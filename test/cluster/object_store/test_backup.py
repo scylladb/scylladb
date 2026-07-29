@@ -781,7 +781,11 @@ async def test_restore_tablets(build_mode: str, manager: ManagerClient, object_s
 
         snap_name, _ = await take_snapshot(ks, servers, manager, logger)
 
-        await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}/{cf}', ks, cf, object_storage, manager, logger) for cf in tables for s in servers))
+        # Use a common prefix across all backup locations so the tablet-aware-restore
+        # API's own 'prefix' parameter (relative to which manifests are resolved) is
+        # exercised, not just the degenerate empty-prefix case.
+        restore_prefix = f'restore-prefix/{snap_name}'
+        await asyncio.gather(*(do_backup(s, snap_name, f'{restore_prefix}/{s.server_id}/{cf}', ks, cf, object_storage, manager, logger) for cf in tables for s in servers))
 
     # Restore all tables into a fresh keyspace, distributing restore calls
     # round-robin across num_restore_nodes nodes.
@@ -793,8 +797,8 @@ async def test_restore_tablets(build_mode: str, manager: ManagerClient, object_s
         async def restore_table(idx, cf):
             node = restore_nodes[idx % len(restore_nodes)]
             logger.info(f'Restore table {cf} via {node.ip_addr}')
-            manifests = [f'{s.server_id}/{snap_name}/{cf}/manifest.json' for s in servers]
-            tid = await manager.api.restore_tablets(node.ip_addr, ks, cf, snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+            manifests = [f'{s.server_id}/{cf}/manifest.json' for s in servers]
+            tid = await manager.api.restore_tablets(node.ip_addr, ks, cf, snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, restore_prefix)
             status = await manager.api.wait_task(node.ip_addr, tid)
             assert (status is not None) and (status['state'] == 'done'), f"Restore of {cf} via {node.ip_addr} failed: {status}"
             assert status['progress_total'] > 0
