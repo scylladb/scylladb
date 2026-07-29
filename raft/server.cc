@@ -1216,7 +1216,7 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
                 }
             }
         }
-        co_await _persistence->store_commit_idx(batch.committed.back()->idx);
+        co_await _persistence->store_commit_idx(batch.committed.back()->idx, batch.committed.back()->term);
         _stats.queue_entries_for_apply += batch.committed.size();
         co_await _apply_entries.push_eventually(std::move(batch.committed));
     }

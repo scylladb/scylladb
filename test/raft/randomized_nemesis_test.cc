@@ -1035,7 +1035,7 @@ public:
         co_return _persistence->load_term_and_vote();
     }
 
-    virtual future<> store_commit_idx(raft::index_t) override {
+    virtual future<> store_commit_idx(raft::index_t, raft::term_t) override {
         co_return;
     }
 

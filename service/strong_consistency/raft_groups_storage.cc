@@ -72,7 +72,7 @@ future<std::pair<raft::term_t, raft::server_id>> raft_groups_storage::load_term_
     co_return std::pair(vote_term, vote);
 }
 
-future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
+future<> raft_groups_storage::store_commit_idx(raft::index_t idx, raft::term_t) {
     // Update in-memory tracking only. Persistence happens via the fake
     // mutation in store_log_entries (durable once the raft_groups memtable
     // flushes) and via persist_commit_idx() from the SC tablet flush hook
