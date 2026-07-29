@@ -3348,32 +3348,14 @@
                       },
                       {
                          "name":"backup_location",
-                         "description":"JSON array of backup location objects. Each object must contain: 'datacenter' (string), 'endpoint' (string), 'bucket' (string), and 'prefix' (string).",
+                         "description":"JSON array of backup location objects. Each object must contain: 'datacenter' (string), 'endpoint' (string), 'bucket' (string), and 'prefix' (string). 'manifests' must not be set.",
                          "required":true,
                          "allowMultiple":false,
                          "type":"array",
-                         "paramType":"body",
-                         "items": {
-                            "description":"A backup location entry describing where to place SSTables",
-                            "properties":{
-                                "datacenter":{
-                                   "type":"string",
-                                   "description":"The datacenter name"
-                                },
-                                "endpoint":{
-                                   "type":"string",
-                                   "description":"The object store endpoint name/URL"
-                                },
-                                "bucket":{
-                                   "type":"string",
-                                   "description":"The object store bucket name"
-                                },
-                                "prefix":{
-                                   "type":"string",
-                                   "description":"The object store bucket prefix"
-                                }
-                            }
-                         }
+                         "items":{
+                            "$ref":"backup_location"
+                         },
+                         "paramType":"body"
                       }
                   ]
               }
@@ -4156,7 +4138,7 @@
       },
       "backup_location":{
          "id":"backup_location",
-         "description":"A backup location entry describing where to find SSTables",
+         "description":"A backup location entry describing where to find or place SSTables",
          "properties":{
             "datacenter":{
                "type":"string",
@@ -4170,12 +4152,16 @@
                "type":"string",
                "description":"The object store bucket name"
             },
+            "prefix":{
+               "type":"string",
+               "description":"The object store bucket prefix"
+            },
             "manifests":{
                "type":"array",
                "items":{
                   "type":"string"
                },
-               "description":"List of manifest file paths"
+               "description":"List of manifest file paths, relative to 'prefix'. Only used by tablet-aware restore; must not be set for backup."
             }
          }
       }
