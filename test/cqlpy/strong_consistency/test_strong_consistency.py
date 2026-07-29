@@ -68,6 +68,28 @@ def test_reject_user_provided_timestamps(cql, sc_keyspace):
         #   APPLY BATCH
 
 
+def test_reject_conditions(cql, sc_keyspace):
+    """
+    Conditional updates (LWT) are not supported on strongly consistent tables.
+    They must be rejected at prepare time - previously they were accepted and
+    the condition was silently never evaluated.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        error_msg = "Strongly consistent updates don't support conditions"
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"INSERT INTO {table} (pk, v) VALUES (0, 13) IF NOT EXISTS")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"UPDATE {table} SET v = 13 WHERE pk = 0 IF EXISTS")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"UPDATE {table} SET v = 13 WHERE pk = 0 IF v = 1")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"DELETE FROM {table} WHERE pk = 0 IF EXISTS")
+        # A statement inside a batch is prepared through a different entry
+        # point, which used to skip the check.
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"BEGIN BATCH INSERT INTO {table} (pk, v) VALUES (0, 13) IF NOT EXISTS APPLY BATCH")
+
+
 @pytest.mark.parametrize("batch_mode", ["text", "prepared"], ids=["text", "prepared"])
 def test_batch(cql, sc_keyspace, batch_mode):
     """

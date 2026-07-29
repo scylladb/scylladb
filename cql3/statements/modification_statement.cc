@@ -641,12 +641,7 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
 
     auto prepared_stmt = prepare_internal(db, schema, ctx, std::move(prepared_attributes), stats);
     if (strong_consistency::is_strongly_consistent(db, schema->ks_name())) {
-        if (prepared_stmt->requires_read()) {
-            throw exceptions::invalid_request_exception("Strongly consistent updates don't support data prefetch");
-        }
-        if (prepared_stmt->is_timestamp_set()) {
-            throw exceptions::invalid_request_exception("Strongly consistent queries don't support user-provided timestamps");
-        }
+        strong_consistency::validate_modification_support(*prepared_stmt);
     }
 
     // At this point the prepare context instance should have a list of

@@ -10,6 +10,7 @@
 
 #include "transport/messages/result_message_base.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/statements/modification_statement.hh"
 #include "replica/database.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "service/strong_consistency/coordinator.hh"
@@ -36,6 +37,18 @@ future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement
 bool is_strongly_consistent(data_dictionary::database db, std::string_view ks_name) {
     const auto* tablet_aware_rs = db.find_keyspace(ks_name).get_replication_strategy().maybe_as_tablet_aware();
     return tablet_aware_rs && tablet_aware_rs->get_consistency() != data_dictionary::consistency_config_option::eventual;
+}
+
+void validate_modification_support(const cql3::statements::modification_statement& stmt) {
+    if (stmt.has_conditions()) {
+        throw exceptions::invalid_request_exception("Strongly consistent updates don't support conditions");
+    }
+    if (stmt.requires_read()) {
+        throw exceptions::invalid_request_exception("Strongly consistent updates don't support data prefetch");
+    }
+    if (stmt.is_timestamp_set()) {
+        throw exceptions::invalid_request_exception("Strongly consistent queries don't support user-provided timestamps");
+    }
 }
 
 }
