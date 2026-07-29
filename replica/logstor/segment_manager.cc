@@ -638,6 +638,8 @@ class segment_manager_impl {
         uint64_t compaction_data_bytes_written{0};
         uint64_t separator_bytes_written{0};
         uint64_t separator_data_bytes_written{0};
+        uint64_t live_record_bytes{0};
+        uint64_t live_record_count{0};
     };
 
     file_manager _file_mgr;
@@ -709,7 +711,8 @@ public:
 
     future<log_record> read(log_location);
 
-    void free_record(log_location);
+    void on_add_record(log_location) noexcept;
+    void on_free_record(log_location) noexcept;
 
     future<> for_each_record(log_segment_id segment_id,
                             std::function<want_data(log_location, const log_record_header&)> on_header,
@@ -945,6 +948,10 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of segments currently in use.")),
         sm::make_gauge("free_segments", [this] { return available_segment_count(); },
                        sm::description("Counts number of free segments currently available.")),
+        sm::make_gauge("live_record_bytes", [this] { return _stats.live_record_bytes; },
+                       sm::description("Counts the durable live record bytes currently referenced by the primary index.")),
+        sm::make_gauge("live_record_count", [this] { return _stats.live_record_count; },
+                   sm::description("Counts the durable live records currently referenced by the primary index.")),
         sm::make_gauge("segment_pool_size", [this] { return _segment_pool.size(); },
                        sm::description("Counts number of segments in the segment pool.")),
         sm::make_counter("segment_pool_segments_put", _segment_pool.get_stats().segments_put,
@@ -1065,8 +1072,6 @@ future<> segment_manager_impl::write(write_buffer& wb) {
         auto seg_ref = seg->ref();
         auto seq_num = seg->seq_num();
         auto write_op = _writes_phaser.start();
-        auto& desc = get_segment_descriptor(seg->id());
-
         // if we wrote a record to the segment but failed to write it to the separator, the segment should not be freed.
         auto write_to_separator_failed = defer([seg_ref] mutable noexcept {
             seg_ref.set_flush_failure();
@@ -1079,8 +1084,6 @@ future<> segment_manager_impl::write(write_buffer& wb) {
 
         auto loc = co_await seg->append(data);
         sem_units.return_all();
-
-        desc.on_write(wb.net_data_size(), wb.record_count());
 
         _stats.bytes_written[static_cast<size_t>(source)] += data.size();
         _stats.data_bytes_written[static_cast<size_t>(source)] += wb.net_data_size();
@@ -1111,8 +1114,6 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, compaction_g
     }
 
     auto seg = co_await get_segment(source);
-    auto& desc = get_segment_descriptor(seg->id());
-
     logstor_logger.trace("Write full segment {} seq {} from {}", seg->id(), seg->seq_num(), write_source_to_string(source));
 
     wb.seal(seg->seq_num(), cg.schema()->id(), block_alignment);
@@ -1120,22 +1121,35 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, compaction_g
 
     auto loc = co_await seg->append(data);
 
-    desc.on_write(wb.net_data_size(), wb.record_count());
-
     _stats.bytes_written[static_cast<size_t>(source)] += data.size();
     _stats.data_bytes_written[static_cast<size_t>(source)] += wb.net_data_size();
 
     co_await wb.complete_writes(loc);
     co_await seg->stop();
 
+    // add the segment after all index updates are completed.
+    auto& desc = get_segment_descriptor(seg->id());
     cg.add_logstor_segment(desc);
 }
 
-void segment_manager_impl::free_record(log_location location) {
+void segment_manager_impl::on_add_record(log_location location) noexcept {
+    auto& desc = get_segment_descriptor(location);
+    desc.on_write(location);
+    _stats.live_record_bytes += location.size;
+    _stats.live_record_count++;
+}
+
+void segment_manager_impl::on_free_record(log_location location) noexcept {
     auto& desc = get_segment_descriptor(location);
     desc.on_free(location);
+    _stats.live_record_bytes -= location.size;
+    _stats.live_record_count--;
     if (desc.owner) {
-        desc.owner->update_segment(desc);
+        try {
+            desc.owner->update_segment(desc);
+        } catch (...) {
+            logstor_logger.warn("Failed to update segments histogram: {}", std::current_exception());
+        }
     }
     _stats.bytes_freed += location.size;
 }
@@ -1289,7 +1303,9 @@ future<> segment_manager_impl::discard_segments(segment_set& ss) {
         }
 
         // the index should be cleared before discarding segments, so no data should be reachable
-        desc.reset(_cfg.segment_size);
+        if (desc.net_data_size(_cfg.segment_size) != 0) {
+            on_internal_error(logstor_logger, format("Discarding segment {} that has data", seg_id));
+        }
 
         segments.push_back(seg_id);
     }
@@ -1532,13 +1548,10 @@ struct compaction_buffer {
         auto write_and_update_index = buf->write(std::move(writer)).then_unpack(
                 [this, index_ptr, key = std::move(key), read_location]
                 (log_location new_location, seastar::gate::holder op) {
-
             if (index_ptr->update_record_location(key, read_location, new_location)) {
-                sm.free_record(read_location);
                 stats.records_rewritten++;
             } else {
                 // another write updated this key
-                sm.free_record(new_location);
                 stats.records_skipped++;
             }
         });
@@ -1728,12 +1741,8 @@ future<> segment_manager_impl::write_to_separator(write_buffer& wb, segment_ref 
         }
 
         buf.pending_updates.push_back(
-            buf.write(std::move(w.writer)).then_unpack([this, index_ptr, key = std::move(key), prev_loc] (log_location new_loc, seastar::gate::holder op) {
-                if (index_ptr->update_record_location(key, prev_loc, new_loc)) {
-                    free_record(prev_loc);
-                } else {
-                    free_record(new_loc);
-                }
+            buf.write(std::move(w.writer)).then_unpack([index_ptr, key = std::move(key), prev_loc] (log_location new_loc, seastar::gate::holder op) {
+                index_ptr->update_record_location(key, prev_loc, new_loc);
             }
         ));
     }
@@ -1751,12 +1760,8 @@ void segment_manager_impl::write_to_separator(table& t, log_location prev_loc, l
     }
 
     buf.pending_updates.push_back(
-        buf.write(std::move(writer)).then_unpack([this, index_ptr, key = std::move(key), prev_loc] (log_location new_loc, seastar::gate::holder op) {
-            if (index_ptr->update_record_location(key, prev_loc, new_loc)) {
-                free_record(prev_loc);
-            } else {
-                free_record(new_loc);
-            }
+        buf.write(std::move(writer)).then_unpack([index_ptr, key = std::move(key), prev_loc] (log_location new_loc, seastar::gate::holder op) {
+            index_ptr->update_record_location(key, prev_loc, new_loc);
         })
     );
 }
@@ -1955,7 +1960,7 @@ future<> segment_manager_impl::recover_segment(replica::database& db, log_segmen
             on_header(seg_hdr);
             return make_ready_future<>();
         },
-        [this, &desc, &db, &cmp] (log_location loc, const log_record_header& header) -> want_data {
+        [&db, &cmp] (log_location loc, const log_record_header& header) -> want_data {
             logstor_logger.trace("Recovery: read record at {} key {} ts {}", loc, header.key, header.timestamp);
 
             index_entry new_entry {
@@ -1968,13 +1973,7 @@ future<> segment_manager_impl::recover_segment(replica::database& db, log_segmen
                 if (!t.uses_logstor()) {
                     return want_data::no;
                 }
-                auto [inserted, prev_entry] = t.logstor_index().insert(header.key, new_entry, cmp);
-                if (inserted) {
-                    desc.on_write(loc);
-                    if (prev_entry) {
-                        get_segment_descriptor(prev_entry->location).on_free(prev_entry->location);
-                    }
-                }
+                t.logstor_index().insert(header.key, new_entry, cmp);
             } catch (const replica::no_such_column_family&) {
                 // ignore record
             }
@@ -1985,6 +1984,14 @@ future<> segment_manager_impl::recover_segment(replica::database& db, log_segmen
             // we don't read record data, only headers.
             return make_ready_future<>();
         });
+}
+
+void segment_manager::on_add_record(log_location location) noexcept {
+    get_impl().on_add_record(location);
+}
+
+void segment_manager::on_free_record(log_location location) noexcept {
+    get_impl().on_free_record(location);
 }
 
 future<> segment_manager_impl::add_segment_to_compaction_group(replica::database& db, segment_descriptor& desc) {
@@ -2099,10 +2106,6 @@ future<> segment_manager::write(write_buffer& wb) {
 
 future<log_record> segment_manager::read(log_location location) {
     return _impl->read(location);
-}
-
-void segment_manager::free_record(log_location location) {
-    _impl->free_record(location);
 }
 
 void segment_manager::set_trigger_compaction_hook(std::function<void()> fn) {

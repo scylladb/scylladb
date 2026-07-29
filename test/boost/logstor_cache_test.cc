@@ -8,6 +8,7 @@
 #include <boost/test/unit_test.hpp>
 #include <optional>
 
+#include "replica/logstor/types.hh"
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 
@@ -30,6 +31,13 @@ struct shared_logstor_cache {
         , logstor_tracker(shared_tracker) {
     }
 };
+
+struct noop_space_accounting_subscriber final : space_accounting_subscriber {
+    void on_add_record(log_location) noexcept override {}
+    void on_free_record(log_location) noexcept override {}
+};
+
+inline noop_space_accounting_subscriber noop_space_accounting{};
 
 index_entry make_index_entry(uint32_t segment, uint32_t offset, uint32_t size, api::timestamp_type timestamp) {
     return index_entry{
@@ -109,7 +117,7 @@ std::vector<dht::decorated_key> insert_same_token_keys(primary_index& index, sim
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_invalidation_and_eviction) {
     simple_schema schema(simple_schema::with_static::no);
-    primary_index index(schema.schema());
+    primary_index index(schema.schema(), noop_space_accounting);
     shared_logstor_cache cache;
     index.set_cache_tracker(&cache.logstor_tracker);
 
@@ -195,7 +203,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_invalidation_and_evict
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_drain_cache_preserves_index_entries) {
     simple_schema schema(simple_schema::with_static::no);
-    primary_index index(schema.schema());
+    primary_index index(schema.schema(), noop_space_accounting);
     shared_logstor_cache cache;
     index.set_cache_tracker(&cache.logstor_tracker);
 
@@ -223,7 +231,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_drain_cache_preserves_index_
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalancing) {
     simple_schema schema(simple_schema::with_static::no);
-    primary_index index(schema.schema());
+    primary_index index(schema.schema(), noop_space_accounting);
     shared_logstor_cache cache;
     index.set_cache_tracker(&cache.logstor_tracker);
 
@@ -284,7 +292,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalan
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_exchange) {
     simple_schema schema(simple_schema::with_static::no);
-    primary_index index(schema.schema());
+    primary_index index(schema.schema(), noop_space_accounting);
     shared_logstor_cache cache;
     index.set_cache_tracker(&cache.logstor_tracker);
 
@@ -329,7 +337,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_excha
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_cache_upgrades_cached_partition_after_schema_change) {
     simple_schema schema(simple_schema::with_static::no);
-    primary_index index(schema.schema());
+    primary_index index(schema.schema(), noop_space_accounting);
     shared_logstor_cache cache;
     index.set_cache_tracker(&cache.logstor_tracker);
 

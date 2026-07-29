@@ -89,6 +89,14 @@ const compaction_manager& logstor::get_compaction_manager() const noexcept {
     return _segment_manager.get_compaction_manager();
 }
 
+std::unique_ptr<primary_index> logstor::make_primary_index(schema_ptr schema, bool cache_enabled) {
+    auto index = std::make_unique<primary_index>(schema, _segment_manager);
+    if (cache_enabled) {
+        index->set_cache_tracker(&_cache_tracker);
+    }
+    return index;
+}
+
 future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout) {
     primary_index_key key(m.decorated_key());
     table_id table = m.schema()->id();
@@ -105,22 +113,13 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
         .mut = canonical_mutation(m)
     };
 
-    return _write_buffer.write(std::move(record), timeout, &cg, std::move(cg_holder)).then_unpack([this, index_ptr = &index, ts, key = std::move(key)]
+    return _write_buffer.write(std::move(record), timeout, &cg, std::move(cg_holder)).then_unpack([index_ptr = &index, ts, key = std::move(key)]
             (log_location location, seastar::gate::holder op) {
         index_entry new_entry {
             .location = location,
             .timestamp = ts,
         };
-
-        auto [inserted, prev_entry] = index_ptr->insert(key, std::move(new_entry));
-
-        if (!inserted) {
-            // A newer entry already exists; free the record we just wrote.
-            _segment_manager.free_record(location);
-        } else if (prev_entry) {
-            // Overwrote an older entry; free it.
-            _segment_manager.free_record(prev_entry->location);
-        }
+        index_ptr->insert(key, std::move(new_entry));
     }).handle_exception([] (std::exception_ptr ep) {
         logstor_logger.error("Error writing mutation: {}", ep);
         return make_exception_future<>(ep);

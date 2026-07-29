@@ -111,6 +111,9 @@ private:
     // call non-const methods on the tracker (touch, insert) for LRU accounting.
     mutable cache_tracker* _cache_tracker = nullptr;
 
+    // Currently we support a single subscriber for space accounting which is the segment manager.
+    space_accounting_subscriber& _space_accounting;
+
     void on_entry_added(const primary_index_entry& e) noexcept {
         _memory_usage += e.memory_usage();
         ++_key_count;
@@ -124,8 +127,11 @@ private:
     auto make_entry_disposer() noexcept {
         return [this] (primary_index_entry* e) noexcept {
             if (_cache_tracker) {
-                _cache_tracker->evict(*e);
+                try {
+                    _cache_tracker->evict(*e);
+                } catch (...) {}
             }
+            _space_accounting.on_free_record(e->_e.location);
             on_entry_removed(*e);
         };
     }
@@ -152,9 +158,10 @@ private:
     }
 
 public:
-    explicit primary_index(schema_ptr schema)
+    explicit primary_index(schema_ptr schema, space_accounting_subscriber& space_accounting)
         : _partitions(dht::raw_token_less_comparator{})
         , _schema(std::move(schema))
+        , _space_accounting(space_accounting)
         {}
 
     void set_schema(schema_ptr s) {
@@ -208,6 +215,8 @@ public:
         if (it != _partitions.end()) {
             if (it->_e.location == old_location) {
                 it->_e.location = new_location;
+                _space_accounting.on_free_record(old_location);
+                _space_accounting.on_add_record(new_location);
                 // The cached mutation is still valid (same data, new location on
                 // disk after compaction moved it) — do not evict the cache here.
                 return true;
@@ -233,12 +242,15 @@ public:
                 }
                 auto old_entry = i->_e;
                 i->_e = std::move(new_entry);
+                _space_accounting.on_free_record(old_entry.location);
+                _space_accounting.on_add_record(i->_e.location);
                 return {true, std::make_optional(old_entry)};
             } else {
                 return {false, std::make_optional(i->_e)};
             }
         } else {
             auto it = _partitions.emplace_before(i, key.dk.token().raw(), hint, key.dk, std::move(new_entry));
+            _space_accounting.on_add_record(it->_e.location);
             on_entry_added(*it);
             return {true, std::nullopt};
         }

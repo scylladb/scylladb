@@ -79,6 +79,13 @@ enum class segment_kind : uint8_t {
     full = 1,
 };
 
+class space_accounting_subscriber {
+public:
+    virtual ~space_accounting_subscriber() = default;
+    virtual void on_add_record(log_location location) noexcept = 0;
+    virtual void on_free_record(log_location location) noexcept = 0;
+};
+
 }
 
 // Format specialization declarations and implementations

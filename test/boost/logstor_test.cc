@@ -13,6 +13,7 @@
 #include <seastar/util/memory-data-source.hh>
 #include <seastar/util/defer.hh>
 
+#include "replica/logstor/index.hh"
 #include "replica/logstor/ondisk.hh"
 #include "replica/logstor/write_buffer.hh"
 #include <seastar/testing/thread_test_case.hh>
@@ -188,6 +189,257 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_accepts_record_at_max_record_
     wb.seal(segment_sequence{29}, std::nullopt, ondisk::block_alignment);
 
     BOOST_REQUIRE_EQUAL(wb.serialized_size(), ondisk::block_alignment);
+}
+
+// Checks that primary_index accounting callbacks track live bytes across
+// inserts, overwrites, relocations, erases, range erases, and clear().
+SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
+    auto schema = make_kv_schema();
+    struct accounting_subscriber : space_accounting_subscriber {
+        ssize_t live_bytes = 0;
+        size_t add_calls = 0;
+        size_t free_calls = 0;
+        std::vector<log_location> added_locations;
+        std::vector<log_location> freed_locations;
+
+        bool is_live(log_location loc) const {
+            return std::count(added_locations.begin(), added_locations.end(), loc)
+                 > std::count(freed_locations.begin(), freed_locations.end(), loc);
+        }
+
+        size_t live_location_count() const {
+            return std::count_if(added_locations.begin(), added_locations.end(), [&] (log_location loc) {
+                return is_live(loc);
+            });
+        }
+
+        void on_add_record(log_location loc) noexcept override {
+            live_bytes += loc.size;
+            ++add_calls;
+            added_locations.push_back(loc);
+        }
+
+        void on_free_record(log_location loc) noexcept override {
+            live_bytes -= loc.size;
+            ++free_calls;
+            BOOST_REQUIRE(is_live(loc));
+            freed_locations.push_back(loc);
+        }
+    } accounting;
+
+    primary_index index(schema, accounting);
+
+    const auto pk0 = primary_index_key{make_kv_mutation(schema, "pk0", "v0").decorated_key()};
+    const auto pk1 = primary_index_key{make_kv_mutation(schema, "pk1", "v1").decorated_key()};
+    const auto pk2 = primary_index_key{make_kv_mutation(schema, "pk2", "v2").decorated_key()};
+
+    const log_location loc0{.segment = log_segment_id{1}, .offset = 0, .size = 11};
+    const log_location loc0_old{.segment = log_segment_id{1}, .offset = 16, .size = 7};
+    const log_location loc1{.segment = log_segment_id{2}, .offset = 0, .size = 17};
+    const log_location loc2{.segment = log_segment_id{3}, .offset = 0, .size = 13};
+    const log_location loc3{.segment = log_segment_id{4}, .offset = 0, .size = 19};
+    const log_location loc4{.segment = log_segment_id{5}, .offset = 0, .size = 23};
+    const log_location loc5{.segment = log_segment_id{6}, .offset = 0, .size = 29};
+
+    // insert(pk0, loc0): new entry, succeeds, no previous entry to free  →  {pk0: loc0}
+    auto [inserted0, prev0] = index.insert(pk0, index_entry{.location = loc0, .timestamp = api::timestamp_type(10)});
+    BOOST_REQUIRE(inserted0);
+    BOOST_REQUIRE(!prev0);
+    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc0.size));
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 1u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 0u);
+    BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 1);
+    BOOST_REQUIRE(accounting.is_live(loc0));
+
+    // insert(pk0, loc0_old): older timestamp, rejected, no accounting change  →  {pk0: loc0}
+    auto [inserted_old, prev_old] = index.insert(pk0, index_entry{.location = loc0_old, .timestamp = api::timestamp_type(9)});
+    BOOST_REQUIRE(!inserted_old);
+    BOOST_REQUIRE(prev_old);
+    BOOST_REQUIRE(prev_old->location == loc0);
+    BOOST_REQUIRE_EQUAL(prev_old->timestamp, api::timestamp_type(10));
+    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc0.size));
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 1u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 0u);
+    BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 1);
+    BOOST_REQUIRE(accounting.is_live(loc0));
+
+    // insert(pk0, loc1): newer timestamp, replaces loc0, old location freed via accounting  →  {pk0: loc1}
+    auto [inserted1, prev1] = index.insert(pk0, index_entry{.location = loc1, .timestamp = api::timestamp_type(11)});
+    BOOST_REQUIRE(inserted1);
+    BOOST_REQUIRE(prev1);
+    BOOST_REQUIRE(prev1->location == loc0);
+    BOOST_REQUIRE_EQUAL(prev1->timestamp, api::timestamp_type(10));
+    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc1.size));
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 2u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 1u);
+    BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 1);
+    BOOST_REQUIRE(accounting.is_live(loc1));
+    BOOST_REQUIRE(!accounting.is_live(loc0));
+    BOOST_REQUIRE(accounting.added_locations.back() == loc1);
+    BOOST_REQUIRE(accounting.freed_locations.back() == loc0);
+
+    // insert(pk1, loc2): new key, succeeds, adds to live bytes  →  {pk0: loc1, pk1: loc2}
+    auto [inserted2, prev2] = index.insert(pk1, index_entry{.location = loc2, .timestamp = api::timestamp_type(7)});
+    BOOST_REQUIRE(inserted2);
+    BOOST_REQUIRE(!prev2);
+    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc1.size + loc2.size));
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 3u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 1u);
+    BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 2);
+    BOOST_REQUIRE(accounting.is_live(loc1));
+    BOOST_REQUIRE(accounting.is_live(loc2));
+
+    // erase(pk1, loc1): location mismatch, returns false, no accounting change  →  {pk0: loc1, pk1: loc2}
+    BOOST_REQUIRE(!index.erase(pk1, loc1));
+    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc1.size + loc2.size));
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 3u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 1u);
+    BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 2);
+
+    // update_record_location(pk0, loc1 -> loc3): old location matches, succeeds, frees loc1 adds loc3  →  {pk0: loc3, pk1: loc2}
+    BOOST_REQUIRE(index.update_record_location(pk0, loc1, loc3));
+    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc2.size + loc3.size));
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 4u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 2u);
+    BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 2);
+    BOOST_REQUIRE(accounting.is_live(loc2));
+    BOOST_REQUIRE(accounting.is_live(loc3));
+    BOOST_REQUIRE(!accounting.is_live(loc1));
+    BOOST_REQUIRE(accounting.added_locations.back() == loc3);
+    BOOST_REQUIRE(accounting.freed_locations.back() == loc1);
+
+    // update_record_location(pk0, loc1 -> loc4): old location no longer current, fails, no accounting change  →  {pk0: loc3, pk1: loc2}
+    BOOST_REQUIRE(!index.update_record_location(pk0, loc1, loc4));
+    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc2.size + loc3.size));
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 4u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 2u);
+    BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 2);
+
+    // erase(pk1, loc2): location matches, succeeds, frees loc2  →  {pk0: loc3}
+    BOOST_REQUIRE(index.erase(pk1, loc2));
+    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc3.size));
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 4u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
+    BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 1);
+    BOOST_REQUIRE(accounting.is_live(loc3));
+    BOOST_REQUIRE(!accounting.is_live(loc2));
+    BOOST_REQUIRE(accounting.freed_locations.back() == loc2);
+
+    // insert(pk1, loc4): new entry for pk1 (previously erased), succeeds  →  {pk0: loc3, pk1: loc4}
+    auto [inserted4, prev4] = index.insert(pk1, index_entry{.location = loc4, .timestamp = api::timestamp_type(12)});
+    BOOST_REQUIRE(inserted4);
+    BOOST_REQUIRE(!prev4);
+    // insert(pk2, loc5): new key, succeeds  →  {pk0: loc3, pk1: loc4, pk2: loc5}
+    auto [inserted5, prev5] = index.insert(pk2, index_entry{.location = loc5, .timestamp = api::timestamp_type(13)});
+    BOOST_REQUIRE(inserted5);
+    BOOST_REQUIRE(!prev5);
+    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc3.size + loc4.size + loc5.size));
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 6u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
+    BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 3);
+
+    // range erase pk1: removes pk1 entry (loc4), frees via accounting  →  {pk0: loc3, pk2: loc5}
+    index.erase(dht::partition_range::make_singular(pk1.dk)).get();
+    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc3.size + loc5.size));
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 6u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 4u);
+    BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 2);
+    BOOST_REQUIRE(!accounting.is_live(loc4));
+    BOOST_REQUIRE(accounting.is_live(loc3));
+    BOOST_REQUIRE(accounting.is_live(loc5));
+    BOOST_REQUIRE(accounting.freed_locations.back() == loc4);
+
+    // clear(): removes all remaining entries (pk0->loc3, pk2->loc5), all freed  →  {}
+    index.clear().get();
+    BOOST_REQUIRE(index.empty());
+    BOOST_REQUIRE_EQUAL(accounting.live_bytes, 0);
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 6u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 6u);
+    BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 0);
+    BOOST_REQUIRE_EQUAL(accounting.freed_locations.size(), 6u);
+}
+
+// Checks that range erase and clear() account for freed log locations correctly.
+SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_accounting) {
+    auto schema = make_kv_schema();
+    struct accounting_subscriber : space_accounting_subscriber {
+        ssize_t live_bytes = 0;
+        size_t add_calls = 0;
+        size_t free_calls = 0;
+        std::vector<log_location> freed_locations;
+
+        void on_add_record(log_location loc) noexcept override {
+            live_bytes += loc.size;
+            ++add_calls;
+        }
+
+        void on_free_record(log_location loc) noexcept override {
+            live_bytes -= loc.size;
+            ++free_calls;
+            freed_locations.push_back(loc);
+        }
+    } accounting;
+
+    primary_index index(schema, accounting);
+
+    struct entry {
+        primary_index_key key;
+        log_location loc;
+    };
+
+    std::vector<entry> entries = {
+        { primary_index_key{make_kv_mutation(schema, "pk0", "v0").decorated_key()}, {.segment = log_segment_id{11}, .offset = 0, .size = 5} },
+        { primary_index_key{make_kv_mutation(schema, "pk1", "v1").decorated_key()}, {.segment = log_segment_id{12}, .offset = 0, .size = 7} },
+        { primary_index_key{make_kv_mutation(schema, "pk2", "v2").decorated_key()}, {.segment = log_segment_id{13}, .offset = 0, .size = 11} },
+        { primary_index_key{make_kv_mutation(schema, "pk3", "v3").decorated_key()}, {.segment = log_segment_id{14}, .offset = 0, .size = 13} },
+        { primary_index_key{make_kv_mutation(schema, "pk4", "v4").decorated_key()}, {.segment = log_segment_id{15}, .offset = 0, .size = 17} },
+    };
+
+    std::sort(entries.begin(), entries.end(), [&] (const entry& a, const entry& b) {
+        return dht::decorated_key::less_comparator(schema)(a.key.dk, b.key.dk);
+    });
+
+    auto insert = [&] (const entry& e, api::timestamp_type ts) {
+        auto [inserted, prev] = index.insert(e.key, index_entry{.location = e.loc, .timestamp = ts});
+        BOOST_REQUIRE(inserted);
+        BOOST_REQUIRE(!prev);
+    };
+
+    insert(entries[0], api::timestamp_type(10));
+    insert(entries[1], api::timestamp_type(11));
+    insert(entries[2], api::timestamp_type(12));
+    insert(entries[3], api::timestamp_type(13));
+    insert(entries[4], api::timestamp_type(14));
+
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 5u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 0u);
+    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(entries[0].loc.size + entries[1].loc.size + entries[2].loc.size + entries[3].loc.size + entries[4].loc.size));
+
+    index.erase(dht::partition_range(
+            dht::partition_range::bound(entries[1].key.dk, true),
+            dht::partition_range::bound(entries[3].key.dk, true))).get();
+
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 5u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
+    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(entries[0].loc.size + entries[4].loc.size));
+    BOOST_REQUIRE(index.find(entries[0].key.dk) != index.end());
+    BOOST_REQUIRE(index.find(entries[1].key.dk) == index.end());
+    BOOST_REQUIRE(index.find(entries[2].key.dk) == index.end());
+    BOOST_REQUIRE(index.find(entries[3].key.dk) == index.end());
+    BOOST_REQUIRE(index.find(entries[4].key.dk) != index.end());
+    BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[1].loc), 1);
+    BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[2].loc), 1);
+    BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[3].loc), 1);
+
+    index.clear().get();
+
+    BOOST_REQUIRE(index.empty());
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 5u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 5u);
+    BOOST_REQUIRE_EQUAL(accounting.live_bytes, 0);
+    BOOST_REQUIRE_EQUAL(accounting.freed_locations.size(), 5u);
+    BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[0].loc), 1);
+    BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[4].loc), 1);
 }
 
 // Checks that scan_segment() returns mixed-buffer log locations that can be used to read back the expected records.
