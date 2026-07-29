@@ -137,7 +137,7 @@ future<> set_server_task_manager(http_context& ctx, sharded<tasks::task_manager>
 future<> unset_server_task_manager(http_context& ctx);
 future<> set_server_task_manager_test(http_context& ctx, sharded<tasks::task_manager>& tm);
 future<> unset_server_task_manager_test(http_context& ctx);
-future<> set_server_tasks_compaction_module(http_context& ctx, sharded<service::storage_service>& ss, sharded<db::snapshot_ctl>& snap_ctl);
+future<> set_server_tasks_compaction_module(http_context& ctx, sharded<replica::database>& db, sharded<db::snapshot_ctl>& snap_ctl);
 future<> unset_server_tasks_compaction_module(http_context& ctx);
 future<> set_server_raft(http_context&, sharded<service::raft_group_registry>&);
 future<> unset_server_raft(http_context&);
