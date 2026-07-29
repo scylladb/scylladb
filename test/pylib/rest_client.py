@@ -444,7 +444,7 @@ class ScyllaRESTAPIClient:
             params['scope'] = scope
         return await self.client.post_json(f"/storage_service/restore", host=node_ip, params=params, json=sstables)
 
-    async def restore_tablets(self, node_ip: str, ks: str, cf: str, snap: str, datacenter: str, endpoint: str, bucket: str, manifests) -> str:
+    async def restore_tablets(self, node_ip: str, ks: str, cf: str, snap: str, datacenter: str, endpoint: str, bucket: str, manifests, prefix: str = '') -> str:
         """Restore tablets from a backup location"""
         params = {
             "keyspace": ks,
@@ -456,6 +456,7 @@ class ScyllaRESTAPIClient:
                 "datacenter": datacenter,
                 "endpoint": endpoint,
                 "bucket": bucket,
+                "prefix": prefix,
                 "manifests": manifests
             }
         ]

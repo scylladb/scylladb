@@ -556,12 +556,6 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         auto dc = rjson::to_string_view(location["datacenter"]);
         auto prefix = location.HasMember("prefix") ? rjson::to_string_view(location["prefix"]) : std::string_view{};
 
-        // FIXME: once manifest_prefix handling is reworked to combine with
-        // the location prefix, this restriction can be lifted.
-        if (!prefix.empty()) {
-            throw httpd::bad_param_exception("backup location 'prefix' must be empty for now");
-        }
-
         if (!location.HasMember("manifests") || !location["manifests"].IsArray()) {
             throw httpd::bad_param_exception("backup location entry must have 'manifests' array");
         }
@@ -574,8 +568,8 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
             throw httpd::bad_param_exception("backup location 'manifests' array must not be empty");
         }
 
-        apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} datacenter={} endpoint={} bucket={} manifests_count={}",
-                    keyspace, table, snapshot, dc, endpoint, bucket, manifests.size());
+        apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} datacenter={} endpoint={} bucket={} prefix={} manifests_count={}",
+                    keyspace, table, snapshot, dc, endpoint, bucket, prefix, manifests.size());
 
         auto table_id = validate_table(ctx.db.local(), keyspace, table);
         auto task_id = co_await sst_loader.local().restore_tablets(table_id, keyspace, table, snapshot, sstring(endpoint), sstring(bucket), sstring(prefix), std::move(manifests));
