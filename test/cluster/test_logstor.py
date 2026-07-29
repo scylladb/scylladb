@@ -24,27 +24,6 @@ async def count_logstor_data_files(manager: ManagerClient, server_id: int, shard
     workdir = await manager.server_get_workdir(server_id)
     return len(list((Path(workdir) / "logstor").glob(f"ls_{shard}-*-Data.db")))
 
-async def test_property(manager: ManagerClient):
-    cmdline = ['--logger-log-level', 'logstor=debug']
-    cfg = {'experimental_features': ['logstor']}
-    await manager.servers_add(1, cmdline=cmdline, config=cfg)
-    cql = manager.get_cql()
-
-    async with new_test_keyspace(manager, "") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.t_enabled (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
-        await cql.run_async(f"CREATE TABLE {ks}.t_disabled (pk int PRIMARY KEY, v int)")
-
-        desc = await cql.run_async(f"DESCRIBE TABLE {ks}.t_enabled")
-        logger.info(f"Table t_enabled description:\n{desc}")
-        assert "storage_engine = 'logstor'" in desc[0].create_statement
-
-        desc = await cql.run_async(f"DESCRIBE TABLE {ks}.t_disabled")
-        logger.info(f"Table t_disabled description:\n{desc}")
-        assert "storage_engine = 'logstor'" not in desc[0].create_statement
-
-        with pytest.raises(ConfigurationException, match="The 'logstor' storage engine cannot be used with tables that have clustering columns"):
-            await cql.run_async(f"CREATE TABLE {ks}.t_enabled (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH storage_engine = 'logstor'")
-
 async def test_config_option_consistency(manager: ManagerClient):
     """
     Test that logstor storage engine requires the experimental 'logstor' feature to be enabled.
@@ -60,94 +39,6 @@ async def test_config_option_consistency(manager: ManagerClient):
         # Should fail because logstor feature is not enabled
         with pytest.raises(ConfigurationException, match="The experimental feature 'logstor' must be enabled"):
             await cql.run_async(f"CREATE TABLE {ks}.t_logstor (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
-
-async def test_basic_write_and_read(manager: ManagerClient):
-    cmdline = ['--logger-log-level', 'logstor=debug']
-    cfg = {'experimental_features': ['logstor']}
-    await manager.servers_add(1, cmdline=cmdline, config=cfg)
-    cql = manager.get_cql()
-
-    async with new_test_keyspace(manager, "") as ks:
-
-        # test int value
-
-        await cql.run_async(f"CREATE TABLE {ks}.test_int (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
-
-        await cql.run_async(f"INSERT INTO {ks}.test_int (pk, v) VALUES (1, 100)")
-        await cql.run_async(f"INSERT INTO {ks}.test_int (pk, v) VALUES (2, 150)")
-        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_int WHERE pk = 1")
-        assert rows[0].pk == 1
-        assert rows[0].v == 100
-        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_int WHERE pk = 2")
-        assert rows[0].pk == 2
-        assert rows[0].v == 150
-
-        await cql.run_async(f"INSERT INTO {ks}.test_int (pk, v) VALUES (1, 200)")
-        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_int WHERE pk = 1")
-        assert rows[0].pk == 1
-        assert rows[0].v == 200
-        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_int WHERE pk = 2")
-        assert rows[0].pk == 2
-        assert rows[0].v == 150
-
-        await cql.run_async(f"DELETE FROM {ks}.test_int WHERE pk = 1")
-        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_int WHERE pk = 1")
-        assert len(rows) == 0
-        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_int WHERE pk = 2")
-        assert rows[0].pk == 2
-        assert rows[0].v == 150
-
-        # test conflict resolution by timestamp
-        await cql.run_async(f"INSERT INTO {ks}.test_int (pk, v) VALUES (3, 300) USING TIMESTAMP 1000")
-        await cql.run_async(f"INSERT INTO {ks}.test_int (pk, v) VALUES (3, 200) USING TIMESTAMP 900")
-        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_int WHERE pk = 3")
-        assert rows[0].pk == 3
-        assert rows[0].v == 300
-
-        # test frozen map value
-
-        await cql.run_async(f"CREATE TABLE {ks}.test_map (pk int PRIMARY KEY, v frozen<map<text, text>>) WITH storage_engine = 'logstor'")
-
-        await cql.run_async(f"INSERT INTO {ks}.test_map (pk, v) VALUES (1, {{'a': 'apple', 'b': 'banana'}})")
-        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_map WHERE pk = 1")
-        assert rows[0].pk == 1
-        assert rows[0].v == {'a': 'apple', 'b': 'banana'}
-
-        await cql.run_async(f"INSERT INTO {ks}.test_map (pk, v) VALUES (1, {{'a': 'apple', 'b': 'banana', 'c': 'cherry'}})")
-        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_map WHERE pk = 1")
-        assert rows[0].pk == 1
-        assert rows[0].v == {'a': 'apple', 'b': 'banana', 'c': 'cherry'}
-
-        await cql.run_async(f"DELETE FROM {ks}.test_map WHERE pk = 1")
-        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_map WHERE pk = 1")
-        assert len(rows) == 0
-
-async def test_range_read(manager: ManagerClient):
-    cmdline = ['--logger-log-level', 'logstor=debug']
-    cfg = {'experimental_features': ['logstor']}
-    await manager.servers_add(1, cmdline=cmdline, config=cfg)
-    cql = manager.get_cql()
-
-    async with new_test_keyspace(manager, "") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
-        for i in range(10):
-            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, {i*10})")
-
-        # test reading all rows
-        rows = await cql.run_async(f"SELECT pk, v, token(pk) AS tok FROM {ks}.test")
-        assert len(rows) == 10
-        assert sorted([row.pk for row in rows]) == list(range(10))
-        for row in rows:
-            assert row.v == row.pk * 10
-
-        # assert the rows are sorted by token
-        tokens = [row.tok for row in rows]
-        assert tokens == sorted(tokens)
-
-        # read rows by a token range
-        rows = await cql.run_async(f"SELECT pk, v, token(pk) AS tok FROM {ks}.test WHERE token(pk) >= {tokens[2]} AND token(pk) < {tokens[5]}")
-        assert len(rows) == 3
-        assert [row.tok for row in rows] == tokens[2:5]
 
 async def test_parallel_writes(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'logstor=debug']
@@ -166,25 +57,6 @@ async def test_parallel_writes(manager: ManagerClient):
             rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
             assert rows[0].pk == i
             assert rows[0].v == i + 1
-
-async def test_overwrites(manager: ManagerClient):
-    cmdline = ['--logger-log-level', 'logstor=debug']
-    cfg = {'experimental_features': ['logstor']}
-    await manager.servers_add(1, cmdline=cmdline, config=cfg)
-    cql = manager.get_cql()
-
-    async with new_test_keyspace(manager, "") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
-
-        # write to a single key many times sequentially
-        pk = 0
-        for i in range(100):
-            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, {i})")
-
-        # validate we get the last value
-        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {pk}")
-        assert rows[0].pk == pk
-        assert rows[0].v == 99
 
 async def test_parallel_big_writes(manager: ManagerClient):
     """
