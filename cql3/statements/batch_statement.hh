@@ -36,7 +36,7 @@ class modification_statement;
  * A <code>BATCH</code> statement parsed from a CQL query.
  *
  */
-class batch_statement : public cql_statement_opt_metadata {
+class batch_statement : public cql_statement {
     static logging::logger _logger;
 public:
     using type = raw::batch_statement::type;

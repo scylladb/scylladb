@@ -57,7 +57,7 @@ db::timeout_clock::duration modification_statement::get_timeout(const service::c
 }
 
 modification_statement::modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_, cql_stats& stats_)
-    : cql_statement_opt_metadata(modification_statement_timeout(*schema_))
+    : cql_statement(modification_statement_timeout(*schema_))
     , type{type_}
     , _bound_terms{bound_terms}
     , _columns_to_read(schema_->all_columns_count())

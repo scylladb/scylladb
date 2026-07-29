@@ -14,7 +14,7 @@
 
 namespace cql3::statements::strong_consistency {
 
-class modification_statement : public cql_statement_opt_metadata {
+class modification_statement : public cql_statement {
     using result_message = cql_transport::messages::result_message;
     using base_statement = cql3::statements::modification_statement;
 
