@@ -292,6 +292,18 @@ def format_size(size: int | float, options: PresentationOptions = DEFAULT_PRESEN
         value /= 1024.0
 
 
+def format_count(value: float, precision: int = 2,
+                 options: PresentationOptions = DEFAULT_PRESENTATION) -> str:
+    """
+    Formats an averaged count, dimming the fraction as every other number does.
+
+    Examples:
+        >>> format_count(1.5)
+        '1.50'
+    """
+    return dim_fraction(f"{value:.{precision}f}", options)
+
+
 def format_pct(fraction: float | None, precision: int = 2,
                options: PresentationOptions = DEFAULT_PRESENTATION) -> str:
     """
