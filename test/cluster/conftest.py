@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import aiohttp
 import ssl
 import tempfile
 from concurrent.futures.thread import ThreadPoolExecutor
@@ -226,7 +227,32 @@ async def manager(request: pytest.FixtureRequest,
     test_py_log_test = suite_log_dir / f"{test_log.stem}_cluster.log"
 
     manager_client = manager_internal()  # set up client object in fixture with scope function
-    await manager_client.before_test(test_case_name, test_log)
+
+    # Add handler to the root logger to intercept all logs produced by pytest process
+    test_logger = logging.getLogger()
+    test_log_fh = logging.FileHandler(test_log, mode='w+')
+    # to have the custom formatter with a timestamp that used in a test.py but for each testcase's log, we need to
+    # extract it from the root logger and apply to the handler
+    test_log_fh.setFormatter(logging.getLogger().handlers[0].formatter)
+    test_log_fh.setLevel(test_logger.getEffectiveLevel())
+    test_logger.addHandler(test_log_fh)
+    # Before a test starts check if cluster needs cycling and update driver connection
+    logger.debug("before_test for %s", test_case_name)
+    dirty = await manager_client.is_dirty()
+    if dirty:
+        manager_client.driver_close()  # Close driver connection to old cluster
+    try:
+        cluster_str = await manager_client.client.put_json(f"/cluster/before-test/{test_case_name}", timeout=600,
+                                                           response_type="json")
+        logger.info(f"Using cluster: {cluster_str} for test {test_case_name}")
+    except aiohttp.ClientError as exc:
+        raise RuntimeError(f"Failed before test check {exc}") from exc
+    servers = await manager_client.running_servers()
+    if manager_client.cql is None and servers:
+        # TODO: if cluster is not up yet due to taking long and HTTP timeout, wait for it
+        # await self._wait_for_cluster()
+        await manager_client.driver_connect()  # Connect driver to new cluster
+
     # Publish what pytest_runtest_makereport needs to attach this test's logs on
     # failure (single source of truth), so it doesn't re-derive these paths.
     request.node.stash[MANAGER_LOGS_KEY] = {
@@ -253,7 +279,15 @@ async def manager(request: pytest.FixtureRequest,
             # here we only need the dir for the manager-specific found_errors files below.
             failed_test_dir_path = make_failed_test_dir(request.config, build_mode, test_case_name)
 
-        cluster_status = await manager_client.after_test(test_case_name, not failed)
+        # Tell harness this test finished
+        manager_client.test_finished_event.set()
+        _client = manager_client.client_for_asyncio_loop.get(asyncio.get_running_loop())
+        logging.getLogger().removeHandler(test_log_fh)
+        Path(test_log_fh.baseFilename).unlink()
+        logger.debug("after_test for %s (success: %s)", test_case_name, not failed)
+        cluster_status = await _client.put_json(f"/cluster/after-test/{not failed}",
+                                                 response_type = "json")
+        logger.info("Cluster after test %s: %s", test_case_name, cluster_status)
     finally:
         # Drop the stash entry before closing the client so a teardown-phase
         # failure report doesn't gather logs through a stopped client.
