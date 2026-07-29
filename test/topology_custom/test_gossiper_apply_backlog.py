@@ -53,8 +53,6 @@ BOUND = 4 * NODES
 MEASURE_SECONDS = 15
 
 
-@pytest.mark.xfail(reason="scylladb/scylladb#10967: the gossiper apply backlog is unbounded; "
-                          "fixed by per-endpoint coalescing of pending states")
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_gossiper_apply_backlog_is_bounded(manager: ManagerClient) -> None:
