@@ -227,6 +227,17 @@ public:
         return _tablet_version_block;
     }
 
+    // Same, for a request which negotiated the tablets-routing-v2 protocol
+    // extension. The block is defined for EXECUTE requests only, and there it
+    // is guaranteed to be present: process_execute_internal() reads it
+    // unconditionally whenever the V2 extension is set and rejects the request
+    // with a protocol_exception if the byte is missing. Reaching the failure
+    // case here is therefore a server-side invariant violation, not a client
+    // error. A QUERY request never carries the block, so a caller which can be
+    // reached from process_query_internal() has to check
+    // get_tablet_version_block() instead of calling this.
+    locator::tablet_version_block get_negotiated_tablet_version_block() const;
+
     // Mainly for the sake of BatchQueryOptions
     const query_options& for_statement(size_t i) const {
         if (!_batch_options) {

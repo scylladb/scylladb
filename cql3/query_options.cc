@@ -12,6 +12,7 @@
 #include "query_options.hh"
 #include "db/consistency_level_type.hh"
 #include "cql3/column_identifier.hh"
+#include "utils/on_internal_error.hh"
 
 namespace cql3 {
 
@@ -189,6 +190,15 @@ computed_function_values::mapped_type* query_options::find_cached_pk_function_ca
         return &it->second;
     }
     return nullptr;
+}
+
+locator::tablet_version_block query_options::get_negotiated_tablet_version_block() const {
+    if (!_tablet_version_block) {
+        utils::on_internal_error(
+            "The protocol extension tablets-routing-v2 requires that every EXECUTE request "
+            "carry a tablet_version_block");
+    }
+    return *_tablet_version_block;
 }
 
 }
