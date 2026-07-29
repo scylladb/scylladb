@@ -1894,6 +1894,8 @@ SEASTAR_TEST_CASE(test_raft_commitlog_store_log_entries_writes_commit_idx_entry)
                             const auto& commit_idx_entry = std::get<raft_commit_idx_entry>(entry_var);
                             BOOST_REQUIRE_EQUAL(commit_idx_entry.group_id, gid);
                             BOOST_REQUIRE_EQUAL(commit_idx_entry.commit_idx, commit.idx);
+                            BOOST_REQUIRE(commit_idx_entry.term);
+                            BOOST_REQUIRE_EQUAL(*commit_idx_entry.term, commit.term);
                             ++commit_idx_entries;
                         }
                         co_return;
