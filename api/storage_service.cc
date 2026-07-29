@@ -2406,6 +2406,9 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             if (!location.IsObject()) {
                 throw httpd::bad_param_exception("backup location (in body) must be a JSON object");
             }
+            if (location.HasMember("manifests")) {
+                throw httpd::bad_param_exception("backup location 'manifests' must not be set for backup");
+            }
 
             auto endpoint = rjson::to_string(location["endpoint"]);
             auto bucket = rjson::to_string(location["bucket"]);
