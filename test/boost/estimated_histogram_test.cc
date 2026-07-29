@@ -282,6 +282,21 @@ BOOST_AUTO_TEST_CASE(test_histogram_min_1_statistics) {
     BOOST_CHECK_EQUAL(hist.mean(), 6);
 }
 
+BOOST_AUTO_TEST_CASE(test_estimated_histogram_get_histogram_small_range) {
+    // Regression test for a heap-buffer-overflow: get_histogram() doubles
+    // last_bound up to max_buckets times, which can exceed the largest
+    // bucket_offsets value well before max_buckets is reached for a
+    // histogram with a small bucket_count (e.g. estimated_sstable_per_read{35}).
+    // pos must not be advanced past bucket_offsets.size().
+    utils::estimated_histogram hist(35);
+    hist.add(1);
+    hist.add(2);
+    hist.add(3);
+    auto res = hist.get_histogram();
+    BOOST_CHECK_EQUAL(res.sample_count, 3);
+    BOOST_CHECK_EQUAL(res.buckets.back().count, 3);
+}
+
 BOOST_AUTO_TEST_CASE(test_histogram_precision_1) {
     // Test with Precision=1, Min=1024, Max=16384 (standard exponential mode)
     utils::approx_exponential_histogram<1024, 16384, 1> hist;

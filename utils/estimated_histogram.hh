@@ -501,7 +501,7 @@ struct estimated_histogram {
             auto& v = res.buckets[i];
             v.upper_bound = last_bound;
 
-            while (bucket_offsets[pos] <= last_bound) {
+            while (pos < bucket_offsets.size() && bucket_offsets[pos] <= last_bound) {
                 cummulative_count += buckets[pos];
                 pos++;
             }
