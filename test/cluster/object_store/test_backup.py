@@ -1525,7 +1525,7 @@ async def test_drop_keyspace_during_tablet_restore(manager: ManagerClient, objec
     manifests = [f'{s.server_id}/{snap_name}/manifest.json' for s in servers]
     tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, cf, snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
 
-    await server_log.wait_for("pause_download_sstable: waiting for message", from_mark=log_mark)
+    await manager.api.wait_for_injection_enter(servers[1].ip_addr, "pause_download_sstable")
 
     # Issue DROP concurrently — with the fix stream_in_progress() guard blocks
     # table::stop() until download completes; without the fix the data directory
