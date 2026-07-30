@@ -1622,6 +1622,55 @@ SEASTAR_TEST_CASE(test_query_digest) {
     });
 }
 
+// Positive test verifying that every possible kind of difference between two mutations is detected by digest.
+SEASTAR_THREAD_TEST_CASE(test_query_digest_not_equal) {
+    auto now = gc_clock::now();
+
+    for_each_mutation_pair([&] (const mutation& m1, const mutation& m2, are_equal eq, std::string_view label) {
+        if (eq) {
+            return;
+        }
+
+        testlog.info("Running case {}", label);
+
+        if (m1.empty() || m2.empty()) {
+            testlog.info("Skipping case {}, empty mutations have the same digest", label);
+            return;
+        }
+
+        // range tombstones are not included in the digest
+        if (label == "range tombstone") {
+            testlog.info("Skipping case {}, range tombstone is not included in the digest", label);
+            return;
+        }
+
+        if (label == "row tombstone") {
+            testlog.info("Skipping case {}, row tombstone is not included in the digest", label);
+            return;
+        }
+
+        auto m3 = m1;
+        if (m1.schema()->version() != m2.schema()->version()) {
+            m3.upgrade(m2.schema());
+        }
+        const auto schema = m2.schema();
+
+        if (m2 == m3) {
+            // possible if the only difference is eliminated by the schema upgrade above
+            testlog.info("Skipping case {}, mutations identical after schema upgrade", label);
+            return;
+        }
+
+        auto ps = partition_slice_builder(*schema).build();
+        auto digest2 = *query_mutation(mutation(m2), ps, query::max_rows, now,
+                query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
+        auto digest3 = *query_mutation(mutation(m3), ps, query::max_rows, now,
+                query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
+
+        BOOST_CHECK_MESSAGE(digest2 != digest3, fmt::format("Digest should not be the same for:\nm1={}\nm2={}\nCase: {}", m2, m3, label));
+    });
+}
+
 SEASTAR_TEST_CASE(test_mutation_upgrade_of_equal_mutations) {
     return seastar::async([] {
         for_each_mutation_pair([](auto&& m1, auto&& m2, are_equal eq) {
