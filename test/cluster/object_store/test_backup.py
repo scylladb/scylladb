@@ -116,8 +116,15 @@ async def test_backup_with_non_existing_parameters(manager: ManagerClient, objec
         assert len(files) > 0
 
         prefix = f'{cf}/backup'
-        tid = await manager.api.backup(server.ip_addr, ks, cf,
-                backup_snap_name if ne_parameter != 'snapshot' else 'no-such-snapshot',
+        if ne_parameter == 'snapshot':
+            # The snapshot's existence on disk is validated synchronously by the
+            # backup API: the request fails and no task is created.
+            with pytest.raises(HTTPError, match='no-such-snapshot not found'):
+                await manager.api.backup(server.ip_addr, ks, cf, 'no-such-snapshot',
+                        object_storage.address, object_storage.bucket_name, prefix)
+            return
+
+        tid = await manager.api.backup(server.ip_addr, ks, cf, backup_snap_name,
                 object_storage.address if ne_parameter != 'endpoint' else 'no-such-endpoint',
                 object_storage.bucket_name if ne_parameter != 'bucket' else 'no-such-bucket',
                 prefix)
