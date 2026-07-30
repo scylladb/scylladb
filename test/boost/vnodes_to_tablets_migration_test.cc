@@ -20,7 +20,9 @@
 #include "locator/token_metadata.hh"
 #include "db/schema_tables.hh"
 #include "dht/token.hh"
+#include "db/view/view_builder.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/error_injection.hh"
 
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
@@ -692,6 +694,44 @@ SEASTAR_TEST_CASE(test_prepare_accepts_rf_rack_valid_keyspace) {
         auto t_id = e.local_db().find_schema("test_migration_ks", "t")->id();
         BOOST_REQUIRE(e.local_db().get_shared_token_metadata().get()->tablets().has_tablet_map(t_id));
     }, rf_rack_valid_keyspaces_config(true));
+}
+
+// Builds in progress aren't carried over to tablets, so the migration must be
+// rejected while a view is still being built, and accepted once it is built.
+SEASTAR_TEST_CASE(test_prepare_rejects_unbuilt_view) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future<>();
+#else
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto pause = "view_builder_pause_before_mark_success";
+        auto ks_name = sstring("test_migration_ks");
+        create_vnode_keyspace_with_table(e, ks_name);
+        for (int k = 0; k < 100; ++k) {
+            e.execute_cql(format("INSERT INTO {}.t (pk, v) VALUES ({}, {})", ks_name, k, k)).get();
+        }
+
+        smp::invoke_on_all([pause] { utils::get_local_injector().enable(pause); }).get();
+        // Subscribe before creating the view: wait_until_built() only reports
+        // builds that finish after the call.
+        auto mv_built = e.local_view_builder().wait_until_built(ks_name, "mv");
+        e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT * FROM {}.t "
+                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks_name, ks_name)).get();
+
+        BOOST_REQUIRE_EXCEPTION(
+                e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get(),
+                std::runtime_error,
+                exception_predicate::message_contains("is not built"));
+
+        smp::invoke_on_all([pause] {
+            utils::get_local_injector().disable(pause);
+            utils::get_local_injector().receive_message(pause);
+        }).get();
+        mv_built.get();
+
+        e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
+    });
+#endif
 }
 
 BOOST_AUTO_TEST_SUITE_END()

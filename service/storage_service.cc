@@ -121,6 +121,7 @@
 #include "node_ops/task_manager_module.hh"
 #include "service/task_manager_module.hh"
 #include "service/topology_mutation.hh"
+#include "db/view/view_build_status.hh"
 #include "cql3/query_processor.hh"
 #include <csignal>
 #include "utils/labels.hh"
@@ -4415,6 +4416,49 @@ static void validate_rf_for_tablets_migration(const replica::database& db,
     }
 }
 
+// Validates that the materialized views of a keyspace can be migrated from
+// vnodes to tablets.
+//
+// Views must be fully built on all normal nodes. The migration
+// doesn't hand over in-progress builds: once the keyspace uses tablets, the
+// node-local view builder ignores it, and the view building coordinator only
+// builds views it has build tasks for. Those tasks are created by CREATE
+// MATERIALIZED VIEW on a tablets keyspace, so a view created under vnodes
+// never gets any. A partially built view would never be completed, and the
+// tablet bookkeeping would treat it as unbuilt, because not all of its
+// entries in system.view_build_status_v2 are SUCCESS.
+//
+// Throws std::runtime_error if any view cannot be migrated.
+static future<> validate_keyspace_views_for_tablets_migration(
+        replica::database& db,
+        db::system_keyspace& sys_ks,
+        const topology& topology,
+        const sstring& ks_name) {
+    auto& ks = db.find_keyspace(ks_name);
+    auto views = ks.metadata()->views();
+    if (views.empty()) {
+        co_return;
+    }
+
+    auto build_statuses = co_await sys_ks.get_view_build_status_map();
+
+    for (const auto& view : views) {
+        auto it = build_statuses.find({view->ks_name(), view->cf_name()});
+        for (const auto& server_id : topology.normal_nodes | std::views::keys) {
+            auto host_id = locator::host_id{server_id.uuid()};
+            bool built = it != build_statuses.end()
+                    && it->second.contains(host_id)
+                    && it->second.at(host_id) == db::view::build_status::SUCCESS;
+            if (!built) {
+                throw std::runtime_error(fmt::format(
+                        "Cannot migrate keyspace {} to tablets: materialized view {}.{} is not built on node {}."
+                        " Wait for the view build to finish and retry.",
+                        ks_name, ks_name, view->cf_name(), host_id));
+            }
+        }
+    }
+}
+
 future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) {
     // Called via run_with_no_api_lock (forwards to shard 0).
     SCYLLA_ASSERT(this_shard_id() == 0);
@@ -4459,6 +4503,7 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         }
 
         validate_rf_for_tablets_migration(db, get_token_metadata_ptr(), *nts, ks_name);
+        co_await validate_keyspace_views_for_tablets_migration(db, get_system_keyspace(), topology, ks_name);
 
         std::vector<std::pair<table_id, sstring>> tables_to_migrate;
 
