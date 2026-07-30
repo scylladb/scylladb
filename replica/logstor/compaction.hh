@@ -37,6 +37,21 @@ class logstor_group;
 
 using separator_write_completion = seastar::noncopyable_function<void(log_location, seastar::gate::holder)>;
 
+// Watermarks, in available segments, that drive automatic compaction. It starts once the number of
+// available segments drops below `low` - the free-segment target - and stops once it is back at
+// `high`. Both are zero when the trigger is disabled.
+struct free_segment_watermarks {
+    uint64_t low;
+    uint64_t high;
+};
+
+// The free-segment target is a fraction of the disk, which is the dominant write-amplification
+// knob (see logstor_compaction.md), with an absolute floor that keeps the target meaningful on
+// small disks, where a fraction of the disk rounds down to a segment or two.
+// `target_fraction` is logstor_compaction_trigger_threshold; 0 disables the trigger.
+free_segment_watermarks make_free_segment_watermarks(uint64_t segment_count, double target_fraction,
+        size_t max_segments_per_compaction) noexcept;
+
 constexpr log_heap_options segment_descriptor_hist_options(4 * 1024, 3, 128 * 1024);
 
 struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options> {
@@ -259,8 +274,6 @@ public:
     virtual future<> flush_separator_buffer(separator_buffer, logstor_group&) = 0;
 
     virtual void add(logstor_group&) = 0;
-
-    virtual void submit_all() = 0;
 
     virtual void submit(logstor_group&) = 0;
 

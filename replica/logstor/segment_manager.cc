@@ -500,10 +500,16 @@ private:
     struct compaction_candidate {
         logstor_group* group;
         std::vector<log_segment_id> segments;
+        ssize_t score;
     };
 
     using group_compaction_state_map = absl::flat_hash_map<logstor_group*, std::unique_ptr<group_compaction_state>>;
     group_compaction_state_map _groups;
+    shared_future<> _auto_compaction_completion{make_ready_future<>()};
+
+    bool auto_compaction_active() const noexcept {
+        return !_auto_compaction_completion.available();
+    }
 
 public:
     compaction_manager_impl(segment_manager_impl& sm, compaction_config cfg)
@@ -537,8 +543,6 @@ public:
 
     void add(logstor_group&) override;
 
-    void submit_all() override;
-
     void submit(logstor_group&) override;
     future<> stop_ongoing_compactions(logstor_group&) override;
     future<> remove(logstor_group&) override;
@@ -547,9 +551,30 @@ public:
     future<> submit_normal_compaction(logstor_group&);
     future<> submit_split_compaction(replica::table&, logstor_group&, mutation_writer::classify_by_token_group) override;
 
+    void schedule_auto_compaction();
+
+    // Refreshes the cached free segment watermarks. Called from start() and whenever
+    // trigger_compaction_threshold changes; segment counts and max_segments_per_compaction
+    // are fixed for the lifetime of the segment manager, so those two are the only inputs
+    // that can make the watermarks change.
+    void refresh_free_segment_watermarks() noexcept;
+
 private:
 
+    // Cached result of make_free_segment_watermarks(). should_run_auto_compaction() and
+    // admission_pressure() call get_free_segment_watermarks() on every write, so caching
+    // avoids repeating the same computation on every hot-path call.
+    free_segment_watermarks _free_segment_watermarks{};
+
+    const free_segment_watermarks& get_free_segment_watermarks() const noexcept {
+        return _free_segment_watermarks;
+    }
+
+    bool should_run_auto_compaction() noexcept;
+    future<> run_auto_compaction();
+
     std::optional<compaction_candidate> select_segments_for_compaction(logstor_group&);
+    future<std::vector<compaction_candidate>> find_top_compaction_candidates(size_t);
 
     future<> submit_group_compaction(logstor_group&, std::function<future<>(group_compaction_state&)>);
     future<> do_compaction(logstor_group&, abort_source&);
@@ -561,6 +586,7 @@ private:
 };
 
 future<> compaction_manager_impl::start() {
+    refresh_free_segment_watermarks();
     co_return;
 }
 
@@ -579,6 +605,9 @@ future<> compaction_manager_impl::stop() {
 
     _separator_flush_sem.broken();
     _compaction_sem.broken();
+
+    auto f = co_await coroutine::as_future(_auto_compaction_completion.get_future());
+    f.ignore_ready_future();
 
     co_await _shares_controller.shutdown();
 
@@ -744,6 +773,8 @@ class segment_manager_impl {
     std::function<void(segment_sequence)> _trigger_separator_flush_fn;
 
     utils::phased_barrier _writes_phaser{"logstor_sm_writes"};
+
+    utils::observer<double> _trigger_threshold_observer;
 
 public:
     static constexpr size_t block_alignment = ondisk::block_alignment;
@@ -953,6 +984,11 @@ float compaction_manager_impl::compaction_pressure() const noexcept {
             / std::max<size_t>(1, soft_pressure_available_segments);
 }
 
+void compaction_manager_impl::refresh_free_segment_watermarks() noexcept {
+    _free_segment_watermarks = make_free_segment_watermarks(_sm._max_segments.configured,
+            _sm._cfg.trigger_compaction_threshold(), _cfg.max_segments_per_compaction);
+}
+
 compaction_manager_impl::group_compaction_state& compaction_manager_impl::get_group_state(logstor_group& cg) {
     auto it = _groups.find(&cg);
     if (it == _groups.end()) {
@@ -973,12 +1009,66 @@ void compaction_manager_impl::add(logstor_group& cg) {
     }
 }
 
-void compaction_manager_impl::submit_all() {
+bool compaction_manager_impl::should_run_auto_compaction() noexcept {
+    const auto available_segments = _sm.available_segment_count(write_source::normal_write);
+    const auto watermarks = get_free_segment_watermarks();
+
+    if (!auto_compaction_active()) {
+        if (available_segments >= watermarks.low || _admission_closed) {
+            return false;
+        }
+        logstor_logger.debug("Starting auto compaction: available segments {} is below the free segment target {}", available_segments, watermarks.low);
+        return true;
+    } else {
+        if (available_segments >= watermarks.high) {
+            logstor_logger.debug("Stopping auto compaction: available segments {} is above high watermark {}", available_segments, watermarks.high);
+            return false;
+        }
+        if (_admission_closed) {
+            logstor_logger.debug("Stopping auto compaction: admission closed");
+            return false;
+        }
+        return true;
+    }
+}
+
+void compaction_manager_impl::schedule_auto_compaction() {
     if (!can_submit_compaction()) {
         return;
     }
-    for (const auto& [cg, _] : _groups) {
-        submit(*cg);
+
+    if (auto_compaction_active()) {
+        return;
+    }
+
+    if (!should_run_auto_compaction()) {
+        return;
+    }
+
+    _auto_compaction_completion = shared_future(run_auto_compaction().handle_exception([] (std::exception_ptr ep) {
+        logstor_logger.warn("Automatic logstor compaction failed: {}. Ignored", ep);
+    }));
+}
+
+future<> compaction_manager_impl::run_auto_compaction() {
+    static constexpr size_t batch_size = 4;
+
+    while (can_submit_compaction() && should_run_auto_compaction()) {
+        auto candidates = co_await find_top_compaction_candidates(batch_size);
+        if (candidates.empty()) {
+            co_await seastar::sleep(std::chrono::milliseconds(100));
+            continue;
+        }
+
+        std::vector<future<>> submitted;
+        submitted.reserve(candidates.size());
+        for (auto& candidate : candidates) {
+            submitted.push_back(submit_normal_compaction(*candidate.group).handle_exception([] (std::exception_ptr ep) {
+                logstor_logger.warn("Automatic logstor compaction failed: {}. Ignored", ep);
+            }));
+        }
+
+        co_await when_all_succeed(submitted.begin(), submitted.end());
     }
 }
 
@@ -996,6 +1086,11 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     , _max_segments{(config.disk_size / config.file_size) * _segments_per_file, (config.disk_size / config.file_size) * _segments_per_file}
     , _segment_descs(static_cast<size_t>(_max_segments.actual))
     , _segment_pool(segment_pool_size, config.max_segments_per_compaction)
+    , _trigger_threshold_observer(_cfg.trigger_compaction_threshold.observe([this] (double new_threshold) {
+            logstor_logger.debug("Compaction trigger threshold changed to {}", new_threshold);
+            _compaction_mgr.refresh_free_segment_watermarks();
+            _compaction_mgr.schedule_auto_compaction();
+      }))
     {
 
     if (_segments_per_file == 0) {
@@ -1337,9 +1432,7 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
             co_return co_await make_segment(seg_id);
         }
 
-        if (_free_segments.size() < static_cast<size_t>(std::ceil(_max_segments.configured * std::min(_cfg.trigger_compaction_threshold(), 1.0)))) {
-            _compaction_mgr.submit_all();
-        }
+        _compaction_mgr.schedule_auto_compaction();
 
         // reuse freed segments
         if (!_free_segments.empty()) {
@@ -1581,8 +1674,53 @@ std::optional<compaction_manager_impl::compaction_candidate> compaction_manager_
         .group = &cg,
         .segments = candidates
             | std::views::take(best_count)
-            | std::ranges::to<std::vector<log_segment_id>>()
+            | std::ranges::to<std::vector<log_segment_id>>(),
+        .score = max_gain,
     };
+}
+
+future<std::vector<compaction_manager_impl::compaction_candidate>>
+compaction_manager_impl::find_top_compaction_candidates(size_t max_candidates) {
+    // min heap of top-k candidates
+    auto candidate_gt = [] (const compaction_candidate& lhs, const compaction_candidate& rhs) {
+        return rhs.score < lhs.score;
+    };
+    std::vector<compaction_candidate> best_candidates;
+    best_candidates.reserve(max_candidates);
+
+    std::vector<logstor_group*> group_snapshot;
+    group_snapshot.reserve(_groups.size());
+    for (const auto& [cg, state] : _groups) {
+        group_snapshot.push_back(cg);
+    }
+
+    for (auto* cg : group_snapshot) {
+        co_await coroutine::maybe_yield();
+
+        auto it = _groups.find(cg);
+        if (it == _groups.end()) {
+            continue;
+        }
+
+        auto& state = *it->second;
+        if (state.running() || state.compaction_disabled_counter > 0) {
+            continue;
+        }
+
+        auto candidate = select_segments_for_compaction(*it->first);
+        if (candidate) {
+            if (best_candidates.size() < max_candidates) {
+                best_candidates.push_back(std::move(*candidate));
+                std::ranges::push_heap(best_candidates, candidate_gt);
+            } else if (best_candidates.front().score < candidate->score) {
+                std::ranges::pop_heap(best_candidates, candidate_gt);
+                best_candidates.back() = std::move(*candidate);
+                std::ranges::push_heap(best_candidates, candidate_gt);
+            }
+        }
+    }
+
+    co_return best_candidates;
 }
 
 // A single buffer used by compaction for rewriting records into new segments in a single compaction group.
