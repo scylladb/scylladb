@@ -4797,11 +4797,11 @@ storage_service::migration_status storage_service::get_tablets_migration_status(
     const auto& tm = get_token_metadata();
     const auto& tablet_metadata = tm.tablets();
 
-    auto tables = ks.metadata()->tables();
+    const auto& cf_meta_data = ks.metadata().get()->cf_meta_data();
 
-    // Check whether all tables have tablet maps (i.e. migration was started).
-    bool has_tablet_maps = !tables.empty() && std::ranges::all_of(tables, [&] (const auto& schema) {
-        return tablet_metadata.has_tablet_map(schema->id());
+    // Check whether all tables and views have tablet maps (i.e. migration was started).
+    bool has_tablet_maps = !cf_meta_data.empty() && std::ranges::all_of(cf_meta_data, [&] (const auto& e) {
+        return tablet_metadata.has_tablet_map(e.second->id());
     });
 
     if (!has_tablet_maps) {
@@ -4960,20 +4960,20 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
         const auto& tm = get_token_metadata();
         const auto& tablet_metadata = tm.tablets();
 
-        auto tables = ks.metadata()->tables();
+        const auto& tables = ks.metadata()->cf_meta_data();
         if (tables.empty()) {
             throw std::runtime_error(fmt::format("Keyspace '{}' has no tables", ks_name));
         }
 
-        for (const auto& schema : tables) {
+        for (const auto& schema : tables | std::views::values) {
             if (!tablet_metadata.has_tablet_map(schema->id())) {
-                throw std::runtime_error(fmt::format("Table {}.{} does not have a tablet map; "
-                    "all tables in keyspace '{}' must be prepared for migration before finalizing",
-                    ks_name, schema->cf_name(), ks_name));
+                throw std::runtime_error(fmt::format("{} {}.{} does not have a tablet map; "
+                    "all tables and views in keyspace '{}' must be prepared for migration before finalizing",
+                    schema->is_view() ? "View" : "Table", ks_name, schema->cf_name(), ks_name));
             }
         }
 
-        slogger.info("All {} table(s) in keyspace '{}' have tablet maps, submitting finalization request",
+        slogger.info("All {} table(s) and view(s) in keyspace '{}' have tablet maps, submitting finalization request",
                      tables.size(), ks_name);
 
         request_id = guard.new_group0_state_id();
