@@ -585,6 +585,53 @@ static void wait_until_view_build_status_success(cql_test_env& e, const sstring&
     }
 }
 
+// Verify that preparing the migration of a keyspace with views registers
+// the views as co-located with their base table, sharing its tablet map,
+// instead of creating independent tablet maps for them.
+SEASTAR_TEST_CASE(test_colocated_view_tablet_map_creation) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto ks_name = sstring("test_migration_ks");
+        create_vnode_keyspace_with_table(e, ks_name);
+        e.execute_cql(format("CREATE TABLE {}.t2 (pk int PRIMARY KEY, v int)", ks_name)).get();
+        e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT * FROM {}.t "
+                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v) "
+                "WITH tombstone_gc = {{'mode': 'timeout'}}", ks_name, ks_name)).get();
+        // A local secondary index is backed by a view with the same partition
+        // key as the base table, so it can be co-located too. There is no way
+        // to set tombstone_gc in CREATE INDEX, so alter the backing view.
+        e.execute_cql(format("CREATE INDEX local_idx ON {}.t ((pk), v)", ks_name)).get();
+        e.execute_cql(format("ALTER MATERIALIZED VIEW {}.local_idx_index WITH tombstone_gc = {{'mode': 'timeout'}}", ks_name)).get();
+
+        wait_until_view_build_status_success(e, ks_name, "mv");
+        wait_until_view_build_status_success(e, ks_name, "local_idx_index");
+
+        auto base_id = e.local_db().find_schema(ks_name, "t")->id();
+        auto t2_id = e.local_db().find_schema(ks_name, "t2")->id();
+        auto mv_id = e.local_db().find_schema(ks_name, "mv")->id();
+        auto idx_id = e.local_db().find_schema(ks_name, "local_idx_index")->id();
+
+        e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
+
+        auto& stm = e.local_db().get_shared_token_metadata();
+        const auto& tablets = stm.get()->tablets();
+
+        // The views are co-located with their base table.
+        BOOST_REQUIRE(tablets.is_base_table(base_id));
+        BOOST_REQUIRE(!tablets.is_base_table(mv_id));
+        BOOST_REQUIRE(!tablets.is_base_table(idx_id));
+        BOOST_REQUIRE(tablets.get_base_table(mv_id) == base_id);
+        BOOST_REQUIRE(tablets.get_base_table(idx_id) == base_id);
+
+        // Co-located tables share a single tablet map instance.
+        BOOST_REQUIRE(&tablets.get_tablet_map(mv_id) == &tablets.get_tablet_map(base_id));
+        BOOST_REQUIRE(&tablets.get_tablet_map(idx_id) == &tablets.get_tablet_map(base_id));
+
+        // A table without views forms its own group.
+        BOOST_REQUIRE(tablets.is_base_table(t2_id));
+        BOOST_REQUIRE(&tablets.get_tablet_map(t2_id) != &tablets.get_tablet_map(base_id));
+    });
+}
+
 // A view whose partition key differs from the base table's cannot be
 // co-located with the base table, so the migration must be rejected.
 SEASTAR_TEST_CASE(test_prepare_rejects_non_colocatable_view) {
