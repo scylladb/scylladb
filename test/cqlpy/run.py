@@ -316,6 +316,7 @@ def run_scylla_cmd(pid, dir):
         # test/alternator/run.
         '--experimental-features=udf',
         '--experimental-features=views-with-tablets',
+        '--experimental-features=logstor',
         '--enable-tablets=true',
         '--enable-user-defined-functions', '1',
         # Views with tablets refuse to work if this option is not on :-(
@@ -340,6 +341,9 @@ def run_scylla_cmd(pid, dir):
         # The expiration scanner's period (started for Alternator but
         # now also CQL)
         '--alternator-ttl-period-in-seconds=0.5',
+        '--logstor-disk-size-in-mb=8',
+        '--logstor-file-size-in-mb=4',
+        '--logstor-separator-max-memory-in-mb=8',
         ], env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same
