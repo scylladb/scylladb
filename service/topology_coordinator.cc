@@ -54,6 +54,7 @@
 #include "service/tablet_allocator.hh"
 #include "service/tablet_operation.hh"
 #include "service/topology_state_machine.hh"
+#include "service/vnodes_to_tablets_migration.hh"
 #include "db/view/view_building_coordinator.hh"
 #include "topology_mutation.hh"
 #include "utils/UUID.hh"
@@ -1441,6 +1442,38 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
 
                     if (!rollback) {
+                        // The migration window is not guarded against view schema
+                        // changes, so re-validate the views: a view may have been
+                        // created, or altered to an unsupported state, after the
+                        // migration was prepared. Finalization can be retried once
+                        // the user fixes the keyspace.
+                        co_await validate_keyspace_views_for_tablets_migration(_db, _sys_ks, _feature_service, _topo_sm._topology, ks_name);
+
+                        // The vnode-based view builder does not clean up build
+                        // status entries of nodes that left the cluster, while the
+                        // tablet-based bookkeeping considers a view built only if
+                        // all its entries are SUCCESS. Remove entries of unknown
+                        // hosts so that stale rows don't mark the views as unbuilt
+                        // after the keyspace switches to tablets.
+                        auto build_statuses = co_await _sys_ks.get_view_build_status_map();
+                        auto normal_hosts = _topo_sm._topology.normal_nodes | std::views::keys
+                                | std::views::transform([] (raft::server_id id) { return to_host_id(id); })
+                                | std::ranges::to<std::unordered_set>();
+                        for (const auto& view : ks.metadata()->views()) {
+                            auto it = build_statuses.find({view->ks_name(), view->cf_name()});
+                            if (it == build_statuses.end()) {
+                                continue;
+                            }
+                            for (const auto& host_id : it->second | std::views::keys) {
+                                if (!normal_hosts.contains(host_id)) {
+                                    rtlogger.info("finalize_migration: removing stale build status entry of view {}.{} for host {}",
+                                        view->ks_name(), view->cf_name(), host_id);
+                                    updates.emplace_back(co_await _sys_ks.make_remove_view_build_status_on_host_mutation(
+                                            guard.write_timestamp(), {view->ks_name(), view->cf_name()}, host_id));
+                                }
+                            }
+                        }
+
                         // All nodes have been migrated. ALTER the keyspace to use tablets.
                         auto old_md = ks.metadata();
                         auto new_md = data_dictionary::keyspace_metadata::new_keyspace(
