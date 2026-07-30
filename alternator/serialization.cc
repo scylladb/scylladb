@@ -417,7 +417,7 @@ rjson::value json_key_column_value(bytes_view cell, const column_definition& col
 
 partition_key pk_from_json(const rjson::value& item, schema_ptr schema) {
     std::vector<bytes> raw_pk;
-    // FIXME: this is a loop, but we really allow only one partition key column.
+    // This is a loop because we allow composite partition keys for GSI.
     for (const column_definition& cdef : schema->partition_key_columns()) {
         bytes raw_value = get_key_column_value(item, cdef);
         raw_pk.push_back(std::move(raw_value));
@@ -461,7 +461,7 @@ position_in_partition pos_from_json(const rjson::value& item, schema_ptr schema)
     if (is_alternator_ks) {
         return position_in_partition::for_key(ck_from_json(item, schema));
     }
-    
+
     const auto region_item = rjson::find(item, scylla_paging_region);
     const auto weight_item = rjson::find(item, scylla_paging_weight);
     if (bool(region_item) != bool(weight_item)) {
