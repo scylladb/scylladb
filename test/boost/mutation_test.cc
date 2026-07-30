@@ -1542,7 +1542,7 @@ SEASTAR_TEST_CASE(test_mutation_equality) {
 
 SEASTAR_TEST_CASE(test_mutation_hash) {
     return seastar::async([] {
-        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
+        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq, std::string_view label) {
             auto test_with_hasher = [&] (auto hasher) {
                 auto get_hash = [&] (const mutation &m) {
                     auto h = hasher;
@@ -1558,7 +1558,7 @@ SEASTAR_TEST_CASE(test_mutation_hash) {
                 } else {
                     // We're using a strong hasher, collision should be unlikely
                     if (h1 == h2) {
-                        BOOST_FAIL(format("Hash should be different for {} and {}", m1, m2));
+                        BOOST_FAIL(fmt::format("Hash should be different for {} and {}, case {}", m1, m2, label));
                     }
                 }
             };
@@ -1590,7 +1590,7 @@ SEASTAR_TEST_CASE(test_query_digest) {
             }
         };
 
-        for_each_mutation_pair([&] (const mutation& m1, const mutation& m2, are_equal eq) {
+        for_each_mutation_pair([&] (const mutation& m1, const mutation& m2, are_equal eq, std::string_view label) {
             if (m1.schema()->version() != m2.schema()->version()) {
                 return;
             }
@@ -1599,7 +1599,7 @@ SEASTAR_TEST_CASE(test_query_digest) {
                 check_digests_equal(compacted(m1, now), m2);
                 check_digests_equal(m1, compacted(m2, now));
             } else {
-                testlog.info("If not equal, they should become so after applying diffs mutually");
+                testlog.info("If not equal (case {}), they should become so after applying diffs mutually", label);
 
                 mutation_application_stats app_stats;
                 schema_ptr s = m1.schema();
