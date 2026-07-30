@@ -37,6 +37,30 @@ class logstor_group;
 
 using separator_write_completion = seastar::noncopyable_function<void(log_location, seastar::gate::holder)>;
 
+// Watermarks, in available segments, that drive automatic compaction. It starts once the number of
+// available segments drops below `low` - the free-segment target - and stops once it is back at
+// `high`. Both are zero when the trigger is disabled.
+struct free_segment_watermarks {
+    uint64_t low;
+    uint64_t high;
+};
+
+// The free-segment target is a fraction of the disk, which is the dominant write-amplification
+// knob (see logstor_compaction.md), with an absolute floor that keeps the target meaningful on
+// small disks, where a fraction of the disk rounds down to a segment or two.
+// `target_fraction` is logstor_compaction_trigger_threshold; 0 disables the trigger.
+free_segment_watermarks make_free_segment_watermarks(uint64_t segment_count, double target_fraction,
+        size_t max_segments_per_compaction) noexcept;
+
+// Whether the free-segment level wants automatic compaction running, given whether it is running
+// now. The two watermarks are a hysteresis band: compaction starts once the free-segment target is
+// breached and runs until the disk is back at the stop watermark, rather than stopping again at the
+// first write that crosses back over the target. Both watermarks are zero when the trigger is
+// disabled, which answers "no" at any number of available segments.
+//
+// This is only the space half of the decision; whether compaction may run at all is the caller's.
+bool auto_compaction_wanted(bool running, uint64_t available_segments, free_segment_watermarks watermarks) noexcept;
+
 inline constexpr log_heap_options segment_descriptor_hist_options(4 * 1024, 3, 128 * 1024);
 
 struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options> {
@@ -261,7 +285,6 @@ public:
     virtual void add(logstor_group&) = 0;
     virtual future<> remove(logstor_group&) = 0;
 
-    virtual void submit_all() = 0;
     virtual void submit(logstor_group&) = 0;
 
     virtual future<> submit_split_compaction(replica::table&, logstor_group&, mutation_writer::classify_by_token_group) = 0;
