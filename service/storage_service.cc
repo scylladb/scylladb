@@ -4354,8 +4354,9 @@ future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_si
         }, uint64_t(0), std::plus<uint64_t>());
         auto estimated_total_size = static_cast<uint64_t>(local_size / local_fraction);
         table_sizes.emplace(tid, estimated_total_size);
-        slogger.info("Estimated size of table {}.{}: {} byte(s) (local data set is {} byte(s))",
-                ks_name, cf_name, estimated_total_size, local_size);
+        slogger.info("Estimated size of {} {}.{}: {} byte(s) (local data set is {} byte(s))",
+                _db.local().find_schema(tid)->is_view() ? "view" : "table", ks_name, cf_name,
+                estimated_total_size, local_size);
     }
 
     co_return table_sizes;
@@ -4467,20 +4468,35 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
 
         co_await validate_keyspace_views_for_tablets_migration(db, get_system_keyspace(), topology, ks_name);
 
+        // Base tables to migrate. Views are not listed here: they are
+        // co-located with their base table and share its tablet map.
         std::vector<std::pair<table_id, sstring>> tables_to_migrate;
+        // Views to migrate, grouped by their base table.
+        std::unordered_map<table_id, std::vector<std::pair<table_id, sstring>>> views_to_migrate;
 
         for (const auto& [name, schema] : cf_meta_data) {
             auto tid = schema->id();
             auto& cf = db.find_column_family(tid);
 
             if (cf.uses_tablets()) {
-                slogger.info("Table {}.{} already uses tablets, skipping", ks_name, name);
+                slogger.info("{} {}.{} already uses tablets, skipping", schema->is_view() ? "View" : "Table", ks_name, name);
                 continue;
             }
-            tables_to_migrate.push_back({tid, name});
+            if (schema->is_view()) {
+                // The validation above guaranteed that every view can be
+                // co-located with its base table.
+                auto base_id = db.get_base_table_for_tablet_colocation(*schema, {});
+                if (!base_id) {
+                    on_internal_error(slogger, fmt::format(
+                            "View {}.{} passed migration validation but is not eligible for co-location", ks_name, name));
+                }
+                views_to_migrate[*base_id].push_back({tid, name});
+            } else {
+                tables_to_migrate.push_back({tid, name});
+            }
         }
 
-        if (tables_to_migrate.empty()) {
+        if (tables_to_migrate.empty() && views_to_migrate.empty()) {
             slogger.info("All tables in keyspace {} already use tablets, nothing to do", ks_name);
             co_return;
         }
@@ -4544,8 +4560,21 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         target_pow2_per_table_map target_pow2s;
         bool use_pow2_presplit = bool(_feature_service.tablet_pow2_convergence);
         if (use_pow2_presplit) {
+            // Estimate the sizes of all tables, including views. Co-located
+            // views share their base table's tablet map, so size each tablet
+            // map by the total size of the tables it holds.
+            auto tables_to_estimate = tables_to_migrate;
+            for (const auto& views : views_to_migrate | std::views::values) {
+                tables_to_estimate.insert(tables_to_estimate.end(), views.begin(), views.end());
+            }
             auto erm = ks.get_static_effective_replication_map();
-            auto estimated_sizes = co_await collect_table_sizes_for_migration(ks_name, erm, trs, tables_to_migrate);
+            auto estimated_sizes = co_await collect_table_sizes_for_migration(ks_name, erm, trs, tables_to_estimate);
+            for (const auto& [base_id, views] : views_to_migrate) {
+                for (const auto& [view_id, view_name] : views) {
+                    estimated_sizes[base_id] += estimated_sizes[view_id];
+                    estimated_sizes.erase(view_id);
+                }
+            }
             target_pow2s = co_await _tablet_allocator.local().compute_migration_target_pow2s(trs, estimated_sizes);
         }
 
@@ -4578,6 +4607,22 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
                     });
             };
 
+            // Views don't get a tablet map of their own; instead, they are
+            // registered in system.tablets as co-located with their base table,
+            // sharing its tablet map.
+            auto append_colocated_tablet_map_mutations = [&] (table_id base_id) -> future<> {
+                auto it = views_to_migrate.find(base_id);
+                if (it == views_to_migrate.end()) {
+                    co_return;
+                }
+                for (const auto& [view_id, view_name] : it->second) {
+                    slogger.info("Built co-located tablet map for view {}.{} (shares the base table's tablet map)",
+                                 ks_name, view_name);
+                    auto m = replica::colocated_tablet_map_to_mutation(view_id, ks_name, view_name, base_id, guard.write_timestamp());
+                    updates.emplace_back(co_await make_canonical_mutation_gently(std::move(m)));
+                }
+            };
+
             if (use_pow2_presplit) {
                 for (const auto& [tid, cf_name] : tables_to_migrate) {
                     size_t target_pow2 = 0;
@@ -4586,11 +4631,13 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
                     }
                     auto tmap = co_await build_tablet_map_for_migration(erm, target_pow2);
                     co_await append_tablet_map_mutations(tid, cf_name, tmap, target_pow2);
+                    co_await append_colocated_tablet_map_mutations(tid);
                 }
             } else {
                 auto shared_tmap = co_await build_tablet_map_for_migration(erm, 0);
                 for (const auto& [tid, cf_name] : tables_to_migrate) {
                     co_await append_tablet_map_mutations(tid, cf_name, shared_tmap, 0);
+                    co_await append_colocated_tablet_map_mutations(tid);
                 }
             }
         }
@@ -4625,6 +4672,12 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         for (const auto& [tid, cf_name] : tables_to_migrate) {
             slogger.info("Successfully built tablet map for table {}.{}",
                          ks_name, cf_name);
+        }
+        for (const auto& views : views_to_migrate | std::views::values) {
+            for (const auto& [view_id, view_name] : views) {
+                slogger.info("Successfully built co-located tablet map for view {}.{}",
+                             ks_name, view_name);
+            }
         }
         break;
     }
