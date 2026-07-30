@@ -4448,6 +4448,9 @@ static void validate_rf_for_tablets_migration(const replica::database& db,
 // tablet bookkeeping would treat it as unbuilt, because not all of its
 // entries in system.view_build_status_v2 are SUCCESS.
 //
+// Co-located tables don't support the 'repair' tombstone_gc mode, but views
+// using it are accepted: finalizing the migration switches them to 'timeout'.
+//
 // Throws std::runtime_error if any view cannot be migrated.
 static future<> validate_keyspace_views_for_tablets_migration(
         replica::database& db,
