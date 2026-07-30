@@ -239,3 +239,156 @@ survive on disk, so uncommitted entries are still available for replay on the ne
 
 This is important: if we decremented the dirty count on shutdown, the commitlog might
 delete segments containing uncommitted Raft entries that we still need.
+
+# Tablet split
+
+A strongly consistent tablet keeps its data in a Raft group of its own, so splitting one is
+not just a matter of rewriting the tablet map: the group of the tablet being split has to be
+replaced by the groups of the two tablets it is split into. Three properties have to hold
+across the replacement:
+
+- no acknowledged write may be lost,
+- no read may observe a state older than a write already acknowledged,
+- no write may be accepted by a group which the new tablet map no longer refers to.
+
+This section describes how the split achieves that. Throughout it, and in the code, the group
+being replaced is called the **parent** and the groups replacing it the **children**. The same
+machinery is meant to serve a tablet merge, where a child has several parents, hence the
+neutral name *resize* in the identifiers; merging is not implemented yet and is rejected
+explicitly.
+
+## Outline
+
+```
+topology coordinator                        replicas
+────────────────────                        ────────
+split decision emitted
+  + child group ids  ──── group0 write ───► create the child groups, hold their
+                                            appliers back, keep their leaders
+                                            co-located with the parent's
+
+  (tablets compact, the balancer waits)
+
+finalization:
+  global barrier
+  seal the parent    ──── process_raft_resize ──► commit start_resize:
+    on every replica                              writes go to the children
+                                                  commit end_resize:
+                                                  the parent's log is final,
+                                                  the child appliers are released
+  replace tablet map ──── group0 write ───► the child tablets take the child group
+                                            ids as their own, the resize state is
+                                            dropped
+```
+
+## The child group ids travel with the split decision
+
+The children have to exist, and every replica has to agree on which groups they are, before
+the split is carried out - otherwise there would be nowhere to send a write the parent has
+stopped accepting. The ids are therefore generated when the split decision is emitted and
+recorded in the tablet metadata (`locator::raft_resize_info`, persisted in the
+`transition_raft_group_ids` column of `system.tablets`), so that both reach the replicas in the
+same group0 write. They are cleared again if the decision is revoked. When the split is finally
+applied, the new tablets take those ids as their own group ids rather than getting fresh ones.
+
+The kind of the resize in progress is not recorded per tablet: it is the kind of the resize
+decision the ids were emitted with, which is already in the tablet metadata (the static
+`resize_type` column), so the two can never disagree.
+
+A replica observing the resize info starts the child groups next to the parent, which keeps
+serving reads and writes in the meantime.
+
+## Sealing the parent
+
+Sealing is driven from outside the group, by the topology coordinator, over the
+`process_raft_resize` verb: the markers have to be committed in the parent's log, which only
+its current leader can do, and every replica has to have applied the second one before the
+tablet map is replaced. It commits two markers:
+
+- `start_resize` - from here on the parent no longer accepts writes, and the coordinator
+  hands the writes of its token range off to the child covering the token,
+- `end_resize` - from here on the parent's log is final, and the appliers of the children
+  are released.
+
+The markers are ordinary entries in the parent's log, so they are replicated and applied in
+log order like any write. They are *not* carried as mutations, though: each marker is recorded
+as a static column of the group's own row in `system.raft_groups`, whose partition key contains
+the shard hosting the group, and replicas may host the same group on different shards. A single
+mutation could therefore not serve all of them, so `raft_command` is a variant
+(`write_mutation`, `resize_marker`, `no_op`) and every replica builds its own mutation when it
+applies the entry. Only the presence of a marker is ever read back; the kind of resize in
+progress comes from the tablet metadata.
+
+The coordinator drives every replica until it reports success, retrying: a failure only ever
+means that the replica cannot make progress *yet* - it has not seen the new tablet metadata,
+does not host the groups, an election is in progress, or the leaders are not co-located - and
+all of those resolve on their own. Nodes being excluded from the cluster are skipped. Once any
+replica has committed the markers the rest only have to be waited for, so they are driven in
+`wait_only` mode; the last round is always a `wait_only` one, because committing a marker only
+establishes that it is committed, not that it has been applied.
+
+`service::strong_consistency::raft_resize_tracker` holds the per-shard state of every
+resize a replica takes part in, tracks which markers have been applied, and owns the promise
+the child appliers wait on. It is reloaded from `system.raft_groups` before a group's Raft
+server is created, because after a restart the parent's committed entries are applied by
+commitlog replay rather than by `state_machine::apply()`, so nothing would fulfil the promise
+otherwise. It deliberately holds nothing but that state: it is started before `groups_manager`
+so that the state machines and the commitlog replay can use it without the Raft servers being
+up, which anything driving those servers would undo.
+
+## Handing the token range over without a gap
+
+Two things have to hold for the hand-over to be seamless.
+
+**A write must either land in the parent's log or be handed off, with nothing in between.**
+The coordinator checks the `start_resize` flag immediately before entering `add_entry()`,
+without suspending in between, so a write which saw the flag unset is submitted before the
+flag was set. That is only enough because `add_entry()` appends entries in the order in which
+callers entered it, rather than in the order in which they happen to win the memory permit -
+which is why the FIFO admission in `raft::server_impl` exists. A write which observed
+`!start_resize` is therefore appended ahead of the `end_resize` marker, and so ends up in the
+final log of the parent.
+
+A linearizable read checks the flag before *and* after its read barrier, since the barrier may
+be what applies the marker.
+
+**A handed-off write has to be ordered after everything already committed in the parent.**
+Timestamps are handed out by the leader, so the handed-off writes have to come from the same
+clock as the ones already in the parent's log: the leaders of the parent and of the children
+have to sit on the same node. They are elected together to begin with - a child derives its
+fast bootstrap seed from the current leader of its parent, which every replica knows, so they
+all pick the same node - and a fiber per resize (`groups_manager::leader_colocator()`) transfers a child's
+leadership back to the parent's leader whenever the two drift apart, using the targeted
+`raft::server::stepdown()`. Until they are co-located the request bounces back to the
+coordinator and is retried, since it has nowhere else to go. On top of that, a handed-off write
+carries the timestamp it got from the parent, and the child's clock is advanced past it before
+a new one is handed out.
+
+## Reads on a child before the parent is done
+
+A child group must not apply anything until the parent has applied everything it committed;
+otherwise a read served by the child could observe a state older than a write already
+committed in the parent. The child's applier therefore blocks on `end_resize`.
+
+This also makes linearizable reads on a child wait, which they must: sealing puts a `no_op`
+entry into each child before committing `start_resize`, so from that point a read barrier
+in a child has an unapplied entry to wait for, and is released by the same thing which releases
+the applier. Writes do not have to wait - a handed-off write is acknowledged as soon as the
+child commits it, because it already carries a timestamp above every one the parent handed out
+and cannot be applied out of order.
+
+## Recovery
+
+Commitlog replay writes to the memtables directly, bypassing `state_machine::apply()` and
+therefore the wait above, so it has to reproduce the ordering itself. It replays in two passes:
+first every group which is not replacing another one, which puts the whole log of a parent in
+place, then the children. For each child, the persisted resize state of its parent is loaded -
+correct by then, since the first pass has already applied the parent's own `end_resize`, if
+any - and:
+
+- if the parent has finished resizing, the child's entries are applied normally,
+- if it has not, they must not be applied at all, since more entries may still arrive in the
+  parent and would have to go first. They are only rewritten to the new commitlog, to get
+  fresh `rp_handle`s, and left in the Raft log to be applied once the parent is sealed. The
+  snapshot index is not advanced, which is correct because such a group had not applied
+  anything before the restart either.
