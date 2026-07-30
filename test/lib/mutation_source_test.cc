@@ -1875,6 +1875,34 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
+            // Add two identical live rows, with different effective tombstones
+            clustering_key live_ck = clustering_key::from_deeply_exploded(*s1, {data_value(bytes("ck_live_0")), data_value(bytes("ck_live_1"))});
+            clustering_key live_ck_prefix = clustering_key::from_deeply_exploded(*s1, {data_value(bytes("ck_live_0"))});
+            auto tomb1 = new_tombstone();
+            auto tomb2 = new_tombstone();
+            auto tomb3 = new_tombstone();
+            auto ts = new_timestamp();
+
+            m1.set_clustered_cell(live_ck, "regular_col_1", data_value(bytes("live_value1")), ts);
+            m2.set_clustered_cell(live_ck, "regular_col_1", data_value(bytes("live_value1")), ts);
+
+            m1.partition().apply_delete(*s1, live_ck, tomb1);
+            result.unequal.emplace_back(m1, m2, "identical rows, one has row tombstone");
+
+            m2.partition().apply_delete(*s2, live_ck, tomb2);
+            result.unequal.emplace_back(m1, m2, "identical rows with different row tombstone");
+
+            m1.partition().apply_delete(*s1, live_ck, tomb2);
+            result.equal.emplace_back(mutations{m1, m2});
+
+            m1.partition().apply_delete(*s1, live_ck_prefix, tomb3);
+            result.unequal.emplace_back(m1, m2, "identical rows with different effective tombstone");
+
+            m2.partition().apply_delete(*s2, live_ck_prefix, tomb3);
+            result.equal.emplace_back(mutations{m1, m2});
+        }
+
+        {
             auto ts = new_timestamp();
             m1.set_clustered_cell(ck1, "regular_col_1", data_value(bytes("regular_col_value")), ts, ttl);
             result.unequal.emplace_back(m1, m2, "update regular_col_1 for ck1");
