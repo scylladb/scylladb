@@ -66,9 +66,14 @@ Keyspace and table configuration
   migration. If your configuration requires changes, see
   :doc:`Update Topology Strategy From Simple to Network </operating-scylla/procedures/cluster-management/update-topology-strategy-from-simple-to-network>`
   and :doc:`How to Safely Increase the Replication Factor </kb/rf-increase>`.
-* All tables in the keyspace should have ``tombstone_gc`` mode set to ``repair``
-  to prevent tombstone garbage collection from running during migration.
-  For guidance, see :ref:`Tombstone Garbage Collection <ddl-tombstones-gc>`.
+* All tables and materialized views in the keyspace should have
+  ``tombstone_gc`` mode set to ``repair`` to prevent tombstone garbage
+  collection from running during migration. For guidance, see
+  :ref:`Tombstone Garbage Collection <ddl-tombstones-gc>`.
+* All materialized views in the keyspace must be **fully built** before the
+  migration is started. Builds in progress are not carried over to tablets.
+  Check the build status with
+  :doc:`nodetool viewbuildstatus </operating-scylla/nodetool-commands/viewbuildstatus>`.
 
 Limitations
 -----------
@@ -81,8 +86,10 @@ The current migration procedure has the following limitations:
 * Clusters with :doc:`zero-token nodes </architecture/zero-token-nodes>` are
   not yet supported.
 
-* **No schema changes** during the migration. Do not create, alter, or drop
-  tables in the migrating keyspace until the migration is finished.
+* **No schema changes** during the migration. Creating or dropping tables, views,
+  or indexes, enabling or disabling CDC, and dropping the migrating keyspace are
+  rejected until the migration is finished. Altering the properties of existing
+  tables and views is allowed.
 * **No topology changes** during the migration. Do not add, remove, decommission,
   replace, or rebuild nodes while a migration is in progress.
 * **No repair** operations during the migration. Do not run ``nodetool repair``
@@ -91,8 +98,16 @@ The current migration procedure has the following limitations:
   Do not take snapshots, run backups, or restore into the migrating keyspace
   while the migration is in progress.
 * **No TRUNCATE** on tables in the migrating keyspace during the migration.
-* Only **CQL base tables** can be migrated. Materialized views, secondary
-  indexes, CDC tables, and Alternator tables are not supported.
+* Only **CQL tables and materialized views** can be migrated. CDC tables and
+  Alternator tables are not supported.
+* Materialized views are migrated as tables **co-located** with their base
+  table (sharing its tablets), so every view in the keyspace must be eligible
+  for co-location: its partition key must consist of exactly the base table's
+  partition key columns, in the same order. Views with a different partition
+  key must be dropped before the migration.
+* **Local secondary indexes** are supported (their backing views share the
+  base table's partition key). **Global secondary indexes** are not; they
+  must be dropped before the migration.
 * Tables with **counters** or **LWTs** cannot be migrated.
 * Only tables using the **Incremental Compaction Strategy (ICS)** can be migrated.
   Other compaction strategies are not supported.
@@ -329,6 +344,11 @@ Procedure
       .. code-block:: console
 
          nodetool migrate-to-tablets finalize <keyspace>
+
+      Finalization switches materialized views and local secondary indexes
+      that use the ``repair`` ``tombstone_gc`` mode to ``timeout``. After the
+      migration they become :term:`co-located tables <Colocated Table>`,
+      which do not support ``repair``, and ``timeout`` is their default mode.
 
    #. Verify that the keyspace status changed to ``tablets``:
 
