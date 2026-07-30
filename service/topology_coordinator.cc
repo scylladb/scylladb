@@ -1368,7 +1368,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                     auto tmptr = get_token_metadata_ptr();
                     const auto& tablet_metadata = tmptr->tablets();
+                    // Views are migrated together with their base tables (as
+                    // co-located tables), so include them in the checks below.
                     auto tables = ks.metadata()->tables();
+                    auto views = ks.metadata()->views()
+                        | std::views::transform([] (const auto& view) { return schema_ptr(view); })
+                        | std::ranges::to<std::vector<schema_ptr>>();
+                    tables.insert(tables.end(), views.begin(), views.end());
 
                     // Verify all tables have tablet maps.
                     for (const auto& schema : tables) {
