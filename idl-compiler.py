@@ -212,7 +212,10 @@ class Attributes(ASTBase):
 
     The following attributes are supported:
      - `[[writable]]` class attribute, triggers generation of writers and views
-       for a class.
+       for a class. For each writable class X, two view types are generated:
+       (1) a non-fragmented `X_view` struct using `utils::input_stream`, and
+       (2) an `X_fragmented_view` struct using `seastar::fragmented_memory_input_stream<fragmented_temporary_buffer::view::iterator>`
+       that supports zero-copy deserialization from fragmented buffers.
      - `[[version id]] field attribute, marks that a field is available starting
        from a specific version.'''
     def __init__(self, attr_items=[]):
@@ -1385,8 +1388,8 @@ def sort_dependencies():
     return res
 
 
-def join_template_view(lst, more_types=[]):
-    return "<" + ", ".join([param_view_type(l) for l in lst] + more_types) + ">"
+def join_template_view(lst, more_types=[], fragmented=False):
+    return "<" + ", ".join([param_view_type(l, fragmented) for l in lst] + more_types) + ">"
 
 
 def to_view(val):
@@ -1395,37 +1398,49 @@ def to_view(val):
     return val
 
 
-def param_view_type(t):
+def param_view_type(t, fragmented=False):
     if isinstance(t, BasicType):
+        if fragmented and t.name in local_writable_types:
+            return t.name + "_fragmented_view"
         return to_view(t.name)
     elif isinstance(t, TemplateType):
         additional_types = []
         if t.name == "boost::variant" or t.name == "std::variant":
             additional_types.append("unknown_variant_type")
-        return t.name + join_template_view(t.template_parameters, additional_types)
+        return t.name + join_template_view(t.template_parameters, additional_types, fragmented)
 
 
-def element_type(t):
+def element_type(t, fragmented=False):
     assert isinstance(t, TemplateType)
     assert len(t.template_parameters) == 1
     assert t.name != "boost::variant" and t.name != "std::variant"
-    return param_view_type(t.template_parameters[0])
+    return param_view_type(t.template_parameters[0], fragmented)
 
 
 read_sizes = set()
 
 
-def add_variant_read_size(hout, typ):
-    global read_sizes
-    t = param_view_type(typ)
-    if t in read_sizes:
-        return
+def _has_writable_view_params(typ):
+    """Check if a variant type has any writable view type parameters."""
     if not is_variant(typ):
-        return
+        return False
     for p in typ.template_parameters:
-        if is_variant(p):
-            add_variant_read_size(hout, p)
-    read_sizes.add(t)
+        if is_local_writable_type(p):
+            return True
+        if is_variant(p) and _has_writable_view_params(p):
+            return True
+    return False
+
+
+def _generate_variant_skip_deserialize(hout, typ, fragmented=False):
+    """Generate skip and deserialize functions for a variant type.
+
+    When fragmented is False, generates the default (backward-compatible)
+    version using X_view types. When fragmented is True, generates a version
+    using X_fragmented_view types for seastar::fragmented_memory_input_stream<fragmented_temporary_buffer::view::iterator>.
+    """
+    t = param_view_type(typ, fragmented)
+
     fprintln(hout, f"""
 template<typename Input>
 inline void skip(Input& v, std::type_identity<{t}>) {{
@@ -1447,18 +1462,45 @@ template<typename Input>
         fprintln(hout, f"""
     if (o == {index}) {{
         v.skip(sizeof(size_type)*2);
-        return {t}(deserialize(v, std::type_identity<{param_view_type(param)}>()));
+        return {t}(deserialize(v, std::type_identity<{param_view_type(param, fragmented)}>()));
     }}""")
     fprintln(hout, f'    return {t}(deserialize(v, std::type_identity<unknown_variant_type>()));\n  }});\n}}')
 
 
-def add_view(cout, cls):
-    members = get_members(cls)
-    for m in members:
-        add_variant_read_size(cout, m.type)
+def add_variant_read_size(hout, typ):
+    global read_sizes
+    t = param_view_type(typ)
+    if t in read_sizes:
+        return
+    if not is_variant(typ):
+        return
+    for p in typ.template_parameters:
+        if is_variant(p):
+            add_variant_read_size(hout, p)
+    read_sizes.add(t)
+    # Generate default (backward-compatible) version
+    _generate_variant_skip_deserialize(hout, typ)
+    # Generate fragmented version if variant contains writable view types
+    if _has_writable_view_params(typ):
+        _generate_variant_skip_deserialize(hout, typ, fragmented=True)
 
-    fprintln(cout, f"""struct {cls.name}_view {{
-    utils::input_stream v;
+
+def _generate_view_struct(cout, cls, fragmented=False):
+    """Generate a view struct for a writable class.
+
+    When fragmented is False, generates the legacy non-templated struct
+    (X_view with utils::input_stream). When fragmented is True, generates
+    X_fragmented_view using seastar::fragmented_memory_input_stream<fragmented_temporary_buffer::view::iterator>.
+    """
+    members = get_members(cls)
+    if fragmented:
+        struct_name = cls.name + "_fragmented_view"
+        stream_type = "seastar::fragmented_memory_input_stream<fragmented_temporary_buffer::view::iterator>"
+    else:
+        struct_name = cls.name + "_view"
+        stream_type = "utils::input_stream"
+    fprintln(cout, f"""struct {struct_name} {{
+    {stream_type} v;
     """)
 
     if not is_stub(cls.name) and is_local_writable_type(cls.name):
@@ -1474,7 +1516,7 @@ def add_view(cout, cls):
     for m in members:
         name = get_member_name(m.name)
         local_names[name] = "this->" + name + "()"
-        full_type = param_view_type(m.type)
+        full_type = param_view_type(m.type, fragmented)
         if m.attribute:
             deflt = m.default_value if m.default_value else param_type(m.type) + "()"
             if deflt in local_names:
@@ -1484,20 +1526,24 @@ def add_view(cout, cls):
             deser = f"{DESERIALIZER}(in, std::type_identity<{full_type}>())"
 
         if is_vector(m.type):
-            elem_type = element_type(m.type)
+            elem_type = element_type(m.type, fragmented)
+            if fragmented:
+                vec_deser = f"vector_deserializer<{elem_type}, true, {stream_type}>"
+            else:
+                vec_deser = f"vector_deserializer<{elem_type}>"
             fprintln(cout, reindent(4, """
                 auto {name}() const {{
                   return seastar::with_serialized_stream(v, [] (auto& v) {{
                    auto in = v;
                    {skip}
-                   return vector_deserializer<{elem_type}>(in);
+                   return {vec_deser}(in);
                   }});
                 }}
             """).format(f=DESERIALIZER, **locals()))
         else:
             fprintln(cout, reindent(4, """
                 auto {name}() const {{
-                  return seastar::with_serialized_stream(v, [this] (auto& v) -> decltype({f}(std::declval<utils::input_stream&>(), std::type_identity<{full_type}>())) {{
+                  return seastar::with_serialized_stream(v, [this] (auto& v) -> decltype({f}(std::declval<{stream_type}&>(), std::type_identity<{full_type}>())) {{
                    std::ignore = this;
                    auto in = v;
                    {skip}
@@ -1515,18 +1561,18 @@ def add_view(cout, cls):
 
     fprintln(cout, f"""
 template<>
-struct serializer<{cls.name}_view> {{
+struct serializer<{struct_name}> {{
     template<typename Input>
-    static {cls.name}_view read(Input& v) {{
+    static {struct_name} read(Input& v) {{
       return seastar::with_serialized_stream(v, [] (auto& v) {{
         auto v_start = v;
         auto start_size = v.size();
         skip(v);
-        return {cls.name}_view{{v_start.read_substream(start_size - v.size())}};
+        return {struct_name}{{v_start.read_substream(start_size - v.size())}};
       }});
     }}
     template<typename Output>
-    static void write(Output& out, {cls.name}_view v) {{
+    static void write(Output& out, {struct_name} v) {{
         v.v.copy_to(out);
     }}
     template<typename Input>
@@ -1537,6 +1583,18 @@ struct serializer<{cls.name}_view> {{
     }}
 }};
 """)
+
+
+def add_view(cout, cls):
+    members = get_members(cls)
+    for m in members:
+        add_variant_read_size(cout, m.type)
+
+    # Generate the legacy non-templated view (backward compatible)
+    _generate_view_struct(cout, cls)
+
+    # Generate the fragmented view for seastar::fragmented_memory_input_stream<fragmented_temporary_buffer::view::iterator>
+    _generate_view_struct(cout, cls, fragmented=True)
 
 
 def add_views(cout):
@@ -1744,6 +1802,7 @@ def load_file(name):
     fprintln(cout, f"#include \"{os.path.basename(hname)}\"")
     fprintln(cout, "#include \"serializer_impl.hh\"")
     fprintln(cout, "#include \"serialization_visitors.hh\"")
+    fprintln(cout, "#include \"utils/fragmented_temporary_buffer.hh\"")
 
     def maybe_open_namespace(printed=False):
         if config.ns != '' and not printed:
