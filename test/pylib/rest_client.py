@@ -221,12 +221,19 @@ class ScyllaRESTAPIClient:
                                timeout = timeout)
         logger.debug("decommission_node %s finished", host_ip)
 
-    async def rebuild_node(self, host_ip: str, timeout: float, source_dc: str | None = None) -> None:
+    async def rebuild_node(self, host_ip: str, timeout: float,
+                           source_dc: Optional[str] = None,
+                           force: bool = False) -> None:
         """Initiate rebuild of a node with host_ip"""
-        logger.debug("rebuild_node %s source_dc=%s", host_ip, source_dc)
-        params = {"source_dc": source_dc} if source_dc else {}
-        await self.client.post("/storage_service/rebuild", host=host_ip,
-                               timeout=timeout, params=params)
+        logger.debug("rebuild_node %s source_dc=%s force=%s", host_ip, source_dc, force)
+        params: dict[str, str] = {}
+        if source_dc is not None:
+            params["source_dc"] = source_dc
+        if force:
+            params["force"] = "true"
+        await self.client.post("/storage_service/rebuild", host = host_ip,
+                               params = params if params else None,
+                               timeout = timeout)
         logger.debug("rebuild_node %s finished", host_ip)
 
     async def get_gossip_generation_number(self, node_ip: str, target_ip: str) -> int:
