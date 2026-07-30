@@ -15,10 +15,10 @@ from uuid import UUID
 from contextlib import asynccontextmanager
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
-from test.pylib.tablets import get_tablet_count, get_all_tablet_replicas
+from test.pylib.tablets import get_tablet_count, get_all_tablet_replicas, get_base_table
 from test.pylib.rest_client import HTTPError, inject_error, read_barrier
 from test.pylib.internal_types import ServerInfo
-from test.pylib.util import get_enabled_features, wait_for, wait_for_feature, wait_for_cql_and_get_hosts
+from test.pylib.util import get_enabled_features, wait_for, wait_for_feature, wait_for_cql_and_get_hosts, wait_for_view
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import create_new_test_keyspace, new_test_keyspace, reconnect_driver, ensure_group0_leader_on, trigger_stepdown
@@ -188,6 +188,10 @@ async def verify_pow2_layout(manager: ScyllaClusterManager, server: ServerInfo,
     expected_tokens = compute_pow2_boundaries(tablet_count)
 
     assert tablet_tokens == expected_tokens
+
+
+async def describe_view(cql, ks: str, view_name: str) -> str:
+    return (await cql.run_async(f"DESCRIBE MATERIALIZED VIEW {ks}.{view_name}"))[0].create_statement
 
 
 async def wait_for_pow2_convergence(manager: ScyllaClusterManager, server: ServerInfo,
@@ -3097,3 +3101,379 @@ async def test_replace_rollback_coordinator_failover(manager: ScyllaClusterManag
                     f"Tablet at {row.last_token} in {table_name}: expected stage=None after rollback, got {row.stage}"
                 assert row.transition is None, \
                     f"Tablet at {row.last_token} in {table_name}: expected transition=None after rollback, got {row.transition}"
+
+
+async def create_table_with_views(cql, ks: str):
+    """Create the table {ks}.test, with partition key pk and a regular column c,
+    and then create one view and index of each kind:
+    - the view mv and the underlying view of the local secondary index
+      local_idx share the base table's partition key, so the migration
+      co-locates them with the base table,
+    - the view mv_by_c and the underlying view of the global secondary index
+      idx_c have a different partition key, so the migration gives them tablet
+      maps of their own.
+
+    All views use the 'repair' tombstone_gc mode, set explicitly. The migration
+    finalization code automatically converts 'repair' to 'timeout' for colocated
+    views, since 'repair' is not yet supported under tablets. This behavior is
+    covered by the tests below. Note that 'repair' is the default under vnodes,
+    but it's better not to rely on defaults.
+    """
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+    await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT pk, c FROM {ks}.test "
+                        "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c) "
+                        "WITH tombstone_gc = {'mode': 'repair'}")
+    await cql.run_async(f"CREATE INDEX local_idx ON {ks}.test ((pk), c)")
+    await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_by_c AS SELECT pk, c FROM {ks}.test "
+                        "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, pk) "
+                        "WITH tombstone_gc = {'mode': 'repair'}")
+    await cql.run_async(f"CREATE INDEX idx_c ON {ks}.test (c)")
+    # CREATE INDEX can't set the tombstone_gc mode, so alter the underlying views.
+    for index in ('local_idx', 'idx_c'):
+        await cql.run_async(f"ALTER MATERIALIZED VIEW {ks}.{index}_index WITH tombstone_gc = {{'mode': 'repair'}}")
+
+
+COLOCATED_VIEWS = ('mv', 'local_idx_index')
+NON_COLOCATED_VIEWS = ('mv_by_c', 'idx_c_index')
+ALL_VIEWS = COLOCATED_VIEWS + NON_COLOCATED_VIEWS
+
+
+async def verify_views_match_base(cql, ks: str, expected: dict[int, int], timeout: float = 60):
+    """Verify that the dataset of the base table {ks}.test (pk, c) matches the
+    `expected` and that the views created by create_table_with_views()
+    eventually reflect it. It reads the views in full, and queries the indexes
+    for a sample of the keys.
+
+    View updates propagate asynchronously, so poll until the views catch up.
+    """
+    deadline = time.time() + timeout
+
+    def read(query):
+        return cql.run_async(SimpleStatement(query, consistency_level=ConsistencyLevel.QUORUM))
+
+    rows = await read(f"SELECT pk, c FROM {ks}.test")
+    assert {r.pk: r.c for r in rows} == expected, "Base table content mismatch"
+
+    expected_view_rows = {(c, pk) for pk, c in expected.items()}
+    # Index lookups are point queries, so check a sample of the keys.
+    sample = sorted(expected.items())[::max(1, len(expected) // 50)]
+
+    def diff(view, actual):
+        missing = sorted(expected_view_rows - actual)
+        extra = sorted(actual - expected_view_rows)
+        return f"{view}: {len(missing)} missing, e.g. {missing[:5]}; {len(extra)} extra, e.g. {extra[:5]}"
+
+    while True:
+        mismatches = []
+        for view in ('mv', 'mv_by_c'):
+            rows = {(r.c, r.pk) for r in await read(f"SELECT c, pk FROM {ks}.{view}")}
+            if rows != expected_view_rows:
+                mismatches.append(diff(view, rows))
+        for pk, c in sample:
+            pks = [r.pk for r in await read(f"SELECT pk FROM {ks}.test WHERE pk = {pk} AND c = {c}")]
+            if pks != [pk]:
+                mismatches.append(f"local_idx: pk={pk}, c={c} returned pk={pks}, expected [{pk}]")
+                break
+        for pk, c in sample:
+            pks = [r.pk for r in await read(f"SELECT pk FROM {ks}.test WHERE c = {c}")]
+            if pks != [pk]:
+                mismatches.append(f"idx_c: c={c} returned pk={pks}, expected [{pk}]")
+                break
+        if not mismatches:
+            return
+        assert time.time() < deadline, "Views don't match the base table:\n" + "\n".join(mismatches)
+        await asyncio.sleep(1)
+
+
+@pytest.mark.parametrize("rf,num_nodes", [(1, 3), (3, 3)])
+async def test_migration_with_views(manager: ScyllaClusterManager, rf: int, num_nodes: int):
+    """Verify vnodes-to-tablets migration for a keyspace with views of both
+    kinds: views co-located with their base table and views with a tablet map
+    of their own.
+
+    This test covers what the migration does to the views' data and metadata:
+    the tablet maps it creates, the resharding of the view sstables on each
+    node, the finalization, and the pow2 convergence. It doesn't write during
+    the migration; writes on a partially upgraded cluster are covered by
+    test_migration_with_views_under_writes.
+
+    The data checks read at QUORUM, as users would, so with RF=3 a node that
+    lost data could go unnoticed, hidden by the other replicas and read
+    repair. The RF=1 case is the strict data check: QUORUM reads the only
+    replica, so any data a node loses shows up.
+
+    Before the migration, the test updates the view key of some rows. This
+    deletes the old view rows with shadowable tombstones, so the view
+    sstables that the storage upgrade reshards contain them. Resharding
+    once had a bug where it dropped the sstable feature flag that lets readers
+    accept such tombstones, and nodes aborted on restart (scylladb/scylladb#30847).
+    Regression tests exist elsewhere, but it doesn't hurt to test it here as well.
+
+    Steps:
+    1. Create a vnode keyspace with a table and views of both kinds; insert
+       data at CL=ALL and update the view key of some rows.
+    2. Start the migration.
+       - Verify the co-located views share the base table's tablet map, and
+         the other views own tablet maps derived from the vnodes.
+    3. Upgrade each node and restart it (triggers resharding).
+       - Verify the views match the base table.
+    4. Finalize the migration.
+       - Verify the keyspace uses tablets, the co-located views switched to the
+         'timeout' tombstone_gc mode and the other views kept 'repair', and the
+         pow2 convergence status API reports every co-location group.
+    5. Wait for pow2 convergence of all tables.
+       - Verify the views match the base table on the converged layout.
+       - Verify the views remain built and view building keeps working on
+         the migrated keyspace (a new view can be created and built by the
+         view building coordinator).
+    """
+    num_shards = 2
+    tokens_per_node = 16
+    num_keys = 1000
+
+    logger.info(f"Starting {num_nodes} node(s) with {num_shards} shards and {tokens_per_node} random tokens")
+    # Co-located tables stall each pow2 convergence round until the next load
+    # stats refresh (SCYLLADB-5244), so refresh them often.
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': tokens_per_node}
+    # As many racks as RF keeps the keyspace RF-rack-valid, which views in a
+    # tablet keyspace require.
+    racks = [{'dc': 'dc1', 'rack': f'rack{i % rf}'} for i in range(num_nodes)]
+    servers = await manager.servers_add(num_nodes, cmdline=['--smp', str(num_shards)], config=cfg,
+                                        property_file=racks)
+    server = servers[0]
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    vnode_boundaries = await get_all_vnode_tokens(cql)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'enabled': false}}") as ks:
+        await create_table_with_views(cql, ks)
+
+        logger.info("Populating the base table and updating the view key of some rows")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(insert_stmt, [k, k]) for k in range(num_keys)))
+        update_stmt = cql.prepare(f"UPDATE {ks}.test SET c = ? WHERE pk = ?")
+        update_stmt.consistency_level = ConsistencyLevel.ALL
+        expected = {k: k for k in range(num_keys)}
+        for k in range(0, num_keys, 10):
+            await cql.run_async(update_stmt, [k + num_keys, k])
+            expected[k] = k + num_keys
+
+        logger.info("Waiting for the views to be built")
+        for view_name in ALL_VIEWS:
+            await wait_for_view(cql, view_name, num_nodes)
+        await verify_views_match_base(cql, ks, expected)
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet maps)")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Verifying the tablet maps of the base table and the views")
+        await verify_tablet_map_boundaries(manager, server, ks, 'test', vnode_boundaries)
+        base_id = await manager.get_table_or_view_id(ks, 'test')
+        for view_name in COLOCATED_VIEWS:
+            view_id = await manager.get_table_or_view_id(ks, view_name)
+            view_base_id = await get_base_table(manager, view_id)
+            assert view_base_id == base_id, \
+                f"Expected view {view_name} to be co-located with base table {base_id}, got base {view_base_id}"
+        for view_name in NON_COLOCATED_VIEWS:
+            view_id = await manager.get_table_or_view_id(ks, view_name)
+            assert await get_base_table(manager, view_id) == view_id, \
+                f"Expected view {view_name} to own its tablet map"
+            await verify_tablet_map_boundaries(manager, server, ks, view_name, vnode_boundaries)
+
+        for s in servers:
+            logger.info(f"Marking node {s.server_id} for tablets migration and restarting it to trigger resharding")
+            await manager.api.upgrade_node_to_tablets(s.ip_addr)
+            await manager.server_restart(s.server_id)
+            await reconnect_driver(manager)
+            cql, _ = await manager.get_ready_cql(servers)
+
+            logger.info(f"Verifying that the views match the base table after resharding of {s.server_id}")
+            await verify_views_match_base(cql, ks, expected)
+
+        logger.info("Finalizing tablets migration")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+        for s in servers:
+            await read_barrier(manager.api, s.ip_addr)
+
+        logger.info("Verifying that the keyspace schema has tablets enabled")
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "keyspace is still using vnodes after migration finalization"
+
+        # Co-located tables don't support the 'repair' tombstone_gc mode, so
+        # finalization switches the co-located views to 'timeout'. Views with
+        # a tablet map of their own support 'repair' and keep it.
+        logger.info("Verifying the tombstone_gc mode of the views")
+        for view_name in ALL_VIEWS:
+            mode = 'timeout' if view_name in COLOCATED_VIEWS else 'repair'
+            desc = await describe_view(cql, ks, view_name)
+            assert f"'mode': '{mode}'" in desc, f"Expected view {view_name} to use the '{mode}' tombstone_gc mode: {desc}"
+
+        logger.info("Verifying that the pow2 convergence status reports every tablet map owner")
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks, with_tablet_status=True)
+        tables = {t['table'] for t in status['tablets']['pow2_convergence']['tables']}
+        assert tables == {'test', *NON_COLOCATED_VIEWS}, f"Unexpected tables in the pow2 convergence status: {tables}"
+
+        logger.info("Waiting for pow2 convergence of every tablet map")
+        for table_name in ('test', *NON_COLOCATED_VIEWS):
+            await wait_for_pow2_convergence(manager, server, ks, table_name)
+
+        logger.info("Verifying that the views match the base table after pow2 convergence")
+        await verify_views_match_base(cql, ks, expected)
+
+        # Creating a new view exercises the view building coordinator on the
+        # migrated keyspace and triggers a view building state reload, which
+        # would mark the migrated views as unbuilt if their build status
+        # entries were not all SUCCESS.
+        logger.info("Creating a new view on the migrated keyspace")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv2 AS SELECT pk, c FROM {ks}.test "
+                            "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
+        await wait_for_view(cql, 'mv2', num_nodes)
+
+        logger.info("Verifying that the migrated views are still marked as built")
+        for view_name in ALL_VIEWS:
+            rows = await cql.run_async(f"SELECT * FROM system.built_views WHERE keyspace_name = '{ks}' AND view_name = '{view_name}'")
+            assert len(rows) == 1, f"Expected view {view_name} to remain built after migration"
+
+
+async def test_migration_rollback_with_views(manager: ScyllaClusterManager):
+    """Verify that rolling back a migration of a keyspace with views of both
+    kinds removes the tablet metadata of the base table and of every view,
+    and leaves the views working on vnodes.
+
+    This test covers the rollback path only; test_migration_with_views covers
+    the forward path.
+
+    Steps:
+    1. Create a vnode keyspace with a table and views of both kinds; insert
+       data.
+    2. Start the migration, and upgrade the node and restart it.
+       - Update the view key of some rows, and verify the views match the
+         base table while the node uses tablets.
+    3. Downgrade the node and restart it again, and finalize the migration
+       (rollback path).
+       - Verify the keyspace still uses vnodes and the tablet metadata of the
+         base table and the views has been removed.
+       - Verify the rollback left the views unchanged, and they remain built.
+       - Update the view key of other rows, and verify the views match the
+         base table on vnodes.
+    """
+    num_shards = 2
+    tokens_per_node = 16
+    num_keys = 200
+
+    logger.info(f"Starting a node with {num_shards} shards and {tokens_per_node} random tokens")
+    cfg = {'num_tokens': tokens_per_node}
+    servers = await manager.servers_add(1, cmdline=['--smp', str(num_shards)], config=cfg)
+    server = servers[0]
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': false}}") as ks:
+        await create_table_with_views(cql, ks)
+
+        logger.info("Populating the base table")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+        expected = {k: k for k in range(num_keys)}
+
+        logger.info("Waiting for the views to be built")
+        for view_name in ALL_VIEWS:
+            await wait_for_view(cql, view_name, 1)
+
+        original_descs = {view_name: await describe_view(cql, ks, view_name) for view_name in ALL_VIEWS}
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet maps)")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        table_ids = [await manager.get_table_or_view_id(ks, name) for name in ('test', *ALL_VIEWS)]
+
+        logger.info("Marking node for tablets migration and restarting")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Updating the view key of some rows while the node uses tablets")
+        update_stmt = cql.prepare(f"UPDATE {ks}.test SET c = ? WHERE pk = ?")
+        for k in range(0, num_keys, 10):
+            await cql.run_async(update_stmt, [k + num_keys, k])
+            expected[k] = k + num_keys
+        await verify_views_match_base(cql, ks, expected)
+
+        logger.info("Marking node for downgrade back to vnodes and restarting")
+        await manager.api.downgrade_node_to_vnodes(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Finalizing migration (rollback path)")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Verifying that the keyspace schema still uses vnodes")
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 0, "Expected keyspace to still use vnodes after rollback"
+
+        logger.info("Verifying that the tablet metadata of the base table and the views has been removed")
+        await read_barrier(manager.api, server.ip_addr)
+        for table_id in table_ids:
+            rows = await cql.run_async(f"SELECT * FROM system.tablets WHERE table_id = {table_id}")
+            assert len(rows) == 0, f"Expected no tablet metadata for table {table_id} after rollback, got {len(rows)} row(s)"
+
+        logger.info("Verifying that the rollback left the views unchanged")
+        for view_name, original_desc in original_descs.items():
+            desc = await describe_view(cql, ks, view_name)
+            assert desc == original_desc, f"Expected view {view_name} to be unchanged after rollback.\nBefore: {original_desc}\nAfter: {desc}"
+
+        logger.info("Verifying that the views remain built and keep working on vnodes")
+        for view_name in ALL_VIEWS:
+            rows = await cql.run_async(f"SELECT * FROM system.built_views WHERE keyspace_name = '{ks}' AND view_name = '{view_name}'")
+            assert len(rows) == 1, f"Expected view {view_name} to remain built after rollback"
+        update_stmt = cql.prepare(f"UPDATE {ks}.test SET c = ? WHERE pk = ?")
+        for k in range(5, num_keys, 10):
+            await cql.run_async(update_stmt, [k + 2 * num_keys, k])
+            expected[k] = k + 2 * num_keys
+        await verify_views_match_base(cql, ks, expected)
+
+
+async def test_migration_with_orphan_view_build_status(manager: ScyllaClusterManager):
+    """Verify that finalization removes the build status entries of views that
+    no longer exist.
+
+    Before 2026.4, dropping a view of a vnode keyspace left its entries in
+    system.view_build_status_v2 for the view builder of every node to remove
+    asynchronously, without retrying if the removal failed. An entry is left
+    behind for good only if this fails on every node at once, which is almost
+    impossible. But once the keyspace uses tablets, such an entry would stop
+    the group0 state machine on every node, so finalization removes it just
+    in case.
+    """
+    server, cql = await setup_single_node(manager)
+    host_id = await manager.get_host_id(server.server_id)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, c int)")
+
+        # Recreate what an older version could leave behind: an entry of a
+        # view that doesn't exist. Current versions remove the entries in the
+        # same group0 command that drops the view, so write it directly.
+        logger.info("Inserting a build status entry of a dropped view")
+        await cql.run_async("INSERT INTO system.view_build_status_v2 (keyspace_name, view_name, host_id, status) "
+                            f"VALUES ('{ks}', 'dropped_view', {host_id}, 'SUCCESS')")
+
+        logger.info("Migrating the keyspace to tablets")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql([server])
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Verifying that finalization removed the entry")
+        rows = await cql.run_async("SELECT * FROM system.view_build_status_v2 "
+                                   f"WHERE keyspace_name = '{ks}' AND view_name = 'dropped_view'")
+        assert len(rows) == 0, f"Expected the build status entry of the dropped view to be removed, got {rows}"
+
+        logger.info("Verifying that group0 still applies commands")
+        await cql.run_async(f"CREATE TABLE {ks}.t2 (pk int PRIMARY KEY)", timeout=60)
