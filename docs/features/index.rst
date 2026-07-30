@@ -20,6 +20,7 @@ This document highlights ScyllaDB's key data modeling features.
    Automatic Repair </features/automatic-repair/>
    Vector Search </features/vector-search/>
    Full-Text Search </features/fulltext-search/>
+   Client Routes </features/client-routes>
 
 .. panel-box::
   :title: ScyllaDB Features
@@ -52,3 +53,6 @@ This document highlights ScyllaDB's key data modeling features.
     similarity-based queries on vector embeddings.
   * :doc:`Full-Text Search </features/fulltext-search/>` lets you search and
     rank text columns by relevance using the BM25 scoring algorithm.
+  * :doc:`Client Routes </features/client-routes>` provides drivers with proxy
+    endpoint mappings required to connect through AWS PrivateLink and Google
+    Cloud Private Service Connect (PSC).
