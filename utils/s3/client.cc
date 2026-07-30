@@ -76,7 +76,7 @@ inline size_t iovec_len(const std::vector<iovec>& iov)
 
 namespace s3 {
 
-static logging::logger s3l("s3");
+logging::logger s3l("s3");
 // "Each part must be at least 5 MB in size, except the last part."
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
 static constexpr size_t aws_minimum_part_size = 5_MiB;
@@ -329,8 +329,21 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
         std::optional<aws_error> possible_error;
         if (status_class != seastar::http::reply::status_class::informational && status_class != seastar::http::reply::status_class::success) {
             possible_error = aws_error::parse(co_await seastar::util::read_entire_stream_contiguous(_in));
-            if (!possible_error) {
-                possible_error = aws_error::from_http_code(rep._status);
+            if (!possible_error || possible_error->get_error_type() == aws_error_type::UNKNOWN) {
+                // The parsed error carries no useful classification. Adopt the HTTP-derived error
+                // unconditionally: even when it too is UNKNOWN it may carry a more accurate
+                // retryability (e.g. 502 → retryable::yes) than the parsed UNKNOWN default, and
+                // adopting it also ensures possible_error stays populated so the failure path
+                // below produces an aws_exception rather than an unexpected_status_error.
+                auto another_error = aws_error::from_http_code(rep._status);
+                // Preserve the server's original <Message> (if any) so diagnostics are not lost
+                // when the HTTP-derived error replaces the parsed one.
+                if (possible_error && !possible_error->get_error_message().empty()) {
+                    another_error = aws_error(another_error.get_error_type(),
+                                              seastar::format("{} ({})", possible_error->get_error_message(), another_error.get_error_message()),
+                                              another_error.is_retryable());
+                }
+                possible_error = another_error;
             }
         }
 
@@ -340,13 +353,13 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
                 s3l.warn("Request failed with REQUEST_TIME_TOO_SKEWED. Machine time: {}, request timestamp: {}",
                          utils::aws::format_time_point(db_clock::now()),
                          request.get_header("x-amz-date"));
-                should_retry = aws::retryable::yes;
+                should_retry = utils::http::retryable::yes;
                 co_await authorize(request);
             }
             if (possible_error->get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
                 s3l.warn("Request failed with EXPIRED_TOKEN. Resetting credentials");
                 _credentials = {};
-                should_retry = aws::retryable::yes;
+                should_retry = utils::http::retryable::yes;
                 co_await authorize(request);
             }
             co_await coroutine::return_exception_ptr(std::make_exception_ptr(
@@ -361,7 +374,7 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
             // We need to be able to simulate a retry in s3 tests
             if (utils::get_local_injector().enter("s3_client_fail_authorization")) {
                 throw aws::aws_exception(
-                    aws::aws_error{aws::aws_error_type::HTTP_UNAUTHORIZED, "EACCESS fault injected to simulate authorization failure", aws::retryable::no});
+                    aws::aws_error{aws::aws_error_type::HTTP_UNAUTHORIZED, "EACCESS fault injected to simulate authorization failure", utils::http::retryable::no});
             }
             co_return co_await handler(rep, std::move(_in));
         } catch (...) {
@@ -1294,7 +1307,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                         while (_buffers_size < _max_buffers_size && !_is_finished) {
                             utils::get_local_injector().inject("kill_s3_inflight_req", [] {
                                 // Inject non-retryable error to emulate source failure
-                                throw aws::aws_exception(aws::aws_error(aws::aws_error_type::RESOURCE_NOT_FOUND, "Injected ResourceNotFound", aws::retryable::no));
+                                throw aws::aws_exception(aws::aws_error(aws::aws_error_type::RESOURCE_NOT_FOUND, "Injected ResourceNotFound", utils::http::retryable::no));
                             });
 
                             s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);

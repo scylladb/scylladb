@@ -13,12 +13,19 @@
 #endif
 
 #include "aws_error.hh"
+#include "utils/exceptions.hh"
+#include "utils/log.hh"
 #include <seastar/util/log.hh>
 #include <seastar/http/exception.hh>
-#include <gnutls/gnutls.h>
 #include <memory>
 
+namespace s3 {
+extern logging::logger s3l;
+}
+
 namespace aws {
+
+using namespace utils::http;
 
 aws_error::aws_error(aws_error_type error_type, retryable is_retryable) : _type(error_type), _is_retryable(is_retryable) {
 }
@@ -68,11 +75,23 @@ std::optional<aws_error> aws_error::parse(seastar::sstring&& body) {
         if (auto found = all_errors.find(code); found != all_errors.end()) {
             ret_val = found->second;
         } else {
+            ::s3::s3l.warn("Unknown S3 error code: {}, message: {}", code, message_node->value());
             ret_val._type = aws_error_type::UNKNOWN;
         }
         ret_val._message = message_node->value();
     } else {
+        std::string code_value = "missing Code node";
+        std::string message_value = "missing Message node";
+
+        if (code_node) {
+            code_value = code_node->value();
+        }
+        if (message_node) {
+            message_value = message_node->value();
+        }
+        ret_val._message = seastar::format("Malformed S3 error response. Code: {}, Message: {}", code_value, message_value);
         ret_val._type = aws_error_type::UNKNOWN;
+        ::s3::s3l.warn("{}", ret_val._message);
     }
     return ret_val;
 }
@@ -120,9 +139,12 @@ aws_error aws_error::from_http_code(seastar::http::reply::status_type http_code)
     case seastar::http::reply::status_type::network_read_timeout:
         ret_val = all_errors.at("HTTP_NETWORK_READ_TIMEOUT");
         break;
+    case seastar::http::reply::status_type::not_implemented:
+        ret_val = all_errors.at("HTTP_NOT_IMPLEMENTED");
+        break;
     default:
         ret_val = {aws_error_type::UNKNOWN,
-                   "Unknown server error has been encountered.",
+                   seastar::format("Erroneous HTTP code has been encountered. Reason: {}", http_code),
                    retryable{seastar::http::reply::classify_status(http_code) == seastar::http::reply::status_class::server_error}};
     }
     ret_val._message = seastar::format("{} HTTP code: {}", ret_val._message, http_code);
@@ -130,154 +152,31 @@ aws_error aws_error::from_http_code(seastar::http::reply::status_type http_code)
 }
 
 aws_error aws_error::from_system_error(const std::system_error& system_error) {
-    switch (system_error.code().value()) {
-    case static_cast<int>(std::errc::interrupted):
-    case static_cast<int>(std::errc::resource_unavailable_try_again):
-    case static_cast<int>(std::errc::timed_out):
-    case static_cast<int>(std::errc::connection_aborted):
-    case static_cast<int>(std::errc::connection_reset):
-    case static_cast<int>(std::errc::connection_refused):
-    case static_cast<int>(std::errc::broken_pipe):
-    case static_cast<int>(std::errc::network_unreachable):
-    case static_cast<int>(std::errc::host_unreachable):
-    case static_cast<int>(std::errc::network_down):
-    case static_cast<int>(std::errc::network_reset):
-    case static_cast<int>(std::errc::no_buffer_space):
-    // GNU TLS section. Since we pack gnutls error codes in std::system_error and rethrow it as std::nested_exception we have to handle them here.
-    case GNUTLS_E_PREMATURE_TERMINATION:
-    case GNUTLS_E_AGAIN:
-    case GNUTLS_E_INTERRUPTED:
-    case GNUTLS_E_PUSH_ERROR:
-    case GNUTLS_E_PULL_ERROR:
-    case GNUTLS_E_TIMEDOUT:
-    case GNUTLS_E_SESSION_EOF:
-    case GNUTLS_E_BAD_COOKIE: // as per RFC6347 section-4.2.1 client should retry
-        return {aws_error_type::NETWORK_CONNECTION, system_error.code().message(), retryable::yes};
-    default:
-        return {aws_error_type::UNKNOWN,
-                format("Non-retryable system error occurred. Message: {}, code: {}", system_error.code().message(), system_error.code().value()),
-                retryable::no};
+    auto is_retryable = utils::http::from_system_error(system_error);
+    if (is_retryable == retryable::yes) {
+        return {aws_error_type::NETWORK_CONNECTION, system_error.code().message(), is_retryable};
     }
+
+    return {aws_error_type::UNKNOWN,
+            format("Non-retryable system error occurred. Message: {}, code: {}", system_error.code().message(), system_error.code().value()),
+            is_retryable};
 }
 
 aws_error aws_error::from_exception_ptr(std::exception_ptr exception) {
-    std::string original_message;
-    while (exception) {
-        try {
-            std::rethrow_exception(exception);
-        } catch (const aws_exception& ex) {
-            return ex.error();
-        } catch (const seastar::httpd::unexpected_status_error& ex) {
-            return from_http_code(ex.status());
-        } catch (const std::system_error& ex) {
-            return from_system_error(ex);
-        } catch (const std::exception& ex) {
-            if (original_message.empty()) {
-                original_message = ex.what();
+    return dispatch_exception<aws_error>(
+        std::move(exception),
+        [](std::exception_ptr eptr, std::string&& original_message) {
+            if (!original_message.empty()) {
+                return aws_error{aws_error_type::UNKNOWN, std::move(original_message), retryable::no};
             }
-
-            try {
-                std::rethrow_if_nested(ex);
-            } catch (...) {
-                exception = std::current_exception();
-                continue;
+            if (!eptr) {
+                return aws_error{aws_error_type::UNKNOWN, "No exception was provided to `aws_error::from_exception_ptr` function call", retryable::no};
             }
-            return aws_error{aws_error_type::UNKNOWN, std::move(original_message), retryable::no};
-        } catch (...) {
-            return aws_error{aws_error_type::UNKNOWN, seastar::format("No error message was provided, exception content: {}", std::current_exception()), retryable::no};
-        }
-    }
-    return aws_error{aws_error_type::UNKNOWN, "No exception was provided to `aws_error::from_exception_ptr` function call", retryable::no};
+            return aws_error{
+                aws_error_type::UNKNOWN, seastar::format("No error message was provided, exception content: {}", eptr), retryable::no};
+        },
+        [](const aws_exception& ex) { return ex.error(); },
+        [](const seastar::httpd::unexpected_status_error& ex) { return from_http_code(ex.status()); },
+        [](const std::system_error& ex) { return from_system_error(ex); });
 }
-
-const aws_errors& aws_error::get_errors() {
-    static const std::unordered_map<std::string_view, const aws_error> aws_error_map{
-        {"IncompleteSignature", aws_error(aws_error_type::INCOMPLETE_SIGNATURE, retryable::no)},
-        {"IncompleteSignatureException", aws_error(aws_error_type::INCOMPLETE_SIGNATURE, retryable::no)},
-        {"InvalidSignatureException", aws_error(aws_error_type::INVALID_SIGNATURE, retryable::no)},
-        {"InvalidSignature", aws_error(aws_error_type::INVALID_SIGNATURE, retryable::no)},
-        {"InternalFailureException", aws_error(aws_error_type::INTERNAL_FAILURE, retryable::yes)},
-        {"InternalFailure", aws_error(aws_error_type::INTERNAL_FAILURE, retryable::yes)},
-        {"InternalServerError", aws_error(aws_error_type::INTERNAL_FAILURE, retryable::yes)},
-        {"InternalError", aws_error(aws_error_type::INTERNAL_FAILURE, retryable::yes)},
-        {"InvalidActionException", aws_error(aws_error_type::INVALID_ACTION, retryable::no)},
-        {"InvalidAction", aws_error(aws_error_type::INVALID_ACTION, retryable::no)},
-        {"InvalidClientTokenIdException", aws_error(aws_error_type::INVALID_CLIENT_TOKEN_ID, retryable::no)},
-        {"InvalidClientTokenId", aws_error(aws_error_type::INVALID_CLIENT_TOKEN_ID, retryable::no)},
-        {"InvalidParameterCombinationException", aws_error(aws_error_type::INVALID_PARAMETER_COMBINATION, retryable::no)},
-        {"InvalidParameterCombination", aws_error(aws_error_type::INVALID_PARAMETER_COMBINATION, retryable::no)},
-        {"InvalidParameterValueException", aws_error(aws_error_type::INVALID_PARAMETER_VALUE, retryable::no)},
-        {"InvalidParameterValue", aws_error(aws_error_type::INVALID_PARAMETER_VALUE, retryable::no)},
-        {"InvalidQueryParameterException", aws_error(aws_error_type::INVALID_QUERY_PARAMETER, retryable::no)},
-        {"InvalidQueryParameter", aws_error(aws_error_type::INVALID_QUERY_PARAMETER, retryable::no)},
-        {"MalformedQueryStringException", aws_error(aws_error_type::MALFORMED_QUERY_STRING, retryable::no)},
-        {"MalformedQueryString", aws_error(aws_error_type::MALFORMED_QUERY_STRING, retryable::no)},
-        {"MissingActionException", aws_error(aws_error_type::MISSING_ACTION, retryable::no)},
-        {"MissingAction", aws_error(aws_error_type::MISSING_ACTION, retryable::no)},
-        {"MissingAuthenticationTokenException", aws_error(aws_error_type::MISSING_AUTHENTICATION_TOKEN, retryable::no)},
-        {"MissingAuthenticationToken", aws_error(aws_error_type::MISSING_AUTHENTICATION_TOKEN, retryable::no)},
-        {"MissingParameterException", aws_error(aws_error_type::MISSING_PARAMETER, retryable::no)},
-        {"MissingParameter", aws_error(aws_error_type::MISSING_PARAMETER, retryable::no)},
-        {"OptInRequired", aws_error(aws_error_type::OPT_IN_REQUIRED, retryable::no)},
-        {"RequestExpiredException", aws_error(aws_error_type::REQUEST_EXPIRED, retryable::yes)},
-        {"RequestExpired", aws_error(aws_error_type::REQUEST_EXPIRED, retryable::yes)},
-        {"ServiceUnavailableException", aws_error(aws_error_type::SERVICE_UNAVAILABLE, retryable::yes)},
-        {"ServiceUnavailableError", aws_error(aws_error_type::SERVICE_UNAVAILABLE, retryable::yes)},
-        {"ServiceUnavailable", aws_error(aws_error_type::SERVICE_UNAVAILABLE, retryable::yes)},
-        {"RequestThrottledException", aws_error(aws_error_type::THROTTLING, retryable::yes)},
-        {"RequestThrottled", aws_error(aws_error_type::THROTTLING, retryable::yes)},
-        {"ThrottlingException", aws_error(aws_error_type::THROTTLING, retryable::yes)},
-        {"ThrottledException", aws_error(aws_error_type::THROTTLING, retryable::yes)},
-        {"Throttling", aws_error(aws_error_type::THROTTLING, retryable::yes)},
-        {"ValidationErrorException", aws_error(aws_error_type::VALIDATION, retryable::no)},
-        {"ValidationException", aws_error(aws_error_type::VALIDATION, retryable::no)},
-        {"ValidationError", aws_error(aws_error_type::VALIDATION, retryable::no)},
-        {"AccessDeniedException", aws_error(aws_error_type::ACCESS_DENIED, retryable::no)},
-        {"AccessDenied", aws_error(aws_error_type::ACCESS_DENIED, retryable::no)},
-        {"ResourceNotFoundException", aws_error(aws_error_type::RESOURCE_NOT_FOUND, retryable::no)},
-        {"ResourceNotFound", aws_error(aws_error_type::RESOURCE_NOT_FOUND, retryable::no)},
-        {"UnrecognizedClientException", aws_error(aws_error_type::UNRECOGNIZED_CLIENT, retryable::no)},
-        {"UnrecognizedClient", aws_error(aws_error_type::UNRECOGNIZED_CLIENT, retryable::no)},
-        {"SlowDownException", aws_error(aws_error_type::SLOW_DOWN, retryable::yes)},
-        {"SlowDown", aws_error(aws_error_type::SLOW_DOWN, retryable::yes)},
-        {"SignatureDoesNotMatchException", aws_error(aws_error_type::SIGNATURE_DOES_NOT_MATCH, retryable::no)},
-        {"SignatureDoesNotMatch", aws_error(aws_error_type::SIGNATURE_DOES_NOT_MATCH, retryable::no)},
-        {"InvalidAccessKeyIdException", aws_error(aws_error_type::INVALID_ACCESS_KEY_ID, retryable::no)},
-        {"InvalidAccessKeyId", aws_error(aws_error_type::INVALID_ACCESS_KEY_ID, retryable::no)},
-        {"RequestTimeTooSkewedException", aws_error(aws_error_type::REQUEST_TIME_TOO_SKEWED, retryable::yes)},
-        {"RequestTimeTooSkewed", aws_error(aws_error_type::REQUEST_TIME_TOO_SKEWED, retryable::yes)},
-        {"RequestTimeoutException", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)},
-        {"RequestTimeout", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)},
-        {"HTTP_UNAUTHORIZED", aws_error(aws_error_type::HTTP_UNAUTHORIZED, retryable::no)},
-        {"HTTP_FORBIDDEN", aws_error(aws_error_type::HTTP_FORBIDDEN, retryable::no)},
-        {"HTTP_NOT_FOUND", aws_error(aws_error_type::HTTP_NOT_FOUND, retryable::no)},
-        {"HTTP_TOO_MANY_REQUESTS", aws_error(aws_error_type::HTTP_TOO_MANY_REQUESTS, retryable::yes)},
-        {"HTTP_INTERNAL_SERVER_ERROR", aws_error(aws_error_type::HTTP_INTERNAL_SERVER_ERROR, retryable::yes)},
-        {"HTTP_BANDWIDTH_LIMIT_EXCEEDED", aws_error(aws_error_type::HTTP_BANDWIDTH_LIMIT_EXCEEDED, retryable::yes)},
-        {"HTTP_SERVICE_UNAVAILABLE", aws_error(aws_error_type::HTTP_SERVICE_UNAVAILABLE, retryable::yes)},
-        {"HTTP_REQUEST_TIMEOUT", aws_error(aws_error_type::HTTP_REQUEST_TIMEOUT, retryable::yes)},
-        {"HTTP_PAGE_EXPIRED", aws_error(aws_error_type::HTTP_PAGE_EXPIRED, retryable::yes)},
-        {"HTTP_LOGIN_TIMEOUT", aws_error(aws_error_type::HTTP_LOGIN_TIMEOUT, retryable::yes)},
-        {"HTTP_GATEWAY_TIMEOUT", aws_error(aws_error_type::HTTP_GATEWAY_TIMEOUT, retryable::yes)},
-        {"HTTP_NETWORK_CONNECT_TIMEOUT", aws_error(aws_error_type::HTTP_NETWORK_CONNECT_TIMEOUT, retryable::yes)},
-        {"HTTP_NETWORK_READ_TIMEOUT", aws_error(aws_error_type::HTTP_NETWORK_READ_TIMEOUT, retryable::yes)},
-        {"NoSuchUpload", aws_error(aws_error_type::NO_SUCH_UPLOAD, retryable::no)},
-        {"BucketAlreadyOwnedByYou", aws_error(aws_error_type::BUCKET_ALREADY_OWNED_BY_YOU, retryable::no)},
-        {"ObjectAlreadyInActiveTierError", aws_error(aws_error_type::OBJECT_ALREADY_IN_ACTIVE_TIER, retryable::no)},
-        {"NoSuchBucket", aws_error(aws_error_type::NO_SUCH_BUCKET, retryable::no)},
-        {"NoSuchKey", aws_error(aws_error_type::NO_SUCH_KEY, retryable::no)},
-        {"ObjectNotInActiveTierError", aws_error(aws_error_type::OBJECT_NOT_IN_ACTIVE_TIER, retryable::no)},
-        {"BucketAlreadyExists", aws_error(aws_error_type::BUCKET_ALREADY_EXISTS, retryable::no)},
-        {"InvalidObjectState", aws_error(aws_error_type::INVALID_OBJECT_STATE, retryable::no)},
-        {"ExpiredTokenException", aws_error(aws_error_type::EXPIRED_TOKEN, retryable::no)},
-        {"InvalidAuthorizationMessageException", aws_error(aws_error_type::INVALID_AUTHORIZATION_MESSAGE, retryable::no)},
-        {"InvalidIdentityToken", aws_error(aws_error_type::INVALID_IDENTITY_TOKEN, retryable::no)},
-        {"IDPCommunicationError", aws_error(aws_error_type::I_D_P_COMMUNICATION_ERROR, retryable::no)},
-        {"IDPRejectedClaim", aws_error(aws_error_type::I_D_P_REJECTED_CLAIM, retryable::no)},
-        {"MalformedPolicyDocument", aws_error(aws_error_type::MALFORMED_POLICY_DOCUMENT, retryable::no)},
-        {"PackedPolicyTooLarge", aws_error(aws_error_type::PACKED_POLICY_TOO_LARGE, retryable::no)},
-        {"RegionDisabledException", aws_error(aws_error_type::REGION_DISABLED, retryable::no)}};
-    return aws_error_map;
-}
-
 } // namespace aws
