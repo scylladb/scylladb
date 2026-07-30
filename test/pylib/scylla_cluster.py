@@ -10,7 +10,6 @@ from functools import wraps
 import asyncio
 import concurrent.futures
 from asyncio.subprocess import Process
-from contextlib import asynccontextmanager
 from collections import ChainMap
 import itertools
 import threading
@@ -21,7 +20,7 @@ import shutil
 import tempfile
 import time
 import traceback
-from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union, NoReturn, \
+from typing import Any, Optional, Dict, List, Set, Tuple, Callable, NamedTuple, Union, NoReturn, \
     Awaitable
 import uuid
 from io import BufferedWriter
@@ -2241,15 +2240,3 @@ class ScyllaClusterManager:
         assert self.cluster
         server_id = ServerNum(int(request.match_info["server_id"]))
         return self.cluster.server_get_process_status(server_id)
-
-
-@asynccontextmanager
-async def get_cluster_manager(test_uname: str, clusters: Pool[ScyllaCluster], test_path: str) \
-        -> AsyncIterator[ScyllaClusterManager]:
-    """Create a temporary manager for the active cluster used in a test
-       and provide the cluster to the caller."""
-    manager = ScyllaClusterManager(test_uname, clusters, test_path)
-    try:
-        yield manager
-    finally:
-        await manager.stop()
