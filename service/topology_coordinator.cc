@@ -1368,13 +1368,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                     auto tmptr = get_token_metadata_ptr();
                     const auto& tablet_metadata = tmptr->tablets();
-                    auto tables = ks.metadata()->tables();
+                    auto tables = ks.metadata()->cf_meta_data()
+                        | std::views::values
+                        | std::ranges::to<std::vector<schema_ptr>>();
+                    auto kind = [] (const schema& s) { return s.is_view() ? "view" : "table"; };
 
-                    // Verify all tables have tablet maps.
+                    // Verify all tables and views have tablet maps.
                     for (const auto& schema : tables) {
                         if (!tablet_metadata.has_tablet_map(schema->id())) {
                             throw std::runtime_error(fmt::format(
-                                "Table {}.{} does not have a tablet map", ks_name, schema->cf_name()));
+                                "{} {}.{} does not have a tablet map",
+                                schema->is_view() ? "View" : "Table", ks_name, schema->cf_name()));
                         }
                     }
 
@@ -1416,8 +1420,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             for (const auto& schema : tables) {
                                 if (!node_stats.tables.contains(schema->id())) {
                                     throw std::runtime_error(fmt::format(
-                                        "Node {} has not yet migrated table {}.{} to tablets",
-                                        host_id, ks_name, schema->cf_name()));
+                                        "Node {} has not yet migrated {} {}.{} to tablets",
+                                        host_id, kind(*schema), ks_name, schema->cf_name()));
                                 }
                             }
                         } else { // rollback path (tablets to vnodes)
@@ -1426,8 +1430,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 for (const auto& schema : tables) {
                                     if (node_stats.tables.contains(schema->id())) {
                                         throw std::runtime_error(fmt::format(
-                                            "Node {} still reports table {}.{} as tablet-based, rollback not complete",
-                                            host_id, ks_name, schema->cf_name()));
+                                            "Node {} still reports {} {}.{} as tablet-based, rollback not complete",
+                                            host_id, kind(*schema), ks_name, schema->cf_name()));
                                     }
                                 }
                             }
