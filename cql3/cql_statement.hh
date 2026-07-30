@@ -48,6 +48,12 @@ using cql_warnings_vec = std::vector<sstring>;
 class cql_statement {
     timeout_config_selector _timeout_config_selector;
     audit::audit_info_ptr _audit_info;
+protected:
+    // Result set metadata, unset for statements which return no result
+    // set. E.g. conditional modification statements and batches return a
+    // result set and have metadata, while the same statements without
+    // conditions do not.
+    seastar::shared_ptr<metadata> _metadata;
 public:
     // CQL statement text
     utils::chunked_string raw_cql_statement;
@@ -59,7 +65,7 @@ public:
 
     explicit cql_statement(timeout_config_selector timeout_selector) : _timeout_config_selector(timeout_selector) {}
     cql_statement(cql_statement&& o) = default;
-    cql_statement(const cql_statement& o) : _timeout_config_selector(o._timeout_config_selector), _audit_info(o._audit_info ? std::make_unique<audit::audit_info>(*o._audit_info) : nullptr) { }
+    cql_statement(const cql_statement& o) : _timeout_config_selector(o._timeout_config_selector), _audit_info(o._audit_info ? std::make_unique<audit::audit_info>(*o._audit_info) : nullptr), _metadata(o._metadata) { }
     virtual ~cql_statement()
     { }
 
@@ -110,7 +116,14 @@ public:
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const = 0;
 
-    virtual seastar::shared_ptr<const metadata> get_result_metadata() const = 0;
+    // Statements which keep their result set metadata elsewhere, e.g. in a
+    // selection, override this instead of setting _metadata.
+    virtual seastar::shared_ptr<const metadata> get_result_metadata() const {
+        if (_metadata) {
+            return _metadata;
+        }
+        return make_empty_metadata();
+    }
 
     virtual bool is_conditional() const {
         return false;
@@ -132,31 +145,6 @@ public:
     void set_audit_info(audit::audit_info_ptr&& info) { _audit_info = std::move(info); }
 
     virtual void sanitize_audit_info() {}
-};
-
-class cql_statement_no_metadata : public cql_statement {
-public:
-    using cql_statement::cql_statement;
-    virtual seastar::shared_ptr<const metadata> get_result_metadata() const override {
-        return make_empty_metadata();
-    }
-};
-
-// Conditional modification statements and batches
-// return a result set and have metadata, while same
-// statements without conditions do not.
-class cql_statement_opt_metadata : public cql_statement {
-protected:
-    // Result set metadata, may be empty for simple updates and batches
-    seastar::shared_ptr<metadata> _metadata;
-public:
-    using cql_statement::cql_statement;
-    virtual seastar::shared_ptr<const metadata> get_result_metadata() const override {
-        if (_metadata) {
-            return _metadata;
-        }
-        return make_empty_metadata();
-    }
 };
 
 }

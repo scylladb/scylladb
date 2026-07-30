@@ -20,7 +20,7 @@ class query_processor;
 
 namespace statements {
 
-class truncate_statement : public cql_statement_no_metadata {
+class truncate_statement : public cql_statement {
     schema_ptr _schema;
     const std::unique_ptr<attributes> _attrs;
 public:
