@@ -48,8 +48,7 @@ if TYPE_CHECKING:
     from cassandra.connection import EndPoint
 
     from test.pylib.internal_types import IPAddress
-    from test.pylib.pool import Pool
-    from test.pylib.scylla_cluster import ScyllaCluster
+    from test.pylib.scylla_cluster import ClusterFactory
 
 
 Session.run_async = run_async     # patch Session for convenience
@@ -158,7 +157,7 @@ def cluster_con(hosts: list[IPAddress | EndPoint], port: int = 9042, use_ssl: bo
 
 @pytest.fixture(scope="module")
 async def manager_api_sock_path(suite_log_dir: Path,
-                                testpy_suite_clusters: Pool[ScyllaCluster],
+                                testpy_cluster_factory: ClusterFactory,
                                 testpy_uname: str) -> AsyncGenerator[str]:
     sock_path = f"{tempfile.mkdtemp(prefix='manager-', dir='/tmp')}/api"
 
@@ -168,7 +167,7 @@ async def manager_api_sock_path(suite_log_dir: Path,
     async def run_manager() -> None:
         mgr = ScyllaClusterManager(
             test_uname=testpy_uname,
-            clusters=testpy_suite_clusters,
+            create_cluster=testpy_cluster_factory,
             base_dir=str(suite_log_dir),
             sock_path=sock_path,
         )

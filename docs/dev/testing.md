@@ -121,8 +121,8 @@ Build artefacts, such as test output and harness output is stored
 in `./testlog`. Scylla data files are stored in `/tmp`.
 
 Test directories under `./test/` may contain a `test_config.yaml` file
-that configures suite-specific behaviour such as server pool size,
-extra Scylla command-line options, and cluster topology. All test
+that configures suite-specific behaviour such as extra Scylla
+command-line options and cluster topology. All test
 execution is delegated to pytest; `test.py` itself is a thin wrapper
 that builds the appropriate pytest arguments.
 
@@ -238,11 +238,12 @@ All tests in pytest suites consist of test-cases -- top-level functions
 starting with test_ -- and thus support the `path/to/test_file.py::casename`
 selection described in the Usage section.
 
-## Sharing and pooling servers
+## Sharing servers
 
 Since there can be many pytests in a single directory (e.g. cqlpy)
-`test.py` creates multiple servers to parallelize their execution.
-Each server is also shared among many tests, to save on setup/teardown
+`test.py` runs them in parallel in several `pytest-xdist` workers,
+each with its own servers. Within a worker, a cluster is created per
+test file and shared by all its test cases, to save on setup/teardown
 steps. While this speeds up execution, sharing servers complicates debugging
 if a test fails.
 
@@ -301,9 +302,9 @@ When finished debugging, you don't have to worry about deleting the remains
 of a previous run, `test.py` will clean them up on the next execution
 automatically.
 
-### Pooling implementation details
+### Server isolation implementation details
 
-When pooling and running multiple servers, we want to avoid host/port or
+When running multiple servers, we want to avoid host/port or
 temporary directory clashes. We also want to make sure that `test.py`
 doesn't leave any running servers around, even when it's interrupted
 by user or with an exception. This is why `test.py` has a special
@@ -311,7 +312,7 @@ registry where it tracks all servers, in which each server gets a unique
 address in a subnet of network `127.*.*.*`. Unless killed with `SIGKILL`,
 `test.py` kills all servers it creates at shutdown.
 
-The servers created by the pool use a pre-defined set of options
+The servers created for tests use a pre-defined set of options
 to speed up boot. Some of these options are developer-only, such as
 `flush_schema_tables_after_modification: false`. If you wish to
 extend the options of a used server, you can do it by adding
@@ -335,8 +336,8 @@ subsequent test because it was manipulated with. Today the check
 is quite simple: any cluster that has nodes added or removed,
 started or stopped, even if it ended up in the same state
 as it was at the beginning of the test, is considered "dirty".
-Such clusters are not returned to the pool, but destroyed, and
-the pool is replenished with a new cluster instead.
+Such clusters are not reused by the next test case: they are destroyed
+and a new cluster is created instead.
 
 ## Test metrics
 
