@@ -131,6 +131,7 @@ public:
     const mutation_partition& partition() const { return _ptr->_p; }
     mutation_partition& partition() { return _ptr->_p; }
     const table_id& column_family_id() const { return _ptr->_schema->id(); }
+    bool empty() const { return _ptr->_p.empty(); }
     // Consistent with hash<canonical_mutation>
     bool operator==(const mutation&) const;
 public:
@@ -167,6 +168,7 @@ public:
     void apply(mutation&&);
     void apply(const mutation&);
     void apply(const mutation_fragment&);
+    future<> apply_gently(mutation&&);
 
     mutation operator+(const mutation& other) const;
     mutation& operator+=(const mutation& other);
@@ -388,7 +390,7 @@ auto mutation::consume_gently(Consumer& consumer, consume_in_reverse reverse, mu
 
 struct mutation_equals_by_key {
     bool operator()(const mutation& m1, const mutation& m2) const {
-        return m1.schema() == m2.schema()
+        return m1.schema()->version() == m2.schema()->version()
                 && m1.decorated_key().equal(*m1.schema(), m2.decorated_key());
     }
 };
@@ -396,7 +398,8 @@ struct mutation_equals_by_key {
 struct mutation_hash_by_key {
     size_t operator()(const mutation& m) const {
         auto dk_hash = std::hash<dht::decorated_key>();
-        return dk_hash(m.decorated_key());
+        return utils::hash_combine(dk_hash(m.decorated_key()),
+                                   std::hash<table_schema_version>()(m.schema()->version()));
     }
 };
 
