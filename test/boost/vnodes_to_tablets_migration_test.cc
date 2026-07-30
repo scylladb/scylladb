@@ -26,6 +26,7 @@
 
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
+#include <fmt/ranges.h>
 
 BOOST_AUTO_TEST_SUITE(vnodes_to_tablets_migration_test)
 
@@ -715,6 +716,115 @@ SEASTAR_TEST_CASE(test_prepare_accepts_rf_rack_valid_keyspace) {
         auto t_id = e.local_db().find_schema("test_migration_ks", "t")->id();
         BOOST_REQUIRE(e.local_db().get_shared_token_metadata().get()->tablets().has_tablet_map(t_id));
     }, rf_rack_valid_keyspaces_config(true));
+}
+
+// Verify that preparing the migration of a keyspace with views registers
+// the views as co-located with their base table, sharing its tablet map,
+// instead of creating independent tablet maps for them.
+SEASTAR_TEST_CASE(test_colocated_view_tablet_map_creation) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto ks_name = sstring("test_migration_ks");
+        create_vnode_keyspace_with_table(e, ks_name);
+        e.execute_cql(format("CREATE TABLE {}.t2 (pk int PRIMARY KEY, v int)", ks_name)).get();
+        // Subscribe before creating the views: wait_until_built() only reports
+        // builds that finish after the call.
+        auto views_built = when_all_succeed(
+                e.local_view_builder().wait_until_built(ks_name, "mv"),
+                e.local_view_builder().wait_until_built(ks_name, "local_idx_index"));
+        e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT * FROM {}.t "
+                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks_name, ks_name)).get();
+        // A local secondary index is backed by a view with the same partition
+        // key as the base table, so it can be co-located too.
+        e.execute_cql(format("CREATE INDEX local_idx ON {}.t ((pk), v)", ks_name)).get();
+        views_built.get();
+
+        auto base_id = e.local_db().find_schema(ks_name, "t")->id();
+        auto t2_id = e.local_db().find_schema(ks_name, "t2")->id();
+        auto mv_id = e.local_db().find_schema(ks_name, "mv")->id();
+        auto idx_id = e.local_db().find_schema(ks_name, "local_idx_index")->id();
+
+        e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
+
+        auto& stm = e.local_db().get_shared_token_metadata();
+        const auto& tablets = stm.get()->tablets();
+
+        // The views are co-located with their base table.
+        BOOST_REQUIRE(tablets.is_base_table(base_id));
+        BOOST_REQUIRE(!tablets.is_base_table(mv_id));
+        BOOST_REQUIRE(!tablets.is_base_table(idx_id));
+        BOOST_REQUIRE(tablets.get_base_table(mv_id) == base_id);
+        BOOST_REQUIRE(tablets.get_base_table(idx_id) == base_id);
+
+        // Co-located tables share a single tablet map instance.
+        BOOST_REQUIRE(&tablets.get_tablet_map(mv_id) == &tablets.get_tablet_map(base_id));
+        BOOST_REQUIRE(&tablets.get_tablet_map(idx_id) == &tablets.get_tablet_map(base_id));
+
+        // A table without views forms its own group.
+        BOOST_REQUIRE(tablets.is_base_table(t2_id));
+        BOOST_REQUIRE(&tablets.get_tablet_map(t2_id) != &tablets.get_tablet_map(base_id));
+    });
+}
+
+// Verify that preparing the migration of a keyspace with views whose
+// partition key differs from the base table's, including the backing views
+// of global secondary indexes, gives each of these views a tablet map of
+// its own, derived from the vnodes like the base table's. Views with the
+// same partition key in the same keyspace remain co-located.
+SEASTAR_TEST_CASE(test_non_colocated_view_tablet_map_creation) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto ks_name = sstring("test_migration_ks");
+        create_vnode_keyspace_with_table(e, ks_name);
+        // Subscribe before creating the views: wait_until_built() only reports
+        // builds that finish after the call.
+        auto views_built = when_all_succeed(
+                e.local_view_builder().wait_until_built(ks_name, "mv_by_v"),
+                e.local_view_builder().wait_until_built(ks_name, "global_idx_index"),
+                e.local_view_builder().wait_until_built(ks_name, "mv"));
+        e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv_by_v AS SELECT * FROM {}.t "
+                "WHERE v IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (v, pk)", ks_name, ks_name)).get();
+        e.execute_cql(format("CREATE INDEX global_idx ON {}.t (v)", ks_name)).get();
+        e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT * FROM {}.t "
+                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks_name, ks_name)).get();
+        views_built.get();
+
+        auto base_id = e.local_db().find_schema(ks_name, "t")->id();
+        auto mv_by_v_id = e.local_db().find_schema(ks_name, "mv_by_v")->id();
+        auto idx_id = e.local_db().find_schema(ks_name, "global_idx_index")->id();
+        auto mv_id = e.local_db().find_schema(ks_name, "mv")->id();
+
+        e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
+
+        auto& stm = e.local_db().get_shared_token_metadata();
+        const auto& tablets = stm.get()->tablets();
+
+        // The co-located view shares the base table's tablet map.
+        BOOST_REQUIRE(tablets.get_base_table(mv_id) == base_id);
+        BOOST_REQUIRE(&tablets.get_tablet_map(mv_id) == &tablets.get_tablet_map(base_id));
+
+        // The other views own a tablet map, distinct from the base table's
+        // and from each other's.
+        for (auto id : {mv_by_v_id, idx_id}) {
+            BOOST_REQUIRE(tablets.has_tablet_map(id));
+            BOOST_REQUIRE(tablets.is_base_table(id));
+            BOOST_REQUIRE(&tablets.get_tablet_map(id) != &tablets.get_tablet_map(base_id));
+        }
+        BOOST_REQUIRE(&tablets.get_tablet_map(mv_by_v_id) != &tablets.get_tablet_map(idx_id));
+
+        const auto& vnode_tokens = stm.get()->sorted_tokens();
+        std::set<dht::token> vnode_boundaries(vnode_tokens.begin(), vnode_tokens.end());
+        for (auto id : {base_id, mv_by_v_id, idx_id}) {
+            verify_migration_tablet_map(tablets.get_tablet_map(id), vnode_boundaries);
+        }
+
+        // The base table and the non-co-located views are the base tables of
+        // their co-location groups.
+        auto base_tables = tablets.base_tables(*e.local_db().find_keyspace(ks_name).metadata())
+                | std::views::transform([] (const schema_ptr& s) { return s->id(); })
+                | std::ranges::to<std::set<table_id>>();
+        auto expected_base_tables = std::set<table_id>{base_id, mv_by_v_id, idx_id};
+        BOOST_REQUIRE_MESSAGE(base_tables == expected_base_tables,
+                fmt::format("Unexpected base tables: got {}, expected {}", base_tables, expected_base_tables));
+    });
 }
 
 // Builds in progress aren't carried over to tablets, so the migration must be
