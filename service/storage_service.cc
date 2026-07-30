@@ -121,6 +121,9 @@
 #include "node_ops/task_manager_module.hh"
 #include "service/task_manager_module.hh"
 #include "service/topology_mutation.hh"
+#include "service/vnodes_to_tablets_migration.hh"
+#include "index/secondary_index_manager.hh"
+#include "db/view/view_build_status.hh"
 #include "cql3/query_processor.hh"
 #include <csignal>
 #include "utils/labels.hh"
@@ -4286,6 +4289,73 @@ future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_si
     co_return table_sizes;
 }
 
+future<> validate_keyspace_views_for_tablets_migration(
+        replica::database& db,
+        db::system_keyspace& sys_ks,
+        const gms::feature_service& features,
+        const topology& topology,
+        const sstring& ks_name) {
+    auto& ks = db.find_keyspace(ks_name);
+    auto views = ks.metadata()->views();
+    if (views.empty()) {
+        co_return;
+    }
+
+    // After the migration, views become co-located tablet tables managed by
+    // the view building coordinator, so the whole cluster must support that.
+    for (const gms::feature* f : {&features.views_with_tablets, &features.colocated_tablets, &features.view_building_coordinator}) {
+        if (!*f) {
+            throw std::runtime_error(fmt::format(
+                    "Cannot migrate keyspace {} to tablets: the keyspace contains materialized views,"
+                    " but not all nodes support the {} feature", ks_name, f->name()));
+        }
+    }
+
+    auto build_statuses = co_await sys_ks.get_view_build_status_map();
+
+    for (const auto& view : views) {
+        auto base_schema = db.find_schema(view->view_info()->base_id());
+
+        if (!db.get_base_table_for_tablet_colocation(*view, {})) {
+            auto& base_cf = db.find_column_family(base_schema->id());
+            if (base_cf.get_index_manager().is_index(*view)) {
+                throw std::runtime_error(fmt::format(
+                        "Cannot migrate keyspace {} to tablets: global secondary index {} (backed by view {}.{})"
+                        " is not supported. Drop the index before starting the migration.",
+                        ks_name, secondary_index::index_name_from_table_name(view->cf_name()), ks_name, view->cf_name()));
+            }
+            throw std::runtime_error(fmt::format(
+                    "Cannot migrate keyspace {} to tablets: materialized view {}.{} cannot be co-located with"
+                    " its base table {}.{} because their partition keys differ. Only views whose partition key"
+                    " consists of exactly the base table's partition key columns, in the same order, can be"
+                    " migrated. Drop the view before starting the migration.",
+                    ks_name, ks_name, view->cf_name(), ks_name, base_schema->cf_name()));
+        }
+
+        if (view->tombstone_gc_options().mode() == tombstone_gc_mode::repair) {
+            throw std::runtime_error(fmt::format(
+                    "Cannot migrate keyspace {} to tablets: materialized view {}.{} uses the 'repair' tombstone_gc"
+                    " mode, which is not supported on co-located tables. Change it before starting the migration,"
+                    " e.g.: ALTER MATERIALIZED VIEW {}.{} WITH tombstone_gc = {{'mode': 'timeout'}}",
+                    ks_name, ks_name, view->cf_name(), ks_name, view->cf_name()));
+        }
+
+        auto it = build_statuses.find({view->ks_name(), view->cf_name()});
+        for (const auto& server_id : topology.normal_nodes | std::views::keys) {
+            auto host_id = locator::host_id{server_id.uuid()};
+            bool built = it != build_statuses.end()
+                    && it->second.contains(host_id)
+                    && it->second.at(host_id) == db::view::build_status::SUCCESS;
+            if (!built) {
+                throw std::runtime_error(fmt::format(
+                        "Cannot migrate keyspace {} to tablets: materialized view {}.{} is not built on node {}."
+                        " Wait for the view build to finish and retry.",
+                        ks_name, ks_name, view->cf_name(), host_id));
+            }
+        }
+    }
+}
+
 future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) {
     // Called via run_with_no_api_lock (forwards to shard 0).
     SCYLLA_ASSERT(this_shard_id() == 0);
@@ -4313,6 +4383,8 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
                         server_id, *replica_state.storage_mode));
             }
         }
+
+        co_await validate_keyspace_views_for_tablets_migration(db, get_system_keyspace(), _feature_service, topology, ks_name);
 
         std::vector<std::pair<table_id, sstring>> tables_to_migrate;
 
