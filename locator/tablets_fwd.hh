@@ -26,6 +26,8 @@
 
 namespace locator {
 
+class tablet_map;
+
 struct tablet_replica {
     host_id host;
     seastar::shard_id shard;
