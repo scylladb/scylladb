@@ -18,7 +18,6 @@
 #include "gms/inet_address.hh"
 #include "auth/authenticated_user.hh"
 #include "db/consistency_level_type.hh"
-#include "types/types.hh"
 #include "mutation/timestamp.hh"
 #include "inet_address_vectors.hh"
 
@@ -31,6 +30,9 @@ namespace statements {
 class prepared_statement;
 }
 }
+
+class abstract_type;
+using data_type = seastar::shared_ptr<const abstract_type>;
 
 namespace tracing {
 
