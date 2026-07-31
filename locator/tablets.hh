@@ -15,7 +15,6 @@
 #include "dht/i_partitioner_fwd.hh"
 #include "dht/token-sharding.hh"
 #include "dht/ring_position.hh"
-#include "locator/topology.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/hash.hh"
