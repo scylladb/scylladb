@@ -249,11 +249,11 @@ size_t lz4_cstream::compress(ZSTD_outBuffer* out, ZSTD_inBuffer* in, ZSTD_EndDir
         size_t n = std::min(_buf.size() - _buf_pos, in->size - in->pos);
         // The compressed block mustn't fill the entire ring buffer.
         // It must be at least 1 byte shorter. It's a dumb quirk of lz4. Perhaps it should be called a bug.
-        n = std::min(max_lz4_window_size - 1, n);
+        n = std::min(_buf.size() - 1, n);
         std::memcpy(_buf.data() + _buf_pos, static_cast<const char*>(in->src) + in->pos, n);
         in->pos += n;
         // The first header_size bytes contain the length of the compressed block, so we compress to _lz4_scratch.data() + sizeof(uint64_t).
-        int x = LZ4_compress_fast_continue(&_ctx, _buf.data() + _buf_pos, _lz4_scratch.data() + sizeof(uint64_t), n, _lz4_scratch.size(), 1);
+        int x = LZ4_compress_fast_continue(&_ctx, _buf.data() + _buf_pos, _lz4_scratch.data() + sizeof(uint64_t), n, _lz4_scratch.size() - sizeof(uint64_t), 1);
         if (x < 0) {
             throw std::runtime_error(fmt::format(
                 "LZ4_compress_fast_continue failed with negative return value {}. "
@@ -298,7 +298,9 @@ void lz4_cstream::set_dict(const LZ4_stream_t* dict) {
 
 lz4_dstream::lz4_dstream(size_t window_size)
     : _buf(window_size)
-{}
+{
+    reset();
+}
 
 void lz4_dstream::reset() noexcept {
     _scratch_pos = _buf_end = _buf_beg = 0;
