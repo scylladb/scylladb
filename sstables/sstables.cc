@@ -2394,6 +2394,13 @@ sstable::read_scylla_metadata() noexcept {
 
             auto computed_digest = co_await compute_component_file_digest(component_type::Scylla);
             validate_component_digest(component_type::Scylla, computed_digest);
+
+            // If we already know which identifier this sstable is, the metadata
+            // we just read must say the same.  On object storage the identifier
+            // we opened the sstable by is the one its component objects are
+            // named after, so a mismatch means those objects and this metadata
+            // do not belong to the same sstable.
+            validate_sstable_identifier();
         });
     });
 }
@@ -2505,7 +2512,10 @@ sstable_id sstable::ensure_sstable_identifier() {
     // If the sstable already loaded its scylla_metadata, take the identifier
     // persisted there; that is the one its components were written under.
     if (_components->scylla_metadata) {
-        // FIXME: validate that it is consistent with the `_sstable_identifier` member.
+        // When the identifier is already known, the metadata must not hold a
+        // different one: adopting it below would then leave the sstable
+        // unreachable under the identifier its components are named by.
+        validate_sstable_identifier();
         sid = _components->scylla_metadata->get_optional_sstable_identifier();
     }
 
@@ -2528,6 +2538,19 @@ sstable_id sstable::ensure_sstable_identifier() {
     // into the Scylla metadata is left to whoever is about to write that out.
     _sstable_identifier = sid;
     return *sid;
+}
+
+void sstable::validate_sstable_identifier() const {
+    if (!_sstable_identifier || !_components->scylla_metadata) {
+        return;
+    }
+    // A null identifier means the metadata predates SSTableIdentifier, or has
+    // not been stamped with one yet; there is nothing to disagree with.
+    auto stored_sid = _components->scylla_metadata->get_optional_sstable_identifier();
+    if (stored_sid && stored_sid != *_sstable_identifier) {
+        on_internal_error(sstlog, fmt::format("SSTable {}: scylla_metadata holds sstable identifier {} while the sstable is identified by {}",
+                get_filename(), stored_sid, *_sstable_identifier));
+    }
 }
 
 bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const {
