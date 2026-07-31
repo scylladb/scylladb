@@ -53,8 +53,8 @@ class DockerizedServer:
         self.logfilenamebase = logfilenamebase
         self.docker_args: Callable[[str, int], list[str]] = (lambda host,port : docker_args) if isinstance(docker_args, list) else docker_args
         self.image_args: Callable[[str, int], list[str]] = (lambda host,port : image_args) if isinstance(image_args, list) else image_args
-        self.is_success_line = lambda line, port : success_string in line if isinstance(success_string, str) else success_string
-        self.is_failure_line = lambda line, port : failure_string in line if isinstance(failure_string, str) else failure_string
+        self.is_success_line = lambda line, port : success_string.lower() in line.lower() if isinstance(success_string, str) else success_string
+        self.is_failure_line = lambda line, port : failure_string.lower() in line.lower() if isinstance(failure_string, str) else failure_string
         self.logfile = None
         self.port = None
         self.proc = None
