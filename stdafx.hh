@@ -8,7 +8,6 @@
 #include <absl/container/btree_set.h>
 #include <absl/container/flat_hash_map.h>
 #include <algorithm>
-#include <antlr3.hpp>
 #include <any>
 #include <arpa/inet.h>
 #include <array>
@@ -67,7 +66,6 @@
 #include <boost/signals2/connection.hpp>
 #include <boost/signals2/dummy_mutex.hpp>
 #include <boost/signals2/signal_type.hpp>
-#include <boost/test/unit_test.hpp>
 #include <boost/thread/barrier.hpp>
 #include <boost/type.hpp>
 #include <boost/units/detail/utility.hpp>
@@ -127,7 +125,6 @@
 #include <linux/magic.h>
 #include <linux/perf_event.h>
 #include <list>
-#include <lua.hpp>
 #include <lz4.h>
 #include <malloc.h>
 #include <map>
@@ -252,7 +249,6 @@
 #include <seastar/coroutine/generator.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
-#include <seastar/http/api_docs.hh>
 #include <seastar/http/client.hh>
 #include <seastar/http/common.hh>
 #include <seastar/http/connection_factory.hh>
