@@ -113,9 +113,7 @@ private:
     cache_type _cache;
 
 public:
-    prepared_statements_cache(logging::logger& logger, size_t size)
-        : _cache(size, entry_expiry, logger)
-    {}
+    prepared_statements_cache(logging::logger& logger, size_t size);
 
     template <typename LoadFunc>
     future<pinned_value_type> get_pinned(const key_type& key, LoadFunc&& load) {
@@ -130,18 +128,9 @@ public:
     }
 
     // "Touch" the corresponding cache entry in order to bump up its reference count.
-    void touch(const key_type& key) {
-        // loading_cache::find() returns a value_ptr object which constructor does the "thouching".
-        _cache.find(key.key());
-    }
+    void touch(const key_type& key);
 
-    value_type find(const key_type& key) {
-        cache_value_ptr vp = _cache.find(key.key());
-        if (vp) {
-            return (*vp)->checked_weak_from_this();
-        }
-        return value_type();
-    }
+    value_type find(const key_type& key);
 
     template <typename Pred>
     requires std::is_invocable_r_v<bool, Pred, ::shared_ptr<cql_statement>>
@@ -159,10 +148,21 @@ public:
         return _cache.memory_footprint();
     }
 
-    future<> stop() {
-        return _cache.stop();
-    }
+    future<> stop();
 };
+
+// prepared_statements_cache's non-template methods above are defined out-of-line in
+// prepared_statements_cache.cc so that calling them (e.g. from cql3::query_processor's
+// inline methods, included by ~90 translation units) does not force each of those
+// translation units to implicitly instantiate the loading_cache<> specialization
+// backing this cache (loading_cache's members are all defined in-class and are
+// therefore always instantiated wherever they are actually called, regardless of
+// this extern template declaration - see utils/loading_cache.hh).
+extern template class utils::loading_cache<prepared_cache_key_type::cache_key_type, prepared_cache_entry, 2,
+    utils::loading_cache_reload_enabled::no, prepared_cache_entry_size,
+    std::hash<prepared_cache_key_type::cache_key_type>, std::equal_to<prepared_cache_key_type::cache_key_type>,
+    prepared_statements_cache::prepared_cache_stats_updater, prepared_statements_cache::prepared_cache_stats_updater>;
+
 }
 
 namespace std {

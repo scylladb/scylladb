@@ -120,6 +120,8 @@ target_sources(cql3
     column_specification.cc
     constants.cc
     query_processor.cc
+    prepared_statements_cache.cc
+    authorized_prepared_statements_cache.cc
     query_options.cc
     user_types.cc
     untyped_result_set.cc
