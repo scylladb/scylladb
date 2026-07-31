@@ -7,10 +7,14 @@
 
 #pragma once
 
+#include <map>
+#include <string>
+
 #include <seastar/core/on_internal_error.hh>
 
+#include "bytes_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "serializer.hh"
-#include "schema/schema.hh"
 #include "utils/log.hh"
 
 extern logging::logger dblog;

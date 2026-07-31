@@ -12,7 +12,7 @@
 #include <seastar/core/sstring.hh>
 
 #include "bytes.hh"
-#include "schema/schema.hh"
+#include "schema/schema_fwd.hh"
 #include "serializer_impl.hh"
 #include "tombstone_gc_options.hh"
 
