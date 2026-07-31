@@ -40,7 +40,7 @@ struct full_position {
         // wrong results for key types (e.g. timeuuid) where semantic order differs from the
         // raw-byte order used on disk, potentially causing paging cursors to be advanced past
         // partitions that haven't been returned yet.
-        if (auto res = dht::ring_position_tri_compare(s, dht::decorate_key(s, a.partition), dht::decorate_key(s, b.partition)); res != 0) {
+        if (auto res = a.partition.view().ring_order_tri_compare(s, b.partition); res != 0) {
             return res;
         }
         position_in_partition::tri_compare pos_cmp(s);
