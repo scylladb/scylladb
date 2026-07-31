@@ -65,6 +65,12 @@ public:
 
 using table_id = utils::tagged_uuid<struct table_id_tag>;
 
+// table_id::to_sstring() is the only non-trivial (non-constexpr) member of
+// tagged_uuid<Tag>; suppress its per-TU re-instantiation given how broadly
+// table_id itself is used. Matching explicit instantiation lives in
+// schema/schema.cc.
+extern template struct utils::tagged_uuid<table_id_tag>;
+
 struct table_info {
     sstring name;
     table_id id;
@@ -92,6 +98,13 @@ struct fmt::formatter<table_info> : fmt::formatter<string_view> {
 // Schema changes merged in any order should result in the same final version.
 //
 using table_schema_version = utils::tagged_uuid<struct table_schema_version_tag>;
+
+// See the comment on the analogous declaration above for table_id: this
+// suppresses per-TU re-instantiation of table_schema_version::to_sstring(),
+// which is odr-used from gms/versioned_value.hh (included by ~60
+// translation units). Matching explicit instantiation lives in
+// gms/versioned_value.cc.
+extern template struct utils::tagged_uuid<table_schema_version_tag>;
 
 inline table_schema_version reversed(table_schema_version v) noexcept {
     return table_schema_version(utils::UUID_gen::negate(v.uuid()));
