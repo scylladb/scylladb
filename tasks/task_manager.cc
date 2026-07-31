@@ -28,6 +28,10 @@
 #include "utils/error_injection.hh"
 #include "idl/tasks.dist.hh"
 
+// Explicit instantiation matching the `extern template` declaration in
+// tasks/types.hh; see the comment there.
+template struct utils::tagged_uuid<tasks::task_id_tag>;
+
 using namespace std::chrono_literals;
 
 template <typename T>

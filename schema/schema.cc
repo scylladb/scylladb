@@ -46,6 +46,10 @@
 
 extern logging::logger dblog;
 
+// Explicit instantiation matching the `extern template` declaration in
+// schema/schema_fwd.hh; see the comment there.
+template struct utils::tagged_uuid<table_id_tag>;
+
 sstring
 speculative_retry::to_sstring() const {
     if (_t == type::NONE) {
