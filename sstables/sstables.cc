@@ -4446,12 +4446,16 @@ class sstable_stream_sink_impl : public sstable_stream_sink {
     component_type _type;
     bool _last_component;
     bool _leave_unsealed;
+    checksum _checksum;
+    uint32_t _digest;
 public:
     sstable_stream_sink_impl(shared_sstable sst, component_type type, sstable_stream_sink_cfg cfg)
         : _sst(std::move(sst))
         , _type(type)
         , _last_component(cfg.last_component)
         , _leave_unsealed(cfg.leave_unsealed)
+        , _checksum(DEFAULT_CHUNK_SIZE, {})
+        , _digest(crc32_utils::init_checksum())
     {
         sstlog.debug("Creating stream sink for SSTable gen={} sid={} type={} last={} leave_unsealed={}", _sst->generation(), _sst->sstable_identifier(), _type, _last_component, _leave_unsealed);
     }
@@ -4483,6 +4487,38 @@ private:
             w.close();
         });
     }
+
+    // Validate digest in the sstable. Used instead of sstable::validate_component_digest, as
+    // it requires _recognized_components to be correctly set.
+    void do_validate_component_integrity(component_type type, uint32_t computed_digest) {
+        auto& metadata = _sst->_components->scylla_metadata;
+        if (!metadata) {
+            return;
+        }
+
+        std::optional<uint32_t> expected;
+        if (type == component_type::Scylla) {
+            expected =  metadata->digest;
+        } else {
+            const auto* cd = metadata->get_components_digests();
+            if (cd) {
+                auto it = cd->map.find(type);
+                if (it != cd->map.end()) {
+                    expected = it->second;
+                }
+            }
+        }
+
+        if (expected && *expected != computed_digest) {
+            auto msg = fmt::format("{} digest mismatch in {}: expected {}, computed {}",
+                                type, _sst->get_filename(), *expected, computed_digest);
+            if (_sst->_ignore_component_digest_mismatch) {
+                sstlog.warn("{}", msg);
+            } else {
+                throw_malformed_sstable_exception(msg);
+            }
+        }
+    }
 public:
     future<output_stream<char>> output(const file_open_options& foptions, const file_output_stream_options& stream_options) override {
         assert(_type != component_type::TOC);
@@ -4504,7 +4540,14 @@ public:
             co_await save_metadata();
         }
 
-        co_return output_stream<char>(std::move(sink));
+        if (load_save_meta) {
+            // These components will be validated against the digest in the metadata, if available.
+            auto checksummed_sink = checksummed_file_data_sink<crc32_utils, false>(std::move(sink), _checksum, _digest);
+            co_return output_stream<char>(std::move(checksummed_sink));
+        } else {
+            // The Scylla and TOC component are not validated, no need to use a checksummed data sink.
+            co_return output_stream<char>(std::move(sink));
+        }
     }
     future<shared_sstable> close() override {
         if (_last_component) {
@@ -4524,6 +4567,14 @@ public:
         // TODO: if we are the last component (or really always), should we remove all component files?
         // For now, this remains the responsibility of calling code (see handle_tablet_migration etc)
         co_await _sst->_storage->unlink_component(*_sst, _type);
+    }
+    future<> validate_integrity() override {
+        if (_type == component_type::TemporaryTOC || _type == component_type::Scylla) {
+            co_return;
+        }
+        
+        co_await load_metadata();
+        do_validate_component_integrity(_type, _digest);
     }
 };
 
