@@ -8,8 +8,11 @@
 
 #pragma once
 
+#include <map>
+
+#include "bytes_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "serializer.hh"
-#include "schema/schema.hh"
 
 namespace db {
 

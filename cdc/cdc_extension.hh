@@ -13,7 +13,7 @@
 
 #include "bytes_fwd.hh"
 #include "cdc/cdc_options.hh"
-#include "schema/schema.hh"
+#include "schema/schema_fwd.hh"
 #include "serializer_impl.hh"
 
 namespace cdc {
