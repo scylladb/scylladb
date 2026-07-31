@@ -7695,4 +7695,111 @@ SEASTAR_TEST_CASE(test_perform_component_rewrite_multiple_sstables) {
     });
 }
 
+// Returns the sealed sstables present in `dir`, identified by their TOC file.
+// An sstable whose deletion already started is renamed to
+// "<...>-TemporaryTOC.txt" first and is reclaimed by the sstable directory scan
+// on boot, so it is deliberately not counted here: only fully sealed leftovers
+// -- the ones that survive a restart and get loaded again -- are.
+static std::vector<sstring> list_sealed_sstables(const fs::path& dir) {
+    std::vector<sstring> tocs;
+    for (const auto& de : fs::directory_iterator(dir)) {
+        auto name = de.path().filename().string();
+        if (name.ends_with("-TOC.txt")) {
+            tocs.push_back(sstring(name));
+        }
+    }
+    std::ranges::sort(tocs);
+    return tocs;
+}
+
+// Reproducer for SCYLLADB-3531
+//
+// When the replacer fails, the sealed output sstables are neither attached to
+// the table nor scheduled for deletion, so their files stay on disk forever:
+//
+//   * compaction::run() calls finish() OUTSIDE its try/catch, so a throw out of
+//     finish() -> on_end_of_compaction() -> replace_remaining_exhausted_sstables()
+//     -> _replacer() never reaches on_interrupt(), and therefore never reaches
+//     delete_sstables_for_interrupted_compaction().
+//   * By that point finish() has already moved _all_new_sstables into its
+//     result, and the replacer call moved _new_unused_sstables into the
+//     completion desc, so even if delete_sstables_for_interrupted_compaction()
+//     did run, both containers it scans would be empty.
+//   * The output was sealed by the writer, and seal_sstable() clears
+//     mark_for_deletion::implicit, so ~sstable() does not unlink it either.
+//
+// Nothing is logged on this path, since no deletion is ever attempted.
+//
+// In production the replacer throws from sstable_list_updater::prepare(), most
+// notably out of compaction_group_for_sstable() when an output sstable spans
+// two tablets after a tablet split has been finalized. The leaked file is a
+// complete, loadable sstable, so the directory scan picks it up on the next
+// restart and trips
+//     "Unable to load SSTable ... that belongs to tablets X and Y"
+// hours or days after the compaction that produced it.
+SEASTAR_TEST_CASE(test_compaction_output_is_not_leaked_when_replacer_throws) {
+    return test_env::do_with_async([] (test_env& env) {
+        // Single-shard sharder so the fixed keys below are always owned by the
+        // shard running the test, regardless of --smp.
+        auto builder = schema_builder(1, "tests", "replacer_failure")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        auto s = builder.build();
+
+        auto cf = env.make_table_for_tests(s);
+        auto stop_cf = deferred_stop(cf);
+        auto sst_gen = env.make_sst_factory(s);
+
+        auto make_mut = [&] (std::string_view key, int32_t value) {
+            mutation m(s, partition_key::from_exploded(*s, {to_bytes(sstring(key))}));
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(value), api::new_timestamp());
+            return m;
+        };
+
+        auto sst1 = make_sstable_containing(sst_gen, {make_mut("a", 1)}).get();
+        auto sst2 = make_sstable_containing(sst_gen, {make_mut("b", 2)}).get();
+        column_family_test(cf).add_sstable(sst1).get();
+        column_family_test(cf).add_sstable(sst2).get();
+
+        const auto dir = tests::table_dir(*cf);
+        const auto before = list_sealed_sstables(dir);
+        BOOST_REQUIRE_EQUAL(before.size(), 2u);
+
+        // Compact the two inputs with a replacer that fails, standing in for
+        // sstable_list_updater::prepare() rejecting the output.
+        // can_purge_tombstones::no keeps the garbage-collected sstable writer
+        // disabled, so the single replacer call happens at end of compaction,
+        // from inside finish() -- the variant where on_interrupt() is skipped
+        // entirely.
+        compaction::compaction_descriptor desc({sst1, sst2});
+        BOOST_REQUIRE_THROW(
+            compact_sstables(env, std::move(desc), cf, sst_gen,
+                             [] (compaction::compaction_completion_desc) {
+                                 throw std::runtime_error("simulated replacer failure");
+                             },
+                             can_purge_tombstones::no).get(),
+            std::runtime_error);
+
+        // The compaction failed, so its output is unreachable and must not be
+        // left behind on disk. An unreferenced sstable is unlinked by a
+        // background task, hence the retry loop.
+        auto leaked = [&] {
+            std::vector<sstring> extra;
+            for (const auto& toc : list_sealed_sstables(dir)) {
+                if (std::ranges::find(before, toc) == before.end()) {
+                    extra.push_back(toc);
+                }
+            }
+            return extra;
+        };
+        (void) eventually_true([&] { return leaked().empty(); });
+
+        // Fails today: the output sstable's "<gen>-big-TOC.txt" is still there.
+        auto extra = leaked();
+        BOOST_REQUIRE_MESSAGE(extra.empty(),
+                fmt::format("compaction output leaked on disk after replacer failure: [{}]",
+                            fmt::join(extra, ", ")));
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()

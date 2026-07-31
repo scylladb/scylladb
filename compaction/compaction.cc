@@ -774,6 +774,36 @@ protected:
 
     // Retrieves all unused garbage collected sstables that will be subsequently added
     // to the SSTable set, and mark them as used.
+    // Hands a completion desc to the replacer, making sure the output sstables do
+    // not survive on disk if the replacer fails.
+    //
+    // On the failure path the outputs are unreachable in every other respect:
+    // _all_new_sstables has already been moved into the compaction_result by
+    // finish(), _new_unused_sstables was moved into `desc` here, and a throw out of
+    // finish() -> on_end_of_compaction() never reaches on_interrupt() at all
+    // because compaction::run() calls finish() outside its try/catch. The outputs
+    // are also sealed, so ~sstable() will not unlink them. Without marking them
+    // here they become complete, unreferenced sstables that sit on disk until the
+    // next restart loads them.
+    //
+    // This assumes the replacer is all-or-nothing with respect to attaching
+    // outputs, which holds today: on_compaction_completion() runs
+    // sstable_list_updater::prepare() (where every failure originates) before
+    // execute() mutates any sstable set.
+    void invoke_replacer(compaction_completion_desc desc) {
+        auto new_sstables = desc.new_sstables;
+        try {
+            _replacer(std::move(desc));
+        } catch (...) {
+            for (auto& sst : new_sstables) {
+                log_debug("Deleting sstable {} of failed sstable replacement for {}.{}",
+                          sst->get_filename(), _schema->ks_name(), _schema->cf_name());
+                sst->mark_for_deletion();
+            }
+            throw;
+        }
+    }
+
     std::vector<sstables::shared_sstable> consume_unused_garbage_collected_sstables() {
         auto unused = std::exchange(_unused_garbage_collected_sstables, {});
         _used_garbage_collected_sstables.insert(_used_garbage_collected_sstables.end(), unused.begin(), unused.end());
@@ -1351,7 +1381,7 @@ private:
             log_debug("Replacing earlier exhausted sstable(s) [{}] by new sstable(s) [{}]",
                 fmt::join(exhausted_ssts | std::views::transform([] (auto sst) { return to_string(sst, false); }), ","),
                 fmt::join(_new_unused_sstables | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
-            _replacer(get_compaction_completion_desc(exhausted_ssts, std::move(_new_unused_sstables)));
+            invoke_replacer(get_compaction_completion_desc(exhausted_ssts, std::move(_new_unused_sstables)));
             _sstables.erase(exhausted, _sstables.end());
             dynamic_cast<compaction_read_monitor_generator&>(unwrap_monitor_generator()).remove_exhausted_sstables(exhausted_ssts);
         }
@@ -1381,7 +1411,7 @@ private:
             log_debug("Releasing {} exhausted GC sstable(s) earlier: [{}]",
                 exhausted_gc_ssts.size(),
                 fmt::join(exhausted_gc_ssts | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
-            _replacer(get_compaction_completion_desc(std::move(exhausted_gc_ssts), {}));
+            invoke_replacer(get_compaction_completion_desc(std::move(exhausted_gc_ssts), {}));
             _used_garbage_collected_sstables.erase(exhausted, _used_garbage_collected_sstables.end());
         }
     }
@@ -1395,7 +1425,7 @@ private:
             auto& used_gc_sstables = used_garbage_collected_sstables();
             old_sstables.insert(old_sstables.end(), used_gc_sstables.begin(), used_gc_sstables.end());
 
-            _replacer(get_compaction_completion_desc(std::move(old_sstables), std::move(_new_unused_sstables)));
+            invoke_replacer(get_compaction_completion_desc(std::move(old_sstables), std::move(_new_unused_sstables)));
          }
     }
 
@@ -1915,7 +1945,7 @@ public:
             auto& used_gc_sstables = used_garbage_collected_sstables();
             old_sstables.insert(old_sstables.end(), used_gc_sstables.begin(), used_gc_sstables.end());
 
-            _replacer(get_compaction_completion_desc(std::move(old_sstables), {}));
+            invoke_replacer(get_compaction_completion_desc(std::move(old_sstables), {}));
         }
 
         // Mark new sstables for deletion as well
