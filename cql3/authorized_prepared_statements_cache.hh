@@ -151,25 +151,21 @@ public:
     future<> stop();
 };
 
+}
+
 // authorized_prepared_statements_cache's non-template methods above are defined
 // out-of-line in authorized_prepared_statements_cache.cc so that calling them (e.g.
 // from cql3::query_processor's inline methods, included by ~90 translation units)
-// does not force each of those translation units to implicitly instantiate the
-// loading_cache<> specialization backing this cache (loading_cache's members are
-// all defined in-class and are therefore always instantiated wherever they are
-// actually called, regardless of this extern template declaration - see
-// utils/loading_cache.hh).
-extern template class utils::loading_cache<authorized_prepared_statements_cache_key,
-    typename statements::prepared_statement::checked_weak_ptr,
-    1,
-    utils::loading_cache_reload_enabled::yes,
-    authorized_prepared_statements_cache_size,
-    std::hash<authorized_prepared_statements_cache_key>,
-    std::equal_to<authorized_prepared_statements_cache_key>,
-    authorized_prepared_statements_cache::authorized_prepared_statements_cache_stats_updater,
-    authorized_prepared_statements_cache::authorized_prepared_statements_cache_stats_updater>;
-
-}
+// does not force each of those translation units to instantiate the loading_cache<>
+// specialization backing this cache at all - they only see a declaration, and the
+// only place that actually calls into loading_cache's methods is
+// authorized_prepared_statements_cache.cc itself, compiled once.
+//
+// NOTE: loading_cache<> itself is deliberately NOT extern-templated here - see the
+// matching note in cql3/prepared_statements_cache.hh. Several of its members are
+// guarded by static_assert(ReloadEnabled == .../== ...) valid for only one of
+// loading_cache_reload_enabled::{yes,no}, so a class-level explicit instantiation
+// fails to compile regardless of which policy value is used.
 
 namespace std {
 template <>

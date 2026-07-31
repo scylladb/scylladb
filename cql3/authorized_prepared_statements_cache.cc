@@ -44,13 +44,3 @@ future<> authorized_prepared_statements_cache::stop() {
 }
 
 }
-
-template class utils::loading_cache<cql3::authorized_prepared_statements_cache_key,
-    typename cql3::statements::prepared_statement::checked_weak_ptr,
-    1,
-    utils::loading_cache_reload_enabled::yes,
-    cql3::authorized_prepared_statements_cache_size,
-    std::hash<cql3::authorized_prepared_statements_cache_key>,
-    std::equal_to<cql3::authorized_prepared_statements_cache_key>,
-    cql3::authorized_prepared_statements_cache::authorized_prepared_statements_cache_stats_updater,
-    cql3::authorized_prepared_statements_cache::authorized_prepared_statements_cache_stats_updater>;
