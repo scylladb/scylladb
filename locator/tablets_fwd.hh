@@ -22,6 +22,7 @@
 #include <seastar/core/sstring.hh>
 #include "dht/token.hh"
 #include <utility>
+#include <vector>
 
 namespace locator {
 
@@ -48,6 +49,12 @@ struct tablet_routing_info_v2;
 /// Tablet version is computed differently for eventually-consistent and
 /// strongly-consistent tablets. For more details, see: docs/dev/tablets-routing-v2.md.
 using tablet_version = utils::tagged_integer<struct tablet_version_tag, uint64_t>;
+
+// Kept in sync with locator/topology.hh's own definition (a plain alias
+// redeclaration with an identical underlying type is not an ODR violation).
+// Duplicated here so headers using it in declaration-only signatures (e.g.
+// locator/tablets.hh's get_allowed_racks()) don't need the full locator/topology.hh.
+using rack_list = std::vector<seastar::sstring>;
 
 // Identifies tablet within the scope of a single tablet_map,
 // which has a scope of (table_id, token metadata version).
