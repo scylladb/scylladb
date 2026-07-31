@@ -2202,7 +2202,7 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
 
         validation_errors += co_await sst->validate(permit, cdata.abort, [&schema] (sstring what) {
             scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, what);
-        }, monitor_generator(sst), true);
+        }, monitor_generator(sst));
         // Did validation actually finish because aborted?
         if (cdata.is_stop_requested()) {
             // Compaction manager will catch this exception and re-schedule the compaction.
