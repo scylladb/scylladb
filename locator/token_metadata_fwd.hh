@@ -14,6 +14,8 @@
 namespace locator {
 
 class token_metadata;
+class shared_token_metadata;
+class pending_token_metadata;
 
 using token_metadata_ptr = lw_shared_ptr<const token_metadata>;
 using mutable_token_metadata_ptr = lw_shared_ptr<token_metadata>;
