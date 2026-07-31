@@ -18,6 +18,8 @@
 #include "version.hh"
 #include "mutation/counters.hh"
 #include "dht/i_partitioner_fwd.hh"
+#include "utils/streaming_histogram.hh"
+#include "utils/estimated_histogram.hh"
 #include <set>
 
 namespace sstables {
