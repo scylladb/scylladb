@@ -34,8 +34,3 @@ future<> prepared_statements_cache::stop() {
 }
 
 }
-
-template class utils::loading_cache<cql3::prepared_cache_key_type::cache_key_type, cql3::prepared_cache_entry, 2,
-    utils::loading_cache_reload_enabled::no, cql3::prepared_cache_entry_size,
-    std::hash<cql3::prepared_cache_key_type::cache_key_type>, std::equal_to<cql3::prepared_cache_key_type::cache_key_type>,
-    cql3::prepared_statements_cache::prepared_cache_stats_updater, cql3::prepared_statements_cache::prepared_cache_stats_updater>;

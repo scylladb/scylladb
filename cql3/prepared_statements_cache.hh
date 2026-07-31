@@ -151,19 +151,23 @@ public:
     future<> stop();
 };
 
+}
+
 // prepared_statements_cache's non-template methods above are defined out-of-line in
 // prepared_statements_cache.cc so that calling them (e.g. from cql3::query_processor's
 // inline methods, included by ~90 translation units) does not force each of those
-// translation units to implicitly instantiate the loading_cache<> specialization
-// backing this cache (loading_cache's members are all defined in-class and are
-// therefore always instantiated wherever they are actually called, regardless of
-// this extern template declaration - see utils/loading_cache.hh).
-extern template class utils::loading_cache<prepared_cache_key_type::cache_key_type, prepared_cache_entry, 2,
-    utils::loading_cache_reload_enabled::no, prepared_cache_entry_size,
-    std::hash<prepared_cache_key_type::cache_key_type>, std::equal_to<prepared_cache_key_type::cache_key_type>,
-    prepared_statements_cache::prepared_cache_stats_updater, prepared_statements_cache::prepared_cache_stats_updater>;
-
-}
+// translation units to instantiate the loading_cache<> specialization backing this
+// cache at all - they only see a declaration, and the only place that actually calls
+// into loading_cache's methods is prepared_statements_cache.cc itself, compiled once.
+//
+// NOTE: loading_cache<> itself is deliberately NOT extern-templated here. Several of
+// its members are guarded by static_assert(ReloadEnabled == .../== ...) (see
+// utils/loading_cache.hh, e.g. the two constructors and get()/get_ptr()) valid for
+// only one of loading_cache_reload_enabled::{yes,no} - a class-level explicit
+// instantiation forces every member to be instantiated regardless of policy, which
+// fails to compile for either policy value. Ordinary (non-explicit) instantiation,
+// triggered naturally by prepared_statements_cache.cc actually calling the specific
+// methods it needs, does not have this problem.
 
 namespace std {
 
