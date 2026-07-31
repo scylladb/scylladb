@@ -44,7 +44,7 @@ using namespace replica;
 
 namespace service {
 
-seastar::logger lblogger("load_balancer");
+static seastar::logger lblogger("load_balancer");
 
 void load_balancer_stats_manager::setup_metrics(const dc_name& dc, load_balancer_dc_stats& stats) {
     namespace sm = seastar::metrics;

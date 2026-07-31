@@ -23,14 +23,14 @@ using namespace seastar::httpd;
 namespace sp = httpd::storage_proxy_json;
 namespace ss = httpd::storage_service_json;
 
-std::string_view format_type(std::string_view type) {
+static std::string_view format_type(std::string_view type) {
     if (type == "int") {
         return "integer";
     }
     return type;
 }
 
-future<> get_config_swagger_entry(std::string_view name, const std::string& description, std::string_view type, bool& first, output_stream<char>& os) {
+static future<> get_config_swagger_entry(std::string_view name, const std::string& description, std::string_view type, bool& first, output_stream<char>& os) {
     std::stringstream ss;
     if (first) {
         first=false;

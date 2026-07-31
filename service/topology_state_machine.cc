@@ -18,7 +18,7 @@
 
 namespace service {
 
-logging::logger tsmlogger("topology_state_machine");
+static logging::logger tsmlogger("topology_state_machine");
 
 const std::pair<const raft::server_id, replica_state>* topology::find(raft::server_id id) const {
     auto it = normal_nodes.find(id);

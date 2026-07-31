@@ -45,5 +45,5 @@ std::string doc_link(std::string_view url_tail) {
 }
 
 // get the version number into writeable memory, so we can grep for it if we get a core dump
-std::string version_stamp_for_core
+static std::string version_stamp_for_core
     = "VERSION VERSION VERSION $Id: " + scylla_version() + " $ VERSION VERSION VERSION";

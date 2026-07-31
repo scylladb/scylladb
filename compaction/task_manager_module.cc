@@ -47,7 +47,7 @@ namespace compaction {
 // Collects shared SSTables from all shards and sstables that require cleanup and returns a vector containing them all.
 // This function assumes that the list of SSTables can be fairly big so it is careful to
 // manipulate it in a do_for_each loop (which yields) instead of using standard accumulators.
-future<sstables::sstable_directory::sstable_open_info_vector>
+static future<sstables::sstable_directory::sstable_open_info_vector>
 collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, compaction::owned_ranges_ptr owned_ranges_ptr) {
     auto info_vec = sstables::sstable_directory::sstable_open_info_vector();
 
@@ -96,7 +96,7 @@ collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir, sharded<r
 // The vector is first sorted to make sure that we are moving the biggest SSTables first.
 //
 // Returns a reshard_shard_descriptor per shard indicating the work that each shard has to do.
-future<std::vector<replica::reshard_shard_descriptor>>
+static future<std::vector<replica::reshard_shard_descriptor>>
 distribute_reshard_jobs(sstables::sstable_directory::sstable_open_info_vector source) {
     auto destinations = std::vector<replica::reshard_shard_descriptor>(this_smp_shard_count());
 
@@ -202,7 +202,7 @@ struct table_tasks_info {
     {}
 };
 
-future<> run_on_table(sstring op, replica::database& db, std::string keyspace, table_info ti, std::function<future<> (replica::table&)> func) {
+static future<> run_on_table(sstring op, replica::database& db, std::string keyspace, table_info ti, std::function<future<> (replica::table&)> func) {
     std::exception_ptr ex;
     tasks::tmlogger.debug("Starting {} on {}.{}", op, keyspace, ti.name);
     try {
@@ -222,13 +222,13 @@ future<> run_on_table(sstring op, replica::database& db, std::string keyspace, t
     }
 }
 
-future<> wait_for_your_turn(seastar::condition_variable& cv, current_task_type& current_task, tasks::task_id id) {
+static future<> wait_for_your_turn(seastar::condition_variable& cv, current_task_type& current_task, tasks::task_id id) {
     co_await cv.wait([&] {
         return current_task && current_task->id() == id;
     });
 }
 
-future<> run_table_tasks(replica::database& db, std::vector<table_tasks_info> table_tasks, seastar::condition_variable& cv, current_task_type& current_task, bool sort) {
+static future<> run_table_tasks(replica::database& db, std::vector<table_tasks_info> table_tasks, seastar::condition_variable& cv, current_task_type& current_task, bool sort) {
     std::exception_ptr ex;
 
     // While compaction is run on one table, the size of tables may significantly change.
@@ -280,7 +280,7 @@ struct keyspace_tasks_info {
     {}
 };
 
-future<> run_keyspace_tasks(replica::database& db, std::vector<keyspace_tasks_info> keyspace_tasks, seastar::condition_variable& cv, current_task_type& current_task, bool sort) {
+static future<> run_keyspace_tasks(replica::database& db, std::vector<keyspace_tasks_info> keyspace_tasks, seastar::condition_variable& cv, current_task_type& current_task, bool sort) {
     std::exception_ptr ex;
 
     // While compaction is run on one table, the size of tables may significantly change.
@@ -393,7 +393,7 @@ tasks::is_user_task global_major_compaction_task_impl::is_user_task() const noex
     return tasks::is_user_task::yes;
 }
 
-std::unordered_map<sstring, std::vector<table_info>> get_tables_by_keyspace(replica::database& db) {
+static std::unordered_map<sstring, std::vector<table_info>> get_tables_by_keyspace(replica::database& db) {
     std::unordered_map<sstring, std::vector<table_info>> tables_by_keyspace;
     auto tables_meta = db.get_tables_metadata().get_column_families_copy();
     for (const auto& [table_id, t] : tables_meta) {

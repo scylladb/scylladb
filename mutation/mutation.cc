@@ -19,7 +19,7 @@
 #include "reader_concurrency_semaphore.hh"
 #include "readers/from_mutations.hh"
 
-logging::logger mlog("mutation");
+static logging::logger mlog("mutation");
 
 mutation::data::data(dht::decorated_key&& key, schema_ptr&& schema)
     : _schema(std::move(schema))

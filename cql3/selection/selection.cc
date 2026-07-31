@@ -23,7 +23,7 @@
 
 namespace cql3 {
 
-logger cql_logger("cql_logger");
+static logger cql_logger("cql_logger");
 
 namespace selection {
 
