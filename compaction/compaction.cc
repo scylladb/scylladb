@@ -1082,10 +1082,27 @@ private:
         // Delete either partially or fully written sstables of a compaction that
         // was either stopped abruptly (e.g. out of disk space) or deliberately
         // (e.g. nodetool stop COMPACTION).
-        for (auto& sst : boost::range::join(_new_partial_sstables, _new_unused_sstables)) {
-            log_debug("Deleting sstable {} of interrupted compaction for {}.{}", sst->get_filename(), _schema->ks_name(), _schema->cf_name());
-            sst->mark_for_deletion();
-        }
+        //
+        // _unused_garbage_collected_sstables is included because a sealed GC
+        // sstable that was never consumed is not tracked anywhere else: it is not
+        // in _new_unused_sstables (it only lands there once
+        // consume_unused_garbage_collected_sstables() runs) and sealing cleared
+        // its implicit deletion mark, so ~sstable() would leave its files behind.
+        //
+        // _used_garbage_collected_sstables is deliberately NOT included: those were
+        // already added to the table's sstable set and are still live there after an
+        // interrupted compaction. Marking them would delete files still referenced
+        // by the sstable set.
+        auto mark_for_deletion = [this] (const auto& sstables) {
+            for (auto& sst : sstables) {
+                log_debug("Deleting sstable {} of interrupted compaction for {}.{}", sst->get_filename(), _schema->ks_name(), _schema->cf_name());
+                sst->mark_for_deletion();
+            }
+        };
+        mark_for_deletion(_new_partial_sstables);
+        mark_for_deletion(_new_unused_sstables);
+        mark_for_deletion(_unused_garbage_collected_sstables);
+        _unused_garbage_collected_sstables.clear();
     }
 protected:
     template <typename... Args>
@@ -1397,6 +1414,30 @@ private:
 
             _replacer(get_compaction_completion_desc(std::move(old_sstables), std::move(_new_unused_sstables)));
          }
+
+        // A GC sstable can still be unused at this point: mutation_compactor seals
+        // the GC writer *before* the regular one at end of stream, so if the
+        // regular writer had already rotated shut (e.g. the tail of the stream is
+        // entirely purgeable), its consume_end_of_stream() is a no-op and
+        // maybe_replace_exhausted_sstables_by_sst() -- the only place that calls
+        // consume_unused_garbage_collected_sstables() -- never runs again.
+        //
+        // Such an sstable was never added to the table, so it cannot be handed to
+        // the replacer as an old_sstable (that would fail to be removed from the
+        // sstable set).  It is sealed, so seal_sstable() already cleared
+        // mark_for_deletion::implicit and ~sstable() will not unlink it.  Mark it
+        // explicitly, or its files stay on disk forever -- neither attached nor
+        // deleted, and invisible until the next restart rescans the data
+        // directory.
+        //
+        // Done after the replacement above so the GC sstable, which guards against
+        // data resurrection, outlives the atomic swap of inputs for outputs.
+        for (auto& sst : _unused_garbage_collected_sstables) {
+            log_debug("Deleting unused garbage collected sstable {} for {}.{}",
+                      sst->get_filename(), _schema->ks_name(), _schema->cf_name());
+            sst->mark_for_deletion();
+        }
+        _unused_garbage_collected_sstables.clear();
     }
 
     void update_pending_ranges() {

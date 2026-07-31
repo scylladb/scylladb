@@ -7650,4 +7650,200 @@ SEASTAR_TEST_CASE(test_perform_component_rewrite_multiple_sstables) {
     });
 }
 
+// Reproducer: the last garbage-collected sstable of a *successful* compaction
+// is leaked on disk.
+//
+// When incremental compaction is active, compaction runs a second "garbage
+// collection" writer that parks its sealed output in
+// _unused_garbage_collected_sstables.  Those only ever get attached to the
+// table (and therefore only ever get deleted afterwards) inside
+// maybe_replace_exhausted_sstables_by_sst():
+//
+//     auto exhausted = std::partition(_sstables.begin(), _sstables.end(), not_exhausted);
+//     if (exhausted != _sstables.end()) {          // <-- guard
+//         ...
+//         auto unused_gc_sstables = consume_unused_garbage_collected_sstables();
+//         _new_unused_sstables.insert(...);        // <-- only path to attachment
+//
+// At end of stream mutation_compactor.hh seals the GC writer *first* and the
+// regular writer second:
+//
+//     gc_consumer.consume_end_of_stream();
+//     return consumer.consume_end_of_stream();
+//
+// so a GC sstable sealed at EOS is only consumed if the regular writer still
+// has an open sstable at that point (which drives stop_sstable_writer() ->
+// maybe_replace_exhausted_sstables_by_sst()).  If the tail of the compacted
+// stream is entirely purgeable, the regular writer has already rotated shut
+// and never reopens, so nothing consumes the final GC sstable:
+//
+//   * replace_remaining_exhausted_sstables() folds in only
+//     used_garbage_collected_sstables(), never _unused_...
+//   * delete_sstables_for_interrupted_compaction() scans only
+//     _new_partial_sstables / _new_unused_sstables, neither GC vector.
+//   * stop_gc_compaction_writer() already called consume_end_of_stream(),
+//     which seals the sstable and so clears mark_for_deletion::implicit --
+//     ~sstable() will not unlink it.
+//
+// Result: a sealed, complete sstable that is never attached, never deleted and
+// never marked, produced by a compaction that reports success.  No exception,
+// no interruption, no log line -- which is why this is invisible in production
+// until the next restart rescans the data directory.
+SEASTAR_TEST_CASE(test_last_gc_sstable_is_not_leaked_on_successful_compaction) {
+    return test_env::do_with_async([] (test_env& env) {
+        BOOST_REQUIRE_EQUAL(smp::count, 1);
+        auto builder = schema_builder("tests", "gc_sstable_leak")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        builder.set_gc_grace_seconds(0);          // make tombstones immediately purgeable
+        auto s = builder.build();
+
+        auto cf = env.make_table_for_tests(s);
+        auto stop_cf = deferred_stop(cf);
+        auto base_sst_gen = env.make_sst_factory(s);
+
+        // Record every sstable the compaction creates.  create_gc_compaction_writer()
+        // uses the same _sstable_creator as the regular writer, so this captures the
+        // garbage-collected output too; they are told apart by get_origin().
+        std::vector<shared_sstable> created;
+        auto sst_gen = [&] {
+            auto sst = base_sst_gen();
+            created.push_back(sst);
+            return sst;
+        };
+
+        api::timestamp_type ts = 1;
+        auto key_for = [&] (int i) {
+            return partition_key::from_exploded(*s, {to_bytes(format("key{:05d}", i))});
+        };
+        // Order keys by token: the compaction stream is token-ordered, and we
+        // need the purgeable partitions to come *last*.
+        std::vector<partition_key> keys;
+        for (int i = 0; i < 24; i++) {
+            keys.push_back(key_for(i));
+        }
+        std::sort(keys.begin(), keys.end(), [&] (const partition_key& a, const partition_key& b) {
+            return dht::get_token(*s, a) < dht::get_token(*s, b);
+        });
+
+        auto make_live = [&] (const partition_key& k) {
+            mutation m(s, k);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), ts++);
+            return m;
+        };
+        // Fully-deleted partition with an already-expired deletion time: this is
+        // what the garbage-collection writer picks up.
+        auto make_purgeable = [&] (const partition_key& k) {
+            mutation m(s, k);
+            m.partition().apply(tombstone(ts++, gc_clock::time_point(gc_clock::duration(0))));
+            return m;
+        };
+
+        // Lowest-token half is live, highest-token half is a purgeable
+        // tombstone-only tail, so the end of the stream produces GC output only.
+        // The two inputs must be *disjoint*: an sstable run is a set of
+        // non-overlapping fragments, and an overlapping pair gets re-assigned a
+        // fresh run id on insertion ("Generating a new run identifier..."),
+        // which would disable the GC writer.
+        utils::chunked_vector<mutation> live, purgeable;
+        for (size_t i = 0; i < keys.size(); i++) {
+            if (i < keys.size() / 2) {
+                live.push_back(make_live(keys[i]));
+            } else {
+                purgeable.push_back(make_purgeable(keys[i]));
+            }
+        }
+
+        auto sst1 = make_sstable_containing(base_sst_gen, std::move(live)).get();
+        auto sst2 = make_sstable_containing(base_sst_gen, std::move(purgeable)).get();
+        // Same run id on both inputs => _contains_multi_fragment_runs, which is
+        // a precondition of enable_garbage_collected_sstable_writer().
+        auto run = sstables::run_id::create_random_id();
+        sstables::test(sst1).set_run_identifier(run);
+        sstables::test(sst2).set_run_identifier(run);
+
+        column_family_test(cf).add_sstable(sst1).get();
+        column_family_test(cf).add_sstable(sst2).get();
+
+        // A real replacer, so the compaction's incremental replacements actually
+        // take effect (a no-op replacer would make every output look orphaned).
+        // Record everything the compaction ever hands over.
+        std::unordered_set<shared_sstable> handed_over;
+        auto replacer = [&] (compaction::compaction_completion_desc ccd) {
+            handed_over.insert(ccd.new_sstables.begin(), ccd.new_sstables.end());
+            handed_over.insert(ccd.old_sstables.begin(), ccd.old_sstables.end());
+            column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(),
+                                                        ccd.new_sstables, ccd.old_sstables).get();
+            env.test_compaction_manager().propagate_replacement(cf.as_compaction_group_view(),
+                                                                ccd.old_sstables, ccd.new_sstables);
+        };
+
+        // max_sstable_bytes = 0 forces ~one partition per output sstable (see
+        // partitions_per_sstable()), so the regular writer rotates shut after
+        // every partition and is therefore already closed once the purgeable
+        // tail of the stream is reached -- meaning its consume_end_of_stream()
+        // is a no-op and never drives maybe_replace_exhausted_sstables_by_sst().
+        compaction::compaction_descriptor desc({sst1, sst2},
+                compaction::compaction_descriptor::default_level,
+                /* max_sstable_bytes */ 0);
+        desc.enable_garbage_collection(cf->get_sstable_set());
+        auto res = compact_sstables(env, std::move(desc), cf, sst_gen, replacer,
+                                    can_purge_tombstones::yes).get();
+
+        for (auto& sst : res.new_sstables) {
+            handed_over.insert(sst);
+        }
+
+        // Sanity check: the scenario must actually have exercised the GC writer,
+        // otherwise the test proves nothing.
+        auto gc_created = std::ranges::count_if(created, [] (const shared_sstable& sst) {
+            return sst->get_origin() == "garbage_collection";
+        });
+        BOOST_REQUIRE_MESSAGE(gc_created > 0, "no garbage-collected sstable was produced; "
+                                              "test scenario did not exercise the GC writer");
+
+        // Snapshot identities before dropping references.  An sstable that was
+        // only marked for deletion is unlinked when its last reference goes away,
+        // so the test must not keep any of its own -- otherwise a correctly
+        // handled sstable would still look like a leak.
+        struct created_sst { sstring toc; sstring origin; };
+        std::vector<created_sst> created_info;
+        for (auto& sst : created) {
+            created_info.push_back({sstring(fmt::to_string(sst->toc_filename())), sstring(sst->get_origin())});
+        }
+        std::unordered_set<sstring> handed_over_tocs;
+        for (auto& sst : handed_over) {
+            handed_over_tocs.insert(sstring(fmt::to_string(sst->toc_filename())));
+        }
+        created.clear();
+        handed_over.clear();
+        res.new_sstables.clear();
+
+        // Every sstable the compaction created must either have gone through the
+        // replacer (attached, and removed again through the normal path) or have
+        // had its files removed from disk.  Anything else was written, sealed and
+        // then forgotten: it survives on disk unreferenced, and the next restart
+        // will load it.  Deletion of an unreferenced sstable runs in the
+        // background, hence the retry loop.
+        auto orphaned = [&] {
+            std::vector<sstring> extra;
+            for (const auto& info : created_info) {
+                if (handed_over_tocs.contains(info.toc)) {
+                    continue;
+                }
+                if (fs::exists(fs::path(std::string(info.toc)))) {
+                    extra.push_back(format("{} (origin: {})", info.toc, info.origin));
+                }
+            }
+            return extra;
+        };
+        (void) eventually_true([&] { return orphaned().empty(); });
+
+        auto extra = orphaned();
+        BOOST_REQUIRE_MESSAGE(extra.empty(),
+                fmt::format("compaction created sstable(s) it never attached nor deleted: [{}]",
+                            fmt::join(extra, ", ")));
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
