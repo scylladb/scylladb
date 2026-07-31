@@ -9,7 +9,7 @@
 #pragma once
 
 #include "locator/abstract_replication_strategy_fwd.hh"
-#include "locator/token_metadata.hh"
+#include "locator/token_metadata_fwd.hh"
 #include "index/secondary_index_manager.hh"
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/sstring.hh>
@@ -1924,8 +1924,8 @@ public:
     }
 
     locator::shared_token_metadata& get_shared_token_metadata() const { return _shared_token_metadata; }
-    locator::token_metadata_ptr get_token_metadata_ptr() const { return _shared_token_metadata.get(); }
-    const locator::token_metadata& get_token_metadata() const { return *_shared_token_metadata.get(); }
+    locator::token_metadata_ptr get_token_metadata_ptr() const;
+    const locator::token_metadata& get_token_metadata() const;
 
     lang::manager& lang() noexcept { return _lang_manager; }
     const lang::manager& lang() const noexcept { return _lang_manager; }

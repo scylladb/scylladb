@@ -15,7 +15,7 @@
 #include "db/view/view.hh"
 #include "locator/network_topology_strategy.hh"
 #include "locator/tablets.hh"
-#include "locator/token_metadata_fwd.hh"
+#include "locator/token_metadata.hh"
 #include "replica/logstor/compaction.hh"
 #include "replica/logstor/types.hh"
 #include "utils/log.hh"
@@ -499,6 +499,14 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
 
 const db::extensions& database::extensions() const {
     return get_config().extensions();
+}
+
+locator::token_metadata_ptr database::get_token_metadata_ptr() const {
+    return _shared_token_metadata.get();
+}
+
+const locator::token_metadata& database::get_token_metadata() const {
+    return *_shared_token_metadata.get();
 }
 
 std::shared_ptr<data_dictionary::user_types_storage> database::as_user_types_storage() const noexcept {
