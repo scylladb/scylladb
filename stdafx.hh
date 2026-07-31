@@ -15,10 +15,6 @@
 #include <atomic>
 #include <bit>
 #include <bitset>
-#include <boost/accumulators/framework/accumulator_set.hpp>
-#include <boost/accumulators/framework/features.hpp>
-#include <boost/accumulators/statistics/error_of_mean.hpp>
-#include <boost/accumulators/statistics/mean.hpp>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/any.hpp>
@@ -31,9 +27,6 @@
 #include <boost/endian/conversion.hpp>
 #include <boost/functional/hash.hpp>
 #include <boost/heap/binomial_heap.hpp>
-#include <boost/icl/interval.hpp>
-#include <boost/icl/interval_map.hpp>
-#include <boost/icl/interval_set.hpp>
 #include <boost/implicit_cast.hpp>
 #include <boost/intrusive/list.hpp>
 #include <boost/intrusive/parent_from_member.hpp>
@@ -46,29 +39,15 @@
 #include <boost/lockfree/queue.hpp>
 #include <boost/lockfree/spsc_queue.hpp>
 #include <boost/mp11/algorithm.hpp>
-#include <boost/multiprecision/cpp_int.hpp>
-#include <boost/multiprecision/fwd.hpp>
-#include <boost/outcome/bad_access.hpp>
-#include <boost/outcome/basic_result.hpp>
-#include <boost/outcome/config.hpp>
-#include <boost/outcome/policy/base.hpp>
-#include <boost/outcome/result.hpp>
 #include <boost/preprocessor/comparison/equal.hpp>
 #include <boost/preprocessor/control/iif.hpp>
 #include <boost/preprocessor/variadic/size.hpp>
-#include <boost/program_options/errors.hpp>
-#include <boost/program_options.hpp>
-#include <boost/program_options/value_semantic.hpp>
-#include <boost/program_options/variables_map.hpp>
 #include <boost/range/numeric.hpp>
-#include <boost/regex_fwd.hpp>
-#include <boost/regex.hpp>
 #include <boost/signals2/connection.hpp>
 #include <boost/signals2/dummy_mutex.hpp>
 #include <boost/signals2/signal_type.hpp>
 #include <boost/thread/barrier.hpp>
 #include <boost/type.hpp>
-#include <boost/units/detail/utility.hpp>
 #include <boost/variant/variant.hpp>
 #include <byteswap.h>
 #include <cassert>
@@ -111,8 +90,6 @@
 #include <forward_list>
 #include <functional>
 #include <future>
-#include <gnutls/crypto.h>
-#include <hwloc.h>
 #include <initializer_list>
 #include <iomanip>
 #include <iosfwd>
@@ -360,7 +337,6 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
-#include <systemd/sd-daemon.h>
 #include <system_error>
 #include <sys/time.h>
 #include <sys/timerfd.h>
@@ -389,8 +365,6 @@
 #include <xmmintrin.h>
 #endif
 #include <xxhash.h>
-#include <yaml-cpp/node/convert.h>
-#include <yaml-cpp/yaml.h>
 #include <zlib.h>
 #define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
