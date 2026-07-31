@@ -4,6 +4,7 @@ target_sources(sstables
     compress.cc
     compressor.cc
     checksummed_data_source.cc
+    digest_checked_data_source.cc
     integrity_checked_file_impl.cc
     kl/reader.cc
     metadata_collector.cc
