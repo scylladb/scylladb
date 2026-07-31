@@ -741,6 +741,9 @@ private:
                                std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
                                std::optional<scylla_metadata::large_data_records> ld_records = std::nullopt);
     sstable_id ensure_sstable_identifier();
+    // Verifies that the sstable identifier persisted in the Scylla metadata
+    // agrees with the one this sstable is known by, when both are known.
+    void validate_sstable_identifier() const;
 
     future<> read_filter(sstable_open_config cfg = {});
 
