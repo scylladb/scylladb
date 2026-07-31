@@ -14,12 +14,6 @@ namespace tasks {
 
 using task_id = utils::tagged_uuid<struct task_id_tag>;
 
-// See the comment on the analogous declaration in locator/host_id.hh: this
-// suppresses per-TU re-instantiation of task_id::to_sstring(), called from
-// several task-manager API translation units. Matching explicit
-// instantiation lives in tasks/task_manager.cc.
-extern template struct utils::tagged_uuid<task_id_tag>;
-
 struct task_info {
     task_id id;
     unsigned shard;
@@ -33,3 +27,10 @@ struct task_info {
 };
 
 }
+
+// task_id::to_sstring() is the only non-trivial (non-constexpr) member of
+// tagged_uuid<Tag>; called from several task-manager API translation units,
+// so suppress its per-TU re-instantiation. Matching explicit instantiation
+// lives in tasks/task_manager.cc. Must be named fully-qualified outside
+// namespace tasks (see locator/host_id.hh).
+extern template struct utils::tagged_uuid<tasks::task_id_tag>;
