@@ -22,10 +22,6 @@ using proxy = service::storage_proxy;
 using namespace seastar::httpd;
 using namespace json;
 
-static utils::time_estimated_histogram timed_rate_moving_average_summary_merge(utils::time_estimated_histogram a, const utils::timed_rate_moving_average_summary_and_histogram& b) {
-    return a.merge(b.histogram());
-}
-
 /**
  * This function implement a two dimensional map reduce where
  * the first level is a distributed storage_proxy class and the
