@@ -18,6 +18,11 @@ All scripts can then use the snapshot directory as a topology source, e.g.:
 
   $ ./scylla-tablets.py cluster --snapshot ./tablet_snap_260714_123456/
 
+Or by picking it up from the environment variable:
+
+  $ export SCYLLA_TABLET_SNAPSHOT=./tablet_snap_260714_123456/
+  $ ./scylla-tablets.py cluster
+
 Scripts integrate with topology source abstraction by:
 
  1) Adding topology source arguments to the script's argument parser:
@@ -862,7 +867,8 @@ def add_topology_source_args(parser: argparse.ArgumentParser):
     source_group.add_argument(
         "--snapshot",
         metavar="PATH",
-        help="Read topology from a snapshot directory, or from a tar archive holding one (as created by snapshot.py --gz)."
+        help="Read topology from a snapshot directory, or from a tar archive holding one (as created by snapshot.py --gz). "
+             "If omitted, the snapshot path may be picked up from the SCYLLA_TABLET_SNAPSHOT environment variable when --cluster is also omitted"
     )
     source_group.add_argument(
         "--cluster",
@@ -902,8 +908,14 @@ def add_topology_source_args(parser: argparse.ArgumentParser):
 
 
 def get_topology_source_from_args(args: argparse.Namespace) -> TopologySource:
-    if args.snapshot:
-        src = TopologyFromSnapshot(args.snapshot)
+    """
+    Builds a topology source from args produced by a parser add_topology_source_args() set up.
+    """
+    snapshot_dir = args.snapshot
+    if snapshot_dir is None and args.cluster is None:
+        snapshot_dir = os.getenv("SCYLLA_TABLET_SNAPSHOT")
+    if snapshot_dir:
+        src = TopologyFromSnapshot(snapshot_dir)
     else:
         src = get_live_topology_source_from_args(args)
 
