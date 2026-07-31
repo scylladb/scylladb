@@ -8,6 +8,19 @@ else()
   set(RUSTC_WRAPPER_ENV "")
 endif()
 
+# `cargo build` runs as a single Ninja job, but internally spawns its own
+# rustc jobs sized to all available cores, uncoordinated with Ninja's -j
+# budget. On a clean build this stacks Ninja's parallel Clang jobs on top of
+# Cargo's parallel rustc jobs at the same time, which can double real
+# concurrency and exhaust memory. Cap Cargo to a quarter of the cores so it
+# stays a minor contributor alongside the C++ build instead of an unbounded one.
+include(ProcessorCount)
+ProcessorCount(Scylla_RUST_NPROC)
+if(Scylla_RUST_NPROC EQUAL 0)
+  set(Scylla_RUST_NPROC 4)
+endif()
+math(EXPR Scylla_RUST_JOBS "(${Scylla_RUST_NPROC} + 3) / 4")
+
 function(add_rust_library name)
   # used for profiles defined in Cargo.toml
   if(CMAKE_CONFIGURATION_TYPES)
@@ -23,7 +36,7 @@ function(add_rust_library name)
   set(library ${target_dir}/lib${name}.a)
   add_custom_command(
     OUTPUT ${library}
-    COMMAND ${CMAKE_COMMAND} -E env CARGO_BUILD_DEP_INFO_BASEDIR=. ${RUSTC_WRAPPER_ENV} ${CARGO} build --locked --target-dir=${target_dir} --profile=${profile}
+    COMMAND ${CMAKE_COMMAND} -E env CARGO_BUILD_DEP_INFO_BASEDIR=. ${RUSTC_WRAPPER_ENV} ${CARGO} build --locked --jobs=${Scylla_RUST_JOBS} --target-dir=${target_dir} --profile=${profile}
     COMMAND ${CMAKE_COMMAND} -E copy ${target_dir}/${profile}/lib${name}.a ${library}
     DEPENDS Cargo.lock
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
