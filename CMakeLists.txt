@@ -122,6 +122,10 @@ else()
     else()
         set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
     endif()
+    # Match configure.py: dev mode skips fmt's compile-time format checks.
+    if(CMAKE_BUILD_TYPE STREQUAL "Dev")
+        set(Seastar_LOGGER_COMPILE_TIME_FMT OFF CACHE BOOL "" FORCE)
+    endif()
     add_subdirectory(seastar)
 
     # Coverage mode sets cmake_build_type='Debug' for Seastar

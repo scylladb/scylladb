@@ -2218,6 +2218,17 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
     dpdk = args.dpdk
     if dpdk:
         seastar_cmake_args += ['-DSeastar_DPDK=ON', '-DSeastar_DPDK_MACHINE=x86-64-v3']
+    if mode == 'dev':
+        # SEASTAR_LOGGER_COMPILE_TIME_FMT (on by default) validates every
+        # logger/fmt::format() call's format string at compile time via a
+        # consteval fmt::formatter instantiation. That's pure frontend cost
+        # with zero generated code, paid on every logging call site - real
+        # measured cost from a full-build -ftime-trace/ClangBuildAnalyzer
+        # profile (see github.com/scylladb/scylladb#1): ~2315s of ~24360s
+        # total CPU time (~9.5%) across ~5000 call sites. Format-string
+        # mismatches become runtime errors instead of compile errors in dev
+        # builds only; release/debug builds keep compile-time checking.
+        seastar_cmake_args += ['-DSeastar_LOGGER_COMPILE_TIME_FMT=OFF']
     if args.split_dwarf:
         seastar_cmake_args += ['-DSeastar_SPLIT_DWARF=ON']
     if args.alloc_failure_injector:
