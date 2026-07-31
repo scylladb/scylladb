@@ -1167,7 +1167,7 @@ sql_cast_prepare_expression(const cast& c, data_dictionary::database db, const s
     };
 }
 
-std::optional<expression>
+static std::optional<expression>
 cast_prepare_expression(const cast& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, prepare_memo& memo) {
     switch (c.style) {
     case cast::cast_style::c:
@@ -1178,7 +1178,7 @@ cast_prepare_expression(const cast& c, data_dictionary::database db, const sstri
     on_internal_error(expr_logger, "Illegal cast style");
 }
 
-std::optional<expression>
+static std::optional<expression>
 field_selection_prepare_expression(const field_selection& fs, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, prepare_memo& memo) {
     // We can't infer the type of the user defined type from the field being selected
     auto prepared_structure = try_prepare_expression(fs.structure, db, keyspace, schema_opt, nullptr, /*infer_default=*/false, memo);
@@ -1212,7 +1212,7 @@ field_selection_prepare_expression(const field_selection& fs, data_dictionary::d
     };
 }
 
-assignment_testable::test_result
+static assignment_testable::test_result
 field_selection_test_assignment(const field_selection& fs, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver, prepare_memo& memo) {
     // We can't infer the type of the user defined type from the field being selected
     auto prepared_structure = try_prepare_expression(fs.structure, db, keyspace, schema_opt, nullptr, /*infer_default=*/false, memo);
@@ -1502,7 +1502,7 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
     }
 }
 
-assignment_testable::test_result
+static assignment_testable::test_result
 test_assignment_function_call(const cql3::expr::function_call& fc, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver, prepare_memo& memo) {
     std::optional<call_probe_key> memo_key;
     if (memo.enabled) {
@@ -1566,7 +1566,7 @@ static assignment_testable::test_result expression_test_assignment(const data_ty
     }
 }
 
-std::optional<expression> prepare_conjunction(const conjunction& conj,
+static std::optional<expression> prepare_conjunction(const conjunction& conj,
                                               data_dictionary::database db,
                                               const sstring& keyspace,
                                               const schema* schema_opt,

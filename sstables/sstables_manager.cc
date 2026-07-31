@@ -28,7 +28,7 @@
 
 namespace sstables {
 
-logging::logger smlogger("sstables_manager");
+static logging::logger smlogger("sstables_manager");
 
 sstables_manager::sstables_manager(
     sstring name, db::large_data_handler& large_data_handler, db::corrupt_data_handler& corrupt_data_handler, struct config cfg, gms::feature_service& feat, cache_tracker& ct, directory_semaphore& dir_sem,

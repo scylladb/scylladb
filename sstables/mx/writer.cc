@@ -207,7 +207,7 @@ static void write(sstable_version_types v, W& out, const clustering_block& block
 
 template <typename W>
 requires Writer<W>
-void write_clustering_prefix(sstable_version_types v, W& out, const schema& s,
+static void write_clustering_prefix(sstable_version_types v, W& out, const schema& s,
     const clustering_key_prefix& prefix, ephemerally_full_prefix is_ephemerally_full) {
     clustering_blocks_input_range range{s, prefix, is_ephemerally_full};
     for (const auto block: range) {
@@ -308,7 +308,7 @@ public:
 
 template <typename W>
 requires Writer<W>
-void write_missing_columns(W& out, const indexed_columns& columns, const row& row) {
+static void write_missing_columns(W& out, const indexed_columns& columns, const row& row) {
     for (const auto value: missing_columns_input_range{columns, row}) {
         write_vint(out, value);
     }
@@ -316,7 +316,7 @@ void write_missing_columns(W& out, const indexed_columns& columns, const row& ro
 
 template <typename T, typename W>
 requires Writer<W>
-void write_unsigned_delta_vint(W& out, T value, T base) {
+static void write_unsigned_delta_vint(W& out, T value, T base) {
     using unsigned_type = std::make_unsigned_t<T>;
     unsigned_type unsigned_delta = static_cast<unsigned_type>(value) - static_cast<unsigned_type>(base);
     // sign-extend to 64-bits
@@ -328,25 +328,25 @@ void write_unsigned_delta_vint(W& out, T value, T base) {
 
 template <typename W>
 requires Writer<W>
-void write_delta_timestamp(W& out, api::timestamp_type timestamp, const encoding_stats& enc_stats) {
+static void write_delta_timestamp(W& out, api::timestamp_type timestamp, const encoding_stats& enc_stats) {
     write_unsigned_delta_vint(out, timestamp, enc_stats.min_timestamp);
 }
 
 template <typename W>
 requires Writer<W>
-void write_delta_ttl(W& out, gc_clock::duration ttl, const encoding_stats& enc_stats) {
+static void write_delta_ttl(W& out, gc_clock::duration ttl, const encoding_stats& enc_stats) {
     write_unsigned_delta_vint(out, ttl.count(), enc_stats.min_ttl.count());
 }
 
 template <typename W>
 requires Writer<W>
-void write_delta_local_deletion_time(W& out, int64_t local_deletion_time, const encoding_stats& enc_stats) {
+static void write_delta_local_deletion_time(W& out, int64_t local_deletion_time, const encoding_stats& enc_stats) {
     write_unsigned_delta_vint(out, local_deletion_time, enc_stats.min_local_deletion_time.time_since_epoch().count());
 }
 
 template <typename W>
 requires Writer<W>
-void write_delta_local_deletion_time(W& out, gc_clock::time_point ldt, const encoding_stats& enc_stats) {
+static void write_delta_local_deletion_time(W& out, gc_clock::time_point ldt, const encoding_stats& enc_stats) {
     write_unsigned_delta_vint(out, ldt.time_since_epoch().count(), enc_stats.min_local_deletion_time.time_since_epoch().count());
 }
 

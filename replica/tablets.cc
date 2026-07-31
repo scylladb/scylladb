@@ -216,7 +216,7 @@ std::vector<data_value> replicas_to_data_value(const tablet_replica_set& replica
     return result;
 };
 
-data_value tablet_task_info_to_data_value(const locator::tablet_task_info& info) {
+static data_value tablet_task_info_to_data_value(const locator::tablet_task_info& info) {
     data_value result = make_user_value(tablet_task_info_type, {
         data_value(locator::tablet_task_type_to_string(info.request_type)),
         data_value(info.tablet_task_id.uuid()),
@@ -229,7 +229,7 @@ data_value tablet_task_info_to_data_value(const locator::tablet_task_info& info)
     return result;
 };
 
-data_value repair_scheduler_config_to_data_value(const locator::repair_scheduler_config& config) {
+static data_value repair_scheduler_config_to_data_value(const locator::repair_scheduler_config& config) {
     data_value result = make_user_value(repair_scheduler_config_type, {
         data_value(config.auto_repair_enabled),
         data_value(int64_t(config.auto_repair_threshold.count())),
@@ -573,7 +573,7 @@ tablet_replica_set deserialize_replica_set(cql3::untyped_result_set_row::view_ty
             replica_set_type->deserialize_value(raw_value));
 }
 
-locator::tablet_task_info tablet_task_info_from_cell(const data_value& v) {
+static locator::tablet_task_info tablet_task_info_from_cell(const data_value& v) {
     std::vector<data_value> dv = value_cast<user_type_impl::native_type>(v);
     auto result = locator::tablet_task_info{
         locator::tablet_task_type_from_string(value_cast<sstring>(dv[0])),
@@ -594,7 +594,7 @@ locator::tablet_task_info deserialize_tablet_task_info(cql3::untyped_result_set_
             tablet_task_info_type->deserialize_value(raw_value));
 }
 
-locator::repair_scheduler_config repair_scheduler_config_from_cell(const data_value& v) {
+static locator::repair_scheduler_config repair_scheduler_config_from_cell(const data_value& v) {
     std::vector<data_value> dv = value_cast<user_type_impl::native_type>(v);
     auto result = locator::repair_scheduler_config{
         value_cast<bool>(dv[0]),
@@ -1237,7 +1237,7 @@ lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr s, const
     return tablet_sstable_set::make(std::move(s), sgm, tmap);
 }
 
-future<std::optional<table_id>> read_base_table(cql3::query_processor& qp, table_id tid) {
+static future<std::optional<table_id>> read_base_table(cql3::query_processor& qp, table_id tid) {
     auto rs = co_await qp.execute_internal("select * from system.tablets where table_id = ?",
             {tid.uuid()}, cql3::query_processor::cache_internal::no);
     if (rs->empty() || !rs->front().has("base_table")) {

@@ -144,13 +144,13 @@ namespace fs = std::filesystem;
 #include <seastar/core/metrics_api.hh>
 #include <seastar/core/relabel_config.hh>
 
-seastar::metrics::metric_groups app_metrics;
+static seastar::metrics::metric_groups app_metrics;
 
 using namespace std::chrono_literals;
 
 namespace bpo = boost::program_options;
 
-logging::logger diaglog("diagnostics");
+static logging::logger diaglog("diagnostics");
 extern seastar::logger dsmlog;
 
 // Must live in a seastar::thread

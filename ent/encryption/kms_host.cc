@@ -45,7 +45,7 @@
 using namespace std::chrono_literals;
 using namespace std::string_literals;
 
-logger kms_log("kms");
+static logger kms_log("kms");
 
 using httpclient = rest::httpclient;
 

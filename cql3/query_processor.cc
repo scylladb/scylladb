@@ -41,8 +41,8 @@ using namespace statements;
 using namespace cql_transport::messages;
 
 logging::logger log("query_processor");
-logging::logger prep_cache_log("prepared_statements_cache");
-logging::logger authorized_prepared_statements_cache_log("authorized_prepared_statements_cache");
+static logging::logger prep_cache_log("prepared_statements_cache");
+static logging::logger authorized_prepared_statements_cache_log("authorized_prepared_statements_cache");
 
 const sstring query_processor::CQL_VERSION = "3.3.1";
 

@@ -697,7 +697,7 @@ future<> merge_lock() {
     return smp::submit_to(0, [] { return the_merge_lock.wait(); });
 }
 
-future<> merge_unlock() {
+static future<> merge_unlock() {
     if (slogger.is_enabled(log_level::trace)) {
         slogger.trace("merge_unlock at {}", current_backtrace());
     }
@@ -809,7 +809,7 @@ read_schema_partition_for_keyspace(sharded<service::storage_proxy>& proxy, sstri
     co_return schema_result_value_type{keyspace_name, std::move(rs)};
 }
 
-future<mutation>
+static future<mutation>
 read_schema_partition_for_table(sharded<service::storage_proxy>& proxy, schema_ptr schema, const sstring& keyspace_name, const sstring& table_name)
 {
     SCYLLA_ASSERT(schema_tables_holding_schema_mutations().contains(schema->id()));
@@ -1092,12 +1092,12 @@ shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& 
 }
 
 template<typename... Args>
-void set_cell_or_clustered(mutation& m, const clustering_key & ckey, Args && ...args) {
+static void set_cell_or_clustered(mutation& m, const clustering_key & ckey, Args && ...args) {
     m.set_clustered_cell(ckey, std::forward<Args>(args)...);
 }
 
 template<typename... Args>
-void set_cell_or_clustered(mutation& m, const exploded_clustering_prefix & ckey, Args && ...args) {
+static void set_cell_or_clustered(mutation& m, const exploded_clustering_prefix & ckey, Args && ...args) {
     m.set_cell(ckey, std::forward<Args>(args)...);
 }
 
@@ -2015,7 +2015,7 @@ future<schema_mutations> read_table_mutations(sharded<service::storage_proxy>& p
     co_return schema_mutations{std::move(cf_m), std::move(col_m), std::move(vv_col_m), std::move(c_col_m), std::move(idx_m), std::move(dropped_m), std::move(st_m)};
 }
 
-future<schema_ptr> create_table_from_name(sharded<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table)
+static future<schema_ptr> create_table_from_name(sharded<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table)
 {
     auto qn = qualified_name(keyspace, table);
     auto sm = co_await read_table_mutations(proxy, qn, tables());

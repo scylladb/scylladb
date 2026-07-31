@@ -10,7 +10,7 @@
 #include <fmt/std.h>
 #include "seastarx.hh"
 
-logging::logger validator_log("mutation_fragment_stream_validator");
+static logging::logger validator_log("mutation_fragment_stream_validator");
 
 invalid_mutation_fragment_stream::invalid_mutation_fragment_stream(std::runtime_error e) : std::runtime_error(std::move(e)) {
 }
