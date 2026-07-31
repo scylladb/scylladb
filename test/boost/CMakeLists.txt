@@ -360,6 +360,7 @@ add_scylla_test(combined_tests
     database_test.cc
     data_listeners_test.cc
     disk_space_monitor_test.cc
+    digest_checked_data_source_test.cc
     error_injection_test.cc
     extensions_test.cc
     filtering_test.cc
