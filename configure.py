@@ -2532,7 +2532,14 @@ def write_build_file(f,
         libs = {libs}
         pool link_pool
             depth = {link_pool_depth}
-        pool submodule_pool
+        # Separate pools (not one shared one) so Seastar's and Abseil's
+        # builds can overlap, while same-subdirectory targets (e.g.
+        # seastar/seastar_testing) stay serialized: two concurrent recursive
+        # ninja invocations in the same subdir don't coordinate at all and
+        # will race-rebuild shared objects (confirmed empirically).
+        pool seastar_pool
+            depth = 1
+        pool abseil_pool
             depth = 1
         rule gen
             command = echo -e $text > $out
@@ -2974,18 +2981,18 @@ def write_build_file(f,
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
         f.write(f'build {seastar_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n')
-        f.write('  pool = submodule_pool\n')
+        f.write('  pool = seastar_pool\n')
         f.write(f'  subdir = $builddir/{mode}/seastar\n')
         f.write('  target = seastar\n')
         f.write(f'build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n')
-        f.write('  pool = submodule_pool\n')
+        f.write('  pool = seastar_pool\n')
         f.write(f'  subdir = $builddir/{mode}/seastar\n')
         f.write('  target = seastar_testing\n')
         f.write(f'  profile_dep = {profile_dep}\n')
 
         for lib in abseil_libs:
             f.write(f'build $builddir/{mode}/abseil/{lib}: ninja $builddir/{mode}/abseil/build.ninja | always {profile_dep}\n')
-            f.write(f'  pool = submodule_pool\n')
+            f.write(f'  pool = abseil_pool\n')
             f.write(f'  subdir = $builddir/{mode}/abseil\n')
             f.write(f'  target = {lib}\n')
             f.write(f'  profile_dep = {profile_dep}\n')
@@ -2996,7 +3003,7 @@ def write_build_file(f,
         f.write(f'build $builddir/{mode}/stdafx.hh.pch: cxx_build_precompiled_header.{mode} stdafx.hh | {profile_dep} {seastar_dep} {gen_headers_dep} {pch_dep}\n')
 
         f.write(f'build $builddir/{mode}/seastar/apps/iotune/iotune: ninja $builddir/{mode}/seastar/build.ninja | $builddir/{mode}/seastar/libseastar.{seastar_lib_ext}\n')
-        f.write('  pool = submodule_pool\n')
+        f.write('  pool = seastar_pool\n')
         f.write(f'  subdir = $builddir/{mode}/seastar\n')
         f.write('  target = iotune\n')
         f.write(f'  profile_dep = {profile_dep}\n')
