@@ -295,6 +295,11 @@ endif()
 
 target_sources(scylla-main
   PRIVATE
+    # Here, not on the scylla executable target: CMake schedules an
+    # executable's own sources last regardless of declaration order,
+    # making main.cc.o (~40s) a solo tail. As a library source it
+    # schedules early like everything else here.
+    main.cc
     absl-flat_hash_map.cc
     bytes.cc
     client_data.cc
@@ -410,8 +415,7 @@ add_subdirectory(vector_search)
 add_version_library(scylla_version
     release.cc)
 
-add_executable(scylla
-  main.cc)
+add_executable(scylla)
 set(scylla_libs
     audit
     scylla-main
