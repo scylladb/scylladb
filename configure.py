@@ -2705,6 +2705,7 @@ def write_build_file(f,
         compiles = {}
         compiles_with_pch = set()
         swaggers = set()
+        swaggers_with_pch = set()
         serializers = {}
         ragels = {}
         antlr3_grammars = set()
@@ -2813,6 +2814,8 @@ def write_build_file(f,
                     serializers[hh] = src
                 elif src.endswith('.json'):
                     swaggers.add(src)
+                    if use_pch:
+                        swaggers_with_pch.add(src)
                 elif src.endswith('.rl'):
                     hh = '$builddir/' + mode + '/gen/' + src.replace('.rl', '.hh')
                     ragels[hh] = src
@@ -2901,7 +2904,13 @@ def write_build_file(f,
             obj = swagger.objects(gen_dir)[0]
             src = swagger.source
             f.write('build {} | {} : swagger {} | {}/scripts/seastar-json2code.py\n'.format(hh, cc, src, args.seastar_path))
-            f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep}\n')
+            # Generated api-doc .cc files skipped the PCH entirely, paying full
+            # header-parse cost per file for no reason - use it when eligible.
+            if swagger in swaggers_with_pch:
+                swagger_pch_dep = f'$builddir/{mode}/stdafx.hh.pch'
+                f.write(f'build {obj}: cxx_with_pch.{mode} {cc} | {profile_dep} {swagger_pch_dep}\n')
+            else:
+                f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep}\n')
         for hh in serializers:
             src = serializers[hh]
             f.write('build {}: serializer {} | idl-compiler.py\n'.format(hh, src))
