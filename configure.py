@@ -2444,6 +2444,17 @@ def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
                               if flag_supported(flag=o, compiler=cxx)]
         cxxflags += optimization_flags
 
+    if mode == 'dev':
+        # Trims backend compile time; dev doesn't need release's vectorization.
+        optimization_flags = [
+            '-fno-vectorize',
+            '-fno-slp-vectorize',
+        ]
+        optimization_flags = [o
+                              for o in optimization_flags
+                              if flag_supported(flag=o, compiler=cxx)]
+        cxxflags += optimization_flags
+
     if flag_supported(flag='-Wstack-usage=4096', compiler=cxx):
         stack_usage_threshold = mode_config['stack-usage-threshold']
         cxxflags += [f'-Wstack-usage={stack_usage_threshold}',
