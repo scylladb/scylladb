@@ -13,7 +13,7 @@
 #include <seastar/core/on_internal_error.hh>
 
 #include "bytes_fwd.hh"
-#include "schema/schema_fwd.hh"
+#include "schema/schema_extension.hh"
 #include "serializer.hh"
 #include "utils/log.hh"
 

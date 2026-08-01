@@ -8,9 +8,12 @@
 
 #pragma once
 
+#include <map>
+#include <stdexcept>
+
 #include "bytes_fwd.hh"
 #include "db/per_partition_rate_limit_options.hh"
-#include "schema/schema_fwd.hh"
+#include "schema/schema_extension.hh"
 #include "serializer.hh"
 
 namespace db {

@@ -9,9 +9,10 @@
 #pragma once
 
 #include <map>
+#include <stdexcept>
 
 #include "bytes_fwd.hh"
-#include "schema/schema_fwd.hh"
+#include "schema/schema_extension.hh"
 #include "serializer.hh"
 
 namespace db {
