@@ -808,6 +808,9 @@ arg_parser.add_argument('--sccache-rust', action=argparse.BooleanOptionalAction,
                         help='Use sccache for rust code (if sccache is selected as compiler cache). Doesn\'t work with distributed builds.')
 add_tristate(arg_parser, name='dpdk', dest='dpdk', default=False,
                         help='Use dpdk (from seastar dpdk sources)')
+add_tristate(arg_parser, name='perf-tools', dest='perf_tools', default=True,
+                        help='build the perf-* dev subcommands and test/lib into the scylla binary '
+                             '(disabling saves ~5%% of full-build CPU; default keeps current behavior)')
 arg_parser.add_argument('--dpdk-target', action='store', dest='dpdk_target', default='',
                         help='Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
 arg_parser.add_argument('--debuginfo', action='store', dest='debuginfo', type=int, default=1,
@@ -1575,6 +1578,19 @@ scylla_tools = ['tools/scylla-local-file-key-generator.cc',
                 'tools/load_system_tablets.cc',
                 'tools/utils.cc',
                 'tools/lua_sstable_consumer.cc']
+
+# test/lib is a genuine shared dependency, not perf-exclusive - e.g.
+# tools/scylla-sstable.cc calls do_with_cql_env_noreentrant_in_thread() from
+# test/lib/cql_test_env.cc - so it's always built, unlike scylla_perfs below.
+scylla_perf_test_lib = ['test/lib/cql_test_env.cc',
+                'test/lib/log.cc',
+                'test/lib/test_services.cc',
+                'test/lib/test_utils.cc',
+                'test/lib/tmpdir.cc',
+                'test/lib/key_utils.cc',
+                'test/lib/random_schema.cc',
+                'test/lib/data_model.cc',
+                'test/lib/eventually.cc']
 scylla_perfs = ['test/perf/perf_alternator.cc',
                 'test/perf/perf_fast_forward.cc',
                 'test/perf/perf_row_cache_update.cc',
@@ -1585,15 +1601,6 @@ scylla_perfs = ['test/perf/perf_alternator.cc',
                 'test/perf/perf_tablets.cc',
                 'test/perf/tablet_load_balancing.cc',
                 'test/perf/perf.cc',
-                'test/lib/cql_test_env.cc',
-                'test/lib/log.cc',
-                'test/lib/test_services.cc',
-                'test/lib/test_utils.cc',
-                'test/lib/tmpdir.cc',
-                'test/lib/key_utils.cc',
-                'test/lib/random_schema.cc',
-                'test/lib/data_model.cc',
-                'test/lib/eventually.cc',
                 'seastar/tests/perf/linux_perf_event.cc']
 
 deps = {
@@ -1601,7 +1608,7 @@ deps = {
     # scylla-sstable.cc, cql_test_env.cc) overlap scylla_core's tail instead
     # of only starting once it's nearly done. List order doesn't affect
     # correctness, only scheduling.
-    'scylla': idls + ['main.cc'] + api + alternator + scylla_tools + scylla_perfs + scylla_core,
+    'scylla': idls + ['main.cc'] + api + alternator + scylla_tools + (scylla_perfs if args.perf_tools else []) + scylla_perf_test_lib + scylla_core,
     'patchelf': ['tools/patchelf.cc'],
 }
 
@@ -2465,6 +2472,9 @@ def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
                      '-Wno-error=stack-usage=']
 
     cxxflags.append(f'-DSCYLLA_BUILD_MODE={mode}')
+
+    if args.perf_tools:
+        cxxflags.append('-DSCYLLA_BUILD_PERF_TOOLS')
 
     if debuginfo and mode_config['can_have_debug_info']:
         cxxflags += ['-g', '-gz']

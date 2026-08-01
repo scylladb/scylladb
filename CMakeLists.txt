@@ -62,6 +62,13 @@ set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 add_compile_definitions(SEASTAR_NO_EXCEPTION_HACK)
 # Hacks needed to expose internal APIs for xxhash dependencies
 add_compile_definitions(XXH_PRIVATE_API)
+
+# Match configure.py's --enable-perf-tools/--disable-perf-tools (default: on).
+# Define is added later, alongside SEASTAR_TESTING_MAIN, to avoid leaking
+# into the seastar/abseil subdirectories.
+option(Scylla_BUILD_PERF_TOOLS
+  "Build the perf-* dev subcommands and their test/perf harness into the scylla binary"
+  ON)
 # SEASTAR_TESTING_MAIN is added later (after add_subdirectory(seastar) and
 # add_subdirectory(abseil)) to avoid leaking into the seastar subdirectory.
 # If SEASTAR_TESTING_MAIN is defined globally before seastar, it causes a
@@ -185,6 +192,9 @@ set_target_properties(absl_strerror PROPERTIES EXCLUDE_FROM_ALL TRUE)
 # SEASTAR_TESTING_MAIN globally. This matches configure.py's global define
 # without leaking into seastar (which would cause duplicate main symbols).
 add_compile_definitions(SEASTAR_TESTING_MAIN)
+if(Scylla_BUILD_PERF_TOOLS)
+  add_compile_definitions(SCYLLA_BUILD_PERF_TOOLS)
+endif()
 
 # System libraries dependencies
 find_package(Boost REQUIRED
@@ -433,13 +443,15 @@ set(scylla_libs
     service
     sstables
     streaming
-    test-perf
     tools
     tracing
     transport
     types
     utils
     vector_search)
+if(Scylla_BUILD_PERF_TOOLS)
+  list(APPEND scylla_libs test-perf)
+endif()
 target_link_libraries(scylla PRIVATE
     ${scylla_libs})
 
