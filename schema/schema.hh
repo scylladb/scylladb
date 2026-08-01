@@ -12,6 +12,7 @@
 #include "utils/assert.hh"
 #include "utils/chunked_vector.hh"
 #include <functional>
+#include <map>
 #include <optional>
 #include <unordered_map>
 #include <ranges>
@@ -33,6 +34,7 @@
 #include "db/per_partition_rate_limit_options.hh"
 #include "db/tablet_options.hh"
 #include "schema_fwd.hh"
+#include "schema/schema_extension.hh"
 #include "db/view/base_info.hh"
 
 namespace dht {

@@ -8,12 +8,13 @@
 #pragma once
 
 #include <map>
+#include <stdexcept>
 
 #include <seastar/core/sstring.hh>
 
 #include "bytes_fwd.hh"
 #include "cdc/cdc_options.hh"
-#include "schema/schema_fwd.hh"
+#include "schema/schema_extension.hh"
 #include "serializer_impl.hh"
 
 namespace cdc {

@@ -8,11 +8,12 @@
 #pragma once
 
 #include <map>
+#include <stdexcept>
 
 #include <seastar/core/sstring.hh>
 
 #include "bytes.hh"
-#include "schema/schema_fwd.hh"
+#include "schema/schema_extension.hh"
 #include "serializer_impl.hh"
 #include "tombstone_gc_options.hh"
 
