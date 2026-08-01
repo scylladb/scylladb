@@ -1597,7 +1597,11 @@ scylla_perfs = ['test/perf/perf_alternator.cc',
                 'seastar/tests/perf/linux_perf_event.cc']
 
 deps = {
-    'scylla': idls + ['main.cc'] + scylla_core + api + alternator + scylla_tools + scylla_perfs,
+    # Smaller groups first so their slow stragglers (storage_service.cc,
+    # scylla-sstable.cc, cql_test_env.cc) overlap scylla_core's tail instead
+    # of only starting once it's nearly done. List order doesn't affect
+    # correctness, only scheduling.
+    'scylla': idls + ['main.cc'] + api + alternator + scylla_tools + scylla_perfs + scylla_core,
     'patchelf': ['tools/patchelf.cc'],
 }
 
