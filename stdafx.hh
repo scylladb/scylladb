@@ -46,7 +46,6 @@
 #include <boost/signals2/connection.hpp>
 #include <boost/signals2/dummy_mutex.hpp>
 #include <boost/signals2/signal_type.hpp>
-#include <boost/thread/barrier.hpp>
 #include <boost/type.hpp>
 #include <boost/variant/variant.hpp>
 #include <byteswap.h>
