@@ -2999,8 +2999,9 @@ def write_build_file(f,
 
         # No abseil_dep: the PCH only parses abseil's checked-in headers
         # (-isystem abseil), never its compiled .a archives, so it needn't
-        # wait on abseil's build.
-        f.write(f'build $builddir/{mode}/stdafx.hh.pch: cxx_build_precompiled_header.{mode} stdafx.hh | {profile_dep} {seastar_dep} {gen_headers_dep} {pch_dep}\n')
+        # wait on abseil's build. No pch_dep either: that's the compiles
+        # loop's leaked variable (the PCH can't depend on itself).
+        f.write(f'build $builddir/{mode}/stdafx.hh.pch: cxx_build_precompiled_header.{mode} stdafx.hh | {profile_dep} {seastar_dep} {gen_headers_dep}\n')
 
         f.write(f'build $builddir/{mode}/seastar/apps/iotune/iotune: ninja $builddir/{mode}/seastar/build.ninja | $builddir/{mode}/seastar/libseastar.{seastar_lib_ext}\n')
         f.write('  pool = seastar_pool\n')
