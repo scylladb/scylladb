@@ -2990,7 +2990,10 @@ def write_build_file(f,
             f.write(f'  target = {lib}\n')
             f.write(f'  profile_dep = {profile_dep}\n')
 
-        f.write(f'build $builddir/{mode}/stdafx.hh.pch: cxx_build_precompiled_header.{mode} stdafx.hh | {profile_dep} {seastar_dep} {abseil_dep} {gen_headers_dep} {pch_dep}\n')
+        # No abseil_dep: the PCH only parses abseil's checked-in headers
+        # (-isystem abseil), never its compiled .a archives, so it needn't
+        # wait on abseil's build.
+        f.write(f'build $builddir/{mode}/stdafx.hh.pch: cxx_build_precompiled_header.{mode} stdafx.hh | {profile_dep} {seastar_dep} {gen_headers_dep} {pch_dep}\n')
 
         f.write(f'build $builddir/{mode}/seastar/apps/iotune/iotune: ninja $builddir/{mode}/seastar/build.ninja | $builddir/{mode}/seastar/libseastar.{seastar_lib_ext}\n')
         f.write('  pool = submodule_pool\n')
