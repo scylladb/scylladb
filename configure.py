@@ -897,6 +897,20 @@ scylla_raft_core = [
 ]
 
 scylla_core = (['message/messaging_service.cc',
+                # These 7 are individually slow (7-22s each) but were
+                # positioned at the very end of this list, where a clean
+                # build's ninja has no prior .ninja_log history to know
+                # that - they ended up as a solo, ~20s-longer tail after
+                # everything else finished. Moved next to messaging_service.cc
+                # (the first scylla_core entry, itself already scheduled
+                # early) so they get picked up in the same early wave.
+                'service/raft/raft_group0.cc',
+                'tasks/task_manager.cc',
+                'service/topology_state_machine.cc',
+                'service/topology_mutation.cc',
+                'service/topology_coordinator.cc',
+                'node_ops/task_manager_module.cc',
+                'vector_search/vector_store_client.cc',
                 'message/advanced_rpc_compressor.cc',
                 'message/stream_compressor.cc',
                 'message/dict_trainer.cc',
@@ -1387,20 +1401,13 @@ scylla_core = (['message/messaging_service.cc',
                 'service/raft/raft_rpc.cc',
                 'service/raft/raft_group_registry.cc',
                 'service/raft/discovery.cc',
-                'service/raft/raft_group0.cc',
                 'service/direct_failure_detector/failure_detector.cc',
                 'service/raft/raft_group0_client.cc',
                 'tasks/task_handler.cc',
-                'tasks/task_manager.cc',
                 'rust/wasmtime_bindings/src/lib.rs',
                 'utils/to_string.cc',
-                'service/topology_state_machine.cc',
-                'service/topology_mutation.cc',
-                'service/topology_coordinator.cc',
-                'node_ops/task_manager_module.cc',
                 'reader_concurrency_semaphore_group.cc',
                 'utils/disk_space_monitor.cc',
-                'vector_search/vector_store_client.cc',
                 'vector_search/dns.cc',
                 'vector_search/client.cc',
                 'vector_search/clients.cc',
