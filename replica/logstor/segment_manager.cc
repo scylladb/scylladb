@@ -927,7 +927,7 @@ public:
         return _cfg.segment_size;
     }
 
-    future<> discard_segments(segment_set&);
+    future<> discard_segments(logstor_group&);
 
     size_t get_memory_usage() const {
         return sizeof(_segment_descs);
@@ -1573,17 +1573,28 @@ void segment_manager_impl::free_segment(log_segment_id segment_id) noexcept {
     _stats.segments_freed++;
 }
 
-future<> segment_manager_impl::discard_segments(segment_set& ss) {
+future<> segment_manager_impl::discard_segments(logstor_group& cg) {
+    auto compaction_disable_guard = co_await _compaction_mgr.disable_compaction(cg);
+
     auto holder = _async_gate.hold();
 
-    std::vector<log_segment_id> segments;
-    segments.reserve(ss.segment_count());
-    while (!ss._segments.empty()) {
-        co_await coroutine::maybe_yield();
-        auto& desc = ss._segments.one_of_largest();
+    auto& ss = cg.logstor_segments();
+
+    // Collect and validate the segments to discard before removing any of them, so that this
+    // cannot fail with a segment already out of the group but not yet freed, which would leak it
+    // and leave its data on disk for recovery to find.
+    // Compaction is the only thing that removes segments from a group and it is disabled here, so
+    // the positions of the first `segment_count` segments stay valid. Segments appended while this runs
+    // are past `segment_count` and are left in the group.
+    const auto segment_count = ss.segment_count();
+    utils::chunked_vector<log_segment_id> segments;
+    segments.reserve(segment_count);
+    for (size_t i = 0; i < segment_count; ++i) {
+        auto& desc = *ss._segment_list[i];
         auto seg_id = desc_to_segment_id(desc);
-        ss.remove_segment(desc);
-        if (desc.ref_count != 0) {
+
+        // Belonging to the group is the only reference the segment may have left.
+        if (desc.ref_count != 1) {
             on_internal_error(logstor_logger, format("Discarding segment {} with non-zero reference count", seg_id));
         }
 
@@ -1593,7 +1604,17 @@ future<> segment_manager_impl::discard_segments(segment_set& ss) {
         }
 
         segments.push_back(seg_id);
+        co_await coroutine::maybe_yield();
     }
+
+    // Removing the segments cannot fail, so every segment taken out of the group below is also
+    // freed further down.
+    for (auto seg_id : segments) {
+        ss.remove_segment(get_segment_descriptor(seg_id));
+        co_await coroutine::maybe_yield();
+    }
+
+    logstor_logger.debug("Discarding {} segments", segments.size());
 
     // Invalidate the first header block so recovery treats the slot as empty.
     co_await max_concurrent_for_each(segments, 32, [this] (log_segment_id seg_id) -> future<> {
@@ -2515,10 +2536,13 @@ future<utils::chunked_vector<segment_snapshot>> segment_manager_impl::make_snaps
 
     auto& segments = cg.logstor_segments();
 
+    // iterate the segment list by index - safe to do with yields.
+    // segments may be added to the end of the list, but not removed since compaction is disabled.
+    const auto segment_count = segments.segment_count();
     utils::chunked_vector<segment_snapshot> snp;
-    snp.reserve(segments.segment_count());
-    for (auto& desc : segments._segments) {
-        auto seg_id = desc_to_segment_id(desc);
+    snp.reserve(segment_count);
+    for (size_t i = 0; i < segment_count; ++i) {
+        auto seg_id = desc_to_segment_id(*segments._segment_list[i]);
         snp.push_back(segment_snapshot{
             .segment_id = seg_id,
             .seg_ref = make_segment_ref(seg_id),
@@ -2584,8 +2608,8 @@ uint64_t segment_manager::get_segment_size() const noexcept {
     return _impl->get_segment_size();
 }
 
-future<> segment_manager::discard_segments(segment_set& ss) {
-    return _impl->discard_segments(ss);
+future<> segment_manager::discard_segments(logstor_group& cg) {
+    return _impl->discard_segments(cg);
 }
 
 size_t segment_manager::get_memory_usage() const {

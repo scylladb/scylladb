@@ -16,7 +16,9 @@
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include "mutation_writer/token_group_based_splitting_writer.hh"
+#include <algorithm>
 #include <array>
+#include <limits>
 #include <ranges>
 #include <optional>
 #include <vector>
@@ -157,6 +159,9 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
     size_t record_count{0};
     segment_set* owner{nullptr}; // non-owning, set when added to a segment_set
     int ref_count{0};
+    // Position in segment_set::_segment_list, set to no_index when the segment has no owner.
+    static constexpr uint32_t no_index = std::numeric_limits<uint32_t>::max();
+    uint32_t index_in_set{no_index};
 
     void reset(size_t segment_size) noexcept {
         free_space = segment_size;
@@ -189,70 +194,119 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
 using segment_descriptor_hist = log_heap<segment_descriptor, segment_descriptor_hist_options>;
 
 struct segment_set {
+    // Segments ordered by free space, used to pick the segments to compact.
     segment_descriptor_hist _segments;
-    size_t _segment_count{0};
+    // The same segments, in no particular order. Used to iterate efficiently and safely over all segments.
+    utils::chunked_vector<segment_descriptor*> _segment_list;
+
+    segment_set() = default;
+
+    // Descriptors point back at their set and are linked into its containers, so a set cannot
+    // be copied or moved without leaving all of them dangling.
+    segment_set(const segment_set&) = delete;
+    segment_set& operator=(const segment_set&) = delete;
+    segment_set(segment_set&&) = delete;
+    segment_set& operator=(segment_set&&) = delete;
 
     ~segment_set() {
         clear();
     }
 
     future<> merge(segment_set& other) {
-        while (!other._segments.empty()) {
-            auto& desc = other._segments.one_of_largest();
-            other._segments.erase(desc);
-            --other._segment_count;
-            desc.owner = this;
-            _segments.push(desc);
-            ++_segment_count;
+        while (!other.empty()) {
+            // Make room before unlinking, so that failing to grow leaves the segment in `other`.
+            // Reserving per segment rather than for all of them up front also covers `other`
+            // growing while this yields, which link() could not report, being noexcept.
+            reserve_one();
+            auto& desc = *other._segment_list.back();
+            other.unlink(desc);
+            link(desc);
             co_await coroutine::maybe_yield();
         }
     }
 
+    // Throws if the set cannot grow, in which case nothing is modified.
     void add_segment(segment_descriptor& desc) {
         if (desc.owner) {
             on_internal_error(logstor_logger, "add_segment called for segment that has an owner");
         }
-        desc.owner = this;
-        _segments.push(desc);
+        reserve_one();
+        link(desc);
         ++desc.ref_count;
-        ++_segment_count;
     }
 
     void update_segment(segment_descriptor& desc) {
         _segments.adjust_up(desc);
     }
 
-    void remove_segment(segment_descriptor& desc) {
-        if (desc.owner != this) {
-            on_internal_error(logstor_logger, "remove_segment called not from the owner");
-        }
-        _segments.erase(desc);
-        desc.owner = nullptr;
+    void remove_segment(segment_descriptor& desc) noexcept {
+        unlink(desc);
         --desc.ref_count;
-        --_segment_count;
     }
 
     // unlink all segments for shutdown.
     // don't decrement ref_count because the segments are still owned
     // by this group and we don't want to free them.
-    void clear() {
+    void clear() noexcept {
         while (!empty()) {
-            auto& desc = _segments.one_of_largest();
-            if (desc.owner != this) {
-                on_internal_error(logstor_logger, "remove_segment called not from the owner");
-            }
-            _segments.erase(desc);
-            desc.owner = nullptr;
-            --_segment_count;
+            unlink(*_segment_list.back());
         }
     }
 
     size_t segment_count() const noexcept {
-        return _segment_count;
+        return _segment_list.size();
     }
 
     bool empty() const noexcept {
-        return _segment_count == 0;
+        return _segment_list.empty();
+    }
+
+private:
+    // Makes room for one more segment, so that the following link() cannot fail. Only useful when
+    // nothing can be added to the set in between, since the room is not reserved for a caller.
+    void reserve_one() {
+        static constexpr size_t min_reservation = 16;
+        static constexpr size_t chunk_capacity = decltype(_segment_list)::max_chunk_capacity();
+        const size_t capacity = _segment_list.capacity();
+        if (_segment_list.size() < capacity) {
+            return;
+        }
+        // While the list is under one chunk, grow geometrically: reserving a single element
+        // reallocates the partially filled last chunk and migrates it, which would make appending
+        // segments quadratic. Once the capacity is a whole number of chunks there is nothing to
+        // migrate, so add exactly one chunk. Clamping to chunk_capacity keeps the capacity chunk
+        // aligned, which is what makes the following reservations migration free.
+        _segment_list.reserve(capacity < chunk_capacity
+                ? std::min(std::max(capacity * 2, min_reservation), chunk_capacity)
+                : capacity + chunk_capacity);
+    }
+
+    // The caller must have made room for the segment, see reserve_one() and merge().
+    // Linking must not fail, or the segment would be left owned by a set that doesn't hold it.
+    void link(segment_descriptor& desc) noexcept {
+        _segment_list.push_back(&desc);
+        desc.owner = this;
+        desc.index_in_set = _segment_list.size() - 1;
+        _segments.push(desc);
+    }
+
+    // Validates the invariants of every removal path, and aborts rather than throwing, both
+    // because it cannot leave the set half-updated and because it runs from the destructor.
+    void unlink(segment_descriptor& desc) noexcept {
+        if (desc.owner != this) {
+            on_fatal_internal_error(logstor_logger, "unlinking a segment from a set that is not its owner");
+        }
+        if (desc.index_in_set >= _segment_list.size() || _segment_list[desc.index_in_set] != &desc) {
+            on_fatal_internal_error(logstor_logger, "segment is not at its recorded position in its set");
+        }
+        _segments.erase(desc);
+        // Keep the list compact by moving the last segment into the freed slot.
+        auto* last = _segment_list.back();
+        _segment_list[desc.index_in_set] = last;
+        last->index_in_set = desc.index_in_set;
+        _segment_list.pop_back();
+        desc.owner = nullptr;
+        desc.index_in_set = segment_descriptor::no_index;
     }
 };
 

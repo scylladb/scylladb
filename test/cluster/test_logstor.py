@@ -723,7 +723,16 @@ async def test_drop_table(manager: ScyllaClusterManager):
             assert rows[0].v == value, f"Expected value of size {value_size} for key {i} in test2 after all operations, but got {len(rows[0].v)}"
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_drop_table_during_logstor_compaction(manager: ScyllaClusterManager):
+@pytest.mark.parametrize("operation", ["drop", "truncate"])
+async def test_table_removal_during_logstor_compaction(manager: ScyllaClusterManager, operation: str):
+    """
+    Both DROP and TRUNCATE discard the segments of the table's compaction groups, which has to
+    wait for an ongoing compaction of those groups, so that compaction cannot free a segment that
+    is being discarded, nor add a segment to a group after it was drained.
+
+    DROP runs the same truncate path and only then stops the table, so the two share this
+    critical section, and DROP additionally tears down the already drained compaction groups.
+    """
     cmdline = ['--logger-log-level', 'logstor=trace', '--logger-log-level', 'debug_error_injection=debug', '--smp=1']
     cfg = {
         'experimental_features': ['logstor'],
@@ -754,14 +763,33 @@ async def test_drop_table_during_logstor_compaction(manager: ScyllaClusterManage
         await manager.api.enable_injection(server.ip_addr, inj, one_shot=True)
         log_mark = await server_log.mark()
 
+        # pause a compaction right before it frees the segments it compacted
         await manager.api.logstor_compaction(server.ip_addr)
         await server_log.wait_for(f'{inj}: waiting for message', from_mark=log_mark, timeout=60)
 
-        drop_task = cql.run_async(f"DROP TABLE {ks}.test")
-        await server_log.wait_for(f"Dropping {ks}.test", from_mark=log_mark, timeout=60)
+        # the operation has to wait for the paused compaction instead of racing with it.
+        # both operations log "Truncating" since drop discards the data the same way.
+        statement = "DROP TABLE" if operation == "drop" else "TRUNCATE TABLE"
+        task = cql.run_async(f"{statement} {ks}.test")
+        try:
+            await server_log.wait_for(f"Truncating {ks}.test", from_mark=log_mark, timeout=60)
+            # the operation has reached the point where it waits for an ongoing compaction, which is
+            # the critical section under test. The paused compaction cannot get past the injection on
+            # its own, so the operation stays blocked until the message below is sent.
+            await asyncio.sleep(0.1)
+            assert not task.done(), f"{operation} did not wait for the ongoing compaction"
+        finally:
+            await manager.api.message_injection(server.ip_addr, inj)
 
-        await manager.api.message_injection(server.ip_addr, inj)
-        await drop_task
+        await task
+
+        metrics = await manager.metrics.query(server.ip_addr)
+        assert metrics.get("scylla_logstor_sm_live_record_bytes") == 0
+        assert metrics.get("scylla_logstor_sm_live_record_count") == 0
+
+        if operation == "truncate":
+            rows = await cql.run_async(f"SELECT pk FROM {ks}.test")
+            assert len(rows) == 0
 
 async def test_trigger_separator_flush(manager: ScyllaClusterManager):
     """
