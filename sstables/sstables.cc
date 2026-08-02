@@ -1844,7 +1844,7 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
     this->set_first_and_last_keys();
     _run_identifier = _components->scylla_metadata->get_optional_run_identifier().value_or(run_id::create_random_id());
 
-    _sstable_identifier = _components->scylla_metadata->get_optional_sstable_identifier();
+    ensure_sstable_identifier();
 
     if (cfg.load_first_and_last_position_metadata) {
         co_await load_first_and_last_position_in_partition();
@@ -2500,23 +2500,34 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
 }
 
 sstable_id sstable::ensure_sstable_identifier() {
-    sstable_id sid;
-    // FIXME:
+    optimized_optional<sstable_id> sid;
+
     // If the sstable already loaded its scylla_metadata, take the identifier
     // persisted there; that is the one its components were written under.
-    // Validate that it is consistent with the `_sstable_identifier` member.
-    if (_sstable_identifier) {
-        sid = *_sstable_identifier;
-    } else if (generation().is_uuid_based()) {
-        sid = sstable_id(generation().as_uuid());
-    } else {
-        sid = sstable_id(utils::UUID_gen::get_time_UUID());
-        sstlog.info("SSTable {} has numerical generation. SSTable identifier in scylla_metadata set to {}", get_filename(), sid);
+    if (_components->scylla_metadata) {
+        // FIXME: validate that it is consistent with the `_sstable_identifier` member.
+        sid = _components->scylla_metadata->get_optional_sstable_identifier();
+    }
+
+    // Otherwise, on the write path, _sstable_identifier may have already been set.
+    // If so, use it, else derive the identifier from the generation unless it is
+    // numerical (as might be the case in some legacy unit tests), in which case
+    // generate a new one.
+    if (!sid) {
+        if (_sstable_identifier) {
+            sid = *_sstable_identifier;
+        } else if (generation().is_uuid_based()) {
+            sid = sstable_id(generation().as_uuid());
+        } else {
+            sid = sstable_id(utils::UUID_gen::get_time_UUID());
+            sstlog.info("SSTable {} has numerical generation. SSTable identifier set to {}", get_filename(), sid);
+        }
     }
     // Make the sstable carry the identifier its component objects are named
-    // by, rather than depend on whoever created it to have set it.
+    // by, rather than depend on whoever created it to have set it.  Stamping it
+    // into the Scylla metadata is left to whoever is about to write that out.
     _sstable_identifier = sid;
-    return sid;
+    return *sid;
 }
 
 bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const {
