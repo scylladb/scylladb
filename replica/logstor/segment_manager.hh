@@ -132,7 +132,10 @@ public:
 
     uint64_t get_segment_size() const noexcept;
 
-    future<> discard_segments(segment_set&);
+    // Removes all the segments of the group and frees them. Waits for an ongoing compaction of
+    // the group and keeps compaction disabled while discarding, so the caller doesn't have to.
+    // The index must be cleared first, so that no record of the group is reachable.
+    future<> discard_segments(logstor_group&);
 
     size_t get_memory_usage() const;
 

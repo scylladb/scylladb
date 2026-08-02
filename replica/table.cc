@@ -1142,7 +1142,7 @@ future<> compaction_group::split(compaction::compaction_type_options::split opt,
 
 future<> compaction_group::discard_logstor_segments() {
     auto& sm = get_logstor_segment_manager();
-    co_await sm.discard_segments(logstor_segments());
+    co_await sm.discard_segments(as_logstor_group());
 }
 
 logstor::logstor_group& compaction_group::as_logstor_group() noexcept {
@@ -2741,13 +2741,16 @@ future<logstor::table_segment_stats> table::get_logstor_segment_stats() const {
         result.compaction_group_count++;
         result.segment_count += cg_segments.segment_count();
 
-        for (const auto& desc : cg_segments._segments) {
-            co_await coroutine::maybe_yield();
-            auto data_size = desc.net_data_size(segment_size);
+        // iterate the segment list by index - safe to do with yields.
+        // segments may be added or removed. such changes during the loop may leave
+        // a segment counted twice or not at all, which is fine for a histogram.
+        for (size_t i = 0; i < cg_segments.segment_count(); ++i) {
+            auto data_size = cg_segments._segment_list[i]->net_data_size(segment_size);
             auto bucket_index = std::min<size_t>(data_size / bucket_size, bucket_count - 1);
             auto& bucket = result.histogram[bucket_index];
             bucket.count++;
             bucket.max_data_size = std::max(bucket.max_data_size, data_size);
+            co_await coroutine::maybe_yield();
         }
     });
 
