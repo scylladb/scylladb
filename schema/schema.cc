@@ -2465,3 +2465,7 @@ schema_mismatch_error::schema_mismatch_error(table_schema_version expected, cons
     : std::runtime_error(fmt::format("Attempted to deserialize schema-dependent object of version {} using {}.{} {}",
         expected, access.ks_name(), access.cf_name(), access.version()))
 { }
+
+table_schema_version reversed(table_schema_version v) noexcept {
+    return table_schema_version(utils::UUID_gen::negate(v.uuid()));
+}

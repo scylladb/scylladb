@@ -9,6 +9,7 @@
 #pragma once
 
 #include "disk_types.hh"
+#include "utils/UUID_gen.hh"
 #include <seastar/core/enum.hh>
 #include <seastar/core/weak_ptr.hh>
 #include "bytes.hh"
