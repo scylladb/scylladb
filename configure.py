@@ -2238,7 +2238,11 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
     dpdk = args.dpdk
     if dpdk:
         seastar_cmake_args += ['-DSeastar_DPDK=ON', '-DSeastar_DPDK_MACHINE=x86-64-v3']
-    if mode == 'dev':
+    # configure_seastar() is called with the lowercase mode key from the
+    # direct-ninja path but with mode_config['cmake_build_type'] (e.g. 'Dev')
+    # from the --use-cmake path - compare case-insensitively so this doesn't
+    # silently no-op on the latter.
+    if mode.lower() == 'dev':
         # SEASTAR_LOGGER_COMPILE_TIME_FMT (on by default) validates every
         # logger/fmt::format() call's format string at compile time via a
         # consteval fmt::formatter instantiation. That's pure frontend cost
