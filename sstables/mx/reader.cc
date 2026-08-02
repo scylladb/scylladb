@@ -77,7 +77,9 @@ public:
     std::optional<collection_mutation_writer> _cm;
 
     data_consumer::proceed consume_range_tombstone_start(clustering_key_prefix ck, bound_kind k, tombstone t) {
-        sstlog.trace("mp_row_consumer_m {}: consume_range_tombstone_start(ck={}, k={}, t={})", fmt::ptr(this), ck, k, t);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: consume_range_tombstone_start(ck={}, k={}, t={})", fmt::ptr(this), ck, k, t);
+        }
         if (_mf_filter->current_tombstone()) {
             throw_malformed_sstable_exception(
                     format("Range tombstones have to be disjoint: current opened range tombstone {}, new tombstone {}",
@@ -88,7 +90,9 @@ public:
     }
 
     data_consumer::proceed consume_range_tombstone_end(clustering_key_prefix ck, bound_kind k, tombstone t) {
-        sstlog.trace("mp_row_consumer_m {}: consume_range_tombstone_end(ck={}, k={}, t={})", fmt::ptr(this), ck, k, t);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: consume_range_tombstone_end(ck={}, k={}, t={})", fmt::ptr(this), ck, k, t);
+        }
         if (!_mf_filter->current_tombstone()) {
             throw_malformed_sstable_exception(
                     format("Closing range tombstone that wasn't opened: clustering {}, kind {}, tombstone {}",
@@ -104,7 +108,9 @@ public:
     }
 
     data_consumer::proceed consume_range_tombstone_boundary(position_in_partition pos, tombstone left, tombstone right) {
-        sstlog.trace("mp_row_consumer_m {}: consume_range_tombstone_boundary(pos={}, left={}, right={})", fmt::ptr(this), pos, left, right);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: consume_range_tombstone_boundary(pos={}, left={}, right={})", fmt::ptr(this), pos, left, right);
+        }
         if (!_mf_filter->current_tombstone()) {
             throw_malformed_sstable_exception(
                     format("Closing range tombstone that wasn't opened: pos {}, tombstone {}", pos, left));
@@ -123,22 +129,30 @@ public:
     }
 
     inline data_consumer::proceed on_range_tombstone_change(position_in_partition pos, tombstone t) {
-        sstlog.trace("mp_row_consumer_m {}: on_range_tombstone_change({}, {}->{})", fmt::ptr(this), pos,
-                     _mf_filter->current_tombstone(), t);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: on_range_tombstone_change({}, {}->{})", fmt::ptr(this), pos,
+                         _mf_filter->current_tombstone(), t);
+        }
 
         mutation_fragment_filter::clustering_result result = _mf_filter->apply(pos, t);
 
         for (auto&& rt : result.rts) {
-            sstlog.trace("mp_row_consumer_m {}: push({})", fmt::ptr(this), rt);
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("mp_row_consumer_m {}: push({})", fmt::ptr(this), rt);
+            }
             _reader->push_mutation_fragment(mutation_fragment_v2(*_schema, permit(), std::move(rt)));
         }
 
         switch (result.action) {
         case mutation_fragment_filter::result::emit:
-            sstlog.trace("mp_row_consumer_m {}: emit", fmt::ptr(this));
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("mp_row_consumer_m {}: emit", fmt::ptr(this));
+            }
             break;
         case mutation_fragment_filter::result::ignore:
-            sstlog.trace("mp_row_consumer_m {}: ignore", fmt::ptr(this));
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("mp_row_consumer_m {}: ignore", fmt::ptr(this));
+            }
             if (_mf_filter->out_of_range()) {
                 _reader->on_out_of_clustering_range();
                 return data_consumer::proceed::no;
@@ -148,7 +162,9 @@ public:
             }
             break;
         case mutation_fragment_filter::result::store_and_finish:
-            sstlog.trace("mp_row_consumer_m {}: store", fmt::ptr(this));
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("mp_row_consumer_m {}: store", fmt::ptr(this));
+            }
             _stored_tombstone = range_tombstone_change(pos, t);
             _reader->on_out_of_clustering_range();
             return data_consumer::proceed::no;
@@ -237,7 +253,9 @@ public:
     }
 
     void setup_for_partition(const partition_key& pk) {
-        sstlog.trace("mp_row_consumer_m {}: setup_for_partition({})", fmt::ptr(this), pk);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: setup_for_partition({})", fmt::ptr(this), pk);
+        }
         _is_mutation_end = false;
         _mf_filter.emplace(*_schema, query::clustering_key_filter_ranges(_slice.row_ranges(*_schema, pk)), _fwd);
     }
@@ -279,7 +297,9 @@ public:
      * skipped to starts in the middle of an opened range tombstone.
      */
     void set_range_tombstone(tombstone t) {
-        sstlog.trace("mp_row_consumer_m {}: set_range_tombstone({})", fmt::ptr(this), t);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: set_range_tombstone({})", fmt::ptr(this), t);
+        }
         _mf_filter->set_tombstone(t);
     }
 
@@ -290,8 +310,10 @@ public:
     // As explained above, the key object is only valid during this call, and
     // if the implementation wishes to save it, it must copy the *contents*.
     data_consumer::proceed consume_partition_start(sstables::key_view key, sstables::deletion_time deltime) {
-        sstlog.trace("mp_row_consumer_m {}: consume_partition_start(deltime=({}, {})), _is_mutation_end={}", fmt::ptr(this),
-            deltime.local_deletion_time, deltime.marked_for_delete_at, _is_mutation_end);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: consume_partition_start(deltime=({}, {})), _is_mutation_end={}", fmt::ptr(this),
+                deltime.local_deletion_time, deltime.marked_for_delete_at, _is_mutation_end);
+        }
         if (!_is_mutation_end) {
             return data_consumer::proceed::yes;
         }
@@ -311,23 +333,31 @@ public:
             [] (const fragmented_temporary_buffer& b) { return fragmented_temporary_buffer::view(b); }));
 
         _sst->get_stats().on_row_read();
-        sstlog.trace("mp_row_consumer_m {}: consume_row_start({})", fmt::ptr(this), key);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: consume_row_start({})", fmt::ptr(this), key);
+        }
 
         _in_progress_row.emplace(std::move(key));
 
         mutation_fragment_filter::clustering_result res = _mf_filter->apply(_in_progress_row->position());
 
         for (auto&& rt : res.rts) {
-            sstlog.trace("mp_row_consumer_m {}: push({})", fmt::ptr(this), rt);
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("mp_row_consumer_m {}: push({})", fmt::ptr(this), rt);
+            }
             _reader->push_mutation_fragment(mutation_fragment_v2(*_schema, permit(), std::move(rt)));
         }
 
         switch (res.action) {
         case mutation_fragment_filter::result::emit:
-            sstlog.trace("mp_row_consumer_m {}: emit", fmt::ptr(this));
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("mp_row_consumer_m {}: emit", fmt::ptr(this));
+            }
             return row_processing_result::do_proceed;
         case mutation_fragment_filter::result::ignore:
-            sstlog.trace("mp_row_consumer_m {}: ignore", fmt::ptr(this));
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("mp_row_consumer_m {}: ignore", fmt::ptr(this));
+            }
             if (_mf_filter->out_of_range()) {
                 _reader->on_out_of_clustering_range();
                 // We actually want skip_later, which doesn't exist, but retry_later
@@ -343,7 +373,9 @@ public:
                 return row_processing_result::skip_row;
             }
         case mutation_fragment_filter::result::store_and_finish:
-            sstlog.trace("mp_row_consumer_m {}: store_and_finish", fmt::ptr(this));
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("mp_row_consumer_m {}: store_and_finish", fmt::ptr(this));
+            }
             _reader->on_out_of_clustering_range();
             return row_processing_result::retry_later;
         }
@@ -352,9 +384,12 @@ public:
 
     data_consumer::proceed consume_row_marker_and_tombstone(
             const liveness_info& info, tombstone tomb, tombstone shadowable_tomb) {
-        sstlog.trace("mp_row_consumer_m {}: consume_row_marker_and_tombstone({}, {}, {}), key={}",
-            fmt::ptr(this), info.to_row_marker(), tomb, shadowable_tomb, _in_progress_row->position());
-        _in_progress_row->apply(info.to_row_marker());
+        auto marker = info.to_row_marker();
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: consume_row_marker_and_tombstone({}, {}, {}), key={}",
+                fmt::ptr(this), marker, tomb, shadowable_tomb, _in_progress_row->position());
+        }
+        _in_progress_row->apply(marker);
         _in_progress_row->apply(tomb);
         if (shadowable_tomb) {
             _in_progress_row->apply(shadowable_tombstone{shadowable_tomb});
@@ -366,7 +401,9 @@ public:
     }
 
     row_processing_result consume_static_row_start() {
-        sstlog.trace("mp_row_consumer_m {}: consume_static_row_start()", fmt::ptr(this));
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: consume_static_row_start()", fmt::ptr(this));
+        }
         if (_treat_static_row_as_regular) {
             return consume_row_start({});
         }
@@ -383,8 +420,10 @@ public:
                                    gc_clock::time_point local_deletion_time,
                                    bool is_deleted) {
         const std::optional<column_id>& column_id = column_info.id;
-        sstlog.trace("mp_row_consumer_m {}: consume_column(id={}, path={}, value={}, ts={}, ttl={}, del_time={}, deleted={})", fmt::ptr(this),
-            column_id, fmt_hex(cell_path), value, timestamp, ttl.count(), local_deletion_time.time_since_epoch().count(), is_deleted);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: consume_column(id={}, path={}, value={}, ts={}, ttl={}, del_time={}, deleted={})", fmt::ptr(this),
+                column_id, fmt_hex(cell_path), value, timestamp, ttl.count(), local_deletion_time.time_since_epoch().count(), is_deleted);
+        }
         check_column_missing_in_current_schema(column_info, timestamp);
         if (!column_id) {
             return data_consumer::proceed::yes;
@@ -434,14 +473,18 @@ public:
 
     data_consumer::proceed consume_complex_column_start(const sstables::column_translation::column_info& column_info,
                                                  tombstone tomb) {
-        sstlog.trace("mp_row_consumer_m {}: consume_complex_column_start({}, {})", fmt::ptr(this), column_info.id, tomb);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: consume_complex_column_start({}, {})", fmt::ptr(this), column_info.id, tomb);
+        }
         _cm.emplace(tomb);
         return data_consumer::proceed::yes;
     }
 
     data_consumer::proceed consume_complex_column_end(const sstables::column_translation::column_info& column_info) {
         const std::optional<column_id>& column_id = column_info.id;
-        sstlog.trace("mp_row_consumer_m {}: consume_complex_column_end({})", fmt::ptr(this), column_id);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: consume_complex_column_end({})", fmt::ptr(this), column_id);
+        }
         if (_cm->tombstone()) {
             check_column_missing_in_current_schema(column_info, _cm->tombstone().timestamp);
         }
@@ -460,7 +503,9 @@ public:
                                            fragmented_temporary_buffer::view value,
                                            api::timestamp_type timestamp) {
         const std::optional<column_id>& column_id = column_info.id;
-        sstlog.trace("mp_row_consumer_m {}: consume_counter_column({}, {}, {})", fmt::ptr(this), column_id, value, timestamp);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: consume_counter_column({}, {}, {})", fmt::ptr(this), column_id, value, timestamp);
+        }
         check_column_missing_in_current_schema(column_info, timestamp);
         if (!column_id) {
             return data_consumer::proceed::yes;
@@ -517,7 +562,9 @@ public:
 
         if (_inside_static_row) {
             fill_cells(column_kind::static_column, _in_progress_static_row.cells());
-            sstlog.trace("mp_row_consumer_m {}: consume_row_end(_in_progress_static_row={})", fmt::ptr(this), static_row::printer(*_schema, _in_progress_static_row));
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("mp_row_consumer_m {}: consume_row_end(_in_progress_static_row={})", fmt::ptr(this), static_row::printer(*_schema, _in_progress_static_row));
+            }
             _inside_static_row = false;
             if (!_in_progress_static_row.empty()) {
                 auto action = _mf_filter->apply(_in_progress_static_row);
@@ -554,14 +601,18 @@ public:
     }
 
     void on_end_of_stream() {
-        sstlog.trace("mp_row_consumer_m {}: on_end_of_stream()", fmt::ptr(this));
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: on_end_of_stream()", fmt::ptr(this));
+        }
         if (_mf_filter && _mf_filter->current_tombstone()) {
             if (_mf_filter->out_of_range()) {
                 throw_malformed_sstable_exception("Unclosed range tombstone.");
             }
             auto result = _mf_filter->apply(position_in_partition_view::after_all_clustered_rows(), {});
             for (auto&& rt : result.rts) {
-                sstlog.trace("mp_row_consumer_m {}: on_end_of_stream(), emitting last tombstone: {}", fmt::ptr(this), rt);
+                if (sstlog.is_enabled(seastar::log_level::trace)) {
+                    sstlog.trace("mp_row_consumer_m {}: on_end_of_stream(), emitting last tombstone: {}", fmt::ptr(this), rt);
+                }
                 _reader->push_mutation_fragment(mutation_fragment_v2(*_schema, permit(), std::move(rt)));
             }
         }
@@ -575,7 +626,9 @@ public:
     // Returns a flag saying whether the sstable consumer should stop now, or
     // proceed consuming more data.
     data_consumer::proceed consume_partition_end() {
-        sstlog.trace("mp_row_consumer_m {}: consume_partition_end()", fmt::ptr(this));
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: consume_partition_end()", fmt::ptr(this));
+        }
         reset_for_new_partition();
 
         if (_fwd == streamed_mutation::forwarding::yes) {
@@ -592,7 +645,9 @@ public:
 
     // Called when the reader is fast forwarded to given element.
     void reset(sstables::indexable_element el) {
-        sstlog.trace("mp_row_consumer_m {}: reset({})", fmt::ptr(this), static_cast<int>(el));
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mp_row_consumer_m {}: reset({})", fmt::ptr(this), static_cast<int>(el));
+        }
         if (el == indexable_element::partition) {
             reset_for_new_partition();
         } else {
