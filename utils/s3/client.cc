@@ -715,6 +715,11 @@ protected:
     named_gate _bg_flushes;
     std::optional<tag> _tag;
     seastar::abort_source* _as;
+    // Set once this sink has produced its object, either with a plain PUT or with
+    // a completed multipart upload. finalize_upload() clears _upload_id and
+    // output_stream::close() flushes a second time, so upload_started() alone
+    // cannot tell "nothing was ever written" from "already uploaded".
+    bool _object_produced = false;
 
     future<> start_upload();
     future<> finalize_upload();
@@ -724,6 +729,15 @@ protected:
 
     bool upload_started() const noexcept {
         return !_upload_id.empty();
+    }
+
+    // Create the object even though nothing was written into the sink. A
+    // zero-length component is still a component, and object stores hold
+    // zero-length objects. Without this the object is silently missing.
+    future<> put_empty_object() {
+        s3l.trace("PUT empty object {}", _object_name);
+        _object_produced = true;
+        return _client->put_object(_object_name, temporary_buffer<char>());
     }
 
     multipart_upload(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag, seastar::abort_source* as)
@@ -1011,6 +1025,10 @@ future<> client::multipart_upload::abort_upload() {
 }
 
 future<> client::multipart_upload::finalize_upload() {
+    // Set before the request rather than after it: on failure the caller aborts the
+    // upload, which clears _upload_id, and a later flush must not then mistake this
+    // sink for one that never wrote anything and PUT an empty object over it.
+    _object_produced = true;
     s3l.trace("wait for {} parts to complete (upload id {})", _part_etags.size(), _upload_id);
     co_await _bg_flushes.close();
 
@@ -1078,21 +1096,31 @@ public:
         : upload_sink_base(std::move(cln), std::move(object_name), std::move(tag), as)
     {}
 
+    // True while nothing has been written into the sink, so it has no object to
+    // copy-upload from. Used by upload_jumbo_sink to skip such a piece.
+    bool empty() const noexcept {
+        return _bufs.size() == 0 && !upload_started();
+    }
+
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
         append_buffers(_bufs, std::move(data));
         return maybe_flush();
     }
 
     virtual future<> flush() override {
-        if (_bufs.size() != 0) {
+        if (!_object_produced) {
             // This is handy for small objects that are uploaded via the sink. It makes
-            // upload happen in one REST call, instead of three (create + PUT + wrap-up)
+            // upload happen in one REST call, instead of three (create + PUT + wrap-up).
+            // Empty _bufs get here too and make the zero-length object
             if (!upload_started()) {
                 s3l.trace("Sink fallback to plain PUT for {}", _object_name);
+                _object_produced = true;
                 co_return co_await _client->put_object(_object_name, std::move(_bufs));
             }
 
-            co_await upload_part(std::move(_bufs));
+            if (_bufs.size() != 0) {
+                co_await upload_part(std::move(_bufs));
+            }
         }
         if (upload_started()) {
             std::exception_ptr ex;
@@ -1187,7 +1215,15 @@ public:
 
     virtual future<> flush() override {
         if (_current) {
-            co_await upload_part(std::exchange(_current, nullptr));
+            auto piece = std::exchange(_current, nullptr);
+            if (piece->empty()) {
+                // Nothing was written into the piece, so upload_sink::flush()
+                // would not create its object and the copy-upload below would
+                // fail with NoSuchKey, leaving the ETag list short. Drop it.
+                co_await piece->close();
+            } else {
+                co_await upload_part(std::move(piece));
+            }
         }
         if (upload_started()) {
             std::exception_ptr ex;
@@ -1200,6 +1236,8 @@ public:
                 co_await abort_upload();
                 std::rethrow_exception(ex);
             }
+        } else if (!_object_produced) {
+            co_await put_empty_object();
         }
     }
 
