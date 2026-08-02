@@ -2524,6 +2524,12 @@ def write_build_file(f,
     cxx_with_cache = f'{compiler_cache} {args.cxx}' if compiler_cache else args.cxx
     # For Rust, sccache is used via RUSTC_WRAPPER environment variable
     rustc_wrapper = f'RUSTC_WRAPPER={compiler_cache} ' if compiler_cache and 'sccache' in compiler_cache and args.sccache_rust else ''
+    # cargo build runs as a single ninja job but internally spawns its own
+    # rustc jobs sized to all available cores, uncoordinated with ninja's -j
+    # budget - stacking on top of ninja's parallel clang jobs and risking an
+    # OOM on a clean build (observed on a 16-core/30GB machine). Cap cargo to
+    # a quarter of the cores, mirroring rust/CMakeLists.txt's Scylla_RUST_JOBS.
+    rust_jobs = max(1, ((os.cpu_count() or 4) + 3) // 4)
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -2708,10 +2714,10 @@ def write_build_file(f,
               description = TEST {mode}
             # This rule is unused for PGO stages. They use the rust lib from the parent mode.
             rule rust_lib.{mode}
-              command = CARGO_BUILD_DEP_INFO_BASEDIR='.' CARGO_NET_RETRY=10 {rustc_wrapper}cargo build --locked --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
+              command = CARGO_BUILD_DEP_INFO_BASEDIR='.' CARGO_NET_RETRY=10 {rustc_wrapper}cargo build --locked --jobs={rust_jobs} --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
                         && touch $out
               description = RUST_LIB $out
-            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, **modeval))
+            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, rust_jobs=rust_jobs, **modeval))
         aws_errors_gen_dir = '$builddir/{}/gen'.format(mode)
         aws_errors_gen_hh = '{}/utils/s3/aws_error_definitions_generated.hh'.format(aws_errors_gen_dir)
         aws_errors_gen_cc = '{}/utils/s3/aws_error_definitions_generated.cc'.format(aws_errors_gen_dir)
