@@ -5,7 +5,10 @@
 #
 # Generate ScyllaDB `aws_error_type` enum entries and wire-name → enum
 # mapping entries for S3 and STS by pulling the c2j models from
-# aws/aws-sdk-cpp main on GitHub.
+# aws/aws-sdk-cpp main on GitHub. Fetched models are cached under
+# $XDG_CACHE_HOME/scylladb/aws-service-errors (~/.cache by default) so a
+# wiped build tree doesn't force a network round-trip; use --force to
+# bypass the cache and re-fetch.
 #
 # Ports the relevant bits of the aws-sdk-cpp Java generator:
 #   * ErrorFormatter.formatErrorConstName()  → _format_error_const_name()
@@ -23,6 +26,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -202,19 +206,37 @@ def _write_if_changed(path: Path, text: str) -> bool:
 # --- main ----------------------------------------------------------------------
 
 
-def _fetch_raw(filename: str) -> bytes:
-    """Fetch one c2j model. Raises RuntimeError on any network/HTTP error;
-    the caller decides how to react (e.g. fall back to cached outputs)."""
+def _model_cache_dir() -> Path:
+    """Persistent (outside any build tree) cache for fetched c2j models, so
+    a wiped/fresh build directory doesn't force a network round-trip for
+    model files that haven't actually changed upstream."""
+    xdg_cache = os.environ.get("XDG_CACHE_HOME")
+    base = Path(xdg_cache) if xdg_cache else Path.home() / ".cache"
+    return base / "scylladb" / "aws-service-errors"
+
+
+def _fetch_raw(filename: str, refresh: bool = False) -> bytes:
+    """Return one c2j model's bytes, from the persistent model cache unless
+    `refresh` is set or the cache is missing, in which case fetch over the
+    network and update the cache. Raises RuntimeError on any network/HTTP
+    error; the caller decides how to react (e.g. fall back to cached
+    outputs)."""
+    cache_file = _model_cache_dir() / filename
+    if not refresh and cache_file.exists():
+        return cache_file.read_bytes()
     url = MODEL_URL_TEMPLATE.format(filename=filename)
     print(f"# fetching {url}", file=sys.stderr)
     try:
         with urllib.request.urlopen(url) as resp:
-            return resp.read()
+            data = resp.read()
     except urllib.error.URLError as e:
         # HTTPError is a subclass of URLError, so this catches both
         # transient network failures (DNS, TCP, TLS) and non-2xx
         # HTTP responses (rate-limiting, model moved/renamed, etc.).
         raise RuntimeError(f"failed to fetch {url}: {e}") from e
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_bytes(data)
+    return data
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -246,7 +268,9 @@ def main() -> int:
                              "writing any files")
     parser.add_argument("--force", action="store_true",
                         help="regenerate even if the cached sidefile shows "
-                             "all model/template/output hashes still match")
+                             "all model/template/output hashes still match, "
+                             "and re-fetch models over the network even if "
+                             "the persistent model cache has a copy")
     parser.add_argument("--output-dir", type=Path, default=None,
                         help="build-system mode: read the source templates "
                              "utils/s3/aws_error_definitions.{hh,cc}.in and "
@@ -285,7 +309,7 @@ def main() -> int:
     fetch_error: str | None = None
     try:
         for service, filename in SERVICES.items():
-            raw = _fetch_raw(filename)
+            raw = _fetch_raw(filename, refresh=args.force)
             raw_models[service] = raw
             fresh["models"][service] = _sha256_bytes(raw)
     except RuntimeError as e:
