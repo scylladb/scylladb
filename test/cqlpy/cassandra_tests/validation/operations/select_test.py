@@ -12,6 +12,7 @@ from ...porting import *
 from uuid import UUID
 from cassandra.query import UNSET_VALUE
 from cassandra.util import Duration
+from ....util import new_function, is_scylla
 
 REQUIRES_ALLOW_FILTERING_MESSAGE = "Cannot execute this query as it might involve data filtering and thus may have unpredictable performance. If you want to execute this query despite the performance unpredictability, use ALLOW FILTERING"
 
@@ -669,11 +670,15 @@ def testSelectWithToken(cql, test_keyspace):
         assert_invalid(cql, table, "select * from %s where token(key) > token(int(3030343330393233)) limit 1")
 
 # Migrated from cql_tests.py:TestCQL.clustering_order_and_functions_test()
+# NOTE: The original test used dateOf() but this name was deprecated in favor
+# of toDate() in Cassandra 3, CASSANDRA-9229, and removed from Cassandra 5
+# (CASSANDRA-18328), so the test was updated to use toDate(), which is
+# supported by both Cassandra and Scylla.
 def testFunctionsWithClusteringDesc(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, t timeuuid, PRIMARY KEY (k, t) ) WITH CLUSTERING ORDER BY (t DESC)") as table:
         for i in range(5):
             execute(cql, table, "INSERT INTO %s (k, t) VALUES (?, now())", i)
-        execute(cql, table, "SELECT dateOf(t) FROM %s")
+        execute(cql, table, "SELECT toDate(t) FROM %s")
 
 # Migrated from cql_tests.py:TestCQL.select_with_alias_test()
 def testSelectWithAlias(cql, test_keyspace):
@@ -2641,42 +2646,46 @@ def testTokenFctRejectsInvalidColumnCount(cql, test_keyspace):
         assert_invalid_message(cql, table, "Invalid number of arguments in call to function system.token: 2 required but 1 provided",
                              "SELECT token(k1) FROM %s")
 
-# UDF test skipped because of different languages in Scylla.
-# TODO: Finish translating this test.
-@pytest.mark.skip_not_implemented(reason="UDF tests not yet translated")
+# Reproduces SCYLLADB-2799: When a UDF in the current keyspace has the same
+# name as a built-in and is compatible with the argument types in a function
+# call, Scylla should prefer the UDF over the built-in (which, if used, will
+# just result in an error like "2 required but 1 provided").
 def testCreatingUDFWithSameNameAsBuiltin_PrefersCompatibleArgs_SameKeyspace(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k1 uuid, k2 text, PRIMARY KEY ((k1, k2)))") as table:
-        createFunctionOverload(KEYSPACE + ".token", "double",
-                               "CREATE FUNCTION %s (val double) RETURNS null ON null INPUT RETURNS double LANGUAGE java AS 'return 10.0d;'")
-        execute(cql, table, "INSERT INTO %s (k1, k2) VALUES (uuid(), 'k2')")
-        assert_rows(execute(cql, table, "SELECT token(10) FROM %s"), row(10.0))
+        lang = "lua" if is_scylla(cql) else "java"
+        body_src = "return 10.0" if is_scylla(cql) else "return 10.0d;"
+        with new_function(cql, test_keyspace,
+                          f"(val double) RETURNS NULL ON NULL INPUT RETURNS double LANGUAGE {lang} AS '{body_src}'",
+                          name="token", args="double"):
+            execute(cql, table, "INSERT INTO %s (k1, k2) VALUES (uuid(), 'k2')")
+            assert_rows(execute(cql, table, "SELECT token(10) FROM %s"), row(10.0))
 
-# UDF test skipped because of different languages in Scylla.
-# TODO: Finish translating this test.
-@pytest.mark.skip_not_implemented(reason="UDF tests not yet translated")
 def testCreatingUDFWithSameNameAsBuiltin_FullyQualifiedFunctionNameWorks(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k1 uuid, k2 text, PRIMARY KEY ((k1, k2)))") as table:
-        createFunctionOverload(KEYSPACE + ".token", "double",
-                               "CREATE FUNCTION %s (val double) RETURNS null ON null INPUT RETURNS double LANGUAGE java AS 'return 10.0d;'")
-        execute(cql, table, "INSERT INTO %s (k1, k2) VALUES (uuid(), 'k2')")
-        assert_rows(execute(cql, table, "SELECT " + KEYSPACE + ".token(10) FROM %s"), row(10.0))
+        lang = "lua" if is_scylla(cql) else "java"
+        body_src = "return 10.0" if is_scylla(cql) else "return 10.0d;"
+        with new_function(cql, test_keyspace,
+                          f"(val double) RETURNS NULL ON NULL INPUT RETURNS double LANGUAGE {lang} AS '{body_src}'",
+                          name="token", args="double"):
+            execute(cql, table, "INSERT INTO %s (k1, k2) VALUES (uuid(), 'k2')")
+            assert_rows(execute(cql, table, f"SELECT {test_keyspace}.token(10) FROM %s"), row(10.0))
 
-# UDF test skipped because of different languages in Scylla.
-# TODO: Finish translating this test.
-@pytest.mark.skip_not_implemented(reason="UDF tests not yet translated")
 def testCreatingUDFWithSameNameAsBuiltin_PrefersCompatibleArgs(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k1 uuid, k2 text, PRIMARY KEY ((k1, k2)))") as table:
-        createFunctionOverload(KEYSPACE + ".token", "double",
-                               "CREATE FUNCTION %s (val double) RETURNS null ON null INPUT RETURNS double LANGUAGE java AS 'return 10.0d;'")
-        execute(cql, table, "INSERT INTO %s (k1, k2) VALUES (uuid(), 'k2')")
-        assertRowCount(execute(cql, table, "SELECT token(k1, k2) FROM %s"), 1)
+        lang = "lua" if is_scylla(cql) else "java"
+        body_src = "return 10.0" if is_scylla(cql) else "return 10.0d;"
+        with new_function(cql, test_keyspace,
+                          f"(val double) RETURNS NULL ON NULL INPUT RETURNS double LANGUAGE {lang} AS '{body_src}'",
+                          name="token", args="double"):
+            execute(cql, table, "INSERT INTO %s (k1, k2) VALUES (uuid(), 'k2')")
+            assertRowCount(execute(cql, table, "SELECT token(k1, k2) FROM %s"), 1)
 
-# UDF test skipped because of different languages in Scylla.
-# TODO: Finish translating this test.
-@pytest.mark.skip_not_implemented(reason="UDF tests not yet translated")
 def testCreatingUDFWithSameNameAsBuiltin_FullyQualifiedFunctionNameWorks_SystemKeyspace(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k1 uuid, k2 text, PRIMARY KEY ((k1, k2)))") as table:
-        createFunctionOverload(KEYSPACE + ".token", "double",
-                               "CREATE FUNCTION %s (val double) RETURNS null ON null INPUT RETURNS double LANGUAGE java AS 'return 10.0d;'")
-        execute(cql, table, "INSERT INTO %s (k1, k2) VALUES (uuid(), 'k2')")
-        assertRowCount(execute(cql, table, "SELECT system.token(k1, k2) FROM %s"), 1)
+        lang = "lua" if is_scylla(cql) else "java"
+        body_src = "return 10.0" if is_scylla(cql) else "return 10.0d;"
+        with new_function(cql, test_keyspace,
+                          f"(val double) RETURNS NULL ON NULL INPUT RETURNS double LANGUAGE {lang} AS '{body_src}'",
+                          name="token", args="double"):
+            execute(cql, table, "INSERT INTO %s (k1, k2) VALUES (uuid(), 'k2')")
+            assertRowCount(execute(cql, table, "SELECT system.token(k1, k2) FROM %s"), 1)

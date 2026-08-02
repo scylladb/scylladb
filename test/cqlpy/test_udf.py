@@ -116,3 +116,184 @@ def test_udf_with_udt_keyspace_isolation(cql, test_keyspace, has_java_udf):
                     f"CREATE FUNCTION {other_ks}.testfun(v text) "
                     f"CALLED ON NULL INPUT RETURNS {test_keyspace}.{udt_name} {lang_ret}")
 
+# Test what happens when a UDF has the same name as a native (system-keyspace)
+# function, such as tounixtimestamp(timeuuid) or token() and used unqualified
+# (without an explict keyspace). The first example tounixtimestamp() is a
+# "declared" builtin (stored in _declared) and the latter is a "special-cased"
+# builtin (its parameters are different in every keyspace). In both cases, The
+# UDF should always win - this is not considered an abiguity error, to be
+# compatible with how Cassandra behaves. See SCYLLADB-2799.
+# The system builtin is still reachable via system.name().
+
+@pytest.fixture(scope="module")
+def table1(cql, test_keyspace):
+    schema = 'p int primary key, t timeuuid, s text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (p, t, s) VALUES (1, now(), 'hello')")
+        yield table
+
+# Case 1: UDF has the same name and same argument types as a declared builtin.
+# Cassandra decided that this case is not called out as ambigous - and the UDF
+# is selected over the builtin. We also check that the user can access the
+# builtin via the "system" keyspace.
+def test_udf_shadows_builtin_1(cql, test_keyspace, table1, has_java_udf):
+    if has_java_udf:
+        body = "(t timeuuid) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 0L;'"
+    else:
+        body = "(t timeuuid) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 0'"
+    with new_function(cql, test_keyspace, body, name="tounixtimestamp", args="timeuuid"):
+        # Unqualified call: UDF wins, returns 0 (not the real unix timestamp)
+        rows = list(cql.execute(f"SELECT tounixtimestamp(t) FROM {table1}"))
+        assert rows[0][0] == 0
+        # Explicit "system." reaches the builtin, and returns a non-zero timestamp
+        rows = list(cql.execute(f"SELECT system.tounixtimestamp(t) FROM {table1}"))
+        assert rows[0][0] != 0
+        # Explicit "{test_keyspace}." qualification reaches the UDF, which returns 0
+        rows = list(cql.execute(f"SELECT {test_keyspace}.tounixtimestamp(t) FROM {table1}"))
+        assert rows[0][0] == 0
+
+# Case 2: UDF has the same name as a declared builtin but with a different
+# (incompatible) argument type. Either the builtin or the UDF match, depending
+# on the actual argument types. An ambiguity error is not reported.
+def test_udf_shadows_builtin_2(cql, test_keyspace, table1, has_java_udf):
+    # text is not a valid argument for the native tounixtimestamp(timeuuid)
+    if has_java_udf:
+        body = "(s text) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 0L;'"
+    else:
+        body = "(s text) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 0'"
+    with new_function(cql, test_keyspace, body, name="tounixtimestamp", args="text"):
+        # UDF wins for text argument, returns 0
+        rows = list(cql.execute(f"SELECT tounixtimestamp(s) FROM {table1}"))
+        assert rows[0][0] == 0
+        # For timeuuid argument the UDF doesn't match, so the builtin is used
+        rows = list(cql.execute(f"SELECT tounixtimestamp(t) FROM {table1}"))
+        assert rows[0][0] != 0
+
+# Case 3: UDF has the same name as a declared builtin but with a different
+# argument count. Depending on the number of arguments actually passed,
+# either the builtin or the UDF match. An ambiguity error is not reported.
+def test_udf_shadows_builtin_3(cql, test_keyspace, table1, has_java_udf):
+    # native tounixtimestamp takes one argument; UDF takes two
+    if has_java_udf:
+        body = "(t timeuuid, i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 0L;'"
+    else:
+        body = "(t timeuuid, i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 0'"
+    with new_function(cql, test_keyspace, body, name="tounixtimestamp", args="timeuuid, int"):
+        # UDF wins and returns 0; the one-argument builtin would not match two args
+        rows = list(cql.execute(f"SELECT tounixtimestamp(t, 0) FROM {table1}"))
+        assert rows[0][0] == 0
+        # With one argument the UDF doesn't match, so the builtin is used
+        rows = list(cql.execute(f"SELECT tounixtimestamp(t) FROM {table1}"))
+        assert rows[0][0] != 0
+
+# Case 4: Like Case 1, but with a "special-cased" builtin token() instead of a
+# "declared" builtin tounixtimestamp(). Also in this case the UDF should win
+# when called unqualified with a keyspace name (it's not considered ambigous)
+# and the builtin is still reachable via system.token().
+def test_udf_shadows_builtin_4(cql, test_keyspace, table1, has_java_udf):
+    if has_java_udf:
+        body = "(p int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42L;'"
+    else:
+        body = "(p int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42'"
+    # Read the real partition token before the UDF shadows the name
+    real_token = list(cql.execute(f"SELECT token(p) FROM {table1}"))[0][0]
+    with new_function(cql, test_keyspace, body, name="token", args="int"):
+        # Unqualified token(p): UDF wins, returns 42
+        rows = list(cql.execute(f"SELECT token(p) FROM {table1}"))
+        assert rows[0][0] == 42
+        # Explicit ks. qualification also reaches the UDF, returns 42
+        rows = list(cql.execute(f"SELECT {test_keyspace}.token(p) FROM {table1}"))
+        assert rows[0][0] == 42
+        # system.token(p) reaches the builtin, returns the real partition token
+        rows = list(cql.execute(f"SELECT system.token(p) FROM {table1}"))
+        assert rows[0][0] == real_token
+
+# Case 5: The builtin is an EXACT_MATCH and the UDF is only WEAKLY_ASSIGNABLE —
+# in this case the builtin must win, not the UDF.
+# "Weak matching" (WEAKLY_ASSIGNABLE) arises when an argument is assignable to a
+# parameter type, but not an exact match.  A typed column value is EXACT for its
+# own type and WEAK for a value-compatible type.
+# In this test we'll have a UDF tounixtimestamp(uuid) and builtin
+# tounixtimestamp(timeuuid). The types uuid and timeuuid are value-compatible
+# (both share the same wire encoding), so passing a timeuuid column to a
+# uuid parameter yields WEAKLY_ASSIGNABLE, while passing it to a timeuuid
+# parameter yields EXACT_MATCH.
+def test_udf_shadows_builtin_5(cql, test_keyspace, table1, has_java_udf):
+    if has_java_udf:
+        body = "(u uuid) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 99L;'"
+    else:
+        body = "(u uuid) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 99'"
+    with new_function(cql, test_keyspace, body, name="tounixtimestamp", args="uuid"):
+        # Since t is timeuuid, udf(t) is WEAKLY_ASSIGNABLE, builtin(t) is
+        # EXACT_MATCH.  Builtin wins; it returns the real unix timestamp, not 99.
+        rows = list(cql.execute(f"SELECT tounixtimestamp(t) FROM {table1}"))
+        assert rows[0][0] != 99
+
+# Case 6: Both the builtin and UDF are only WEAKLY_ASSIGNABLE - the call
+# should be deemed ambiguous and refused.  This is in contrast to the EXACT
+# match case (test 1) where the UDF wins without ambiguity.
+# We use NULL as the argument: null is WEAKLY_ASSIGNABLE to any non-counter
+# type in both Cassandra and Scylla, so both intasblob(int) and intasblob(bigint)
+# are weak candidates - so we get an ambiguity error.
+# Note: an integer literal like 42 would NOT work for this test, because
+# Cassandra assigns it the preferred type int (EXACT for the builtin), so the
+# builtin would win without ambiguity. Scylla lacks the preferred-type mechanism
+# so 42 would be WEAK for both there.
+def test_udf_shadows_builtin_6(cql, test_keyspace, table1, has_java_udf):
+    if has_java_udf:
+        body = "(x bigint) CALLED ON NULL INPUT RETURNS blob LANGUAGE java AS 'return null;'"
+    else:
+        body = "(x bigint) CALLED ON NULL INPUT RETURNS blob LANGUAGE lua AS 'return nil'"
+    with new_function(cql, test_keyspace, body, name="intasblob", args="bigint"):
+        with pytest.raises(InvalidRequest, match="Ambiguous"):
+            cql.execute(f"SELECT intasblob(null) FROM {table1}")
+
+# Case 7: The UDF does not match because of wrong argument count, and the builtin
+# does not match because of wrong argument type.  The error should say "none of its
+# type signatures match", not "Invalid number of arguments" (which would only be
+# correct if there were a single candidate and it had the wrong count).
+def test_udf_shadows_builtin_7(cql, test_keyspace, table1, has_java_udf):
+    # UDF tounixtimestamp(timeuuid, int) takes two arguments; builtin takes
+    # one (there are actually three variants of this builtin, taking type
+    # timeuuid, timestamp, or date). If we call this function with a single
+    # text column, neither the UDF nor the builtin should match. The error
+    # should just generally say "none of its type signatures match" (not
+    # something more specific like "Invalid number of arguments" because the
+    # two non-matches happened because of different causes).
+    if has_java_udf:
+        body = "(t timeuuid, i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 0L;'"
+    else:
+        body = "(t timeuuid, i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 0'"
+    with new_function(cql, test_keyspace, body, name="tounixtimestamp", args="timeuuid, int"):
+        with pytest.raises(InvalidRequest, match="none of its type signatures match"):
+            cql.execute(f"SELECT tounixtimestamp(s) FROM {table1}")
+
+# Case 8: The special-cased builtin token(int) is EXACT_MATCH for an int
+# partition key column, but a UDF token(blob) is only WEAKLY_ASSIGNABLE (because
+# blob is value-compatible with every type). In this case the builtin should win
+# over the UDF, just as a declared builtin exact match beats a UDF weak match
+# (see test 5).
+# Unfortunately, this obscure case currently fails on Scylla. We deliberately
+# decided that a weakly matching UDF should win over a special-cased builtin,
+# even when the builtin is an exact match - even though this is not what
+# Cassandra does - and this is what causes this test to fail.
+# Why did we deviate from Cassandra here? Because we wanted the Cassandra test
+#  testCreatingUDFWithSameNameAsBuiltin_PrefersCompatibleArgs_SameKeyspace
+# to pass. That test uses token(10) with a CQL constant. In Cassandra, the
+# CQL constant is considered an exact match for the UDF token(double), while in
+# Scylla it's considered a weak match. If we want this weak match to win over
+# the builtin, we need to deviate from Cassandra's behavior :-(
+@pytest.mark.xfail(reason="Scylla lets a weakly-matching UDF beat an exact-match special-cased builtin (token)")
+def test_udf_shadows_builtin_8(cql, test_keyspace, table1, has_java_udf):
+    if has_java_udf:
+        body = "(b blob) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 99L;'"
+    else:
+        body = "(b blob) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 99'"
+    real_token = list(cql.execute(f"SELECT token(p) FROM {table1}"))[0][0]
+    with new_function(cql, test_keyspace, body, name="token", args="blob"):
+        # UDF token(blob) is WEAKLY_ASSIGNABLE for int column p.
+        # Builtin token(int) is EXACT_MATCH for p.
+        # The builtin should win, returning the real partition token, not 99.
+        rows = list(cql.execute(f"SELECT token(p) FROM {table1}"))
+        assert rows[0][0] == real_token
+
