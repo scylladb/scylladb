@@ -216,8 +216,6 @@
 #include <seastar/http/mime_types.hh>
 #include <seastar/http/reply.hh>
 #include <seastar/http/request.hh>
-#include <seastar/http/request_parser.hh>
-#include <seastar/http/response_parser.hh>
 #include <seastar/http/routes.hh>
 #include <seastar/http/transformers.hh>
 #include <seastar/http/url.hh>
