@@ -7616,6 +7616,87 @@ SEASTAR_TEST_CASE(test_perform_component_rewrite_single_sstable_without_backup) 
     return test_perform_component_rewrite_single_sstable(sstables::update_sstable_id::no);
 }
 
+static void object_storage_perform_component_rewrite_single_sstable_fn(test_env& env) {
+    // Regression test for SCYLLADB-3420.
+    //
+    // On object storage the component objects of an sstable are keyed by its
+    // sstable_id, and the id persisted in the Scylla component is the one used
+    // to locate them when the sstable is opened again.  Before the fix, the
+    // component rewrite copied the components under the new sstable's id but
+    // stamped the rewritten Scylla metadata with a freshly generated,
+    // unrelated id, and created no registry entry for the new sstable.  The
+    // in-memory id was right all along, so it is the persisted id and the
+    // registry entry that need to be checked here.
+    simple_schema ss;
+    auto s = ss.schema();
+    auto pk = tests::generate_partition_key(s).key();
+
+    auto mut1 = mutation(s, pk);
+    mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+    auto original_sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)}).get();
+    BOOST_REQUIRE(original_sst->sstable_identifier());
+
+    uint32_t new_level = 5;
+    auto modifier = [new_level] (sstable& sst) {
+        sst.mutate_sstable_level(new_level);
+    };
+
+    auto creator = [&env] (shared_sstable sst) {
+        return env.make_sstable(sst->get_schema());
+    };
+    auto new_sst = original_sst->link_with_rewritten_component(std::move(creator),
+            component_type::Statistics,
+            std::move(modifier),
+            sstables::update_sstable_id::yes).get();
+
+    BOOST_REQUIRE(new_sst->sstable_identifier());
+    BOOST_REQUIRE(new_sst->sstable_identifier() != original_sst->sstable_identifier());
+    BOOST_REQUIRE(new_sst->get_sstable_level() == new_level);
+    BOOST_REQUIRE(new_sst->generation() != original_sst->generation());
+    // The rewritten sstable is created fresh, so it takes its identifier from
+    // its own generation, and its component objects are keyed by it.
+    BOOST_REQUIRE(new_sst->sstable_identifier() == sstable_id(new_sst->generation().as_uuid()));
+
+    // The rewritten sstable must be registered under its own identifier,
+    // otherwise it cannot be found after restart.
+    std::optional<sstring> registered_status;
+    optimized_optional<sstable_id> registered_sid;
+    env.manager()
+        .sstables_registry()
+        .sstables_registry_list(s->id(), env.manager().get_local_host_id(),
+                                [&registered_status, &registered_sid, new_gen = new_sst->generation()]
+                                        (sstring status, sstable_state, entry_descriptor desc) {
+                                    if (desc.generation == new_gen) {
+                                        registered_status = std::move(status);
+                                        registered_sid = desc.sid;
+                                    }
+                                    return make_ready_future<>();
+                                })
+        .get();
+    BOOST_REQUIRE(registered_status);
+    BOOST_REQUIRE_EQUAL(*registered_status, "sealed");
+    BOOST_REQUIRE(registered_sid == new_sst->sstable_identifier());
+
+    // Re-open the rewritten sstable to verify that the identifier persisted in
+    // its Scylla component - the one its components are looked up by - is the
+    // identifier they were written under.  This used to be an unrelated id.
+    auto reloaded_sst = env.reusable_sst(s, new_sst).get();
+    BOOST_REQUIRE(reloaded_sst->sstable_identifier() == new_sst->sstable_identifier());
+    // The rewritten Statistics component, not the original one, is the one that
+    // was persisted under the new identifier.
+    BOOST_REQUIRE(reloaded_sst->get_sstable_level() == new_level);
+}
+
+SEASTAR_TEST_CASE(test_object_storage_perform_component_rewrite_single_sstable_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+    return test_env::do_with_async([] (test_env& env) { object_storage_perform_component_rewrite_single_sstable_fn(env); },
+            test_env_config{.storage = make_test_object_storage_options("S3")});
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_object_storage_perform_component_rewrite_single_sstable_gcs, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_env::do_with_async([] (test_env& env) { object_storage_perform_component_rewrite_single_sstable_fn(env); },
+            test_env_config{.storage = make_test_object_storage_options("GS")});
+}
+
 SEASTAR_TEST_CASE(test_perform_component_rewrite_multiple_sstables) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
