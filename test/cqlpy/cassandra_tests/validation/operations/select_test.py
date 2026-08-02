@@ -2643,7 +2643,7 @@ def testTokenFctRejectsInvalidColumnCount(cql, test_keyspace):
 
 # UDF test skipped because of different languages in Scylla.
 # TODO: Finish translating this test.
-@pytest.mark.skip_not_implemented(reason="UDF tests not yet translated")
+@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-2799", reason="Function resolution isn't completely compatible with Cassandra")
 def testCreatingUDFWithSameNameAsBuiltin_PrefersCompatibleArgs_SameKeyspace(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k1 uuid, k2 text, PRIMARY KEY ((k1, k2)))") as table:
         createFunctionOverload(KEYSPACE + ".token", "double",
@@ -2653,7 +2653,7 @@ def testCreatingUDFWithSameNameAsBuiltin_PrefersCompatibleArgs_SameKeyspace(cql,
 
 # UDF test skipped because of different languages in Scylla.
 # TODO: Finish translating this test.
-@pytest.mark.skip_not_implemented(reason="UDF tests not yet translated")
+@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-2799", reason="Function resolution isn't completely compatible with Cassandra")
 def testCreatingUDFWithSameNameAsBuiltin_FullyQualifiedFunctionNameWorks(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k1 uuid, k2 text, PRIMARY KEY ((k1, k2)))") as table:
         createFunctionOverload(KEYSPACE + ".token", "double",
@@ -2663,7 +2663,7 @@ def testCreatingUDFWithSameNameAsBuiltin_FullyQualifiedFunctionNameWorks(cql, te
 
 # UDF test skipped because of different languages in Scylla.
 # TODO: Finish translating this test.
-@pytest.mark.skip_not_implemented(reason="UDF tests not yet translated")
+@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-2799", reason="Function resolution isn't completely compatible with Cassandra")
 def testCreatingUDFWithSameNameAsBuiltin_PrefersCompatibleArgs(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k1 uuid, k2 text, PRIMARY KEY ((k1, k2)))") as table:
         createFunctionOverload(KEYSPACE + ".token", "double",
@@ -2673,7 +2673,7 @@ def testCreatingUDFWithSameNameAsBuiltin_PrefersCompatibleArgs(cql, test_keyspac
 
 # UDF test skipped because of different languages in Scylla.
 # TODO: Finish translating this test.
-@pytest.mark.skip_not_implemented(reason="UDF tests not yet translated")
+@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-2799", reason="Function resolution isn't completely compatible with Cassandra")
 def testCreatingUDFWithSameNameAsBuiltin_FullyQualifiedFunctionNameWorks_SystemKeyspace(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k1 uuid, k2 text, PRIMARY KEY ((k1, k2)))") as table:
         createFunctionOverload(KEYSPACE + ".token", "double",
