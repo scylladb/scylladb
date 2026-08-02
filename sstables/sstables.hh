@@ -897,6 +897,11 @@ private:
     void write_toc(std::unique_ptr<crc32_digest_file_writer> w);
     static future<uint32_t> read_digest_from_file(file f);
     static future<lw_shared_ptr<checksum>> read_checksum_from_file(file f);
+
+    void set_sstable_identifier(sstable_id sid) noexcept {
+        _sstable_identifier = sid;
+    }
+
 public:
 
     shareable_components& get_shared_components() const {
