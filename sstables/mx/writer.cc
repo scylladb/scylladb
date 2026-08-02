@@ -631,6 +631,9 @@ private:
     } _pi_write_m;
     run_id _run_identifier;
     bool _write_regular_as_static; // See #4139
+    // Only compact-storage tables can produce prefix (non-full) clustering rows;
+    // lets record_clustering_position() skip the prefix check in the common case.
+    const bool _may_have_prefix_clustering_rows;
     large_data_stats_entry _partition_size_entry;
     large_data_stats_entry _rows_in_partition_entry;
     large_data_stats_entry _row_size_entry;
@@ -818,7 +821,7 @@ private:
         }
         // update_max() compares a prefix (non-full) row as after_all_prefixed(pos), which
         // can exceed later full-key positions sharing the prefix, so it can't be deferred.
-        if (pos.is_clustering_row() && !pos.key().is_full(_schema)) {
+        if (_may_have_prefix_clustering_rows && pos.is_clustering_row() && !pos.key().is_full(_schema)) {
             _collector.update_max(pos);
         } else {
             _partition_max_clustering_pos = pos;
@@ -869,6 +872,7 @@ public:
         , _sst_schema(make_sstable_schema(s, _enc_stats, _cfg))
         , _run_identifier(cfg.run_identifier)
         , _write_regular_as_static(s.is_static_compact_table())
+        , _may_have_prefix_clustering_rows(s.is_compact_table())
         , _partition_size_entry(
                     large_data_stats_entry{
                         .threshold = _sst.get_large_data_handler().get_partition_threshold_bytes(),

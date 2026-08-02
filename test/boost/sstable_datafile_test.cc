@@ -1070,6 +1070,8 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
             }
             if (version >= sstable_version_types::mc) {
                 {
+                    // The prefix row {"a"} compares as after_all_prefixed, so the later
+                    // full-key row {"a", "z"} must not displace it from max_column_names.
                     auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
                             .with(schema_builder::compact_storage::yes)
                             .with_column("pk", utf8_type, column_kind::partition_key)
