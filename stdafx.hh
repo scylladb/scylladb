@@ -50,14 +50,12 @@
 #include <cassert>
 #include <cctype>
 #include <cerrno>
-#include <charconv>
 #include <chrono>
 #include <cmath>
 #if __has_include(<compare>)
 #include <compare>
 #endif
 #include <concepts>
-#include <condition_variable>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
@@ -72,7 +70,6 @@
 #if __has_include(<execinfo.h>)
 #include <execinfo.h>
 #endif
-#include <expected>
 #if __has_include(<experimental/source_location>)
 #include <experimental/source_location>
 #endif
@@ -88,7 +85,6 @@
 #include <functional>
 #include <future>
 #include <initializer_list>
-#include <iomanip>
 #include <iosfwd>
 #include <iostream>
 #include <istream>
@@ -97,7 +93,6 @@
 #include <limits>
 #include <linux/fs.h>
 #include <linux/magic.h>
-#include <linux/perf_event.h>
 #include <list>
 #include <lz4.h>
 #include <malloc.h>
@@ -117,7 +112,6 @@
 #include <random>
 #include <ranges>
 #include <ratio>
-#include <regex>
 #include <sched.h>
 #include <seastar/core/abortable_fifo.hh>
 #include <seastar/core/abort_on_expiry.hh>
@@ -345,7 +339,6 @@
 #include <xmmintrin.h>
 #endif
 #include <xxhash.h>
-#include <zlib.h>
 #define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
 
