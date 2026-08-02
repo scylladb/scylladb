@@ -1362,7 +1362,9 @@ public:
             , _fwd_mr(fwd_mr)
             , _monitor(mon)
             , _integrity(integrity) {
-        sstlog.trace("mx_sstable_mutation_reader {}: init with _pr={}", fmt::ptr(this), _pr.get());
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("mx_sstable_mutation_reader {}: init with _pr={}", fmt::ptr(this), _pr.get());
+        }
         if (reversed()) {
             if (!_single_partition_read) {
                 on_internal_error(sstlog, format(
@@ -1394,11 +1396,15 @@ private:
         return *_index_reader;
     }
     future<> advance_to_next_partition() {
-        sstlog.trace("reader {}: advance_to_next_partition()", fmt::ptr(this));
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("reader {}: advance_to_next_partition()", fmt::ptr(this));
+        }
         _before_partition = true;
         auto& consumer = _consumer;
         if (consumer.is_mutation_end()) {
-            sstlog.trace("reader {}: already at partition boundary", fmt::ptr(this));
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("reader {}: already at partition boundary", fmt::ptr(this));
+            }
             _index_in_current_partition = false;
             return make_ready_future<>();
         }
@@ -1419,15 +1425,21 @@ private:
         });
     }
     future<> read_from_index() {
-        sstlog.trace("reader {}: read from index", fmt::ptr(this));
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("reader {}: read from index", fmt::ptr(this));
+        }
         auto tomb = _index_reader->partition_tombstone();
         if (!tomb) {
-            sstlog.trace("reader {}: no tombstone", fmt::ptr(this));
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("reader {}: no tombstone", fmt::ptr(this));
+            }
             return read_from_datafile();
         }
         std::optional<partition_key> pk = _index_reader->get_partition_key();
         if (!pk) {
-            sstlog.trace("reader {}: no partition key", fmt::ptr(this));
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("reader {}: no partition key", fmt::ptr(this));
+            }
             return read_from_datafile();
         }
         auto key = dht::decorate_key(*_schema, std::move(*pk));
@@ -1436,16 +1448,22 @@ private:
         return make_ready_future<>();
     }
     future<> read_from_datafile() {
-        sstlog.trace("reader {}: read from data file", fmt::ptr(this));
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("reader {}: read from data file", fmt::ptr(this));
+        }
         return _context->consume_input();
     }
     // Assumes that we're currently positioned at partition boundary.
     future<> read_partition() {
-        sstlog.trace("reader {}: reading partition", fmt::ptr(this));
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("reader {}: reading partition", fmt::ptr(this));
+        }
 
         _end_of_stream = true; // on_next_partition() will set it to true
         if (!_read_enabled) {
-            sstlog.trace("reader {}: eof", fmt::ptr(this));
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("reader {}: eof", fmt::ptr(this));
+            }
             return make_ready_future<>();
         }
 
@@ -1457,7 +1475,9 @@ private:
             // and the tombstone that we saved after parsing.
             auto tomb = *_saved_partition_tombstone;
             _saved_partition_tombstone.reset();
-            sstlog.trace("reader {}: serving partition key {} due to _saved_partition_tombstone {}", fmt::ptr(this), *_current_partition_key, tomb);
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("reader {}: serving partition key {} due to _saved_partition_tombstone {}", fmt::ptr(this), *_current_partition_key, tomb);
+            }
             on_next_partition(*_current_partition_key, tomb);
             return make_ready_future<>();
         }
@@ -1475,7 +1495,9 @@ private:
         //
         if (_index_in_current_partition) {
             if (_context->eof()) {
-                sstlog.trace("reader {}: eof", fmt::ptr(this));
+                if (sstlog.is_enabled(seastar::log_level::trace)) {
+                    sstlog.trace("reader {}: eof", fmt::ptr(this));
+                }
                 return make_ready_future<>();
             }
             if (_index_reader->partition_data_ready()) {
@@ -1493,12 +1515,16 @@ private:
     }
     // Can be called from any position.
     future<> read_next_partition() {
-        sstlog.trace("reader {}: read next partition", fmt::ptr(this));
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("reader {}: read next partition", fmt::ptr(this));
+        }
         // If next partition exists then on_next_partition will be called
         // and _end_of_stream will be set to false again.
         _end_of_stream = true;
         if (!_read_enabled || _single_partition_read) {
-            sstlog.trace("reader {}: eof", fmt::ptr(this));
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("reader {}: eof", fmt::ptr(this));
+            }
             return make_ready_future<>();
         }
         return advance_to_next_partition().then([this] {
@@ -1624,7 +1650,9 @@ private:
         auto [begin, end] = _index_reader->data_file_positions();
         parse_assert(bool(end), _sst->get_filename());
 
-        sstlog.trace("sstable_reader: {}: data file range [{}, {})", fmt::ptr(this), begin, *end);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("sstable_reader: {}: data file range [{}, {})", fmt::ptr(this), begin, *end);
+        }
 
         if (_integrity) {
             // Caller must retain a reference to checksum component while in use by the stream.
@@ -1660,7 +1688,9 @@ private:
         co_return true;
     }
     future<> skip_to(indexable_element el, uint64_t begin) {
-        sstlog.trace("sstable_reader: {}: skip_to({} -> {}, el={})", fmt::ptr(_context.get()), _context->position(), begin, static_cast<int>(el));
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("sstable_reader: {}: skip_to({} -> {}, el={})", fmt::ptr(_context.get()), _context->position(), begin, static_cast<int>(el));
+        }
         if (begin <= _context->position()) {
             return make_ready_future<>();
         }
@@ -1685,7 +1715,9 @@ public:
         while (true) {
             auto [start, end] = _index_reader->data_file_positions();
             if (start >= _context->position()) {
-                sstlog.trace("mp_row_consumer_reader_mx {}: advance_index_until_unseen_partition(): advanced to {}", fmt::ptr(this), start);
+                if (sstlog.is_enabled(seastar::log_level::trace)) {
+                    sstlog.trace("mp_row_consumer_reader_mx {}: advance_index_until_unseen_partition(): advanced to {}", fmt::ptr(this), start);
+                }
                 co_return;
             } else {
                 co_await _index_reader->advance_to_next_partition();
@@ -1700,7 +1732,9 @@ public:
 
         return maybe_initialize().then([this, &pr] (bool initialized) {
             _pr = pr;
-            sstlog.trace("mp_row_consumer_reader_mx {}: fast_forward_to({})", fmt::ptr(this), _pr.get());
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("mp_row_consumer_reader_mx {}: fast_forward_to({})", fmt::ptr(this), _pr.get());
+            }
             if (!initialized) {
                 _end_of_stream = true;
                 return make_ready_future<>();
@@ -1714,9 +1748,13 @@ public:
                 return f1.then([this] {
                     auto [start, end] = _index_reader->data_file_positions();
                     parse_assert(bool(end), _sst->get_filename());
-                    sstlog.trace("mp_row_consumer_reader_mx {}: fast_forward_to({}), index returned range [{}, {}), parser currently at {}", fmt::ptr(this), _pr.get(), start, *end, _context->position());
+                    if (sstlog.is_enabled(seastar::log_level::trace)) {
+                        sstlog.trace("mp_row_consumer_reader_mx {}: fast_forward_to({}), index returned range [{}, {}), parser currently at {}", fmt::ptr(this), _pr.get(), start, *end, _context->position());
+                    }
                     if (start < _context->position()) {
-                        sstlog.trace("mp_row_consumer_reader_mx {}: _saved_partition_tombstone={}", fmt::ptr(this), _saved_partition_tombstone);
+                        if (sstlog.is_enabled(seastar::log_level::trace)) {
+                            sstlog.trace("mp_row_consumer_reader_mx {}: _saved_partition_tombstone={}", fmt::ptr(this), _saved_partition_tombstone);
+                        }
                         // If we got here, the index returned a Data start which precedes
                         // the data parser's position.
                         // But by contract, fast_forward_to can only be used to move the reader forward.
@@ -1872,7 +1910,9 @@ public:
 
     data_consumer::proceed on_next_partition(dht::decorated_key key, tombstone tomb) override {
         if (_pr.get().before(key, dht::ring_position_comparator(*_schema))) {
-            sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, skipping key before range", fmt::ptr(this), key, _pr.get());
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, skipping key before range", fmt::ptr(this), key, _pr.get());
+            }
             // If we got here, then the index returned a Data file range which
             // includes some partitions before the queried range.
             //
@@ -1897,7 +1937,9 @@ public:
             // If we got here, then the index returned a Data file range which
             // includes some partitions after the queried range.
             // The read is over. The new key and everything after it should be ignored.
-            sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, skipping key after range", fmt::ptr(this), key, _pr.get());
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, skipping key after range", fmt::ptr(this), key, _pr.get());
+            }
             _end_of_stream = true;
             // The read is over for now, but the reader can be later forwarded to the key we just read.
             // The parser can't move backwards, so we have to remember the key and tombstone
@@ -1907,7 +1949,9 @@ public:
             return data_consumer::proceed::no;
         } else {
             // This is the normal path.
-            sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, consuming key in range", fmt::ptr(this), key, _pr.get());
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, consuming key in range", fmt::ptr(this), key, _pr.get());
+            }
             return mp_row_consumer_reader_mx::on_next_partition(std::move(key), tomb);
         }
     }
@@ -2141,7 +2185,9 @@ private:
                 }
             }
             if (cmp_end == 0) {
-                sstlog.trace("validating_consumer {}: {}() current block is done", fmt::ptr(this), __FUNCTION__);
+                if (sstlog.is_enabled(seastar::log_level::trace)) {
+                    sstlog.trace("validating_consumer {}: {}() current block is done", fmt::ptr(this), __FUNCTION__);
+                }
                 _expected_clustering_block->done = true;
             }
         }
@@ -2193,7 +2239,9 @@ public:
         _last_pkey = key.to_partition_key(*_schema);
         auto dk = dht::decorate_key(*_schema, *_last_pkey);
         _current_pos = position_in_partition(position_in_partition::partition_start_tag_t{});
-        sstlog.trace("validating_consumer {}: {}({}) _expected_pkey={}", fmt::ptr(this), __FUNCTION__, _last_pkey, _expected_pkey);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("validating_consumer {}: {}({}) _expected_pkey={}", fmt::ptr(this), __FUNCTION__, _last_pkey, _expected_pkey);
+        }
         validate_fragment_order(mutation_fragment_v2::kind::partition_start, {});
         if (_expected_pkey && !_expected_pkey->equal(*_schema, dk.key())) {
             report_error(format("mismatching index/data: partition mismatch: index: {}, data: {}", *_expected_pkey, dk.key()));
@@ -2213,7 +2261,9 @@ public:
     row_processing_result consume_row_start(const std::vector<fragmented_temporary_buffer>& ecp) {
         auto ck = from_fragmented_buffer(ecp);
         _current_pos = position_in_partition::for_key(std::move(ck));
-        sstlog.trace("validating_consumer {}: {}({})", fmt::ptr(this), __FUNCTION__, _current_pos);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("validating_consumer {}: {}({})", fmt::ptr(this), __FUNCTION__, _current_pos);
+        }
         validate_fragment_order(mutation_fragment_v2::kind::clustering_row, {});
         return row_processing_result::do_proceed;
     }
@@ -2223,7 +2273,9 @@ public:
     }
 
     row_processing_result consume_static_row_start() {
-        sstlog.trace("validating_consumer {}: {}()", fmt::ptr(this), __FUNCTION__);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("validating_consumer {}: {}()", fmt::ptr(this), __FUNCTION__);
+        }
         if (_treat_static_row_as_regular) {
             return consume_row_start({});
         }
@@ -2256,7 +2308,9 @@ public:
         if (kind == bound_kind::incl_start || kind == bound_kind::excl_start) {
             new_current_tomb = tomb;
         }
-        sstlog.trace("validating_consumer {}: {}({}, {})", fmt::ptr(this), __FUNCTION__, _current_pos, new_current_tomb);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("validating_consumer {}: {}({}, {})", fmt::ptr(this), __FUNCTION__, _current_pos, new_current_tomb);
+        }
         validate_fragment_order(mutation_fragment_v2::kind::range_tombstone_change, new_current_tomb);
         if (_expected_clustering_block) {
             return data_consumer::proceed(!_expected_clustering_block->done);
@@ -2266,7 +2320,9 @@ public:
     }
 
     data_consumer::proceed consume_range_tombstone(const std::vector<fragmented_temporary_buffer>& ecp, sstables::bound_kind_m kind, tombstone end_tombstone, tombstone start_tombstone) {
-        sstlog.trace("validating_consumer {}: {}()", fmt::ptr(this), __FUNCTION__);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("validating_consumer {}: {}()", fmt::ptr(this), __FUNCTION__);
+        }
         switch (kind) {
         case bound_kind_m::incl_end_excl_start:
             return consume_range_tombstone(ecp, bound_kind::excl_start, start_tombstone);
@@ -2278,7 +2334,9 @@ public:
     }
 
     data_consumer::proceed consume_row_end() {
-        sstlog.trace("validating_consumer {}: {}()", fmt::ptr(this), __FUNCTION__);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("validating_consumer {}: {}()", fmt::ptr(this), __FUNCTION__);
+        }
         if (_expected_clustering_block) {
             return data_consumer::proceed(!_expected_clustering_block->done);
         } else {
@@ -2290,11 +2348,15 @@ public:
         if (auto res = _validator.on_end_of_stream(); !res) {
             report_error(res.what());
         }
-        sstlog.trace("validating_consumer {}: {}()", fmt::ptr(this), __FUNCTION__);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("validating_consumer {}: {}()", fmt::ptr(this), __FUNCTION__);
+        }
     }
 
     data_consumer::proceed consume_partition_end() {
-        sstlog.trace("validating_consumer {}: {}()", fmt::ptr(this), __FUNCTION__);
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("validating_consumer {}: {}()", fmt::ptr(this), __FUNCTION__);
+        }
         _current_pos = position_in_partition(position_in_partition::end_of_partition_tag_t{});
         validate_fragment_order(mutation_fragment_v2::kind::partition_end, {});
         return data_consumer::proceed::no;
@@ -2340,10 +2402,12 @@ future<uint64_t> validate(
                 const auto data_pos = context->position();
                 auto pk = idx_reader->get_partition_key();
 
-                if (pk) {
-                    sstlog.trace("validate(): index-data position check for partition {}: {} == {}", *pk, data_pos, index_pos);
-                } else {
-                    sstlog.trace("validate(): index-data position check for a partition: {} == {}", data_pos, index_pos);
+                if (sstlog.is_enabled(seastar::log_level::trace)) {
+                    if (pk) {
+                        sstlog.trace("validate(): index-data position check for partition {}: {} == {}", *pk, data_pos, index_pos);
+                    } else {
+                        sstlog.trace("validate(): index-data position check for a partition: {} == {}", data_pos, index_pos);
+                    }
                 }
                 if (index_pos != data_pos) {
                     consumer.report_error(format("mismatching index/data: position mismatch: index: {}, data: {}", index_pos, data_pos));
@@ -2370,7 +2434,9 @@ future<uint64_t> validate(
                     const auto end = std::get<position_in_partition_view>(current_pi_block->end);
                     const auto index_pos = current_partition_pos + current_pi_block->offset;
                     const auto data_pos = context->position();
-                    sstlog.trace("validate(): index-data position check for clustering block (first={}) [{}, {}]: {} == {}, partition starts at {}", first_block, start, end, index_pos, data_pos, current_partition_pos);
+                    if (sstlog.is_enabled(seastar::log_level::trace)) {
+                        sstlog.trace("validate(): index-data position check for clustering block (first={}) [{}, {}]: {} == {}, partition starts at {}", first_block, start, end, index_pos, data_pos, current_partition_pos);
+                    }
                     // We cannot reliably position the parser at the start of
                     // the first block, because there is no way to check what
                     // the next element is (static row or clustering row)
