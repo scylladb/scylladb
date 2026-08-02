@@ -217,9 +217,7 @@
 #include <seastar/http/connection_factory.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/http/file_handler.hh>
-#include <seastar/http/function_handlers.hh>
 #include <seastar/http/handlers.hh>
-#include <seastar/http/httpd.hh>
 #include <seastar/http/matcher.hh>
 #include <seastar/http/matchrules.hh>
 #include <seastar/http/mime_types.hh>
@@ -255,7 +253,6 @@
 #include <seastar/net/udp.hh>
 #include <seastar/net/unix_address.hh>
 #include <seastar/net/virtio.hh>
-#include <seastar/rpc/rpc.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <seastar/util/alloc_failure_injector.hh>
 #include <seastar/util/assert.hh>
