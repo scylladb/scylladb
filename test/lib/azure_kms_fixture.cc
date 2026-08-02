@@ -9,6 +9,7 @@
 #include <string>
 #include <memory>
 #include <regex>
+#include <vector>
 
 #include <seastar/core/with_timeout.hh>
 #include <seastar/core/reactor.hh>
@@ -16,6 +17,7 @@
 #include <seastar/net/inet_address.hh>
 
 #include "azure_kms_fixture.hh"
+#include "scoped_env_var.hh"
 #include "tmpdir.hh"
 #include "proc_utils.hh"
 #include "test_utils.hh"
@@ -110,6 +112,9 @@ public:
     azure_mode mode;
     std::optional<tp::process_fixture> local_azure;
     tmpdir tmp;
+    // Environment overrides applied to isolate mock tests from a developer's
+    // real Azure credentials. Restored on teardown.
+    std::vector<scoped_env_var> env_overrides;
 
     impl(azure_mode);
 
@@ -134,6 +139,30 @@ azure_kms_fixture::impl::impl(azure_mode m)
 
 seastar::future<> azure_kms_fixture::impl::setup() {
     if ((key_name.empty() || mode == azure_mode::local) && mode != azure_mode::real) {
+        // Isolate the default-credentials chain from the developer's real Azure
+        // credentials, so tests that expect the chain to find *no* credentials
+        // (e.g. test_azure_provider_with_incomplete_creds) don't spuriously
+        // succeed.
+        //
+        // The Env source reads service-principal credentials directly from the
+        // environment, so scrub those variables.
+        for (const char* var : {
+                "AZURE_TENANT_ID",
+                "AZURE_CLIENT_ID",
+                "AZURE_CLIENT_SECRET",
+                "AZURE_CLIENT_CERTIFICATE_PATH",
+                "AZURE_AUTHORITY_HOST"}) {
+            scoped_env_var v;
+            v.unset(var);
+            env_overrides.push_back(std::move(v));
+        }
+        // The Azure CLI source spawns `az`, which reads the logged-in account
+        // from AZURE_CONFIG_DIR (defaulting to ~/.azure). Point it at an empty
+        // directory so `az` finds no account.
+        auto empty_azure_dir = tmp.path() / "empty-azure-config";
+        fs::create_directories(empty_azure_dir);
+        env_overrides.emplace_back("AZURE_CONFIG_DIR", empty_azure_dir.string());
+
         auto host = getenv_or_default("MOCK_AZURE_VAULT_SERVER_HOST", "127.0.0.1");
         auto [proc, port] = co_await start_fake_azure_server(tmp, host);
         local_azure.emplace(std::move(proc));
@@ -170,6 +199,8 @@ seastar::future<> azure_kms_fixture::impl::teardown() {
         local_azure->terminate();
         co_await local_azure->wait();
     }
+    // Restore any environment variables we overrode during setup.
+    env_overrides.clear();
 }
 
 static thread_local azure_kms_fixture* active_azure_kms_fixture = nullptr;
