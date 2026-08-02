@@ -5,8 +5,6 @@
 
 #ifdef SCYLLA_USE_PRECOMPILED_HEADER
 
-#include <absl/container/btree_set.h>
-#include <absl/container/flat_hash_map.h>
 #include <algorithm>
 #include <any>
 #include <arpa/inet.h>
@@ -124,15 +122,12 @@
 #include <seastar/core/abortable_fifo.hh>
 #include <seastar/core/abort_on_expiry.hh>
 #include <seastar/core/abort_source.hh>
-#include <seastar/core/alien.hh>
 #include <seastar/core/aligned_buffer.hh>
 #include <seastar/core/align.hh>
-#include <seastar/core/app-template.hh>
 #include <seastar/core/bitops.hh>
 #include <seastar/core/bitset-iter.hh>
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/cacheline.hh>
-#include <seastar/core/checked_ptr.hh>
 #include <seastar/core/chunked_fifo.hh>
 #include <seastar/core/circular_buffer_fixed_capacity.hh>
 #include <seastar/core/circular_buffer.hh>
@@ -142,13 +137,10 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/enum.hh>
-#include <seastar/core/execution_stage.hh>
-#include <seastar/core/expiring_fifo.hh>
 #include <seastar/core/fair_queue.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/file-types.hh>
 #include <seastar/core/format.hh>
-#include <seastar/core/fstream.hh>
 #include <seastar/core/function_traits.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/future-util.hh>
@@ -184,7 +176,6 @@
 #include <seastar/core/reactor_config.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/resource.hh>
-#include <seastar/core/rwlock.hh>
 #include <seastar/core/scattered_message.hh>
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/scheduling_specific.hh>
@@ -199,7 +190,6 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/signal.hh>
 #include <seastar/core/simple-stream.hh>
-#include <seastar/core/sleep.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/core/smp_options.hh>
 #include <seastar/core/sstring.hh>
@@ -224,8 +214,6 @@
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/generator.hh>
 #include <seastar/coroutine/maybe_yield.hh>
-#include <seastar/coroutine/parallel_for_each.hh>
-#include <seastar/http/client.hh>
 #include <seastar/http/common.hh>
 #include <seastar/http/connection_factory.hh>
 #include <seastar/http/exception.hh>
@@ -250,7 +238,6 @@
 #include <seastar/net/byteorder.hh>
 #include <seastar/net/config.hh>
 #include <seastar/net/const.hh>
-#include <seastar/net/dns.hh>
 #include <seastar/net/dpdk.hh>
 #include <seastar/net/ethernet.hh>
 #include <seastar/net/inet_address.hh>
@@ -275,7 +262,6 @@
 #include <seastar/util/assert.hh>
 #include <seastar/util/backtrace.hh>
 #include <seastar/util/bool_class.hh>
-#include <seastar/util/closeable.hh>
 #include <seastar/util/critical_alloc_section.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/util/eclipse.hh>
@@ -283,7 +269,6 @@
 #include <seastar/util/iostream.hh>
 #include <seastar/util/is_smart_ptr.hh>
 #include <seastar/util/later.hh>
-#include <seastar/util/lazy.hh>
 #include <seastar/util/log-cli.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/log-impl.hh>
