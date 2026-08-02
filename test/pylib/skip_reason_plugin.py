@@ -15,7 +15,6 @@ Usage as decorator (after conftest.py registers the plugin)::
         link="https://github.com/scylladb/scylladb/issues/12345",
         reason="Known repair scheduler crash",
     )
-    @pytest.mark.skip_not_implemented(reason="no per tablet support yet")
 
 Usage at runtime (inside test body or fixture) — prefer the
 convenience wrappers from :mod:`test.pylib.skip_types`::
