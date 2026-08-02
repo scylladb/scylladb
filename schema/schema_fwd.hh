@@ -11,7 +11,6 @@
 #include <seastar/core/shared_ptr.hh>
 
 #include "utils/UUID.hh"
-#include "utils/UUID_gen.hh"
 
 using column_count_type = uint32_t;
 
@@ -66,6 +65,4 @@ using table_schema_version = utils::tagged_uuid<struct table_schema_version_tag>
 // gms/versioned_value.cc.
 extern template struct utils::tagged_uuid<table_schema_version_tag>;
 
-inline table_schema_version reversed(table_schema_version v) noexcept {
-    return table_schema_version(utils::UUID_gen::negate(v.uuid()));
-}
+table_schema_version reversed(table_schema_version v) noexcept;
