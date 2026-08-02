@@ -11,7 +11,7 @@
 #include "utils/log.hh"
 #include "db/system_keyspace.hh"
 #include "replica/database.hh"
-#include "locator/tablets.hh"
+#include "locator/tablets_fwd.hh"
 #include "topology_mutation.hh"
 #include "raft/raft_group0_client.hh"
 #include "raft/raft_group0.hh"

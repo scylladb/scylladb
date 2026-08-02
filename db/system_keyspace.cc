@@ -22,7 +22,7 @@
 #include "cql3/untyped_result_set.hh"
 #include "cql3/query_processor.hh"
 #include "locator/host_id.hh"
-#include "locator/tablets.hh"
+#include "locator/tablets_fwd.hh"
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
 #include "locator/abstract_replication_strategy.hh"

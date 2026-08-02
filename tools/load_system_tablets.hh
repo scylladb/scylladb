@@ -14,7 +14,7 @@
 
 #include "reader_permit.hh"
 #include "dht/token.hh"
-#include "locator/tablets.hh"
+#include "locator/tablets_fwd.hh"
 #include "schema/schema_fwd.hh"
 #include "seastarx.hh"
 

@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "locator/tablets.hh"
+#include "locator/tablets_fwd.hh"
 #include "schema/schema_fwd.hh"
 namespace tasks {
 
