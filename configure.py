@@ -2464,6 +2464,8 @@ def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
 
     if mode == 'dev':
         # Trims backend compile time; dev doesn't need release's vectorization.
+        # Isolated A/B (official -j8/cache-disabled full build, same tip
+        # with/without this block): 557s -> 548s, -1.6%.
         optimization_flags = [
             '-fno-vectorize',
             '-fno-slp-vectorize',
