@@ -707,6 +707,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 co_await build_vnode_topology_updates(node, vnode_updates);
 
                 bool fits_in_one_command = updates.empty() || mutations_size(updates) + mutations_size(vnode_updates) <= mutation_size_threshold;
+                if (fits_in_one_command && !updates.empty() &&
+                        utils::get_local_injector().enter("topology_coordinator/update_topology_state_with_replace_tablet_updates/force_split")) {
+                    fits_in_one_command = false;
+                }
                 if (fits_in_one_command) {
                     std::ranges::move(vnode_updates, std::back_inserter(updates));
                     co_await update_topology_state(take_guard(std::move(node)), std::move(updates), reason);
