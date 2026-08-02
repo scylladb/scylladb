@@ -174,7 +174,6 @@
 #include <seastar/core/preempt.hh>
 #include <seastar/core/queue.hh>
 #include <seastar/core/reactor_config.hh>
-#include <seastar/core/reactor.hh>
 #include <seastar/core/resource.hh>
 #include <seastar/core/scattered_message.hh>
 #include <seastar/core/scheduling.hh>
