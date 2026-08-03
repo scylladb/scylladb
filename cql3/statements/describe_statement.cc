@@ -29,6 +29,7 @@
 #include "cql3/cql_statement.hh"
 #include "cql3/statements/raw/describe_statement.hh"
 #include "cql3/statements/describe_statement.hh"
+#include "cql3/statements/cluster_config_read.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <sstream>
 #include "transport/messages/result_message.hh"
@@ -49,6 +50,9 @@
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/user_aggregate.hh"
 #include "utils/overloaded_functor.hh"
+#include "db/config.hh"
+#include "db/cluster_config_registry.hh"
+#include "db/schema_tables.hh"
 #include "db/system_keyspace.hh"
 #include "db/extensions.hh"
 #include "utils/chunked_vector.hh"
@@ -70,6 +74,18 @@ namespace cql3 {
 namespace statements {
 
 namespace {
+
+// Collects the registry options visible at `s` scope, so DESCRIBE keeps emitting the full set
+// as the registry grows instead of naming one option.
+std::vector<std::string_view> config_option_names_for_scope(db::cluster_config_registry::scope s) {
+    std::vector<std::string_view> names;
+    for (const auto& opt : db::cluster_config_registry::options()) {
+        if (db::cluster_config_registry::supports_scope(opt, s)) {
+            names.push_back(opt.name);
+        }
+    }
+    return names;
+}
 
 template <typename Range, typename Describer>
     requires std::is_invocable_r_v<description, Describer, std::ranges::range_value_t<Range>>
@@ -103,6 +119,207 @@ utils::chunked_vector<description> wrap_in_vector(description desc) {
 
 bool is_index(const data_dictionary::database& db, const schema_ptr& schema) {
     return db.find_column_family(schema->view_info()->base_id()).get_index_manager().is_index(*schema);
+}
+
+future<std::map<sstring, sstring>> table_config_options(query_processor& qp, const sstring& ks, const sstring& table) {
+    return read_configs_column(qp,
+            format("SELECT configs FROM system_schema.{} WHERE keyspace_name = ? AND table_name = ?", db::schema_tables::SCYLLA_TABLES),
+            {ks, table});
+}
+
+future<std::map<sstring, sstring>> keyspace_config_options(query_processor& qp, const sstring& ks) {
+    return read_configs_column(qp,
+            format("SELECT configs FROM system_schema.{} WHERE keyspace_name = ?", db::schema_tables::SCYLLA_KEYSPACES),
+            {ks});
+}
+
+future<std::map<sstring, sstring>> cluster_config_options(query_processor& qp) {
+    return read_configs_column(qp,
+            format("SELECT configs FROM system_schema.{} WHERE cluster_name = ?", db::schema_tables::SCYLLA_CLUSTERS),
+            {sstring(db::schema_tables::CLUSTER_CONFIG_SINGLETON_KEY)});
+}
+
+std::optional<sstring> get_config_option(const std::map<sstring, sstring>& configs, std::string_view config_name) {
+    if (auto it = configs.find(sstring(config_name)); it != configs.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
+// A scope in a table-oriented option's resolution chain, used to annotate
+// DESCRIBE output with the value's provenance.
+enum class config_origin {
+    cluster,
+    keyspace,
+    table,
+};
+
+std::string_view config_origin_name(config_origin origin) {
+    switch (origin) {
+    case config_origin::cluster:  return "cluster";
+    case config_origin::keyspace: return "keyspace";
+    case config_origin::table:    return "table";
+    }
+    return "unknown";
+}
+
+// One scope in an option's domain chain together with the override stored at
+// exactly that scope (std::nullopt when no override is stored there).
+struct config_scope_value {
+    config_origin scope;
+    std::optional<sstring> stored;
+};
+
+// Renders the provenance comment as the option name followed by the full stored-override
+// chain, most specific scope first:
+// "<option>: effective from <scope>, stored=[<scope>=<value|NULL>, ...]". The option name
+// is what ties the comment to the property it annotates: an object may carry a comment per
+// described option, and without the name the comment lines are indistinguishable from one
+// another. Every scope in the chain is listed unconditionally; the winning scope after
+// "effective from" is the most specific scope with a stored value, or "default" when all
+// are NULL. The comment never contains ';' so it cannot be mistaken for a statement
+// terminator.
+sstring format_config_provenance(std::string_view config_name, const std::vector<config_scope_value>& chain) {
+    std::string_view effective_scope = "default";
+    for (const auto& entry : chain) {
+        if (entry.stored) {
+            effective_scope = config_origin_name(entry.scope);
+            break;
+        }
+    }
+    sstring stored;
+    for (const auto& entry : chain) {
+        if (!stored.empty()) {
+            stored += ", ";
+        }
+        stored += sstring(config_origin_name(entry.scope));
+        stored += "=";
+        stored += entry.stored ? *entry.stored : sstring("NULL");
+    }
+    sstring comment = sstring(config_name);
+    comment += ": effective from ";
+    comment += sstring(effective_scope);
+    comment += ", stored=[";
+    comment += stored;
+    comment += "]";
+    return comment;
+}
+
+struct effective_config_option {
+    sstring value;
+    sstring provenance_comment;
+};
+
+std::optional<effective_config_option> make_effective_config_option(std::string_view config_name, const std::vector<config_scope_value>& chain) {
+    for (const auto& entry : chain) {
+        if (entry.stored) {
+            return effective_config_option{*entry.stored, format_config_provenance(config_name, chain)};
+        }
+    }
+    return std::nullopt;
+}
+
+future<std::optional<effective_config_option>> effective_keyspace_config_option(query_processor& qp, const sstring& ks, std::string_view config_name) {
+    auto keyspace_configs = co_await keyspace_config_options(qp, ks);
+    auto cluster_configs = co_await cluster_config_options(qp);
+
+    std::vector<config_scope_value> chain{
+        {config_origin::keyspace, get_config_option(keyspace_configs, config_name)},
+        {config_origin::cluster, get_config_option(cluster_configs, config_name)},
+    };
+    co_return make_effective_config_option(config_name, chain);
+}
+
+future<std::optional<effective_config_option>> effective_table_config_option(query_processor& qp, const sstring& ks, const sstring& table, std::string_view config_name) {
+    auto table_configs = co_await table_config_options(qp, ks, table);
+    auto keyspace_configs = co_await keyspace_config_options(qp, ks);
+    auto cluster_configs = co_await cluster_config_options(qp);
+
+    std::vector<config_scope_value> chain{
+        {config_origin::table, get_config_option(table_configs, config_name)},
+        {config_origin::keyspace, get_config_option(keyspace_configs, config_name)},
+        {config_origin::cluster, get_config_option(cluster_configs, config_name)},
+    };
+    co_return make_effective_config_option(config_name, chain);
+}
+
+struct described_config_option {
+    std::string_view name;
+    sstring value;
+    sstring provenance_comment;
+};
+
+// Render a config value as it must appear on the right-hand side of a CQL
+// property assignment. Numeric and boolean options are bare tokens; a text
+// option must be a single-quoted CQL string literal (with embedded quotes
+// doubled), otherwise replaying the DESCRIBE output fails to parse. The option
+// is guaranteed to be registered here since the value came from the registry
+// scope iteration; default to quoting if it somehow is not.
+static sstring format_config_option_value(std::string_view name, const sstring& value) {
+    const auto* opt = db::cluster_config_registry::find(name);
+    if (opt && opt->type != db::cluster_config_registry::value_type::text) {
+        return value;
+    }
+    std::string escaped;
+    for (char c : value) {
+        if (c == '\'') {
+            escaped += "''";
+        } else {
+            escaped += c;
+        }
+    }
+    return format("'{}'", escaped);
+}
+
+void append_create_statement_options(description& desc, const std::vector<described_config_option>& options) {
+    if (!desc.create_statement || options.empty()) {
+        return;
+    }
+
+    auto create_statement = desc.create_statement->linearize();
+    while (!create_statement.empty() && std::isspace(static_cast<unsigned char>(create_statement.back()))) {
+        create_statement.resize(create_statement.size() - 1);
+    }
+    if (!create_statement.empty() && create_statement.back() == ';') {
+        create_statement.resize(create_statement.size() - 1);
+    }
+    const auto separator = create_statement.contains('\n') ? sstring("\n    AND ") : sstring(" AND ");
+    for (const auto& option : options) {
+        create_statement += separator;
+        create_statement += sstring(option.name);
+        create_statement += " = ";
+        create_statement += format_config_option_value(option.name, option.value);
+    }
+    create_statement += sstring(";");
+    // The effective value above is the real, executable property value; the provenance is emitted
+    // as an informational trailing CQL comment that is ignored on replay.
+    for (const auto& option : options) {
+        if (!option.provenance_comment.empty()) {
+            create_statement += "\n-- ";
+            create_statement += option.provenance_comment;
+        }
+    }
+    desc.create_statement = managed_string(create_statement);
+}
+
+future<description> keyspace_description(query_processor& qp, const lw_shared_ptr<keyspace_metadata>& ks_meta, const replica::database& db, with_create_statement with_stmt) {
+    auto desc = ks_meta->describe(db, with_stmt);
+    if (!with_stmt || !desc.create_statement) {
+        co_return desc;
+    }
+
+    std::vector<described_config_option> options;
+    for (const auto& config_name : config_option_names_for_scope(db::cluster_config_registry::scope::keyspace)) {
+        if (auto effective = co_await effective_keyspace_config_option(qp, ks_meta->name(), config_name)) {
+            options.emplace_back(described_config_option{
+                    config_name,
+                    std::move(effective->value),
+                    std::move(effective->provenance_comment)});
+        }
+    }
+
+    append_create_statement_options(desc, options);
+    co_return desc;
 }
 
 /**
@@ -299,13 +516,13 @@ std::optional<description> describe_cdc_log_table(const data_dictionary::databas
     return schema_desc;
 }
 
-future<utils::chunked_vector<description>> table(const data_dictionary::database& db, const sstring& ks, const sstring& name, bool with_internals) {
-    auto table = db.try_find_table(ks, name);
+future<utils::chunked_vector<description>> table(query_processor& qp, const data_dictionary::database& db, const lw_shared_ptr<keyspace_metadata>& ks_meta, const sstring& name, bool with_internals) {
+    auto table = db.try_find_table(ks_meta->name(), name);
     if (!table) {
-        throw exceptions::invalid_request_exception(format("Table '{}' not found in keyspace '{}'", name, ks));
+        throw exceptions::invalid_request_exception(format("Table '{}' not found in keyspace '{}'", name, ks_meta->name()));
     }
     
-    auto s = validation::validate_column_family(db, ks, name);
+    auto s = validation::validate_column_family(db, ks_meta->name(), name);
     if (s->is_view()) { 
         throw exceptions::invalid_request_exception("Cannot use DESC TABLE on materialized View. (Did you mean DESC MATERIALIZED VIEW)?");
     }
@@ -316,8 +533,21 @@ future<utils::chunked_vector<description>> table(const data_dictionary::database
     utils::chunked_vector<description> result;
 
     // table
-    auto table_desc = schema->describe(replica::make_schema_describe_helper(schema, db), with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
-    if (cdc::is_log_for_some_table(db.real_database(), ks, name)) {
+    auto describe_helper = replica::make_schema_describe_helper(schema, db);
+    auto table_desc = schema->describe(describe_helper, with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
+    std::vector<described_config_option> table_config_options;
+    for (const auto& config_name : config_option_names_for_scope(db::cluster_config_registry::scope::table)) {
+        if (auto effective = co_await effective_table_config_option(qp, ks_meta->name(), name, config_name)) {
+            table_config_options.emplace_back(described_config_option{
+                    config_name,
+                    std::move(effective->value),
+                    std::move(effective->provenance_comment)});
+        }
+    }
+    if (!table_config_options.empty()) {
+        append_create_statement_options(table_desc, table_config_options);
+    }
+    if (cdc::is_log_for_some_table(db.real_database(), ks_meta->name(), name)) {
         // If the table the user wants to describe is a CDC log table, we want to print it as a CQL comment.
         // This way, the user learns about the internals of the table, but they're also told not to execute it.
         fragmented_ostringstream os{};
@@ -352,7 +582,7 @@ future<utils::chunked_vector<description>> table(const data_dictionary::database
         return a.metadata().name();
     });
     for (const auto& idx: idxs) {
-        result.push_back(index(db, ks, idx.metadata().name(), with_internals));
+        result.push_back(index(db, ks_meta->name(), idx.metadata().name(), with_internals));
         co_await coroutine::maybe_yield();
     }
 
@@ -360,13 +590,13 @@ future<utils::chunked_vector<description>> table(const data_dictionary::database
     std::ranges::sort(views, std::ranges::less(), std::mem_fn(&schema::cf_name));
     for (const auto& v: views) {
         if(!is_index(db, v)) {
-            result.push_back(view(db, ks, v->cf_name(), with_internals));
+            result.push_back(view(db, ks_meta->name(), v->cf_name(), with_internals));
         }
         co_await coroutine::maybe_yield();
     }
 
     if (cdc::cdc_enabled(*schema)) {
-        auto cdc_log_alter = describe_cdc_log_table(db, ks, name);
+        auto cdc_log_alter = describe_cdc_log_table(db, ks_meta->name(), name);
         if (cdc_log_alter) {
             result.push_back(std::move(*cdc_log_alter));
         }
@@ -375,7 +605,7 @@ future<utils::chunked_vector<description>> table(const data_dictionary::database
     co_return result;
 }
 
-future<utils::chunked_vector<description>> tables(const data_dictionary::database& db, const lw_shared_ptr<keyspace_metadata>& ks, std::optional<bool> with_internals = std::nullopt) {
+future<utils::chunked_vector<description>> tables(query_processor& qp, const data_dictionary::database& db, const lw_shared_ptr<keyspace_metadata>& ks, std::optional<bool> with_internals = std::nullopt) {
     auto& replica_db = db.real_database();
     auto tables = ks->tables() | std::views::filter([&replica_db] (const schema_ptr& s) {
         return !cdc::is_log_for_some_table(replica_db, s->ks_name(), s->cf_name()) && !service::paxos::paxos_store::try_get_base_table(s->cf_name());
@@ -385,7 +615,7 @@ future<utils::chunked_vector<description>> tables(const data_dictionary::databas
     if (with_internals) {
         utils::chunked_vector<description> result;
         for (const auto& t: tables) {
-            auto tables_desc = co_await table(db, ks->name(), t->cf_name(), *with_internals);
+            auto tables_desc = co_await table(qp, db, ks, t->cf_name(), *with_internals);
             result.insert(result.end(), std::make_move_iterator(tables_desc.begin()), std::make_move_iterator(tables_desc.end()));
             co_await coroutine::maybe_yield();
         }
@@ -423,7 +653,7 @@ lw_shared_ptr<keyspace_metadata> get_keyspace_metadata(const data_dictionary::da
             Descriptions don't contain create_statements.
  *  @throw `invalid_request_exception` if there is no such keyspace
  */
-future<utils::chunked_vector<description>> list_elements(const data_dictionary::database& db, const sstring& ks, element_type element) {
+future<utils::chunked_vector<description>> list_elements(query_processor& qp, const data_dictionary::database& db, const sstring& ks, element_type element) {
     auto ks_meta = get_keyspace_metadata(db, ks);
     auto& replica_db = db.real_database();
 
@@ -431,8 +661,8 @@ future<utils::chunked_vector<description>> list_elements(const data_dictionary::
     case element_type::type:         co_return co_await types(replica_db, ks_meta, with_create_statement::no);
     case element_type::function:     co_return co_await functions(replica_db, ks, with_create_statement::no);
     case element_type::aggregate:    co_return co_await aggregates(replica_db, ks, with_create_statement::no);
-    case element_type::table:        co_return co_await tables(db, ks_meta);
-    case element_type::keyspace:     co_return wrap_in_vector(ks_meta->describe(replica_db, with_create_statement::no));
+    case element_type::table:        co_return co_await tables(qp, db, ks_meta);
+    case element_type::keyspace:     co_return wrap_in_vector(co_await keyspace_description(qp, ks_meta, replica_db, with_create_statement::no));
     case element_type::view:
     case element_type::index:
         on_internal_error(dlogger, "listing of views and indexes is unsupported");
@@ -447,7 +677,7 @@ future<utils::chunked_vector<description>> list_elements(const data_dictionary::
             Description contains create_statement.
  *  @throw `invalid_request_exception` if there is no such keyspace or there is no element with given name
  */
-future<utils::chunked_vector<description>> describe_element(const data_dictionary::database& db, const sstring& ks, element_type element, const sstring& name, bool with_internals) {
+future<utils::chunked_vector<description>> describe_element(query_processor& qp, const data_dictionary::database& db, const sstring& ks, element_type element, const sstring& name, bool with_internals) {
     auto ks_meta = get_keyspace_metadata(db, ks);
     auto& replica_db = db.real_database();
 
@@ -455,10 +685,10 @@ future<utils::chunked_vector<description>> describe_element(const data_dictionar
     case element_type::type:             co_return wrap_in_vector(type(replica_db, ks_meta, name));
     case element_type::function:         co_return co_await function(replica_db, ks, name);
     case element_type::aggregate:        co_return co_await aggregate(replica_db, ks, name);
-    case element_type::table:            co_return co_await table(db, ks, name, with_internals);
+    case element_type::table:            co_return co_await table(qp, db, ks_meta, name, with_internals);
     case element_type::index:            co_return wrap_in_vector(index(db, ks, name, with_internals));
     case element_type::view:             co_return wrap_in_vector(view(db, ks, name, with_internals));
-    case element_type::keyspace:         co_return wrap_in_vector(ks_meta->describe(replica_db, with_create_statement::yes));
+    case element_type::keyspace:         co_return wrap_in_vector(co_await keyspace_description(qp, ks_meta, replica_db, with_create_statement::yes));
     }
 }
 
@@ -471,7 +701,7 @@ future<utils::chunked_vector<description>> describe_element(const data_dictionar
             Descriptions contain create_statements.
  *  @throw `invalid_request_exception` if there is no such keyspace or there is no element with given name
  */
-future<utils::chunked_vector<description>> describe_all_keyspace_elements(const data_dictionary::database& db, const sstring& ks, bool with_internals) {
+future<utils::chunked_vector<description>> describe_all_keyspace_elements(query_processor& qp, const data_dictionary::database& db, const sstring& ks, bool with_internals) {
     auto ks_meta = get_keyspace_metadata(db, ks);
     auto& replica_db = db.real_database();
     utils::chunked_vector<description> result;
@@ -480,11 +710,11 @@ future<utils::chunked_vector<description>> describe_all_keyspace_elements(const 
         result.insert(result.end(), std::make_move_iterator(elements.begin()), std::make_move_iterator(elements.end()));
     };
 
-    result.push_back(ks_meta->describe(replica_db, with_create_statement::yes));
+    result.push_back(co_await keyspace_description(qp, ks_meta, replica_db, with_create_statement::yes));
     inserter(co_await types(replica_db, ks_meta, with_create_statement::yes));
     inserter(co_await functions(replica_db, ks, with_create_statement::yes));
     inserter(co_await aggregates(replica_db, ks, with_create_statement::yes));
-    inserter(co_await tables(db, ks_meta, with_internals));
+    inserter(co_await tables(qp, db, ks_meta, with_internals));
 
     co_return result; 
 }
@@ -669,7 +899,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
                 if (!config.full_schema && db.extensions().is_extension_internal_keyspace(ks)) {
                     continue;
                 }
-                auto ks_result = co_await describe_all_keyspace_elements(db, ks, _with_internals);
+                auto ks_result = co_await describe_all_keyspace_elements(qp, db, ks, _with_internals);
                 schema_result.insert(schema_result.end(), std::make_move_iterator(ks_result.begin()), std::make_move_iterator(ks_result.end()));
             }
 
@@ -695,11 +925,11 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
 
             if (config.only_keyspace) {
                 auto ks_meta = get_keyspace_metadata(db, ks);
-                auto ks_desc = ks_meta->describe(db.real_database(), with_create_statement::yes);
+                auto ks_desc = co_await keyspace_description(qp, ks_meta, db.real_database(), with_create_statement::yes);
 
                 co_return wrap_in_vector(std::move(ks_desc));
             } else {
-                co_return co_await describe_all_keyspace_elements(db, ks, _with_internals);
+                co_return co_await describe_all_keyspace_elements(qp, db, ks, _with_internals);
             }
         }
     }, _config);
@@ -733,7 +963,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> listing_describe_statement::
 
     utils::chunked_vector<description> result;
     for (auto&& ks: keyspaces) {
-        auto ks_result = co_await list_elements(db, ks, _element);
+        auto ks_result = co_await list_elements(qp, db, ks, _element);
         result.insert(result.end(), std::make_move_iterator(ks_result.begin()), std::make_move_iterator(ks_result.end()));
         co_await coroutine::maybe_yield();
     }
@@ -762,7 +992,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> element_describe_statement::
         throw exceptions::invalid_request_exception("No keyspace specified and no current keyspace");
     }
     
-    co_return serialize_descriptions(co_await describe_element(qp.db(), ks, _element, _name, _with_internals));
+    co_return serialize_descriptions(co_await describe_element(qp, qp.db(), ks, _element, _name, _with_internals));
 }
 
 //GENERIC DESCRIBE STATEMENT
@@ -786,7 +1016,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> generic_describe_statement::
         auto ks = db.try_find_keyspace(_name);
 
         if (ks) {
-            co_return serialize_descriptions(co_await describe_all_keyspace_elements(db, ks->metadata()->name(), _with_internals));
+            co_return serialize_descriptions(co_await describe_all_keyspace_elements(qp, db, ks->metadata()->name(), _with_internals));
         } else if (raw_ks.empty()) {
             throw exceptions::invalid_request_exception(format("'{}' not found in keyspaces", _name));
         }
@@ -803,7 +1033,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> generic_describe_statement::
         if (tbl->schema()->is_view()) {
             co_return serialize_descriptions(wrap_in_vector(view(db, ks_name, _name, _with_internals)));
         } else {
-            co_return serialize_descriptions(co_await table(db, ks_name, _name, _with_internals));
+            co_return serialize_descriptions(co_await table(qp, db, ks_meta, _name, _with_internals));
         }
     }
 
