@@ -2919,7 +2919,11 @@ def write_build_file(f,
             objs.extend([f'$builddir/{mode}/abseil/{lib}' for lib in abseil_libs])
 
             if do_lto:
-                local_libs += ' -flto=thin -ffat-lto-objects'
+                # --thinlto-jobs=all: use all logical CPUs for the ThinLTO
+                # backend (lld defaults to physical cores only, leaving SMT
+                # idle during the multi-minute LTO link). Scheduling-only:
+                # thread count does not affect the generated code.
+                local_libs += ' -flto=thin -ffat-lto-objects -Wl,--thinlto-jobs=all'
             else:
                 local_libs += ' -fno-lto'
             use_pch = use_precompiled_header and binary == 'scylla'
