@@ -3333,6 +3333,7 @@ def configure_using_cmake(args):
         'Scylla_ENABLE_LTO': 'ON' if args.lto else 'OFF',
         'Scylla_WITH_DEBUG_INFO' : 'ON' if args.debuginfo else 'OFF',
         'Scylla_USE_PRECOMPILED_HEADER': 'OFF' if args.disable_precompiled_header else 'ON',
+        'Scylla_BUILD_PERF_TOOLS': 'ON' if args.perf_tools else 'OFF',
     }
 
     if compiler_cache:

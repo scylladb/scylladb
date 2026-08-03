@@ -22,7 +22,12 @@ target_link_libraries(tools
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    db)
+    db
+    # scylla-sstable.cc calls do_with_cql_env_noreentrant_in_thread() from
+    # test-lib directly - unconditional regardless of Scylla_BUILD_PERF_TOOLS,
+    # matching configure.py's own scylla_perf_test_lib split (test/lib/*.cc
+    # stays unconditional even with --disable-perf-tools).
+    test-lib)
 if (Scylla_USE_PRECOMPILED_HEADER_USE)
   target_precompile_headers(tools REUSE_FROM scylla-precompiled-header)
 endif()
