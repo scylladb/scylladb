@@ -55,6 +55,8 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
             OPERATION(describe_backup, "DescribeBackup")
             OPERATION(describe_continuous_backups, "DescribeContinuousBackups")
             OPERATION(describe_endpoints, "DescribeEndpoints")
+            OPERATION(export_table_to_point_in_time, "ExportTableToPointInTime")
+            OPERATION(describe_export, "DescribeExport")
             OPERATION(describe_global_table, "DescribeGlobalTable")
             OPERATION(describe_global_table_settings, "DescribeGlobalTableSettings")
             OPERATION(describe_limits, "DescribeLimits")
