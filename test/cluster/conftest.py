@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import aiohttp
 import ssl
 import tempfile
 from concurrent.futures.thread import ThreadPoolExecutor
@@ -226,7 +227,19 @@ async def manager(request: pytest.FixtureRequest,
     test_py_log_test = suite_log_dir / f"{test_log.stem}_cluster.log"
 
     manager_client = manager_internal()  # set up client object in fixture with scope function
-    await manager_client.before_test(test_case_name, test_log)
+    logger.debug("before_test for %s", test_case_name)
+    if await manager_client.is_dirty():
+        manager_client.driver_close()  # Close driver connection to old cluster
+    try:
+        cluster_str = await manager_client.client.put_json(f"/cluster/before-test/{test_case_name}", timeout=600,
+                                                           response_type="json")
+        logger.info(f"Using cluster: {cluster_str} for test {test_case_name}")
+    except aiohttp.ClientError as exc:
+        raise RuntimeError(f"Failed before test check {exc}") from exc
+    servers = await manager_client.running_servers()
+    if manager_client.cql is None and servers:
+        await manager_client.driver_connect()  # Connect driver to new cluster
+
     # Publish what pytest_runtest_makereport needs to attach this test's logs on
     # failure (single source of truth), so it doesn't re-derive these paths.
     request.node.stash[MANAGER_LOGS_KEY] = {
@@ -253,7 +266,14 @@ async def manager(request: pytest.FixtureRequest,
             # here we only need the dir for the manager-specific found_errors files below.
             failed_test_dir_path = make_failed_test_dir(request.config, build_mode, test_case_name)
 
-        cluster_status = await manager_client.after_test(test_case_name, not failed)
+        # Tear down (after test): notify the Manager server that the test finished
+        # We grab the raw per-loop client here because the `client` property becomes inaccessible
+        # once test_finished_event is set.
+        manager_client.test_finished_event.set()
+        _client = manager_client.client_for_asyncio_loop.get(asyncio.get_running_loop())
+        logger.debug("after_test for %s (success: %s)", test_case_name, not failed)
+        cluster_status = await _client.put_json(f"/cluster/after-test/{not failed}", response_type="json")
+        logger.info("Cluster after test %s (success: %s): %s", test_case_name, not failed, cluster_status)
     finally:
         # Drop the stash entry before closing the client so a teardown-phase
         # failure report doesn't gather logs through a stopped client.

@@ -28,7 +28,6 @@ from cassandra.cluster import Session as CassandraSession, \
 from cassandra.policies import LoadBalancingPolicy, RoundRobinPolicy, WhiteListRoundRobinPolicy
 from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.auth import AuthProvider
-import aiohttp
 import asyncio
 import allure
 
@@ -52,7 +51,6 @@ class ManagerClient:
     def __init__(self, sock_path: str, port: int, use_ssl: bool, auth_provider: Any|None,
                  con_gen: Callable[[List[IPAddress], int, bool, Any, LoadBalancingPolicy], CassandraCluster]) \
                          -> None:
-        self.test_log_fh: Optional[logging.FileHandler] = None
         self.port = port
         self.use_ssl = use_ssl
         self.auth_provider = auth_provider
@@ -74,7 +72,7 @@ class ManagerClient:
     @property
     def client(self):
         if self.test_finished_event.is_set():
-            raise Exception("ManagerClient.after_test method was called, client object is not accessible anymore")
+            raise Exception("ManagerClient client object is not accessible after the test finished")
             # there are still can be issue when some task first obtains the client object,
             # but usually, tests obtains the manager and uses the client as manager.client
             # and there is an actual workaround for this case.
@@ -153,45 +151,6 @@ class ManagerClient:
             logger.debug("refresh driver node list")
             self.ccluster.control_connection.refresh_node_list_and_token_map()
 
-    async def before_test(self, test_case_name: str, test_log: Path) -> None:
-        # Add handler to the root logger to intercept all logs produced by pytest process
-        test_logger = logging.getLogger()
-        self.test_log_fh = logging.FileHandler(test_log, mode='w+')
-        # to have the custom formatter with a timestamp that used in a test.py but for each testcase's log, we need to
-        # extract it from the root logger and apply to the handler
-        self.test_log_fh.setFormatter(logging.getLogger().handlers[0].formatter)
-        self.test_log_fh.setLevel(test_logger.getEffectiveLevel())
-        test_logger.addHandler(self.test_log_fh)
-        # Before a test starts check if cluster needs cycling and update driver connection
-        logger.debug("before_test for %s", test_case_name)
-        dirty = await self.is_dirty()
-        if dirty:
-            self.driver_close()  # Close driver connection to old cluster
-        try:
-            cluster_str = await self.client.put_json(f"/cluster/before-test/{test_case_name}", timeout=600,
-                                                     response_type = "json")
-            logger.info(f"Using cluster: {cluster_str} for test {test_case_name}")
-        except aiohttp.ClientError as exc:
-            raise RuntimeError(f"Failed before test check {exc}") from exc
-        servers = await self.running_servers()
-        if self.cql is None and servers:
-            # TODO: if cluster is not up yet due to taking long and HTTP timeout, wait for it
-            # await self._wait_for_cluster()
-            await self.driver_connect()  # Connect driver to new cluster
-
-    async def after_test(self, test_case_name: str, success: bool) -> None:
-        """Tell harness this test finished"""
-        self.test_finished_event.set()
-        _client = self.client_for_asyncio_loop.get(asyncio.get_running_loop())
-        logging.getLogger().removeHandler(self.test_log_fh)
-        pathlib.Path(self.test_log_fh.baseFilename).unlink()
-        logger.debug("after_test for %s (success: %s)", test_case_name, success)
-        cluster_status = await _client.put_json(f"/cluster/after-test/{success}",
-                                                 response_type = "json")
-        logger.info("Cluster after test %s: %s", test_case_name, cluster_status)
-
-        return cluster_status
-    
     async def check_all_errors(self, check_all_errors=False) -> dict[ServerInfo, dict[str, Union[list[str], list[str], Path, list[str]]]]:
         
         errors = defaultdict(dict)
