@@ -10,7 +10,6 @@
 #include <exception>
 #include <initializer_list>
 #include <memory>
-#include <regex>
 #include <stdexcept>
 #if __has_include(<rapidxml.h>)
 #include <rapidxml.h>
