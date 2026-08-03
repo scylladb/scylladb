@@ -239,12 +239,12 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
     validate_login();
 
     // `additional_permissions` only ever widens a SELECT check with other read-authorizing
-    // permissions (e.g. VECTOR_SEARCH_INDEXING), never anything else.
+    // permissions (e.g. VECTOR_SEARCH_INDEXING/TEXT_SEARCH_INDEXING), never anything else.
     SCYLLA_ASSERT(additional_permissions.mask() == 0 || permission == auth::permission::SELECT);
 
     // System tables read by an external Vector Store engine.
-    // A user holding VECTOR_SEARCH_INDEXING may SELECT from them without holding full SELECT, so
-    // that permission also authorizes the read.
+    // A user holding VECTOR_SEARCH_INDEXING or TEXT_SEARCH_INDEXING may SELECT from them without
+    // holding full SELECT, so those permissions also authorize the read.
     static const std::unordered_set<auth::resource> external_index_system_resources = {
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::GROUP0_HISTORY),
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::VERSIONS),
@@ -254,6 +254,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
     };
     if (permission == auth::permission::SELECT && external_index_system_resources.contains(resource)) {
         additional_permissions.set(auth::permission::VECTOR_SEARCH_INDEXING);
+        additional_permissions.set(auth::permission::TEXT_SEARCH_INDEXING);
     }
 
     co_return co_await check_access_rules(ks, permission, resource, type, additional_permissions);
