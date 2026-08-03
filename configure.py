@@ -2794,6 +2794,7 @@ def write_build_file(f,
         serializers = {}
         ragels = {}
         antlr3_grammars = set()
+        antlr3_grammars_with_pch = set()
         rust_headers = {}
 
         # We want LTO, but with the regular LTO, clang generates special LLVM IR files instead of
@@ -2913,6 +2914,8 @@ def write_build_file(f,
                     ragels[hh] = src
                 elif src.endswith('.g'):
                     antlr3_grammars.add(src)
+                    if use_pch:
+                        antlr3_grammars_with_pch.add(src)
                 elif src.endswith('.rs'):
                     idx = src.rindex('/src/')
                     hh = '$builddir/' + mode + '/gen/' + src[:idx] + '.hh'
@@ -3019,7 +3022,19 @@ def write_build_file(f,
                                                                    grammar.source.rsplit('.', 1)[0]))
             for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
                 obj = cc.replace('.cpp', '.o')
-                f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep} || {" ".join(serializers)}\n')
+                # The ANTLR-generated lexers/parsers are among the heaviest TUs
+                # in the build and skipped the PCH entirely, paying the full
+                # header-parse cost (same reasoning as the swagger objects).
+                # Parsers in -O0/g/s modes get an -O1 override below; keep
+                # those off the PCH so their options match how it was built.
+                use_grammar_pch = (grammar in antlr3_grammars_with_pch
+                                   and not (cc.endswith('Parser.cpp')
+                                            and modes[mode]['optimization-level'] in ['0', 'g', 's']))
+                if use_grammar_pch:
+                    grammar_pch_dep = f'$builddir/{mode}/stdafx.hh.pch'
+                    f.write(f'build {obj}: cxx_with_pch.{mode} {cc} | {profile_dep} {grammar_pch_dep} || {" ".join(serializers)}\n')
+                else:
+                    f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep} || {" ".join(serializers)}\n')
                 flags = '-Wno-parentheses-equality'
                 if cc.endswith('Parser.cpp'):
                     # Unoptimized parsers end up using huge amounts of stack space and overflowing their stack
