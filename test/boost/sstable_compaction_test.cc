@@ -486,7 +486,9 @@ static future<> check_compacted_sstables(test_env& env, compact_sstables_result 
         // keys from compacted sstable aren't ordered lexographically,
         // thus we must read all keys into a vector, sort the vector
         // lexographically, then proceed with the comparison.
-        std::sort(keys.begin(), keys.end(), partition_key::less_compare(*s));
+        std::sort(keys.begin(), keys.end(), [pkey_type = s->partition_key_type()] (const partition_key& a, const partition_key& b) {
+            return pkey_type->compare(a.representation(), b.representation()) < 0;
+        });
         BOOST_REQUIRE_EQUAL(keys.size(), res.input_sstables.size());
 
         auto generations = res.input_sstables
