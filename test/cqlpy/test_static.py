@@ -9,9 +9,10 @@
 # allow running tests with debatable behavior on Cassandra as well.
 #############################################################################
 
+import time
 import pytest
 from cassandra.protocol import SyntaxException, InvalidRequest
-from .util import new_test_table, unique_key_int
+from .util import new_test_table, new_secondary_index, unique_key_int
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -111,3 +112,90 @@ def test_syntax_primary_key_and_static(cql, test_keyspace):
     with pytest.raises((SyntaxException, InvalidRequest)):
         with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY STATIC, v int') as table:
             pass
+
+# A secondary index is built in the background, so after writing data a query
+# through the index may briefly return incomplete results (and on Cassandra may
+# even fail) until the index catches up. This helper retries the given query
+# until it returns the expected number of rows, or a timeout elapses.
+def _query_until(cql, query, expected_count, timeout=30):
+    deadline = time.time() + timeout
+    rows = None
+    while time.time() < deadline:
+        try:
+            rows = list(cql.execute(query))
+            if len(rows) == expected_count:
+                return rows
+        except Exception:
+            # On Cassandra the SELECT may transiently fail while the index is
+            # still being set up. Ignore and retry until the deadline.
+            pass
+        time.sleep(0.1)
+    # Return whatever we last got so the caller's assertion produces a useful
+    # diff on failure.
+    return rows if rows is not None else []
+
+# Verify that querying a table through a secondary index on a *regular* column
+# correctly returns the partition's *static* column value - including across
+# multiple partitions and when the index lookup matches multiple rows via an
+# inequality/range restriction.
+#
+# This is the scenario that used to be covered only by the dtest
+# cql_static_columns_tests.py (test_query_static_column_when_using_index).
+# It is distinct from the tests in test_secondary_index.py, which index the
+# static column itself rather than indexing a regular column and reading the
+# static column back. See SCYLLADB-1922.
+#
+# The data layout mirrors the original dtest (with r1 == p so the indexed
+# value equals the clustering key): two partitions, each with its own static
+# value -
+#   partition k=1: p in [1..N],      s = 11
+#   partition k=0: p in [N+1..2N],   s = 22
+# so that a range like "N <= r1 <= N+1" straddles the two partitions and must
+# return both static values.
+def test_query_static_column_via_regular_index(cql, test_keyspace):
+    # A modest row count is enough to exercise multi-row index fetches and the
+    # cross-partition boundary; the original dtest used 10000 rows only to also
+    # stress paging at cluster scale, which is not the point of this test.
+    N = 50
+    schema = 'k int, p int, s int static, r1 int, PRIMARY KEY (k, p)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with new_secondary_index(cql, table, 'r1'):
+            insert = cql.prepare(f'INSERT INTO {table} (k, p, s, r1) VALUES (?, ?, ?, ?)')
+            for p in range(1, N + 1):
+                cql.execute(insert, [1, p, 11, p])
+            for p in range(N + 1, 2 * N + 1):
+                cql.execute(insert, [0, p, 22, p])
+
+            # 1. SELECT * with an equality match - one row, including its static
+            #    value.
+            rows = _query_until(cql,
+                f'SELECT * FROM {table} WHERE r1 = 39 ALLOW FILTERING', 1)
+            assert rows == [(1, 39, 11, 39)]
+
+            # 2. SELECT only the primary key, inequality matching several rows
+            #    in the same partition.
+            rows = _query_until(cql,
+                f'SELECT k, p FROM {table} WHERE r1 < 3 ALLOW FILTERING', 2)
+            assert sorted(rows) == [(1, 1), (1, 2)]
+
+            # 3. SELECT a single non-static column with an equality match.
+            rows = _query_until(cql,
+                f'SELECT p FROM {table} WHERE r1 = 2 ALLOW FILTERING', 1)
+            assert rows == [(2,)]
+
+            # 4. SELECT only the static column, inequality matching many rows -
+            #    all in the second partition, so every result has s = 22.
+            #    (One result row is returned per matching base-table row.)
+            expected_count = N  # rows with r1 > N are exactly partition k=0
+            rows = _query_until(cql,
+                f'SELECT s FROM {table} WHERE r1 > {N} ALLOW FILTERING', expected_count)
+            assert rows == [(22,)] * expected_count
+
+            # 5. SELECT only the static column across a range that straddles the
+            #    two partitions: r1 = N (s=11, partition k=1) and r1 = N+1
+            #    (s=22, partition k=0). This is the cross-partition case that
+            #    motivated SCYLLADB-1922.
+            rows = _query_until(cql,
+                f'SELECT s FROM {table} WHERE r1 >= {N} AND r1 <= {N + 1} ALLOW FILTERING', 2)
+            assert sorted(rows) == [(11,), (22,)]
+
