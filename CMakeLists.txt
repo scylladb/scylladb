@@ -63,6 +63,13 @@ add_compile_definitions(SEASTAR_NO_EXCEPTION_HACK)
 # Hacks needed to expose internal APIs for xxhash dependencies
 add_compile_definitions(XXH_PRIVATE_API)
 
+# Match configure.py's --enable-wasmtime/--disable-wasmtime (default: on).
+# Define is added later, alongside SEASTAR_TESTING_MAIN, to avoid leaking
+# into the seastar/abseil subdirectories.
+option(Scylla_BUILD_WASMTIME
+  "Build the wasmtime (WASM UDF) backend into the scylla binary"
+  ON)
+
 # Build the bundled fmt submodule rather than relying on whatever version
 # happens to be installed on the host (matching configure.py). This must come
 # before Seastar is configured below: for the in-tree Seastar build, CMake
@@ -218,6 +225,9 @@ set_target_properties(absl_strerror PROPERTIES EXCLUDE_FROM_ALL TRUE)
 # SEASTAR_TESTING_MAIN globally. This matches configure.py's global define
 # without leaking into seastar (which would cause duplicate main symbols).
 add_compile_definitions(SEASTAR_TESTING_MAIN)
+if(Scylla_BUILD_WASMTIME)
+  add_compile_definitions(SCYLLA_BUILD_WASMTIME)
+endif()
 
 # System libraries dependencies
 find_package(Boost REQUIRED
