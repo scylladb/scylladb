@@ -1124,6 +1124,63 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     /// End test
 }
 
+BOOST_AUTO_TEST_CASE(test_truncate_rederives_config_indices) {
+    // When a leader's AppendEntries overwrites a follower's last
+    // configuration entry, log::truncate_uncommitted() must re-derive the
+    // two tracked configuration indices from the entries that remain in the
+    // log. Rolling _last_conf_idx back to _prev_conf_idx and zeroing
+    // _prev_conf_idx is not enough: an older configuration entry may still
+    // be in the log, and with _prev_conf_idx zeroed both
+    // get_prev_configuration() and last_conf_for() skip it and wrongly fall
+    // back to the snapshot configuration. last_conf_for() supplies the
+    // configuration stored in snapshots, so a snapshot taken at an index
+    // between the two surviving configuration entries would be stamped with
+    // a stale configuration.
+    server_id A = id(), B = id(), C = id(), D = id();
+
+    // Original cluster {A,B,C,D} captured in the snapshot at idx 0.
+    raft::configuration snap_cfg = config_from_ids({A, B, C, D});
+
+    // Log contents:
+    //   idx 1 (term 1): committed config {A,B,C}
+    //   idx 2 (term 1): dummy entry
+    //   idx 3 (term 1): committed config {A,B}
+    //   idx 4 (term 2): uncommitted joint config curr={A} prev={A,B}
+    raft::log_entries entries;
+    entries.push_back(seastar::make_lw_shared<const raft::log_entry>(
+            raft::log_entry{term_t{1}, index_t{1}, config_from_ids({A, B, C})}));
+    entries.push_back(seastar::make_lw_shared<const raft::log_entry>(
+            raft::log_entry{term_t{1}, index_t{2}, raft::log_entry::dummy{}}));
+    entries.push_back(seastar::make_lw_shared<const raft::log_entry>(
+            raft::log_entry{term_t{1}, index_t{3}, config_from_ids({A, B})}));
+    entries.push_back(seastar::make_lw_shared<const raft::log_entry>(
+            raft::log_entry{term_t{2}, index_t{4},
+                    raft::configuration{config_set({A}), config_set({A, B})}}));
+
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = snap_cfg},
+            std::move(entries));
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), index_t{4});
+    BOOST_CHECK(log.get_configuration().is_joint());
+
+    // A new leader (term 3) overwrites the log from idx 4 with a
+    // non-configuration entry, conflicting on term. This truncates the
+    // uncommitted joint configuration entry.
+    std::vector<log_entry_ptr> overwrite;
+    overwrite.push_back(seastar::make_lw_shared<const raft::log_entry>(
+            raft::log_entry{term_t{3}, index_t{4}, raft::log_entry::dummy{}}));
+    log.maybe_append(std::move(overwrite));
+
+    // The config at idx 3 is the effective one again, and the older config
+    // at idx 1 - not the snapshot config - is the previous one.
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), index_t{3});
+    BOOST_CHECK(!log.get_configuration().is_joint());
+    BOOST_CHECK(log.get_configuration().current == config_from_ids({A, B}).current);
+    BOOST_REQUIRE(log.get_prev_configuration() != nullptr);
+    BOOST_CHECK(log.get_prev_configuration()->current == config_from_ids({A, B, C}).current);
+    BOOST_CHECK(log.last_conf_for(index_t{2}).current == config_from_ids({A, B, C}).current);
+    BOOST_CHECK(log.last_conf_for(index_t{1}).current == config_from_ids({A, B, C}).current);
+}
+
 BOOST_AUTO_TEST_CASE(test_empty_configuration) {
     // When a server is joining an existing cluster, its configuration is empty.
     // The leader sends its configuration over in AppendEntries or
