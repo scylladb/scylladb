@@ -22,6 +22,8 @@ Syntax and semantics
 
 * ``DESCRIBE [FULL] SCHEMA``: describe elements of the non-system schema: keyspaces, tables, views, UDTs, etc.
   When `FULL` is used, it also includes the elements of the system schema, e.g. system tables.
+  If any cluster-scope configuration overrides are stored (see ``ALTER CLUSTER``), the corresponding
+  ``ALTER CLUSTER WITH ...`` statements lead the output, before any keyspace.
 
 * ``DESCRIBE [FULL] SCHEMA WITH INTERNALS``: in addition to the output of the previous tier, the statement
   also describes authentication and authorization, as well as service levels. The statements corresponding to
