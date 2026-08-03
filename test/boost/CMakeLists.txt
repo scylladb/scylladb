@@ -317,10 +317,12 @@ add_scylla_test(vint_serialization_test
      utils)
 add_scylla_test(virtual_table_mutation_source_test
   KIND SEASTAR)
-add_scylla_test(wasm_alloc_test
-  KIND SEASTAR)
-add_scylla_test(wasm_test
-  KIND SEASTAR)
+if(Scylla_BUILD_WASMTIME)
+  add_scylla_test(wasm_alloc_test
+    KIND SEASTAR)
+  add_scylla_test(wasm_test
+    KIND SEASTAR)
+endif()
 add_scylla_test(wrapping_interval_test
   KIND BOOST)
 add_scylla_test(address_map_test

@@ -811,6 +811,10 @@ add_tristate(arg_parser, name='dpdk', dest='dpdk', default=False,
 add_tristate(arg_parser, name='perf-tools', dest='perf_tools', default=True,
                         help='build the perf-* dev subcommands and test/lib into the scylla binary '
                              '(disabling saves ~5%% of full-build CPU; default keeps current behavior)')
+add_tristate(arg_parser, name='wasmtime', dest='wasmtime', default=True,
+                        help='build the wasmtime (WASM UDF) backend into the scylla binary '
+                             '(disabling skips the heaviest Rust dependency and the lang/wasm* '
+                             'sources; default keeps current behavior)')
 arg_parser.add_argument('--dpdk-target', action='store', dest='dpdk_target', default='',
                         help='Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
 arg_parser.add_argument('--debuginfo', action='store', dest='debuginfo', type=int, default=1,
@@ -873,6 +877,15 @@ args = arg_parser.parse_args()
 if args.help:
     arg_parser.print_help()
     arg_parser.exit()
+
+if not args.wasmtime:
+    # Without the wasmtime backend there is nothing to run WASM UDFs (or
+    # their tests, or the .wat test fixtures) with.
+    _wasmtime_tests = {'test/boost/wasm_alloc_test', 'test/boost/wasm_test'}
+    scylla_tests -= _wasmtime_tests
+    tests -= _wasmtime_tests
+    all_artifacts -= _wasmtime_tests | wasms
+    wasms = set()
 
 PROFILES_LIST_FILE_NAME = "coverage_sources.list"
 
@@ -1383,9 +1396,6 @@ scylla_core = (['message/messaging_service.cc',
                 'mutation_writer/feed_writers.cc',
                 'lang/manager.cc',
                 'lang/lua.cc',
-                'lang/wasm.cc',
-                'lang/wasm_alien_thread_runner.cc',
-                'lang/wasm_instance_cache.cc',
                 'service/strong_consistency/groups_manager.cc',
                 'service/strong_consistency/coordinator.cc',
                 'service/strong_consistency/state_machine.cc',
@@ -1404,7 +1414,6 @@ scylla_core = (['message/messaging_service.cc',
                 'service/direct_failure_detector/failure_detector.cc',
                 'service/raft/raft_group0_client.cc',
                 'tasks/task_handler.cc',
-                'rust/wasmtime_bindings/src/lib.rs',
                 'utils/to_string.cc',
                 'reader_concurrency_semaphore_group.cc',
                 'utils/disk_space_monitor.cc',
@@ -1412,7 +1421,11 @@ scylla_core = (['message/messaging_service.cc',
                 'vector_search/client.cc',
                 'vector_search/clients.cc',
                 'vector_search/truststore.cc'
-                ] + [Antlr3Grammar('cql3/Cql.g')] \
+                ] + (['lang/wasm.cc',
+                      'lang/wasm_alien_thread_runner.cc',
+                      'lang/wasm_instance_cache.cc',
+                      'rust/wasmtime_bindings/src/lib.rs'] if args.wasmtime else []) \
+                  + [Antlr3Grammar('cql3/Cql.g')] \
                   + scylla_raft_core
                )
 
@@ -2488,6 +2501,8 @@ def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
 
     if args.perf_tools:
         cxxflags.append('-DSCYLLA_BUILD_PERF_TOOLS')
+    if args.wasmtime:
+        cxxflags.append('-DSCYLLA_BUILD_WASMTIME')
 
     if debuginfo and mode_config['can_have_debug_info']:
         cxxflags += ['-g', '-gz']
@@ -2731,10 +2746,10 @@ def write_build_file(f,
               description = TEST {mode}
             # This rule is unused for PGO stages. They use the rust lib from the parent mode.
             rule rust_lib.{mode}
-              command = CARGO_BUILD_DEP_INFO_BASEDIR='.' CARGO_NET_RETRY=10 {rustc_wrapper}cargo build --locked --jobs={rust_jobs} --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
+              command = CARGO_BUILD_DEP_INFO_BASEDIR='.' CARGO_NET_RETRY=10 {rustc_wrapper}cargo build --locked --jobs={rust_jobs} {rust_features} --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
                         && touch $out
               description = RUST_LIB $out
-            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, rust_jobs=rust_jobs, pch_codegen_flag=pch_codegen_flag, **modeval))
+            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, rust_jobs=rust_jobs, rust_features=('' if args.wasmtime else '--no-default-features'), pch_codegen_flag=pch_codegen_flag, **modeval))
         aws_errors_gen_dir = '$builddir/{}/gen'.format(mode)
         aws_errors_gen_hh = '{}/utils/s3/aws_error_definitions_generated.hh'.format(aws_errors_gen_dir)
         aws_errors_gen_cc = '{}/utils/s3/aws_error_definitions_generated.cc'.format(aws_errors_gen_dir)
@@ -2896,6 +2911,10 @@ def write_build_file(f,
         )
 
         headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])
+        if not args.wasmtime:
+            # The wasm headers need the generated rust/wasmtime_bindings.hh,
+            # which does not exist in this configuration.
+            headers = [hh for hh in headers if not hh.startswith('lang/wasm')]
         f.write(
             'build {mode}-headers: phony {header_objs}\n'.format(
                 mode=mode,
@@ -3361,6 +3380,7 @@ def configure_using_cmake(args):
         'Scylla_WITH_DEBUG_INFO' : 'ON' if args.debuginfo else 'OFF',
         'Scylla_USE_PRECOMPILED_HEADER': 'OFF' if args.disable_precompiled_header else 'ON',
         'Scylla_BUILD_PERF_TOOLS': 'ON' if args.perf_tools else 'OFF',
+        'Scylla_BUILD_WASMTIME': 'ON' if args.wasmtime else 'OFF',
     }
 
     if compiler_cache:

@@ -69,6 +69,12 @@ add_compile_definitions(XXH_PRIVATE_API)
 option(Scylla_BUILD_PERF_TOOLS
   "Build the perf-* dev subcommands and their test/perf harness into the scylla binary"
   ON)
+# Match configure.py's --enable-wasmtime/--disable-wasmtime (default: on).
+# Define is added later, alongside SCYLLA_BUILD_PERF_TOOLS, to avoid leaking
+# into the seastar/abseil subdirectories.
+option(Scylla_BUILD_WASMTIME
+  "Build the wasmtime (WASM UDF) backend into the scylla binary"
+  ON)
 # SEASTAR_TESTING_MAIN is added later (after add_subdirectory(seastar) and
 # add_subdirectory(abseil)) to avoid leaking into the seastar subdirectory.
 # If SEASTAR_TESTING_MAIN is defined globally before seastar, it causes a
@@ -194,6 +200,9 @@ set_target_properties(absl_strerror PROPERTIES EXCLUDE_FROM_ALL TRUE)
 add_compile_definitions(SEASTAR_TESTING_MAIN)
 if(Scylla_BUILD_PERF_TOOLS)
   add_compile_definitions(SCYLLA_BUILD_PERF_TOOLS)
+endif()
+if(Scylla_BUILD_WASMTIME)
+  add_compile_definitions(SCYLLA_BUILD_WASMTIME)
 endif()
 
 # System libraries dependencies
