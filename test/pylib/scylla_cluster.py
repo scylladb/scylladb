@@ -356,6 +356,7 @@ class ScyllaCluster:
                 property_file=property_file,
                 append_env=self.append_env,
             )
+            server._per_server_cmdline_options = list(cmdline or [])
             self.starting[server.server_id] = server
             self.logger.info("Cluster %s adding server...", self)
             if start:
@@ -597,14 +598,23 @@ class ScyllaCluster:
         server = self.running[server_id]
         server.unpause()
 
-    def server_switch_executable(self, server_id: ServerNum, path: str) -> None:
-        """Switch the executable path of a stopped server"""
+    def server_switch_executable(self, server_id: ServerNum, path: str,
+                                  version: Optional[ScyllaVersionDescription] = None) -> None:
+        """Switch the executable path of a stopped server.
+
+        If `version` is given, also recompute the server's cmdline_options for that
+        version, so version-specific argv from the previous version (e.g. a
+        --logger-log-level for a logger unknown to the new executable) doesn't leak
+        into the new one.
+        """
         self.logger.info("Cluster %s upgrading server %s to executable %s", self.name, server_id, path)
         server = self.servers[server_id]
         assert not server.is_running, f"Server {server_id} is running: stop it first and then change its executable"
         self.is_dirty = True
         server.exe = pathlib.Path(path).resolve()
         server.check_scylla_executable()
+        if version is not None:
+            server.switch_version(version, self.cmdline_options, self.cmdline_options_override)
 
     def server_get_process_status(self, server_id: ServerNum) -> str:
         assert server_id in self.running

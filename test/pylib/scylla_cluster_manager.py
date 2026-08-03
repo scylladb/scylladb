@@ -749,12 +749,17 @@ class ScyllaClusterManager:
         self.cluster.update_cmdline(server_id, cmdline_options)
 
     @manager_op(blockable=True)
-    async def server_switch_executable(self, server_id: ServerNum, path: str) -> None:
+    async def server_switch_executable(self, server_id: ServerNum, path: str,
+                                       version: ScyllaVersionDescription | None = None) -> None:
         """Switch the executable of the server to the one specified by 'path'.
 
         Marks the cluster as dirty.
+
+        If `version` is given, also recompute the server's cmdline_options for that
+        version, so version-specific argv from the previous version doesn't leak
+        into the new one.
         """
-        self.cluster.server_switch_executable(server_id, path)
+        self.cluster.server_switch_executable(server_id, path, version)
 
     @manager_op(blockable=True)
     async def server_change_ip(self, server_id: ServerNum) -> IPAddress:
@@ -1215,11 +1220,18 @@ class ScyllaClusterManager:
         if wait_for_cql:
             await wait_for_cql_and_get_hosts(self.get_cql(), servers_running, time() + 60)
 
-    async def server_change_version(self, server_id: ServerNum, exe: str) -> None:
-        """Upgrade a running Scylla node by switching it to a new binary version specified by the 'exe' parameter."""
+    async def server_change_version(self, server_id: ServerNum, exe: str,
+                                     version: ScyllaVersionDescription | None = None) -> None:
+        """Upgrade a running Scylla node by switching it to a new binary version specified by the 'exe' parameter.
+
+        If `version` is given, it is forwarded to server_switch_executable() so the
+        server's cmdline_options are recomputed for that version, rather than carrying
+        over version-specific argv from whatever version the server was previously
+        running (see server_switch_executable's docstring).
+        """
 
         await self.server_stop_gracefully(server_id)
-        await self.server_switch_executable(server_id, exe)
+        await self.server_switch_executable(server_id, exe, version)
         await self.server_start(server_id)
 
     async def _get_ignored_ip_addresses(self, ignore_dead: list[IPAddress | HostID]) -> list[IPAddress]:
