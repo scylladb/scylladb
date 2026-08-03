@@ -297,7 +297,10 @@ void lz4_cstream::set_dict(const LZ4_stream_t* dict) {
 }
 
 lz4_dstream::lz4_dstream(size_t window_size)
-    : _buf(window_size)
+    // The ring buffer has to be bigger than the compressor's by at least the maximum
+    // block size. See the comment on `_buf`.
+    : _buf(window_size + window_size)
+    , _max_block_size(window_size)
 {
     reset();
 }
@@ -312,8 +315,14 @@ void lz4_dstream::decompress(ZSTD_outBuffer* out, ZSTD_inBuffer* in, bool end_of
         // If we have no decompressed data that wasn't yet output,
         // we will decompress a new block.
 
-        if (_buf_end == _buf.size()) {
-            // The ring buffer wraps around here.
+        if (_buf.size() - _buf_end < _max_block_size) {
+            // There might not be enough contiguous space for the next block,
+            // so the ring buffer wraps around here.
+            //
+            // This is the update rule mandated by LZ4 (see the comment of
+            // LZ4_decoderRingBufferSize() in lz4.h), and the third scheme in the comment of
+            // LZ4_decompress_safe_continue() assumes it. In particular, we mustn't wrap
+            // any later than this, even though there might still be some space left.
             _buf_end = _buf_beg = 0;
         }
         // First, we have to ingest the first few bytes of input data, which contain
