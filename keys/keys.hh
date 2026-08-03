@@ -540,12 +540,12 @@ public:
         return legacy_tri_compare(s, o) == 0;
     }
 
+    // A trichotomic comparator which orders keys according to their ordering on the ring.
+    std::strong_ordering ring_order_tri_compare(const schema& s, partition_key_view o) const;
+
     void validate(const schema& s) const {
         return s.partition_key_type()->validate(representation());
     }
-
-    // A trichotomic comparator which orders keys according to their ordering on the ring.
-    std::strong_ordering ring_order_tri_compare(const schema& s, partition_key_view o) const;
 };
 
 template <>
@@ -634,6 +634,11 @@ public:
     // Checks if keys are equal in a way which is compatible with Origin.
     bool legacy_equal(const schema& s, const partition_key& o) const {
         return view().legacy_equal(s, o);
+    }
+
+    // A trichotomic comparator which orders keys according to their ordering on the ring.
+    std::strong_ordering ring_order_tri_compare(const schema& s, const partition_key& o) const {
+        return view().ring_order_tri_compare(s, o.view());
     }
 
     void validate(const schema& s) const {
