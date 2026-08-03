@@ -1130,7 +1130,7 @@ std::ostream& schema::schema_properties(const schema_describe_helper& helper, st
     map_as_cql_param(os, caching_options().to_map());
     os << "}";
     os << "\n    AND comment = " << cql3::util::single_quote(comment());
-    os << "\n    AND compaction = {'class': '" <<  sstables::compaction_strategy::name(compaction_strategy()) << "'";
+    os << "\n    AND compaction = {'class': '" <<  sstables::compaction_strategy::name(configured_compaction_strategy()) << "'";
     map_as_cql_param(os, compaction_strategy_options(), false) << "}";
     os << "\n    AND compression = {";
     map_as_cql_param(os,  get_compressor_params().get_options());
