@@ -9,6 +9,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <set>
 
 #include "cdc/cdc_options.hh"
 #include "cdc/log.hh"
@@ -29,6 +30,7 @@
 #include "cql3/cql_statement.hh"
 #include "cql3/statements/raw/describe_statement.hh"
 #include "cql3/statements/describe_statement.hh"
+#include "cql3/statements/cluster_config_read.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <sstream>
 #include "transport/messages/result_message.hh"
@@ -49,6 +51,9 @@
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/user_aggregate.hh"
 #include "utils/overloaded_functor.hh"
+#include "db/config.hh"
+#include "db/cluster_config_registry.hh"
+#include "db/schema_tables.hh"
 #include "db/system_keyspace.hh"
 #include "db/extensions.hh"
 #include "utils/chunked_vector.hh"
@@ -70,6 +75,24 @@ namespace cql3 {
 namespace statements {
 
 namespace {
+
+// Collects the registry options visible at `s` scope, so DESCRIBE keeps emitting the full set
+// as the registry grows instead of naming one option. Options above the cluster's registry
+// version are excluded, mirroring the write side: what ALTER refuses to store, DESCRIBE does
+// not describe. With no version (feature not enabled) no option is visible.
+std::vector<std::string_view> config_option_names_for_scope(db::cluster_config_registry::scope s,
+        std::optional<db::cluster_config_registry::version> current_version) {
+    std::vector<std::string_view> names;
+    if (!current_version) {
+        return names;
+    }
+    for (const auto& opt : db::cluster_config_registry::options()) {
+        if (opt.min_version <= *current_version && db::cluster_config_registry::supports_scope(opt, s)) {
+            names.push_back(opt.name);
+        }
+    }
+    return names;
+}
 
 template <typename Range, typename Describer>
     requires std::is_invocable_r_v<description, Describer, std::ranges::range_value_t<Range>>
@@ -103,6 +126,363 @@ utils::chunked_vector<description> wrap_in_vector(description desc) {
 
 bool is_index(const data_dictionary::database& db, const schema_ptr& schema) {
     return db.find_column_family(schema->view_info()->base_id()).get_index_manager().is_index(*schema);
+}
+
+future<std::map<sstring, sstring>> table_config_options(query_processor& qp, const sstring& ks, const sstring& table) {
+    return read_configs_column(qp,
+            format("SELECT configs FROM system_schema.{} WHERE keyspace_name = ? AND table_name = ?", db::schema_tables::SCYLLA_TABLES),
+            {ks, table});
+}
+
+future<std::map<sstring, sstring>> keyspace_config_options(query_processor& qp, const sstring& ks) {
+    return read_configs_column(qp,
+            format("SELECT configs FROM system_schema.{} WHERE keyspace_name = ?", db::schema_tables::SCYLLA_KEYSPACES),
+            {ks});
+}
+
+future<std::map<sstring, sstring>> cluster_config_options(query_processor& qp) {
+    return read_configs_column(qp,
+            format("SELECT configs FROM system_schema.{} WHERE cluster_name = ?", db::schema_tables::SCYLLA_CLUSTERS),
+            {sstring(db::schema_tables::CLUSTER_CONFIG_SINGLETON_KEY)});
+}
+
+std::optional<sstring> get_config_option(const std::map<sstring, sstring>& configs, std::string_view config_name) {
+    if (auto it = configs.find(sstring(config_name)); it != configs.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
+// Memoizes the config-table rows read during one DESCRIBE execution. The per-option loops
+// below would otherwise re-read the same cluster/keyspace/table configs row once per option
+// per described object — over a schema dump of K keyspaces, N tables and M options that is
+// 3*M*N + 2*M*K internal queries for three distinct rows per table. Each row is read at most
+// once per execution, which also makes one DESCRIBE internally consistent: every object is
+// annotated against the same config state. Reads are lazy, so a DESCRIBE that emits no
+// config options issues no queries. The accessors return a reference into the snapshot,
+// valid for the snapshot's lifetime (map nodes are stable across later inserts).
+class config_snapshot {
+    query_processor& _qp;
+    std::optional<std::map<sstring, sstring>> _cluster;
+    std::map<sstring, std::map<sstring, sstring>> _keyspaces;
+    std::map<std::pair<sstring, sstring>, std::map<sstring, sstring>> _tables;
+public:
+    explicit config_snapshot(query_processor& qp) : _qp(qp) {}
+
+    future<std::reference_wrapper<const std::map<sstring, sstring>>> cluster() {
+        if (!_cluster) {
+            _cluster = co_await cluster_config_options(_qp);
+        }
+        co_return std::cref(*_cluster);
+    }
+
+    future<std::reference_wrapper<const std::map<sstring, sstring>>> keyspace(const sstring& ks) {
+        auto it = _keyspaces.find(ks);
+        if (it == _keyspaces.end()) {
+            auto configs = co_await keyspace_config_options(_qp, ks);
+            it = _keyspaces.emplace(ks, std::move(configs)).first;
+        }
+        co_return std::cref(it->second);
+    }
+
+    future<std::reference_wrapper<const std::map<sstring, sstring>>> table(const sstring& ks, const sstring& table) {
+        auto key = std::pair(ks, table);
+        auto it = _tables.find(key);
+        if (it == _tables.end()) {
+            auto configs = co_await table_config_options(_qp, ks, table);
+            it = _tables.emplace(std::move(key), std::move(configs)).first;
+        }
+        co_return std::cref(it->second);
+    }
+};
+
+// A scope in a table-oriented option's resolution chain, used to annotate
+// DESCRIBE output with the value's provenance.
+enum class config_origin {
+    cluster,
+    keyspace,
+    table,
+};
+
+std::string_view config_origin_name(config_origin origin) {
+    switch (origin) {
+    case config_origin::cluster:  return "cluster";
+    case config_origin::keyspace: return "keyspace";
+    case config_origin::table:    return "table";
+    }
+    return "unknown";
+}
+
+// One scope in an option's domain chain together with the override stored at
+// exactly that scope (std::nullopt when no override is stored there).
+struct config_scope_value {
+    config_origin scope;
+    std::optional<sstring> stored;
+};
+
+// Render a config value as it must appear on the right-hand side of a CQL
+// property assignment. Numeric and boolean options are bare tokens; a text
+// option must be a single-quoted CQL string literal (with embedded quotes
+// doubled), otherwise replaying the DESCRIBE output fails to parse. The option
+// is guaranteed to be registered here since the value came from the registry
+// scope iteration; default to quoting if it somehow is not.
+sstring format_config_option_value(std::string_view name, const sstring& value) {
+    const auto* opt = db::cluster_config_registry::find(name);
+    if (opt && opt->type != db::cluster_config_registry::value_type::text) {
+        return value;
+    }
+    std::string escaped;
+    for (char c : value) {
+        if (c == '\'') {
+            escaped += "''";
+        } else {
+            escaped += c;
+        }
+    }
+    return format("'{}'", escaped);
+}
+
+// The provenance of one option: the formatted effective value together with the inline
+// comment trailer that annotates the emitted property line:
+// "from <scope> (<scope>=<value|NULL>, ...)". The chain lists every scope in the option's
+// domain chain visible at the described scope, most specific first, unconditionally; each
+// entry shows the override stored at exactly that scope, or NULL. The effective value is
+// the resolution of exactly the printed chain (the leftmost non-NULL entry) and the scope
+// after "from" names where it comes from, so the two can never disagree. Values are
+// rendered as CQL literals (text quoted) so the effective value can sit on the right-hand
+// side of a property assignment. The trailer contains neither ';' nor a newline, so
+// appending it after "-- " keeps the whole tail one valid inline comment, both before and
+// after a user uncomments the property it annotates; the newline half of that holds
+// because cluster_config_registry::validate_value() rejects a line break (and "*/", which
+// would end the block comment a described CDC log or paxos table is wrapped in) in a text
+// value. All-NULL chains never reach this function (such options emit nothing).
+struct config_provenance {
+    sstring effective;
+    sstring trailer;
+};
+
+config_provenance format_config_provenance(std::string_view config_name, const std::vector<config_scope_value>& chain) {
+    std::optional<sstring> effective;
+    std::string_view source_scope = "unknown";
+    for (const auto& entry : chain) {
+        if (entry.stored) {
+            effective = format_config_option_value(config_name, *entry.stored);
+            source_scope = config_origin_name(entry.scope);
+            break;
+        }
+    }
+    sstring trailer = "from ";
+    trailer += sstring(source_scope);
+    trailer += " (";
+    bool first = true;
+    for (const auto& entry : chain) {
+        if (!std::exchange(first, false)) {
+            trailer += ", ";
+        }
+        trailer += sstring(config_origin_name(entry.scope));
+        trailer += "=";
+        trailer += entry.stored ? format_config_option_value(config_name, *entry.stored) : sstring("NULL");
+    }
+    trailer += ")";
+    return {effective.value_or(sstring("NULL")), std::move(trailer)};
+}
+
+// One described option: the override stored at the described object's own scope (absent
+// when nothing is stored there: the plain tier then emits the option as a commented-out
+// property, and WITH INTERNALS emits nothing), the effective value, and the provenance
+// trailer.
+struct described_config_option {
+    std::string_view name;
+    std::optional<sstring> stored;
+    sstring effective;
+    sstring provenance;
+};
+
+// Returns nullopt when no scope in the chain stores a value: such an option produces
+// no output at all and resolves to its registry default.
+std::optional<described_config_option> make_described_config_option(std::string_view config_name, const std::vector<config_scope_value>& chain) {
+    for (const auto& entry : chain) {
+        if (entry.stored) {
+            auto provenance = format_config_provenance(config_name, chain);
+            return described_config_option{config_name, chain.front().stored, std::move(provenance.effective), std::move(provenance.trailer)};
+        }
+    }
+    return std::nullopt;
+}
+
+future<std::optional<described_config_option>> described_keyspace_config_option(config_snapshot& snapshot, const sstring& ks, std::string_view config_name) {
+    const auto& keyspace_configs = (co_await snapshot.keyspace(ks)).get();
+    const auto& cluster_configs = (co_await snapshot.cluster()).get();
+
+    std::vector<config_scope_value> chain{
+        {config_origin::keyspace, get_config_option(keyspace_configs, config_name)},
+        {config_origin::cluster, get_config_option(cluster_configs, config_name)},
+    };
+    co_return make_described_config_option(config_name, chain);
+}
+
+future<std::optional<described_config_option>> described_table_config_option(config_snapshot& snapshot, const sstring& ks, const sstring& table, std::string_view config_name) {
+    const auto& table_configs = (co_await snapshot.table(ks, table)).get();
+    const auto& keyspace_configs = (co_await snapshot.keyspace(ks)).get();
+    const auto& cluster_configs = (co_await snapshot.cluster()).get();
+
+    std::vector<config_scope_value> chain{
+        {config_origin::table, get_config_option(table_configs, config_name)},
+        {config_origin::keyspace, get_config_option(keyspace_configs, config_name)},
+        {config_origin::cluster, get_config_option(cluster_configs, config_name)},
+    };
+    co_return make_described_config_option(config_name, chain);
+}
+
+void append_create_statement_options(description& desc, const std::vector<described_config_option>& options, bool with_comments) {
+    if (!desc.create_statement || options.empty()) {
+        return;
+    }
+
+    auto create_statement = desc.create_statement->linearize();
+    while (!create_statement.empty() && std::isspace(static_cast<unsigned char>(create_statement.back()))) {
+        create_statement.resize(create_statement.size() - 1);
+    }
+    if (with_comments) {
+        // Plain tier: one property line per option, in WITH-clause position. An option
+        // stored at the described object's own scope is a live property; an inherited one
+        // is the same property commented out ("-- AND <option> = <effective>"). Folding an
+        // inherited value into a live property instead would, on replay, invent an
+        // override at this scope and detach the object from later broader-scope changes;
+        // the commented form keeps replay-as-is inheritance-preserving, while erasing just
+        // the leading comment marker pins the currently effective value here as a
+        // deliberate one-keystroke edit. Every line carries a trailing inline comment with
+        // the value's provenance; it stays a valid comment after uncommenting. The
+        // terminating ';' moves to its own line: the COMMENT lexer token requires a
+        // newline terminator (Cql.g), so a trailing comment at the very end of the
+        // statement would make it fail to parse as a single request.
+        if (!create_statement.empty() && create_statement.back() == ';') {
+            create_statement.resize(create_statement.size() - 1);
+        }
+        for (const auto& option : options) {
+            create_statement += option.stored ? "\n    AND " : "\n    -- AND ";
+            create_statement += sstring(option.name);
+            create_statement += " = ";
+            create_statement += option.effective;
+            create_statement += "  -- ";
+            create_statement += option.provenance;
+        }
+        create_statement += "\n;";
+    } else {
+        // WITH INTERNALS stays pure replayable CQL: only overrides stored at the described
+        // object's own scope appear, with no comment lines, so replaying a full dump
+        // reproduces the stored configs maps at every scope exactly.
+        const bool has_stored = std::ranges::any_of(options, [] (const described_config_option& option) { return bool(option.stored); });
+        if (has_stored) {
+            if (!create_statement.empty() && create_statement.back() == ';') {
+                create_statement.resize(create_statement.size() - 1);
+            }
+            const auto separator = create_statement.contains('\n') ? sstring("\n    AND ") : sstring(" AND ");
+            for (const auto& option : options) {
+                if (!option.stored) {
+                    continue;
+                }
+                create_statement += separator;
+                create_statement += sstring(option.name);
+                create_statement += " = ";
+                create_statement += format_config_option_value(option.name, *option.stored);
+            }
+            create_statement += sstring(";");
+        }
+    }
+    desc.create_statement = managed_string(create_statement);
+}
+
+// One scope of a scope object's resolution chain together with the full stored `configs`
+// map at that scope. The first entry of a chain is the described scope itself.
+struct scope_chain_entry {
+    config_origin scope;
+    const std::map<sstring, sstring>& configs;
+};
+
+// Builds the create_statement for a scope object (cluster, datacenter, rack, or node):
+// one `<alter_target> WITH <option> = <value>;` line per option, since these scopes have
+// no CREATE form. In the plain tier an option stored at the described scope itself is a
+// live statement, and an option only inherited from a broader scope is the same statement
+// commented out, so erasing the leading comment marker pins the effective value here;
+// every line carries a trailing "-- from <scope> (<chain>)" provenance comment, and the
+// output keeps its final newline because the COMMENT lexer token requires a newline
+// terminator (Cql.g). Live statements come from the stored map, not the registry listing,
+// so a dump reproduces stored state faithfully even for options this node's registry does
+// not know. Inherited (commented) lines appear only for options that support
+// `described_scope`: the shared cluster map also holds table-oriented options, and those
+// do not resolve through the node-oriented chain, so annotating them here would be
+// misleading. An option unknown to this node's registry gets a line only if it is stored
+// at the described scope itself (its scope mask cannot be checked, but its presence
+// proves a registry that knew it accepted it here). WITH INTERNALS output stays pure
+// replayable CQL: stored options only, no comments. Returns an empty string when there is
+// nothing to say.
+managed_string make_scope_create_statement(const sstring& alter_target, db::cluster_config_registry::scope described_scope,
+        const std::vector<scope_chain_entry>& chain, bool with_comments) {
+    std::string result;
+    if (with_comments) {
+        std::set<sstring> option_names;
+        for (const auto& [option_name, value] : chain.front().configs) {
+            option_names.insert(option_name);
+        }
+        for (const auto& entry : chain) {
+            for (const auto& [option_name, value] : entry.configs) {
+                const auto* opt = db::cluster_config_registry::find(option_name);
+                if (opt && db::cluster_config_registry::supports_scope(*opt, described_scope)) {
+                    option_names.insert(option_name);
+                }
+            }
+        }
+        for (const auto& option_name : option_names) {
+            std::vector<config_scope_value> values;
+            for (const auto& entry : chain) {
+                values.push_back({entry.scope, get_config_option(entry.configs, option_name)});
+            }
+            auto provenance = format_config_provenance(option_name, values);
+            if (!values.front().stored) {
+                result += "-- ";
+            }
+            result += alter_target;
+            result += " WITH ";
+            result += option_name;
+            result += " = ";
+            result += provenance.effective;
+            result += ";  -- ";
+            result += provenance.trailer;
+            result += "\n";
+        }
+    } else {
+        for (const auto& [option_name, value] : chain.front().configs) {
+            result += alter_target;
+            result += " WITH ";
+            result += option_name;
+            result += " = ";
+            result += format_config_option_value(option_name, value);
+            result += ";\n";
+        }
+        if (!result.empty() && result.back() == '\n') {
+            result.resize(result.size() - 1);
+        }
+    }
+    return managed_string(result);
+}
+
+future<description> keyspace_description(config_snapshot& snapshot, const lw_shared_ptr<keyspace_metadata>& ks_meta, const replica::database& db, with_create_statement with_stmt, bool with_internals) {
+    auto desc = ks_meta->describe(db, with_stmt);
+    if (!with_stmt || !desc.create_statement) {
+        co_return desc;
+    }
+
+    std::vector<described_config_option> options;
+    auto version = db::cluster_config_registry::current_version(db.features());
+    for (const auto& config_name : config_option_names_for_scope(db::cluster_config_registry::scope::keyspace, version)) {
+        if (auto described = co_await described_keyspace_config_option(snapshot, ks_meta->name(), config_name)) {
+            options.push_back(std::move(*described));
+        }
+    }
+
+    append_create_statement_options(desc, options, !with_internals);
+    co_return desc;
 }
 
 /**
@@ -299,13 +679,13 @@ std::optional<description> describe_cdc_log_table(const data_dictionary::databas
     return schema_desc;
 }
 
-future<utils::chunked_vector<description>> table(const data_dictionary::database& db, const sstring& ks, const sstring& name, bool with_internals) {
-    auto table = db.try_find_table(ks, name);
+future<utils::chunked_vector<description>> table(config_snapshot& snapshot, const data_dictionary::database& db, const lw_shared_ptr<keyspace_metadata>& ks_meta, const sstring& name, bool with_internals) {
+    auto table = db.try_find_table(ks_meta->name(), name);
     if (!table) {
-        throw exceptions::invalid_request_exception(format("Table '{}' not found in keyspace '{}'", name, ks));
+        throw exceptions::invalid_request_exception(format("Table '{}' not found in keyspace '{}'", name, ks_meta->name()));
     }
     
-    auto s = validation::validate_column_family(db, ks, name);
+    auto s = validation::validate_column_family(db, ks_meta->name(), name);
     if (s->is_view()) { 
         throw exceptions::invalid_request_exception("Cannot use DESC TABLE on materialized View. (Did you mean DESC MATERIALIZED VIEW)?");
     }
@@ -316,8 +696,19 @@ future<utils::chunked_vector<description>> table(const data_dictionary::database
     utils::chunked_vector<description> result;
 
     // table
-    auto table_desc = schema->describe(replica::make_schema_describe_helper(schema, db), with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
-    if (cdc::is_log_for_some_table(db.real_database(), ks, name)) {
+    auto describe_helper = replica::make_schema_describe_helper(schema, db);
+    auto table_desc = schema->describe(describe_helper, with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
+    std::vector<described_config_option> table_config_options;
+    auto version = db::cluster_config_registry::current_version(db.features());
+    for (const auto& config_name : config_option_names_for_scope(db::cluster_config_registry::scope::table, version)) {
+        if (auto described = co_await described_table_config_option(snapshot, ks_meta->name(), name, config_name)) {
+            table_config_options.push_back(std::move(*described));
+        }
+    }
+    if (!table_config_options.empty()) {
+        append_create_statement_options(table_desc, table_config_options, !with_internals);
+    }
+    if (cdc::is_log_for_some_table(db.real_database(), ks_meta->name(), name)) {
         // If the table the user wants to describe is a CDC log table, we want to print it as a CQL comment.
         // This way, the user learns about the internals of the table, but they're also told not to execute it.
         fragmented_ostringstream os{};
@@ -352,7 +743,7 @@ future<utils::chunked_vector<description>> table(const data_dictionary::database
         return a.metadata().name();
     });
     for (const auto& idx: idxs) {
-        result.push_back(index(db, ks, idx.metadata().name(), with_internals));
+        result.push_back(index(db, ks_meta->name(), idx.metadata().name(), with_internals));
         co_await coroutine::maybe_yield();
     }
 
@@ -360,13 +751,13 @@ future<utils::chunked_vector<description>> table(const data_dictionary::database
     std::ranges::sort(views, std::ranges::less(), std::mem_fn(&schema::cf_name));
     for (const auto& v: views) {
         if(!is_index(db, v)) {
-            result.push_back(view(db, ks, v->cf_name(), with_internals));
+            result.push_back(view(db, ks_meta->name(), v->cf_name(), with_internals));
         }
         co_await coroutine::maybe_yield();
     }
 
     if (cdc::cdc_enabled(*schema)) {
-        auto cdc_log_alter = describe_cdc_log_table(db, ks, name);
+        auto cdc_log_alter = describe_cdc_log_table(db, ks_meta->name(), name);
         if (cdc_log_alter) {
             result.push_back(std::move(*cdc_log_alter));
         }
@@ -375,7 +766,7 @@ future<utils::chunked_vector<description>> table(const data_dictionary::database
     co_return result;
 }
 
-future<utils::chunked_vector<description>> tables(const data_dictionary::database& db, const lw_shared_ptr<keyspace_metadata>& ks, std::optional<bool> with_internals = std::nullopt) {
+future<utils::chunked_vector<description>> tables(config_snapshot& snapshot, const data_dictionary::database& db, const lw_shared_ptr<keyspace_metadata>& ks, std::optional<bool> with_internals = std::nullopt) {
     auto& replica_db = db.real_database();
     auto tables = ks->tables() | std::views::filter([&replica_db] (const schema_ptr& s) {
         return !cdc::is_log_for_some_table(replica_db, s->ks_name(), s->cf_name()) && !service::paxos::paxos_store::try_get_base_table(s->cf_name());
@@ -385,7 +776,7 @@ future<utils::chunked_vector<description>> tables(const data_dictionary::databas
     if (with_internals) {
         utils::chunked_vector<description> result;
         for (const auto& t: tables) {
-            auto tables_desc = co_await table(db, ks->name(), t->cf_name(), *with_internals);
+            auto tables_desc = co_await table(snapshot, db, ks, t->cf_name(), *with_internals);
             result.insert(result.end(), std::make_move_iterator(tables_desc.begin()), std::make_move_iterator(tables_desc.end()));
             co_await coroutine::maybe_yield();
         }
@@ -423,7 +814,7 @@ lw_shared_ptr<keyspace_metadata> get_keyspace_metadata(const data_dictionary::da
             Descriptions don't contain create_statements.
  *  @throw `invalid_request_exception` if there is no such keyspace
  */
-future<utils::chunked_vector<description>> list_elements(const data_dictionary::database& db, const sstring& ks, element_type element) {
+future<utils::chunked_vector<description>> list_elements(config_snapshot& snapshot, const data_dictionary::database& db, const sstring& ks, element_type element) {
     auto ks_meta = get_keyspace_metadata(db, ks);
     auto& replica_db = db.real_database();
 
@@ -431,8 +822,8 @@ future<utils::chunked_vector<description>> list_elements(const data_dictionary::
     case element_type::type:         co_return co_await types(replica_db, ks_meta, with_create_statement::no);
     case element_type::function:     co_return co_await functions(replica_db, ks, with_create_statement::no);
     case element_type::aggregate:    co_return co_await aggregates(replica_db, ks, with_create_statement::no);
-    case element_type::table:        co_return co_await tables(db, ks_meta);
-    case element_type::keyspace:     co_return wrap_in_vector(ks_meta->describe(replica_db, with_create_statement::no));
+    case element_type::table:        co_return co_await tables(snapshot, db, ks_meta);
+    case element_type::keyspace:     co_return wrap_in_vector(co_await keyspace_description(snapshot, ks_meta, replica_db, with_create_statement::no, false));
     case element_type::view:
     case element_type::index:
         on_internal_error(dlogger, "listing of views and indexes is unsupported");
@@ -447,7 +838,7 @@ future<utils::chunked_vector<description>> list_elements(const data_dictionary::
             Description contains create_statement.
  *  @throw `invalid_request_exception` if there is no such keyspace or there is no element with given name
  */
-future<utils::chunked_vector<description>> describe_element(const data_dictionary::database& db, const sstring& ks, element_type element, const sstring& name, bool with_internals) {
+future<utils::chunked_vector<description>> describe_element(config_snapshot& snapshot, const data_dictionary::database& db, const sstring& ks, element_type element, const sstring& name, bool with_internals) {
     auto ks_meta = get_keyspace_metadata(db, ks);
     auto& replica_db = db.real_database();
 
@@ -455,10 +846,10 @@ future<utils::chunked_vector<description>> describe_element(const data_dictionar
     case element_type::type:             co_return wrap_in_vector(type(replica_db, ks_meta, name));
     case element_type::function:         co_return co_await function(replica_db, ks, name);
     case element_type::aggregate:        co_return co_await aggregate(replica_db, ks, name);
-    case element_type::table:            co_return co_await table(db, ks, name, with_internals);
+    case element_type::table:            co_return co_await table(snapshot, db, ks_meta, name, with_internals);
     case element_type::index:            co_return wrap_in_vector(index(db, ks, name, with_internals));
     case element_type::view:             co_return wrap_in_vector(view(db, ks, name, with_internals));
-    case element_type::keyspace:         co_return wrap_in_vector(ks_meta->describe(replica_db, with_create_statement::yes));
+    case element_type::keyspace:         co_return wrap_in_vector(co_await keyspace_description(snapshot, ks_meta, replica_db, with_create_statement::yes, with_internals));
     }
 }
 
@@ -471,7 +862,7 @@ future<utils::chunked_vector<description>> describe_element(const data_dictionar
             Descriptions contain create_statements.
  *  @throw `invalid_request_exception` if there is no such keyspace or there is no element with given name
  */
-future<utils::chunked_vector<description>> describe_all_keyspace_elements(const data_dictionary::database& db, const sstring& ks, bool with_internals) {
+future<utils::chunked_vector<description>> describe_all_keyspace_elements(config_snapshot& snapshot, const data_dictionary::database& db, const sstring& ks, bool with_internals) {
     auto ks_meta = get_keyspace_metadata(db, ks);
     auto& replica_db = db.real_database();
     utils::chunked_vector<description> result;
@@ -480,11 +871,11 @@ future<utils::chunked_vector<description>> describe_all_keyspace_elements(const 
         result.insert(result.end(), std::make_move_iterator(elements.begin()), std::make_move_iterator(elements.end()));
     };
 
-    result.push_back(ks_meta->describe(replica_db, with_create_statement::yes));
+    result.push_back(co_await keyspace_description(snapshot, ks_meta, replica_db, with_create_statement::yes, with_internals));
     inserter(co_await types(replica_db, ks_meta, with_create_statement::yes));
     inserter(co_await functions(replica_db, ks, with_create_statement::yes));
     inserter(co_await aggregates(replica_db, ks, with_create_statement::yes));
-    inserter(co_await tables(db, ks_meta, with_internals));
+    inserter(co_await tables(snapshot, db, ks_meta, with_internals));
 
     co_return result; 
 }
@@ -650,6 +1041,9 @@ std::vector<lw_shared_ptr<column_specification>> schema_describe_statement::get_
 
 future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
     auto db = qp.db();
+    // One config snapshot per DESCRIBE execution: every described object is annotated
+    // against the same config state, read at most once per config-tables row.
+    config_snapshot snapshot(qp);
 
     auto result = co_await std::visit(overloaded_functor{
         [&] (const schema_desc& config) -> future<utils::chunked_vector<description>> {
@@ -665,11 +1059,27 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
             auto keyspaces = config.full_schema ? db.get_all_keyspaces() : db.get_user_keyspaces();
             utils::chunked_vector<description> schema_result;
 
+            // Cluster-scope config leads the dump, before any keyspace and in all tiers:
+            // it is portable operator state that lower scopes inherit from, and emitting it
+            // only under INTERNALS would make the default dump silently lossy.
+            if (db::cluster_config_registry::current_version(db.features())) {
+                const auto& cluster_configs = (co_await snapshot.cluster()).get();
+                if (!cluster_configs.empty()) {
+                    std::vector<scope_chain_entry> chain{{config_origin::cluster, cluster_configs}};
+                    description cluster_desc;
+                    cluster_desc.keyspace = std::nullopt;
+                    cluster_desc.type = "cluster_config";
+                    cluster_desc.name = "cluster";
+                    cluster_desc.create_statement = make_scope_create_statement("ALTER CLUSTER", db::cluster_config_registry::scope::cluster, chain, !_with_internals);
+                    schema_result.push_back(std::move(cluster_desc));
+                }
+            }
+
             for (auto&& ks: keyspaces) {
                 if (!config.full_schema && db.extensions().is_extension_internal_keyspace(ks)) {
                     continue;
                 }
-                auto ks_result = co_await describe_all_keyspace_elements(db, ks, _with_internals);
+                auto ks_result = co_await describe_all_keyspace_elements(snapshot, db, ks, _with_internals);
                 schema_result.insert(schema_result.end(), std::make_move_iterator(ks_result.begin()), std::make_move_iterator(ks_result.end()));
             }
 
@@ -695,11 +1105,11 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
 
             if (config.only_keyspace) {
                 auto ks_meta = get_keyspace_metadata(db, ks);
-                auto ks_desc = ks_meta->describe(db.real_database(), with_create_statement::yes);
+                auto ks_desc = co_await keyspace_description(snapshot, ks_meta, db.real_database(), with_create_statement::yes, _with_internals);
 
                 co_return wrap_in_vector(std::move(ks_desc));
             } else {
-                co_return co_await describe_all_keyspace_elements(db, ks, _with_internals);
+                co_return co_await describe_all_keyspace_elements(snapshot, db, ks, _with_internals);
             }
         }
     }, _config);
@@ -732,8 +1142,9 @@ future<std::vector<std::vector<managed_bytes_opt>>> listing_describe_statement::
     }
 
     utils::chunked_vector<description> result;
+    config_snapshot snapshot(qp);
     for (auto&& ks: keyspaces) {
-        auto ks_result = co_await list_elements(db, ks, _element);
+        auto ks_result = co_await list_elements(snapshot, db, ks, _element);
         result.insert(result.end(), std::make_move_iterator(ks_result.begin()), std::make_move_iterator(ks_result.end()));
         co_await coroutine::maybe_yield();
     }
@@ -762,7 +1173,8 @@ future<std::vector<std::vector<managed_bytes_opt>>> element_describe_statement::
         throw exceptions::invalid_request_exception("No keyspace specified and no current keyspace");
     }
     
-    co_return serialize_descriptions(co_await describe_element(qp.db(), ks, _element, _name, _with_internals));
+    config_snapshot snapshot(qp);
+    co_return serialize_descriptions(co_await describe_element(snapshot, qp.db(), ks, _element, _name, _with_internals));
 }
 
 //GENERIC DESCRIBE STATEMENT
@@ -781,12 +1193,13 @@ future<std::vector<std::vector<managed_bytes_opt>>> generic_describe_statement::
     auto& replica_db = db.real_database();
     auto raw_ks = client_state.get_raw_keyspace();
     auto ks_name = (_keyspace) ? *_keyspace : raw_ks;
+    config_snapshot snapshot(qp);
 
     if (!_keyspace) {
         auto ks = db.try_find_keyspace(_name);
 
         if (ks) {
-            co_return serialize_descriptions(co_await describe_all_keyspace_elements(db, ks->metadata()->name(), _with_internals));
+            co_return serialize_descriptions(co_await describe_all_keyspace_elements(snapshot, db, ks->metadata()->name(), _with_internals));
         } else if (raw_ks.empty()) {
             throw exceptions::invalid_request_exception(format("'{}' not found in keyspaces", _name));
         }
@@ -803,7 +1216,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> generic_describe_statement::
         if (tbl->schema()->is_view()) {
             co_return serialize_descriptions(wrap_in_vector(view(db, ks_name, _name, _with_internals)));
         } else {
-            co_return serialize_descriptions(co_await table(db, ks_name, _name, _with_internals));
+            co_return serialize_descriptions(co_await table(snapshot, db, ks_meta, _name, _with_internals));
         }
     }
 
