@@ -1485,7 +1485,7 @@ async def test_drop_keyspace_during_tablet_restore(manager: ManagerClient, objec
     The fix acquires a stream_in_progress() phaser guard before downloading,
     which makes table::stop() block until the download completes.
     """
-    topology = topo(rf=2, nodes=2, racks=1, dcs=1)
+    topology = topo(rf=2, nodes=2, racks=2, dcs=1)
     servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
     await manager.disable_tablet_balancing()
     cql = manager.get_cql()
