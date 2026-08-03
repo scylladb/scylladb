@@ -61,22 +61,6 @@ public:
         return _bytes;
     }
 
-    struct less_compare {
-        typename TopLevelView::compound _t;
-        less_compare(const schema& s) : _t(get_compound_type(s)) {}
-        bool operator()(const TopLevelView& k1, const TopLevelView& k2) const {
-            return _t->less(k1.representation(), k2.representation());
-        }
-    };
-
-    struct tri_compare {
-        typename TopLevelView::compound _t;
-        tri_compare(const schema &s) : _t(get_compound_type(s)) {}
-        std::strong_ordering operator()(const TopLevelView& k1, const TopLevelView& k2) const {
-            return _t->compare(k1.representation(), k2.representation());
-        }
-    };
-
     struct hashing {
         typename TopLevelView::compound _t;
         hashing(const schema& s) : _t(get_compound_type(s)) {}
@@ -256,34 +240,6 @@ public:
         return result;
     }
 
-    struct tri_compare {
-        typename TopLevel::compound _t;
-        tri_compare(const schema& s) : _t(get_compound_type(s)) {}
-        std::strong_ordering operator()(const TopLevel& k1, const TopLevel& k2) const {
-            return _t->compare(k1.representation(), k2.representation());
-        }
-        std::strong_ordering operator()(const TopLevelView& k1, const TopLevel& k2) const {
-            return _t->compare(k1.representation(), k2.representation());
-        }
-        std::strong_ordering operator()(const TopLevel& k1, const TopLevelView& k2) const {
-            return _t->compare(k1.representation(), k2.representation());
-        }
-    };
-
-    struct less_compare {
-        typename TopLevel::compound _t;
-        less_compare(const schema& s) : _t(get_compound_type(s)) {}
-        bool operator()(const TopLevel& k1, const TopLevel& k2) const {
-            return _t->less(k1.representation(), k2.representation());
-        }
-        bool operator()(const TopLevelView& k1, const TopLevel& k2) const {
-            return _t->less(k1.representation(), k2.representation());
-        }
-        bool operator()(const TopLevel& k1, const TopLevelView& k2) const {
-            return _t->less(k1.representation(), k2.representation());
-        }
-    };
-
     struct hashing {
         typename TopLevel::compound _t;
         hashing(const schema& s) : _t(get_compound_type(s)) {}
@@ -440,6 +396,22 @@ protected:
     { }
 
 public:
+    struct less_compare {
+        typename TopLevel::compound _t;
+        less_compare(const schema& s) : _t(TopLevel::get_compound_type(s)) {}
+        bool operator()(const TopLevel& k1, const TopLevel& k2) const {
+            return _t->less(k1.representation(), k2.representation());
+        }
+    };
+
+    struct tri_compare {
+        typename TopLevel::compound _t;
+        tri_compare(const schema& s) : _t(TopLevel::get_compound_type(s)) {}
+        std::strong_ordering operator()(const TopLevel& k1, const TopLevel& k2) const {
+            return _t->compare(k1.representation(), k2.representation());
+        }
+    };
+
     bool is_full(const schema& s) const {
         return TopLevel::get_compound_type(s)->is_full(base::_bytes);
     }
@@ -489,7 +461,35 @@ public:
             return prefix_equality_tri_compare(prefix_type->types().begin(),
                 prefix_type->begin(k1.representation()), prefix_type->end(k1.representation()),
                 prefix_type->begin(k2.representation()), prefix_type->end(k2.representation()),
-                tri_compare) < 0;
+                ::tri_compare) < 0;
+        }
+    };
+
+    struct less_compare {
+        typename TopLevel::compound _t;
+        less_compare(const schema& s) : _t(base::get_compound_type(s)) {}
+        bool operator()(const TopLevel& k1, const TopLevel& k2) const {
+            return _t->less(k1.representation(), k2.representation());
+        }
+        bool operator()(const TopLevelView& k1, const TopLevel& k2) const {
+            return _t->less(k1.representation(), k2.representation());
+        }
+        bool operator()(const TopLevel& k1, const TopLevelView& k2) const {
+            return _t->less(k1.representation(), k2.representation());
+        }
+    };
+
+    struct tri_compare {
+        typename TopLevel::compound _t;
+        tri_compare(const schema& s) : _t(base::get_compound_type(s)) {}
+        std::strong_ordering operator()(const TopLevel& k1, const TopLevel& k2) const {
+            return _t->compare(k1.representation(), k2.representation());
+        }
+        std::strong_ordering operator()(const TopLevelView& k1, const TopLevel& k2) const {
+            return _t->compare(k1.representation(), k2.representation());
+        }
+        std::strong_ordering operator()(const TopLevel& k1, const TopLevelView& k2) const {
+            return _t->compare(k1.representation(), k2.representation());
         }
     };
 
@@ -505,7 +505,7 @@ public:
             return prefix_equality_tri_compare(prefix_type->types().begin(),
                 prefix_type->begin(k1.representation()), prefix_type->end(k1.representation()),
                 prefix_type->begin(k2.representation()), prefix_type->end(k2.representation()),
-                tri_compare);
+                ::tri_compare);
         }
     };
 };
