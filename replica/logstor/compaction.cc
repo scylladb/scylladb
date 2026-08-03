@@ -74,4 +74,27 @@ size_t select_compaction_prefix(std::span<const compaction_candidate_score> pref
     return best;
 }
 
+float compaction_admission_pressure(uint64_t available_segments, free_segment_watermarks watermarks) noexcept {
+    if (available_segments >= watermarks.high) {
+        return 0.0f;
+    }
+    if (available_segments <= watermarks.low) {
+        return 1.0f;
+    }
+    return float(watermarks.high - available_segments) / float(watermarks.high - watermarks.low);
+}
+
+double compaction_max_used_fraction(float admission_pressure, size_t max_segments_per_compaction) noexcept {
+    // With no space pressure, compact only segments that are nearly dead.
+    static constexpr double no_pressure_bound = 0.25;
+    // A compaction job writes whole output segments, so reclaiming anything requires
+    // n_out < n_in, which means the batch's mean utilization must be below 1 - 1/n_in. Opening the
+    // gate any further than that cannot admit a batch with a net gain.
+    const auto reclaim_ceiling = 1.0 - 1.0 / double(std::max<size_t>(1, max_segments_per_compaction));
+    if (reclaim_ceiling <= no_pressure_bound) {
+        return reclaim_ceiling;
+    }
+    return no_pressure_bound + admission_pressure * (reclaim_ceiling - no_pressure_bound);
+}
+
 } // namespace replica::logstor

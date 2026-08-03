@@ -97,6 +97,16 @@ struct compaction_candidate_score {
 // `extension_tolerance` of it, trading a little efficiency for fewer and larger jobs.
 size_t select_compaction_prefix(std::span<const compaction_candidate_score> prefix_scores, double extension_tolerance) noexcept;
 
+// Space pressure driving the compaction admission gate: 0 at or above the high watermark, 1 at or
+// below the free-segment target, linear in between. Deriving it from the same watermarks as the
+// automatic compaction trigger keeps the gate fully open whenever compaction is triggered.
+float compaction_admission_pressure(uint64_t available_segments, free_segment_watermarks watermarks) noexcept;
+
+// Upper bound on the utilization of a segment considered for compaction, for a given admission
+// pressure. With no space pressure only nearly dead segments are worth rewriting; at full pressure
+// the bound reaches the highest utilization a batch can still reclaim a segment from.
+double compaction_max_used_fraction(float admission_pressure, size_t max_segments_per_compaction) noexcept;
+
 constexpr log_heap_options segment_descriptor_hist_options(4 * 1024, 3, 128 * 1024);
 
 struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options> {

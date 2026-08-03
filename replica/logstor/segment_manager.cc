@@ -18,6 +18,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <chrono>
 #include <linux/if_link.h>
 #include <seastar/core/file.hh>
@@ -571,6 +572,8 @@ private:
         return _free_segment_watermarks;
     }
 
+    float admission_pressure() const noexcept;
+
     bool should_run_auto_compaction() noexcept;
     future<> run_auto_compaction();
 
@@ -988,6 +991,10 @@ float compaction_manager_impl::compaction_pressure() const noexcept {
 void compaction_manager_impl::refresh_free_segment_watermarks() noexcept {
     _free_segment_watermarks = make_free_segment_watermarks(_sm._max_segments.configured,
             _sm._cfg.trigger_compaction_threshold(), _cfg.max_segments_per_compaction);
+}
+
+float compaction_manager_impl::admission_pressure() const noexcept {
+    return compaction_admission_pressure(_sm.available_segment_count(write_source::normal_write), get_free_segment_watermarks());
 }
 
 compaction_manager_impl::group_compaction_state& compaction_manager_impl::get_group_state(logstor_group& cg) {
@@ -1645,12 +1652,23 @@ std::optional<compaction_manager_impl::compaction_candidate> compaction_manager_
     std::vector<compaction_candidate_score> prefix_scores;
     const auto segment_size = _sm.get_segment_size();
     const auto& segments = cg.logstor_segments()._segments;
+    // The admission gate is driven by the same watermarks as the automatic compaction trigger, so
+    // that it is fully open whenever compaction is triggered. Refusing a batch that has a net gain
+    // while free segments are needed does not avoid the work, it only defers it until the segment
+    // is usually no cheaper - and leaves the selection loop rescanning with nothing to admit.
+    const auto pressure = admission_pressure();
+    const auto max_used_fraction = compaction_max_used_fraction(pressure, _cfg.max_segments_per_compaction);
 
     candidates.reserve(_cfg.max_segments_per_compaction);
     prefix_scores.reserve(_cfg.max_segments_per_compaction);
 
     for (const auto& desc : segments) {
         if (candidates.size() >= _cfg.max_segments_per_compaction) {
+            break;
+        }
+
+        const auto used_fraction = double(desc.net_data_size(segment_size)) / double(segment_size);
+        if (used_fraction > max_used_fraction) {
             break;
         }
 
