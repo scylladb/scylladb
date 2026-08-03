@@ -10,7 +10,14 @@
 #include <exception>
 #include <initializer_list>
 #include <memory>
+<<<<<<< HEAD
 #include <regex>
+||||||| parent of dbaae46a87 (s3: drop the now-unused <regex> include)
+#include <numeric>
+#include <regex>
+=======
+#include <numeric>
+>>>>>>> dbaae46a87 (s3: drop the now-unused <regex> include)
 #include <stdexcept>
 #if __has_include(<rapidxml.h>)
 #include <rapidxml.h>
