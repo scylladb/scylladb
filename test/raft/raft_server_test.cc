@@ -360,12 +360,15 @@ static void test_add_entry_wait_resolved_via_drop_waiters_aux(raft::wait_type ty
         .nodes = 3,
         .config = std::vector<raft::server::configuration>({srv_config, srv_config, srv_config})
     };
+    // Resolved when node 0 (the leader) applies the entry with command 42
+    // added below.
+    seastar::promise<> leader_applied_42;
     // apply_entries must be greater than the number of entries added
     // during the test, otherwise the state machine's done promise fires
     // prematurely.
     auto cluster = raft_cluster<std::chrono::steady_clock>{
         std::move(test_config),
-        ::apply_changes,
+        signal_when_leader_applies(42, leader_applied_42),
         100,  // apply_entries
         0,
         0, false, tick_delay, rpc_config{}
@@ -386,8 +389,20 @@ static void test_add_entry_wait_resolved_via_drop_waiters_aux(raft::wait_type ty
     auto& follower = cluster.get_server(1);
     auto fut = follower.add_entry(create_command(42), type, nullptr);
 
-    // Wait for the leader to commit, apply, and snapshot the entry.
+    // The snapshot must cover the entry, otherwise node 1, once reconnected,
+    // catches up by append entries and drop_waiters() is never exercised.
+    //
+    // The signal fires inside apply(), before the applied index the snapshot is
+    // taken at is assigned, so the barrier is what puts the entry under that
+    // index. The barrier alone wouldn't do: it only waits for entries committed
+    // when it registers, and the forwarded entry may not have reached the
+    // leader yet.
+    //
+    // trigger_snapshot() waits for a persisted snapshot at or above the applied
+    // index; false means automatic snapshotting (snapshot_threshold = 1 above)
+    // already took it.
     auto& leader = cluster.get_server(0);
+    leader_applied_42.get_future().get();
     leader.read_barrier(nullptr).get();
     leader.trigger_snapshot(nullptr).get();
 
