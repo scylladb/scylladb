@@ -209,7 +209,6 @@
 #include <seastar/http/common.hh>
 #include <seastar/http/connection_factory.hh>
 #include <seastar/http/exception.hh>
-#include <seastar/http/file_handler.hh>
 #include <seastar/http/handlers.hh>
 #include <seastar/http/matcher.hh>
 #include <seastar/http/matchrules.hh>
@@ -217,7 +216,6 @@
 #include <seastar/http/reply.hh>
 #include <seastar/http/request.hh>
 #include <seastar/http/routes.hh>
-#include <seastar/http/transformers.hh>
 #include <seastar/http/url.hh>
 #include <seastar/json/formatter.hh>
 #include <seastar/json/json_elements.hh>
@@ -275,8 +273,6 @@
 #include <seastar/util/tuple_utils.hh>
 #include <seastar/util/used_size.hh>
 #include <seastar/util/variant_utils.hh>
-#include <seastar/websocket/common.hh>
-#include <seastar/websocket/parser.hh>
 #include <set>
 #include <setjmp.h>
 #include <shared_mutex>
