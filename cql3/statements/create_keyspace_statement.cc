@@ -70,7 +70,7 @@ void create_keyspace_statement::validate(query_processor& qp, const service::cli
         throw exceptions::invalid_request_exception(format("Keyspace names shouldn't be more than {:d} characters long (got \"{}\")", schema::NAME_LENGTH, _name.c_str()));
     }
 
-    _attrs->validate();
+    _attrs->validate(qp.proxy().features());
 
     if (!bool(_attrs->get_replication_strategy_class())) {
         throw exceptions::configuration_exception("Missing mandatory replication strategy class");
@@ -310,7 +310,7 @@ create_keyspace_statement::execute(query_processor& qp, service::query_state& st
 }
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> create_keyspace_statement::get_keyspace_metadata(const locator::token_metadata& tm, const gms::feature_service& feat, const db::config& cfg) {
-    _attrs->validate();
+    _attrs->validate(feat);
     return _attrs->as_ks_metadata(_name, tm, feat, cfg);
 }
 
