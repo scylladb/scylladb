@@ -34,9 +34,16 @@ function(add_rust_library name)
   set(profile "rust-${build_mode}")
   set(target_dir ${CMAKE_CURRENT_BINARY_DIR})
   set(library ${target_dir}/lib${name}.a)
+  # Match configure.py: --disable-wasmtime builds the rust workspace without
+  # its default "wasmtime" cargo feature.
+  if(Scylla_BUILD_WASMTIME)
+    set(cargo_features "")
+  else()
+    set(cargo_features "--no-default-features")
+  endif()
   add_custom_command(
     OUTPUT ${library}
-    COMMAND ${CMAKE_COMMAND} -E env CARGO_BUILD_DEP_INFO_BASEDIR=. ${RUSTC_WRAPPER_ENV} ${CARGO} build --locked --jobs=${Scylla_RUST_JOBS} --target-dir=${target_dir} --profile=${profile}
+    COMMAND ${CMAKE_COMMAND} -E env CARGO_BUILD_DEP_INFO_BASEDIR=. ${RUSTC_WRAPPER_ENV} ${CARGO} build --locked --jobs=${Scylla_RUST_JOBS} ${cargo_features} --target-dir=${target_dir} --profile=${profile}
     COMMAND ${CMAKE_COMMAND} -E copy ${target_dir}/${profile}/lib${name}.a ${library}
     DEPENDS Cargo.lock
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -80,32 +87,40 @@ set(cxx_header "${binding_gen_build_dir}/cxx.h")
 add_custom_command(
   OUTPUT ${cxx_header}
   COMMAND ${CXXBRIDGE} --header --output ${cxx_header})
-generate_cxxbridge(wasmtime_bindings
-  INPUT wasmtime_bindings/src/lib.rs
-  INCLUDE rust/cxx.h
-  OUTPUT_DIR "${binding_gen_build_dir}"
-  SOURCES wasmtime_bindings_sources)
-
 set_target_properties(Rust::rust_combined PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_BINARY_DIR}")
 
-add_library(wasmtime_bindings STATIC)
-target_sources(wasmtime_bindings
-  PRIVATE
-    ${cxx_header}
-    ${wasmtime_bindings_sources})
-target_include_directories(wasmtime_bindings
-  PUBLIC
-    ${scylla_gen_build_dir})
-target_link_libraries(wasmtime_bindings
-  INTERFACE Rust::rust_combined)
-if (Scylla_USE_PRECOMPILED_HEADER_USE)
-  # The PCH from scylla-precompiled-header is compiled with Seastar's compile
-  # flags, including sanitizer flags in Debug/Sanitize modes. Any target reusing
-  # this PCH must have matching compile options, otherwise the compiler rejects
-  # the PCH due to flag mismatch (e.g., -fsanitize=address).
-  target_link_libraries(wasmtime_bindings PRIVATE Seastar::seastar)
-  target_precompile_headers(wasmtime_bindings REUSE_FROM scylla-precompiled-header)
+if(Scylla_BUILD_WASMTIME)
+  generate_cxxbridge(wasmtime_bindings
+    INPUT wasmtime_bindings/src/lib.rs
+    INCLUDE rust/cxx.h
+    OUTPUT_DIR "${binding_gen_build_dir}"
+    SOURCES wasmtime_bindings_sources)
+
+  add_library(wasmtime_bindings STATIC)
+  target_sources(wasmtime_bindings
+    PRIVATE
+      ${cxx_header}
+      ${wasmtime_bindings_sources})
+  target_include_directories(wasmtime_bindings
+    PUBLIC
+      ${scylla_gen_build_dir})
+  target_link_libraries(wasmtime_bindings
+    INTERFACE Rust::rust_combined)
+  if (Scylla_USE_PRECOMPILED_HEADER_USE)
+    # The PCH from scylla-precompiled-header is compiled with Seastar's compile
+    # flags, including sanitizer flags in Debug/Sanitize modes. Any target reusing
+    # this PCH must have matching compile options, otherwise the compiler rejects
+    # the PCH due to flag mismatch (e.g., -fsanitize=address).
+    target_link_libraries(wasmtime_bindings PRIVATE Seastar::seastar)
+    target_precompile_headers(wasmtime_bindings REUSE_FROM scylla-precompiled-header)
+  endif()
+else()
+  # Stub keeping the many `target_link_libraries(... wasmtime_bindings)`
+  # references valid; still carries the rust_combined archive (inc crate).
+  add_library(wasmtime_bindings INTERFACE)
+  target_link_libraries(wasmtime_bindings
+    INTERFACE Rust::rust_combined)
 endif()
 
 # only for testing
