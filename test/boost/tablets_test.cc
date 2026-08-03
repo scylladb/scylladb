@@ -3044,7 +3044,7 @@ alter_result alter_replication(cql_test_env& e,
     alter_options["class"] = sstring("NetworkTopologyStrategy");
     cql3::statements::ks_prop_defs new_ks_props;
     new_ks_props.add_property("replication", alter_options);
-    new_ks_props.validate();
+    new_ks_props.validate(e.local_db().features());
     BOOST_REQUIRE(new_ks_props.get_replication_strategy_class().has_value());
     auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, e.local_db().features(), e.local_db().get_config());
     auto new_options = ks_md->strategy_options();
