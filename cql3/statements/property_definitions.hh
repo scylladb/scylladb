@@ -69,6 +69,11 @@ public:
     static map_type to_simple_map(const extended_map_type&);
     static extended_map_type to_extended_map(const map_type&);
 
+    // Extracts a plain-string property value, throwing a CQL syntax_exception rather than
+    // letting std::bad_variant_access escape when the property was given a map value
+    // (the grammar accepts `<ident> = <mapLiteral>` for any property name).
+    static sstring value_as_string(const sstring& name, const value_type& value);
+
     sstring get_string(sstring key, sstring default_value) const;
 
     // Return a property value, typed as a Boolean
