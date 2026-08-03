@@ -7932,14 +7932,25 @@ SEASTAR_TEST_CASE(test_size_tiering_for_tiny_sstables) {
         auto tiny_sst = make_sstable(tiny_sstable_size);
         auto medium_sst = make_sstable(medium_sstable_size);
 
-        auto expect_buckets = [&] (unsigned expected_bucket_count, db_clock::time_point write_time) {
+        // Build compaction strategy options with a specific min_sstable_age, keeping all other defaults.
+        auto make_options = [] (std::chrono::seconds min_sstable_age) {
+            std::map<sstring, sstring> options = {
+                { "min_sstable_age", std::to_string(min_sstable_age.count()) },
+            };
+            return std::pair<compaction::size_tiered_compaction_strategy_options,
+                             compaction::incremental_compaction_strategy_options>(options, options);
+        };
+
+        auto expect_buckets = [&] (unsigned expected_bucket_count, db_clock::time_point write_time, std::chrono::seconds min_sstable_age) {
             sstables::test(tiny_sst).set_data_file_write_time(write_time);
             sstables::test(medium_sst).set_data_file_write_time(write_time);
 
+            auto [stcs_options, ics_options] = make_options(min_sstable_age);
+
             // SSTables of 1M and 40M, both smaller than min_sstable_size (50M), must end up
-            // in the same tier only if they were not written recently. Otherwise, they must
-            // stay in distinct tiers so that similarly sized sstables are compacted together.
-            compaction::size_tiered_compaction_strategy_options stcs_options;
+            // in the same tier only if they were not written within the last min_sstable_age.
+            // Otherwise, they must stay in distinct tiers so that similarly sized sstables are
+            // compacted together.
             auto stcs_buckets = compaction::size_tiered_compaction_strategy::get_buckets({ tiny_sst, medium_sst }, stcs_options);
             BOOST_REQUIRE_EQUAL(stcs_buckets.size(), expected_bucket_count);
 
@@ -7947,15 +7958,23 @@ SEASTAR_TEST_CASE(test_size_tiering_for_tiny_sstables) {
                 make_lw_shared<const sstables::sstable_run>(sstables::sstable_run(tiny_sst)),
                 make_lw_shared<const sstables::sstable_run>(sstables::sstable_run(medium_sst)),
             };
-            compaction::incremental_compaction_strategy_options ics_options;
             auto ics_buckets = compaction::incremental_compaction_strategy::get_buckets(runs, ics_options);
             BOOST_REQUIRE_EQUAL(ics_buckets.size(), expected_bucket_count);
         };
 
-        // Tiny sstables written recently must stay in their own tiers.
-        expect_buckets(2, db_clock::now());
-        // Tiny sstables which are no longer actively written can be squashed into the same tier.
-        expect_buckets(1, db_clock::now() - std::chrono::hours(2));
+        constexpr std::chrono::seconds age_1h = std::chrono::hours(1);
+        constexpr std::chrono::seconds age_10h = std::chrono::hours(10);
+        const auto now = db_clock::now();
+
+        // With the default min_sstable_age of 1h, tiny sstables written recently must stay in
+        // their own tiers, while those written more than 1h ago can be squashed into the same tier.
+        expect_buckets(2, now, age_1h);
+        expect_buckets(1, now - std::chrono::hours(2), age_1h);
+
+        // A longer min_sstable_age keeps tiny sstables in their own tiers for longer: 2h-old
+        // sstables are still "recent" under a 10h window, whereas 12h-old ones are squashed.
+        expect_buckets(2, now - std::chrono::hours(2), age_10h);
+        expect_buckets(1, now - std::chrono::hours(12), age_10h);
     });
 }
 

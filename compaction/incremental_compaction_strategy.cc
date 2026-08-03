@@ -29,10 +29,27 @@ static long validate_min_sstable_size(const std::map<sstring, sstring>& options)
     return min_sstable_size;
 }
 
+static std::chrono::seconds validate_min_sstable_age(const std::map<sstring, sstring>& options) {
+    auto min_sstable_age = cql3::statements::property_definitions::to_long(incremental_compaction_strategy_options::MIN_SSTABLE_AGE_KEY,
+        compaction_strategy_impl::get_value(options, incremental_compaction_strategy_options::MIN_SSTABLE_AGE_KEY),
+        incremental_compaction_strategy_options::DEFAULT_MIN_SSTABLE_AGE.count());
+    if (min_sstable_age < 0) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be non negative",
+            incremental_compaction_strategy_options::MIN_SSTABLE_AGE_KEY, min_sstable_age));
+    }
+    return std::chrono::seconds(min_sstable_age);
+}
+
 static long validate_min_sstable_size(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     auto min_sstable_size = validate_min_sstable_size(options);
     unchecked_options.erase(incremental_compaction_strategy_options::MIN_SSTABLE_SIZE_KEY);
     return min_sstable_size;
+}
+
+static std::chrono::seconds validate_min_sstable_age(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    auto min_sstable_age = validate_min_sstable_age(options);
+    unchecked_options.erase(incremental_compaction_strategy_options::MIN_SSTABLE_AGE_KEY);
+    return min_sstable_age;
 }
 
 static double validate_bucket_low(const std::map<sstring, sstring>& options) {
@@ -111,6 +128,7 @@ static std::optional<double> validate_space_amplification_goal(const std::map<ss
 
 incremental_compaction_strategy_options::incremental_compaction_strategy_options(const std::map<sstring, sstring>& options) {
     min_sstable_size = validate_min_sstable_size(options);
+    min_sstable_age = validate_min_sstable_age(options);
     bucket_low = validate_bucket_low(options);
     bucket_high = validate_bucket_high(options);
 }
@@ -120,6 +138,7 @@ incremental_compaction_strategy_options::incremental_compaction_strategy_options
 // This helps making sure that only allowed options are being set.
 void incremental_compaction_strategy_options::validate(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     validate_min_sstable_size(options, unchecked_options);
+    validate_min_sstable_age(options, unchecked_options);
     auto bucket_low = validate_bucket_low(options, unchecked_options);
     auto bucket_high = validate_bucket_high(options, unchecked_options);
     if (bucket_high <= bucket_low) {
@@ -177,7 +196,7 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
     });
 
     auto min_sstable_size_check = [&runs, &options] (uint64_t size) {
-        return !tiny_sstables_written_recently(options.min_sstable_size, runs) && size < options.min_sstable_size;
+        return !tiny_sstables_written_recently(options.min_sstable_size, options.min_sstable_age, runs) && size < options.min_sstable_size;
     };
 
     using bucket_type = std::vector<sstables::frozen_sstable_run>;

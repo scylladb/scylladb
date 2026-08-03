@@ -8,6 +8,8 @@
 
 #include "compaction_strategy_impl.hh"
 
+#include <chrono>
+
 namespace compaction {
 
 class incremental_backlog_tracker;
@@ -15,14 +17,17 @@ class incremental_backlog_tracker;
 class incremental_compaction_strategy_options {
 public:
     static constexpr uint64_t DEFAULT_MIN_SSTABLE_SIZE = 50L * 1024L * 1024L;
+    static constexpr std::chrono::seconds DEFAULT_MIN_SSTABLE_AGE = std::chrono::hours(1);
     static constexpr double DEFAULT_BUCKET_LOW = 0.7071;
     static constexpr double DEFAULT_BUCKET_HIGH = 1.4142;
 
     static constexpr auto MIN_SSTABLE_SIZE_KEY = "min_sstable_size";
+    static constexpr auto MIN_SSTABLE_AGE_KEY = "min_sstable_age";
     static constexpr auto BUCKET_LOW_KEY = "bucket_low";
     static constexpr auto BUCKET_HIGH_KEY = "bucket_high";
 private:
     uint64_t min_sstable_size = DEFAULT_MIN_SSTABLE_SIZE;
+    std::chrono::seconds min_sstable_age = DEFAULT_MIN_SSTABLE_AGE;
     double bucket_low = DEFAULT_BUCKET_LOW;
     double bucket_high = DEFAULT_BUCKET_HIGH;
 public:
@@ -30,6 +35,7 @@ public:
 
     incremental_compaction_strategy_options() {
         min_sstable_size = DEFAULT_MIN_SSTABLE_SIZE;
+        min_sstable_age = DEFAULT_MIN_SSTABLE_AGE;
         bucket_low = DEFAULT_BUCKET_LOW;
         bucket_high = DEFAULT_BUCKET_HIGH;
     }
@@ -104,12 +110,12 @@ public:
     friend class compaction::incremental_backlog_tracker;
 };
 
-// Returns true whether any tiny sstable run, i.e. a run smaller than option.min_sstable_size, was written in the last hour.
+// Returns true whether any tiny sstable run, i.e. a run smaller than option.min_sstable_size, was written within the last min_sstable_age.
 template <std::ranges::range Range>
 requires std::convertible_to<std::ranges::range_value_t<Range>, sstables::shared_sstable> || std::convertible_to<std::ranges::range_value_t<Range>, sstables::frozen_sstable_run>
-bool tiny_sstables_written_recently(uint64_t min_sstable_size, const Range& sstable_runs) {
-    return std::ranges::any_of(sstable_runs, [min_sstable_size, now = db_clock::now()] (const std::ranges::range_value_t<Range>& r) {
-        return r->data_size() < min_sstable_size && r->data_file_write_time() > (now - db_clock::duration(std::chrono::seconds(3600)));
+bool tiny_sstables_written_recently(uint64_t min_sstable_size, db_clock::duration min_sstable_age, const Range& sstable_runs) {
+    return std::ranges::any_of(sstable_runs, [min_sstable_size, min_sstable_age, now = db_clock::now()] (const std::ranges::range_value_t<Range>& r) {
+        return r->data_size() < min_sstable_size && r->data_file_write_time() > (now - min_sstable_age);
     });
 }
 
