@@ -533,6 +533,10 @@ public:
     const legacy_compound_view<c_type> legacy_form(const schema& s) const;
 
     // A trichotomic comparator for ordering compatible with Origin.
+    //
+    // This does not produce ring order! Ring order first compares the key's
+    // tokens and only falls back to legacy-tri-compare if the tokens are equal.
+    // Only use this for partitions which map to the same token.
     std::strong_ordering legacy_tri_compare(const schema& s, partition_key_view o) const;
 
     // Checks if keys are equal in a way which is compatible with Origin.
@@ -627,6 +631,10 @@ public:
     }
 
     // A trichotomic comparator for ordering compatible with Origin.
+    //
+    // This does not produce ring order! Ring order first compares the key's
+    // tokens and only falls back to legacy-tri-compare if the tokens are equal.
+    // Only use this for partitions which map to the same token.
     std::strong_ordering legacy_tri_compare(const schema& s, const partition_key& o) const {
         return view().legacy_tri_compare(s, o);
     }
