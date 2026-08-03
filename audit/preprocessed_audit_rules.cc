@@ -19,6 +19,12 @@ preprocessed_audit_rules::preprocessed_audit_rules(std::vector<audit_rule> rules
 
 future<> preprocessed_audit_rules::refresh_rules(std::vector<audit_rule> rules) {
     _rules = std::move(rules);
+    if (!wants_eager_known_tables(_known_tables.size())) {
+        _known_tables.clear();
+        _known_table_cache_enabled = false;
+    } else {
+        _known_table_cache_enabled = true;
+    }
     _role_to_matching_rules.clear();
     _table_to_matching_rules.clear();
     ++_cache_generation;
@@ -41,6 +47,16 @@ void preprocessed_audit_rules::remove_known_role(const sstring& role) {
 }
 
 void preprocessed_audit_rules::add_known_table(const sstring& keyspace, const sstring& table) {
+    if (!_known_table_cache_enabled || _rules.empty()) {
+        return;
+    }
+    if (_known_tables.size() >= max_preprocessed_known_tables) {
+        _known_tables.clear();
+        _table_to_matching_rules.clear();
+        _known_table_cache_enabled = false;
+        ++_cache_generation;
+        return;
+    }
     auto [it, inserted] = _known_tables.emplace(keyspace, table);
     if (inserted) {
         ++_cache_generation;
@@ -49,6 +65,9 @@ void preprocessed_audit_rules::add_known_table(const sstring& keyspace, const ss
 }
 
 void preprocessed_audit_rules::remove_known_table(const sstring& keyspace, const sstring& table) {
+    if (!_known_table_cache_enabled) {
+        return;
+    }
     if (_known_tables.erase(known_table{keyspace, table})) {
         ++_cache_generation;
         _table_to_matching_rules.erase(known_table{keyspace, table});
@@ -100,7 +119,8 @@ future<> preprocessed_audit_rules::rebuild_cache() {
         // by the number of audit rules, roles, and tables — expected to be modest.
         auto rules = _rules;
         auto known_roles = _known_roles;
-        auto known_tables = _known_tables;
+        auto known_table_cache_enabled = _known_table_cache_enabled;
+        auto known_tables = known_table_cache_enabled ? _known_tables : known_table_set{};
         auto generation = _cache_generation;
 
         std::unordered_map<sstring, rule_bitset, sstring_hash, sstring_eq>
@@ -115,9 +135,11 @@ future<> preprocessed_audit_rules::rebuild_cache() {
                 role_to_matching_rules[role] = compute_role_bits(rules, role);
                 co_await coroutine::maybe_yield();
             }
-            for (const auto& [ks, tbl] : known_tables) {
-                table_to_matching_rules[known_table{ks, tbl}] = compute_table_bits(rules, ks, tbl);
-                co_await coroutine::maybe_yield();
+            if (known_table_cache_enabled) {
+                for (const auto& [ks, tbl] : known_tables) {
+                    table_to_matching_rules[known_table{ks, tbl}] = compute_table_bits(rules, ks, tbl);
+                    co_await coroutine::maybe_yield();
+                }
             }
         }
 
@@ -131,11 +153,20 @@ future<> preprocessed_audit_rules::rebuild_cache() {
 
 future<> preprocessed_audit_rules::replace_known_entities(std::unordered_set<sstring> roles, known_table_set tables) {
     _known_roles = std::move(roles);
-    _known_tables = std::move(tables);
+    _known_table_cache_enabled = wants_eager_known_tables(tables.size());
+    if (_known_table_cache_enabled) {
+        _known_tables = std::move(tables);
+    } else {
+        _known_tables.clear();
+    }
     _role_to_matching_rules.clear();
     _table_to_matching_rules.clear();
     ++_cache_generation;
     co_await rebuild_cache();
+}
+
+bool preprocessed_audit_rules::wants_eager_known_tables(size_t table_count) const noexcept {
+    return !_rules.empty() && table_count <= max_preprocessed_known_tables;
 }
 
 audit_sink_set preprocessed_audit_rules::matching_sinks(statement_category category,

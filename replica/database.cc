@@ -9,6 +9,7 @@
 #include <algorithm>
 
 #include <exception>
+#include <vector>
 #include <fmt/ranges.h>
 #include <fmt/std.h>
 #include <seastar/core/rwlock.hh>
@@ -24,6 +25,7 @@
 #include "utils/assert.hh"
 #include "utils/lister.hh"
 #include "replica/database.hh"
+#include "replica/schema_boot.hh"
 #include <memory>
 #include <seastar/core/future-util.hh>
 #include <seastar/coroutine/try_future.hh>
@@ -806,16 +808,18 @@ do_parse_schema_tables(sharded<service::storage_proxy>& proxy, const sstring cf_
     using namespace db::schema_tables;
 
     auto rs = co_await db::system_keyspace::query(proxy.local().get_db(), db::schema_tables::NAME, cf_name);
-    auto names = std::set<sstring>();
+    std::vector<sstring> names;
     for (auto& r : rs->rows()) {
         auto keyspace_name = r.template get_nonnull<sstring>("keyspace_name");
-        names.emplace(keyspace_name);
-    }
-    co_await coroutine::parallel_for_each(names, [&] (sstring name) mutable -> future<> {
-        if (is_system_keyspace(name)) {
-            co_return;
+        if (!is_system_keyspace(keyspace_name)) {
+            names.emplace_back(std::move(keyspace_name));
         }
+    }
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
 
+    dblog.info("Loading schema table {} for {} keyspaces with concurrency {}", cf_name, names.size(), schema_boot::max_concurrent_keyspace_schema_partitions);
+    co_await schema_boot::for_each_keyspace_schema_partition(names, [&] (const sstring& name) mutable -> future<> {
         auto v = co_await read_schema_partition_for_keyspace(proxy, cf_name, name);
         try {
             co_await func(v);
@@ -882,7 +886,8 @@ future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, s
     batch.commit();
     co_await do_parse_schema_tables(proxy, db::schema_tables::TABLES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         std::map<sstring, schema_ptr> tables = co_await create_tables_from_tables_partition(proxy, v.second);
-        co_await coroutine::parallel_for_each(tables, [&] (auto& t) -> future<> {
+        dblog.debug("Loading {} tables for keyspace {} with concurrency {}", tables.size(), v.first, schema_boot::max_concurrent_tables_per_keyspace);
+        co_await schema_boot::for_each_table_in_keyspace(tables, [&] (auto& t) -> future<> {
             co_await this->add_column_family_and_make_directory(t.second, replica::database::is_new_cf::no, storage_mode);
             auto s = t.second;
             // Recreate missing column mapping entries in case
@@ -896,7 +901,8 @@ future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, s
     }));
     co_await do_parse_schema_tables(proxy, db::schema_tables::VIEWS, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         std::vector<view_ptr> views = co_await create_views_from_schema_partition(proxy, v.second);
-        co_await coroutine::parallel_for_each(views, [&] (auto&& v) -> future<> {
+        dblog.debug("Loading {} views for keyspace {} with concurrency {}", views.size(), v.first, schema_boot::max_concurrent_views_per_keyspace);
+        co_await schema_boot::for_each_view_in_keyspace(views, [&] (auto&& v) -> future<> {
             check_no_legacy_secondary_index_mv_schema(*this, v, nullptr);
             co_await this->add_column_family_and_make_directory(v, replica::database::is_new_cf::no, storage_mode);
         });

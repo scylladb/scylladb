@@ -223,6 +223,7 @@ public:
     void on_role_created(const sstring& role);
     void on_role_dropped(const sstring& role);
 
+    bool wants_eager_known_tables(size_t table_count) const noexcept;
     future<> set_known_entities(std::unordered_set<sstring> roles,
                                 preprocessed_audit_rules::known_table_set tables);
 };
