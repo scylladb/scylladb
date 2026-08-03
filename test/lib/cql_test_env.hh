@@ -38,6 +38,7 @@ class database;
 
 namespace db {
 class batchlog_manager;
+class cluster_config_manager;
 class system_distributed_keyspace;
 }
 
@@ -184,6 +185,8 @@ public:
     virtual sharded<service::migration_manager>& migration_manager() = 0;
 
     virtual sharded<db::batchlog_manager>& batchlog_manager() = 0;
+
+    virtual sharded<db::cluster_config_manager>& cluster_config_manager() = 0;
 
     virtual sharded<netw::messaging_service>& get_messaging_service() = 0;
 
