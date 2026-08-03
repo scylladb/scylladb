@@ -1110,7 +1110,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     auto& ks = _db.find_keyspace(ks_name);
                     auto tmptr = get_token_metadata_ptr();
                     cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
-                    new_ks_props.validate();
+                    new_ks_props.validate(_db.features());
                     auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, _db.features(), _db.get_config());
                     _db.validate_keyspace_update(*ks_md);
                     size_t unimportant_init_tablet_count = 2; // must be a power of 2
@@ -1402,7 +1402,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             std::optional<unsigned>(0), // initial_tablets=0 means auto
                             old_md->consistency_option(),
                             old_md->durable_writes(),
-                            old_md->get_storage_options());
+                            old_md->get_storage_options(),
+                            {},
+                            std::nullopt,
+                            // Must be carried over: make_create_keyspace_mutations() emits a
+                            // collection tombstone for an empty config_options, so dropping
+                            // them here would silently erase every keyspace-scope
+                            // cluster-config override when the keyspace migrates to tablets.
+                            old_md->config_options());
                         auto schema_muts = prepare_keyspace_update_announcement(_db, new_md, guard.write_timestamp());
                         for (auto& m : schema_muts) {
                             updates.emplace_back(m);
@@ -1843,7 +1850,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             auto& ks = _db.find_keyspace(completion.ks_name);
             if (error.empty()) {
                 cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{completion.saved_ks_props.begin(), completion.saved_ks_props.end()}};
-                new_ks_props.validate();
+                new_ks_props.validate(_db.features());
                 auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *get_token_metadata_ptr(), _db.features(), _db.get_config());
                 ks_md->clear_next_strategy_options();
 

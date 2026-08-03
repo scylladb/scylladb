@@ -1901,15 +1901,15 @@ property[cql3::statements::property_definitions& props]
     | k=ident '=' map=mapLiteral { try { $props.add_property(k->to_string(), convert_extended_property_map(map)); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } }
     ;
 
-propertyValue returns [sstring str]
-    : c=constant           { $str = c.raw_text.linearize(); }
+propertyValue returns [cql3::statements::property_value val]
+    : c=constant           { $val = cql3::statements::property_value{sstring(c.raw_text.linearize()), false}; }
     // FIXME: unreserved keywords below are indistinguishable from their string representation,
     // which might be problematic in the future. A possible solution is to use a more complicated
-    // type for storing property values instead of just plain strings. For the specific case
-    // of "null" it would be enough to use an optional, but for the general case it should be
-    // a variant-like class which distinguishes plain string values from special keywords
-    | u=unreserved_keyword { $str = u; }
-    | K_NULL { $str = "null"; }
+    // type for storing property values instead of just plain strings; for the general case it
+    // should be a variant-like class which distinguishes plain string values from special
+    // keywords. K_NULL is already carried separately, via property_value::is_null_keyword.
+    | u=unreserved_keyword { $val = cql3::statements::property_value{std::move(u), false}; }
+    | K_NULL { $val = cql3::statements::property_value{sstring("null"), true}; }
     ;
 
 relationType returns [oper_t op = oper_t{}]

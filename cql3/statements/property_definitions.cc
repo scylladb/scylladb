@@ -30,6 +30,13 @@ void property_definitions::add_property(const sstring& name, sstring value) {
     }
 }
 
+void property_definitions::add_property(const sstring& name, const property_value& value) {
+    add_property(name, value.value);
+    if (value.is_null_keyword) {
+        _null_keyword_properties.insert(name);
+    }
+}
+
 void property_definitions::add_property(const sstring& name, const extended_map_type& value) {
     if (auto [ignored, added] = _properties.try_emplace(name, value); !added) {
         throw exceptions::syntax_exception(format("Multiple definition for property '{}'", name));
@@ -52,16 +59,20 @@ void property_definitions::validate(const std::set<sstring>& keywords, const std
     }
 }
 
+sstring property_definitions::value_as_string(const sstring& name, const value_type& value) {
+    try {
+        return std::get<sstring>(value);
+    } catch (const std::bad_variant_access& e) {
+        throw exceptions::syntax_exception(format("Invalid value for property '{}'. It should be a string", name));
+    }
+}
+
 std::optional<sstring> property_definitions::get_simple(const sstring& name) const {
     auto it = _properties.find(name);
     if (it == _properties.end()) {
         return std::nullopt;
     }
-    try {
-        return std::get<sstring>(it->second);
-    } catch (const std::bad_variant_access& e) {
-        throw exceptions::syntax_exception(format("Invalid value for property '{}'. It should be a string", name));
-    }
+    return value_as_string(name, it->second);
 }
 
 std::optional<property_definitions::extended_map_type> property_definitions::get_extended_map(const sstring& name) const {
@@ -101,6 +112,10 @@ property_definitions::extended_map_type property_definitions::to_extended_map(co
 
 bool property_definitions::has_property(const sstring& name) const {
     return _properties.contains(name);
+}
+
+bool property_definitions::is_null_keyword(const sstring& name) const {
+    return _null_keyword_properties.contains(name);
 }
 
 property_definitions::value_type property_definitions::extract_property(const sstring& name) {
