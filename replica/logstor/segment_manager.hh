@@ -54,6 +54,7 @@ struct segment_manager_config {
     seastar::scheduling_group compaction_sg;
     utils::updateable_value<float> compaction_static_shares;
     seastar::scheduling_group separator_sg;
+    seastar::scheduling_group split_compaction_sg;
 };
 
 struct table_segment_histogram_bucket {

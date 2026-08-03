@@ -970,6 +970,7 @@ database::init_logstor() {
             .compaction_sg = _dbcfg.compaction_scheduling_group,
             .compaction_static_shares = _cfg.compaction_static_shares,
             .separator_sg = _dbcfg.memtable_scheduling_group,
+            .split_compaction_sg = _dbcfg.maintenance_scheduling_group,
         },
         .flush_sg = _dbcfg.commitlog_scheduling_group,
     };

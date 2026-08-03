@@ -463,6 +463,7 @@ public:
         seastar::scheduling_group compaction_sg;
         utils::updateable_value<float> compaction_static_shares;
         seastar::scheduling_group separator_sg;
+        seastar::scheduling_group split_compaction_sg;
     };
 
 private:
@@ -578,7 +579,7 @@ private:
     std::optional<compaction_candidate> select_segments_for_compaction(logstor_group&);
     future<std::vector<compaction_candidate>> find_top_compaction_candidates(size_t);
 
-    future<> submit_group_compaction(logstor_group&, std::function<future<>(group_compaction_state&)>);
+    future<> submit_group_compaction(logstor_group&, std::function<future<>(group_compaction_state&)>, scheduling_group);
     future<> do_compaction(logstor_group&, abort_source&);
     future<> do_split_compaction(replica::table&, logstor_group&, mutation_writer::classify_by_token_group, abort_source&);
 
@@ -1307,7 +1308,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
             .max_segments_per_compaction = config.max_segments_per_compaction,
             .compaction_sg = config.compaction_sg,
             .compaction_static_shares = config.compaction_static_shares,
-            .separator_sg = config.separator_sg
+            .separator_sg = config.separator_sg,
+            .split_compaction_sg = config.split_compaction_sg
         })
     , _cfg(config)
     , _segments_per_file(config.file_size / config.segment_size)
@@ -1848,7 +1850,7 @@ future<> segment_manager_impl::scan_segment(log_segment_id segment_id,
     }
 }
 
-future<> compaction_manager_impl::submit_group_compaction(logstor_group& cg, std::function<future<>(group_compaction_state&)> op) {
+future<> compaction_manager_impl::submit_group_compaction(logstor_group& cg, std::function<future<>(group_compaction_state&)> op, scheduling_group sg) {
     while (can_submit_compaction()) {
         auto* state = find_group_state(cg);
         if (!state) {
@@ -1867,7 +1869,7 @@ future<> compaction_manager_impl::submit_group_compaction(logstor_group& cg, std
         }
 
         state->as = {};
-        state->completion = shared_future(with_scheduling_group(_cfg.compaction_sg, [state, op = std::move(op)] {
+        state->completion = shared_future(with_scheduling_group(sg, [state, op = std::move(op)] {
             return op(*state);
         }).handle_exception([this] (std::exception_ptr ep) {
             ++_stats.compaction_failures;
@@ -1883,13 +1885,13 @@ future<> compaction_manager_impl::submit_group_compaction(logstor_group& cg, std
 future<> compaction_manager_impl::submit_normal_compaction(logstor_group& cg) {
     co_await submit_group_compaction(cg, [this, &cg] (group_compaction_state& state) {
         return do_compaction(cg, state.as);
-    });
+    }, _cfg.compaction_sg);
 }
 
 future<> compaction_manager_impl::submit_split_compaction(replica::table& t, logstor_group& src, mutation_writer::classify_by_token_group classifier) {
     co_await submit_group_compaction(src, [this, &t, &src, classifier = std::move(classifier)] (group_compaction_state& state) mutable {
         return do_split_compaction(t, src, std::move(classifier), state.as);
-    });
+    }, _cfg.split_compaction_sg);
 }
 
 void compaction_manager_impl::submit(logstor_group& cg) {
