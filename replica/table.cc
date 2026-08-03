@@ -4945,6 +4945,10 @@ utils::small_vector<compaction::compaction_group_view*, 3> compaction_group::all
     return ret;
 }
 
+bool compaction_group::is_repairing_view(const compaction::compaction_group_view* v) const noexcept {
+    return v == _repairing_view.get();
+}
+
 compaction_group* table::try_get_compaction_group_with_static_sharding() const {
     if (!uses_static_sharding()) {
         return nullptr;

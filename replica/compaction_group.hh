@@ -242,6 +242,8 @@ public:
     // Gets the view a sstable currently belongs to.
     compaction::compaction_group_view& view_for_sstable(const sstables::shared_sstable& sst) const;
     utils::small_vector<compaction::compaction_group_view*, 3> all_views() const;
+    // Returns true iff v is the repairing view of this compaction group.
+    bool is_repairing_view(const compaction::compaction_group_view* v) const noexcept;
 
     seastar::condition_variable& get_staging_done_condition() noexcept {
         return _staging_done_condition;
