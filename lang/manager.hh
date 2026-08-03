@@ -9,9 +9,11 @@
 #pragma once
 
 #include <seastar/core/sharded.hh>
+#ifdef SCYLLA_BUILD_WASMTIME
 #include "rust/wasmtime_bindings.hh"
 #include "lang/wasm_instance_cache.hh"
 #include "lang/wasm_alien_thread_runner.hh"
+#endif
 #include "cql3/functions/user_function.hh"
 
 namespace wasm {
@@ -21,9 +23,11 @@ struct context;
 namespace lang {
 
 class manager : public seastar::peering_sharded_service<manager> {
+#ifdef SCYLLA_BUILD_WASMTIME
     std::shared_ptr<rust::Box<wasmtime::Engine>> _engine;
     std::optional<wasm::instance_cache> _instance_cache;
     std::shared_ptr<wasm::alien_thread_runner> _alien_runner;
+#endif
 
 public:
     const uint64_t wasm_yield_fuel;
@@ -55,7 +59,9 @@ public:
     future<> start();
     future<> stop();
     void remove(const db::functions::function_name& name, const std::vector<data_type>& arg_types) noexcept {
+#ifdef SCYLLA_BUILD_WASMTIME
         _instance_cache->remove(name, arg_types);
+#endif
     }
 
     using context = std::optional<cql3::functions::user_function::context>;
