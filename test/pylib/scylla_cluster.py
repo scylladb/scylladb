@@ -71,6 +71,42 @@ async def async_rmtree(directory, *args, **kwargs):
     await loop.run_in_executor(io_executor, partial(shutil.rmtree, directory, *args, **kwargs))
 
 
+# Callbacks registered through ManagerClient.on_teardown(), fired by
+# run_teardown_callbacks() from recycle_cluster() in test/pylib/runner.py once
+# the cluster has been stopped.
+#
+# Each entry remembers the event loop it was registered on.  Recycling runs on
+# the ScyllaClusterManager's own loop, in its own thread, while the callbacks
+# own objects created by the fixtures on a different loop -- a subprocess
+# handle awaited from the wrong loop hangs instead of failing, so a coroutine
+# is always handed back to the loop that produced it.
+_teardown_callbacks: list[tuple[asyncio.AbstractEventLoop, Callable[[], Any]]] = []
+
+
+def add_teardown_callback(callback: Callable[[], Any]) -> None:
+    """Register a callback to fire after the next cluster recycle."""
+    _teardown_callbacks.append((asyncio.get_running_loop(), callback))
+
+
+async def run_teardown_callbacks(logger: logging.Logger | logging.LoggerAdapter) -> None:
+    """Fire the registered teardown callbacks in LIFO order.
+
+    An exception in one callback is logged and swallowed so that it neither
+    hides the others nor aborts the rest of the recycling.
+    """
+    while _teardown_callbacks:
+        loop, callback = _teardown_callbacks.pop()
+        try:
+            res = callback()
+            if asyncio.iscoroutine(res):
+                if loop is asyncio.get_running_loop():
+                    await res
+                else:
+                    await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(res, loop))
+        except Exception as e:
+            logger.warning("teardown callback %s failed: %s", callback, e)
+
+
 class ReplaceConfig(NamedTuple):
     replaced_id: ServerNum
     reuse_ip_addr: bool
@@ -1769,6 +1805,9 @@ class ScyllaClusterManager:
                                 self.cluster, self.test_uname)
                 await self.clusters.put(self.cluster, is_dirty=True)
             self.cluster = None
+        # A clean cluster is not recycled, so anything still registered has not
+        # been fired yet.  Drain it here rather than leak it into the next suite.
+        await run_teardown_callbacks(self.logger)
         if os.path.exists(self.manager_dir):
             await async_rmtree(self.manager_dir)
         self.is_running = False

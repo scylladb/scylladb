@@ -184,7 +184,10 @@ async def manager_api_sock_path(suite_log_dir: Path,
         yield sock_path
 
         stop_event.set()
-        future.result()
+        # Wait for the manager thread off the event loop.  Stopping the manager
+        # recycles the leased cluster, and recycling runs callbacks that belong
+        # to this loop; blocking it here would deadlock them.
+        await asyncio.get_running_loop().run_in_executor(None, future.result)
 
 
 @pytest.fixture(scope="module")
@@ -368,7 +371,7 @@ def failure_detector_timeout(build_mode):
     return 5000 * MODES_TIMEOUT_FACTOR[build_mode]
 
 @pytest.fixture(params=[None, 's3', 'gs'], ids=['local', 's3', 'gs'])
-async def storage(request, pytestconfig, tmpdir):
+async def storage(request, pytestconfig, tmpdir, manager: ManagerClient):
     """Parametrize tests over local / S3 / GCS storage.
 
     When storage is None the test runs with local (filesystem) storage.
@@ -378,5 +381,5 @@ async def storage(request, pytestconfig, tmpdir):
         yield None
         return
 
-    async with make_object_storage(request.param, pytestconfig, tmpdir, request.node.name) as server:
+    async with make_object_storage(request.param, pytestconfig, tmpdir, request.node.name, manager) as server:
         yield server
