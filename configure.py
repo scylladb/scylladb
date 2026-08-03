@@ -2676,6 +2676,10 @@ def write_build_file(f,
         seastar_lib_ext = 'so' if modeval['build_seastar_shared_libs'] else 'a'
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
+        # Sub-ninja step building only Seastar's generated headers (ragel
+        # parsers, metrics2.pb.h) - all that compiling (vs linking) scylla
+        # TUs needs from the seastar build; see the build statement below.
+        seastar_gen_headers_dep = f'$builddir/{mode}/seastar/gen/include/seastar/http/request_parser.hh'
         abseil_dep = ' '.join(f'$builddir/{mode}/abseil/{lib}' for lib in abseil_libs)
         fmt_lib = 'fmt'
         f.write(textwrap.dedent('''\
@@ -2974,11 +2978,13 @@ def write_build_file(f,
             compiles[obj] = cc
         for obj in compiles:
             src = compiles[obj]
-            seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
-            abseil_dep = ' '.join(f'$builddir/{mode}/abseil/{lib}' for lib in abseil_libs)
+            # Compiling (not linking) needs only Seastar's generated headers,
+            # not libseastar itself, and only Abseil's checked-in headers, not
+            # its archives - gating TUs on the full submodule builds kept the
+            # first ~45s of a clean build free of any scylla compiles.
             pch_dep = f'$builddir/{mode}/stdafx.hh.pch' if obj in compiles_with_pch else ''
             cxx_cmd = 'cxx_with_pch' if obj in compiles_with_pch else 'cxx'
-            f.write(f'build {obj}: {cxx_cmd}.{mode} {src} | {profile_dep} {seastar_dep} {abseil_dep} {gen_headers_dep} {pch_dep}\n')
+            f.write(f'build {obj}: {cxx_cmd}.{mode} {src} | {profile_dep} {seastar_gen_headers_dep} {gen_headers_dep} {pch_dep}\n')
             if src in modeval['per_src_extra_cxxflags']:
                 f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=modeval["per_src_extra_cxxflags"][src], **modeval))
         for swagger in swaggers:
@@ -2993,7 +2999,7 @@ def write_build_file(f,
                 swagger_pch_dep = f'$builddir/{mode}/stdafx.hh.pch'
                 f.write(f'build {obj}: cxx_with_pch.{mode} {cc} | {profile_dep} {swagger_pch_dep}\n')
             else:
-                f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep}\n')
+                f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep} {seastar_gen_headers_dep}\n')
         for hh in serializers:
             src = serializers[hh]
             f.write('build {}: serializer {} | idl-compiler.py\n'.format(hh, src))
@@ -3057,11 +3063,20 @@ def write_build_file(f,
 
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
-        f.write(f'build {seastar_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n')
+        # Seastar's generated headers (ragel parsers, metrics2.pb.h) are all
+        # scylla TUs and the PCH actually need from the sub-build; they take
+        # <1s vs ~45s for libseastar. A dedicated sub-ninja step lets scylla
+        # compiles start immediately instead of idling behind the full lib.
+        # Ordered before the lib steps (shared seastar_pool, depth 1).
+        f.write(f'build {seastar_gen_headers_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n')
+        f.write('  pool = seastar_pool\n')
+        f.write(f'  subdir = $builddir/{mode}/seastar\n')
+        f.write('  target = seastar_http_request_parser seastar_http_response_parser seastar_http_chunk_parsers seastar_proto_metrics2\n')
+        f.write(f'build {seastar_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep} || {seastar_gen_headers_dep}\n')
         f.write('  pool = seastar_pool\n')
         f.write(f'  subdir = $builddir/{mode}/seastar\n')
         f.write('  target = seastar\n')
-        f.write(f'build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n')
+        f.write(f'build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep} || {seastar_gen_headers_dep}\n')
         f.write('  pool = seastar_pool\n')
         f.write(f'  subdir = $builddir/{mode}/seastar\n')
         f.write('  target = seastar_testing\n')
@@ -3078,7 +3093,7 @@ def write_build_file(f,
         # (-isystem abseil), never its compiled .a archives, so it needn't
         # wait on abseil's build. No pch_dep either: that's the compiles
         # loop's leaked variable (the PCH can't depend on itself).
-        f.write(f'build $builddir/{mode}/stdafx.hh.pch: cxx_build_precompiled_header.{mode} stdafx.hh | {profile_dep} {seastar_dep} {gen_headers_dep}\n')
+        f.write(f'build $builddir/{mode}/stdafx.hh.pch: cxx_build_precompiled_header.{mode} stdafx.hh | {profile_dep} {seastar_gen_headers_dep} {gen_headers_dep}\n')
         if use_pch_codegen:
             f.write(f'build $builddir/{mode}/stdafx.o: cxx_pch_object.{mode} $builddir/{mode}/stdafx.hh.pch\n')
 
