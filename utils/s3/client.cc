@@ -11,7 +11,6 @@
 #include <initializer_list>
 #include <memory>
 #include <numeric>
-#include <regex>
 #include <stdexcept>
 #if __has_include(<rapidxml.h>)
 #include <rapidxml.h>
