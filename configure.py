@@ -2615,7 +2615,10 @@ def write_build_file(f,
             command = ./idl-compiler.py --ns ser -f $in -o $out
             description = IDL compiler $out
         rule ninja
-            command = {ninja} -C $subdir $jobs $target
+            # nice: when scylla TUs saturate the cores the submodule builds
+            # yield to them (they have huge slack before the final link);
+            # on an otherwise idle machine they still run at full speed.
+            command = nice -n10 {ninja} -C $subdir $jobs $target
             restat = 1
             description = NINJA $out
         rule ragel
@@ -2784,7 +2787,7 @@ def write_build_file(f,
               description = TEST {mode}
             # This rule is unused for PGO stages. They use the rust lib from the parent mode.
             rule rust_lib.{mode}
-              command = CARGO_BUILD_DEP_INFO_BASEDIR='.' CARGO_NET_RETRY=10 {rustc_wrapper}cargo build --locked --jobs={rust_jobs} {rust_features} --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
+              command = CARGO_BUILD_DEP_INFO_BASEDIR='.' CARGO_NET_RETRY=10 nice -n10 {rustc_wrapper}cargo build --locked --jobs={rust_jobs} {rust_features} --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
                         && touch $out
               description = RUST_LIB $out
             ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, rust_jobs=rust_jobs, rust_features=('' if args.wasmtime else '--no-default-features'), pch_codegen_flag=pch_codegen_flag, **modeval))
