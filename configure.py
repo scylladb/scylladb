@@ -2652,6 +2652,12 @@ def write_build_file(f,
 
     for mode in build_modes:
         modeval = modes[mode]
+        # -fpch-codegen (dev only): emit inline/template code instantiated in the
+        # PCH once, into stdafx.o, instead of weak copies in every including TU.
+        # Kept out of release/debug to leave LTO'd/asserted builds untouched.
+        use_pch_codegen = use_precompiled_header and mode == 'dev'
+        pch_codegen_flag = '-fpch-codegen' if use_pch_codegen else ''
+        pch_object = f'$builddir/{mode}/stdafx.o' if use_pch_codegen else ''
         seastar_lib_ext = 'so' if modeval['build_seastar_shared_libs'] else 'a'
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
@@ -2669,9 +2675,16 @@ def write_build_file(f,
               description = CXX $out
               depfile = $out.d
             rule cxx_build_precompiled_header.{mode}
-              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -fpch-instantiate-templates -Xclang -emit-pch -DSCYLLA_USE_PRECOMPILED_HEADER
+              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -fpch-instantiate-templates {pch_codegen_flag} -Xclang -emit-pch -DSCYLLA_USE_PRECOMPILED_HEADER
               description = CXX-PRECOMPILED-HEADER $out
               depfile = $out.d
+            # Compiles the PCH itself to an object holding the single strong copy of
+            # inline/template code the -fpch-codegen PCH externalized; every binary
+            # linking PCH-built objects must link it. Include paths/-MD don't apply
+            # to a serialized AST input, hence the unused-argument suppression.
+            rule cxx_pch_object.{mode}
+              command = $cxx {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Wno-unused-command-line-argument
+              description = CXX-PCH-OBJECT $out
             rule cxx_with_pch.{mode}
               command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -Xclang -include-pch -Xclang $builddir/{mode}/stdafx.hh.pch
               description = CXX $out
@@ -2721,7 +2734,7 @@ def write_build_file(f,
               command = CARGO_BUILD_DEP_INFO_BASEDIR='.' CARGO_NET_RETRY=10 {rustc_wrapper}cargo build --locked --jobs={rust_jobs} --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
                         && touch $out
               description = RUST_LIB $out
-            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, rust_jobs=rust_jobs, **modeval))
+            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, rust_jobs=rust_jobs, pch_codegen_flag=pch_codegen_flag, **modeval))
         aws_errors_gen_dir = '$builddir/{}/gen'.format(mode)
         aws_errors_gen_hh = '{}/utils/s3/aws_error_definitions_generated.hh'.format(aws_errors_gen_dir)
         aws_errors_gen_cc = '{}/utils/s3/aws_error_definitions_generated.cc'.format(aws_errors_gen_dir)
@@ -2755,6 +2768,7 @@ def write_build_file(f,
         # object code. And we enable LTO when linking the main Scylla executable, while disable
         # it when linking anything else.
 
+        scylla_srcs = frozenset(deps['scylla'])
         for binary in sorted(build_artifacts):
             if modeval['is_profile'] and binary != "scylla":
                 # Just to avoid clutter in build.ninja
@@ -2815,6 +2829,11 @@ def write_build_file(f,
             else:
                 local_libs += ' -fno-lto'
             use_pch = use_precompiled_header and binary == 'scylla'
+            # With -fpch-codegen, any binary linking objects compiled against the
+            # PCH must also link stdafx.o (the externalized PCH code lives there).
+            links_pch_object = use_pch_codegen and (binary == 'scylla' or any(src in scylla_srcs for src in srcs))
+            if links_pch_object:
+                objs.append(pch_object)
             if binary in tests:
                 if binary in pure_boost_tests:
                     local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
@@ -2822,6 +2841,12 @@ def write_build_file(f,
                     local_libs += f' {seastar_testing_libs}'
                 else:
                     local_libs += ' ' + '-lgnutls' + ' ' + '-lboost_unit_test_framework'
+                    if links_pch_object:
+                        # stdafx.o emits every inline instantiated in the PCH,
+                        # including liburing's inline wrappers; the seastar
+                        # testing lib set (which carries -luring) isn't linked
+                        # into these tests, so add it explicitly.
+                        local_libs += ' -luring'
                 # Our code's debugging information is huge, and multiplied
                 # by many tests yields ridiculous amounts of disk space.
                 # So we strip the tests by default; The user can very
@@ -3014,6 +3039,8 @@ def write_build_file(f,
         # wait on abseil's build. No pch_dep either: that's the compiles
         # loop's leaked variable (the PCH can't depend on itself).
         f.write(f'build $builddir/{mode}/stdafx.hh.pch: cxx_build_precompiled_header.{mode} stdafx.hh | {profile_dep} {seastar_dep} {gen_headers_dep}\n')
+        if use_pch_codegen:
+            f.write(f'build $builddir/{mode}/stdafx.o: cxx_pch_object.{mode} $builddir/{mode}/stdafx.hh.pch\n')
 
         f.write(f'build $builddir/{mode}/seastar/apps/iotune/iotune: ninja $builddir/{mode}/seastar/build.ninja | $builddir/{mode}/seastar/libseastar.{seastar_lib_ext}\n')
         f.write('  pool = seastar_pool\n')
