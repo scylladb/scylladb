@@ -927,6 +927,9 @@ scylla_core = (['message/messaging_service.cc',
                 'message/advanced_rpc_compressor.cc',
                 'message/stream_compressor.cc',
                 'message/dict_trainer.cc',
+                ] + scylla_raft_core + [  # raft/server.cc (~6s) was the last
+                # TU of every clean build when appended at the end (see the
+                # scheduling note above).
                 'replica/database.cc',
                 'replica/schema_describe_helper.cc',
                 'replica/table.cc',
@@ -1425,8 +1428,7 @@ scylla_core = (['message/messaging_service.cc',
                       'lang/wasm_alien_thread_runner.cc',
                       'lang/wasm_instance_cache.cc',
                       'rust/wasmtime_bindings/src/lib.rs'] if args.wasmtime else []) \
-                  + [Antlr3Grammar('cql3/Cql.g')] \
-                  + scylla_raft_core
+                  + [Antlr3Grammar('cql3/Cql.g')]
                )
 
 api = ['api/api.cc',
@@ -3051,17 +3053,9 @@ def write_build_file(f,
                     if '-DSANITIZE' in modeval['cxxflags'] and has_sanitize_address_use_after_scope:
                         flags += ' -fno-sanitize-address-use-after-scope'
                 f.write('  obj_cxxflags = %s\n' % flags)
-        for obj in compiles:
-            src = compiles[obj]
-            # Compiling (not linking) needs only Seastar's generated headers,
-            # not libseastar itself, and only Abseil's checked-in headers, not
-            # its archives - gating TUs on the full submodule builds kept the
-            # first ~45s of a clean build free of any scylla compiles.
-            pch_dep = f'$builddir/{mode}/stdafx.hh.pch' if obj in compiles_with_pch else ''
-            cxx_cmd = 'cxx_with_pch' if obj in compiles_with_pch else 'cxx'
-            f.write(f'build {obj}: {cxx_cmd}.{mode} {src} | {profile_dep} {seastar_gen_headers_dep} {gen_headers_dep} {pch_dep}\n')
-            if src in modeval['per_src_extra_cxxflags']:
-                f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=modeval["per_src_extra_cxxflags"][src], **modeval))
+        # Swagger objects are emitted before the regular compiles for the
+        # same tie-break reason as the ANTLR objects above; left after them
+        # they were consistently the second-to-last tail cluster.
         for swagger in swaggers:
             hh = swagger.headers(gen_dir)[0]
             cc = swagger.sources(gen_dir)[0]
@@ -3075,6 +3069,17 @@ def write_build_file(f,
                 f.write(f'build {obj}: cxx_with_pch.{mode} {cc} | {profile_dep} {swagger_pch_dep}\n')
             else:
                 f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep} {seastar_gen_headers_dep}\n')
+        for obj in compiles:
+            src = compiles[obj]
+            # Compiling (not linking) needs only Seastar's generated headers,
+            # not libseastar itself, and only Abseil's checked-in headers, not
+            # its archives - gating TUs on the full submodule builds kept the
+            # first ~45s of a clean build free of any scylla compiles.
+            pch_dep = f'$builddir/{mode}/stdafx.hh.pch' if obj in compiles_with_pch else ''
+            cxx_cmd = 'cxx_with_pch' if obj in compiles_with_pch else 'cxx'
+            f.write(f'build {obj}: {cxx_cmd}.{mode} {src} | {profile_dep} {seastar_gen_headers_dep} {gen_headers_dep} {pch_dep}\n')
+            if src in modeval['per_src_extra_cxxflags']:
+                f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=modeval["per_src_extra_cxxflags"][src], **modeval))
         for hh in serializers:
             src = serializers[hh]
             f.write('build {}: serializer {} | idl-compiler.py\n'.format(hh, src))
