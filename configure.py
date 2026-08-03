@@ -3435,7 +3435,11 @@ def configure_using_cmake(args):
         'CMAKE_DEFAULT_CONFIGS': selected_configs,
         'CMAKE_C_COMPILER': args.cc,
         'CMAKE_CXX_COMPILER': args.cxx,
-        'CMAKE_CXX_FLAGS': args.user_cflags + ("" if args.disable_precompiled_header else " -fpch-validate-input-files-content"),
+        # -fpch-validate-input-files-content is deliberately NOT added here:
+        # CMakeLists.txt adds it via add_compile_options() after the seastar
+        # and abseil subdirectories, keeping it (correctly) off their TUs.
+        # Adding it to the global CMAKE_CXX_FLAGS would leak it into both.
+        'CMAKE_CXX_FLAGS': args.user_cflags,
         'CMAKE_EXE_LINKER_FLAGS': args.user_ldflags,
         'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
         'Scylla_CHECK_HEADERS': 'ON',
