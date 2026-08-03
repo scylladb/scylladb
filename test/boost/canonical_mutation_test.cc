@@ -9,6 +9,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include "db/schema_tables.hh"
 #include "mutation/canonical_mutation.hh"
 #include "mutation/async_utils.hh"
 #include "test/lib/mutation_source_test.hh"
@@ -52,5 +53,20 @@ SEASTAR_TEST_CASE(test_reading_with_different_schemas) {
                 assert_that(cm2.to_mutation(m1.schema())).is_equal_to(m);
             }
         });
+    });
+}
+
+SEASTAR_TEST_CASE(test_scylla_table_configs_mutation_roundtrips) {
+    return seastar::async([] {
+        auto schema = db::schema_tables::scylla_tables();
+        const std::map<sstring, sstring> config_cases[] = {
+            {{"auto_repair_enabled", "false"}},
+            {},
+        };
+        for (const auto& configs : config_cases) {
+            auto mut = db::schema_tables::make_scylla_table_configs_mutation("ks_cfg", "tbl", configs, api::timestamp_type(1));
+            auto cm = canonical_mutation(mut);
+            assert_that(cm.to_mutation(schema)).is_equal_to(mut);
+        }
     });
 }

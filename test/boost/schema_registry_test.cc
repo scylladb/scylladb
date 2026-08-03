@@ -20,6 +20,7 @@
 #include "schema/schema_builder.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "db/config.hh"
+#include "db/cluster_config_registry.hh"
 #include "db/schema_applier.hh"
 #include "db/schema_tables.hh"
 #include "types/list.hh"
@@ -85,6 +86,59 @@ SEASTAR_THREAD_TEST_CASE(test_load_with_cdc_schema) {
     }).get();
 
     BOOST_REQUIRE(s_loaded->cdc_schema()->version() == s_cdc->version());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_v0_feature_is_supported) {
+    dummy_init dummy;
+    auto features = dummy.fs.supported_feature_set();
+    BOOST_REQUIRE(features.contains("CLUSTER_CONFIG_REGISTRY_V0"));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_current_version_follows_feature_gate) {
+    dummy_init dummy;
+
+    dummy.fs.cluster_config_registry_v0.enable();
+
+    BOOST_REQUIRE(
+        db::cluster_config_registry::current_version(dummy.fs)
+        == std::optional<db::cluster_config_registry::version>(db::cluster_config_registry::version::v0));
+
+    gms::feature_config cfg;
+    cfg.disabled_features.emplace("CLUSTER_CONFIG_REGISTRY_V0");
+    gms::feature_service fs(cfg);
+
+    BOOST_REQUIRE(db::cluster_config_registry::current_version(fs) == std::nullopt);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_declares_option_scope_and_type_rules) {
+    const auto* auto_repair_enabled = db::cluster_config_registry::find("auto_repair_enabled");
+    BOOST_REQUIRE(auto_repair_enabled != nullptr);
+    BOOST_REQUIRE(auto_repair_enabled->type == db::cluster_config_registry::value_type::boolean);
+    BOOST_REQUIRE(db::cluster_config_registry::supports_scope(*auto_repair_enabled, db::cluster_config_registry::scope::cluster));
+    BOOST_REQUIRE(db::cluster_config_registry::supports_scope(*auto_repair_enabled, db::cluster_config_registry::scope::keyspace));
+    BOOST_REQUIRE(db::cluster_config_registry::supports_scope(*auto_repair_enabled, db::cluster_config_registry::scope::table));
+    BOOST_REQUIRE(!db::cluster_config_registry::supports_scope(*auto_repair_enabled, db::cluster_config_registry::scope::node));
+
+    BOOST_REQUIRE(!db::cluster_config_registry::validate_value(*auto_repair_enabled, "true"));
+    BOOST_REQUIRE(db::cluster_config_registry::validate_value(*auto_repair_enabled, "1"));
+
+    // Only auto_repair_enabled is part of this feature; other options must not be registered.
+    BOOST_REQUIRE(db::cluster_config_registry::find("gc_grace_seconds") == nullptr);
+    BOOST_REQUIRE(db::cluster_config_registry::find("compaction_static_shares") == nullptr);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_only_exposes_options_visible_in_active_version) {
+    dummy_init dummy;
+    dummy.fs.cluster_config_registry_v0.enable();
+    const auto current_version = db::cluster_config_registry::current_version(dummy.fs);
+
+    BOOST_REQUIRE(db::cluster_config_registry::find("auto_repair_enabled", current_version) != nullptr);
+
+    gms::feature_config cfg;
+    cfg.disabled_features.emplace("CLUSTER_CONFIG_REGISTRY_V0");
+    gms::feature_service fs(cfg);
+
+    BOOST_REQUIRE(db::cluster_config_registry::find("auto_repair_enabled", db::cluster_config_registry::current_version(fs)) == nullptr);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_learn_schema_with_cdc) {
