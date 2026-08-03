@@ -528,18 +528,30 @@ class ManagerClient:
         logger.debug("ManagerClient unpausing %s", server_id)
         await self.client.put_json(f"/cluster/server/{server_id}/unpause")
 
-    async def server_switch_executable(self, server_id: ServerNum, path: str) -> None:
-        """Switch the executable path of a stopped server"""
+    async def server_switch_executable(self, server_id: ServerNum, path: str,
+                                        version: Optional[ScyllaVersionDescription] = None) -> None:
+        """Switch the executable path of a stopped server.
+
+        If `version` is given, also recompute the server's cmdline_options for that
+        version, so version-specific argv from the previous version doesn't leak into
+        the new one.
+        """
         logger.debug("ManagerClient starting %s", server_id)
-        data = {"path": path}
+        data = {"path": path, "version": version._asdict() if version is not None else None}
         await self.client.put_json(f"/cluster/server/{server_id}/switch_executable", data)
 
-    async def server_change_version(self, server_id: ServerNum, exe: str):
-        """ Upgrades a running Scylla node by switching it to a new binary version 
+    async def server_change_version(self, server_id: ServerNum, exe: str,
+                                     version: Optional[ScyllaVersionDescription] = None):
+        """ Upgrades a running Scylla node by switching it to a new binary version
             specified by the 'exe' parameter.
+
+        If `version` is given, it is forwarded to server_switch_executable() so the
+        server's cmdline_options are recomputed for that version, rather than carrying
+        over version-specific argv from whatever version the server was previously
+        running (see server_switch_executable's docstring).
         """
         await self.server_stop_gracefully(server_id)
-        await self.server_switch_executable(server_id, exe)
+        await self.server_switch_executable(server_id, exe, version)
         await self.server_start(server_id)
 
     async def server_wipe_sstables(self, server_id: ServerNum, keyspace: str, table: str) -> None:

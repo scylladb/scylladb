@@ -233,6 +233,21 @@ async def get_scylla_2025_1_description(build_mode: str) -> ScyllaVersionDescrip
         argv=[],
     )
 
+
+async def get_scylla_2026_1_executable(build_mode: str) -> str:
+    is_debug = build_mode == 'debug' or build_mode == 'sanitize'
+    package = "debug" if is_debug else ""
+    arch = platform.machine()
+    return fetch_and_install_scylla_version(2026, 1, arch=arch, pack=package)
+
+
+async def get_scylla_2026_1_description(build_mode: str) -> ScyllaVersionDescription:
+    return ScyllaVersionDescription(
+        path=str(await get_scylla_2026_1_executable(build_mode)),
+        config={},
+        argv=[],
+    )
+
 # [--smp, 1], [--smp, 2] -> [--smp, 2]
 # [--smp, 1], [--smp] -> [--smp]
 # [--smp, 1], [--smp, __missing__] -> [--smp]
@@ -363,6 +378,10 @@ class ScyllaServer:
         self.vardir = pathlib.Path(vardir)
         self.logger = logger
         self.log_file = None
+        # Kept so a later switch_executable() to a different version can recompute
+        # cmdline_options without re-baking in the old version's version-specific argv
+        # (e.g. a --logger-log-level for a logger the new executable doesn't know about).
+        self._user_cmdline_options = cmdline_options
         self.cmdline_options = merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, version.argv)
         self.cmdline_options = merge_cmdline_options(self.cmdline_options, cmdline_options)
         self.cluster_name = cluster_name
@@ -589,6 +608,14 @@ class ScyllaServer:
         """Update the command-line options by merging the new options into the existing ones.
            Takes effect only after the node is restarted."""
         self.cmdline_options = merge_cmdline_options(self.cmdline_options, cmdline_options)
+
+    def switch_version(self, version: ScyllaVersionDescription) -> None:
+        """Recompute cmdline_options for a different Scylla version, so that
+           version-specific argv (e.g. from ScyllaVersionDescription.argv) doesn't
+           leak across a switch_executable() to a version which doesn't support it.
+           Takes effect only after the node is restarted."""
+        self.cmdline_options = merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, version.argv)
+        self.cmdline_options = merge_cmdline_options(self.cmdline_options, self._user_cmdline_options)
 
     def take_log_savepoint(self) -> None:
         """Save the server current log size when a test starts so that if
@@ -1550,14 +1577,23 @@ class ScyllaCluster:
         server = self.running[server_id]
         server.unpause()
 
-    def server_switch_executable(self, server_id: ServerNum, path: str) -> None:
-        """Switch the executable path of a stopped server"""
+    def server_switch_executable(self, server_id: ServerNum, path: str,
+                                  version: Optional[ScyllaVersionDescription] = None) -> None:
+        """Switch the executable path of a stopped server.
+
+        If `version` is given, also recompute the server's cmdline_options for that
+        version, so version-specific argv from the previous version (e.g. a
+        --logger-log-level for a logger unknown to the new executable) doesn't leak
+        into the new one.
+        """
         self.logger.info("Cluster %s upgrading server %s to executable %s", self.name, server_id, path)
         server = self.servers[server_id]
         assert not server.is_running, f"Server {server_id} is running: stop it first and then change its executable"
         self.is_dirty = True
         server.exe = pathlib.Path(path).resolve()
         server.check_scylla_executable()
+        if version is not None:
+            server.switch_version(version)
 
     def server_get_process_status(self, server_id: ServerNum) -> str:
         assert server_id in self.running
@@ -2178,9 +2214,11 @@ class ScyllaClusterManager:
         """Switch the executable of the server to the one specified by 'path'
            Marks the cluster as dirty."""
         assert self.cluster
-        path = (await request.json())["path"]
+        data = await request.json()
+        path = data["path"]
+        version = ScyllaVersionDescription(**data["version"]) if "version" in data and data["version"] is not None else None
         server_id = ServerNum(int(request.match_info["server_id"]))
-        self.cluster.server_switch_executable(server_id, path)
+        self.cluster.server_switch_executable(server_id, path, version)
 
     async def _server_change_ip(self, request: aiohttp.web.Request) -> dict[str, object]:
         """Pass change_ip command for the given server to the cluster"""
