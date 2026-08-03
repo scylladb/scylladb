@@ -2741,10 +2741,10 @@ def write_build_file(f,
 
     for mode in build_modes:
         modeval = modes[mode]
-        # -fpch-codegen (dev only): emit inline/template code instantiated in the
-        # PCH once, into stdafx.o, instead of weak copies in every including TU.
-        # Kept out of release/debug to leave LTO'd/asserted builds untouched.
-        use_pch_codegen = use_precompiled_header and mode == 'dev'
+        # -fpch-codegen (dev/debug only): emit inline/template code instantiated
+        # in the PCH once, into stdafx.o, instead of weak copies in every
+        # including TU. Kept out of release to leave the LTO'd build untouched.
+        use_pch_codegen = use_precompiled_header and mode in ('dev', 'debug')
         pch_codegen_flag = '-fpch-codegen' if use_pch_codegen else ''
         pch_object = f'$builddir/{mode}/stdafx.o' if use_pch_codegen else ''
         seastar_lib_ext = 'so' if modeval['build_seastar_shared_libs'] else 'a'
