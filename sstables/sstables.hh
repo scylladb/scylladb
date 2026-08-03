@@ -286,6 +286,10 @@ public:
     // put it into the desired destination assigning the given generation
     future<> pick_up_from_upload(sstable_state to, generation_type new_generation);
 
+    // The sstable generation represents the node/shard reference to the sstable.
+    // When the sstable is created, the sstable identifier is equal to the sstable generation,
+    // but over time, e.g. when a sstable is migrated across shards or nodes, its identifier
+    // remains stable, while the generation changes to reflect the new node/shard reference.
     generation_type generation() const {
         return _generation;
     }
@@ -1172,7 +1176,18 @@ public:
         return _unlinked_at;
     }
 
-    // sstable_id is null iff not present in scylla_metadata
+    // The sstable identifier identifies the sstable globally across all nodes, shards, and over time.
+    // When the sstable is created, the sstable identifier is equal to the sstable generation,
+    // but over time, e.g. when a sstable is migrated across shards or nodes, its identifier
+    // remains stable, while the generation changes to reflect the new node/shard reference.
+    //
+    // On object-storage, the sstable identifier comes as part of the sstable prefix,
+    // while the generation is used to identify the node reference to the sstable.
+    // The generation-based references control the sstable lifetime across migrations, sstable sharing,
+    // and across snapshot and backup operations.
+    //
+    // The sstable_identifier is null iff not present in scylla_metadata
+    // It is required to be set for all sstables stored on object storage.
     const optimized_optional<sstable_id>& sstable_identifier() const noexcept {
         return _sstable_identifier;
     }
