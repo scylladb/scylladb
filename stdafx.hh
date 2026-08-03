@@ -139,7 +139,6 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/gate.hh>
-#include <seastar/core/idle_cpu_handler.hh>
 #include <seastar/core/internal/api-level.hh>
 #include <seastar/core/internal/buffer_allocator.hh>
 #include <seastar/core/internal/estimated_histogram.hh>
@@ -252,7 +251,6 @@
 #include <seastar/util/memory_diagnostics.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/util/optimized_optional.hh>
-#include <seastar/util/process.hh>
 #include <seastar/util/program-options.hh>
 #include <seastar/util/reference_wrapper.hh>
 #include <seastar/util/sampler.hh>
