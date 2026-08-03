@@ -37,6 +37,7 @@ class keyspace_metadata final {
     user_types_metadata _user_types;
     lw_shared_ptr<const storage_options> _storage_options;
     std::optional<consistency_config_option> _consistency_option;
+    std::map<sstring, sstring> _config_options;
 public:
     keyspace_metadata(std::string_view name,
                  std::string_view strategy_name,
@@ -47,7 +48,8 @@ public:
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{},
                  user_types_metadata user_types = user_types_metadata{},
                  storage_options storage_opts = storage_options{},
-                 std::optional<locator::replication_strategy_config_options> next_options = std::nullopt);
+                 std::optional<locator::replication_strategy_config_options> next_options = std::nullopt,
+                 std::map<sstring, sstring> config_options = {});
     static lw_shared_ptr<keyspace_metadata>
     new_keyspace(std::string_view name,
                  std::string_view strategy_name,
@@ -57,7 +59,8 @@ public:
                  bool durables_writes = true,
                  storage_options storage_opts = {},
                  std::vector<schema_ptr> cf_defs = {},
-                 std::optional<locator::replication_strategy_config_options> next_options = std::nullopt);
+                 std::optional<locator::replication_strategy_config_options> next_options = std::nullopt,
+                 std::map<sstring, sstring> config_options = {});
     static lw_shared_ptr<keyspace_metadata>
     new_keyspace(const keyspace_metadata& ksm);
     void validate(const gms::feature_service&, const locator::topology&) const;
@@ -106,6 +109,12 @@ public:
     }
     const storage_options& get_storage_options() const {
         return *_storage_options;
+    }
+    const std::map<sstring, sstring>& config_options() const noexcept {
+        return _config_options;
+    }
+    void set_config_options(std::map<sstring, sstring> config_options) {
+        _config_options = std::move(config_options);
     }
     lw_shared_ptr<const storage_options> get_storage_options_ptr() {
         return _storage_options;
