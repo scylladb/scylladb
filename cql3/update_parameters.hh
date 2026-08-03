@@ -42,17 +42,17 @@ public:
         using key = std::pair<partition_key, clustering_key>;
         using key_view = std::pair<const partition_key&, const clustering_key&>;
         struct key_less {
-            partition_key::tri_compare pk_cmp;
+            partition_key::compound pk_type;
             clustering_key::tri_compare ck_cmp;
 
             key_less(const schema& s)
-                : pk_cmp(s)
+                : pk_type(partition_key::get_compound_type(s))
                 , ck_cmp(s)
             { }
             std::strong_ordering tri_compare(const partition_key& pk1, const clustering_key& ck1,
                     const partition_key& pk2, const clustering_key& ck2) const {
 
-                std::strong_ordering rc = pk_cmp(pk1, pk2);
+                std::strong_ordering rc = pk_type->compare(pk1.representation(), pk2.representation());
                 return rc != 0 ? rc : ck_cmp(ck1, ck2);
             }
             // Allow mixing std::pair<partition_key, clustering_key> and
