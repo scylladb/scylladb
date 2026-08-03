@@ -909,6 +909,46 @@ scylla_raft_core = [
     'raft/log.cc',
 ]
 
+# TUs measured at >=1.5GB peak compiler RSS (dev mode, clang). Their compiles
+# go through heavy_mem_pool so a high -j can't co-schedule enough multi-GB
+# clang processes to OOM the machine (ninja's default -j is nproc+2, which on
+# a 16-thread/30GB box would otherwise allow ~35GB of concurrent compile RSS).
+# To regenerate: configure with --compiler-cache=<wrapper recording
+# ru_maxrss per compile via os.wait4>, full clean build, take TUs >= 1.5GB.
+heavy_mem_compiles = {
+    'alternator/executor.cc',
+    'api/column_family.cc',
+    'api/storage_service.cc',
+    'cql3/statements/describe_statement.cc',
+    'cql3/statements/select_statement.cc',
+    'db/config.cc',
+    'db/schema_applier.cc',
+    'db/schema_tables.cc',
+    'db/snapshot/cluster_backup.cc',
+    'db/system_keyspace.cc',
+    'db/view/view.cc',
+    'db/view/view_building_worker.cc',
+    'db/virtual_tables.cc',
+    'main.cc',
+    'message/messaging_service.cc',
+    'repair/repair.cc',
+    'repair/row_level.cc',
+    'replica/database.cc',
+    'replica/table.cc',
+    'service/storage_proxy.cc',
+    'service/storage_service.cc',
+    'service/tablet_allocator.cc',
+    'service/topology_coordinator.cc',
+    'sstables_loader.cc',
+    'sstables/sstables.cc',
+    'test/lib/cql_test_env.cc',
+    'test/perf/perf_fast_forward.cc',
+    'test/perf/perf_simple_query.cc',
+    'test/perf/perf_sstable.cc',
+    'tools/schema_loader.cc',
+    'tools/scylla-sstable.cc',
+}
+
 scylla_core = (['message/messaging_service.cc',
                 # These 7 are individually slow (7-22s each) but were
                 # positioned at the very end of this list, where a clean
@@ -1948,6 +1988,10 @@ globals().update(vars(args))
 total_memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
 # assuming each link job takes around 7GiB of memory without LTO
 link_pool_depth = max(int(total_memory / 7e9), 1)
+# Cap on concurrently-compiling memory-hungry TUs (heavy_mem_compiles
+# below): each peaks at 1.5-3.1GB RSS; unbounded, a high -j (ninja's
+# default is nproc+2) can co-schedule enough of them to OOM the machine.
+heavy_mem_pool_depth = max(int(total_memory / 7e9), 2)
 if args.lto:
     # ThinLTO provides its own parallel linking, use 16GiB for RAM size used
     # by each link job
@@ -2587,6 +2631,13 @@ def write_build_file(f,
             depth = 1
         pool abseil_pool
             depth = 1
+        # Bounds how many memory-hungry TUs (measured >=1.5GB peak RSS,
+        # see heavy_mem_compiles in configure.py) compile concurrently,
+        # so high -j (including ninja's default of nproc+2) can't stack
+        # several multi-GB clang processes into an OOM. Sized like
+        # link_pool: one slot per ~7GB of RAM, at least 2.
+        pool heavy_mem_pool
+            depth = {heavy_mem_pool_depth}
         rule gen
             command = echo -e $text > $out
             description = GEN $out
@@ -2672,6 +2723,7 @@ def write_build_file(f,
                     rustc_target=rustc_target,
                     rustc_wrapper=rustc_wrapper,
                     link_pool_depth=link_pool_depth,
+                    heavy_mem_pool_depth=heavy_mem_pool_depth,
                     seastar_path=args.seastar_path,
                     ninja=ninja,
                     ragel_exec=args.ragel_exec))
@@ -3091,6 +3143,8 @@ def write_build_file(f,
             pch_dep = f'$builddir/{mode}/stdafx.hh.pch' if obj in compiles_with_pch else ''
             cxx_cmd = 'cxx_with_pch' if obj in compiles_with_pch else 'cxx'
             f.write(f'build {obj}: {cxx_cmd}.{mode} {src} | {profile_dep} {seastar_gen_headers_dep} {gen_headers_dep} {pch_dep}\n')
+            if src in heavy_mem_compiles:
+                f.write('    pool = heavy_mem_pool\n')
             if src in modeval['per_src_extra_cxxflags']:
                 f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=modeval["per_src_extra_cxxflags"][src], **modeval))
         for hh in serializers:
