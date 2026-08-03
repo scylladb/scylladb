@@ -28,12 +28,34 @@
 #include "utils/s3/creds.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/lister.hh"
+#include "utils/rjson.hh"
 
 using namespace seastar;
 using namespace sstables;
 using namespace utils;
 
 static logging::logger osclog("object_storage_client");
+
+static rjson::value make_gcs_object_metadata(const object_storage_attributes& attributes) {
+    if (attributes.empty()) {
+        return {};
+    }
+    rjson::value metadata = rjson::empty_object();
+    for (const auto& [key, value] : attributes) {
+        rjson::add_with_string_name(metadata, key, rjson::from_string(value));
+    }
+    rjson::value object_metadata = rjson::empty_object();
+    rjson::add(object_metadata, "metadata", std::move(metadata));
+    return object_metadata;
+}
+
+static object_storage_attributes make_attributes(std::unordered_map<std::string, std::string>&& attributes) {
+    object_storage_attributes ret;
+    for (auto& [key, value] : attributes) {
+        ret.emplace(sstring(key), sstring(value));
+    }
+    return ret;
+}
 
 
 sstables::object_name::object_name(std::string_view bucket, std::string_view prefix, std::string_view type)
@@ -87,11 +109,11 @@ public:
         return lc ? dynamic_pointer_cast<s3_client_wrapper>(lc)->_client : shared_ptr<s3::client>{};
     }
 
-    future<> put_object(object_name name, ::memory_data_sink_buffers bufs, abort_source* as) override {
-        return _client->put_object(name.str(), std::move(bufs), as);
+    future<> put_object(object_name name, ::memory_data_sink_buffers bufs, object_storage_attributes attributes, abort_source* as) override {
+        return _client->put_object(name.str(), std::move(bufs), std::move(attributes), as);
     }
-    future<> copy_object(object_name src, object_name dst, abort_source* as) override {
-        return _client->copy_object(src.str(), dst.str(), std::nullopt, std::nullopt, as);
+    future<> copy_object(object_name src, object_name dst, object_storage_attributes attributes, abort_source* as) override {
+        return _client->copy_object(src.str(), dst.str(), std::move(attributes), std::nullopt, std::nullopt, as);
     }
     future<> delete_object(object_name name, abort_source* as) override {
         return _client->delete_object(name.str(), as);
@@ -99,17 +121,21 @@ public:
     file make_readable_file(object_name name, abort_source* as) override {
         return _client->make_readable_file(name.str(), as);
     }
-    data_sink make_data_upload_sink(object_name name, std::optional<unsigned> max_parts_per_piece, abort_source* as) override {
-        return _client->make_upload_jumbo_sink(name.str(), max_parts_per_piece, as);
+    data_sink make_data_upload_sink(object_name name, std::optional<unsigned> max_parts_per_piece, object_storage_attributes attributes, abort_source* as) override {
+        return _client->make_upload_jumbo_sink(name.str(), max_parts_per_piece, std::move(attributes), as);
     }
-    data_sink make_upload_sink(object_name name, abort_source* as) override {
-        return _client->make_upload_sink(name.str(), as);
+    data_sink make_upload_sink(object_name name, object_storage_attributes attributes, abort_source* as) override {
+        return _client->make_upload_sink(name.str(), std::move(attributes), as);
     }
     data_source make_download_source(object_name name, abort_source* as) override {
         return _client->make_chunked_download_source(name.str(), s3::full_range, as);
     }
     future<bool> object_exists(object_name name, abort_source* as) override {
         return _client->object_exists(name.str(), as);
+    }
+    future<object_storage_metadata> get_object_metadata(object_name name, abort_source* as) override {
+        auto info = co_await _client->get_object_info(name.str(), as);
+        co_return object_storage_metadata{ .attributes = std::move(info.metadata) };
     }
     abstract_lister make_object_lister(std::string bucket, std::string prefix, lister::filter_type filter) override {
         return abstract_lister::make<s3::client::bucket_lister>(_client, std::move(bucket), std::move(prefix), std::move(filter));
@@ -163,16 +189,16 @@ public:
         })
     {}
 
-    future<> put_object(object_name name, ::memory_data_sink_buffers bufs, abort_source* as) override {
-        auto sink = _client->create_upload_sink(name.bucket(), name.object(), {}, as);
+    future<> put_object(object_name name, ::memory_data_sink_buffers bufs, object_storage_attributes attributes, abort_source* as) override {
+        auto sink = _client->create_upload_sink(name.bucket(), name.object(), make_gcs_object_metadata(attributes), as);
         for (auto&& buf : bufs.buffers()) {
             co_await sink.put(std::move(buf));
         }
         co_await sink.flush();
         co_await sink.close();
     }
-    future<> copy_object(object_name src, object_name dst, abort_source* as) override {
-        return _client->copy_object(src.bucket(), src.object(), dst.bucket(), dst.object(), as);
+    future<> copy_object(object_name src, object_name dst, object_storage_attributes attributes, abort_source* as) override {
+        return _client->copy_object(src.bucket(), src.object(), dst.bucket(), dst.object(), make_gcs_object_metadata(attributes), as);
     }
     future<> delete_object(object_name name, abort_source* as) override {
         return _client->delete_object(name.bucket(), name.object(), as);
@@ -183,17 +209,21 @@ public:
                     return scf();
                 }, as);
     }
-    data_sink make_data_upload_sink(object_name name, std::optional<unsigned> max_parts_per_piece, abort_source* as) override {
-        return make_upload_sink(std::move(name), as);
+    data_sink make_data_upload_sink(object_name name, std::optional<unsigned> max_parts_per_piece, object_storage_attributes attributes, abort_source* as) override {
+        return make_upload_sink(std::move(name), std::move(attributes), as);
     }
-    data_sink make_upload_sink(object_name name, abort_source* as) override {
-        return _client->create_upload_sink(name.bucket(), name.object(), {}, as);
+    data_sink make_upload_sink(object_name name, object_storage_attributes attributes, abort_source* as) override {
+        return _client->create_upload_sink(name.bucket(), name.object(), make_gcs_object_metadata(attributes), as);
     }
     data_source make_download_source(object_name name, abort_source* as) override {
         return _client->create_download_source(name.bucket(), name.object(), as);
     }
     future<bool> object_exists(object_name name, abort_source* as) override {
         return _client->object_exists(name.bucket(), name.object(), as);
+    }
+    future<object_storage_metadata> get_object_metadata(object_name name, abort_source* as) override {
+        auto info = co_await _client->get_object_info(name.bucket(), name.object(), as);
+        co_return object_storage_metadata{ .attributes = make_attributes(std::move(info.metadata)) };
     }
     abstract_lister make_object_lister(std::string bucket, std::string prefix, lister::filter_type filter) override {
         class list_impl : public abstract_lister::impl {
@@ -250,7 +280,7 @@ public:
 
         auto upload_one = [this, as, &up, &f](object_name name, uint64_t offset, uint64_t size) -> future<> {
             uint64_t pos = offset;
-            auto sink = make_upload_sink(std::move(name), as);
+            auto sink = make_upload_sink(std::move(name), {}, as);
             while (size > 0) {
                 auto rem = std::min(size, size_t(64*1024));
                 auto buf = co_await f.dma_read_bulk<char>(pos, rem);

@@ -103,7 +103,7 @@ public:
     // Clone an sstable to a new generation, linking or copying all components except those in excluded_components.
     virtual future<> link_with_excluded_components(const sstable& sst, generation_type new_gen,
             const std::unordered_set<component_type>& excluded_components,
-            optimized_optional<sstable_id> new_sid = {}) const = 0;
+            optimized_optional<sstable_id> new_sid) const = 0;
     virtual ~storage() {}
 
     using sync_dir = bool_class<struct sync_dir_tag>; // meaningful only to filesystem storage
@@ -114,6 +114,7 @@ public:
     // and use their natural clone method.
     virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const = 0;
     virtual future<> change_state(const sstable& sst, sstable_state to, generation_type generation, delayed_commit_changes* delay) = 0;
+    virtual void use_live_object_storage_prefix() {}
     // runs in async context
     virtual void open(sstable& sst) = 0;
     // Must never return an exceptional future: implementations are expected

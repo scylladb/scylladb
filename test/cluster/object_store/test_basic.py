@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import subprocess
 import time
 import pytest
 import shutil
@@ -22,7 +23,7 @@ from test.cluster.test_config import wait_for_config
 from test.cluster.util import new_test_keyspace, wait_for_token_ring_and_group0_consistency
 from test.pylib.tablets import get_all_tablet_replicas
 from test.pylib.skip_types import skip_bug
-from test.pylib.util import wait_for
+from test.pylib.util import wait_for, unique_name
 
 logger = logging.getLogger(__name__)
 
@@ -842,3 +843,38 @@ async def test_stream_sink_abort_on_object_storage(manager: ManagerClient, objec
             components, refs = get_components_and_refs()
             logger.error(f"Orphaned components: {components=} {refs=}: {e}")
             raise
+
+
+async def test_scylla_sstable_dump_scylla_metadata(manager: ManagerClient, object_storage, tmp_path):
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf}
+    cmd = ['--logger-log-level', 's3=trace:http=debug:gcp_storage=trace']
+    server = await manager.server_add(config=cfg, cmdline=cmd)
+
+    cql = manager.get_cql()
+
+    print(f'Create keyspace (storage server listening at {object_storage.address})')
+    async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
+        schema = f"CREATE TABLE {ks}.test (name text PRIMARY KEY, value int)"
+        schema_file = os.path.join(tmp_path, f"{unique_name()}-schema.cql")
+        with open(schema_file, "w") as f:
+            f.write(schema)
+        await cql.run_async(schema)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (name, value) VALUES ('{k}', {k});") for k in range(4)])
+
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        # Mark the sstables as "removing" to simulate the problem
+        res = cql.execute("SELECT * FROM system.sstables;")
+        sstables = [row.sstable_id for row in res]
+        logger.debug(f'Found entries: {sstables}')
+
+        scylla_path = await manager.server_get_exe(server.server_id)
+        workdir = await manager.server_get_workdir(server.server_id)
+        args = [scylla_path, "sstable", "dump-scylla-metadata",
+                "--scylla-yaml-file", os.path.join(workdir, "conf", "scylla.yaml"),
+                "--schema-file", schema_file,
+                f"{object_storage.type}://{object_storage.bucket_name}/sstables/{sstables[0]}/TOC.txt"]
+        out = subprocess.check_output(args)
+        assert out
+        assert json.loads(out)
