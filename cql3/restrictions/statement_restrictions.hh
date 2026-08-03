@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include <memory>
+#include <unordered_set>
 #include <vector>
 #include "bounds_slice.hh"
 #include "cql3/expr/expression.hh"
@@ -168,7 +170,7 @@ private:
     std::vector<expr::binary_operator> _scoring_function_restrictions;
 
 
-    std::unordered_set<const column_definition*> _not_null_columns;
+    std::unique_ptr<std::unordered_set<const column_definition*>> _not_null_columns;
 
     /**
      * The restrictions used to build the index expressions
@@ -215,7 +217,7 @@ private:
     /// Elements are conjunctions of single-column binary operators with the same LHS.
     /// Element order follows the indexing-table clustering key.
     /// In case of a global index the first element's (token restriction) RHS is a dummy value, it is filled later.
-    std::optional<std::vector<predicate>> _idx_tbl_ck_prefix;
+    std::unique_ptr<std::vector<predicate>> _idx_tbl_ck_prefix;
 
     /// Parts of _where defining the partition range.
     ///
@@ -232,17 +234,23 @@ private:
     check_indexes _check_indexes = check_indexes::yes;
     /// Columns that appear on the LHS of an EQ restriction (not IN).
     /// For multi-column EQ like (ck1, ck2) = (1, 2), all columns in the tuple are included.
-    std::unordered_set<const column_definition*> _columns_with_eq;
+    std::vector<const column_definition*> _columns_with_eq;
     std::vector<const column_definition*> _column_defs_for_filtering;
     schema_ptr _view_schema;
     std::unique_ptr<secondary_index::index> _idx_opt;
     std::vector<predicate> _idx_column_predicates; ///< Predicates for the chosen index's target column.
     get_partition_key_ranges_fn_t _get_partition_key_ranges_fn;
     get_clustering_bounds_fn_t _get_clustering_bounds_fn;
-    get_clustering_bounds_fn_t _get_global_index_clustering_ranges_fn;
-    get_clustering_bounds_fn_t _get_global_index_token_clustering_ranges_fn;
-    get_clustering_bounds_fn_t _get_local_index_clustering_ranges_fn;
-    get_singleton_value_fn_t _value_for_index_partition_key_fn;
+
+    // Index-related query functions, only allocated for index-backed queries.
+    // For non-index queries (the common case), this is nullptr, saving ~120 bytes.
+    struct index_query_fns {
+        get_clustering_bounds_fn_t get_global_index_clustering_ranges_fn;
+        get_clustering_bounds_fn_t get_global_index_token_clustering_ranges_fn;
+        get_clustering_bounds_fn_t get_local_index_clustering_ranges_fn;
+        get_singleton_value_fn_t value_for_index_partition_key_fn;
+    };
+    std::unique_ptr<index_query_fns> _index_fns;
 public:
     /**
      * Creates a new empty <code>StatementRestrictions</code>.
