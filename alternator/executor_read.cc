@@ -1904,6 +1904,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         schema_ptr schema;
         db::consistency_level cl;
         ::shared_ptr<const std::optional<alternator::attrs_to_get>> attrs_to_get;
+        uint64_t item_count = 0;
         // clustering_keys keeps a sorted set of clustering keys. It must
         // be sorted for the read below (see #10827). Additionally each
         // clustering key is mapped to the original rjson::value "Key".
@@ -1923,12 +1924,15 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             if (auto [_, inserted] = it->second.emplace(ck, &key); !inserted) {
                 throw api_error::validation("Provided list of item keys contains duplicates");
             }
+            item_count++;
         }
     };
     std::vector<table_requests> requests;
-    uint batch_size = 0;
+    uint64_t batch_size = 0;
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
         table_requests rs(get_table_from_batch_request(_proxy, it));
+        lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
+        per_table_stats->api_operations.batch_get_item++;
         tracing::add_alternator_table_name(trace_state, rs.schema->cf_name());
         rs.cl = get_read_consistency(it->value);
         std::unordered_set<std::string> used_attribute_names;
@@ -1940,7 +1944,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             rs.add(key);
             check_key(key, rs.schema);
         }
-        batch_size += rs.requests.size();
+        batch_size += rs.item_count;
         requests.emplace_back(std::move(rs));
     }
 
@@ -1958,7 +1962,8 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         const table_requests& rs = requests[i];
         bool is_quorum = rs.cl == db::consistency_level::LOCAL_QUORUM;
         lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
-        per_table_stats->api_operations.batch_get_item_histogram.add(rs.requests.size());
+        per_table_stats->api_operations.batch_get_item_batch_total += rs.item_count;
+        per_table_stats->api_operations.batch_get_item_histogram.add(rs.item_count);
         for (const auto& [pk, cks] : rs.requests) {
             dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*rs.schema, pk))};
             std::vector<query::clustering_range> bounds;
