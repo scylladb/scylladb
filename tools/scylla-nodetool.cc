@@ -2301,9 +2301,9 @@ void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
             case api::scrub_status::unable_to_cancel:
                 continue;
             case api::scrub_status::aborted:
-                throw operation_failed_on_scylladb("scrub failed: aborted");
+                throw operation_failed_on_scylladb("scrub was aborted");
             case api::scrub_status::validation_errors:
-                throw operation_failed_on_scylladb("scrub failed: there are invalid sstables");
+                throw operation_failed_on_scylladb("scrub found invalid sstables");
         }
     }
 }

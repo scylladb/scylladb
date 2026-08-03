@@ -151,7 +151,7 @@ def test_scrub_validation_errors_exit_code(nodetool, scylla_only):
                     expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
                     expected_request("GET", "/storage_service/keyspace_scrub/ks", params={"scrub_mode": "VALIDATE"},
                                      response=scrub_status.validation_errors.value)]},
-            ["scrub failed: there are invalid sstables"])
+            ["scrub found invalid sstables"])
 
     # Check that when the first scrub fails, nodetool goes on to scrub the remainder
     check_nodetool_fails_with(
@@ -163,7 +163,7 @@ def test_scrub_validation_errors_exit_code(nodetool, scylla_only):
                                      response=scrub_status.validation_errors.value),
                     expected_request("GET", "/storage_service/keyspace_scrub/ks2", params={"scrub_mode": "VALIDATE"},
                                      response=scrub_status.successful.value)]},
-            ["scrub failed: there are invalid sstables"])
+            ["scrub found invalid sstables"])
 
 
 def test_scrub_abort_exit_code(nodetool, scylla_only):
@@ -179,7 +179,7 @@ def test_scrub_abort_exit_code(nodetool, scylla_only):
                     expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
                     expected_request("GET", "/storage_service/keyspace_scrub/ks", params={"scrub_mode": "ABORT"},
                                      response=scrub_status.aborted.value)]},
-            ["scrub failed: aborted"])
+            ["scrub was aborted"])
 
     # Check that when the first scrub fails, nodetool goes on to scrub the remainder
     check_nodetool_fails_with(
@@ -191,7 +191,7 @@ def test_scrub_abort_exit_code(nodetool, scylla_only):
                                      response=scrub_status.aborted.value),
                     expected_request("GET", "/storage_service/keyspace_scrub/ks2", params={"scrub_mode": "ABORT"},
                                      response=scrub_status.successful.value)]},
-            ["scrub failed: aborted"])
+            ["scrub was aborted"])
 
 def test_scrub_drop_unfixable_sstables_option(nodetool):
     nodetool("scrub", "ks", "tbl1", "--mode=SEGREGATE", "--drop-unfixable-sstables", expected_requests=[
