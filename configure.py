@@ -2976,6 +2976,45 @@ def write_build_file(f,
             f.write('build {}: rust_source {}\n'.format(cc, src))
             obj = cc.replace('.cc', '.o')
             compiles[obj] = cc
+        # PCH, stdafx.o and the ANTLR-generated lexers/parsers are emitted
+        # before the regular compiles: on a clean build ninja breaks ties
+        # between equal-priority ready edges by statement order, and these
+        # are the heaviest TUs - left last (their old position) CqlParser.o
+        # (~11s) and stdafx.o (~8s) started only after every other TU and
+        # directly gated the final link.
+        # No abseil_dep on the PCH: it only parses abseil's checked-in
+        # headers (-isystem abseil), never its compiled .a archives, so it
+        # needn't wait on abseil's build.
+        f.write(f'build $builddir/{mode}/stdafx.hh.pch: cxx_build_precompiled_header.{mode} stdafx.hh | {profile_dep} {seastar_gen_headers_dep} {gen_headers_dep}\n')
+        if use_pch_codegen:
+            f.write(f'build $builddir/{mode}/stdafx.o: cxx_pch_object.{mode} $builddir/{mode}/stdafx.hh.pch\n')
+        for grammar in antlr3_grammars:
+            outs = ' '.join(grammar.generated('$builddir/{}/gen'.format(mode)))
+            f.write('build {}: antlr3.{} {}\n  stem = {}\n'.format(outs, mode, grammar.source,
+                                                                   grammar.source.rsplit('.', 1)[0]))
+            for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
+                obj = cc.replace('.cpp', '.o')
+                # The ANTLR-generated lexers/parsers are among the heaviest TUs
+                # in the build and skipped the PCH entirely, paying the full
+                # header-parse cost (same reasoning as the swagger objects).
+                # Parsers in -O0/g/s modes get an -O1 override below; keep
+                # those off the PCH so their options match how it was built.
+                use_grammar_pch = (grammar in antlr3_grammars_with_pch
+                                   and not (cc.endswith('Parser.cpp')
+                                            and modes[mode]['optimization-level'] in ['0', 'g', 's']))
+                if use_grammar_pch:
+                    grammar_pch_dep = f'$builddir/{mode}/stdafx.hh.pch'
+                    f.write(f'build {obj}: cxx_with_pch.{mode} {cc} | {profile_dep} {grammar_pch_dep} || {" ".join(serializers)}\n')
+                else:
+                    f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep} || {" ".join(serializers)}\n')
+                flags = '-Wno-parentheses-equality'
+                if cc.endswith('Parser.cpp'):
+                    # Unoptimized parsers end up using huge amounts of stack space and overflowing their stack
+                    flags += ' -O1' if modes[mode]['optimization-level'] in ['0', 'g', 's'] else ''
+
+                    if '-DSANITIZE' in modeval['cxxflags'] and has_sanitize_address_use_after_scope:
+                        flags += ' -fno-sanitize-address-use-after-scope'
+                f.write('  obj_cxxflags = %s\n' % flags)
         for obj in compiles:
             src = compiles[obj]
             # Compiling (not linking) needs only Seastar's generated headers,
@@ -3029,33 +3068,6 @@ def write_build_file(f,
         if 'parent_mode' not in modes[mode]:
             librust = '$builddir/{}/rust-{}/librust_combined'.format(mode, mode)
             f.write('build {}.a: rust_lib.{} rust/Cargo.lock\n  depfile={}.d\n'.format(librust, mode, librust))
-        for grammar in antlr3_grammars:
-            outs = ' '.join(grammar.generated('$builddir/{}/gen'.format(mode)))
-            f.write('build {}: antlr3.{} {}\n  stem = {}\n'.format(outs, mode, grammar.source,
-                                                                   grammar.source.rsplit('.', 1)[0]))
-            for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
-                obj = cc.replace('.cpp', '.o')
-                # The ANTLR-generated lexers/parsers are among the heaviest TUs
-                # in the build and skipped the PCH entirely, paying the full
-                # header-parse cost (same reasoning as the swagger objects).
-                # Parsers in -O0/g/s modes get an -O1 override below; keep
-                # those off the PCH so their options match how it was built.
-                use_grammar_pch = (grammar in antlr3_grammars_with_pch
-                                   and not (cc.endswith('Parser.cpp')
-                                            and modes[mode]['optimization-level'] in ['0', 'g', 's']))
-                if use_grammar_pch:
-                    grammar_pch_dep = f'$builddir/{mode}/stdafx.hh.pch'
-                    f.write(f'build {obj}: cxx_with_pch.{mode} {cc} | {profile_dep} {grammar_pch_dep} || {" ".join(serializers)}\n')
-                else:
-                    f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep} || {" ".join(serializers)}\n')
-                flags = '-Wno-parentheses-equality'
-                if cc.endswith('Parser.cpp'):
-                    # Unoptimized parsers end up using huge amounts of stack space and overflowing their stack
-                    flags += ' -O1' if modes[mode]['optimization-level'] in ['0', 'g', 's'] else ''
-
-                    if '-DSANITIZE' in modeval['cxxflags'] and has_sanitize_address_use_after_scope:
-                        flags += ' -fno-sanitize-address-use-after-scope'
-                f.write('  obj_cxxflags = %s\n' % flags)
         f.write(f'build $builddir/{mode}/gen/empty.cc: gen\n')
         for hh in headers:
             f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} | $builddir/{mode}/gen/empty.cc {profile_dep} || {gen_headers_dep}\n'.format(
@@ -3088,14 +3100,6 @@ def write_build_file(f,
             f.write(f'  subdir = $builddir/{mode}/abseil\n')
             f.write(f'  target = {lib}\n')
             f.write(f'  profile_dep = {profile_dep}\n')
-
-        # No abseil_dep: the PCH only parses abseil's checked-in headers
-        # (-isystem abseil), never its compiled .a archives, so it needn't
-        # wait on abseil's build. No pch_dep either: that's the compiles
-        # loop's leaked variable (the PCH can't depend on itself).
-        f.write(f'build $builddir/{mode}/stdafx.hh.pch: cxx_build_precompiled_header.{mode} stdafx.hh | {profile_dep} {seastar_gen_headers_dep} {gen_headers_dep}\n')
-        if use_pch_codegen:
-            f.write(f'build $builddir/{mode}/stdafx.o: cxx_pch_object.{mode} $builddir/{mode}/stdafx.hh.pch\n')
 
         f.write(f'build $builddir/{mode}/seastar/apps/iotune/iotune: ninja $builddir/{mode}/seastar/build.ninja | $builddir/{mode}/seastar/libseastar.{seastar_lib_ext}\n')
         f.write('  pool = seastar_pool\n')
