@@ -51,5 +51,8 @@ custom_args:
         - '-c2 -m2G --logger-log-level s3=trace --logger-log-level http=trace --logger-log-level default_http_retry_strategy=trace'
     batchlog_manager_test:
         - '-c2 -m2G --logger-log-level batchlog_manager=trace:debug_error_injection=trace:testlog=trace'
+    # Purely CPU-bound, single-threaded, and it allocates nothing but its own buffers.
+    stream_compressor_test:
+        - '-c1 -m512M'
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test
