@@ -2549,6 +2549,13 @@ def write_build_file(f,
     # OOM on a clean build (observed on a 16-core/30GB machine). Cap cargo to
     # a quarter of the cores, mirroring rust/CMakeLists.txt's Scylla_RUST_JOBS.
     rust_jobs = max(1, ((os.cpu_count() or 4) + 3) // 4)
+    # The Seastar/Abseil sub-ninjas default to nproc+2 jobs each, on top of
+    # the outer ninja's -j and cargo: on a clean build the first ~50s ran
+    # ~40 jobs on 16 cores, stretching the PCH (which gates every scylla TU)
+    # ~3x. Now that scylla compiles no longer wait for the submodule libs
+    # (only the final link does, ~480s later), capping the sub-ninjas to
+    # half the cores trades idle submodule slack for PCH/TU throughput.
+    submodule_jobs = max(4, (os.cpu_count() or 8) // 2)
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -2581,7 +2588,7 @@ def write_build_file(f,
             command = ./utils/s3/gen_aws_service_errors.py --output-dir $out_dir
             description = AWS service errors generator $out
         rule ninja
-            command = {ninja} -C $subdir $target
+            command = {ninja} -C $subdir $jobs $target
             restat = 1
             description = NINJA $out
         rule ragel
@@ -2976,6 +2983,35 @@ def write_build_file(f,
             f.write('build {}: rust_source {}\n'.format(cc, src))
             obj = cc.replace('.cc', '.o')
             compiles[obj] = cc
+        # Seastar's generated headers (ragel parsers, metrics2.pb.h) are all
+        # scylla TUs and the PCH actually need from the sub-build; they take
+        # <1s vs ~45s for libseastar. A dedicated sub-ninja step lets scylla
+        # compiles start immediately instead of idling behind the full lib.
+        # Ordered before the lib steps (shared seastar_pool, depth 1).
+        # Emitted (with the abseil steps) ahead of the compiles so ninja's
+        # clean-build tie-break dispatches them as soon as a slot frees:
+        # libseastar_testing.so used to be picked up only at t~534s, gating
+        # the final link (which order-depends on it) by ~3s.
+        f.write(f'build {seastar_gen_headers_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n')
+        f.write('  pool = seastar_pool\n')
+        f.write(f'  subdir = $builddir/{mode}/seastar\n')
+        f.write('  target = seastar_http_request_parser seastar_http_response_parser seastar_http_chunk_parsers seastar_proto_metrics2\n')
+        f.write(f'build {seastar_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep} || {seastar_gen_headers_dep}\n')
+        f.write('  pool = seastar_pool\n')
+        f.write(f'  subdir = $builddir/{mode}/seastar\n')
+        f.write('  target = seastar\n')
+        f.write(f'  jobs = -j{submodule_jobs}\n')
+        f.write(f'build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep} || {seastar_gen_headers_dep}\n')
+        f.write('  pool = seastar_pool\n')
+        f.write(f'  subdir = $builddir/{mode}/seastar\n')
+        f.write('  target = seastar_testing\n')
+        f.write(f'  jobs = -j{submodule_jobs}\n')
+        for lib in abseil_libs:
+            f.write(f'build $builddir/{mode}/abseil/{lib}: ninja $builddir/{mode}/abseil/build.ninja | always {profile_dep}\n')
+            f.write(f'  pool = abseil_pool\n')
+            f.write(f'  subdir = $builddir/{mode}/abseil\n')
+            f.write(f'  target = {lib}\n')
+            f.write(f'  jobs = -j{submodule_jobs}\n')
         # PCH, stdafx.o and the ANTLR-generated lexers/parsers are emitted
         # before the regular compiles: on a clean build ninja breaks ties
         # between equal-priority ready edges by statement order, and these
@@ -3072,34 +3108,6 @@ def write_build_file(f,
         for hh in headers:
             f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} | $builddir/{mode}/gen/empty.cc {profile_dep} || {gen_headers_dep}\n'.format(
                     mode=mode, hh=hh, gen_headers_dep=gen_headers_dep, profile_dep=profile_dep))
-
-        seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
-        seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
-        # Seastar's generated headers (ragel parsers, metrics2.pb.h) are all
-        # scylla TUs and the PCH actually need from the sub-build; they take
-        # <1s vs ~45s for libseastar. A dedicated sub-ninja step lets scylla
-        # compiles start immediately instead of idling behind the full lib.
-        # Ordered before the lib steps (shared seastar_pool, depth 1).
-        f.write(f'build {seastar_gen_headers_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n')
-        f.write('  pool = seastar_pool\n')
-        f.write(f'  subdir = $builddir/{mode}/seastar\n')
-        f.write('  target = seastar_http_request_parser seastar_http_response_parser seastar_http_chunk_parsers seastar_proto_metrics2\n')
-        f.write(f'build {seastar_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep} || {seastar_gen_headers_dep}\n')
-        f.write('  pool = seastar_pool\n')
-        f.write(f'  subdir = $builddir/{mode}/seastar\n')
-        f.write('  target = seastar\n')
-        f.write(f'build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep} || {seastar_gen_headers_dep}\n')
-        f.write('  pool = seastar_pool\n')
-        f.write(f'  subdir = $builddir/{mode}/seastar\n')
-        f.write('  target = seastar_testing\n')
-        f.write(f'  profile_dep = {profile_dep}\n')
-
-        for lib in abseil_libs:
-            f.write(f'build $builddir/{mode}/abseil/{lib}: ninja $builddir/{mode}/abseil/build.ninja | always {profile_dep}\n')
-            f.write(f'  pool = abseil_pool\n')
-            f.write(f'  subdir = $builddir/{mode}/abseil\n')
-            f.write(f'  target = {lib}\n')
-            f.write(f'  profile_dep = {profile_dep}\n')
 
         f.write(f'build $builddir/{mode}/seastar/apps/iotune/iotune: ninja $builddir/{mode}/seastar/build.ninja | $builddir/{mode}/seastar/libseastar.{seastar_lib_ext}\n')
         f.write('  pool = seastar_pool\n')
