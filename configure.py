@@ -1715,6 +1715,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/commitlog_cleanup_test.cc',
     'test/boost/commitlog_raft_replay_test.cc',
     'test/boost/commitlog_test.cc',
+    'test/boost/cluster_config_manager_test.cc',
     'test/boost/cql_auth_query_test.cc',
     'test/boost/cql_functions_test.cc',
     'test/boost/cql_query_group_test.cc',

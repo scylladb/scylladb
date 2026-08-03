@@ -23,6 +23,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
+#include "test/lib/eventually.hh"
 #include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
 #include "test/lib/eventually.hh"
@@ -40,6 +41,8 @@
 #include "types/vector.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
+#include "auth/authenticated_user.hh"
+#include "service/client_state.hh"
 #include "cql3/cql_config.hh"
 #include "test/lib/exception_utils.hh"
 #include "service/qos/qos_common.hh"
@@ -62,12 +65,46 @@
 #include "service_permit.hh"
 #include "service/strong_consistency/coordinator.hh"
 #include "service/strong_consistency/groups_manager.hh"
+#include "db/cluster_config_registry.hh"
+#include "locator/token_metadata.hh"
+#include "locator/topology.hh"
+#include <seastar/core/smp.hh>
 
 
 BOOST_AUTO_TEST_SUITE(cql_query_test)
 
 using namespace std::literals::chrono_literals;
 using namespace tests;
+
+static sstring describe_create_statement(cql_test_env& e, std::string_view query) {
+    auto msg = e.execute_cql(query).get();
+    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+    BOOST_REQUIRE(rows);
+
+    const auto& rs = rows->rs().result_set();
+    BOOST_REQUIRE_EQUAL(rs.rows().size(), 1);
+    const auto& row = rs.rows().front();
+    BOOST_REQUIRE_EQUAL(row.size(), 4);
+    BOOST_REQUIRE(row[3]);
+
+    return value_cast<sstring>(utf8_type->deserialize(*row[3]));
+}
+
+// All create_statement cells of a multi-row describe (e.g. DESC SCHEMA), in row order.
+static std::vector<sstring> describe_create_statements(cql_test_env& e, std::string_view query) {
+    auto msg = e.execute_cql(query).get();
+    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+    BOOST_REQUIRE(rows);
+
+    std::vector<sstring> result;
+    for (const auto& row : rows->rs().result_set().rows()) {
+        BOOST_REQUIRE_EQUAL(row.size(), 4);
+        if (row[3]) {
+            result.push_back(value_cast<sstring>(utf8_type->deserialize(*row[3])));
+        }
+    }
+    return result;
+}
 
 SEASTAR_TEST_CASE(test_create_keyspace_statement) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
@@ -104,6 +141,513 @@ SEASTAR_TEST_CASE(test_create_table_with_id_statement) {
         BOOST_REQUIRE_THROW(
             e.execute_cql("ALTER TABLE tbl WITH id='f2a8c099-e723-48cb-8cd9-53e647a011a3'").get(),
             exceptions::configuration_exception);
+    });
+}
+
+SEASTAR_TEST_CASE(test_alter_cluster_with_persists_cluster_config_override) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto configs_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
+
+        e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = true").get();
+
+        assert_that(e.execute_cql("SELECT configs FROM system_schema.scylla_clusters WHERE cluster_name = 'cluster'").get())
+            .is_rows().with_rows({{
+                {configs_type->decompose(make_map_value(configs_type, map_type_impl::native_type({
+                    {sstring("auto_repair_enabled"), sstring("true")},
+                })))}
+            }});
+
+        // The string literal 'null' is a value, not the removal keyword: for a boolean
+        // option it is rejected as an invalid value and the stored override stays intact.
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = 'null'").get(),
+            exceptions::invalid_request_exception);
+
+        e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = null").get();
+
+        assert_that(e.execute_cql("SELECT configs FROM system_schema.scylla_clusters WHERE cluster_name = 'cluster'").get())
+            .is_rows().with_size(0);
+    });
+}
+
+SEASTAR_TEST_CASE(test_alter_cluster_without_auth_enabled_is_allowed) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        BOOST_REQUIRE_NO_THROW(e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = true").get());
+    });
+}
+
+// The CQL BOOLEAN token is case-insensitive but case-preserving, so `= TRUE` reaches the
+// registry as "TRUE". Every scope must accept it and persist the canonical lowercase form,
+// so that consumers can compare the stored text without re-normalizing it.
+SEASTAR_TEST_CASE(test_cluster_config_boolean_value_is_case_insensitive_and_stored_canonically) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto configs_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
+        auto expect_stored = [&] (const sstring& query, const sstring& expected) {
+            assert_that(e.execute_cql(query).get())
+                .is_rows().with_rows({{
+                    {configs_type->decompose(make_map_value(configs_type, map_type_impl::native_type({
+                        {sstring("auto_repair_enabled"), expected},
+                    })))}
+                }});
+        };
+
+        e.execute_cql("CREATE KEYSPACE ks_cfg_case WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_cfg_case.tbl (pk int PRIMARY KEY)").get();
+
+        e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = TRUE").get();
+        expect_stored("SELECT configs FROM system_schema.scylla_clusters WHERE cluster_name = 'cluster'", "true");
+
+        e.execute_cql("ALTER KEYSPACE ks_cfg_case WITH auto_repair_enabled = False").get();
+        expect_stored("SELECT configs FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'ks_cfg_case'", "false");
+
+        e.execute_cql("ALTER TABLE ks_cfg_case.tbl WITH auto_repair_enabled = TrUe").get();
+        expect_stored("SELECT configs FROM system_schema.scylla_tables WHERE keyspace_name = 'ks_cfg_case' AND table_name = 'tbl'", "true");
+
+        // NULL removal stays case-insensitive too.
+        e.execute_cql("ALTER TABLE ks_cfg_case.tbl WITH auto_repair_enabled = NULL").get();
+        assert_that(e.execute_cql("SELECT configs FROM system_schema.scylla_tables WHERE keyspace_name = 'ks_cfg_case' AND table_name = 'tbl'").get())
+            .is_rows().with_rows({{ {} }});
+    });
+}
+
+// The grammar accepts `<ident> = <mapLiteral>` for any property name, so a map value must
+// surface as a CQL error rather than escaping as std::bad_variant_access (which the client
+// would see as a generic ServerError).
+SEASTAR_TEST_CASE(test_cluster_config_rejects_map_value_with_cql_error) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_cfg_map WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_cfg_map.tbl (pk int PRIMARY KEY)").get();
+
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER TABLE ks_cfg_map.tbl WITH auto_repair_enabled = {'a': 'b'}").get(),
+            exceptions::syntax_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER KEYSPACE ks_cfg_map WITH auto_repair_enabled = {'a': 'b'}").get(),
+            exceptions::syntax_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("CREATE TABLE ks_cfg_map.tbl2 (pk int PRIMARY KEY) WITH auto_repair_enabled = {'a': 'b'}").get(),
+            exceptions::syntax_exception);
+    });
+}
+
+// A non-boolean value for a boolean-typed option must be rejected at every scope.
+SEASTAR_TEST_CASE(test_cluster_config_rejects_invalid_boolean_value) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_cfg_bad WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_cfg_bad.tbl (pk int PRIMARY KEY)").get();
+
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = 'yes'").get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER KEYSPACE ks_cfg_bad WITH auto_repair_enabled = 'yes'").get(),
+            exceptions::configuration_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER TABLE ks_cfg_bad.tbl WITH auto_repair_enabled = 'yes'").get(),
+            exceptions::configuration_exception);
+    });
+}
+
+// CREATE TABLE ... WITH <config_key> = ... must persist the override, not accept it and
+// silently drop it. cf_prop_defs::validate() allow-lists registry keys for every statement
+// that uses cf_prop_defs, but only ALTER TABLE used to write them, so DESCRIBE output
+// (which folds the effective value into CREATE TABLE) could not be replayed without losing
+// every table-scope override.
+SEASTAR_TEST_CASE(test_create_table_persists_cluster_config_property) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_cfg_create WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_cfg_create.tbl (pk int PRIMARY KEY) WITH auto_repair_enabled = TRUE").get();
+
+        // Stored in the out-of-band configs column, canonicalized to lowercase.
+        auto rows = e.execute_cql("SELECT configs['auto_repair_enabled'] FROM system_schema.scylla_tables "
+                                  "WHERE keyspace_name = 'ks_cfg_create' AND table_name = 'tbl'").get();
+        assert_that(rows).is_rows().with_rows({{utf8_type->decompose(sstring("true"))}});
+
+        // A table created without the property stores nothing.
+        e.execute_cql("CREATE TABLE ks_cfg_create.plain (pk int PRIMARY KEY)").get();
+        auto plain_rows = e.execute_cql("SELECT configs['auto_repair_enabled'] FROM system_schema.scylla_tables "
+                                        "WHERE keyspace_name = 'ks_cfg_create' AND table_name = 'plain'").get();
+        assert_that(plain_rows).is_rows().with_rows({{std::nullopt}});
+    });
+}
+
+// Regression test for the superuser check on node-oriented ALTER statements: it must be
+// awaited, not resolved with a blocking future::get(). With authentication enabled and the
+// permissions cache disabled, has_superuser() returns a non-ready future, so a blocking get()
+// outside a seastar::thread would abort the node. Exercises both the superuser-allowed path
+// (default cassandra user) and the non-superuser-rejected path.
+SEASTAR_TEST_CASE(test_alter_cluster_superuser_check_is_async_with_auth_enabled) {
+    auto db_config = make_shared<db::config>();
+    db_config->authorizer.set("CassandraAuthorizer");
+    db_config->authenticator.set("PasswordAuthenticator");
+    // Disable permissions caching so the superuser lookup resolves a non-ready future.
+    db_config->permissions_validity_in_ms.set(0);
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // Default logged-in user is a superuser: allowed, and must not crash on the async
+        // has_superuser() lookup.
+        BOOST_REQUIRE_NO_THROW(e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = true").get());
+
+        // A non-superuser is rejected with unauthorized_exception (also via the async path).
+        e.execute_cql("CREATE USER alice WITH PASSWORD 'alice'").get();
+        auto& cs = e.local_client_state();
+        std::optional<auth::authenticated_user> old_user = cs.user();
+        BOOST_REQUIRE(old_user);
+        cs.set_login(auth::authenticated_user(sstring("alice")));
+        auto restore_user = defer([&cs, old_user = std::move(old_user)] mutable noexcept {
+            cs.set_login(std::move(*old_user));
+        });
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = false").get(),
+            exceptions::unauthorized_exception);
+    }, db_config);
+}
+
+SEASTAR_TEST_CASE(test_registry_backed_cluster_config_statements_reject_when_feature_is_disabled) {
+    cql_test_config cfg;
+    cfg.disabled_features.emplace("CLUSTER_CONFIG_REGISTRY_V0");
+
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto feature_disabled = [] (const exceptions::invalid_request_exception& ex) {
+            return std::string_view(ex.what()).find("Cluster config registry v0 is not yet supported by this cluster") != std::string_view::npos;
+        };
+
+        BOOST_REQUIRE_EXCEPTION(
+            e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = true").get(),
+            exceptions::invalid_request_exception,
+            feature_disabled);
+
+        e.execute_cql("CREATE KEYSPACE ks_cfg_disabled WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+
+        BOOST_REQUIRE_EXCEPTION(
+            e.execute_cql("CREATE TABLE ks_cfg_disabled.tbl (pk int PRIMARY KEY) WITH auto_repair_enabled = true").get(),
+            exceptions::invalid_request_exception,
+            feature_disabled);
+
+        e.execute_cql("CREATE TABLE ks_cfg_disabled.tbl (pk int PRIMARY KEY)").get();
+
+        BOOST_REQUIRE_EXCEPTION(
+            e.execute_cql("ALTER KEYSPACE ks_cfg_disabled WITH auto_repair_enabled = true").get(),
+            exceptions::invalid_request_exception,
+            feature_disabled);
+
+        BOOST_REQUIRE_EXCEPTION(
+            e.execute_cql("ALTER TABLE ks_cfg_disabled.tbl WITH auto_repair_enabled = true").get(),
+            exceptions::invalid_request_exception,
+            feature_disabled);
+    }, cfg);
+}
+
+// No shipping option supports the node-oriented scopes yet, so we inject a test-only option
+// to exercise the ALTER DATACENTER/RACK/NODE paths. Verifies that each node-oriented write is
+// schema-backed (bumps the global schema version), persists its value out-of-band in the
+// matching scylla_datacenters/scylla_racks/scylla_nodes config table, and - because it never
+// raises a per-table schema-change notification - leaves an unrelated table's prepared
+// statement valid.
+SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_persist_and_bump_version_without_invalidation) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        constexpr uint32_t node_oriented_mask =
+            static_cast<uint32_t>(db::cluster_config_registry::scope::cluster)
+            | static_cast<uint32_t>(db::cluster_config_registry::scope::datacenter)
+            | static_cast<uint32_t>(db::cluster_config_registry::scope::rack)
+            | static_cast<uint32_t>(db::cluster_config_registry::scope::node);
+        seastar::smp::invoke_on_all([] {
+            db::cluster_config_registry::add_test_only_option(db::cluster_config_registry::option{
+                .name = "test_node_only_option",
+                .type = db::cluster_config_registry::value_type::uint32,
+                .scope_mask = node_oriented_mask,
+                .min_version = db::cluster_config_registry::version::v0,
+                .default_value = uint32_t(0),
+            });
+        }).get();
+        auto clear_test_options = defer([] noexcept {
+            seastar::smp::invoke_on_all([] {
+                db::cluster_config_registry::clear_test_only_options();
+            }).get();
+        });
+
+        const auto& topo = e.shared_token_metadata().local().get()->get_topology();
+        const sstring dc = topo.get_datacenter();
+        const sstring rack = topo.get_rack();
+        const auto node_uuid = topo.my_host_id().uuid();
+
+        auto configs_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
+        auto global_version = [&] { return e.db().local().get_version(); };
+        auto expect_configs = [&] (sstring query, sstring value) {
+            assert_that(e.execute_cql(query).get())
+                .is_rows().with_rows({{
+                    {configs_type->decompose(make_map_value(configs_type, map_type_impl::native_type({
+                        {sstring("test_node_only_option"), value},
+                    })))}
+                }});
+        };
+
+        e.execute_cql("CREATE KEYSPACE ks_node WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_node.tbl (pk int PRIMARY KEY, v int)").get();
+        auto prepared = e.prepare("SELECT * FROM ks_node.tbl WHERE pk = 0").get();
+
+        // Datacenter scope.
+        auto before = global_version();
+        e.execute_cql(seastar::format("ALTER DATACENTER \"{}\" WITH test_node_only_option = 7", dc)).get();
+        BOOST_REQUIRE_NE(global_version(), before);
+        expect_configs(seastar::format("SELECT configs FROM system_schema.scylla_datacenters WHERE dc_name = '{}'", dc), "7");
+
+        // Rack scope.
+        before = global_version();
+        e.execute_cql(seastar::format("ALTER RACK \"{}\" \"{}\" WITH test_node_only_option = 8", dc, rack)).get();
+        BOOST_REQUIRE_NE(global_version(), before);
+        expect_configs(seastar::format("SELECT configs FROM system_schema.scylla_racks WHERE dc_name = '{}' AND rack_name = '{}'", dc, rack), "8");
+
+        // Node scope.
+        before = global_version();
+        e.execute_cql(seastar::format("ALTER NODE {} WITH test_node_only_option = 9", node_uuid)).get();
+        BOOST_REQUIRE_NE(global_version(), before);
+        expect_configs(seastar::format("SELECT configs FROM system_schema.scylla_nodes WHERE host_id = {}", node_uuid), "9");
+
+        // None of the node-oriented writes raise a per-table notification, so the prepared
+        // statement on an unrelated table is still valid.
+        BOOST_REQUIRE_NO_THROW(e.execute_prepared(prepared, {}).get());
+    });
+}
+
+// Verifies that the node-oriented ALTER statements validate the scope target against the live
+// topology and reject datacenters/racks/nodes that do not exist.
+SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        constexpr uint32_t node_oriented_mask =
+            static_cast<uint32_t>(db::cluster_config_registry::scope::cluster)
+            | static_cast<uint32_t>(db::cluster_config_registry::scope::datacenter)
+            | static_cast<uint32_t>(db::cluster_config_registry::scope::rack)
+            | static_cast<uint32_t>(db::cluster_config_registry::scope::node);
+        seastar::smp::invoke_on_all([] {
+            db::cluster_config_registry::add_test_only_option(db::cluster_config_registry::option{
+                .name = "test_node_only_option",
+                .type = db::cluster_config_registry::value_type::uint32,
+                .scope_mask = node_oriented_mask,
+                .min_version = db::cluster_config_registry::version::v0,
+                .default_value = uint32_t(0),
+            });
+        }).get();
+        auto clear_test_options = defer([] noexcept {
+            seastar::smp::invoke_on_all([] {
+                db::cluster_config_registry::clear_test_only_options();
+            }).get();
+        });
+
+        const auto& topo = e.shared_token_metadata().local().get()->get_topology();
+        const sstring dc = topo.get_datacenter();
+
+        auto missing_target = [] (std::string_view fragment) {
+            return [fragment] (const exceptions::invalid_request_exception& ex) {
+                return std::string_view(ex.what()).find(fragment) != std::string_view::npos;
+            };
+        };
+
+        BOOST_REQUIRE_EXCEPTION(
+            e.execute_cql("ALTER DATACENTER no_such_dc WITH test_node_only_option = 1").get(),
+            exceptions::invalid_request_exception,
+            missing_target("does not exist"));
+
+        BOOST_REQUIRE_EXCEPTION(
+            e.execute_cql(seastar::format("ALTER RACK \"{}\" no_such_rack WITH test_node_only_option = 1", dc)).get(),
+            exceptions::invalid_request_exception,
+            missing_target("does not exist"));
+
+        BOOST_REQUIRE_EXCEPTION(
+            e.execute_cql(seastar::format("ALTER NODE {} WITH test_node_only_option = 1", utils::make_random_uuid())).get(),
+            exceptions::invalid_request_exception,
+            missing_target("does not exist"));
+    });
+}
+
+SEASTAR_TEST_CASE(test_alter_schema_with_persists_scope_configs) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto configs_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
+        e.execute_cql("CREATE KEYSPACE ks_cfg WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_cfg.tbl (pk int PRIMARY KEY, v int)").get();
+
+        e.execute_cql("ALTER KEYSPACE ks_cfg WITH auto_repair_enabled = true").get();
+        e.execute_cql("ALTER TABLE ks_cfg.tbl WITH auto_repair_enabled = false").get();
+
+        assert_that(e.execute_cql("SELECT configs FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'ks_cfg'").get())
+            .is_rows().with_rows({{
+                {configs_type->decompose(make_map_value(configs_type, map_type_impl::native_type({
+                    {sstring("auto_repair_enabled"), sstring("true")},
+                })))}
+            }});
+
+        assert_that(e.execute_cql("SELECT configs FROM system_schema.scylla_tables WHERE keyspace_name = 'ks_cfg' AND table_name = 'tbl'").get())
+            .is_rows().with_rows({{
+                {configs_type->decompose(make_map_value(configs_type, map_type_impl::native_type({
+                    {sstring("auto_repair_enabled"), sstring("false")},
+                })))}
+            }});
+
+        e.execute_cql("ALTER TABLE ks_cfg.tbl WITH auto_repair_enabled = null").get();
+
+        assert_that(e.execute_cql("SELECT configs FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'ks_cfg'").get())
+            .is_rows().with_rows({{
+                {configs_type->decompose(make_map_value(configs_type, map_type_impl::native_type({
+                    {sstring("auto_repair_enabled"), sstring("true")},
+                })))}
+            }});
+
+        assert_that(e.execute_cql("SELECT configs FROM system_schema.scylla_tables WHERE keyspace_name = 'ks_cfg' AND table_name = 'tbl'").get())
+            .is_rows().with_rows({{{}}});
+    });
+}
+
+SEASTAR_TEST_CASE(test_describe_schema_with_inherited_auto_repair_scope_config) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_desc_auto WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_desc_auto.tbl (pk int PRIMARY KEY)").get();
+        e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = true").get();
+
+        // A live property is emitted only for what is stored at the described object's own
+        // scope: nothing is stored at the keyspace or table yet, so the option appears as a
+        // commented-out property carrying the effective value, with a trailing provenance
+        // comment. The terminating ';' sits on its own line so the trailing comment lexes.
+        auto keyspace_desc = describe_create_statement(e, "DESCRIBE ONLY KEYSPACE ks_desc_auto");
+        BOOST_REQUIRE_EQUAL(keyspace_desc.find("\n    AND auto_repair_enabled"), sstring::npos);
+        BOOST_REQUIRE_NE(keyspace_desc.find("\n    -- AND auto_repair_enabled = true  -- from cluster (keyspace=NULL, cluster=true)\n;"), sstring::npos);
+        BOOST_REQUIRE_EQUAL(keyspace_desc.back(), ';');
+
+        auto table_desc = describe_create_statement(e, "DESCRIBE TABLE ks_desc_auto.tbl");
+        BOOST_REQUIRE_EQUAL(table_desc.find("\n    AND auto_repair_enabled"), sstring::npos);
+        BOOST_REQUIRE_NE(table_desc.find("\n    -- AND auto_repair_enabled = true  -- from cluster (table=NULL, keyspace=NULL, cluster=true)\n;"), sstring::npos);
+        BOOST_REQUIRE_EQUAL(table_desc.back(), ';');
+
+        // WITH INTERNALS output is pure replayable CQL: no comment block, and no property
+        // either — nothing is stored at table scope, and the cluster-scope override is
+        // carried by the ALTER CLUSTER block of DESC SCHEMA instead.
+        auto internals_desc = describe_create_statement(e, "DESCRIBE TABLE ks_desc_auto.tbl WITH INTERNALS");
+        BOOST_REQUIRE_EQUAL(internals_desc.find("auto_repair_enabled"), sstring::npos);
+
+        e.execute_cql("ALTER KEYSPACE ks_desc_auto WITH auto_repair_enabled = false").get();
+        keyspace_desc = describe_create_statement(e, "DESCRIBE ONLY KEYSPACE ks_desc_auto");
+        // Now stored at the keyspace itself: live property, annotated with the chain.
+        BOOST_REQUIRE_NE(keyspace_desc.find("\n    AND auto_repair_enabled = false  -- from keyspace (keyspace=false, cluster=true)\n;"), sstring::npos);
+        BOOST_REQUIRE_EQUAL(keyspace_desc.find("-- AND auto_repair_enabled"), sstring::npos);
+
+        table_desc = describe_create_statement(e, "DESCRIBE TABLE ks_desc_auto.tbl");
+        // The table only inherits the keyspace override: commented-out property.
+        BOOST_REQUIRE_EQUAL(table_desc.find("\n    AND auto_repair_enabled"), sstring::npos);
+        BOOST_REQUIRE_NE(table_desc.find("\n    -- AND auto_repair_enabled = false  -- from keyspace (table=NULL, keyspace=false, cluster=true)\n;"), sstring::npos);
+
+        e.execute_cql("ALTER TABLE ks_desc_auto.tbl WITH auto_repair_enabled = true").get();
+        table_desc = describe_create_statement(e, "DESCRIBE TABLE ks_desc_auto.tbl");
+        // Now stored at the table itself: live property, annotated with the chain.
+        BOOST_REQUIRE_EQUAL(table_desc.find(";\n AND auto_repair_enabled"), sstring::npos);
+        BOOST_REQUIRE_NE(table_desc.find("\n    AND auto_repair_enabled = true  -- from table (table=true, keyspace=false, cluster=true)\n;"), sstring::npos);
+        BOOST_REQUIRE_EQUAL(table_desc.find("-- AND auto_repair_enabled"), sstring::npos);
+
+        // WITH INTERNALS keeps the stored override as a property, still without comments.
+        internals_desc = describe_create_statement(e, "DESCRIBE TABLE ks_desc_auto.tbl WITH INTERNALS");
+        BOOST_REQUIRE_NE(internals_desc.find("auto_repair_enabled = true"), sstring::npos);
+        BOOST_REQUIRE_EQUAL(internals_desc.find("-- AND auto_repair_enabled"), sstring::npos);
+        BOOST_REQUIRE_EQUAL(internals_desc.find("-- from"), sstring::npos);
+
+        e.execute_cql("ALTER TABLE ks_desc_auto.tbl WITH auto_repair_enabled = null").get();
+        table_desc = describe_create_statement(e, "DESCRIBE TABLE ks_desc_auto.tbl");
+        BOOST_REQUIRE_EQUAL(table_desc.find("\n    AND auto_repair_enabled"), sstring::npos);
+        BOOST_REQUIRE_NE(table_desc.find("\n    -- AND auto_repair_enabled = false  -- from keyspace (table=NULL, keyspace=false, cluster=true)\n;"), sstring::npos);
+
+        e.execute_cql("ALTER KEYSPACE ks_desc_auto WITH auto_repair_enabled = null").get();
+        keyspace_desc = describe_create_statement(e, "DESCRIBE ONLY KEYSPACE ks_desc_auto");
+        BOOST_REQUIRE_EQUAL(keyspace_desc.find("\n    AND auto_repair_enabled"), sstring::npos);
+        BOOST_REQUIRE_NE(keyspace_desc.find("\n    -- AND auto_repair_enabled = true  -- from cluster (keyspace=NULL, cluster=true)\n;"), sstring::npos);
+
+        table_desc = describe_create_statement(e, "DESCRIBE TABLE ks_desc_auto.tbl");
+        BOOST_REQUIRE_EQUAL(table_desc.find("\n    AND auto_repair_enabled"), sstring::npos);
+        BOOST_REQUIRE_NE(table_desc.find("\n    -- AND auto_repair_enabled = true  -- from cluster (table=NULL, keyspace=NULL, cluster=true)\n;"), sstring::npos);
+    });
+}
+
+// The DESC SCHEMA cluster-config block: stored cluster-scope overrides lead the dump,
+// before any keyspace, in all tiers - the executable slot is stored-only, so without this
+// block a schema dump would silently lose cluster scope. The plain tier annotates each
+// statement with a trailing provenance comment (and so keeps a final newline, which the
+// COMMENT lexer token requires); WITH INTERNALS stays pure CQL.
+SEASTAR_TEST_CASE(test_describe_schema_emits_cluster_config_block) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_blk WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_blk.tbl (pk int PRIMARY KEY)").get();
+
+        // Nothing stored at cluster scope: no cluster block at all.
+        for (const auto& stmt : describe_create_statements(e, "DESCRIBE SCHEMA")) {
+            BOOST_REQUIRE_EQUAL(stmt.find("ALTER CLUSTER"), sstring::npos);
+        }
+
+        e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = false").get();
+
+        auto schema_stmts = describe_create_statements(e, "DESCRIBE SCHEMA");
+        BOOST_REQUIRE(!schema_stmts.empty());
+        BOOST_REQUIRE_EQUAL(schema_stmts.front(), "ALTER CLUSTER WITH auto_repair_enabled = false;  -- from cluster (cluster=false)\n");
+
+        auto internals_stmts = describe_create_statements(e, "DESCRIBE SCHEMA WITH INTERNALS");
+        BOOST_REQUIRE_EQUAL(internals_stmts.front(), "ALTER CLUSTER WITH auto_repair_enabled = false;");
+    });
+}
+
+// Every emitted create_statement must replay verbatim as a single request, comment lines
+// included. This is what moving the terminating ';' to its own line buys: the CQL COMMENT
+// lexer token needs a newline terminator, so a trailing comment with no final newline
+// fails to parse.
+SEASTAR_TEST_CASE(test_describe_config_output_replays_verbatim) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_replay WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_replay.tbl (pk int PRIMARY KEY)").get();
+        e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = false").get();
+        e.execute_cql("ALTER TABLE ks_replay.tbl WITH auto_repair_enabled = true").get();
+
+        auto table_desc = describe_create_statement(e, "DESCRIBE TABLE ks_replay.tbl");
+        BOOST_REQUIRE_NE(table_desc.find("\n    AND auto_repair_enabled = true  -- from table (table=true, keyspace=NULL, cluster=false)\n;"), sstring::npos);
+
+        e.execute_cql("DROP TABLE ks_replay.tbl").get();
+        BOOST_REQUIRE_NO_THROW(e.execute_cql(table_desc).get());
+
+        // The replayed CREATE stored the table-scope override again.
+        auto rows = e.execute_cql("SELECT configs['auto_repair_enabled'] FROM system_schema.scylla_tables "
+                                  "WHERE keyspace_name = 'ks_replay' AND table_name = 'tbl'").get();
+        assert_that(rows).is_rows().with_rows({{
+            {utf8_type->decompose(sstring("true"))}
+        }});
+    });
+}
+
+// The commented-out property is a real, executable property behind its comment marker:
+// replaying the describe output as-is stores nothing at the described scope (inheritance
+// is preserved), while erasing just the leading "-- " pins the effective value there.
+SEASTAR_TEST_CASE(test_describe_config_uncomment_pins_inherited_value) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_pin WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_pin.tbl (pk int PRIMARY KEY)").get();
+        e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = true").get();
+
+        auto table_desc = describe_create_statement(e, "DESCRIBE TABLE ks_pin.tbl");
+        const sstring commented = "\n    -- AND auto_repair_enabled = true  -- from cluster (table=NULL, keyspace=NULL, cluster=true)";
+        const auto pos = table_desc.find(commented);
+        BOOST_REQUIRE_NE(pos, sstring::npos);
+
+        // Replaying as-is keeps the table purely inheriting: no stored override.
+        e.execute_cql("DROP TABLE ks_pin.tbl").get();
+        BOOST_REQUIRE_NO_THROW(e.execute_cql(table_desc).get());
+        auto rows = e.execute_cql("SELECT configs FROM system_schema.scylla_tables "
+                                  "WHERE keyspace_name = 'ks_pin' AND table_name = 'tbl'").get();
+        assert_that(rows).is_rows().with_rows({{{}}});
+
+        // Erasing the comment marker turns the line into a live property; the trailing
+        // provenance stays a valid inline comment. Replaying now pins the value.
+        constexpr std::string_view commented_marker = "\n    -- AND";
+        auto pinned_desc = std::string(table_desc);
+        pinned_desc.replace(pos, commented_marker.size(), "\n    AND");
+        e.execute_cql("DROP TABLE ks_pin.tbl").get();
+        BOOST_REQUIRE_NO_THROW(e.execute_cql(pinned_desc).get());
+        rows = e.execute_cql("SELECT configs['auto_repair_enabled'] FROM system_schema.scylla_tables "
+                             "WHERE keyspace_name = 'ks_pin' AND table_name = 'tbl'").get();
+        assert_that(rows).is_rows().with_rows({{
+            {utf8_type->decompose(sstring("true"))}
+        }});
     });
 }
 
