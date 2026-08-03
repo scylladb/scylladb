@@ -335,12 +335,28 @@ static void test_add_entry_wait_resolved_via_drop_waiters_aux(raft::wait_type ty
         .nodes = 3,
         .config = std::vector<raft::server::configuration>({srv_config, srv_config, srv_config})
     };
+    // Resolved when node 0 (the leader) applies the entry with command 42
+    // added below. The entry is forwarded to the leader asynchronously, so
+    // the test needs an explicit signal that the leader applied it.
+    seastar::promise<> leader_applied_42;
+    auto apply = [&, signalled = false] (raft::server_id id, const raft::log_entry_ptr_list& commands,
+            lw_shared_ptr<hasher_int> hasher) mutable {
+        if (id == to_raft_id(0)) {
+            for (auto& entry : commands) {
+                auto is = ser::as_input_stream(std::get<raft::command>(entry->data));
+                if (ser::deserialize(is, std::type_identity<int>()) == 42 && !std::exchange(signalled, true)) {
+                    leader_applied_42.set_value();
+                }
+            }
+        }
+        return apply_changes(id, commands, hasher);
+    };
     // apply_entries must be greater than the number of entries added
     // during the test, otherwise the state machine's done promise fires
     // prematurely.
     auto cluster = raft_cluster<std::chrono::steady_clock>{
         std::move(test_config),
-        ::apply_changes,
+        apply,
         100,  // apply_entries
         0,
         0, false, tick_delay, rpc_config{}
@@ -361,10 +377,14 @@ static void test_add_entry_wait_resolved_via_drop_waiters_aux(raft::wait_type ty
     auto& follower = cluster.get_server(1);
     auto fut = follower.add_entry(create_command(42), type, nullptr);
 
-    // Wait for the leader to commit, apply, and snapshot the entry.
+    // Wait until the leader applies the entry: trigger_snapshot() takes the
+    // snapshot at the applied index, and the snapshot must cover the entry to
+    // drop it from the log. A read barrier would not be enough: it only waits
+    // for entries committed at the moment the barrier registers, and the
+    // forwarded entry may not have reached the leader yet by that point.
     auto& leader = cluster.get_server(0);
-    leader.read_barrier(nullptr).get();
-    leader.trigger_snapshot(nullptr).get();
+    leader_applied_42.get_future().get();
+    BOOST_REQUIRE(leader.trigger_snapshot(nullptr).get());
 
     // Reconnect node 1. The leader will send a snapshot since the log
     // entries are truncated (snapshot_trailing = 0).
