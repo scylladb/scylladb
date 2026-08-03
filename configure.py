@@ -2306,6 +2306,16 @@ def configure_abseil(build_dir, mode, mode_config, compiler_cache=None):
             cxx_flags = cxx_flags.replace(f' {flag}', '')
 
     cxx_flags += ' ' + abseil_cflags.strip()
+
+    # Scylla-specific defines and PCH flags are meaningless to Abseil TUs
+    # (Abseil includes no Scylla or Seastar headers). Dropping them keeps
+    # Abseil's flags stable when Scylla options toggle (e.g. --disable-wasmtime),
+    # avoiding spurious full Abseil rebuilds.
+    cxx_flags = ' '.join(tok for tok in cxx_flags.split()
+                         if not (tok.startswith('-DSCYLLA_')
+                                 or tok.startswith('-DSEASTAR_')
+                                 or tok == '-DDEVEL'
+                                 or tok == '-fpch-validate-input-files-content'))
     cmake_mode = mode_config['cmake_build_type']
     abseil_cmake_args = [
         '-DCMAKE_BUILD_TYPE={}'.format(cmake_mode),
