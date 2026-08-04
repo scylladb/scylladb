@@ -30,6 +30,7 @@
 #include "sstables/sstables_manager.hh"
 #include "sstables/object_storage_client.hh"
 #include "service/storage_proxy.hh"
+#include "service/topology_guard.hh"
 #include "idl/snapshot_backup.dist.hh"
 
 using namespace std::chrono_literals;
@@ -65,11 +66,13 @@ snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, sharded<service::stor
         _delete_expired_snapshots = delete_expired_snapshots();
     }
     ser::snapshot_backup_rpc_verbs::register_backup_snapshot_sstables(&_ms
-        , [this](table_id table_id, std::string tag, std::string endpoint, std::string bucket, std::string prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move) -> future<> {
+        , [this](table_id table_id, std::string tag, std::string endpoint, std::string bucket, std::string prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move, service::frozen_topology_guard frozen_guard) -> future<> {
             auto h = _ops.hold();
-            // Removed shard 0 restriction. backup_sstables does not care...
+            //this can run on any shard. 
+            service::topology_guard guard(frozen_guard);
+            auto& as = guard.abort_source();
             co_await coroutine::switch_to(_config.backup_sched_group);
-            co_await snapshot::backup_sstables(_qp.local(), table_id, std::move(tag), std::move(endpoint), std::move(bucket), std::move(prefix), first_token, last_token, std::move(sstable_ids), use_move);
+            co_await snapshot::backup_sstables(_qp.local(), table_id, std::move(tag), std::move(endpoint), std::move(bucket), std::move(prefix), first_token, last_token, std::move(sstable_ids), use_move, &as);
         }
     );
 }
