@@ -75,7 +75,7 @@ container="$(buildah from --pull=always docker.io/redhat/ubi9-minimal:latest)"
 packages=(
     "build/dist/$config/redhat/RPMS/$arch/$product-server-$version-$release.$arch.rpm"
     "build/dist/$config/redhat/RPMS/$arch/$product-conf-$version-$release.$arch.rpm"
-    "tools/cqlsh/build/redhat/RPMS/$arch/$product-cqlsh-$version-$release.$arch.rpm"
+    "tools/cqlsh-rs-pkg/build/redhat/RPMS/$arch/$product-cqlsh-$version-$release.$arch.rpm"
     "tools/python3/build/redhat/RPMS/$arch/$product-python3-$version-$release.$arch.rpm"
 )
 
