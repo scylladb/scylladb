@@ -3101,6 +3101,10 @@ void storage_proxy_stats::stats::register_stats() {
                        sm::description("number of background read repairs"),
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
+        sm::make_total_operations("read_repairs_diff_found_total", read_repair_diff_found,
+                       sm::description("number of read repairs in which the full-data reconciliation found actual differences between replicas and repair mutations were sent"),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
+
         sm::make_total_operations("read_timeouts", [this]{return read_timeouts.count(); },
                        sm::description("number of read request failed due to a timeout"),
                        {storage_proxy_stats::current_scheduling_group_label(), basic_level}).set_skip_when_empty(),
@@ -4878,6 +4882,7 @@ future<result<>> storage_proxy::schedule_repair(locator::effective_replication_m
     if (diffs.empty()) {
         return make_ready_future<result<>>(bo::success());
     }
+    get_stats().read_repair_diff_found++;
     return mutate_internal(
             diffs |
                     std::views::values |
