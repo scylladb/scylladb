@@ -35,6 +35,7 @@
 #include "utils/s3/client.hh"
 #include "utils/s3/creds.hh"
 #include "utils/s3/aws_throttling_controller.hh"
+#include "utils/s3/default_aws_retry_strategy.hh"
 #include "utils/s3/noop_throttling_controller.hh"
 #include "utils/s3/utils/manip_s3.hh"
 #include "utils/exceptions.hh"
@@ -1185,6 +1186,69 @@ BOOST_AUTO_TEST_CASE(test_throttling_controller_seeded_rate_survives_success) {
     // beta * seed. A dip is expected; a collapse to the floor is not.
     BOOST_REQUIRE_GT(tc.fill_rate(), seed / 2.0);
     BOOST_REQUIRE_LE(tc.fill_rate(), 2.0 * seed);
+}
+
+// Recomputed from the same constants the controller derives it from, so that a
+// change to either is caught here.
+static constexpr unsigned expected_retry_quota = s3::endpoint_config::default_connections_per_shard * aws::default_aws_retry_strategy::default_max_retries;
+
+BOOST_AUTO_TEST_CASE(test_throttling_controller_retry_quota_exhausts_and_counts_denials) {
+    // The budget admits exactly connections x depth retries, then refuses and counts
+    // each refusal. Nothing is counted while capacity remains.
+    s3::aws_throttling_controller tc;
+    for (unsigned i = 0; i < expected_retry_quota; i++) {
+        BOOST_REQUIRE(tc.try_acquire_retry_quota());
+    }
+    BOOST_REQUIRE_EQUAL(tc.quota_denials(), 0u);
+
+    BOOST_REQUIRE(!tc.try_acquire_retry_quota());
+    BOOST_REQUIRE_EQUAL(tc.quota_denials(), 1u);
+    BOOST_REQUIRE(!tc.try_acquire_retry_quota());
+    BOOST_REQUIRE_EQUAL(tc.quota_denials(), 2u);
+}
+
+BOOST_AUTO_TEST_CASE(test_throttling_controller_retry_quota_refunds_only_on_success) {
+    // Only a success returns capacity: were a failure to refund, a retryable error
+    // would hand back exactly what its retry spends and the budget would never move.
+    s3::aws_throttling_controller tc;
+    for (unsigned i = 0; i < expected_retry_quota; i++) {
+        BOOST_REQUIRE(tc.try_acquire_retry_quota());
+    }
+    BOOST_REQUIRE(!tc.try_acquire_retry_quota());
+
+    tc.on_error_not_throttled();
+    BOOST_REQUIRE(!tc.try_acquire_retry_quota());
+
+    tc.on_throttled();
+    BOOST_REQUIRE(!tc.try_acquire_retry_quota());
+
+    tc.on_success();
+    BOOST_REQUIRE(tc.try_acquire_retry_quota());
+    // ...and one success buys exactly one retry, not more.
+    BOOST_REQUIRE(!tc.try_acquire_retry_quota());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_throttling_controller_freeze_stops_admission_on_throttle) {
+    // A throttling response must stop admission outright for a while, not just
+    // slow it down.
+    constexpr double seed = 64.0;
+    s3::aws_throttling_controller tc{seed};
+    auto first = tc.acquire(nullptr);
+    BOOST_REQUIRE(first.available()); // seeded bucket starts full
+    first.get();
+
+    tc.on_throttled();
+
+    // The freeze is at least 3s, so this cannot possibly be ready synchronously.
+    auto frozen = tc.acquire(nullptr);
+    BOOST_REQUIRE(!frozen.available());
+
+    // It must lift on its own: freeze (<=5s) plus at most one token wait.
+    try {
+        seastar::with_timeout(seastar::lowres_clock::now() + 10s, std::move(frozen)).get();
+    } catch (const seastar::timed_out_error&) {
+        BOOST_FAIL("acquire() never resumed after the throttling freeze");
+    }
 }
 
 // Read a single S3 metric value out of the seastar metrics registry, matching
