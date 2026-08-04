@@ -43,6 +43,7 @@
 #include "db/hints/manager.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "cql3/query_processor.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/intrusive/list.hpp>
 #include <boost/outcome/result.hpp>
@@ -311,6 +312,10 @@ public:
 
     paxos::paxos_store& paxos_store() {
         return _paxos_store.local();
+    }
+
+    topology_state_machine& topology_state_machine() {
+        return _topology_state_machine;
     }
 
     const db::view::view_building_state_machine& view_building_state_machine() {
@@ -7661,4 +7666,40 @@ future<> storage_proxy::cancel_nonlocal_write_response_handlers() {
     }
     co_await g.close();
 }
+
+abortable_topology_task::abortable_topology_task(storage_proxy& sp, utils::UUID id) noexcept 
+    : _sp(&sp)
+    , _request_id(id)
+{}
+
+abortable_topology_task::abortable_topology_task(abortable_topology_task&& t) noexcept = default;
+abortable_topology_task& abortable_topology_task::operator=(abortable_topology_task&& t) noexcept = default;
+
+future<> abortable_topology_task::wait() {
+    // group0 is only set on shard 0
+    auto me = this_shard_id();
+    std::string result;
+    co_await _sp->container().invoke_on(0, [&](storage_proxy& sp) -> future<> {
+        auto& r = sp.remote();
+        auto error = co_await r.topology_state_machine().wait_for_request_completion(r.system_keyspace(), _request_id, true);
+        if (!error.empty()) {
+            co_await smp::submit_to(me, [&error, &result] {
+                result = error; // copy!
+            });
+        }
+    });
+
+    if (!result.empty()) {
+        throw std::runtime_error(fmt::format("Abortable task wait failed: {}", result));
+    }
+}
+
+future<> abortable_topology_task::abort() {
+    co_await _sp->container().invoke_on(0, [&](storage_proxy& sp) -> future<> {
+        auto& r = sp.remote();
+        co_await r.system_keyspace().query_processor().storage_service().abort_topology_request(_request_id);
+    });
+}
+
+
 }
