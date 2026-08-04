@@ -1156,11 +1156,11 @@ private:
     using can_replace_op_with_ongoing_func = std::function<bool(const db::system_keyspace::topology_requests_entry&, const service::global_topology_request&)>;
     using create_op_mutations_func = std::function<global_topology_request(topology_request_tracking_mutation_builder&)>;
 
-    future<> do_topology_request(std::string_view reason, begin_op_func begin, can_replace_op_with_ongoing_func can_replace_op, create_op_mutations_func create_mutations, std::string_view origin) {
+    future<utils::UUID> start_topology_request(std::string_view reason, begin_op_func begin, can_replace_op_with_ongoing_func can_replace_op, create_op_mutations_func create_mutations, std::string_view origin) {
         if (this_shard_id() != 0) {
             // group0 is only set on shard 0
             co_return co_await _sp.container().invoke_on(0, [&] (storage_proxy& sp) {
-                return sp.remote().do_topology_request(reason, begin, can_replace_op, create_mutations, origin);
+                return sp.remote().start_topology_request(reason, begin, can_replace_op, create_mutations, origin);
             });
         }
 
@@ -1219,6 +1219,19 @@ private:
             }
         }
 
+        co_return global_request_id;
+    }
+
+    future<> do_topology_request(std::string_view reason, begin_op_func begin, can_replace_op_with_ongoing_func can_replace_op, create_op_mutations_func create_mutations, std::string_view origin) {
+        if (this_shard_id() != 0) {
+            // group0 is only set on shard 0
+            co_return co_await _sp.container().invoke_on(0, [&] (storage_proxy& sp) {
+                return sp.remote().do_topology_request(reason, begin, can_replace_op, create_mutations, origin);
+            });
+        }
+
+        auto global_request_id = co_await start_topology_request(reason, begin, can_replace_op, create_mutations, origin);
+ 
         // Wait for the topology request to complete
         sstring error = co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(), global_request_id, true);
         if (!error.empty()) {
