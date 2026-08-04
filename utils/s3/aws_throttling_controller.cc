@@ -8,13 +8,25 @@
 
 #include "utils/s3/aws_throttling_controller.hh"
 
+#include "utils/log.hh"
+
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <random>
 
 namespace s3 {
+
+extern logging::logger s3l;
+
+// Uniform in [lo, hi].
+static seastar::lowres_clock::duration freeze_duration(seastar::lowres_clock::duration lo, seastar::lowres_clock::duration hi) {
+    thread_local std::mt19937 engine{std::random_device{}()};
+    std::uniform_int_distribution dist{lo.count(), hi.count()};
+    return seastar::lowres_clock::duration(dist(engine));
+}
 
 static double to_seconds(seastar::lowres_clock::time_point tp) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch()).count() / 1e3;
@@ -49,6 +61,17 @@ seastar::future<> aws_throttling_controller::acquire(seastar::abort_source* as) 
     if (!_enabled) {
         co_return;
     }
+
+    // Freeze first: it means no requests at all, which a fill rate cannot express.
+    if (auto now = seastar::lowres_clock::now(); now < _frozen_until) {
+        auto d = _frozen_until - now;
+        if (as) {
+            co_await seastar::sleep_abortable(d, *as);
+        } else {
+            co_await seastar::sleep(d);
+        }
+    }
+
     refill(seastar::lowres_clock::now());
     while (1.0 > _current_capacity) {
         std::chrono::duration<double> wait_time((1.0 - _current_capacity) / _fill_rate);
@@ -97,6 +120,33 @@ void aws_throttling_controller::update_measured_rate(seastar::lowres_clock::time
 void aws_throttling_controller::on_throttled() {
     ++_throttles;
     update_client_sending_rate(true);
+
+    // Stop admitting for a short interval; lowering the fill rate alone still sends.
+    const auto now = seastar::lowres_clock::now();
+    if (now < _frozen_until) {
+        // Already frozen. Extending on every response would never let go.
+        return;
+    }
+    if (_last_freeze_end != seastar::lowres_clock::time_point{} && now - _last_freeze_end < freeze_min_gap) {
+        // Inside the quiet gap that bounds the duty cycle.
+        return;
+    }
+
+    const auto d = freeze_duration(freeze_min, freeze_max);
+    _frozen_until = now + d;
+    _last_freeze_end = _frozen_until;
+    ++_freezes;
+
+    // Drop accrued tokens so the resume is paced by the reduced fill rate rather
+    // than firing a full bucket.
+    _current_capacity = 0.0;
+
+    // warn, because the s3 logger runs at warn by default and this needs to be
+    // countable in a run. freeze_min_gap bounds how often it can fire.
+    s3l.warn("froze sending for {} ms after a throttling response (freeze #{}, fill_rate {:.2f}/s)",
+             std::chrono::duration_cast<std::chrono::milliseconds>(d).count(),
+             _freezes,
+             _fill_rate);
 }
 
 void aws_throttling_controller::on_success() {

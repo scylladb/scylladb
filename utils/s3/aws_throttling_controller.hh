@@ -13,6 +13,7 @@
 #include "utils/s3/throttling_controller.hh"
 
 #include <seastar/core/lowres_clock.hh>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 
@@ -33,6 +34,7 @@ class aws_throttling_controller final : public throttling_controller {
     static constexpr double beta = 0.7;
     static constexpr double scale_constant = 0.4;
 
+
     double _fill_rate = 0.0;        // tokens (requests) added per second
     double _max_capacity = 0.0;     // token bucket ceiling
     double _current_capacity = 0.0; // available tokens
@@ -45,6 +47,24 @@ class aws_throttling_controller final : public throttling_controller {
     bool _enabled = false;
     double _last_max_rate = 0.0;
     seastar::lowres_clock::time_point _last_throttle_time{};
+
+    // On a throttling response the limiter stops admitting altogether for a short
+    // interval, rather than only lowering the fill rate -- at min_fill_rate it would
+    // still trickle requests at an endpoint that just refused us. The duration is
+    // drawn per freeze so that limiters refused at the same moment do not all resume
+    // at the same moment.
+    static constexpr seastar::lowres_clock::duration freeze_min = std::chrono::milliseconds(3000);
+    static constexpr seastar::lowres_clock::duration freeze_max = std::chrono::milliseconds(5000);
+
+    // Minimum quiet period after a freeze. The trigger fires per throttling response
+    // and an episode delivers hundreds per second, so without this the limiter would
+    // stay frozen for the whole episode. Caps the duty cycle at roughly
+    // freeze_max / (freeze_max + gap).
+    static constexpr seastar::lowres_clock::duration freeze_min_gap = std::chrono::milliseconds(7000);
+
+    seastar::lowres_clock::time_point _frozen_until{};
+    seastar::lowres_clock::time_point _last_freeze_end{};
+    uint64_t _freezes = 0;
 
     uint64_t _throttles = 0; // throttling responses observed, for metrics only
 
@@ -67,7 +87,6 @@ class aws_throttling_controller final : public throttling_controller {
     double calculate_time_window() const;
     double cubic_success(seastar::lowres_clock::time_point now, double time_window) const;
     double cubic_throttle(double rate_to_use) const;
-
 
 public:
     aws_throttling_controller();
