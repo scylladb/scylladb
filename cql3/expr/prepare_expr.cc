@@ -35,6 +35,264 @@ static const column_value resolve_column(const unresolved_identifier& col_ident,
 static assignment_testable::test_result expression_test_assignment(const data_type& expr_type,
                                                                    const column_specification& receiver);
 
+<<<<<<< HEAD
+||||||| parent of 813ebc695f (cql3: allow naming the IN bind variable to use lowercase)
+static std::optional<data_type> try_widen(const data_type& a, const data_type& b);
+static expression coerce_to(expression e, const data_type& target, data_dictionary::database db, const sstring& keyspace);
+
+static bool is_widenable_to(const data_type& from, const data_type& to);
+
+// Memoization that is active only for the duration of a single top-level prepare.
+//
+// Resolving an unresolved nested function call against a candidate parameter type
+// is recursive. When a multi-overload function has an argument that is itself an
+// unresolved hole (e.g. an ambiguous nested call), overload resolution probes that
+// hole once per candidate parameter type, at every nesting level - which is
+// exponential in the nesting depth. Caching the result of such a probe for a given
+// (call, receiver type) collapses that back to linear.
+//
+// A prepare_memo is created on the stack by the public prepare entry points and
+// threaded by reference through the recursive prepare; it is freed when that entry
+// point returns, so nothing is retained between independent prepare calls. Being a
+// parameter rather than a global, its lifetime is exactly the prepare it belongs to,
+// with no dependence on preparation staying synchronous.
+//
+// keyspace/schema/cf are constant within a prepare, so the key is just (call, receiver type).
+struct call_probe_key {
+    function_call call;
+    data_type receiver_type;
+    bool operator==(const call_probe_key&) const = default;
+};
+
+// Shallow hash: (qualified name, arity, receiver type) only - args aren't hashed; operator== separates them.
+struct call_probe_key_hash {
+    size_t operator()(const call_probe_key& k) const {
+        const auto fn = std::visit(overloaded_functor{
+            [] (const functions::function_name& name) { return name; },
+            [] (const shared_ptr<functions::function>& f) { return f->name(); },
+        }, k.call.func);
+        size_t h = std::hash<functions::function_name>{}(fn);
+        h = utils::hash_combine(h, k.call.args.size());
+        h = utils::hash_combine(h, std::hash<sstring>{}(k.receiver_type->name()));
+        return h;
+    }
+};
+
+struct prepare_memo {
+    // Test-only: when false, probes are neither looked up nor stored, so a test can
+    // observe the un-memoized (exponential) probing cost for comparison. The constructor
+    // seeds it from the test switch (always true in release).
+    bool enabled = true;
+    std::unordered_map<call_probe_key, assignment_testable::test_result, call_probe_key_hash> test_assignment_function_call;
+
+    prepare_memo();
+};
+
+// Memo-threaded overloads of the public entry points. The public (memo-less) functions
+// create a prepare_memo on the stack and delegate here; the recursive prepare passes the
+// same memo by reference, so it is never global.
+static std::optional<expression> try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, bool infer_default, prepare_memo& memo, bool allow_unresolved = false);
+static assignment_testable::test_result test_assignment(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver, prepare_memo& memo);
+static expression prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, prepare_memo& memo);
+static assignment_testable::test_result test_assignment_all(const std::vector<expression>& to_test, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver, prepare_memo& memo);
+static ::shared_ptr<assignment_testable> as_assignment_testable(expression e, std::optional<data_type> type_opt, prepare_memo& memo);
+
+struct inferred_elements {
+    data_type element_type;
+    std::vector<expression> prepared;
+};
+
+template <typename Project>
+static std::optional<inferred_elements>
+prepare_and_infer_collection_elements(std::span<const expression> elements,
+        data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, Project&& project, prepare_memo& memo) {
+    std::optional<data_type> result;
+    std::vector<expression> prepared;
+    prepared.reserve(elements.size());
+    for (const expression& e : elements) {
+        std::optional<expression> p = try_prepare_expression(project(e), db, keyspace, schema_opt, nullptr, /*infer_default=*/true, memo);
+        if (!p) {
+            return std::nullopt;
+        }
+        data_type t = type_of(*p);
+        if (!result) {
+            result = t;
+        } else if (**result != *t) {
+            auto widened = try_widen(*result, t);
+            if (!widened) {
+                return std::nullopt;
+            }
+            result = std::move(widened);
+        }
+        prepared.push_back(std::move(*p));
+    }
+    if (!result) {
+        return std::nullopt;
+    }
+    return inferred_elements{std::move(*result), std::move(prepared)};
+}
+
+// Build a collection literal from elements that were already prepared (by
+// prepare_and_infer_collection_elements), coercing each to the collection's element type
+// rather than preparing it again. Folds to a terminal constant when every element is.
+static expression
+build_collection_from_prepared(collection_constructor::style_type style, data_type collection_type,
+        data_type element_type, std::vector<expression> prepared,
+        data_dictionary::database db, const sstring& keyspace) {
+    std::vector<expression> values;
+    values.reserve(prepared.size());
+    bool all_terminal = true;
+    for (auto& p : prepared) {
+        expression elem = coerce_to(std::move(p), element_type, db, keyspace);
+        if (!is<constant>(elem)) {
+            all_terminal = false;
+        }
+        values.push_back(std::move(elem));
+    }
+    collection_constructor value {
+        .style = style,
+        .elements = std::move(values),
+        .type = std::move(collection_type),
+    };
+    if (all_terminal) {
+        return constant(evaluate(value, query_options::DEFAULT), value.type);
+    }
+    return value;
+}
+
+=======
+static std::optional<data_type> try_widen(const data_type& a, const data_type& b);
+static expression coerce_to(expression e, const data_type& target, data_dictionary::database db, const sstring& keyspace);
+
+static bool is_widenable_to(const data_type& from, const data_type& to);
+
+// Memoization that is active only for the duration of a single top-level prepare.
+//
+// Resolving an unresolved nested function call against a candidate parameter type
+// is recursive. When a multi-overload function has an argument that is itself an
+// unresolved hole (e.g. an ambiguous nested call), overload resolution probes that
+// hole once per candidate parameter type, at every nesting level - which is
+// exponential in the nesting depth. Caching the result of such a probe for a given
+// (call, receiver type) collapses that back to linear.
+//
+// A prepare_memo is created on the stack by the public prepare entry points and
+// threaded by reference through the recursive prepare; it is freed when that entry
+// point returns, so nothing is retained between independent prepare calls. Being a
+// parameter rather than a global, its lifetime is exactly the prepare it belongs to,
+// with no dependence on preparation staying synchronous.
+//
+// keyspace/schema/cf are constant within a prepare, so the key is just (call, receiver type).
+struct call_probe_key {
+    function_call call;
+    data_type receiver_type;
+    bool operator==(const call_probe_key&) const = default;
+};
+
+// Shallow hash: (qualified name, arity, receiver type) only - args aren't hashed; operator== separates them.
+struct call_probe_key_hash {
+    size_t operator()(const call_probe_key& k) const {
+        const auto fn = std::visit(overloaded_functor{
+            [] (const functions::function_name& name) { return name; },
+            [] (const shared_ptr<functions::function>& f) { return f->name(); },
+        }, k.call.func);
+        size_t h = std::hash<functions::function_name>{}(fn);
+        h = utils::hash_combine(h, k.call.args.size());
+        h = utils::hash_combine(h, std::hash<sstring>{}(k.receiver_type->name()));
+        return h;
+    }
+};
+
+struct prepare_memo {
+    // Test-only: when false, probes are neither looked up nor stored, so a test can
+    // observe the un-memoized (exponential) probing cost for comparison. The constructor
+    // seeds it from the test switch (always true in release).
+    bool enabled = true;
+    std::unordered_map<call_probe_key, assignment_testable::test_result, call_probe_key_hash> test_assignment_function_call;
+
+    prepare_memo();
+};
+
+// Memo-threaded overloads of the public entry points. The public (memo-less) functions
+// create a prepare_memo on the stack and delegate here; the recursive prepare passes the
+// same memo by reference, so it is never global.
+static std::optional<expression> try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, bool infer_default, prepare_memo& memo, bool allow_unresolved = false);
+static assignment_testable::test_result test_assignment(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver, prepare_memo& memo);
+static expression prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, prepare_memo& memo, const dialect* d = nullptr);
+static assignment_testable::test_result test_assignment_all(const std::vector<expression>& to_test, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver, prepare_memo& memo);
+static ::shared_ptr<assignment_testable> as_assignment_testable(expression e, std::optional<data_type> type_opt, prepare_memo& memo);
+
+// A relation is named after the dialect it is prepared under, so the dialect travels along
+// the expressions that can contain a relation and nowhere else - what a relation is built
+// from is an ordinary expression, which cannot contain one. The dialect is null when
+// preparing an expression that is not allowed to contain a relation, which then refuses one
+// rather than naming it under a dialect nobody chose.
+static std::optional<expression> try_prepare_expression_allowing_relations(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, bool infer_default, prepare_memo& memo, const dialect* d);
+static std::optional<expression> prepare_relation(const binary_operator& binop, data_dictionary::database db, const schema* schema_opt, const lw_shared_ptr<column_specification>& receiver, const dialect* d);
+
+struct inferred_elements {
+    data_type element_type;
+    std::vector<expression> prepared;
+};
+
+template <typename Project>
+static std::optional<inferred_elements>
+prepare_and_infer_collection_elements(std::span<const expression> elements,
+        data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, Project&& project, prepare_memo& memo) {
+    std::optional<data_type> result;
+    std::vector<expression> prepared;
+    prepared.reserve(elements.size());
+    for (const expression& e : elements) {
+        std::optional<expression> p = try_prepare_expression(project(e), db, keyspace, schema_opt, nullptr, /*infer_default=*/true, memo);
+        if (!p) {
+            return std::nullopt;
+        }
+        data_type t = type_of(*p);
+        if (!result) {
+            result = t;
+        } else if (**result != *t) {
+            auto widened = try_widen(*result, t);
+            if (!widened) {
+                return std::nullopt;
+            }
+            result = std::move(widened);
+        }
+        prepared.push_back(std::move(*p));
+    }
+    if (!result) {
+        return std::nullopt;
+    }
+    return inferred_elements{std::move(*result), std::move(prepared)};
+}
+
+// Build a collection literal from elements that were already prepared (by
+// prepare_and_infer_collection_elements), coercing each to the collection's element type
+// rather than preparing it again. Folds to a terminal constant when every element is.
+static expression
+build_collection_from_prepared(collection_constructor::style_type style, data_type collection_type,
+        data_type element_type, std::vector<expression> prepared,
+        data_dictionary::database db, const sstring& keyspace) {
+    std::vector<expression> values;
+    values.reserve(prepared.size());
+    bool all_terminal = true;
+    for (auto& p : prepared) {
+        expression elem = coerce_to(std::move(p), element_type, db, keyspace);
+        if (!is<constant>(elem)) {
+            all_terminal = false;
+        }
+        values.push_back(std::move(elem));
+    }
+    collection_constructor value {
+        .style = style,
+        .elements = std::move(values),
+        .type = std::move(collection_type),
+    };
+    if (all_terminal) {
+        return constant(evaluate(value, query_options::DEFAULT), value.type);
+    }
+    return value;
+}
+
+>>>>>>> 813ebc695f (cql3: allow naming the IN bind variable to use lowercase)
 
 static
 lw_shared_ptr<column_specification>
@@ -1200,7 +1458,16 @@ std::optional<expression> prepare_conjunction(const conjunction& conj,
                                               data_dictionary::database db,
                                               const sstring& keyspace,
                                               const schema* schema_opt,
+<<<<<<< HEAD
                                               lw_shared_ptr<column_specification> receiver) {
+||||||| parent of 813ebc695f (cql3: allow naming the IN bind variable to use lowercase)
+                                              lw_shared_ptr<column_specification> receiver,
+                                              prepare_memo& memo) {
+=======
+                                              lw_shared_ptr<column_specification> receiver,
+                                              prepare_memo& memo,
+                                              const dialect* d) {
+>>>>>>> 813ebc695f (cql3: allow naming the IN bind variable to use lowercase)
     if (receiver.get() != nullptr && receiver->type->without_reversed().get_kind() != abstract_type::kind::boolean) {
         throw exceptions::invalid_request_exception(
             format("AND conjunction produces a boolean value, which doesn't match the type: {} of {}",
@@ -1226,7 +1493,13 @@ std::optional<expression> prepare_conjunction(const conjunction& conj,
     bool all_terminal = true;
     for (const expression& child : conj.children) {
         std::optional<expression> prepared_child =
+<<<<<<< HEAD
             try_prepare_expression(child, db, keyspace, schema_opt, child_receiver);
+||||||| parent of 813ebc695f (cql3: allow naming the IN bind variable to use lowercase)
+            try_prepare_expression(child, db, keyspace, schema_opt, child_receiver, /*infer_default=*/false, memo);
+=======
+            try_prepare_expression_allowing_relations(child, db, keyspace, schema_opt, child_receiver, /*infer_default=*/false, memo, d);
+>>>>>>> 813ebc695f (cql3: allow naming the IN bind variable to use lowercase)
         if (!prepared_child.has_value()) {
             throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", child));
         }
@@ -1309,6 +1582,39 @@ prepare_column_mutation_attribute(
     };
 }
 
+static std::optional<expression>
+prepare_relation(const binary_operator& binop, data_dictionary::database db, const schema* schema_opt, const lw_shared_ptr<column_specification>& receiver, const dialect* d) {
+    if (receiver.get() != nullptr && &receiver->type->without_reversed() != boolean_type.get()) {
+        throw exceptions::invalid_request_exception(
+            format("binary operator produces a boolean value, which doesn't match the type: {} of {}",
+                   receiver->type->name(), receiver->name->text()));
+    }
+
+    if (!d) {
+        on_internal_error(expr_logger, "preparing a relation in an expression that is not allowed to contain one");
+    }
+    binary_operator result = prepare_binary_operator(binop, db, *schema_opt, *d);
+
+    // A binary operator where both sides of the equation are known can be evaluated to a boolean value.
+    // This only applies to operators in the CQL order, operations in the clustering order should only be
+    // of form (clustering_column1, colustering_column2) < SCYLLA_CLUSTERING_BOUND(1, 2).
+    if (is<constant>(result.lhs) && is<constant>(result.rhs) && result.order == comparison_order::cql) {
+        return constant(evaluate(result, query_options::DEFAULT), boolean_type);
+    }
+    return result;
+}
+
+static std::optional<expression>
+try_prepare_expression_allowing_relations(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, bool infer_default, prepare_memo& memo, const dialect* d) {
+    if (auto* conj = as_if<conjunction>(&expr)) {
+        return prepare_conjunction(*conj, db, keyspace, schema_opt, std::move(receiver), memo, d);
+    }
+    if (auto* binop = as_if<binary_operator>(&expr)) {
+        return prepare_relation(*binop, db, schema_opt, receiver, d);
+    }
+    return try_prepare_expression(expr, db, keyspace, schema_opt, std::move(receiver), infer_default, memo);
+}
+
 std::optional<expression>
 try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
     return expr::visit(overloaded_functor{
@@ -1328,24 +1634,16 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
             return result;
         },
         [&] (const binary_operator& binop) -> std::optional<expression> {
-            if (receiver.get() != nullptr && &receiver->type->without_reversed() != boolean_type.get()) {
-                throw exceptions::invalid_request_exception(
-                    format("binary operator produces a boolean value, which doesn't match the type: {} of {}",
-                           receiver->type->name(), receiver->name->text()));
-            }
-
-            binary_operator result = prepare_binary_operator(binop, db, *schema_opt);
-
-            // A binary operator where both sides of the equation are known can be evaluated to a boolean value.
-            // This only applies to operators in the CQL order, operations in the clustering order should only be
-            // of form (clustering_column1, colustering_column2) < SCYLLA_CLUSTERING_BOUND(1, 2).
-            if (is<constant>(result.lhs) && is<constant>(result.rhs) && result.order == comparison_order::cql) {
-                return constant(evaluate(result, query_options::DEFAULT), boolean_type);
-            }
-            return result;
+            return prepare_relation(binop, db, schema_opt, receiver, /*d=*/nullptr);
         },
         [&] (const conjunction& conj) -> std::optional<expression> {
+<<<<<<< HEAD
             return prepare_conjunction(conj, db, keyspace, schema_opt, receiver);
+||||||| parent of 813ebc695f (cql3: allow naming the IN bind variable to use lowercase)
+            return prepare_conjunction(conj, db, keyspace, schema_opt, receiver, memo);
+=======
+            return prepare_conjunction(conj, db, keyspace, schema_opt, receiver, memo, /*d=*/nullptr);
+>>>>>>> 813ebc695f (cql3: allow naming the IN bind variable to use lowercase)
         },
         [] (const column_value& cv) -> std::optional<expression> {
             return cv;
@@ -1616,7 +1914,47 @@ test_assignment_any_size_float_vector(const expression& expr) {
 
 expression
 prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
+<<<<<<< HEAD
     auto e_opt = try_prepare_expression(expr, db, keyspace, schema_opt, std::move(receiver));
+||||||| parent of 813ebc695f (cql3: allow naming the IN bind variable to use lowercase)
+    prepare_memo memo;
+    return prepare_expression(expr, db, keyspace, schema_opt, std::move(receiver), memo);
+}
+
+static expression
+prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, prepare_memo& memo) {
+    // Pass 1: contextual typing. Expressions without a type (untyped constants,
+    // collection literals) yield nullopt when no receiver constrains them.
+    auto e_opt = try_prepare_expression(expr, db, keyspace, schema_opt, receiver, /*infer_default=*/false, memo);
+    // Pass 2: default-type inference. The same prepare is retried with infer_default
+    // enabled, so untyped constants and collection literals fall back to a default
+    // type at the point where no receiver is available.
+    if (!e_opt) {
+        e_opt = try_prepare_expression(expr, db, keyspace, schema_opt, receiver, /*infer_default=*/true, memo);
+    }
+=======
+    prepare_memo memo;
+    return prepare_expression(expr, db, keyspace, schema_opt, std::move(receiver), memo);
+}
+
+expression
+prepare_expression_allowing_relations(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, dialect d) {
+    prepare_memo memo;
+    return prepare_expression(expr, db, keyspace, schema_opt, std::move(receiver), memo, &d);
+}
+
+static expression
+prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, prepare_memo& memo, const dialect* d) {
+    // Pass 1: contextual typing. Expressions without a type (untyped constants,
+    // collection literals) yield nullopt when no receiver constrains them.
+    auto e_opt = try_prepare_expression_allowing_relations(expr, db, keyspace, schema_opt, receiver, /*infer_default=*/false, memo, d);
+    // Pass 2: default-type inference. The same prepare is retried with infer_default
+    // enabled, so untyped constants and collection literals fall back to a default
+    // type at the point where no receiver is available.
+    if (!e_opt) {
+        e_opt = try_prepare_expression_allowing_relations(expr, db, keyspace, schema_opt, receiver, /*infer_default=*/true, memo, d);
+    }
+>>>>>>> 813ebc695f (cql3: allow naming the IN bind variable to use lowercase)
     if (!e_opt) {
         throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", expr));
     }
@@ -1749,12 +2087,22 @@ static lw_shared_ptr<column_specification> get_lhs_receiver(const expression& pr
 
 // Given type of LHS and the operation finds the expected type of RHS.
 // The type will be the same as LHS for simple operations like =, but it will be different for more complex ones like IN or CONTAINS.
-static lw_shared_ptr<column_specification> get_rhs_receiver(lw_shared_ptr<column_specification>& lhs_receiver, oper_t oper) {
+static lw_shared_ptr<column_specification> get_rhs_receiver(lw_shared_ptr<column_specification>& lhs_receiver, oper_t oper, const dialect& d) {
     const data_type lhs_type = lhs_receiver->type->underlying_type();
 
     if (oper == oper_t::IN || oper == oper_t::NOT_IN) {
         data_type rhs_receiver_type = list_type_impl::get_instance(std::move(lhs_type), false);
-        auto in_name = ::make_shared<column_identifier>(format("{}({})", oper, lhs_receiver->name->text()), true);
+        // Cassandra spells the operator in lowercase. Applications bind by this name,
+        // so the case cannot change under them and is part of the dialect. The dialect
+        // is also part of the prepared statement cache key, so statements prepared
+        // under different dialects get separate entries.
+        std::string_view oper_name;
+        if (d.in_bind_variable_name_uses_uppercase_operator) {
+            oper_name = (oper == oper_t::IN) ? "IN" : "NOT IN";
+        } else {
+            oper_name = (oper == oper_t::IN) ? "in" : "not in";
+        }
+        auto in_name = ::make_shared<column_identifier>(fmt::format("{}({})", oper_name, lhs_receiver->name->text()), true);
         return make_lw_shared<column_specification>(lhs_receiver->ks_name,
                                                     lhs_receiver->cf_name,
                                                     in_name,
@@ -1868,7 +2216,7 @@ optimize_like(const expression& e) {
     });
 }
 
-binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, const schema& table_schema) {
+binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, const schema& table_schema, const dialect& d) {
     std::optional<expression> prepared_lhs_opt = try_prepare_expression(binop.lhs, db, table_schema.ks_name(), &table_schema, {});
     if (!prepared_lhs_opt) {
         throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", binop.lhs));
@@ -1880,7 +2228,7 @@ binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::
         throw exceptions::invalid_request_exception(fmt::format("Duration type is unordered for {}", lhs_receiver->name));
     }
 
-    lw_shared_ptr<column_specification> rhs_receiver = get_rhs_receiver(lhs_receiver, binop.op);
+    lw_shared_ptr<column_specification> rhs_receiver = get_rhs_receiver(lhs_receiver, binop.op, d);
     expression prepared_rhs = prepare_expression(binop.rhs, db, table_schema.ks_name(), &table_schema, rhs_receiver);
 
     // IS NOT NULL requires an additional check that the RHS is NULL.
