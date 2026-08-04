@@ -10,6 +10,7 @@
 
 #include "locator/tablets.hh"
 #include "raft/raft.hh"
+#include "raft/server.hh"
 #include "service/migration_manager.hh"
 #include "service/strong_consistency/state_machine.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
@@ -75,6 +76,24 @@ static raft_ticker_type::duration get_tick_interval() {
             .inject_parameter<int64_t>("strongly-consistent-raft-group-tick-interval-in-ms")
             .transform([](int64_t ms) { return raft_ticker_type::duration{std::chrono::milliseconds{ms}}; })
             .value_or(raft_tick_interval);
+}
+
+// The applier queue limit a group runs with while it takes part in a resize as a child, in place
+// of the default, which a held-back applier would otherwise hit.
+//
+// The bound counts messages, not entries or bytes, so the 20MB log limiter bites first for most
+// workloads. Only many tiny writes, each committed on its own, reach this bound first.
+static constexpr size_t resizing_applier_queue_max_size = 10'000;
+
+// Applies the limit above to `server`, which may not have been created yet - the next update()
+// takes care of it then.
+static void apply_applier_queue_max_size(raft::server* server, bool is_child) {
+    if (!server) {
+        return;
+    }
+    server->set_applier_queue_max_size(is_child
+        ? resizing_applier_queue_max_size
+        : raft::server::default_applier_queue_max_size);
 }
 
 // Precondition: The passed group_leader must be a non-trivial raft::server_id.
@@ -1235,6 +1254,12 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             auto& state = _raft_groups[id];
             state.has_tablet = true;
 
+            // We set this from the tablet metadata on every token metadata change rather than
+            // toggling it when the resize ends, so that a finalization and a restart both restore
+            // the default without a path of their own. It has to happen before the check below,
+            // which a group that is already running never gets past.
+            apply_applier_queue_max_size(state.server, parent_id.has_value());
+
             // Don't start the raft server if it is already (started or starting) and not stopping.
             if (state.gate && !state.gate->is_closed()) {
                 continue;
@@ -1249,6 +1274,10 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             chain_control_op(state, id, [&state, this, tablet, id, new_tm, parent_id, g = state.gate] () mutable -> future<> {
                 state.state_machine = co_await start_raft_group(tablet, id, std::move(new_tm));
                 state.server = &_raft_gr.get_server(id);
+                // The update() which started this group could not do it - the server did not exist
+                // yet. A stale limit is corrected by the next update(), which finalizing or rolling
+                // back the resize triggers.
+                apply_applier_queue_max_size(state.server, parent_id.has_value());
                 // A group created by a resize applies nothing until the group it replaces applied
                 // end_resize here, which the tracker tells it; every other group applies right away.
                 if (parent_id) {
