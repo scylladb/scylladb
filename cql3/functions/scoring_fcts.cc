@@ -31,5 +31,20 @@ shared_ptr<function> make_bm25_function() {
         });
 }
 
+shared_ptr<function> make_ann_function(const std::vector<data_type>& arg_types) {
+    // ANN vector ordering function: ann(column, query_vector) -> float
+    //
+    // Planning-only: the argument types are inferred from the indexed column at prepare time
+    // and the ordering is served by vector_indexed_table_select_statement, so the function body
+    // is never evaluated.  Marked as non-pure (false) for the same reason as BM25(): it must not
+    // be constant-folded when both arguments happen to be literals.
+    return make_native_scalar_function<false>(ANN_FUNCTION_NAME.name, float_type, arg_types,
+        [] (std::span<const bytes_opt>) -> bytes_opt {
+            // ANN() is only valid in ORDER BY, where it is resolved at prepare time.
+            // Reaching the function body means the prepare-time check was bypassed - this is a bug.
+            on_internal_error(log, "ANN() reached scalar evaluation; prepare-time check should have prevented this");
+        });
+}
+
 } // namespace functions
 } // namespace cql3
