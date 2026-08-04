@@ -1749,6 +1749,7 @@ allowedFunctionName returns [sstring s]
     | u=unreserved_function_keyword { $s = u; }
     | K_TOKEN                       { $s = "token"; }
     | K_COUNT                       { $s = "count"; }
+    | K_ANN                         { $s = "ann"; }
     ;
 
 functionArgs returns [std::vector<expression> a]
