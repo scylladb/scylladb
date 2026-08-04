@@ -75,6 +75,7 @@ class feature_service;
 namespace db {
 class system_keyspace;
 struct snapshot_options;
+struct snapshot_dc_location;
 enum class large_data_violation_type : uint8_t;
 
 namespace view {
@@ -827,6 +828,8 @@ public:
      * Performs snapshot on keyspace/tables. To snapshot all tables in a keyspace, put "ks: ''" in map
      */
     future<> snapshot_keyspace(std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, const db::snapshot_options& opts);
+
+    future<abortable_topology_task> start_backup_snapshot(std::unordered_map<sstring, db::snapshot_dc_location> locations, std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, bool move_files);
 
     /*
      * Executes data query on the whole cluster.
