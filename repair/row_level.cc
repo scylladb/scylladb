@@ -196,6 +196,9 @@ struct row_level_repair_metrics {
     uint64_t inc_sst_skipped_bytes{0};
     uint64_t inc_sst_read_bytes{0};
     uint64_t tablet_time_ms{0};
+    uint64_t rounds_total{0};
+    uint64_t rounds_in_sync_total{0};
+    uint64_t rounds_out_of_sync_total{0};
     row_level_repair_metrics() {
         namespace sm = seastar::metrics;
         _metrics.add_group("repair", {
@@ -221,6 +224,16 @@ struct row_level_repair_metrics {
                             sm::description("Total number of bytes read from sstables for incremental repair on this shard.")),
             sm::make_counter("tablet_time_ms", tablet_time_ms,
                             sm::description("Time spent on tablet repair on this shard in milliseconds.")),
+            sm::make_counter("rounds_total", rounds_total,
+                            sm::description("Total number of repair rounds executed on this shard as repair master, "
+                                            "for repair jobs only, excluding repair-based node operations.")),
+            sm::make_counter("rounds_in_sync_total", rounds_in_sync_total,
+                            sm::description("Total number of repair rounds in which all replicas were found already in sync on this shard, "
+                                            "for repair jobs only, excluding repair-based node operations.")),
+            sm::make_counter("rounds_out_of_sync_total", rounds_out_of_sync_total,
+                            sm::description("Total number of repair rounds in which differences between replicas were found "
+                                            "and rows were exchanged on this shard, "
+                                            "for repair jobs only, excluding repair-based node operations.")).set_skip_when_empty(),
         });
     }
 };
@@ -3176,12 +3189,20 @@ private:
                 _skipped_sync_boundary = _common_sync_boundary;
                 rlogger.debug("Skip set skipped_sync_boundary={}", _skipped_sync_boundary);
                 master.stats().round_nr_fast_path_already_synced++;
+                if (count_round_metrics()) {
+                    _metrics.rounds_total++;
+                    _metrics.rounds_in_sync_total++;
+                }
                 return op_status::next_round;
             } else {
                 _skipped_sync_boundary = std::nullopt;
             }
         } else {
             master.stats().round_nr_fast_path_already_synced++;
+            if (count_round_metrics()) {
+                _metrics.rounds_total++;
+                _metrics.rounds_in_sync_total++;
+            }
             // We are done with this range because all the nodes have no more data.
             return op_status::all_done;
         }
@@ -3236,6 +3257,10 @@ private:
             // `_working_row_buf` on all the nodes are the same
             // This is the second fast path.
             master.stats().round_nr_fast_path_same_combined_hashes++;
+            if (count_round_metrics()) {
+                _metrics.rounds_total++;
+                _metrics.rounds_in_sync_total++;
+            }
             return op_status::next_round;
         }
 
@@ -3376,9 +3401,20 @@ private:
             }
         })).get();
         master.stats().round_nr_slow_path++;
+        if (count_round_metrics()) {
+            _metrics.rounds_total++;
+            _metrics.rounds_out_of_sync_total++;
+        }
     }
 
 private:
+    // The row-level repair code also serves repair-based node operations
+    // (rebuild, replace, decommission, ...), where divergence between the
+    // syncing nodes is expected. The round-outcome metrics track repair jobs only.
+    bool count_round_metrics() const {
+        return _shard_task.reason() == streaming::stream_reason::repair;
+    }
+
     locator::effective_replication_map_ptr get_erm() {
         return _shard_task.get_erm();
     }
