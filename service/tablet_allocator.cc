@@ -24,6 +24,7 @@
 #include "utils/div_ceil.hh"
 #include "db/config.hh"
 #include "db/tablet_options.hh"
+#include "db/snapshot_types.hh"
 #include "locator/load_sketch.hh"
 #include "replica/database.hh"
 #include "gms/feature_service.hh"
