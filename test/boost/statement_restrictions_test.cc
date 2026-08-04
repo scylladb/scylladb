@@ -33,6 +33,7 @@ query::clustering_row_ranges slice(
         const std::vector<expr::expression>& where_clause, cql_test_env& env,
         const sstring& table_name = "t", const sstring& keyspace_name = "ks") {
     prepare_context ctx;
+    ctx.set_bound_variables({}, internal_dialect());
     return restrictions::analyze_statement_restrictions(
             env.data_dictionary(),
             env.local_db().find_schema(keyspace_name, table_name),

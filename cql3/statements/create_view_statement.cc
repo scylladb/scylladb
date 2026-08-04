@@ -205,7 +205,10 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     auto parameters = make_lw_shared<raw::select_statement::parameters>(raw::select_statement::parameters::orderings_type(), false, true);
     raw::select_statement raw_select(_base_name, std::move(parameters), _select_clause, _where_clause, std::nullopt, std::nullopt, {}, std::make_unique<cql3::attributes::raw>());
     raw_select.prepare_keyspace(keyspace());
-    raw_select.set_bound_variables({});
+    // The view definition is rebuilt from the schema and prepared again on every read,
+    // under the internal dialect, so validating it here under the dialect of the
+    // connection that happens to create the view would validate something else.
+    raw_select.set_bound_variables({}, internal_dialect());
 
     cql_stats ignored;
     auto prepared = raw_select.prepare(db, ignored, true);
