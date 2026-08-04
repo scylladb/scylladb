@@ -94,7 +94,7 @@ query_options::query_options(db::consistency_level cl, cql3::raw_value_vector_wi
 {
 }
 
-query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<service::pager::paging_state> paging_state)
+query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<const service::pager::paging_state> paging_state)
         : query_options(qo->_cql_config,
         qo->_consistency,
         std::move(qo->_names),
@@ -106,7 +106,7 @@ query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<se
 
 }
 
-query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<service::pager::paging_state> paging_state, int32_t page_size)
+query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<const service::pager::paging_state> paging_state, int32_t page_size)
         : query_options(qo->_cql_config,
         qo->_consistency,
         std::move(qo->_names),

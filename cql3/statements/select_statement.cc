@@ -1280,7 +1280,7 @@ view_indexed_table_select_statement::actually_do_execute(query_processor& qp,
                 if (paging_state) {
                     paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options, internal_page_size);
                 }
-                internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
+                internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state));
                 if (needs_post_filtering()) {
                     _stats.filtered_rows_read_total += *results->row_count();
                     query::result_view::consume(*results, cmd->slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection,
