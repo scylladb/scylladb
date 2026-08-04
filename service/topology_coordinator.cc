@@ -2867,12 +2867,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         co_await global_tablet_token_metadata_barrier(std::move(guard));
     }
 
+    using do_topo_op_func = std::function<future<std::optional<sstring>>(const db::system_keyspace::topology_requests_entry&, group0_guard&)>;
     using get_table_ids_func = std::function<std::unordered_set<table_id>(const db::system_keyspace::topology_requests_entry&)>;
     using send_rpc_func = std::function<future<>(locator::host_id, const service::frozen_topology_guard&)>;
     using desc_func = std::function<std::string()>;
     using before_finalize_func = std::function<future<>()>;
 
-    future<> handle_topology_ordered_op(group0_guard guard, get_table_ids_func get_table_ids, send_rpc_func send_rpc, desc_func desc, std::string_view what, before_finalize_func bf = {}) {
+    future<> handle_topology_ordered_op0(group0_guard guard, do_topo_op_func do_topo_op, std::string_view what, before_finalize_func bf = {}) {
         // Execute a barrier to make sure the nodes we are performing truncate on see the session
         // and are able to create a topology_guard using the frozen_guard we are sending over RPC
         // TODO: Exclude nodes which don't contain replicas of the table we are truncating
@@ -2884,45 +2885,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         // handler performed the truncate and cleared the session, but crashed before finalizing the request
         if (_topo_sm._topology.session) {
             const auto topology_requests_entry = co_await _sys_ks.get_topology_request_entry(global_request_id);
-            std::unordered_set<table_id> tables;
-            try {
-                tables = get_table_ids(topology_requests_entry);
-            } catch (std::exception& e) {
-                error = e.what();
-            }
-            if (!tables.empty()) {
-                // Collect the IDs of the hosts with replicas, but ignore excluded nodes
-                std::unordered_set<locator::host_id> replica_hosts;
-                for (auto table_id : tables) {
-                    const locator::tablet_map& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
-                    co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) {
-                        for (const locator::tablet_replica& replica: tinfo.replicas) {
-                            if (!_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(replica.host.uuid()))) {
-                                replica_hosts.insert(replica.host);
-                            }
-                        }
-                        return make_ready_future<>();
-                    });
-                }
-
-                // Release the guard to avoid blocking group0 for long periods of time while invoking RPCs
-                release_guard(std::move(guard));
-
-                co_await utils::get_local_injector().inject(fmt::format("{}_table_wait", what), utils::wait_for_message(std::chrono::minutes(2)));
-
-                // Check if all the nodes with replicas are alive
-                for (const locator::host_id& replica_host: replica_hosts) {
-                    if (!_gossiper.is_alive(replica_host)) {
-                        throw std::runtime_error(::format("Cannot perform {} because host {} is down", desc(), replica_host));
-                    }
-                }
-
-                // Send the RPC to all replicas
-                const service::frozen_topology_guard frozen_guard { _topo_sm._topology.session };
-                co_await coroutine::parallel_for_each(replica_hosts, [&] (const locator::host_id& host_id) -> future<> {
-                    co_await send_rpc(host_id, frozen_guard);
-                });
-            }
+            error = co_await do_topo_op(topology_requests_entry, guard);
 
             // Clear the session and save the error message
             while (true) {
@@ -2984,6 +2947,55 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             } catch (group0_concurrent_modification&) {
             }
         }
+    }
+
+    future<> handle_topology_ordered_op(group0_guard guard, get_table_ids_func get_table_ids, send_rpc_func send_rpc, desc_func desc, std::string_view what, before_finalize_func bf = {}) {
+        co_await handle_topology_ordered_op0(std::move(guard), [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry, group0_guard& guard) -> future<std::optional<sstring>> {
+            std::unordered_set<table_id> tables;
+            std::optional<sstring> error;
+
+            try {
+                tables = get_table_ids(topology_requests_entry);
+            } catch (std::exception& e) {
+                error = e.what();
+            }
+
+            if (!tables.empty()) {
+                // Collect the IDs of the hosts with replicas, but ignore excluded nodes
+                std::unordered_set<locator::host_id> replica_hosts;
+                for (auto table_id : tables) {
+                    const locator::tablet_map& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
+                    co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) {
+                        for (const locator::tablet_replica& replica: tinfo.replicas) {
+                            if (!_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(replica.host.uuid()))) {
+                                replica_hosts.insert(replica.host);
+                            }
+                        }
+                        return make_ready_future<>();
+                    });
+                }
+
+                // Release the guard to avoid blocking group0 for long periods of time while invoking RPCs
+                release_guard(std::move(guard));
+                assert(!guard);
+                co_await utils::get_local_injector().inject(fmt::format("{}_table_wait", what), utils::wait_for_message(std::chrono::minutes(2)));
+
+                // Check if all the nodes with replicas are alive
+                for (const locator::host_id& replica_host: replica_hosts) {
+                    if (!_gossiper.is_alive(replica_host)) {
+                        throw std::runtime_error(::format("Cannot perform {} because host {} is down", desc(), replica_host));
+                    }
+                }
+
+                // Send the RPC to all replicas
+                const service::frozen_topology_guard frozen_guard { _topo_sm._topology.session };
+                co_await coroutine::parallel_for_each(replica_hosts, [&] (const locator::host_id& host_id) -> future<> {
+                    co_await send_rpc(host_id, frozen_guard);
+                });
+            }
+
+            co_return error;
+        }, what, std::move(bf));
     }
 
     future<> handle_truncate_table(group0_guard guard) {
