@@ -11,8 +11,14 @@
 # https://github.com/apache/cassandra/blob/1959502d8b16212479eecb076c89945c3f0f180c/doc/native_protocol_v4.spec#L675
 
 import pytest
+<<<<<<< HEAD
 from .util import new_test_table, unique_key_int, config_value_context
 from cassandra.protocol import InvalidRequest
+||||||| parent of 644b4d9642 (test: cover IN bind variable naming)
+from .util import new_test_table, unique_key_int, config_value_context
+=======
+from .util import new_test_table, unique_key_int, config_value_context, is_scylla
+>>>>>>> 644b4d9642 (test: cover IN bind variable naming)
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -260,3 +266,88 @@ def test_duplicate_named_bind_marker_prepared_cassandra_compatibility_mode(cql, 
         # query's bind markers have the same name :x. Exactly like two different
         # "?" bind markers can also be bound to different values:
         assert [(x,x+1)] == list(cql.execute(stmt, (x,x+1)))
+
+# The tests from here on cover the name of the IN bind variable, SCYLLADB-3454.
+# The bind variable created for the right-hand side of an IN restriction is
+# named "IN(column)" in Scylla. This name is part of the driver-visible
+# metadata and applications bind values by it, so it must not change.
+def test_in_bind_marker_name(cql, table1, scylla_only):
+    prepared = cql.prepare(f"SELECT * FROM {table1} WHERE p = ? AND c IN ?")
+    assert [col.name for col in prepared.column_metadata] == ['p', 'IN(c)']
+    x = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p,c) VALUES ({x},{x})')
+    assert [(x,x)] == list(cql.execute(prepared, {'p': x, 'IN(c)': [x, x+1]}))
+
+# Same as test_in_bind_marker_name, but for the NOT IN restriction, which is a
+# Scylla extension.
+def test_not_in_bind_marker_name(cql, table1, scylla_only):
+    prepared = cql.prepare(f"SELECT * FROM {table1} WHERE p = ? AND c NOT IN ?")
+    assert [col.name for col in prepared.column_metadata] == ['p', 'NOT IN(c)']
+    x = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p,c) VALUES ({x},{x})')
+    cql.execute(f'INSERT INTO {table1} (p,c) VALUES ({x},{x+1})')
+    assert [(x,x)] == list(cql.execute(prepared, {'p': x, 'NOT IN(c)': [x+1]}))
+
+# The IF condition of an LWT statement is prepared as an expression rather than as
+# a restriction, so its bind variable is named along a different path.
+def test_in_bind_marker_name_lwt_condition(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, v int') as table:
+        prepared = cql.prepare(f"UPDATE {table} SET v = 1 WHERE p = ? IF v IN ?")
+        assert [col.name for col in prepared.column_metadata] == ['p', 'IN(v)']
+
+# Cassandra spells the operator in lowercase, "in(column)". Scylla can be asked
+# for that spelling with cql_in_bind_variable_name_uses_uppercase_operator; on
+# Cassandra it is the only spelling, so the fixture is a no-op there and the
+# tests below run against both.
+@pytest.fixture(scope="function")
+def lowercase_in_bind_marker_name(cql):
+    if is_scylla(cql):
+        with config_value_context(cql, 'cql_in_bind_variable_name_uses_uppercase_operator', 'false'):
+            yield
+    else:
+        yield
+
+# The name is chosen when the statement is prepared, and the item is part of
+# the prepared statement cache key. The tests below can therefore reuse the
+# query strings of the tests above: preparing them again gets a fresh cache
+# entry and reports the new spelling instead of returning the statement
+# cached under the old one.
+def test_in_bind_marker_name_lowercase_operator(cql, table1, lowercase_in_bind_marker_name):
+    prepared = cql.prepare(f"SELECT * FROM {table1} WHERE p = ? AND c IN ?")
+    assert [col.name for col in prepared.column_metadata] == ['p', 'in(c)']
+    x = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p,c) VALUES ({x},{x})')
+    assert [(x,x)] == list(cql.execute(prepared, {'p': x, 'in(c)': [x, x+1]}))
+
+# Same as test_in_bind_marker_name_lowercase_operator, but for NOT IN.
+def test_not_in_bind_marker_name_lowercase_operator(cql, table1, scylla_only, lowercase_in_bind_marker_name):
+    prepared = cql.prepare(f"SELECT * FROM {table1} WHERE p = ? AND c NOT IN ?")
+    assert [col.name for col in prepared.column_metadata] == ['p', 'not in(c)']
+    x = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p,c) VALUES ({x},{x})')
+    cql.execute(f'INSERT INTO {table1} (p,c) VALUES ({x},{x+1})')
+    assert [(x,x)] == list(cql.execute(prepared, {'p': x, 'not in(c)': [x+1]}))
+
+# Same as test_in_bind_marker_name_lwt_condition, with the lowercase spelling. Unlike
+# the tests above this one is scylla_only: the name Cassandra gives the variable of a
+# condition has not been checked against Cassandra, and the SELECT tests already pin
+# down the spelling Cassandra produces.
+def test_in_bind_marker_name_lwt_condition_lowercase_operator(cql, test_keyspace, scylla_only, lowercase_in_bind_marker_name):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, v int') as table:
+        prepared = cql.prepare(f"UPDATE {table} SET v = 1 WHERE p = ? IF v IN ?")
+        assert [col.name for col in prepared.column_metadata] == ['p', 'in(v)']
+
+# Only the operator part of the name is affected by the spelling - the column
+# name keeps the case it was declared with in either mode. new_test_table hands
+# out a recycled table name, so the two tests below can end up with the same
+# query string; what keeps the second one from being answered from the prepared
+# statement cache is, as above, that the item is part of the cache key.
+def test_in_bind_marker_name_case_sensitive_column(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int, "C" int, PRIMARY KEY (p, "C")') as table:
+        prepared = cql.prepare(f'SELECT * FROM {table} WHERE p = ? AND "C" IN ?')
+        assert [col.name for col in prepared.column_metadata] == ['p', 'IN(C)']
+
+def test_in_bind_marker_name_case_sensitive_column_lowercase_operator(cql, test_keyspace, lowercase_in_bind_marker_name):
+    with new_test_table(cql, test_keyspace, 'p int, "C" int, PRIMARY KEY (p, "C")') as table:
+        prepared = cql.prepare(f'SELECT * FROM {table} WHERE p = ? AND "C" IN ?')
+        assert [col.name for col in prepared.column_metadata] == ['p', 'in(C)']
