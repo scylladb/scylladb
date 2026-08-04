@@ -140,6 +140,28 @@ future<> cluster_backup_task::do_backup() {
         }
     }
 
+    try {
+        auto ctl = co_await _snap_ctl.sp().local().start_backup_snapshot(
+            _locations, _ks_tables, _snapshot, _remove_on_uploaded
+        );
+
+        // TODO: progress and abort
+        auto sub = _as.subscribe([&]() noexcept {
+            // would be great to wait here
+            std::ignore = ctl.abort();
+        });
+
+        if (_as.abort_requested()) {
+            co_await ctl.abort();
+            co_return;
+        }
+
+        co_await ctl.wait();
+        co_return;
+    } catch (gms::unsupported_feature_exception&) {
+        snap_log.warn("Topology coordinated backup not available. Falling back to simple mode...");
+    }
+
     co_await run_global_backup(_snap_ctl.qp().local(), _snapshot, _ks_tables, _locations, _remove_on_uploaded
         , [&](locator::host_id host, table_id tid, sstring tag, sstring endpoint, sstring bucket, sstring prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move) -> future<> {
             co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&_snap_ctl.ms(), host, tid, tag, endpoint, bucket, prefix, first_token, last_token, std::move(sstable_ids), use_move, service::frozen_topology_guard{});
