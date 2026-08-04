@@ -57,6 +57,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/core/execution_stage.hh>
 #include "db/timeout_clock.hh"
+#include "db/snapshot/cluster_backup.hh"
 #include "replica/multishard_query.hh"
 #include "replica/database.hh"
 #include "db/consistency_level_validations.hh"
@@ -489,6 +490,13 @@ public:
     future<> snapshot_with_tablets(const std::vector<std::pair<sstring, sstring>>& ks_cf_names, sstring tag, const db::snapshot_options& opts) {
         co_await seastar::with_gate(_snapshot_gate, [&] () -> future<> {
             co_await request_snapshot_with_tablets(ks_cf_names, tag, opts);
+        });
+    }
+
+    future<utils::UUID> start_backup_snapshot(const std::unordered_map<sstring, db::snapshot_dc_location>& locations, const std::vector<std::pair<sstring, sstring>>& ks_cf_names, sstring tag, bool move_files) {
+        co_return co_await seastar::with_gate(_snapshot_gate, [&]() -> future<utils::UUID> {
+            auto id = co_await request_start_backup_snapshot(locations, ks_cf_names, tag, move_files);
+            co_return id;
         });
     }
 
@@ -1316,6 +1324,35 @@ private:
         );
     }
 
+    future<utils::UUID> request_start_backup_snapshot(const std::unordered_map<sstring, db::snapshot_dc_location>& locations, const std::vector<std::pair<sstring, sstring>>& ks_cf_names, sstring tag, bool move_files) {
+        std::unordered_set<table_id> ids;
+        co_return co_await start_topology_request("Backup snapshot"
+            , [&] {
+                ids = ks_names_to_ids(_sp.local_db(), ks_cf_names);
+                return fmt::format("BACKUP SNAPSHOT tables {}", ks_cf_names);
+            }
+            , [&](const db::system_keyspace::topology_requests_entry& entry, const service::global_topology_request& global_request) {
+                if (global_request == global_topology_request::backup_snapshot) {
+                    const std::optional<topology::transition_state>& tstate = _topology_state_machine._topology.tstate;
+                    if (!tstate || *tstate != topology::transition_state::backup_snapshot) {
+                        return entry.snapshot_table_ids == ids && entry.snapshot_tag == tag
+                            && entry.backup_locations ==  locations
+                            && entry.backup_use_move == move_files
+                            ;
+                    }
+                }
+                return false;
+            }
+            , [&](topology_request_tracking_mutation_builder& trbuilder) {
+                trbuilder.set_backup_snapshot_data(ids, locations, tag, move_files)
+                         .set("done", false)
+                         .set("start_time", db_clock::now());
+                slogger.info("Creating BACKUP SNAPSHOT global topology request for snapshot {}, tables {}", tag, ks_cf_names);
+                return global_topology_request::backup_snapshot;
+            }
+            , "request_backup_tablet_snapshot"
+        );
+    }
 };
 
 using namespace exceptions;
@@ -7319,7 +7356,7 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std:
 
 future<> storage_proxy::snapshot_keyspace(std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, const db::snapshot_options& opts) {
     if (!features().snapshot_as_topology_operation) {
-        throw std::runtime_error("Cannot do cluster wide snapshot. Feature 'snapshot_as_topology_operation' is not available in cluster");
+        throw gms::unsupported_feature_exception("Cannot do cluster wide snapshot. Feature 'snapshot_as_topology_operation' is not available in cluster");
     }
 
     for (auto& [ksname, _] : ks_tables) {
@@ -7338,6 +7375,20 @@ future<> storage_proxy::snapshot_keyspace(std::unordered_multimap<sstring, sstri
         | std::ranges::to<std::vector>()
         ;
     co_await remote().snapshot_with_tablets(table_pairs, tag, opts);
+}
+
+future<abortable_topology_task> storage_proxy::start_backup_snapshot(std::unordered_map<sstring, db::snapshot_dc_location> locations, std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, bool move_files) {
+    if (!features().backup_as_topology_operation) {
+        throw gms::unsupported_feature_exception("Cannot do cluster wide topology coordinated backup. Feature 'backup_as_topology_operation' is not available in cluster");
+    }
+
+    slogger.debug("Starting a blocking backup operation on keyspaces {}", ks_tables);
+
+    auto table_pairs = ks_tables | std::views::transform([](auto& p) { return std::pair<sstring, sstring>(p.first, p.second); }) 
+        | std::ranges::to<std::vector>()
+        ;
+    auto id = co_await remote().start_backup_snapshot(locations, table_pairs, tag, move_files);
+    co_return abortable_topology_task(*this, id);
 }
 
 db::system_keyspace& storage_proxy::system_keyspace() {
