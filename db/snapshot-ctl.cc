@@ -65,7 +65,14 @@ snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, sharded<service::stor
     if (this_shard_id() == 0) {
         _delete_expired_snapshots = delete_expired_snapshots();
     }
-    ser::snapshot_backup_rpc_verbs::register_backup_snapshot_sstables(&_ms, std::bind_front(&snapshot_ctl::backup_sstables, this));
+    ser::snapshot_backup_rpc_verbs::register_backup_snapshot_sstables(&_ms
+        , [this](table_id table_id, std::string tag, std::string endpoint, std::string bucket, std::string prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move) -> future<> {
+            co_await with_gate(_ops, [&]() -> future<> {
+                co_await coroutine::switch_to(_config.backup_sched_group);
+                co_await snapshot::backup_sstables(_qp.local(), table_id, std::move(tag), std::move(endpoint), std::move(bucket), std::move(prefix), first_token, last_token, std::move(sstable_ids), use_move);
+            });
+        }
+    );
 }
 
 future<> snapshot_ctl::stop() {
@@ -373,19 +380,6 @@ future<tasks::task_id> snapshot_ctl::start_global_backup(std::unordered_map<sstr
     snap_log.info("Backup sstables from {}(cluster snapshot {}) to {}", ks_tables, tag, locations);
 
     co_return co_await snapshot::start_global_backup(*this, static_pointer_cast<tasks::task_manager::module>(_task_manager_module), tag, std::move(ks_tables), std::move(locations), move_files);
-}
-
-future<>
-snapshot_ctl::backup_sstables(table_id table_id, std::string tag, std::string endpoint, std::string bucket, std::string prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move) {
-    // backup_task_impl assumes we create and run it on shard 0
-    if (this_shard_id() != 0) {
-        co_return co_await container().invoke_on(0, [&](auto& local) {
-            return local.backup_sstables(table_id, tag, endpoint, bucket, prefix, first_token, last_token, sstable_ids, use_move);
-        });
-    }
-
-    co_await coroutine::switch_to(_config.backup_sched_group);
-    co_await snapshot::backup_sstables(*this, table_id, std::move(tag), std::move(endpoint), std::move(bucket), std::move(prefix), first_token, last_token, std::move(sstable_ids), use_move);
 }
 
 future<int64_t> snapshot_ctl::true_snapshots_size(sstring ks, sstring cf) {
