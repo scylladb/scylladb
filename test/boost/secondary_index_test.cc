@@ -467,7 +467,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
             auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
             auto paging_state = rows->rs().get_metadata().paging_state();
             SCYLLA_ASSERT(paging_state);
-            return make_lw_shared<service::pager::paging_state>(*paging_state);
+            return paging_state;
         };
 
         auto expect_more_pages = [] (::shared_ptr<cql_transport::messages::result_message> res, bool more_pages_expected) {
@@ -846,7 +846,7 @@ SEASTAR_TEST_CASE(test_local_index_paging) {
             auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
             auto paging_state = rows->rs().get_metadata().paging_state();
             SCYLLA_ASSERT(paging_state);
-            return make_lw_shared<service::pager::paging_state>(*paging_state);
+            return paging_state;
         };
 
         eventually([&] {

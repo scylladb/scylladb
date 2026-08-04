@@ -625,7 +625,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         service_permit permit,
         bool enforce_authorization,
         bool warn_authorization) {
-    lw_shared_ptr<service::pager::paging_state> old_paging_state = nullptr;
+    lw_shared_ptr<const service::pager::paging_state> old_paging_state = nullptr;
 
     tracing::trace(trace_state, "Performing a database query");
 

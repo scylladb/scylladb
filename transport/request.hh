@@ -413,7 +413,7 @@ public:
 
         std::unique_ptr<cql3::query_options> options;
         if (flags) {
-            lw_shared_ptr<service::pager::paging_state> paging_state;
+            lw_shared_ptr<const service::pager::paging_state> paging_state;
             int32_t page_size = -1;
             if (flags.contains<options_flag::PAGE_SIZE>()) {
                 utils::result_with_exception_ptr<int32_t> v = read_int();
