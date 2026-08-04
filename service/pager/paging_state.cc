@@ -56,7 +56,7 @@ service::pager::paging_state::paging_state(partition_key pk,
             pos.region())
 { }
 
-lw_shared_ptr<service::pager::paging_state> service::pager::paging_state::deserialize(
+lw_shared_ptr<const service::pager::paging_state> service::pager::paging_state::deserialize(
         bytes_opt data) {
     if (!data) {
         return nullptr;

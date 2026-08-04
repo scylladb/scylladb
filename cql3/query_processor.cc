@@ -984,9 +984,7 @@ query_processor::execute_paged_internal(internal_query_state& state) {
                 if (done) {
                     _state.more_results = false;
                 } else {
-                    const service::pager::paging_state& st = *rs.get_metadata().paging_state();
-                    lw_shared_ptr<service::pager::paging_state> shrd = make_lw_shared<service::pager::paging_state>(st);
-                    _state.opts = std::make_unique<query_options>(std::move(_state.opts), shrd);
+                    _state.opts = std::make_unique<query_options>(std::move(_state.opts), rs.get_metadata().paging_state());
                     _state.p = _qp.prepare_internal(_state.query_string);
                 }
             } else {
