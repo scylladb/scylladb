@@ -32,6 +32,7 @@
 #include "transport/messages/result_message.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/as_json_function.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
@@ -2134,6 +2135,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     for (auto& ps : prepared_selectors) {
         if (expr::is_native_function_call(ps.expr, "bm25")) {
             throw exceptions::invalid_request_exception("BM25() is not supported in the SELECT clause");
+        }
+        if (expr::is_native_function_call(ps.expr, functions::ANN_FUNCTION_NAME.name)) {
+            throw exceptions::invalid_request_exception("ANN() is not supported in the SELECT clause");
         }
         expr::fill_prepare_context(ps.expr, ctx);
     }

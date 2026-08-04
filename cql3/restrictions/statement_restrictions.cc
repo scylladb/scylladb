@@ -24,6 +24,7 @@
 #include "cql3/query_options.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/statements/request_validations.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/functions/token_fct.hh"
 #include "dht/i_partitioner.hh"
 #include "db/schema_tables.hh"
@@ -843,6 +844,12 @@ statement_restrictions::statement_restrictions(private_tag,
                 }
                 _scoring_function_restrictions.push_back(std::move(prepared_restriction));
                 continue;
+            }
+            // ANN() is a scoring function too, but unlike BM25() it is only meaningful in
+            // ORDER BY. Reject it with a dedicated message instead of letting it fall through
+            // to the generic "unsupported function-call restriction" error below.
+            if (expr::is_native_function_call(*fc, functions::ANN_FUNCTION_NAME.name)) {
+                throw exceptions::invalid_request_exception("ANN() is only supported in the ORDER BY clause");
             }
             // token() is the only other allowed function-call restriction.
             // It is handled separately by `try_make_token_predicate()`.
