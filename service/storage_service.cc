@@ -4505,15 +4505,50 @@ future<storage_service::keyspace_migration_status> storage_service::get_tablets_
         }
     }
 
+    // Determine which nodes take part in the sample table's tablet replication.
+    // Nodes with no replicas (e.g., zero-token nodes in arbiter DCs, or token-owning
+    // nodes in a DC with RF=0) have nothing to migrate, so their effective current mode
+    // matches their intended mode.
+    auto tmptr = _db.local().get_token_metadata_ptr();
+    const auto& tablet_metadata = tmptr->tablets();
+    std::unordered_set<locator::host_id> nodes_with_replicas;
+    if (tablet_metadata.has_tablet_map(sample_table_id)) {
+        const auto& tmap = tablet_metadata.get_tablet_map(sample_table_id);
+        co_await tmap.for_each_tablet([&] (locator::tablet_id, const locator::tablet_info& tinfo) -> future<> {
+            for (const auto& replica : tinfo.replicas) {
+                nodes_with_replicas.insert(replica.host);
+            }
+            return make_ready_future<>();
+        });
+        // Also count replicas a tablet is transitioning to. A pending replica is not in
+        // tablet_info::replicas yet, but it does receive the tablet, so reporting it as
+        // having nothing to migrate would be wrong. The tablet load balancer skips tables
+        // under migration (see is_migrating_table() in tablet_allocator.cc), so there
+        // should be no transitions here, but don't rely on that.
+        for (const auto& [tid, trinfo] : tmap.transitions()) {
+            for (const auto& replica : trinfo.next) {
+                nodes_with_replicas.insert(replica.host);
+            }
+            co_await coroutine::maybe_yield();
+        }
+    }
+
     const auto& topo = _topology_state_machine._topology;
     for (const auto& [server_id, rs] : topo.normal_nodes) {
         auto host_id = locator::host_id{server_id.uuid()};
-        bool reports_tablets = nodes_reporting_tablets.contains(host_id);
-
-        auto current_mode = reports_tablets
-            ? intended_storage_mode::tablets
-            : intended_storage_mode::vnodes;
         auto intended_mode = rs.storage_mode.value_or(intended_storage_mode::vnodes);
+
+        intended_storage_mode current_mode;
+        if (!nodes_with_replicas.contains(host_id)) {
+            // Node has no replicas for this keyspace (e.g., zero-token node in arbiter DC,
+            // or token-owning node in a DC with RF=0). It has nothing to migrate, so its
+            // effective current mode matches its intended mode.
+            current_mode = intended_mode;
+        } else {
+            current_mode = nodes_reporting_tablets.contains(host_id)
+                ? intended_storage_mode::tablets
+                : intended_storage_mode::vnodes;
+        }
 
         result.nodes.push_back(node_migration_status{
             .host_id = host_id,
