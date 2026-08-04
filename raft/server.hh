@@ -313,6 +313,12 @@ public:
     virtual void elapse_election() = 0;
     // Server id of this server
     virtual raft::server_id id() const = 0;
+
+    // Number of messages the io_fiber may queue up for the applier before it has to wait for the
+    // applier to catch up. It is what bounds the memory of committed but unapplied entries on a
+    // follower, which has no log limiter of its own.
+    static constexpr size_t default_applier_queue_max_size = 10;
+
     virtual void set_applier_queue_max_size(size_t queue_max_size) = 0;
 
     virtual size_t max_command_size() const = 0;

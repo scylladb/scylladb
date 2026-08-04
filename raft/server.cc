@@ -172,7 +172,8 @@ private:
         snapshot_descriptor,
         removed_from_config,
         trigger_snapshot_msg>;
-    queue<applier_fiber_message> _apply_entries = queue<applier_fiber_message>(10);
+    queue<applier_fiber_message> _apply_entries =
+        queue<applier_fiber_message>(server::default_applier_queue_max_size);
 
     struct stats {
         uint64_t add_command = 0;
