@@ -198,7 +198,6 @@ private:
     future<> do_take_cluster_column_family_snapshot(std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
 
     future<> delete_expired_snapshots();
-    future<> backup_sstables(table_id, std::string, std::string, std::string, std::string, dht::token, dht::token, utils::chunked_vector<sstables::sstable_id>, bool);
 };
 
 }
