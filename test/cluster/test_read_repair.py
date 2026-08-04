@@ -266,6 +266,18 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ManagerCl
         check_rows(cql, host1, node1_rows)
         check_rows(cql, host2, node2_rows)
 
+        async def read_repair_metrics() -> tuple[int, int]:
+            digest_mismatches = 0
+            diff_found = 0
+            for node in nodes:
+                metrics = await manager.metrics.query(node.ip_addr)
+                digest_mismatches += metrics.get("scylla_storage_proxy_coordinator_foreground_read_repairs") or 0
+                digest_mismatches += metrics.get("scylla_storage_proxy_coordinator_background_read_repairs") or 0
+                diff_found += metrics.get("scylla_storage_proxy_coordinator_read_repairs_diff_found_total") or 0
+            return int(digest_mismatches), int(diff_found)
+
+        digest_mismatches_before, diff_found_before = await read_repair_metrics()
+
         logger.info("Run read-repair")
         res = cql.execute(SimpleStatement(data_class.get_select_query(ks), consistency_level=ConsistencyLevel.ALL), trace=True)
         res_rows = []
@@ -297,6 +309,15 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ManagerCl
             assert row_id in all_rows
             data_class.check_result_row(row_id, res_row)
         assert actual_row_ids == all_rows
+
+        # The replicas diverged, so the CL=ALL read must have hit a digest
+        # mismatch, and the reconciliation must have found actual differences.
+        digest_mismatches_after, diff_found_after = await read_repair_metrics()
+        assert digest_mismatches_after > digest_mismatches_before
+        assert diff_found_after > diff_found_before
+        # Reconciliations are triggered by digest mismatches, so no more
+        # diff-found events than digest mismatches.
+        assert diff_found_after - diff_found_before <= digest_mismatches_after - digest_mismatches_before
 
         for node in (node1, node2):
             await manager.api.keyspace_flush(node.ip_addr, ks)
