@@ -1319,3 +1319,84 @@ async def test_migration_with_zero_token_node(manager: ManagerClient):
         logger.info("Verifying data integrity after finalization")
         await verify_data_integrity(cql, ks, "test", num_keys)
 
+
+async def test_migration_status_api_with_rf_zero_dc(manager: ManagerClient):
+    """Verify the status API correctly reports current_mode for token-owning nodes in a DC with RF=0.
+
+    Reproduces SCYLLADB-3268 (status API part): nodes with no replicas for the migrating
+    keyspace were always reported as current_mode='vnodes' because they never appeared in
+    system.tablet_sizes.
+
+    Steps:
+    1. Start a 2-node cluster with one node in dc1 (RF=1) and one in dc2 (RF=0).
+    2. Create a vnode keyspace with RF={'dc1': 1, 'dc2': 0}.
+    3. Start migration, mark both nodes for upgrade, restart both.
+    4. Verify status API reports current_mode='tablets' for the dc2 node (which has no replicas
+       but has completed its local migration).
+    """
+    num_keys = 50
+    tokens_per_node = 16
+
+    logger.info("Starting a token-owning node in dc1")
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': tokens_per_node}
+    server_dc1 = await manager.server_add(cmdline=['--smp', '2'], config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
+
+    logger.info("Starting a token-owning node in dc2")
+    server_dc2 = await manager.server_add(cmdline=['--smp', '2'], config=cfg, property_file={"dc": "dc2", "rack": "rack1"})
+
+    servers = [server_dc1, server_dc2]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    host_id_dc1 = await manager.get_host_id(server_dc1.server_id)
+    host_id_dc2 = await manager.get_host_id(server_dc2.server_id)
+
+    logger.info("Creating keyspace with RF={'dc1': 1, 'dc2': 0}")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 0} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        logger.info(f"Populating table with {num_keys} rows")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+
+        logger.info("Starting vnodes-to-tablets migration")
+        await manager.api.create_vnode_tablet_migration(server_dc1.ip_addr, ks)
+
+        logger.info("Marking both nodes for tablets migration")
+        await manager.api.upgrade_node_to_tablets(server_dc1.ip_addr)
+        await manager.api.upgrade_node_to_tablets(server_dc2.ip_addr)
+
+        logger.info("Restarting both nodes")
+        await manager.server_restart(server_dc1.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+        await manager.server_restart(server_dc2.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Verifying status API: both nodes should report current_mode='tablets'")
+        # dc2 node has no replicas for this keyspace, but since it set intended_mode=tablets
+        # and restarted, the status API should correctly report current_mode='tablets'.
+        await verify_migration_status(manager, server_dc1, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={
+                host_id_dc1: ('tablets', 'tablets'),
+                host_id_dc2: ('tablets', 'tablets'),
+            },
+            retries=5, retry_interval=1)
+
+        logger.info("Finalizing tablets migration")
+        await manager.api.finalize_vnode_tablet_migration(server_dc1.ip_addr, ks)
+
+        # finalize_vnode_tablet_migration returns once the group0 command is applied on the
+        # topology coordinator; other nodes apply it asynchronously. Both nodes are token
+        # owners here, so the driver may route the read to the one that is still behind.
+        await read_barrier(manager.api, server_dc1.ip_addr)
+        host_dc1 = cql.cluster.metadata.get_host(server_dc1.ip_addr)
+
+        logger.info("Verifying that the keyspace schema has tablets enabled")
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'", host=host_dc1)
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "Keyspace is still using vnodes after migration finalization"
+
+        logger.info("Final data integrity check")
+        await verify_data_integrity(cql, ks, "test", num_keys)
