@@ -1478,6 +1478,31 @@ SEASTAR_TEST_CASE(sstable_partition_tombstone_with_rows_metadata_check) {
     });
 }
 
+// A static-row-only partition feeds no clustering positions into the collector,
+// so min/max_column_names must stay empty.
+SEASTAR_TEST_CASE(sstable_static_row_only_metadata_check) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (const auto version : writable_sstable_versions) {
+            auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                    .with_column("pk", utf8_type, column_kind::partition_key)
+                    .with_column("ck1", utf8_type, column_kind::clustering_key)
+                    .with_column("s1", int32_type, column_kind::static_column)
+                    .with_column("r1", int32_type)
+                    .build();
+            auto sst_gen = env.make_sst_factory(s, version);
+            auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+            const column_definition& s1_col = *s->get_column_definition("s1");
+
+            BOOST_TEST_MESSAGE(fmt::format("version {}", version));
+
+            mutation m(s, key);
+            m.set_static_cell(s1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
+            auto sst = make_sstable_containing(sst_gen, {std::move(m)}).get();
+            check_min_max_column_names(sst, {}, {});
+        }
+    });
+}
+
 SEASTAR_TEST_CASE(sstable_composite_reverse_tombstone_metadata_check) {
     return test_env::do_with_async([] (test_env& env) {
         for (const auto version : writable_sstable_versions) {
