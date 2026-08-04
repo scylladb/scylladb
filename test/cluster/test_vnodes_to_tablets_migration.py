@@ -1360,3 +1360,89 @@ async def test_pow2_convergence_virtual_task(manager: ManagerClient):
         convergence_tasks = [t for t in tasks if t.type == "pow2_convergence"]
         assert len(convergence_tasks) == 0, \
             f"Expected no convergence tasks after completion, got {len(convergence_tasks)}"
+
+
+async def test_migration_with_zero_token_node(manager: ManagerClient):
+    """Verify vnodes-to-tablets migration succeeds in the presence of zero-token nodes (arbiter DCs).
+
+    Reproduces SCYLLADB-3268: finalization used to fail with "No load stats available" for
+    zero-token nodes because collect_tablet_load_stats only queried token-owning nodes, but
+    the finalization check iterated all normal nodes.
+
+    The migration status API is deliberately not used to check progress here. It derives
+    current_mode from system.tablet_sizes, which is keyed by tablet replica, so a zero-token
+    node never appears in it and is always reported as using vnodes no matter what it has
+    actually done. That is a separate bug with a separate fix, so this test only checks that
+    finalization itself no longer fails.
+
+    Steps:
+    1. Start a 2-node cluster: one token-owning node in dc1 and one zero-token node in dc2 (arbiter DC).
+    2. Create a vnode keyspace with RF={'dc1': 1, 'dc2': 0}.
+    3. Start the migration.
+    4. Mark both nodes for upgrade and restart them.
+    5. Finalize the migration — this should succeed (previously it would fail).
+    6. Verify the keyspace now uses tablets and the data is intact.
+    """
+    num_keys = 100
+    tokens_per_node = 16
+
+    logger.info("Starting a token-owning node in dc1")
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': tokens_per_node}
+    server_dc1 = await manager.server_add(cmdline=['--smp', '2'], config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
+
+    logger.info("Starting a zero-token node in dc2 (arbiter DC)")
+    zero_token_cfg = cfg | {'join_ring': False}
+    server_dc2 = await manager.server_add(cmdline=['--smp', '2'], config=zero_token_cfg, property_file={"dc": "dc2", "rack": "rack1"})
+
+    # Only wait for the token-owning node to be CQL-ready: the zero-token node has no
+    # tokens in the ring metadata, so the driver does not treat it as a replica for any
+    # query. It does serve CQL though, and the driver may still route a query to it, so
+    # reads that must observe a specific group0 state are pinned to a host explicitly.
+    token_owning_servers = [server_dc1]
+    cql, _ = await manager.get_ready_cql(token_owning_servers)
+
+    host_id_dc1 = await manager.get_host_id(server_dc1.server_id)
+    host_id_dc2 = await manager.get_host_id(server_dc2.server_id)
+
+    logger.info("Creating keyspace with RF={'dc1': 1, 'dc2': 0}")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 0} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        logger.info(f"Populating table with {num_keys} rows")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+
+        logger.info("Starting vnodes-to-tablets migration")
+        await manager.api.create_vnode_tablet_migration(server_dc1.ip_addr, ks)
+
+        logger.info("Marking both nodes for tablets migration")
+        await manager.api.upgrade_node_to_tablets(server_dc1.ip_addr)
+        await manager.api.upgrade_node_to_tablets(server_dc2.ip_addr)
+
+        logger.info("Restarting token-owning node to trigger resharding")
+        await manager.server_restart(server_dc1.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(token_owning_servers)
+
+        logger.info("Restarting zero-token node to trigger its migration")
+        await manager.server_restart(server_dc2.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(token_owning_servers)
+
+        logger.info("Finalizing tablets migration (should succeed with zero-token node present)")
+        await manager.api.finalize_vnode_tablet_migration(server_dc1.ip_addr, ks)
+
+        # finalize_vnode_tablet_migration returns once the group0 command is applied on the
+        # topology coordinator; other nodes apply it asynchronously. Barrier before reading
+        # the schema so we observe the latest group0 state.
+        await read_barrier(manager.api, server_dc1.ip_addr)
+        host_dc1 = cql.cluster.metadata.get_host(server_dc1.ip_addr)
+
+        logger.info("Verifying that the keyspace schema has tablets enabled")
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'", host=host_dc1)
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "Keyspace is still using vnodes after migration finalization"
+
+        logger.info("Verifying data integrity after finalization")
+        await verify_data_integrity(cql, ks, "test", num_keys)
+
