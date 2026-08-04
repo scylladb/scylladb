@@ -1961,6 +1961,44 @@ def test_paging_and_drop_index_no_allow_filtering(cql, test_keyspace):
                 got.extend(r.current_rows)
             assert expected == got
 
+# A base-table read is not tied to the table's identity, so a table dropped and
+# recreated between pages is read on - the same way on Cassandra and on Scylla.
+def test_paging_and_recreate_table(cql, test_keyspace):
+    count = 20
+    with new_test_table(cql, test_keyspace,
+            "p int, v int, PRIMARY KEY (p)") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (p, v) VALUES (?, ?)")
+        for i in range(count):
+            cql.execute(insert, [i, 17])
+        page_size = 7
+        stmt = SimpleStatement(f"SELECT p, token(p) FROM {table} WHERE v=17 ALLOW FILTERING",
+                fetch_size=page_size)
+        r = cql.execute(stmt)
+        assert len(r.current_rows) == page_size
+        assert r.has_more_pages
+        # Where the read stopped. The scan visits partitions in token order, so
+        # this is the position the new table is read from.
+        stale_token = max(row.system_token_p for row in r.current_rows)
+        cql.execute(f"DROP TABLE {table}")
+        cql.execute(f"CREATE TABLE {table} (p text, v int, PRIMARY KEY (p))")
+        # Fill the new table, so a resume that decodes the old position returns
+        # rows instead of an empty page indistinguishable from a finished read.
+        insert = cql.prepare(f"INSERT INTO {table} (p, v) VALUES (?, ?)")
+        for i in range(count):
+            cql.execute(insert, [str(i), 17])
+        fresh = {row.p: row.system_token_p for row in
+                cql.execute(f"SELECT p, token(p) FROM {table} WHERE v=17 ALLOW FILTERING")}
+        skipped = {p for p, token in fresh.items() if token <= stale_token}
+        # The stale position has to fall inside the new table's tokens, or there
+        # would be nothing for the resumed read to skip and nothing left to return.
+        assert skipped
+        assert set(fresh) - skipped
+        got = set()
+        while r.has_more_pages:
+            r = cql.execute(stmt, paging_state=r.paging_state)
+            got.update(row.p for row in r.current_rows)
+        assert got == set(fresh) - skipped
+
 
 # Test index representation in system.* tables
 def test_index_in_system_tables(cql, test_keyspace):
