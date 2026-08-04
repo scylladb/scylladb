@@ -115,6 +115,8 @@ class system_keyspace_view_build_progress;
 struct replay_position;
 typedef std::vector<db::replay_position> replay_positions;
 
+struct snapshot_dc_location;
+
 struct compaction_history_entry;
 
 class system_keyspace : public seastar::peering_sharded_service<system_keyspace>, public seastar::async_sharded_service<system_keyspace> {
@@ -430,6 +432,9 @@ public:
         std::optional<sstring> finalize_migration_ks_name;
         std::optional<table_id> restore_table_id;
         std::optional<sstring> restore_snapshot_name;
+
+        std::optional<std::unordered_map<sstring, db::snapshot_dc_location>> backup_locations;
+        bool backup_use_move;
     };
     using topology_requests_entries = std::unordered_map<utils::UUID, system_keyspace::topology_requests_entry>;
 
