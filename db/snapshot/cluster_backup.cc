@@ -76,6 +76,40 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         }
     }
 
+    if (snap_ctl.db().local().features().backup_as_topology_operation) {
+        // No real point in holding any snap gate here. We only send the
+        // op to topology coordinator. If it is us, topo gate(s) will
+        // handle shutdown attempt, otherwise things will either die
+        // or run, regardless. We do no state changes in this code here.
+        auto ctl = co_await snap_ctl.sp().local().start_backup_snapshot(
+            dc_locations, ks_tables, snapshot_name, remove_on_uploaded
+        );
+
+        gate g;
+        // TODO: progress and abort
+        auto sub = as.subscribe([&]() noexcept {
+            // would be great to wait here
+            snap_log.info("Aborting snapshot {}", snapshot_name);
+            auto h = g.hold();
+            std::ignore = ctl.abort().handle_exception([](auto ep) {
+                snap_log.error("Abort failed with exception: {}", ep);
+            }).finally([h = std::move(h)]{});
+        });
+
+        if (as.abort_requested()) {
+            sub = {};
+            co_await g.close();
+            co_await ctl.abort();
+            co_return;
+        }
+
+        co_await ctl.wait().finally([&] {
+            sub = {};
+            return g.close();
+        });
+        co_return;
+    }
+
     class my_progress_sink : public tasks::progress_sink {
         tasks::task_manager::task::progress& _progress;
     public:
@@ -94,7 +128,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
 
     co_await run_global_backup(snap_ctl.qp().local(), snapshot_name, ks_tables, dc_locations, remove_on_uploaded
         , [&](locator::host_id host, table_id tid, sstring tag, sstring endpoint, sstring bucket, sstring prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move) -> future<> {
-            co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&snap_ctl.ms(), host, tid, tag, endpoint, bucket, prefix, first_token, last_token, std::move(sstable_ids), use_move);
+            co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&snap_ctl.ms(), host, tid, tag, endpoint, bucket, prefix, first_token, last_token, std::move(sstable_ids), use_move, service::null_topology_guard);
         }
         , mps
     );
@@ -330,7 +364,7 @@ db::snapshot::run_global_backup(cql3::query_processor& qp, std::string snapshot_
             auto streamer = json::stream_object(std::move(manifest));
             co_await streamer(std::move(out));
 
-            progress.add_progress(1);
+            progress.add_progress(info.datacenters.size());
         });
     });
 
@@ -469,6 +503,7 @@ db::snapshot::backup_sstables(cql3::query_processor& qp, table_id table_id, std:
     };
 
     seastar::sharded<shard_ctxt> per_shard;
+    seastar::gate as_gate;
     std::exception_ptr ex;
 
     co_await per_shard.start();
@@ -482,9 +517,11 @@ db::snapshot::backup_sstables(cql3::query_processor& qp, table_id table_id, std:
         // The per-context gate ensures we finish any aborts before
         // destroying any coroutine frame vars.
         abort_sub = as->subscribe([&] () noexcept {
+            auto h = as_gate.hold();
             std::ignore = per_shard.invoke_on_all([] (auto& ps) {
                 ps.as.request_abort();
-            });
+            }).finally([h = std::move(h)] {});
+            utils::get_local_injector().inject("backup_task_abort_dispatch", []{});
         });
     }
 
@@ -518,12 +555,10 @@ db::snapshot::backup_sstables(cql3::query_processor& qp, table_id table_id, std:
 
                 auto gen = (*gen_info).generation;
                 auto ref_name = sstables::object_name(bucket, table_prefix, fmt::format("refs/snapshot-{}/{}", tag, gen));
-                co_await client->put_object(ref_name, memory_data_sink_buffers{}, sstables::object_storage_attributes{}); // any exception here can just propagate
+                co_await client->put_object(ref_name, memory_data_sink_buffers{}, sstables::object_storage_attributes{}, &as); // any exception here can just propagate
 
                 bool any_failed = false;
                 co_await coroutine::parallel_for_each(info.filenames, [&](std::string_view name) -> future<> {
-                    auto units = co_await manager.dir_semaphore().get_units(1, as);
-
                     // Pre-upload break point. For testing abort in actual s3 client usage.
                     co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
 
@@ -535,6 +570,7 @@ db::snapshot::backup_sstables(cql3::query_processor& qp, table_id table_id, std:
                     bool error = false;
 
                     try {
+                        auto units = co_await manager.dir_semaphore().get_units(1, as);
                         auto exists = co_await client->object_exists(destination, &as);
 
                         if (exists) {
@@ -598,6 +634,7 @@ db::snapshot::backup_sstables(cql3::query_processor& qp, table_id table_id, std:
     }
 
     abort_sub = {};
+    co_await as_gate.close();
     co_await per_shard.invoke_on_all([&](auto& ps) {
         return ps.gate.close();
     });

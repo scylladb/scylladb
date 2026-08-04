@@ -146,6 +146,7 @@ static std::unordered_map<topology::transition_state, sstring> transition_state_
     {topology::transition_state::rollback_to_normal, "rollback to normal"},
     {topology::transition_state::truncate_table, "truncate table"},
     {topology::transition_state::snapshot_tables, "snapshot tables"},
+    {topology::transition_state::backup_snapshot, "backup_snapshot"},
     {topology::transition_state::lock, "lock"},
 };
 
@@ -213,6 +214,7 @@ static std::unordered_map<global_topology_request, sstring> global_topology_requ
     {global_topology_request::finalize_migration, "finalize_migration"},
     {global_topology_request::quiesce, "quiesce"},
     {global_topology_request::restore_tablets, "restore_tablets"},
+    {global_topology_request::backup_snapshot, "backup_snapshot"},
 };
 
 global_topology_request global_topology_request_from_string(const sstring& s) {
