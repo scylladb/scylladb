@@ -92,6 +92,7 @@ enum class global_topology_request: uint16_t {
     finalize_migration,
     quiesce,
     restore_tablets,
+    backup_snapshot,
 };
 
 struct ring_slice {
@@ -150,6 +151,7 @@ struct topology {
         truncate_table,
         lock,
         snapshot_tables,
+        backup_snapshot,
     };
 
     std::optional<transition_state> tstate;
