@@ -10,6 +10,7 @@
 
 #include "locator/tablets.hh"
 #include "raft/raft.hh"
+#include "raft/server.hh"
 #include "service/migration_manager.hh"
 #include "service/strong_consistency/state_machine.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
@@ -56,6 +57,30 @@ static dht::token stable_token_of_group(const tablet_map& tablet_map, tablet_id 
         return tablet_map.get_split_token(tid);
     }
     return tablet_map.get_last_token(tid);
+}
+
+// A child's applier is held back until its parent is sealed (see raft_resize_tracker), so the
+// entries it commits in the meantime pile up in its raft server's applier queue. The default limit
+// on that queue is small - it is what bounds the memory of committed but unapplied entries on a
+// follower, which has no log limiter of its own - and a child would hit it long before the resize
+// is over, blocking its io_fiber and with it every write handed off to it.
+//
+// Lift the limit for as long as the child takes part in a resize. The entries are bounded anyway:
+// on the leader by its log limiter, and on a follower by what the leader was able to send. The
+// queue holds pointers to entries which sit in the log regardless, so a longer queue costs the
+// pointers rather than the payloads. The limit stays finite so that a wrong assumption degrades
+// into backpressure rather than into unbounded memory.
+static constexpr size_t resizing_applier_queue_max_size = 10'000;
+
+// Applies the limit above to `server`, which may not have been created yet - the next update()
+// takes care of it then.
+static void apply_applier_queue_max_size(raft::server* server, bool is_child) {
+    if (!server) {
+        return;
+    }
+    server->set_applier_queue_max_size(is_child
+        ? resizing_applier_queue_max_size
+        : raft::server::default_applier_queue_max_size);
 }
 
 // Precondition: The passed group_leader must be a non-trivial raft::server_id.
@@ -520,6 +545,12 @@ void groups_manager::update(token_metadata_ptr new_tm) {
                 _resize_tracker.set_replacement_groups(id, {new_gids.begin(), new_gids.end()});
             }
 
+            // Set from the tablet metadata on every token metadata change rather than toggled when
+            // the resize ends, so that finalization, a rollback and a restart all restore the
+            // default without a path of their own. Has to happen before the check below, which a
+            // group that is already running never gets past.
+            apply_applier_queue_max_size(state.server, parent_id.has_value());
+
             // Don't start the raft server if it is already (started or starting) and not stopping.
             if (state.gate && !state.gate->is_closed()) {
                 continue;
@@ -529,10 +560,15 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             state.gate = make_lw_shared<gate>();
             _starting_groups.push_back(state);
             const auto token = stable_token_of_group(tablet_map, tid, id);
-            state.server_control_op = futurize_invoke([&state, this, tablet, id, new_tm, token](this auto) -> future<> {
+            state.server_control_op = futurize_invoke([&state, this, tablet, id, new_tm, token,
+                    is_child = parent_id.has_value()](this auto) -> future<> {
                 co_await state.server_control_op.get_future();
                 co_await start_raft_group(tablet, id, std::move(new_tm));
                 state.server = &_raft_gr.get_server(id);
+                // The update() which started this group could not do it - the server did not exist
+                // yet. A stale limit is corrected by the next update(), which finalizing or rolling
+                // back the resize triggers.
+                apply_applier_queue_max_size(state.server, is_child);
                 state.leader_info_updater = leader_info_updater(state, tablet.table, id, token);
 
                 // We want to make sure the server is ready to serve requests before
