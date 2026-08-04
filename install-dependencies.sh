@@ -180,7 +180,10 @@ fedora_python3_packages=(
 
 # an associative array from packages to constrains
 declare -A pip_packages=(
-    [scylla-driver]="==$(cat tools/cqlsh/requirements.txt | grep scylla-driver | cut -d= -f3)"
+    # This used to track tools/cqlsh/requirements.txt, which went away with the
+    # Python cqlsh.  cqlsh-rs does not use the Python driver, so the pin is now
+    # only for the test suites and has to be bumped by hand.
+    [scylla-driver]="==3.29.7"
     [geomet]=""
     [traceback-with-variables]=""
     [scylla-api-client]=""
