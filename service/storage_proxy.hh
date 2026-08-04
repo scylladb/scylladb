@@ -123,6 +123,18 @@ using is_cancellable = bool_class<struct cancellable_tag>;
 
 using storage_proxy_clock_type = lowres_clock;
 
+class abortable_topology_task {
+    storage_proxy& _sp;
+    utils::UUID _request_id;
+public:
+    abortable_topology_task(storage_proxy&, utils::UUID request_id) noexcept;
+    abortable_topology_task(abortable_topology_task&&) noexcept;
+    abortable_topology_task& operator=(abortable_topology_task&&) noexcept;
+
+    future<> wait();
+    future<> abort();
+};
+
 class storage_proxy_coordinator_query_options {
     storage_proxy_clock_type::time_point _timeout;
 
@@ -230,6 +242,7 @@ private:
     using unique_response_handler_vector = utils::small_vector<unique_response_handler, 1>;
     using response_handlers_map = std::unordered_map<response_id_type, ::shared_ptr<abstract_write_response_handler>>;
 
+    friend class abortable_topology_task;
 public:
     static const sstring COORDINATOR_STATS_CATEGORY;
     static const sstring REPLICA_STATS_CATEGORY;

@@ -7643,4 +7643,39 @@ future<> storage_proxy::cancel_nonlocal_write_response_handlers() {
     }
     co_await g.close();
 }
+
+abortable_topology_task::abortable_topology_task(storage_proxy& sp, utils::UUID id) noexcept 
+    : _sp(sp)
+    , _request_id(id)
+{}
+
+abortable_topology_task::abortable_topology_task(abortable_topology_task&& t) noexcept
+    : _sp(t._sp)
+    , _request_id(std::exchange(t._request_id, {}))
+{}
+
+abortable_topology_task& abortable_topology_task::operator=(abortable_topology_task&& t) noexcept {
+    if (this != &t) {
+        this->~abortable_topology_task();
+        new (this) abortable_topology_task(std::move(t));
+    }
+    return *this;
+}
+
+future<> abortable_topology_task::wait() {
+    // group0 is only set on shard 0
+    co_await _sp.container().invoke_on(0, [&](storage_proxy& sp) -> future<> {
+        auto& r = sp.remote();
+        co_await r.topology_state_machine().wait_for_request_completion(r.system_keyspace(), _request_id, true);
+    });
+}
+
+future<> abortable_topology_task::abort() {
+    co_await _sp.container().invoke_on(0, [&](storage_proxy& sp) -> future<> {
+        auto& r = sp.remote();
+        co_await r.system_keyspace().query_processor().storage_service().abort_topology_request(_request_id);
+    });
+}
+
+
 }
