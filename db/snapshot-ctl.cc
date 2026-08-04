@@ -69,7 +69,7 @@ snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, sharded<service::stor
             co_await with_gate(_ops, [&]() -> future<> {
                 // Removed shard 0 restriction. backup_sstables does not care...
                 co_await coroutine::switch_to(_config.backup_sched_group);
-                co_await snapshot::backup_sstables(*this, table_id, std::move(tag), std::move(endpoint), std::move(bucket), std::move(prefix), first_token, last_token, std::move(sstable_ids), use_move);
+                co_await snapshot::backup_sstables(_qp.local(), table_id, std::move(tag), std::move(endpoint), std::move(bucket), std::move(prefix), first_token, last_token, std::move(sstable_ids), use_move);
             });
         }
     );
