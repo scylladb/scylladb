@@ -1272,20 +1272,25 @@ private:
         );
     }
 
+    static std::unordered_set<table_id> ks_names_to_ids(replica::database& db, const std::vector<std::pair<sstring, sstring>>& ks_cf_names) {
+        std::unordered_set<table_id> ids;
+        for (auto& [ks_name, cf_name] : ks_cf_names) {
+            if (cf_name.empty()) {
+                auto& ks = db.find_keyspace(ks_name);
+                auto id_range = ks.metadata()->cf_meta_data() | std::views::values | std::views::transform(std::mem_fn(&schema::id));
+                ids.insert(id_range.begin(), id_range.end());
+            } else {
+                ids.insert(db.find_uuid(ks_name, cf_name));
+            }
+        }
+        return ids;
+    }
+
     future<> request_snapshot_with_tablets(const std::vector<std::pair<sstring, sstring>> ks_cf_names, sstring tag, const db::snapshot_options& opts) {
         std::unordered_set<table_id> ids;
         co_await do_topology_request("Snapshot table"
             , [&] {
-                auto& db = _sp.local_db();
-                for (auto& [ks_name, cf_name] : ks_cf_names) {
-                    if (cf_name.empty()) {
-                        auto& ks = db.find_keyspace(ks_name);
-                        auto id_range = ks.metadata()->cf_meta_data() | std::views::values | std::views::transform(std::mem_fn(&schema::id));
-                        ids.insert(id_range.begin(), id_range.end());
-                    } else {
-                        ids.insert(db.find_uuid(ks_name, cf_name));
-                    }
-                }
+                ids = ks_names_to_ids(_sp.local_db(), ks_cf_names);
                 return fmt::format("SNAPSHOT tables {}", ks_cf_names);
             }
             , [&](const db::system_keyspace::topology_requests_entry& entry, const service::global_topology_request& global_request) {
