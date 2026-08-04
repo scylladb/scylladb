@@ -1,0 +1,15 @@
+# Pinned cqlsh-rs release used to build the scylla-cqlsh package.
+#
+# This is the single source of truth for the packaged binary.  It must stay in
+# sync with the tools/cqlsh-rs submodule, which is what the integration tests
+# in test/cqlsh-rs run against -- reloc/build_reloc.sh fails the build if the
+# two disagree.
+#
+# Use tools/cqlsh-rs-pkg/update-cqlsh-rs.sh to bump both together; it rewrites
+# this file with the digests published for the release.
+
+cqlsh_rs_version=0.5.14
+
+# sha256 of the cqlsh-rs-${cqlsh_rs_version}-${rust_target}.tar.gz release assets
+cqlsh_rs_sha256_x86_64=05ba9cdea9e09963156a7a61c11573e9d1990b56d2051c13cbff095986fe9737
+cqlsh_rs_sha256_aarch64=020f2ec72b781230684d7596eae9724e277e9fbbac8e41f3dad573051e34b1ce
