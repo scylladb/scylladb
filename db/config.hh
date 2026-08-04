@@ -508,6 +508,7 @@ public:
     named_value<bool> enable_cql_config_updates;
     named_value<bool> enable_parallelized_aggregation;
     named_value<bool> cql_duplicate_bind_variable_names_refer_to_same_variable;
+    named_value<bool> cql_in_bind_variable_name_uses_uppercase_operator;
     named_value<uint32_t> max_relations_in_where_clause;
     named_value<uint32_t> select_internal_page_size;
 
