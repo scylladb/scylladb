@@ -2682,6 +2682,11 @@ public:
         };
         std::unordered_map<table_id, scale_info> table_scaling;
 
+        // Determine if activity-weighted allocation should be used.
+        const bool activity_weighted_enabled = _db.get_config().tablets_activity_weighted_allocation_enabled()
+            && _db.features().table_activity_tablet_allocation;
+        const bool have_activity_data = _table_load_stats && !_table_load_stats->table_activity.empty();
+
         for (auto&& [rack, shard_count] : shards_per_rack) {
             double cur_avg_tablets_per_shard = 0;
             double new_avg_tablets_per_shard = 0;
@@ -2724,24 +2729,244 @@ public:
                 overloaded ? " (overloaded!)" : "");
 
             if (overloaded) {
-                auto scale = scale_info{_tablets_per_shard_goal / new_avg_tablets_per_shard, rack};
+                if (!activity_weighted_enabled) {
+                    // Legacy uniform scaling.
+                    auto scale = scale_info{_tablets_per_shard_goal / new_avg_tablets_per_shard, rack};
 
-                for (auto&& [table, table_plan]: plan.tables) {
-                    // Tables converging to powers of two have a fixed merge trajectory;
-                    // scaling them would interfere with it.
-                    if (table_plan.converging_to_pow2()) {
-                        continue;
+                    for (auto&& [table, table_plan]: plan.tables) {
+                        // Tables converging to powers of two have a fixed merge trajectory;
+                        // scaling them would interfere with it.
+                        if (table_plan.converging_to_pow2()) {
+                            continue;
+                        }
+                        auto* rs = rs_by_table[table];
+                        auto rf = rs->get_replication_factor_data(rack.dc);
+
+
+                        if (rf && (rf->is_numeric() || std::ranges::contains(rf->get_rack_list(), rack.rack))) {
+                            auto [i, inserted] = table_scaling.try_emplace(table, scale);
+                            if (!inserted) {
+                                if (scale.factor < i->second.factor) {
+                                    i->second = std::move(scale);
+                                }
+                            }
+                        }
                     }
-                    auto* rs = rs_by_table[table];
-                    auto rf = rs->get_replication_factor_data(rack.dc);
+                } else if (!have_activity_data) {
+                    // Activity enabled but data unavailable (e.g., rolling upgrade
+                    // where topology coordinator cleared activity, or first cycle
+                    // after leader failover): pin to current counts to avoid making
+                    // harmful decisions without activity information.
+                    // New tables (current=0) are not pinned: they use legacy uniform.
+                    lblogger.debug("Activity-weighted allocation enabled but activity data missing for rack {}.{}, pinning to current counts",
+                                   rack.dc, rack.rack);
+                    const scale_info uniform_scale{_tablets_per_shard_goal / new_avg_tablets_per_shard, rack};
+                    for (auto&& [table, table_plan] : plan.tables) {
+                        // Tables converging to powers of two have a fixed merge trajectory;
+                        // their current count is intentionally inflated mid-convergence,
+                        // so pinning to it would interfere with the trajectory.
+                        if (table_plan.converging_to_pow2()) {
+                            continue;
+                        }
+                        auto* rs = rs_by_table[table];
+                        auto rf = rs->get_replication_factor_data(rack.dc);
+                        if (rf && (rf->is_numeric() || std::ranges::contains(rf->get_rack_list(), rack.rack))) {
+                            // New tables have uniform scaling
+                            if (table_plan.current_tablet_count == 0) {
+                                auto [i, inserted] = table_scaling.try_emplace(table, uniform_scale);
+                                if (!inserted && uniform_scale.factor < i->second.factor) {
+                                    i->second = uniform_scale;
+                                }
+                            } else {
+                                if (table_plan.target_tablet_count > 0) {
+                                    const double pin_factor = double(table_plan.current_tablet_count) / double(table_plan.target_tablet_count);
+                                    scale_info pin_scale{pin_factor, rack};
+                                    auto [i, inserted] = table_scaling.try_emplace(table, pin_scale);
+                                    if (!inserted) {
+                                        if (pin_factor < i->second.factor) {
+                                            i->second = std::move(pin_scale);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Activity-weighted compression.
+                    const double idle_threshold = _db.get_config().tablets_idle_table_rate_threshold();
+                    const unsigned idle_percentile = _db.get_config().tablets_idle_percentile();
+                    const unsigned size_factor = _db.get_config().tablets_activity_max_tablet_size_factor();
 
-                    // If table has no replicas in this rack, scaling it won't help and is harmful to its distribution
-                    // in other DCs or racks.
-                    if (rf && (rf->is_numeric() || std::ranges::contains(rf->get_rack_list(), rack.rack))) {
-                        auto [i, inserted] = table_scaling.try_emplace(table, scale);
-                        if (!inserted) {
-                            if (scale.factor < i->second.factor) {
-                                i->second = std::move(scale);
+                    // Compute combined rates and per-shard factors for tables in this rack.
+                    struct table_activity_info {
+                        table_id id;
+                        double combined_rate;
+                        size_t target;
+                        size_t floor;
+                        double per_shard_factor; // tablets_per_shard = tablet_count * per_shard_factor
+                    };
+                    std::vector<table_activity_info> rack_tables;
+
+                    for (auto&& [table, table_plan] : plan.tables) {
+                        // Tables converging to powers of two have a fixed merge trajectory;
+                        // exclude them from activity-weighted compression so their
+                        // selective-merge decision is preserved. They still count toward
+                        // the per-shard goal via target_tablet_count_for_scaling.
+                        if (table_plan.converging_to_pow2()) {
+                            continue;
+                        }
+                        auto* rs = rs_by_table[table];
+                        auto rf = rs->get_replication_factor_data(rack.dc);
+                        if (!rf || !(rf->is_numeric() || std::ranges::contains(rf->get_rack_list(), rack.rack))) {
+                            continue;
+                        }
+
+                        // Per-shard factor: how many per-shard tablets does one absolute tablet represent.
+                        double psf = 0;
+                        if (rf->is_numeric()) {
+                            auto racks_in_dc = racks_per_dc.at(rack.dc).size();
+                            psf = double(rf->count()) / shard_count / racks_in_dc;
+                        } else {
+                            psf = 1.0 / shard_count;
+                        }
+
+                        double combined_rate = 0;
+                        if (auto it = _table_load_stats->table_activity.find(table); it != _table_load_stats->table_activity.end()) {
+                            combined_rate = it->second.read_rate + it->second.write_rate;
+                        }
+
+                        // Compute floor: max(shard_count, ceil(size / (factor * target_tablet_size)))
+                        size_t floor_from_shards = shard_count;
+                        size_t floor_from_size = 1;
+                        const auto* table_stats = load_stats_for_table(table);
+                        if (table_stats && table_stats->size_in_bytes > 0 && size_factor > 0) {
+                            auto max_tablet_size = uint64_t(size_factor) * _target_tablet_size;
+                            floor_from_size = (table_stats->size_in_bytes + max_tablet_size - 1) / max_tablet_size;
+                        }
+                        size_t floor = std::max(floor_from_shards, floor_from_size);
+                        floor = std::min(floor, table_plan.target_tablet_count);
+
+                        rack_tables.push_back({table, combined_rate, table_plan.target_tablet_count, floor, psf});
+                    }
+
+                    // Find percentile threshold.
+                    std::vector<double> rates;
+                    rates.reserve(rack_tables.size());
+                    for (auto& t : rack_tables) {
+                        rates.push_back(t.combined_rate);
+                    }
+                    std::sort(rates.begin(), rates.end());
+
+                    double percentile_threshold = 0;
+                    if (!rates.empty()) {
+                        size_t idx = std::min<size_t>(rates.size() - 1, (rates.size() - 1) * idle_percentile / 100);
+                        percentile_threshold = rates[idx];
+                    }
+                    double boundary = std::max(idle_threshold, percentile_threshold);
+
+                    // Classify and compute weighted compressible ranges (in per-shard units).
+                    double needed_savings = new_avg_tablets_per_shard - _tablets_per_shard_goal;
+                    double total_weighted_savings = 0;
+                    double total_unweighted_savings = 0;
+
+                    struct idle_info {
+                        size_t idx;
+                        double weight;
+                        double weighted_compressible_ps; // in per-shard units
+                    };
+                    std::vector<idle_info> idle_tables;
+                    std::vector<size_t> active_table_indices;
+
+                    for (size_t i = 0; i < rack_tables.size(); ++i) {
+                        auto& t = rack_tables[i];
+                        if (t.combined_rate <= boundary) {
+                            double weight = (boundary > 0) ? (1.0 - t.combined_rate / boundary) : 1.0;
+                            double compressible = double(t.target) - double(t.floor);
+                            if (compressible < 0) {
+                                compressible = 0;
+                            }
+                            double weighted_compressible_ps = compressible * weight * t.per_shard_factor;
+                            total_weighted_savings += weighted_compressible_ps;
+                            double unweighted_compressible_ps = compressible * t.per_shard_factor;
+                            total_unweighted_savings += unweighted_compressible_ps;
+                            idle_tables.push_back({i, weight, weighted_compressible_ps});
+                        } else {
+                            active_table_indices.push_back(i);
+                        }
+                    }
+
+                    if (total_weighted_savings > 0) {
+                        double fraction = needed_savings / total_weighted_savings;
+
+                        if (fraction <= 1.0) {
+                            // Idle tables can absorb the deficit.
+                            for (auto& idle : idle_tables) {
+                                auto& t = rack_tables[idle.idx];
+                                // Convert per-shard savings back to absolute tablet reduction.
+                                double compressible = double(t.target) - double(t.floor);
+                                size_t reduction = std::lround(compressible * idle.weight * fraction);
+                                size_t new_target = (t.target > reduction) ? (t.target - reduction) : t.floor;
+                                new_target = std::max(new_target, t.floor);
+                                if (new_target < t.target) {
+                                    auto scale_f = double(new_target) / double(plan.tables[t.id].target_tablet_count);
+                                    auto [it, inserted] = table_scaling.try_emplace(t.id, scale_info{scale_f, rack});
+                                    if (!inserted && scale_f < it->second.factor) {
+                                        it->second = scale_info{scale_f, rack};
+                                    }
+                                }
+                            }
+                        } else {
+                            // Compress all idle tables to floors, then compress active uniformly.
+                            for (auto& idle : idle_tables) {
+                                auto& t = rack_tables[idle.idx];
+                                if (t.floor < t.target) {
+                                    auto scale_f = double(t.floor) / double(plan.tables[t.id].target_tablet_count);
+                                    auto [it, inserted] = table_scaling.try_emplace(t.id, scale_info{scale_f, rack});
+                                    if (!inserted && scale_f < it->second.factor) {
+                                        it->second = scale_info{scale_f, rack};
+                                    }
+                                }
+                            }
+
+                            // Remaining deficit after idle compression (in per-shard units).
+                            double remaining = needed_savings - total_unweighted_savings;
+                            double active_compressible_ps = 0;
+                            for (auto idx : active_table_indices) {
+                                auto& t = rack_tables[idx];
+                                double compressible = double(t.target) - double(t.floor);
+                                if (compressible > 0) {
+                                    active_compressible_ps += compressible * t.per_shard_factor;
+                                }
+                            }
+
+                            if (remaining > 0 && active_compressible_ps > 0) {
+                                double active_fraction = std::min(1.0, remaining / active_compressible_ps);
+                                for (auto idx : active_table_indices) {
+                                    auto& t = rack_tables[idx];
+                                    double compressible = double(t.target) - double(t.floor);
+                                    if (compressible <= 0) {
+                                        continue;
+                                    }
+                                    size_t reduction = std::lround(compressible * active_fraction);
+                                    size_t new_target = (t.target > reduction) ? (t.target - reduction) : t.floor;
+                                    new_target = std::max(new_target, t.floor);
+                                    if (new_target < t.target) {
+                                        auto scale_f = double(new_target) / double(plan.tables[t.id].target_tablet_count);
+                                        auto [it, inserted] = table_scaling.try_emplace(t.id, scale_info{scale_f, rack});
+                                        if (!inserted && scale_f < it->second.factor) {
+                                            it->second = scale_info{scale_f, rack};
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // No idle compressible range: uniform compression of all tables.
+                        scale_info scale{_tablets_per_shard_goal / new_avg_tablets_per_shard, rack};
+                        for (auto& t : rack_tables) {
+                            auto [it, inserted] = table_scaling.try_emplace(t.id, scale);
+                            if (!inserted && scale.factor < it->second.factor) {
+                                it->second = scale;
                             }
                         }
                     }
