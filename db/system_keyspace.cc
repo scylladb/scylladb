@@ -59,6 +59,7 @@
 #include "db/compaction_history_entry.hh"
 #include "mutation/async_utils.hh"
 #include "utils/chunked_string.hh"
+#include "db/snapshot_types.hh"
 
 #include <unordered_map>
 
@@ -332,6 +333,8 @@ schema_ptr system_keyspace::topology_requests() {
             .with_column("finalize_migration_ks_name", utf8_type)
             .with_column("restore_table_id", uuid_type)
             .with_column("restore_snapshot_name", utf8_type)
+            .with_column("backup_locations", map_type_impl::get_instance(utf8_type, tuple_type_impl::get_instance({utf8_type, utf8_type, utf8_type}), false))
+            .with_column("backup_use_move", boolean_type)
             .set_comment("Topology request tracking")
             .with_hash_version()
             .build();
@@ -3621,6 +3624,21 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
     if (row.has("restore_table_id")) {
         entry.restore_table_id = table_id(row.get_as<utils::UUID>("restore_table_id"));
         entry.restore_snapshot_name = row.get_as<sstring>("restore_snapshot_name");
+    }
+    if (row.has("backup_locations")) {
+        entry.backup_locations = row.get_map<sstring, std::vector<data_value>>("backup_locations"
+            , data_type_for<sstring>()
+            , tuple_type_impl::get_instance({utf8_type, utf8_type, utf8_type}))
+            |  std::views::transform([](auto& p) { 
+                return std::make_pair(p.first, db::snapshot_dc_location {
+                    .endpoint = value_cast<sstring>(p.second[0]),
+                    .bucket = value_cast<sstring>(p.second[1]),
+                    .prefix = value_cast<sstring>(p.second[2]),
+                });
+            }) 
+            | std::ranges::to<std::unordered_map<sstring, db::snapshot_dc_location>>()
+            ;
+        entry.backup_use_move = row.get_as<bool>("backup_use_move");
     }
 
     return entry;
