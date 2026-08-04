@@ -1021,7 +1021,7 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     req._headers["Content-Length"] = seastar::format("{}", size);
     req.set_query_param("partNumber", seastar::format("{}", part_number + 1));
     req.set_query_param("uploadId", _upload_id);
-    req.write_body("bin", size, [this, part_number, bufs = std::move(bufs), p = std::move(mpu)] (output_stream<char>&& out_) mutable -> future<> {
+    req.write_body("bin", size, [this, part_number, bufs = std::move(bufs)] (output_stream<char>&& out_) mutable -> future<> {
         auto out = std::move(out_);
         std::exception_ptr ex;
         s3l.trace("upload {} part data (upload id {})", part_number, _upload_id);
@@ -1037,8 +1037,6 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
         if (ex) {
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
-        // note: At this point the buffers are sent, but the response is not yet
-        // received. However, claim is released and next part may start uploading
     });
 
     // Do upload in the background so that several parts could go in parallel.
@@ -1062,7 +1060,7 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
         // ... the exact exception only remains in logs
         s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
-    }).finally([gh = std::move(gh)] {});
+    }).finally([gh = std::move(gh), mpu = std::move(mpu)] {});
 }
 
 future<> client::multipart_upload::abort_upload() {
@@ -1663,6 +1661,8 @@ class client::do_upload_file : private multipart_upload {
     future<> upload_part(file f, uint64_t offset, uint64_t part_size, uint64_t part_number) {
         // upload a part in a multipart upload, see
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
+        //
+        // The claim is held for the whole request, including the response
         auto mpu = co_await claim_unit(_client->_mpus_sem, _as);
 
         auto req = http::request::make("PUT", _client->_host, _object_name);
@@ -1670,7 +1670,7 @@ class client::do_upload_file : private multipart_upload {
         req.set_query_param("partNumber", to_sstring(part_number + 1));
         req.set_query_param("uploadId", _upload_id);
         s3l.trace("PUT part {}, {} bytes (upload id {})", part_number, part_size, _upload_id);
-        req.write_body("bin", part_size, [f=std::move(f), mpu=std::move(mpu), offset, part_size, &progress = _progress] (output_stream<char>&& out_) {
+        req.write_body("bin", part_size, [f=std::move(f), offset, part_size, &progress = _progress] (output_stream<char>&& out_) {
             auto input = make_file_input_stream(f, offset, part_size, input_stream_options());
             auto output = std::move(out_);
             return copy_to(std::move(input), std::move(output), _transmit_size, progress);
