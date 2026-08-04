@@ -87,8 +87,12 @@ seastar::future<bool> default_aws_retry_strategy::should_retry(std::exception_pt
     // Report before the caps are consulted, so that the response which exhausts a
     // request still reaches the control loop.
     const bool is_throttling = is_throttling_error(err.get_error_type());
-    if (_controller && is_throttling) {
-        _controller->on_throttled();
+    if (_controller) {
+        if (is_throttling) {
+            _controller->on_throttled();
+        } else {
+            _controller->on_error_not_throttled();
+        }
     }
 
     if (attempted_retries >= _max_retries) {
@@ -96,6 +100,14 @@ seastar::future<bool> default_aws_retry_strategy::should_retry(std::exception_pt
         co_return false;
     }
     bool should_retry = err.is_retryable() == utils::http::retryable::yes;
+
+    // The cap above bounds one request. This bounds how much of the client's work
+    // may be retries at all, across every request in flight.
+    if (should_retry && _controller && !_controller->try_acquire_retry_quota()) {
+        rs_logger.warn("Retry quota exhausted, not retrying. Reason: {}. Retry# {}", err.get_error_message(), attempted_retries);
+        co_return false;
+    }
+
     if (should_retry) {
         rs_logger.debug("AWS HTTP client request failed. Reason: {}. Retry# {}", err.get_error_message(), attempted_retries);
         co_await sleep_before_retry(attempted_retries, is_throttling);

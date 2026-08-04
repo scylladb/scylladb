@@ -346,6 +346,9 @@ void client::register_throttling_metrics() {
     defs.emplace_back(sm::make_counter("throttles", [this] { return _request_limiter->throttles(); },
             sm::description("Total number of throttling responses (503 SlowDown etc.) from S3"), {ep_label, request_op})
             (sm::skip_when_empty::yes));
+    defs.emplace_back(sm::make_counter("quota_denials", [this] { return _request_limiter->quota_denials(); },
+            sm::description("Retries refused because the client-wide retry budget was exhausted"), {ep_label, request_op})
+            (sm::skip_when_empty::yes));
     defs.emplace_back(sm::make_gauge("send_fill_rate", [this] { return _request_limiter->fill_rate(); },
             sm::description("Adaptive limiter target send rate (requests/s)"), {ep_label, request_op})
             (sm::skip_when_empty::yes));

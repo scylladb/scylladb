@@ -8,10 +8,13 @@
 
 #pragma once
 
+#include "utils/s3/creds.hh"
+#include "utils/s3/default_aws_retry_strategy.hh"
 #include "utils/s3/throttling_controller.hh"
 
 #include <seastar/core/lowres_clock.hh>
 #include <cstddef>
+#include <cstdint>
 
 namespace s3 {
 
@@ -45,6 +48,18 @@ class aws_throttling_controller final : public throttling_controller {
 
     uint64_t _throttles = 0; // throttling responses observed, for metrics only
 
+    // Client-wide retry budget: one unit per admitted retry, one returned per
+    // success, so a request that retried and then succeeded costs nothing and the
+    // pool only drains for retries that end in failure. Sized as the connection
+    // budget times the retry depth, since every in-flight request holds a connection
+    // and any request class may retry -- large enough that a full complement of
+    // requests can spend its whole retry allowance before the budget binds.
+    static constexpr unsigned initial_retry_quota = endpoint_config::default_connections_per_shard * aws::default_aws_retry_strategy::default_max_retries;
+
+    unsigned _retry_quota = initial_retry_quota;
+    uint64_t _quota_denials = 0;
+
+
     void refill(seastar::lowres_clock::time_point now);
     void update_client_sending_rate(bool is_throttling_response);
     void update_rate(double new_rps, seastar::lowres_clock::time_point now);
@@ -64,11 +79,15 @@ public:
     seastar::future<> acquire(seastar::abort_source* as) override;
     void on_throttled() override;
     void on_success() override;
+    void on_error_not_throttled() override;
+
+    bool try_acquire_retry_quota() override;
 
     bool enabled() const override { return _enabled; }
     double fill_rate() const override { return _fill_rate; }
     double measured_tx_rate() const override { return _measured_tx_rate; }
     uint64_t throttles() const override { return _throttles; }
+    uint64_t quota_denials() const override { return _quota_denials; }
 };
 
 } // namespace s3

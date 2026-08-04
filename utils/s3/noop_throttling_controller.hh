@@ -25,11 +25,15 @@ public:
     }
     void on_throttled() override {}
     void on_success() override {}
+    void on_error_not_throttled() override {}
+
+    bool try_acquire_retry_quota() override { return true; }
 
     bool enabled() const override { return false; }
     double fill_rate() const override { return 0.0; }
     double measured_tx_rate() const override { return 0.0; }
     uint64_t throttles() const override { return 0; }
+    uint64_t quota_denials() const override { return 0; }
 };
 
 } // namespace s3

@@ -100,7 +100,25 @@ void aws_throttling_controller::on_throttled() {
 }
 
 void aws_throttling_controller::on_success() {
+    // Returns exactly what an admitted retry spent, so a request that retried and
+    // then succeeded is net zero and only retries that end in failure drain the pool.
+    _retry_quota = std::min(_retry_quota + 1, initial_retry_quota);
     update_client_sending_rate(false);
+}
+
+void aws_throttling_controller::on_error_not_throttled() {
+    // Not throttled, so the curve grows as on success -- but it is not a success,
+    // so no quota is returned.
+    update_client_sending_rate(false);
+}
+
+bool aws_throttling_controller::try_acquire_retry_quota() {
+    if (_retry_quota == 0) {
+        ++_quota_denials;
+        return false;
+    }
+    --_retry_quota;
+    return true;
 }
 
 // Recomputes the target rate from one response. A throttle records the current
