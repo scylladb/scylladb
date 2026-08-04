@@ -926,19 +926,6 @@ SEASTAR_TEST_CASE(test_promoted_index_read) {
     });
 }
 
-static void check_min_max_column_names(const sstable_ptr& sst, std::vector<bytes> min_components, std::vector<bytes> max_components) {
-    const auto& st = sst->get_stats_metadata();
-    BOOST_TEST_MESSAGE(fmt::format("min {}/{} max {}/{}", st.min_column_names.elements.size(), min_components.size(), st.max_column_names.elements.size(), max_components.size()));
-    BOOST_REQUIRE(st.min_column_names.elements.size() == min_components.size());
-    for (auto i = 0U; i < st.min_column_names.elements.size(); i++) {
-        BOOST_REQUIRE(min_components[i] == st.min_column_names.elements[i].value);
-    }
-    BOOST_REQUIRE(st.max_column_names.elements.size() == max_components.size());
-    for (auto i = 0U; i < st.max_column_names.elements.size(); i++) {
-        BOOST_REQUIRE(max_components[i] == st.max_column_names.elements[i].value);
-    }
-}
-
 static void test_min_max_clustering_key(test_env& env, schema_ptr s, std::vector<bytes> exploded_pk, std::vector<std::vector<bytes>> exploded_cks,
         std::vector<bytes> min_components, std::vector<bytes> max_components, sstable_version_types version, bool remove = false) {
     auto mt = make_lw_shared<replica::memtable>(s);
