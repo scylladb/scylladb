@@ -30,5 +30,17 @@ shared_ptr<function> make_bm25_function() {
         });
 }
 
+shared_ptr<function> make_ann_function(const std::vector<data_type>& arg_types) {
+    // ANN vector ordering function: ann(column, query_vector) -> float
+    //
+    // Marked as non-pure (false) for the same reason as BM25(): it must not be constant-folded
+    // when both arguments happen to be literals.
+    return make_native_scalar_function<false>(ANN_FUNCTION_NAME.name, float_type, arg_types,
+        [] (std::span<const bytes_opt>) -> bytes_opt {
+            // An ANN() call is always resolved at prepare time, so this body is never reached.
+            on_internal_error(log, "ANN() reached scalar evaluation; prepare-time handling should have prevented this");
+        });
+}
+
 } // namespace functions
 } // namespace cql3
