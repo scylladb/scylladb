@@ -1203,3 +1203,111 @@ async def test_pow2_convergence_virtual_task(manager: ManagerClient):
         convergence_tasks = [t for t in tasks if t.type == "pow2_convergence"]
         assert len(convergence_tasks) == 0, \
             f"Expected no convergence tasks after completion, got {len(convergence_tasks)}"
+
+
+async def test_migration_with_zero_token_node(manager: ManagerClient):
+    """Verify vnodes-to-tablets migration succeeds in the presence of zero-token nodes (arbiter DCs).
+
+    Reproduces SCYLLADB-3268: finalization used to fail with "No load stats available" for
+    zero-token nodes because collect_tablet_load_stats only queried token-owning nodes, but
+    the finalization check iterated all normal nodes.
+
+    Steps:
+    1. Start a 2-node cluster: one token-owning node in dc1 and one zero-token node in dc2 (arbiter DC).
+    2. Create a vnode keyspace with RF={'dc1': 1, 'dc2': 0}.
+    3. Start the migration.
+    4. Mark both nodes for upgrade and restart them.
+    5. Verify the status API reports correct current_mode for the zero-token node.
+    6. Finalize the migration — this should succeed (previously it would fail).
+    7. Verify data integrity.
+    """
+    num_keys = 100
+    tokens_per_node = 16
+
+    logger.info("Starting a token-owning node in dc1")
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': tokens_per_node}
+    server_dc1 = await manager.server_add(cmdline=['--smp', '2'], config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
+
+    logger.info("Starting a zero-token node in dc2 (arbiter DC)")
+    zero_token_cfg = cfg | {'join_ring': False}
+    server_dc2 = await manager.server_add(cmdline=['--smp', '2'], config=zero_token_cfg, property_file={"dc": "dc2", "rack": "rack1"})
+
+    # Only pass token-owning servers to get_ready_cql: the CQL driver cannot
+    # discover zero-token nodes (they have no tokens in the ring metadata).
+    token_owning_servers = [server_dc1]
+    cql, _ = await manager.get_ready_cql(token_owning_servers)
+
+    host_id_dc1 = await manager.get_host_id(server_dc1.server_id)
+    host_id_dc2 = await manager.get_host_id(server_dc2.server_id)
+
+    logger.info("Creating keyspace with RF={'dc1': 1, 'dc2': 0}")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 0} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        logger.info(f"Populating table with {num_keys} rows")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+
+        logger.info("Starting vnodes-to-tablets migration")
+        await manager.api.create_vnode_tablet_migration(server_dc1.ip_addr, ks)
+
+        logger.info("Verifying migration status: both nodes should appear")
+        # The zero-token node has no replicas, so its current_mode matches its
+        # intended_mode (nothing to migrate). Initially both intended modes are 'vnodes'.
+        await verify_migration_status(manager, server_dc1, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={
+                host_id_dc1: ('vnodes', 'vnodes'),
+                host_id_dc2: ('vnodes', 'vnodes'),
+            })
+
+        logger.info("Marking both nodes for tablets migration")
+        await manager.api.upgrade_node_to_tablets(server_dc1.ip_addr)
+        await manager.api.upgrade_node_to_tablets(server_dc2.ip_addr)
+
+        logger.info("Verifying status API after marking for upgrade")
+        # dc1 (token-owning, has replicas): still uses vnodes (hasn't restarted)
+        # dc2 (zero-token, no replicas): current_mode='tablets' immediately because
+        #   it has nothing to migrate — current_mode tracks intended_mode for such nodes.
+        await verify_migration_status(manager, server_dc1, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={
+                host_id_dc1: ('vnodes', 'tablets'),
+                host_id_dc2: ('tablets', 'tablets'),
+            })
+
+        logger.info("Restarting token-owning node to trigger resharding")
+        await manager.server_restart(server_dc1.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(token_owning_servers)
+
+        logger.info("Restarting zero-token node to trigger its migration")
+        await manager.server_restart(server_dc2.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(token_owning_servers)
+
+        logger.info("Verifying status API: dc1 node should use tablets, dc2 zero-token node should also report tablets")
+        # The zero-token node has no replicas, so the status API should report
+        # current_mode matching intended_mode (since it has nothing to migrate).
+        await verify_migration_status(manager, server_dc1, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={
+                host_id_dc1: ('tablets', 'tablets'),
+                host_id_dc2: ('tablets', 'tablets'),
+            },
+            retries=5, retry_interval=1)
+
+        logger.info("Finalizing tablets migration (should succeed with zero-token node present)")
+        await manager.api.finalize_vnode_tablet_migration(server_dc1.ip_addr, ks)
+
+        logger.info("Verifying that the keyspace schema has tablets enabled")
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "Keyspace is still using vnodes after migration finalization"
+
+        logger.info("Verifying migration status after finalization")
+        await verify_migration_status(manager, server_dc1, ks, expected_status='tablets', expected_node_statuses={})
+
+        logger.info("Verifying data integrity after finalization")
+        await verify_data_integrity(cql, ks, "test", num_keys)
+
