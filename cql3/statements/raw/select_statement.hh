@@ -52,6 +52,11 @@ public:
         expr::expression func_expr;
     };
     using ordering_type = std::variant<ordering, ann_vector, scoring_function_ordering>;
+    // Returns the raw (unresolved) function name of a scoring_function_ordering,
+    // or an empty string view for any other ordering kind.  Scoring-function
+    // resolvers use this to classify an ordering before preparing it, so that
+    // only the resolver that owns the function prepares the expression.
+    static std::string_view scoring_order_raw_name(const ordering_type& ordering);
     class parameters final {
     public:
         using orderings_type = std::vector<std::pair<shared_ptr<column_identifier::raw>, ordering_type>>;
