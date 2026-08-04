@@ -560,6 +560,15 @@ private:
     std::unique_ptr<file_writer> _hashes_writer;
     bool _tombstone_written = false;
     bool _static_row_written = false;
+    // Positions within a partition are weakly monotonic, so the sstable-wide min is
+    // only checked on a partition's first position and the max check of full-key
+    // positions is deferred to consume_end_of_partition(); prefix rows are handled
+    // eagerly - see record_clustering_position(). Reset in consume_new_partition().
+    bool _partition_min_checked = false;
+    // Deferred update_max() candidate; disengaged if the partition has no clustering positions.
+    std::optional<position_in_partition> _partition_max_clustering_pos;
+    // Set when the candidate is after_all_clustered_rows(), which nothing can exceed.
+    bool _partition_max_clustering_pos_is_final = false;
     // The length of partition header (partition key, partition deletion and static row, if present)
     // as written to the data file
     // Used for writing promoted index
@@ -796,6 +805,24 @@ private:
     void collect_range_tombstone_stats() {
         ++_c_stats.rows_count;
         ++_c_stats.range_tombstones_count;
+    }
+
+    // Track pos in _collector's sstable-wide min/max clustering positions.
+    void record_clustering_position(position_in_partition_view pos) {
+        if (!_partition_min_checked) {
+            _collector.update_min(pos);
+            _partition_min_checked = true;
+        }
+        if (_partition_max_clustering_pos_is_final) {
+            return;
+        }
+        // update_max() compares a prefix (non-full) row as after_all_prefixed(pos), which
+        // can exceed later full-key positions sharing the prefix, so it can't be deferred.
+        if (pos.is_clustering_row() && !pos.key().is_full(_schema)) {
+            _collector.update_max(pos);
+        } else {
+            _partition_max_clustering_pos = pos;
+        }
     }
 
     // Clustered is a term used to denote an entity that has a clustering key prefix
@@ -1113,6 +1140,10 @@ void writer::consume_new_partition(const dht::decorated_key& dk) {
 
     _tombstone_written = false;
     _static_row_written = false;
+
+    _partition_min_checked = false;
+    _partition_max_clustering_pos.reset();
+    _partition_max_clustering_pos_is_final = false;
 }
 
 void writer::consume(tombstone t) {
@@ -1127,8 +1158,11 @@ void writer::consume(tombstone t) {
     _tombstone_written = true;
 
     if (t) {
-        _collector.update_min_max_components(position_in_partition_view::before_all_clustered_rows());
-        _collector.update_min_max_components(position_in_partition_view::after_all_clustered_rows());
+        // The tombstone covers the whole clustered region; nothing can exceed
+        // after_all_clustered_rows(), so pin the max.
+        record_clustering_position(position_in_partition_view::before_all_clustered_rows());
+        record_clustering_position(position_in_partition_view::after_all_clustered_rows());
+        _partition_max_clustering_pos_is_final = true;
     }
 }
 
@@ -1560,7 +1594,7 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
     flush_tmp_bufs();
 
     // Collect statistics
-    _collector.update_min_max_components(clustered_row.position());
+    record_clustering_position(clustered_row.position());
     collect_row_stats(_data_writer->offset() - current_pos, &clustered_row.key(), is_dead);
 }
 
@@ -1700,7 +1734,7 @@ void writer::write_clustered(const rt_marker& marker, uint64_t prev_row_size) {
     write_marker_body(_tmp_bufs);
     write_vint(*_data_writer, _tmp_bufs.size());
     flush_tmp_bufs();
-    _collector.update_min_max_components(marker.position());
+    record_clustering_position(marker.position());
 
     collect_range_tombstone_stats();
 }
@@ -1785,6 +1819,11 @@ stop_iteration writer::consume_end_of_partition() {
     _c_stats.partition_size = _data_writer->offset() - _c_stats.start_offset;
 
     maybe_record_large_partitions(_sst, *_partition_key, _c_stats.partition_size, _c_stats.rows_count, _c_stats.range_tombstones_count, _c_stats.dead_rows_count);
+
+    // Flush the deferred max update, if the partition had any clustering positions.
+    if (_partition_max_clustering_pos) {
+        _collector.update_max(*_partition_max_clustering_pos);
+    }
 
     // update is about merging column_stats with the data being stored by collector.
     _collector.update(std::move(_c_stats));
