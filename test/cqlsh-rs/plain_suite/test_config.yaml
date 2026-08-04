@@ -1,0 +1,3 @@
+extra_scylla_config_options:
+  authenticator: AllowAllAuthenticator
+  authorizer: AllowAllAuthorizer

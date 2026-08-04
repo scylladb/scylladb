@@ -1,0 +1,3 @@
+# PasswordAuthenticator and CassandraAuthorizer are already the defaults the
+# test framework configures, so this suite needs no overrides of its own.
+{}
