@@ -4742,12 +4742,26 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
     std::unordered_map<table_id, size_t> total_replicas;
     bool table_load_stats_invalid = false;
 
-    for (auto& [dc, nodes] : tm->get_datacenter_token_owners_nodes()) {
+    // Poll every normal node of each DC, not only its token owners: a node that owns no
+    // tokens (e.g. in an arbiter DC) still switches its local storage mode during a
+    // vnodes-to-tablets migration, and finalization needs to observe that.
+    for (auto& [dc, nodes] : tm->get_topology().get_datacenter_nodes()) {
         locator::load_stats dc_stats;
-        rtlogger.debug("raft topology: Refreshing table load stats for DC {} that has {} token owners", dc, nodes.size());
+        bool dc_has_token_owners = false;
+        rtlogger.debug("raft topology: Refreshing table load stats for DC {} that has {} node(s)", dc, nodes.size());
         co_await coroutine::parallel_for_each(nodes, [&] (const auto& node) -> future<> {
             auto dst = node.get().host_id();
             auto dst_server = raft::server_id(dst.uuid());
+
+            const bool is_token_owner = tm->is_normal_token_owner(dst);
+
+            // get_datacenter_nodes() also contains nodes in transient states; only normal
+            // ones take part in the migration and can be expected to report load stats.
+            if (!is_token_owner && !_topo_sm._topology.normal_nodes.contains(dst_server)) {
+                co_return;
+            }
+
+            dc_has_token_owners |= is_token_owner;
 
             _as.check();
 
@@ -4771,7 +4785,9 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
                     node_stats = _load_stats_per_node[dst];
                 } else {
                     rtlogger.debug("raft topology: Unable to refresh table load on {} because it's down.", dst);
-                    table_load_stats_invalid = true;
+                    if (is_token_owner) {
+                        table_load_stats_invalid = true;
+                    }
                     co_return;
                 }
             } else if (_feature_service.tablet_load_stats_v2) {
@@ -4788,8 +4804,19 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
             }
 
             _load_stats_per_node[dst] = node_stats;
-            dc_stats += node_stats;
+            if (is_token_owner) {
+                dc_stats += node_stats;
+            }
         });
+
+        // A DC with no token owners holds no replicas of any table, so dc_stats was never
+        // merged into and is still the identity element. `stats += dc_stats` would not be a
+        // no-op for it: load_stats::operator+= invalidates split readiness for every table
+        // the source does not report, and decides whether to do so from the destination's
+        // _aggregated flag rather than the source's. So skip such a DC entirely.
+        if (!dc_has_token_owners) {
+            continue;
+        }
 
         for (auto& [table_id, table_stats] : dc_stats.tables) {
             co_await coroutine::maybe_yield();
