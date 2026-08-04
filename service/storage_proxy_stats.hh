@@ -142,6 +142,7 @@ struct stats : public write_stats {
     uint64_t read_repair_attempts = 0;
     uint64_t read_repair_repaired_blocking = 0;
     uint64_t read_repair_repaired_background = 0;
+    uint64_t read_repair_diff_found = 0;
     uint64_t global_read_repairs_canceled_due_to_concurrent_write = 0;
 
     // number of mutations received as a coordinator
