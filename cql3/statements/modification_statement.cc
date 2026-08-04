@@ -691,8 +691,8 @@ update_for_lwt_null_equality_rules(const expr::expression& e) {
 
 static
 expr::expression
-column_condition_prepare(const expr::expression& expr, data_dictionary::database db, const sstring& keyspace, const schema& schema){
-    auto prepared = expr::prepare_expression(expr, db, keyspace, &schema, make_lw_shared<column_specification>("", "", make_shared<column_identifier>("IF condition", true), boolean_type));
+column_condition_prepare(const expr::expression& expr, data_dictionary::database db, const sstring& keyspace, const schema& schema, const dialect& d){
+    auto prepared = expr::prepare_expression_allowing_relations(expr, db, keyspace, &schema, make_lw_shared<column_specification>("", "", make_shared<column_identifier>("IF condition", true), boolean_type), d);
     expr::verify_no_aggregate_functions(prepared, "IF clause");
 
     expr::for_each_expression<expr::column_value>(prepared, [] (const expr::column_value& cval) {
@@ -745,7 +745,7 @@ modification_statement::prepare_conditions(data_dictionary::database db, const s
             throwing_assert(!_if_not_exists);
             stmt.set_if_exist_condition();
         } else {
-            stmt._condition = column_condition_prepare(*_conditions, db, keyspace(), schema);
+            stmt._condition = column_condition_prepare(*_conditions, db, keyspace(), schema, ctx.get_dialect());
             expr::fill_prepare_context(stmt._condition, ctx);
             stmt.analyze_condition(stmt._condition);
         }
