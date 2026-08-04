@@ -187,3 +187,21 @@ future<sstables::shared_sstable> verify_mutation(test_env& env, shared_sstable s
     co_await rd.close();
     co_return sstp;
 }
+
+void slightly_corrupt_sstable(sstables::shared_sstable sst, component_type component) {
+    auto path = sstables::test(sst).filename(component).native();
+    auto size = seastar::file_size(path).get();
+    auto f = open_file_dma(path, open_flags::rw).get();
+    auto close_f = deferred_close(f);
+    const auto mem_align = f.memory_dma_alignment();
+    const auto dma_align = f.disk_write_dma_alignment();
+    auto block_offset = align_down(size - 1, dma_align);
+    auto buf = seastar::temporary_buffer<char>::aligned(mem_align, dma_align);
+    f.dma_read(block_offset, buf.get_write(), dma_align).get();
+    // Flip one bit in the last byte of the file to corrupt it minimally.
+    // Using a single-bit flip avoids creating values that overflow
+    // during parsing.
+    buf.get_write()[size - 1 - block_offset] += 1;
+    f.dma_write(block_offset, buf.get(), dma_align).get();
+    f.truncate(size).get();
+}

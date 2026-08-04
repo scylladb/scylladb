@@ -298,3 +298,5 @@ inline shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::me
 
 future<lw_shared_ptr<replica::memtable>> make_memtable(schema_ptr s, const utils::chunked_vector<mutation>& muts);
 std::vector<replica::memtable*> active_memtables(replica::table& t);
+
+void slightly_corrupt_sstable(sstables::shared_sstable sst, component_type component = component_type::Data);
