@@ -26,6 +26,7 @@
 #include "db/cluster_config_manager.hh"
 #include "db/cluster_config_registry.hh"
 #include "db/tablet_options.hh"
+#include "db/snapshot_types.hh"
 #include "locator/load_sketch.hh"
 #include "replica/database.hh"
 #include "gms/feature_service.hh"
