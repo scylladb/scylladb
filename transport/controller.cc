@@ -239,6 +239,13 @@ future<> controller::do_start_server() {
               .allow_shard_aware_drivers = cfg.enable_shard_aware_drivers(),
               .bounce_request_smp_service_group = bounce_request_smp_service_group,
               .max_relations_in_where_clause = cfg.max_relations_in_where_clause,
+<<<<<<< HEAD
+||||||| parent of 89895304ff (cql3: allow naming the IN bind variable to use lowercase)
+              .uninitialized_connections_semaphore_cpu_concurrency = cfg.uninitialized_connections_semaphore_cpu_concurrency,
+=======
+              .cql_in_bind_variable_name_uses_uppercase_operator = cfg.cql_in_bind_variable_name_uses_uppercase_operator,
+              .uninitialized_connections_semaphore_cpu_concurrency = cfg.uninitialized_connections_semaphore_cpu_concurrency,
+>>>>>>> 89895304ff (cql3: allow naming the IN bind variable to use lowercase)
               .request_timeout_on_shutdown_in_seconds = cfg.request_timeout_on_shutdown_in_seconds
             };
         });
