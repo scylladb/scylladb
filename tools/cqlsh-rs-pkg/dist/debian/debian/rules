@@ -1,0 +1,27 @@
+#!/usr/bin/make -f
+
+include /usr/share/dpkg/pkg-info.mk
+
+product := $(subst -cqlsh,,$(DEB_SOURCE))
+
+override_dh_auto_configure:
+
+override_dh_auto_build:
+
+override_dh_auto_clean:
+
+override_dh_auto_install:
+	dh_auto_install
+	cd scylla-cqlsh; ./install.sh --root "$(CURDIR)/debian/${product}-cqlsh"
+
+override_dh_makeshlibs:
+
+override_dh_shlibdeps:
+
+override_dh_fixperms:
+	dh_fixperms
+
+override_dh_strip_nondeterminism:
+
+%:
+	dh $@
