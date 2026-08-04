@@ -2203,7 +2203,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     if (!orderings.empty() && !is_ann_query && !is_fts_query) {
         std::visit([&](auto&& ordering) {
             using T = std::decay_t<decltype(ordering)>;
-            if constexpr (!std::is_same_v<T, select_statement::ann_vector> && !std::is_same_v<T, raw::select_statement::scoring_function_ordering>) {
+            if constexpr (!std::is_same_v<T, raw::select_statement::scoring_function_ordering>) {
                 throwing_assert(!for_view);
                 verify_ordering_is_allowed(*_parameters, *restrictions);
                 prepared_orderings_type prepared_orderings = prepare_orderings(*schema);
