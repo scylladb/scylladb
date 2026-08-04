@@ -140,6 +140,31 @@ future<> cluster_backup_task::do_backup() {
         }
     }
 
+    if (_snap_ctl.db().local().features().backup_as_topology_operation) {
+        // No real point in holding any snap gate here. We only send the
+        // op to topology coordinator. If it is us, topo gate(s) will
+        // handle shutdown attempt, otherwise things will either die
+        // or run, regardless. We do no state changes in this code here.
+        auto ctl = co_await _snap_ctl.sp().local().start_backup_snapshot(
+            _locations, _ks_tables, _snapshot, _remove_on_uploaded
+        );
+
+        // TODO: progress and abort
+        auto sub = _as.subscribe([&]() noexcept {
+            // would be great to wait here
+            snap_log.info("Aborting snapshot {}", _snapshot);
+            std::ignore = ctl.abort();
+        });
+
+        if (_as.abort_requested()) {
+            co_await ctl.abort();
+            co_return;
+        }
+
+        co_await ctl.wait();
+        co_return;
+    }
+
     /**
      * This is a bit overzealous, but we've removed the snapshot-ctl from the run_global_backup call (prep for topo op)
      * so in this legacy call, just hold the snapshot gate across the whole backup run. The motivation being that we should 
@@ -149,7 +174,7 @@ future<> cluster_backup_task::do_backup() {
     co_await _snap_ctl.run_snapshot_modify_operation([&]() -> future<> {
         co_await run_global_backup(_snap_ctl.qp().local(), _snapshot, _ks_tables, _locations, _remove_on_uploaded
             , [&](locator::host_id host, table_id tid, sstring tag, sstring endpoint, sstring bucket, sstring prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move) -> future<> {
-                co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&_snap_ctl.ms(), host, tid, tag, endpoint, bucket, prefix, first_token, last_token, std::move(sstable_ids), use_move);
+                co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&_snap_ctl.ms(), host, tid, tag, endpoint, bucket, prefix, first_token, last_token, std::move(sstable_ids), use_move, service::frozen_topology_guard{});
             }
             , *this
         );
@@ -386,7 +411,7 @@ db::snapshot::run_global_backup(cql3::query_processor& qp, std::string snapshot_
             auto streamer = json::stream_object(std::move(manifest));
             co_await streamer(std::move(out));
 
-            progress.add_progress(1);
+            progress.add_progress(info.datacenters.size());
         });
     });
 
@@ -523,6 +548,7 @@ db::snapshot::backup_sstables(cql3::query_processor& qp, table_id table_id, std:
             std::ignore = per_shard.invoke_on_all([] (auto& ps) {
                 ps.as.request_abort();
             });
+            utils::get_local_injector().inject("backup_task_abort_dispatch", []{});
         });
     }
 

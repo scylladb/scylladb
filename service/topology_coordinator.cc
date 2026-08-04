@@ -30,6 +30,7 @@
 #include "cql3/statements/ks_prop_defs.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/system_keyspace.hh"
+#include "db/snapshot/cluster_backup.hh"
 #include "dht/boot_strapper.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
@@ -67,6 +68,7 @@
 
 #include "idl/join_node.dist.hh"
 #include "idl/storage_service.dist.hh"
+#include "idl/snapshot_backup.dist.hh"
 #include "replica/exceptions.hh"
 #include "service/paxos/prepare_response.hh"
 #include "idl/storage_proxy.dist.hh"
@@ -1308,6 +1310,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                    .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
                    .set_session(session_id(req_id));
             co_await update_topology_state(std::move(guard), {builder.build()}, "SNAPSHOT TABLES requested");
+        }
+        break;
+        case global_topology_request::backup_snapshot: {
+            rtlogger.info("BACKUP SNAPSHOT requested");
+            topology_mutation_builder builder(guard.write_timestamp());
+            builder.set_transition_state(topology::transition_state::backup_snapshot)
+                   .set_global_topology_request(req)
+                   .set_global_topology_request_id(req_id)
+                   .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
+                   .set_session(session_id(req_id));
+            co_await update_topology_state(std::move(guard), {builder.build()}, "BACKUP SNAPSHOT requested");
         }
         break;
         case global_topology_request::finalize_migration: {
@@ -3071,6 +3084,44 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         );
     }
 
+    future<> handle_backup_snapshot(group0_guard guard) {
+        co_await handle_topology_ordered_op0(std::move(guard), [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry, group0_guard& guard) -> future<std::optional<sstring>> {
+            std::optional<sstring> error;
+
+            try {
+                auto tag = *topology_requests_entry.snapshot_tag;
+                auto move_files = topology_requests_entry.backup_use_move;
+                auto locations = *topology_requests_entry.backup_locations;
+                std::unordered_multimap<sstring, sstring> ks_tables;
+
+                for (auto& id : *topology_requests_entry.snapshot_table_ids) {
+                    lw_shared_ptr<replica::table> table = _db.get_tables_metadata().get_table_if_exists(id);
+                    if (!table) {
+                        throw std::invalid_argument(fmt::format("Cannot BACKUP SNAPSHOT of table with UUID {} because it does not exist.", id));
+                    }
+                    ks_tables.emplace(table->schema()->ks_name(), table->schema()->cf_name());
+                }
+
+                // Release the guard to avoid blocking group0 for long periods of time while invoking RPCs
+                release_guard(std::move(guard));
+
+                const service::frozen_topology_guard frozen_guard { _topo_sm._topology.session };
+                tasks::progress_sink ps{}; // TODO: progress
+                co_await db::snapshot::run_global_backup(_sys_ks.query_processor()
+                    , std::move(tag), std::move(ks_tables), std::move(locations), move_files
+                    , [&](locator::host_id host, table_id tid, sstring tag, sstring endpoint, sstring bucket, sstring prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move) -> future<> {
+                        co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&_messaging, host, tid, tag, endpoint, bucket, prefix, first_token, last_token, std::move(sstable_ids), use_move, frozen_guard);
+                    }
+                    , ps
+                );
+            } catch (std::exception& e) {
+                error = e.what();
+            }
+
+            co_return error;
+        }, "backup");
+    }
+
     // This function must not release and reacquire the guard, callers rely
     // on the fact that the block which calls this is atomic.
     // FIXME: Don't take the ownership of the guard to make the above guarantee explicit.
@@ -3978,6 +4029,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 break;
             case topology::transition_state::snapshot_tables:
                 co_await handle_snapshot_tables(std::move(guard));
+                break;
+            case topology::transition_state::backup_snapshot:
+                co_await handle_backup_snapshot(std::move(guard));
                 break;
         }
         co_return true;

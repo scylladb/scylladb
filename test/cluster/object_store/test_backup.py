@@ -1815,3 +1815,56 @@ async def test_cluster_snapshot_repair_set_unique(manager: ScyllaClusterManager,
     Tests a cluster snapshot reduces the snapshot sstable set by the current repair set for each tablet
     """
     await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_and_check_redundancy, object_storage), object_storage, True, True)
+
+async def do_aborted_cluster_backup(object_storage, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+    """
+    Helper
+    """
+    s = servers[0]
+    breakpoint_name = "backup_task_pre_upload"
+    abort_breakpoint_name = "backup_task_abort_dispatch"
+    prefix = "gargamel"
+    await manager.api.enable_injection(s.ip_addr, breakpoint_name, one_shot=True)
+    await manager.api.enable_injection(s.ip_addr, abort_breakpoint_name, one_shot=False)
+
+    backup_tid = await manager.api.backup_cluster_snapshot(s.ip_addr, ks, snapshot_name, s.datacenter, 
+                                                           object_storage.address, object_storage.bucket_name,
+                                                           prefix, tables = [cf])
+
+    await manager.api.wait_for_injection_enter(s.ip_addr, breakpoint_name)
+    await manager.api.abort_task(s.ip_addr, backup_tid)
+    await manager.api.wait_for_injection_enter(s.ip_addr, abort_breakpoint_name)
+
+    await manager.api.message_injection(s.ip_addr, breakpoint_name)
+    status = await manager.api.wait_task(s.ip_addr, backup_tid)
+
+    assert (status is not None) and (status['state'] == 'failed')
+    assert "abort requested" in status['error'] or "aborted" in status['error']
+
+    cql = manager.get_cql()
+    num_sstables = 0;
+
+    for ss in servers:
+        sstables = list(cql.execute(f"""
+                    SELECT COUNT(*) FROM system_distributed.snapshot_sstables WHERE 
+                    snapshot_name = '{snapshot_name}' AND \"keyspace\" = '{ks}' AND
+                    \"table\" = '{cf}' AND datacenter = '{ss.datacenter}' AND
+                    rack = '{ss.rack}'
+                    """))
+        num_sstables += sstables[0].count
+
+    objects = set(os.path.basename(o.key) for o in
+                  object_storage.get_resource().Bucket(object_storage.bucket_name).
+                  objects.filter(Prefix=f"{prefix}/sstables"))
+
+    objects = list(filter(lambda o: o.endswith("TOC.txt"), objects))
+
+    assert len(objects) < num_sstables, "should not manage to upload all files"
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_cluster_snapshot_backup_abortable(manager: ScyllaClusterManager, object_storage):
+    """
+    Tests a cluster snapshot backup can be aborted
+    """
+    await do_test_snapshot_on_all_nodes(manager, partial(do_aborted_cluster_backup, object_storage), object_storage, True)
