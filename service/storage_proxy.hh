@@ -132,7 +132,7 @@ public:
     abortable_topology_task(abortable_topology_task&&) noexcept;
     abortable_topology_task& operator=(abortable_topology_task&&) noexcept;
 
-    future<> wait();
+    future<> wait(topology_state_machine::completion_callback = {});
     future<> abort();
 };
 
