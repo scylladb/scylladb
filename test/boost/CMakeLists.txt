@@ -252,6 +252,8 @@ add_scylla_test(sorting_test
   KIND SEASTAR)
 add_scylla_test(sstable_3_x_test
   KIND SEASTAR)
+add_scylla_test(sstable_automatic_scrub_test
+  KIND SEASTAR)
 add_scylla_test(sstable_conforms_to_mutation_source_test
   KIND SEASTAR)
 add_scylla_test(sstable_datafile_test
