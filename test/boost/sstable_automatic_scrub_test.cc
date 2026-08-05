@@ -296,5 +296,58 @@ SEASTAR_THREAD_TEST_CASE(sstable_auto_scrub_scrub_time_updated_mixed) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(sstable_auto_scrub_skips_validated_sstables_test) {
+    automatic_scrub_test_framework test(tests::random_schema_specification::compress_sstable::yes);
+
+    auto& test_env = test.env();
+    constexpr auto sst_count = 5;
+
+    test.run(sst_count, [&test_env] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+        auto& cm = test_env.test_compaction_manager();
+
+        std::vector<shared_sstable> validated, not_validated;
+
+        for (auto [idx, sst] : std::views::enumerate(sstables)) {
+            if (idx < 3) {
+                sst->set_scrub_time(db_clock::from_time_t(0));
+                not_validated.emplace_back(std::move(sst));
+            } else {
+                validated.emplace_back(std::move(sst));
+            }
+        }
+
+        sstables::test(not_validated.front()).rewrite_toc_without_component(component_type::Scylla);
+
+        auto generations_of_validated = validated
+            | std::views::transform(std::mem_fn(&sstable::generation))
+            | std::ranges::to<std::unordered_set>();
+        
+        auto timestamp_before = db_clock::now();
+
+        cm.set_scrub_period(std::chrono::seconds(3600));
+        cm.trigger_auto_scrub_timer();
+
+        wait_on_enter("automatic_scrub_compaction_done", not_validated.size()).get();
+
+        BOOST_REQUIRE_EQUAL(table->get_sstables()->size(), sstables.size());
+
+        auto sstables_after = table->get_sstables();
+        size_t newly_validated = 0;
+
+        for (const auto& sst : *sstables_after) {
+            BOOST_REQUIRE(sst->get_scrub_time());
+            if (*sst->get_scrub_time() > timestamp_before) {
+                newly_validated++;
+            } else {
+                auto it = generations_of_validated.find(sst->generation());
+                BOOST_REQUIRE(it != generations_of_validated.end());
+                generations_of_validated.erase(it);
+            }
+        }
+        
+        BOOST_REQUIRE_EQUAL(newly_validated, not_validated.size());
+    });
+}
+
 } // namespace
 
