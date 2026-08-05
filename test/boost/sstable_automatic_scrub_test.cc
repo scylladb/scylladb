@@ -349,5 +349,52 @@ SEASTAR_THREAD_TEST_CASE(sstable_auto_scrub_skips_validated_sstables_test) {
     });
 }
 
+
+SEASTAR_THREAD_TEST_CASE(sstable_auto_scrub_and_ongiong_compaction) {
+    automatic_scrub_test_framework test(tests::random_schema_specification::compress_sstable::yes);
+
+    auto& test_env = test.env();
+    constexpr auto sst_count = 5;
+
+    test.run(sst_count, [&test_env] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+        auto& cm = test_env.test_compaction_manager();
+
+        for (sstables::shared_sstable& sst : sstables) {
+            sst->set_scrub_time(db_clock::from_time_t(0));
+        }
+
+        auto timestamp_before = db_clock::now();
+        auto signal_waits_before = utils::get_local_injector().enter_count("automatic_scrub_wait_for_signal");
+
+        size_t compacting_sstable_count = 3;
+        cm.register_compacting(ts, std::span{sstables}.subspan(0, compacting_sstable_count)).wait();
+        
+        cm.set_scrub_period(std::chrono::seconds(3600));
+        cm.trigger_auto_scrub_timer();
+
+        wait_on_enter("automatic_scrub_compaction_done", sst_count - compacting_sstable_count).get();
+
+        wait_on_enter("automatic_scrub_wait_for_signal", signal_waits_before + 1).get();
+        BOOST_REQUIRE_EQUAL(utils::get_local_injector().enter_count("automatic_scrub_wait_for_signal"), signal_waits_before + 1);
+
+        auto ssts_after_scrub = *table->get_sstables() | std::ranges::to<std::unordered_set>();
+        for (auto compacting_sst : sstables | std::views::take(compacting_sstable_count)) {
+            // The compacting sstables were not selected by automatic scrub
+            BOOST_REQUIRE(ssts_after_scrub.contains(compacting_sst));
+        }
+
+        cm.deregister_compacting(ts, std::span{sstables}.subspan(0, compacting_sstable_count)).wait();
+        cm.trigger_auto_scrub_timer();
+        wait_on_enter("automatic_scrub_compaction_done", compacting_sstable_count).get();
+        
+        BOOST_REQUIRE_EQUAL(table->get_sstables()->size(), sstables.size());
+        for (auto& sst : *table->get_sstables()) {
+            auto sst_timestamp = sst->get_scrub_time();
+            BOOST_REQUIRE(sst_timestamp);
+            BOOST_REQUIRE(*sst_timestamp > timestamp_before);
+        }
+    });
+}
+
 } // namespace
 
