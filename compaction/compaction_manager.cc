@@ -296,6 +296,9 @@ void compaction_manager::register_compacting_sstables(const Range& sstables) {
     }
 }
 
+// Needed for test_env_compaction_manager.
+template void compaction_manager::register_compacting_sstables<std::span<sstables::shared_sstable>>(const std::span<sstables::shared_sstable>&);
+
 template <std::ranges::range Range>
 requires std::same_as<std::ranges::range_value_t<Range>, sstables::shared_sstable>
 void compaction_manager::deregister_compacting_sstables(const Range& sstables) {
@@ -315,6 +318,9 @@ void compaction_manager::deregister_compacting_sstables(const Range& sstables) {
         reevaluate_automatic_scrub();
     }
 }
+
+// Needed for test_env_compaction_manager.
+template void compaction_manager::deregister_compacting_sstables<std::span<sstables::shared_sstable>>(const std::span<sstables::shared_sstable>&);
 
 class user_initiated_backlog_tracker final : public compaction_backlog_tracker::impl {
 public:
