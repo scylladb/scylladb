@@ -319,6 +319,14 @@ public:
         return _topology_state_machine;
     }
 
+    raft_group0_client& group0_client() {
+        return _group0_client;
+    }
+
+    abort_source& group0_as() {
+        return _group0_as;
+    }
+
     const db::view::view_building_state_machine& view_building_state_machine() {
         return _vb_state_machine;
     }
@@ -7738,7 +7746,7 @@ future<> abortable_topology_task::wait() {
     std::string result;
     co_await _sp->container().invoke_on(0, [&](storage_proxy& sp) -> future<> {
         auto& r = sp.remote();
-        auto error = co_await r.topology_state_machine().wait_for_request_completion(r.system_keyspace(), _request_id, true);
+        auto error = co_await r.topology_state_machine().wait_for_request_completion(r.system_keyspace(), r.group0_client(), r.group0_as(), _request_id, true);
         if (!error.empty()) {
             co_await smp::submit_to(me, [&error, &result] {
                 result = error; // copy!

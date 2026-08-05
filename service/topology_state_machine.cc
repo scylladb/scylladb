@@ -278,14 +278,18 @@ validate_removing_node(replica::database& db, locator::host_id host_id) {
 }
 
 future<sstring> topology_state_machine::wait_for_request_completion(db::system_keyspace& sys_ks,
-        raft_group0_client& group0_client, abort_source& as, utils::UUID id, bool require_entry) {
+        raft_group0_client& group0_client, abort_source& as, utils::UUID id, bool require_entry, completion_callback cc) {
     if (this_shard_id() != 0) {
         on_internal_error(tsmlogger, "wait_for_request_completion() must run on shard 0");
     }
     tsmlogger.debug("Start waiting for topology request completion (request id {})", id);
     while (true) {
         auto c = reload_count;
-        auto [done, error] = co_await sys_ks.get_topology_request_state(id, require_entry);
+        auto [done, error, pc] = co_await sys_ks.get_topology_request_state(id, require_entry);
+        if (cc) {
+            tsmlogger.debug("Request with id {} is {} percent complete", id, pc);
+            cc(pc); // maybe report progress
+        }
         if (done) {
             // The group0 command that marks the request done also carries its effects.
             // Applying it writes the mutations first and rebuilds the in-memory state
