@@ -103,7 +103,11 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
             co_return;
         }
 
-        co_await ctl.wait().finally([&] {
+        total_progress.total = 100;
+
+        co_await ctl.wait([&total_progress](uint32_t v) {
+            total_progress.completed = v;
+        }).finally([&] {
             sub = {};
             return g.close();
         });
@@ -301,10 +305,16 @@ db::snapshot::run_global_backup(cql3::query_processor& qp, std::string snapshot_
             snap_log.info("Requesting backup of {}: {}", node.node, sstable_ids);
 
             try {
+                // Pre-rpc call break point. 
+                co_await utils::get_local_injector().inject("cluster_backup_pre_node_rpc", utils::wait_for_message(std::chrono::minutes(2)));
+
                 auto prefix = db::snapshot::sstables_location(dst.prefix, t, snapshot_name);
                 co_await send_rpc(node.node, tid, snapshot_name, dst.endpoint, dst.bucket, prefix, first_token, last_token, std::move(sstable_ids), move_files);
 
                 progress.add_progress(1);
+
+                // Post-rpc call break point. 
+                co_await utils::get_local_injector().inject("cluster_backup_post_node_rpc", utils::wait_for_message(std::chrono::minutes(2)));
             } catch (...) {
                 snap_log.error("Exception requesting backup of {}:{} from {}", snapshot_name, sstable_ids, node.node);
                 throw; // fail the whole process already
