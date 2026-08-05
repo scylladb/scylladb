@@ -277,11 +277,15 @@ validate_removing_node(replica::database& db, locator::host_id host_id) {
     return node_validation_success {};
 }
 
-future<sstring> topology_state_machine::wait_for_request_completion(db::system_keyspace& sys_ks, utils::UUID id, bool require_entry) {
+future<sstring> topology_state_machine::wait_for_request_completion(db::system_keyspace& sys_ks, utils::UUID id, bool require_entry, completion_callback cc) {
     tsmlogger.debug("Start waiting for topology request completion (request id {})", id);
     while (true) {
         auto c = reload_count;
-        auto [done, error] = co_await sys_ks.get_topology_request_state(id, require_entry);
+        auto [done, error, pc] = co_await sys_ks.get_topology_request_state(id, require_entry);
+        if (cc) {
+            tsmlogger.debug("Request with id {} is {} percent complete", id, pc);
+            cc(pc); // maybe report progress
+        }
         if (done) {
             tsmlogger.debug("Request with id {} is completed with status: {}", id, error.empty() ? sstring("success") : error);
             co_return error;
