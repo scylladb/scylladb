@@ -621,9 +621,6 @@ async def test_tablet_incremental_repair_merge_higher_repaired_at_number(manager
     max_repaired_at = 2
     await verify_max_repaired_at(manager, scylla_path, servers, ks, 2)
 
-    for server in servers:
-        await manager.server_stop_gracefully(server.server_id)
-
     await verify_repaired_and_unrepaired_keys(manager, scylla_path, servers, ks, repaired_keys, unrepaired_keys)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
