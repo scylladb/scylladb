@@ -45,6 +45,10 @@ static constexpr uint8_t ESCAPED_0_DONE = 0xFF;
 static constexpr uint8_t NEXT_COMPONENT = 0x40;
 // Marker for null components in tuples, maps, sets and clustering keys.
 static constexpr uint8_t NEXT_COMPONENT_NULL = 0x3E;
+// Marker for "empty" components (zero-sized values of a type which normally has a fixed size)
+// in tuples, maps, sets and vectors. Sorts after a null component and before every ordinary
+// value, exactly like the corresponding marker of a clustering key component.
+static constexpr uint8_t NEXT_COMPONENT_EMPTY = 0x3F;
 // Terminator byte in sequences.
 static constexpr uint8_t TERMINATOR = 0x38;
 
@@ -870,12 +874,26 @@ static void unescape_zeros(managed_bytes_view& comparable_bytes_view, bytes_ostr
 // Functions are defined later in the file as they depend on to_comparable_bytes_visitor and from_comparable_bytes_visitor.
 void to_comparable_bytes(const abstract_type& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out);
 static void from_comparable_bytes(const abstract_type& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out);
+static bool has_encoding_for_zero_sized_value(const abstract_type& type);
+static void encode_null_component(bytes_ostream& out);
+static void encode_empty_component(bytes_ostream& out);
 
-// Encodes a single non-null element of a multi-component type into a byte-comparable format.
+// Encodes a single non-null element of a multi-element type into a byte-comparable format.
 // The element can be an item from a list, set, vector, a key or value from a map, or a field from a tuple.
 // The serialized bytes of the element are transformed into a byte-comparable representation,
 // prefixed with a `NEXT_COMPONENT` marker to delimit it from other elements, and written to the output stream.
 void encode_component(const abstract_type& type, managed_bytes_view serialized_bytes_view, bytes_ostream& out) {
+    if (serialized_bytes_view.empty() && !has_encoding_for_zero_sized_value(type)) {
+        // An "empty" value -- a zero-sized value of a type which normally has a fixed size --
+        // is encoded via a special separator, 0x3f. (Like is already done for empty values
+        // in clustering keys).
+        //
+        // This deviates from Cassandra, which encodes a nested empty element exactly
+        // like a null (with 0x3e). That's not valid. In the Data file, `null` is distinct
+        // from `empty`, so it must stay distinct in the index too.
+        encode_empty_component(out);
+        return;
+    }
     write_native_int(out, NEXT_COMPONENT);
     to_comparable_bytes(type, serialized_bytes_view, out);
 }
@@ -896,6 +914,23 @@ void decode_component(const abstract_type& type, managed_bytes_view& comparable_
 static void encode_null_component(bytes_ostream& out) {
     // Write the NULL component marker
     write_native_int(out, NEXT_COMPONENT_NULL);
+}
+
+// Encodes a single "empty" element of a multi-component type into a byte-comparable format.
+static void encode_empty_component(bytes_ostream& out) {
+    // Write the EMPTY component marker
+    write_native_int(out, NEXT_COMPONENT_EMPTY);
+}
+
+// Decodes a single "empty" element of a multi-component type, i.e. writes a zero-length value.
+static void decode_empty_component(bytes_ostream& out) {
+    // Write 0 as length for the empty value encoded as 4-byte big endian.
+    static const auto empty_length = [] {
+        std::array<char, 4> arr{};
+        write_be(arr.data(), int32_t(0));
+        return arr;
+    }();
+    out.write(bytes_view(reinterpret_cast<const signed char*>(empty_length.data()), empty_length.size()));
 }
 
 // Decodes a single null element of a multi-component type.
@@ -919,6 +954,11 @@ static stop_iteration decode_marker_and_component(const abstract_type& type, man
     case TERMINATOR:
         // End of the collection, return without writing anything
         return stop_iteration::yes;
+    case NEXT_COMPONENT_EMPTY:
+        // An "empty" element. Unlike a null one this is an ordinary value, so it's decoded
+        // even where null elements aren't allowed (e.g. as a map key).
+        decode_empty_component(out);
+        return stop_iteration::no;
     case NEXT_COMPONENT_NULL:
         if constexpr (allow_null_component_value) {
             decode_null_component(out);
@@ -935,7 +975,8 @@ static stop_iteration decode_marker_and_component(const abstract_type& type, man
 
 // Encode a set or a list type into byte comparable format.
 // The collection is encoded as a sequence of components, each preceded by a header.
-// The component header is either NEXT_COMPONENT_NULL or NEXT_COMPONENT, depending on whether the element is null or not.
+// The component header is NEXT_COMPONENT_NULL for a null element, NEXT_COMPONENT_EMPTY for an "empty" one,
+// and NEXT_COMPONENT otherwise.
 // The collection is terminated with a TERMINATOR byte.
 static void encode_set_or_list_type(const listlike_collection_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
     const auto& elements_type = *type.get_elements_type();
@@ -988,10 +1029,16 @@ static void decode_map(const map_type_impl& type, managed_bytes_view& comparable
     int32_t map_size = 0;
     while (decode_marker_and_component<false>(key_type, comparable_bytes_view, out) == stop_iteration::no) {
         // Decode value
-        if (read_simple_native<uint8_t>(comparable_bytes_view) != NEXT_COMPONENT) {
+        switch (read_simple_native<uint8_t>(comparable_bytes_view)) {
+        case NEXT_COMPONENT:
+            decode_component(value_type, comparable_bytes_view, out);
+            break;
+        case NEXT_COMPONENT_EMPTY:
+            decode_empty_component(out);
+            break;
+        default:
             throw_with_backtrace<marshal_exception>("decode_map - unexpected component marker in map");
         }
-        decode_component(value_type, comparable_bytes_view, out);
         map_size++;
     }
     write_be(map_size_ptr, static_cast<int32_t>(map_size));
@@ -1395,6 +1442,82 @@ static bytes_view bytespan_to_bytesview(std::span<const std::byte> s) {
     return {reinterpret_cast<const bytes::value_type*>(s.data()), s.size()};
 }
 
+// Tells whether a zero-sized value is an ordinary value of `type`, with an ordinary
+// byte-comparable encoding.
+//
+// For most types it isn't: a zero-sized value of e.g. `int` is an "empty" value,
+// a legacy relic which carries no value of the type at all, and which therefore has
+// to be encoded specially by comparable_bytes_from_compound().
+//
+// But for the variable-length types which are byte-comparable on their own (blob,
+// text, ascii, inet, duration), a zero-sized value is just the shortest ordinary
+// value, and it's encoded like any other one: an escaped (i.e. empty) byte sequence
+// followed by its terminator. Tuples (and UDTs) are the same, for the reason given
+// on their overload below.
+//
+// This mirrors Cassandra, where the caller of AbstractType.asComparableBytes() has to
+// deal with the "empty" values -- exactly the ones for which it returns null.
+// Tuples are the one type where deviate from Cassandra.
+struct has_encoding_for_zero_sized_value_visitor {
+    // Fixed-size types: a zero-sized value is an "empty" value, not an ordinary one.
+    bool operator()(const boolean_type_impl&) { return false; }
+    bool operator()(const byte_type_impl&) { return false; }
+    bool operator()(const short_type_impl&) { return false; }
+    bool operator()(const int32_type_impl&) { return false; }
+    bool operator()(const long_type_impl&) { return false; }
+    bool operator()(const float_type_impl&) { return false; }
+    bool operator()(const double_type_impl&) { return false; }
+    bool operator()(const simple_date_type_impl&) { return false; }
+    bool operator()(const time_type_impl&) { return false; }
+    bool operator()(const timestamp_type_impl&) { return false; }
+    bool operator()(const date_type_impl&) { return false; }
+    bool operator()(const uuid_type_impl&) { return false; }
+    bool operator()(const timeuuid_type_impl&) { return false; }
+
+    // Variable-length, but a zero-sized value isn't a valid value of the type.
+    bool operator()(const varint_type_impl&) { return false; }
+    bool operator()(const decimal_type_impl&) { return false; }
+
+    // Collections: a zero-sized value is an empty collection, which Cassandra
+    // and we alike treat as an "empty" value rather than an ordinary one.
+    bool operator()(const list_type_impl&) { return false; }
+    bool operator()(const set_type_impl&) { return false; }
+    bool operator()(const map_type_impl&) { return false; }
+    bool operator()(const vector_type_impl&) { return false; }
+
+    // Not encodable at all; the encoder errors out on them before we get here.
+    bool operator()(const counter_type_impl&) { return false; }
+    // empty_type has no values other than the zero-sized one, and no encoding
+    // of its own; it's handled as an "empty" value.
+    // (It also can't appear in keys so it doesn't matter).
+    bool operator()(const empty_type_impl&) { return false; }
+
+    // Variable-length types where the encoding handles a zero-length value
+    // uniformly with other values.
+    bool operator()(const bytes_type_impl&) { return true; }
+    bool operator()(const ascii_type_impl&) { return true; }
+    bool operator()(const utf8_type_impl&) { return true; }
+    bool operator()(const duration_type_impl&) { return true; }
+    bool operator()(const inet_addr_type_impl&) { return true; }
+    // Tuples can be truncated, i.e. have any number of trailing nulls.
+    // In Scylla, a zero-byte tuple compares equal to a zero-element (i.e. null-filled) tuple.
+    // Therefore, in the byte-comparable encoding, we encode both cases as a
+    // zero-element sequence: 0x403838.
+    //
+    // This deviates from Cassandra, where a zero-byte tuple compares before a zero-element tuple,
+    // and is therefore encoded as 0x38.
+    bool operator()(const tuple_type_impl&) { return true; }
+    bool operator()(const user_type_impl&) { return true; }
+
+    bool operator()(const reversed_type_impl& type) {
+        return visit(*type.underlying_type(), *this);
+    }
+};
+
+static bool has_encoding_for_zero_sized_value(const abstract_type& type) {
+    return visit(type, has_encoding_for_zero_sized_value_visitor{});
+}
+
 template <allow_prefixes AllowPrefixes>
 comparable_bytes comparable_bytes_from_compound(const compound_type<AllowPrefixes>& p, managed_bytes_view representation, std::byte terminator) {
     bytes_ostream out;
@@ -1405,10 +1528,33 @@ comparable_bytes comparable_bytes_from_compound(const compound_type<AllowPrefixe
     while (c_it != c_end) {
         SCYLLA_ASSERT(t_it != t_end);
 
-        constexpr std::byte col_separator = std::byte(0x40);
-        out.write(bytespan_to_bytesview(object_representation(col_separator)));
+        const abstract_type& type = **t_it;
         auto mbv = *c_it;
-        to_comparable_bytes(**t_it, mbv, out);
+        if (mbv.empty() && !has_encoding_for_zero_sized_value(type)) {
+            // An "empty" value: a zero-sized value of a type which normally has
+            // a fixed size (int, bigint, timeuuid, ...).
+            // This is legal even in clustering keys.
+            // "Empty" compares before all other values.
+            // (Except null, but a null clustering column isn't even representable here).
+            //
+            // Empty values get their own separator and no value bytes at all, which is
+            // what makes them sort before every non-empty value of the same
+            // component (0x3F < 0x40) while still sorting after a sequence which
+            // ends before this component (0x38 < 0x3F).
+            //
+            // For a reversed type the empty value must instead compare greater
+            // than all values, so it uses a separator greater than the regular
+            // one (0x41 > 0x40). Note that the value bytes of a reversed type
+            // are bit-flipped, but the separator is not.
+            constexpr std::byte empty_separator = std::byte(0x3f);
+            constexpr std::byte reversed_empty_separator = std::byte(0x41);
+            const auto separator = type.is_reversed() ? reversed_empty_separator : empty_separator;
+            out.write(bytespan_to_bytesview(object_representation(separator)));
+        } else {
+            constexpr std::byte col_separator = std::byte(0x40);
+            out.write(bytespan_to_bytesview(object_representation(col_separator)));
+            to_comparable_bytes(type, mbv, out);
+        }
         ++c_it;
         ++t_it;
     }
