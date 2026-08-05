@@ -84,6 +84,7 @@ public:
         utils::updateable_value<float> max_shares = utils::updateable_value<float>(0);
         utils::updateable_value<uint32_t> throughput_mb_per_sec = utils::updateable_value<uint32_t>(0);
         std::chrono::seconds flush_all_tables_before_major = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(1));
+        utils::updateable_value<uint32_t> scrub_period = utils::updateable_value<uint32_t>(0);
     };
 
 public:
