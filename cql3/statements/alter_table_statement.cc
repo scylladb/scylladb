@@ -486,7 +486,7 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
                 auto new_where = util::rename_columns_in_where_clause(
                         view->view_info()->where_clause(),
                         view_renames,
-                        cql3::dialect{});
+                        cql3::internal_dialect());
                 builder.with_view_info(new_base_schema, view->view_info()->include_all_columns(), std::move(new_where));
                 view_updates.push_back(view_ptr(builder.build()));
             }
