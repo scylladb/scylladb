@@ -388,6 +388,10 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
     return set("done", true);
 }
 
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::percent_complete(uint32_t pc) {
+    return set("percent_complete", pc);
+}
+
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_truncate_table_data(const table_id& table_id) {
     apply_atomic("truncate_table_id", table_id.uuid());
     return *this;
