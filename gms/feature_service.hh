@@ -113,6 +113,11 @@ public:
     gms::feature truncate_as_topology_operation { *this, "TRUNCATE_AS_TOPOLOGY_OPERATION"sv };
     gms::feature snapshot_as_topology_operation { *this, "SNAPSHOT_AS_TOPOLOGY_OPERATION"sv };
     gms::feature secondary_indexes_on_static_columns { *this, "SECONDARY_INDEXES_ON_STATIC_COLUMNS"sv };
+    // When enabled cluster-wide (i.e. every node is upgraded), a query restricting
+    // several equality-indexed columns may intersect their posting lists and drive
+    // the scan with a cost-chosen index. The chosen plan is pinned in the paging
+    // state so every coordinator continues a paged query identically (CUSTOMER-303).
+    gms::feature secondary_index_intersection { *this, "SECONDARY_INDEX_INTERSECTION"sv };
     gms::feature tablets { *this, "TABLETS"sv };
     gms::feature table_digest_insensitive_to_expiry { *this, "TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"sv };
     gms::feature supports_consistent_topology_changes { *this, "SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES"sv };

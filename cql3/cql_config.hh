@@ -33,6 +33,7 @@ struct cql_config {
     utils::updateable_value<uint32_t> batch_size_fail_threshold_in_kb;
     utils::updateable_value<bool> restrict_future_timestamp;
     utils::updateable_value<bool> enable_create_table_with_compact_storage;
+    utils::updateable_value<uint32_t> secondary_index_intersection_skip_max_rows;
 
     explicit cql_config(const db::config& cfg)
         : restrictions(cfg)
@@ -46,6 +47,7 @@ struct cql_config {
         , batch_size_fail_threshold_in_kb(cfg.batch_size_fail_threshold_in_kb)
         , restrict_future_timestamp(cfg.restrict_future_timestamp)
         , enable_create_table_with_compact_storage(cfg.enable_create_table_with_compact_storage)
+        , secondary_index_intersection_skip_max_rows(cfg.secondary_index_intersection_skip_max_rows)
     {}
     struct default_tag{};
     cql_config(default_tag)
@@ -60,6 +62,7 @@ struct cql_config {
         , batch_size_fail_threshold_in_kb(1024)
         , restrict_future_timestamp(true)
         , enable_create_table_with_compact_storage(false)
+        , secondary_index_intersection_skip_max_rows(100)
     {}
 };
 
