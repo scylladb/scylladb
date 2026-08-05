@@ -12,6 +12,7 @@
 #include "utils/log.hh"
 #include "message/messaging_service.hh"
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/core/with_scheduling_group.hh>
 #include "streaming/stream_session.hh"
 #include "streaming/prepare_message.hh"
 #include "streaming/stream_result_future.hh"
@@ -49,6 +50,7 @@ static sstables::offstrategy is_offstrategy_supported(streaming::stream_reason r
         streaming::stream_reason::decommission,
         streaming::stream_reason::repair,
         streaming::stream_reason::rebuild,
+        streaming::stream_reason::restore,
     };
     return sstables::offstrategy(operations_supported.contains(reason));
 }
@@ -91,122 +93,87 @@ stream_manager::make_streaming_consumer(uint64_t estimated_partitions, stream_re
     return streaming::make_streaming_consumer("streaming", _db, _view_builder, _view_building_worker, estimated_partitions, reason, is_offstrategy_supported(reason), topo_guard);
 }
 
-void stream_manager::init_messaging_service_handler(abort_source& as) {
-    auto& ms = _ms.local();
+future<rpc::sink<int>>
+stream_manager::handle_stream_mutation_fragments(streaming::plan_id plan_id, table_schema_version schema_id, table_id cf_id, uint64_t estimated_partitions,
+        locator::host_id from, uint32_t cpu_id, locator::host_id src, stream_reason reason, service::frozen_topology_guard topo_guard,
+        rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source, abort_source& as) {
+    return _mm.local().get_schema_for_write(schema_id, src, cpu_id, _ms.local(), as).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, &as] (schema_ptr s) mutable {
+        auto permit = _db.local().get_reader_concurrency_semaphore().make_tracking_only_permit(s, "stream-session", db::no_timeout, {});
+        struct stream_mutation_fragments_cmd_status {
+            bool got_cmd = false;
+            bool got_end_of_stream = false;
+        };
+        auto cmd_status = make_lw_shared<stream_mutation_fragments_cmd_status>();
+        auto offstrategy_update = make_lw_shared<offstrategy_trigger>(_db, cf_id, plan_id);
+        auto guard = service::topology_guard(topo_guard);
 
-    ser::streaming_rpc_verbs::register_prepare_message(&ms, [this] (const rpc::client_info& cinfo, prepare_message msg, streaming::plan_id plan_id, sstring description, rpc::optional<stream_reason> reason_opt, rpc::optional<service::session_id> session) {
-        const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
-        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
-        auto dst_cpu_id = this_shard_id();
-        auto reason = reason_opt ? *reason_opt : stream_reason::unspecified;
-        auto topo_guard = service::frozen_topology_guard(session.value_or(service::default_session_id));
-        return container().invoke_on(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, reason, topo_guard] (auto& sm) mutable {
-            auto sr = stream_result_future::init_receiving_side(sm, plan_id, description, from);
-            auto session = sm.get_session(plan_id, from, "PREPARE_MESSAGE");
-            session->init(sr);
-            session->dst_cpu_id = src_cpu_id;
-            session->set_reason(reason);
-            session->set_topo_guard(topo_guard);
-            return session->prepare(std::move(msg.requests), std::move(msg.summaries));
-        });
-    });
-    ser::streaming_rpc_verbs::register_prepare_done_message(&ms, [this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, unsigned dst_cpu_id) {
-        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
-        return container().invoke_on(dst_cpu_id, [plan_id, from] (auto& sm) mutable {
-            auto session = sm.get_session(plan_id, from, "PREPARE_DONE_MESSAGE");
-            session->follower_start_sent();
-            return make_ready_future<>();
-        });
-    });
-    ms.register_stream_mutation_fragments([this, &as] (const rpc::client_info& cinfo, streaming::plan_id plan_id, table_schema_version schema_id, table_id cf_id, uint64_t estimated_partitions,
-            rpc::optional<stream_reason> reason_opt,
-            rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source,
-            rpc::optional<service::session_id> session) {
-        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
-        auto cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        // Will log a message when streaming is done. Used to synchronize tests.
+        lw_shared_ptr<std::any> log_done;
+        if (utils::get_local_injector().is_enabled("stream_mutation_fragments")) {
+            log_done = make_lw_shared<std::any>(seastar::make_shared(seastar::defer([] noexcept {
+                sslog.info("stream_mutation_fragments: done");
+            })));
+        }
 
-        auto src = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
-
-        auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
-        service::frozen_topology_guard topo_guard = session.value_or(service::default_session_id);
-        sslog.trace("Got stream_mutation_fragments from {} reason {}, session {}", from, int(reason), session);
-        return _mm.local().get_schema_for_write(schema_id, src, cpu_id, _ms.local(), as).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, &as] (schema_ptr s) mutable {
-            auto permit = _db.local().get_reader_concurrency_semaphore().make_tracking_only_permit(s, "stream-session", db::no_timeout, {});
-            struct stream_mutation_fragments_cmd_status {
-                bool got_cmd = false;
-                bool got_end_of_stream = false;
-            };
-            auto cmd_status = make_lw_shared<stream_mutation_fragments_cmd_status>();
-            auto offstrategy_update = make_lw_shared<offstrategy_trigger>(_db, cf_id, plan_id);
-            auto guard = service::topology_guard(topo_guard);
-
-            // Will log a message when streaming is done. Used to synchronize tests.
-            lw_shared_ptr<std::any> log_done;
-            if (utils::get_local_injector().is_enabled("stream_mutation_fragments")) {
-                log_done = make_lw_shared<std::any>(seastar::make_shared(seastar::defer([] noexcept {
-                    sslog.info("stream_mutation_fragments: done");
-                })));
-            }
-
-            auto get_next_mutation_fragment = [guard = std::move(guard), &as, &sm = container(), &db = _db, source, plan_id, from, s, cmd_status, offstrategy_update, permit] () mutable {
-                guard.check();
-                return source().then([&sm, &db, &guard, &as, plan_id, from, s, cmd_status, offstrategy_update, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
-                    if (opt) {
-                        auto cmd = std::get<1>(*opt);
-                        if (cmd) {
-                            cmd_status->got_cmd = true;
-                            switch (*cmd) {
-                            case stream_mutation_fragments_cmd::mutation_fragment_data:
-                                break;
-                            case stream_mutation_fragments_cmd::error:
-                                return make_exception_future<mutation_fragment_opt>(std::runtime_error("Sender failed"));
-                            case stream_mutation_fragments_cmd::abort:
-                                return make_exception_future<mutation_fragment_opt>(rpc::canceled_error());
-                            case stream_mutation_fragments_cmd::end_of_stream:
-                                cmd_status->got_end_of_stream = true;
-                                return make_ready_future<mutation_fragment_opt>();
-                            default:
-                                return make_exception_future<mutation_fragment_opt>(std::runtime_error("Sender sent wrong cmd"));
-                            }
+        auto get_next_mutation_fragment = [guard = std::move(guard), &as, &sm = container(), &db = _db, source, plan_id, from, s, cmd_status, offstrategy_update, permit] () mutable {
+            guard.check();
+            return source().then([&sm, &db, &guard, &as, plan_id, from, s, cmd_status, offstrategy_update, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
+                if (opt) {
+                    auto cmd = std::get<1>(*opt);
+                    if (cmd) {
+                        cmd_status->got_cmd = true;
+                        switch (*cmd) {
+                        case stream_mutation_fragments_cmd::mutation_fragment_data:
+                            break;
+                        case stream_mutation_fragments_cmd::error:
+                            return make_exception_future<mutation_fragment_opt>(std::runtime_error("Sender failed"));
+                        case stream_mutation_fragments_cmd::abort:
+                            return make_exception_future<mutation_fragment_opt>(rpc::canceled_error());
+                        case stream_mutation_fragments_cmd::end_of_stream:
+                            cmd_status->got_end_of_stream = true;
+                            return make_ready_future<mutation_fragment_opt>();
+                        default:
+                            return make_exception_future<mutation_fragment_opt>(std::runtime_error("Sender sent wrong cmd"));
                         }
-                        frozen_mutation_fragment& fmf = std::get<0>(*opt);
-                        auto sz = fmf.representation().size();
-                        auto mf = fmf.unfreeze(*s, permit);
-                        sm.local().update_progress(plan_id, from, progress_info::direction::IN, sz);
-                        offstrategy_update->update();
-
-                        return utils::get_local_injector().inject("stream_mutation_fragments", [&guard, &as] (auto& handler) -> future<> {
-                            auto& guard_ = guard;
-                            auto& as_ = as;
-                            sslog.info("stream_mutation_fragments: waiting");
-                            while (!handler.poll_for_message()) {
-                                guard_.check();
-                                co_await sleep_abortable(std::chrono::milliseconds(5), as_);
-                            }
-                            sslog.info("stream_mutation_fragments: released");
-                        }).then([mf = std::move(mf), &db] () mutable {
-                            if (utils::get_local_injector().is_enabled("stream_mutation_fragments_rx_error")) {
-                                sslog.info("stream_mutation_fragments_rx_error: throw");
-                                throw std::runtime_error("stream_mutation_fragments_rx_error");
-                            }
-                            if (db.local().is_in_critical_disk_utilization_mode()) {
-                                throw replica::critical_disk_utilization_exception("rejected streamed mutation fragment");
-                            }
-                            return mutation_fragment_opt(std::move(mf));
-                        });
-                    } else {
-                        // If the sender has sent stream_mutation_fragments_cmd it means it is
-                        // a node that understands the new protocol. It must send end_of_stream
-                        // before close the stream.
-                        if (cmd_status->got_cmd && !cmd_status->got_end_of_stream) {
-                            return make_exception_future<mutation_fragment_opt>(std::runtime_error("Sender did not sent end_of_stream"));
-                        }
-                        return make_ready_future<mutation_fragment_opt>();
                     }
-                });
-            };
-          auto sink = _ms.local().make_sink_for_stream_mutation_fragments(source);
-          try {
+                    frozen_mutation_fragment& fmf = std::get<0>(*opt);
+                    auto sz = fmf.representation().size();
+                    auto mf = fmf.unfreeze(*s, permit);
+                    sm.local().update_progress(plan_id, from, progress_info::direction::IN, sz);
+                    offstrategy_update->update();
+
+                    return utils::get_local_injector().inject("stream_mutation_fragments", [&guard, &as] (auto& handler) -> future<> {
+                        auto& guard_ = guard;
+                        auto& as_ = as;
+                        sslog.info("stream_mutation_fragments: waiting");
+                        while (!handler.poll_for_message()) {
+                            guard_.check();
+                            co_await sleep_abortable(std::chrono::milliseconds(5), as_);
+                        }
+                        sslog.info("stream_mutation_fragments: released");
+                    }).then([mf = std::move(mf), &db] () mutable {
+                        if (utils::get_local_injector().is_enabled("stream_mutation_fragments_rx_error")) {
+                            sslog.info("stream_mutation_fragments_rx_error: throw");
+                            throw std::runtime_error("stream_mutation_fragments_rx_error");
+                        }
+                        if (db.local().is_in_critical_disk_utilization_mode()) {
+                            throw replica::critical_disk_utilization_exception("rejected streamed mutation fragment");
+                        }
+                        return mutation_fragment_opt(std::move(mf));
+                    });
+                } else {
+                    // If the sender has sent stream_mutation_fragments_cmd it means it is
+                    // a node that understands the new protocol. It must send end_of_stream
+                    // before close the stream.
+                    if (cmd_status->got_cmd && !cmd_status->got_end_of_stream) {
+                        return make_exception_future<mutation_fragment_opt>(std::runtime_error("Sender did not sent end_of_stream"));
+                    }
+                    return make_ready_future<mutation_fragment_opt>();
+                }
+            });
+        };
+        auto sink = _ms.local().make_sink_for_stream_mutation_fragments(source);
+        try {
             // Make sure the table with cf_id is still present at this point.
             // Close the sink in case the table is dropped.
             auto& table = _db.local().find_column_family(cf_id);
@@ -278,13 +245,61 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     co_await sink.close();
                 });
             });
-          } catch (...) {
+        } catch (...) {
             return sink.close().then([sink, eptr = std::current_exception()] () -> future<rpc::sink<int>> {
                 return make_exception_future<rpc::sink<int>>(eptr);
             });
-          }
-            return make_ready_future<rpc::sink<int>>(sink);
-      });
+        }
+        return make_ready_future<rpc::sink<int>>(sink);
+    });
+}
+
+void stream_manager::init_messaging_service_handler(abort_source& as) {
+    auto& ms = _ms.local();
+
+    ser::streaming_rpc_verbs::register_prepare_message(&ms, [this] (const rpc::client_info& cinfo, prepare_message msg, streaming::plan_id plan_id, sstring description, rpc::optional<stream_reason> reason_opt, rpc::optional<service::session_id> session) {
+        const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto dst_cpu_id = this_shard_id();
+        auto reason = reason_opt ? *reason_opt : stream_reason::unspecified;
+        auto topo_guard = service::frozen_topology_guard(session.value_or(service::default_session_id));
+        return container().invoke_on(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, reason, topo_guard] (auto& sm) mutable {
+            auto sg = reason == stream_reason::restore ? sm.get_backup_scheduling_group() : current_scheduling_group();
+            return with_scheduling_group(sg, [&sm, msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, reason, topo_guard] () mutable {
+                auto sr = stream_result_future::init_receiving_side(sm, plan_id, description, from);
+                auto session = sm.get_session(plan_id, from, "PREPARE_MESSAGE");
+                session->init(sr);
+                session->dst_cpu_id = src_cpu_id;
+                session->set_reason(reason);
+                session->set_topo_guard(topo_guard);
+                return session->prepare(std::move(msg.requests), std::move(msg.summaries));
+            });
+        });
+    });
+    ser::streaming_rpc_verbs::register_prepare_done_message(&ms, [this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, unsigned dst_cpu_id) {
+        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        return container().invoke_on(dst_cpu_id, [plan_id, from] (auto& sm) mutable {
+            auto session = sm.get_session(plan_id, from, "PREPARE_DONE_MESSAGE");
+            session->follower_start_sent();
+            return make_ready_future<>();
+        });
+    });
+    ms.register_stream_mutation_fragments([this, &as] (const rpc::client_info& cinfo, streaming::plan_id plan_id, table_schema_version schema_id, table_id cf_id, uint64_t estimated_partitions,
+            rpc::optional<stream_reason> reason_opt,
+            rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source,
+            rpc::optional<service::session_id> session) {
+        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+
+        auto src = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+
+        auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
+        service::frozen_topology_guard topo_guard = session.value_or(service::default_session_id);
+        sslog.trace("Got stream_mutation_fragments from {} reason {}, session {}", from, int(reason), session);
+        auto sg = reason == stream_reason::restore ? get_backup_scheduling_group() : current_scheduling_group();
+        return with_scheduling_group(sg, [this, plan_id, schema_id, cf_id, estimated_partitions, from, cpu_id, src, reason, topo_guard, source, &as] () mutable {
+            return handle_stream_mutation_fragments(plan_id, schema_id, cf_id, estimated_partitions, from, cpu_id, src, reason, topo_guard, source, as);
+        });
     });
     ser::streaming_rpc_verbs::register_stream_mutation_done(&ms, [this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");

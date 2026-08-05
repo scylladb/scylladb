@@ -101,6 +101,7 @@ future<scheduling_groups> get_scheduling_groups() {
         _scheduling_groups->memtable_scheduling_group = co_await create_scheduling_group("memtable", 1000);
         _scheduling_groups->memtable_to_cache_scheduling_group = co_await create_scheduling_group("memtable_to_cache", 200);
         _scheduling_groups->gossip_scheduling_group = co_await create_scheduling_group("gossip", 1000);
+        _scheduling_groups->backup_scheduling_group = co_await create_scheduling_group("backup", 200);
     }
     co_return *_scheduling_groups;
 }
@@ -598,6 +599,7 @@ private:
             auto scheduling_groups = get_scheduling_groups().get();
             debug::streaming_scheduling_group = scheduling_groups.streaming_scheduling_group;
             debug::gossip_scheduling_group = scheduling_groups.streaming_scheduling_group;
+            debug::backup_scheduling_group = scheduling_groups.backup_scheduling_group;
 
             auto notify_set = init_configurables
                 ? configurable::init_all(*cfg, init_configurables->extensions, service_set(
@@ -670,6 +672,7 @@ private:
             dbcfg.memtable_scheduling_group = scheduling_groups.memtable_scheduling_group;
             dbcfg.memtable_to_cache_scheduling_group = scheduling_groups.memtable_to_cache_scheduling_group;
             dbcfg.gossip_scheduling_group = scheduling_groups.gossip_scheduling_group;
+            dbcfg.backup_scheduling_group = scheduling_groups.backup_scheduling_group;
 
             auto get_tm_cfg = sharded_parameter([&] {
                 return tasks::task_manager::config {
@@ -987,7 +990,7 @@ private:
                 _view_builder.stop().get();
             });
 
-            _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_view_building_worker), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
+            _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_view_building_worker), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group, scheduling_groups.backup_scheduling_group).get();
             auto stop_streaming = defer_verbose_shutdown("stream manager", [this] { _stream_manager.stop().get(); });
 
             _auth_cache.start(std::ref(_qp), std::ref(abort_sources)).get();
