@@ -1639,6 +1639,19 @@ std::optional<uint32_t> sstable::get_component_digest(component_type c) const {
     return it->second;
 }
 
+std::optional<db_clock::time_point> sstable::get_scrub_time() {
+    auto& metadata = _components->scylla_metadata;
+    return metadata ? metadata->get_scrub_time() : std::nullopt;
+}
+
+void sstable::set_scrub_time(db_clock::time_point timestamp) {
+    auto& metadata = _components->scylla_metadata;
+    if (metadata) {
+        metadata->set_scrub_time(timestamp);
+    }
+}
+
+
 int64_t sstable::update_repaired_at(int64_t repaired_at) {
     const stats_metadata& old_stats = get_stats_metadata();
     auto old_repaired_at = old_stats.repaired_at;
