@@ -84,6 +84,7 @@ public:
         utils::updateable_value<float> max_shares = utils::updateable_value<float>(0);
         utils::updateable_value<uint32_t> throughput_mb_per_sec = utils::updateable_value<uint32_t>(0);
         std::chrono::seconds flush_all_tables_before_major = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(1));
+        utils::updateable_value<uint32_t> scrub_period;
     };
 
 public:
@@ -156,6 +157,8 @@ private:
 
     config _cfg;
     timer<lowres_clock> _compaction_submission_timer;
+
+    std::optional<utils::observer<std::optional<std::chrono::seconds>>> _scrub_period_observer;
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
@@ -356,6 +359,9 @@ public:
     // given sstable, e.g. after node loses part of its token range because
     // of a newly added node.
     future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info);
+
+    void set_scrub_period(std::chrono::seconds period);
+    void remove_scrub_period();
 private:
     future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info);
 

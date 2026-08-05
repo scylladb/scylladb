@@ -673,6 +673,7 @@ public:
     named_value<float> compaction_max_shares;
     named_value<bool> compaction_enforce_min_threshold;
     named_value<uint32_t> compaction_flush_all_tables_before_major_seconds;
+    named_value<uint32_t> compaction_scrub_period;
 
     named_value<uint32_t> maintenance_io_throughput_mb_per_sec;
     named_value<uint32_t> backup_io_throughput_mb_per_sec;
