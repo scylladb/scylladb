@@ -195,9 +195,13 @@ def test_create_index_if_not_exists2(cql, test_keyspace, cassandra_bug):
         with pytest.raises(InvalidRequest, match="already exists"):
             cql.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table}(v2)")
 
-# Verify that oversized index names are cleanly rejected  as InvalidRequest
+# Verify that oversized index names are cleanly rejected as InvalidRequest.
+# Cassandra doesn't validate the name's length, so the CREATE INDEX request
+# fails on the filesystem name length limit with an internal server error
+# instead of a clean InvalidRequest. Hence this test is marked
+# "cassandra_bug" - passes on Scylla and xfails on Cassandra.
 # Reproduces issue #20755
-def test_create_index_oversized_name(cql, test_keyspace):
+def test_create_index_oversized_name(cql, test_keyspace, cassandra_bug):
     with new_test_table(cql, test_keyspace, 'p int primary key, v int') as table:
         index_name = 'x'*500
         with pytest.raises((InvalidRequest, ConfigurationException)):
