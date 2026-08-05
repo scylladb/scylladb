@@ -2104,12 +2104,17 @@ compaction_manager::rewrite_sstables_component(compaction_group_view& t,
 
 class validate_sstables_compaction_task_executor : public sstables_task_executor {
     compaction_manager::quarantine_invalid_sstables _quarantine_sstables;
+    compacting_sstable_registration _compacting;
+    compaction_manager::may_update_scrub_time _may_update_scrub_time;
 public:
     validate_sstables_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping,
             compaction_group_view* t, tasks::task_id parent_id, std::vector<sstables::shared_sstable> sstables,
-            compaction_manager::quarantine_invalid_sstables quarantine_sstables)
+            compacting_sstable_registration compacting, compaction_manager::quarantine_invalid_sstables quarantine_sstables,
+            compaction_manager::may_update_scrub_time may_update_scrub_time)
         : sstables_task_executor(mgr, do_throw_if_stopping, t, compaction_type::Scrub, "Scrub compaction in validate mode", std::move(sstables), parent_id)
         , _quarantine_sstables(quarantine_sstables)
+        , _compacting(std::move(compacting))
+        , _may_update_scrub_time(may_update_scrub_time)
     {}
 
 protected:
@@ -2138,8 +2143,12 @@ private:
                     sst->get_sstable_level(),
                     compaction_descriptor::default_max_sstable_bytes,
                     sst->run_identifier(),
-                    compaction_type_options::make_scrub(compaction_type_options::scrub::mode::validate, _quarantine_sstables));
-            co_return co_await ::compaction::compact_sstables(std::move(desc), _compaction_data, *_compacting_table, _progress_monitor);
+                    compaction_type_options::make_scrub(compaction_type_options::scrub::mode::validate,
+                        _quarantine_sstables,
+                        compaction_type_options::scrub::drop_unfixable_sstables::no,
+                        _may_update_scrub_time));
+            auto on_replace = _compacting.update_on_sstable_replacement();
+            co_return co_await compact_sstables_and_update_history(std::move(desc), _compaction_data, on_replace);
         } catch (compaction_stopped_exception&) {
             // ignore, will be handled by can_proceed()
         } catch (storage_io_error& e) {
@@ -2168,7 +2177,8 @@ static future<std::vector<sstables::shared_sstable>> get_all_sstables(compaction
     co_return s;
 }
 
-future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sstable_scrub_validate_mode(compaction_group_view& t, tasks::task_info info, quarantine_invalid_sstables quarantine_sstables) {
+future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sstable_scrub_validate_mode(compaction_group_view& t, tasks::task_info info, quarantine_invalid_sstables quarantine_sstables,
+    compaction_type_options::scrub::may_update_scrub_time may_update_timestamp) {
     auto gh = start_compaction(t);
     if (!gh) {
         co_return compaction_stats_opt{};
@@ -2187,7 +2197,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
         co_return compaction_stats_opt{};
     }
 
-    co_return co_await perform_compaction<validate_sstables_compaction_task_executor>(throw_if_stopping::no, info, &t, info.id, std::move(all_sstables), quarantine_sstables);
+    co_return co_await perform_compaction<validate_sstables_compaction_task_executor>(throw_if_stopping::no, info, &t, info.id, std::move(all_sstables), std::move(compacting), quarantine_sstables, may_update_timestamp);
 }
 
 class cleanup_sstables_compaction_task_executor : public compaction_task_executor, public cleanup_compaction_task_impl {
@@ -2552,7 +2562,7 @@ future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> c
 future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sstable_scrub(compaction_group_view& t, compaction_type_options::scrub opts, tasks::task_info info) {
     auto scrub_mode = opts.operation_mode;
     if (scrub_mode == compaction_type_options::scrub::mode::validate) {
-        co_return co_await perform_sstable_scrub_validate_mode(t, info, opts.quarantine_sstables);
+        co_return co_await perform_sstable_scrub_validate_mode(t, info, opts.quarantine_sstables, opts.may_update_timestamp);
     }
     owned_ranges_ptr owned_ranges_ptr = {};
     sstring option_desc = fmt::format("mode: {};\nquarantine_mode: {}\n", opts.operation_mode, opts.quarantine_operation_mode);
