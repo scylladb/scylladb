@@ -78,6 +78,7 @@
 #include "idl/sstables_loader.dist.hh"
 
 #include "service/topology_coordinator.hh"
+#include "tasks/task_manager.hh"
 
 #include <boost/range/join.hpp>
 #include <seastar/core/metrics_registration.hh>
@@ -2938,7 +2939,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 .build());
 
             try {
-                co_await update_topology_state(std::move(guard), std::move(updates), fmt::format("{}{} has completed", ::toupper(what[0]), what.substr(1)));
+                co_await update_topology_state(std::move(guard), std::move(updates), fmt::format("{}{} has completed", char(::toupper(what[0])), what.substr(1)));
                 break;
             } catch (group0_concurrent_modification&) {
             }
@@ -3067,6 +3068,68 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         );
     }
 
+    class topo_request_progress_sink : public tasks::progress_sink {
+        double _total = 0;
+        double _done = 0;
+        double _pub = 0;
+        topology_coordinator& _tc;
+        group0_guard& _guard;
+        utils::UUID _request_id;
+        std::string _what;
+        future<> _background = make_ready_future<>();
+    public:
+        topo_request_progress_sink(topology_coordinator& tc, group0_guard& g, utils::UUID id, std::string_view what)
+            : _tc(tc)
+            , _guard(g)
+            , _request_id(id)
+            , _what(what)
+        {}
+
+        future<> finalize() {
+            return std::exchange(_background, make_ready_future<>());
+        }
+
+        void set_total(double v) override {
+            _total = v;
+        };
+        void add_progress(double v) override {
+            if (_total == 0) {
+                return;
+            }
+            _done += v;
+            auto npcd = uint32_t(100 * _done / _total);
+
+            // avoid doing this too often or while we are still
+            // trying to write a previous update
+            if ((npcd - _pub) < 5 || !_background.available()) {
+                return;
+            }
+
+            // don't (can't) wait for the update until all 
+            // work is done.
+            _background = [this, npcd]() -> future<> {
+                auto n = npcd;
+                auto* me = this;
+                while (true) {
+                    if (!_guard) {
+                        _guard = co_await _tc.start_operation();
+                    }
+                    utils::chunked_vector<canonical_mutation> updates;
+                    updates.push_back(topology_request_tracking_mutation_builder(_request_id)
+                                        .percent_complete(n)
+                                        .build());
+
+                    try {
+                        co_await _tc.update_topology_state(std::move(_guard), std::move(updates), fmt::format("{}{} {} percent complete", char(::toupper(_what[0])), _what.substr(1), n));
+                        me->_pub = n;
+                        break;
+                    } catch (group0_concurrent_modification&) {
+                    }
+                }
+            }();
+        }
+    };
+
     future<> handle_backup_snapshot(group0_guard guard) {
         co_await handle_topology_ordered_op0(std::move(guard), [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry, group0_guard& guard) -> future<std::optional<sstring>> {
             std::optional<sstring> error;
@@ -3076,6 +3139,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             auto ids = *topology_requests_entry.snapshot_table_ids;
             auto locations = *topology_requests_entry.backup_locations;
             std::unordered_multimap<sstring, sstring> ks_tables;
+
+            topo_request_progress_sink ps(*this, guard, topology_requests_entry.id, "backup");
 
             try {
                 for (auto& id : *topology_requests_entry.snapshot_table_ids) {
@@ -3090,7 +3155,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 release_guard(std::move(guard));
 
                 const service::frozen_topology_guard frozen_guard { _topo_sm._topology.session };
-                tasks::progress_sink ps{}; // TODO: progress
+
                 co_await db::snapshot::run_global_backup(_sys_ks.query_processor()
                     , std::move(tag), std::move(ks_tables), std::move(locations), move_files
                     , [&](locator::host_id host, table_id tid, sstring tag, sstring endpoint, sstring bucket, sstring prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move) -> future<> {
@@ -3102,6 +3167,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 error = e.what();
             }
 
+            // make sure any progress updates are done before we
+            // signal done.
+            co_await ps.finalize();
             co_return error;
         }, "backup");
     }
@@ -3867,7 +3935,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 // Denotes the case when this path is already executed before and first topology state update was successful.
                 // So we can skip all steps and perform the second topology state update operation (which modifies node state to left)
                 // and remove node conditionally from group0.
-                if (auto [done, error] = co_await _sys_ks.get_topology_request_state(node.rs->request_id, false); done) {
+                if (auto [done, error, _] = co_await _sys_ks.get_topology_request_state(node.rs->request_id, false); done) {
                     co_await finish_left_token_ring_transition(node);
                     break;
                 }
