@@ -295,7 +295,9 @@ struct topology_state_machine {
     std::function<void()> on_tablet_split_ready;
 
     future<> await_not_busy();
-    future<sstring> wait_for_request_completion(db::system_keyspace& sys_ks, utils::UUID id, bool require_entry);
+
+    using completion_callback = std::function<void(uint32_t)>;
+    future<sstring> wait_for_request_completion(db::system_keyspace& sys_ks, utils::UUID id, bool require_entry, completion_callback = {});
 
     // Generates mutations that cancel a topology request which is active on the given node.
     // If no request is found, or it cannot be canceled at this stage, no mutations are generated.
@@ -353,6 +355,7 @@ struct fencing_token {
 struct topology_request_state {
     bool done;
     sstring error;
+    int32_t percent_complete;
 };
 
 struct node_validation_success {};
