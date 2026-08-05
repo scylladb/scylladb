@@ -9,6 +9,7 @@
 #include "utils/assert.hh"
 #include "sstables/sstables.hh"
 #include "size_tiered_compaction_strategy.hh"
+#include "incremental_compaction_strategy.hh"
 #include "cql3/statements/property_definitions.hh"
 
 namespace compaction {
@@ -22,10 +23,26 @@ static long validate_sstable_size(const std::map<sstring, sstring>& options) {
     return min_sstables_size;
 }
 
+static std::chrono::seconds validate_min_sstable_age(const std::map<sstring, sstring>& options) {
+    auto min_sstable_age = cql3::statements::property_definitions::to_long(size_tiered_compaction_strategy_options::MIN_SSTABLE_AGE_KEY,
+        compaction_strategy_impl::get_value(options, size_tiered_compaction_strategy_options::MIN_SSTABLE_AGE_KEY),
+        size_tiered_compaction_strategy_options::DEFAULT_MIN_SSTABLE_AGE.count());
+    if (min_sstable_age < 0) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be non negative", size_tiered_compaction_strategy_options::MIN_SSTABLE_AGE_KEY, min_sstable_age));
+    }
+    return std::chrono::seconds(min_sstable_age);
+}
+
 static long validate_sstable_size(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     auto min_sstables_size = validate_sstable_size(options);
     unchecked_options.erase(size_tiered_compaction_strategy_options::MIN_SSTABLE_SIZE_KEY);
     return min_sstables_size;
+}
+
+static std::chrono::seconds validate_min_sstable_age(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    auto min_sstable_age = validate_min_sstable_age(options);
+    unchecked_options.erase(size_tiered_compaction_strategy_options::MIN_SSTABLE_AGE_KEY);
+    return min_sstable_age;
 }
 
 static double validate_bucket_low(const std::map<sstring, sstring>& options) {
@@ -77,6 +94,7 @@ size_tiered_compaction_strategy_options::size_tiered_compaction_strategy_options
     using namespace cql3::statements;
 
     min_sstable_size = validate_sstable_size(options);
+    min_sstable_age = validate_min_sstable_age(options);
     bucket_low = validate_bucket_low(options);
     bucket_high = validate_bucket_high(options);
     cold_reads_to_omit = validate_cold_reads_to_omit(options);
@@ -84,6 +102,7 @@ size_tiered_compaction_strategy_options::size_tiered_compaction_strategy_options
 
 size_tiered_compaction_strategy_options::size_tiered_compaction_strategy_options() {
     min_sstable_size = DEFAULT_MIN_SSTABLE_SIZE;
+    min_sstable_age = DEFAULT_MIN_SSTABLE_AGE;
     bucket_low = DEFAULT_BUCKET_LOW;
     bucket_high = DEFAULT_BUCKET_HIGH;
     cold_reads_to_omit = DEFAULT_COLD_READS_TO_OMIT;
@@ -94,6 +113,7 @@ size_tiered_compaction_strategy_options::size_tiered_compaction_strategy_options
 // This helps making sure that only allowed options are being set.
 void size_tiered_compaction_strategy_options::validate(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     validate_sstable_size(options, unchecked_options);
+    validate_min_sstable_age(options, unchecked_options);
     auto bucket_low = validate_bucket_low(options, unchecked_options);
     auto bucket_high = validate_bucket_high(options, unchecked_options);
     if (bucket_high <= bucket_low) {
@@ -128,6 +148,10 @@ size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_
         return i.second < j.second;
     });
 
+    auto min_sstable_size_check = [&sstables, &options] (uint64_t size) {
+        return !tiny_sstables_written_recently(options.min_sstable_size, options.min_sstable_age, sstables) && size < options.min_sstable_size;
+    };
+
     using bucket_type = std::vector<sstables::shared_sstable>;
     std::vector<bucket_type> bucket_list;
     std::vector<double> bucket_average_size_list;
@@ -142,7 +166,7 @@ size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_
             auto& bucket_average_size = bucket_average_size_list.back();
 
             if ((size > (bucket_average_size * options.bucket_low) && size < (bucket_average_size * options.bucket_high)) ||
-                    (size < options.min_sstable_size && bucket_average_size < options.min_sstable_size)) {
+                    (min_sstable_size_check(size) && min_sstable_size_check(bucket_average_size))) {
                 auto& bucket = bucket_list.back();
                 auto total_size = bucket.size() * bucket_average_size;
                 auto new_average_size = (total_size + size) / (bucket.size() + 1);
@@ -152,7 +176,7 @@ size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_
                 // average might drift upwards.
                 // Don't let it drift too high, to a point where the smallest
                 // SSTable might fall out of range.
-                if (size < options.min_sstable_size || smallest_sstable_in_bucket > new_average_size * options.bucket_low) {
+                if (min_sstable_size_check(size) || smallest_sstable_in_bucket > new_average_size * options.bucket_low) {
                     bucket.push_back(pair.first);
                     bucket_average_size = new_average_size;
                     continue;

@@ -98,6 +98,13 @@ sstables::run_id sstable_run::run_identifier() const {
     return (_all.empty()) ? run_id() : (*_all.begin())->run_identifier();
 }
 
+db_clock::time_point sstable_run::data_file_write_time() const {
+    if (_all.empty()) {
+        return db_clock::time_point();
+    }
+    return std::ranges::max(_all | std::views::transform([](const shared_sstable& s) { return s->data_file_write_time(); }));
+}
+
 std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run) {
     os << "Run = {\n";
     if (run.all().empty()) {
