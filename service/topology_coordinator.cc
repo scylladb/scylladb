@@ -3883,7 +3883,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 // Denotes the case when this path is already executed before and first topology state update was successful.
                 // So we can skip all steps and perform the second topology state update operation (which modifies node state to left)
                 // and remove node conditionally from group0.
-                if (auto [done, error] = co_await _sys_ks.get_topology_request_state(node.rs->request_id, false); done) {
+                if (auto [done, error, _] = co_await _sys_ks.get_topology_request_state(node.rs->request_id, false); done) {
                     co_await finish_left_token_ring_transition(node);
                     break;
                 }
