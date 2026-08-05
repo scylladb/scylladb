@@ -65,8 +65,21 @@ template<std::integral T, std::size_t array_size>
 static std::array<T, array_size> read_fragmented_into_array(managed_bytes_view& view) {
     std::array<T, array_size> buffer;
     constexpr auto bytes_to_read = array_size * sizeof(T);
-    read_fragmented(view, bytes_to_read, reinterpret_cast<bytes::value_type*>(buffer.data()));
+    read_fragmented_checked(view, bytes_to_read, reinterpret_cast<bytes::value_type*>(buffer.data()));
     return buffer;
+}
+
+// Consumes exactly `n` bytes from `view` and writes them to `out` unchanged.
+// managed_bytes_view::prefix() doesn't check its argument.
+// It's the responsibility of the caller to make sure that it's smaller
+// than the view's size. Otherwise results are undefined.
+static void copy_bytes_checked(managed_bytes_view& view, size_t n, bytes_ostream& out) {
+    if (view.size_bytes() < n) {
+        throw_with_backtrace<marshal_exception>(
+            format("copy_bytes_checked - not enough bytes (expected {:d}, got {:d})", n, view.size_bytes()));
+    }
+    out.write(view.prefix(n));
+    view.remove_prefix(n);
 }
 
 // Write the given integer array to the bytes stream without changing its endianness.
@@ -306,6 +319,9 @@ uint64_t decode_varint_length(managed_bytes_view& src, int64_t sign_mask) {
 //    2^56-1        as FEFFFFFFFFFFFFFF
 //    2^56          as FF000100000000000000
 static void encode_varint_type(managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    if (serialized_bytes_view.empty()) {
+        throw_with_backtrace<marshal_exception>("encode_varint_type - empty varint");
+    }
     // Peek first byte
     uint8_t first_byte = static_cast<uint8_t>(serialized_bytes_view[0]);
     const int64_t sign_mask = first_byte < 0x80 ? 0 : -1;
@@ -540,6 +556,13 @@ std::size_t count_digits(const boost::multiprecision::cpp_int& value) {
 //                    00
 static void encode_decimal_type(managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
     const int32_t scale = read_simple<int32_t>(serialized_bytes_view);
+    // Without this check, if the input is truncated for whatever reason,
+    // deserialize_value() below would return an "empty" varint,
+    // and value_cast would throw empty_value_exception out of the
+    // encoder instead of marshal_exception, which is the customary exception for malformed input.
+    if (serialized_bytes_view.empty()) {
+        throw_with_backtrace<marshal_exception>("encode_decimal_type - missing unscaled value");
+    }
     const boost::multiprecision::cpp_int unscaled_value =
             value_cast<utils::multiprecision_int>(varint_type->deserialize_value(serialized_bytes_view));
     if (unscaled_value.is_zero()) {
@@ -1215,8 +1238,7 @@ struct to_comparable_bytes_visitor {
     // They are both fixed length unsigned integers and are already byte comparable in their serialized form
     template <std::integral T>
     void operator()(const simple_type_impl<T>&) {
-        out.write(serialized_bytes_view.prefix(sizeof(T)));
-        serialized_bytes_view.remove_prefix(sizeof(T));
+        copy_bytes_checked(serialized_bytes_view, sizeof(T), out);
     }
 
     // timestamp_type is encoded as fixed length signed integer
@@ -1279,8 +1301,7 @@ struct to_comparable_bytes_visitor {
     void operator()(const empty_type_impl&) {}
 
     void operator()(const date_type_impl&) {
-        out.write(serialized_bytes_view.prefix(sizeof(db_clock::rep)));
-        serialized_bytes_view.remove_prefix(sizeof(db_clock::rep));
+        copy_bytes_checked(serialized_bytes_view, sizeof(db_clock::rep), out);
     }
 
     void operator()(const counter_type_impl&) {
