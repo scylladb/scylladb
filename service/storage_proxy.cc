@@ -7731,13 +7731,25 @@ abortable_topology_task::abortable_topology_task(storage_proxy& sp, utils::UUID 
 abortable_topology_task::abortable_topology_task(abortable_topology_task&& t) noexcept = default;
 abortable_topology_task& abortable_topology_task::operator=(abortable_topology_task&& t) noexcept = default;
 
-future<> abortable_topology_task::wait() {
+future<> abortable_topology_task::wait(topology_state_machine::completion_callback cc) {
     // group0 is only set on shard 0
     auto me = this_shard_id();
     std::string result;
     co_await _sp->container().invoke_on(0, [&](storage_proxy& sp) -> future<> {
         auto& r = sp.remote();
-        auto error = co_await r.topology_state_machine().wait_for_request_completion(r.system_keyspace(), _request_id, true);
+        // progress needs to be handled non-waiting. use a gate to ensure we've reported all
+        // before returning (handle exceptions...)
+        gate g;
+        auto error = co_await r.topology_state_machine().wait_for_request_completion(r.system_keyspace(), _request_id, true, [&](int32_t pc) {
+            if (cc) {
+                auto h = g.hold();
+                std::ignore = smp::submit_to(me, [pc, &cc] {
+                    cc(pc);
+                }).finally([h = std::move(h)] {});
+            }
+        }).finally([&] {
+            return g.close();
+        });
         if (!error.empty()) {
             co_await smp::submit_to(me, [&error, &result] {
                 result = error; // copy!
