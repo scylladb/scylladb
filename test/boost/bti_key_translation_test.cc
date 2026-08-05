@@ -920,3 +920,55 @@ BOOST_AUTO_TEST_CASE(test_comparable_bytes_from_compound_random_valid_data) {
         }
     }
 }
+
+// Encodes `ckp` and checks that the result is sane.
+// Doesn't validate the result, only demonstrates that nothing crashed or hanged.
+//
+// Since the input is random, and therefore not guaranteed to hold valid
+// values of the key's types, so the encoder is allowed to reject it
+// with marshal_exception or invalid_request_exception, since those seem to be the only
+// two exceptions used for rejecting malformed input.
+static void check_encoding_is_well_behaved(const schema& s, const clustering_key_prefix& ckp) {
+    using encoding = sstables::trie::lazy_comparable_bytes_from_clustering_position;
+    for (int weight = -1; weight <= 1; ++weight) {
+        auto pipv = position_in_partition_view(ckp, bound_weight(weight));
+        try {
+            auto encoded = linearize(encoding(s, pipv).begin());
+            // The encoding always ends with the terminator byte, so it's never empty.
+            BOOST_REQUIRE(!encoded.empty());
+        } catch (const marshal_exception&) {
+            // Okay
+        } catch (const exceptions::invalid_request_exception&) {
+            // Okay
+        }
+    }
+}
+
+// Feeds completely random bytes (with random splits into components)
+// to the BTI clustering key encoder, and checks it handles them gracefully.
+BOOST_AUTO_TEST_CASE(test_comparable_bytes_from_compound_random_garbage_data) {
+    auto engine = std::mt19937(tests::random::get_int<uint32_t>());
+
+    constexpr int n_schemas = 30;
+    constexpr int n_keys_per_schema = 30;
+    for (int i = 0; i < n_schemas; ++i) {
+        auto s = make_random_clustering_key_schema(engine);
+        const auto& types = s->clustering_key_prefix_type()->types();
+        testlog.info("schema {}: ck types={}", i, fmt::join(
+            types | std::views::transform([] (const data_type& t) { return t->name(); }), ", "));
+
+        for (int j = 0; j < n_keys_per_schema; ++j) {
+            const auto n_components = tests::random::get_int<size_t>(0, types.size(), engine);
+            std::vector<managed_bytes> components;
+            for (size_t k = 0; k < n_components; ++k) {
+                // Random size (including 0, i.e. "empty") and random contents.
+                const auto size = tests::random::get_int<size_t>(0, 24, engine);
+                components.push_back(managed_bytes(managed_bytes_view(
+                    bytes_view(tests::random::get_bytes(size, engine)))));
+            }
+            auto ckp = clustering_key_prefix::from_range(components);
+            testlog.debug("key={}", ckp);
+            check_encoding_is_well_behaved(*s, ckp);
+        }
+    }
+}
