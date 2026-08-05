@@ -780,11 +780,11 @@ private:
     // and so max_local_deletion_time should be discarded for those.
     void validate_max_local_deletion_time();
     void validate_partitioner();
-    void validate_component_digest(component_type type, uint32_t computed_digest) const;
     // Read component data and validate the digest.
     future<> compute_and_validate_component_digest(component_type type);
     future<> validate_scylla_digest_value();
 public:
+    void validate_component_digest(component_type type, uint32_t computed_digest) const;
     using skip_data_digest = bool_class<struct skip_data_digest_tag>;
     future<> validate_digests(skip_data_digest skip_data = skip_data_digest::no);
 private:
@@ -1379,6 +1379,10 @@ public:
     virtual ~sstable_stream_sink() = default;
     // Stream to the component file
     virtual future<output_stream<char>> output(const file_open_options&, const file_output_stream_options&) = 0;
+
+    // Validate the streamed sstable integrity, by verifying against stored digests, if available;
+    virtual future<> validate_integrity() = 0;
+
     // closes this component. If this is the last component in a set (see "last_component" in creating method below)
     // the table on disk will be sealed.
     // Returns sealed sstable if last, or nullptr otherwise.
