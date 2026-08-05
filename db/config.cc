@@ -1817,6 +1817,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Set to 0 to disable automatic flushing all tables before major compaction.")
     , compaction_scrub_period(this, "compaction_scrub_period", liveness::LiveUpdate, value_status::Used, 0, 
         "Set the interval in seconds, after which all sstables will be scrubbed")
+    , automatic_scrub_isolate_on_suspected_disk_error(this, "automatic_scrub_isolate_on_suspected_disk_error", liveness::LiveUpdate, value_status::Used, true,
+        "If set, the node will be isolated when automatic scrub detects digest a mismatch")
     , maintenance_io_throughput_mb_per_sec(this, "maintenance_io_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
         "Throttles background I/O to the specified total throughput (in MiBs/s) across the entire system. Background I/O includes the one performed by repair and both RBNO and legacy topology operations such as adding or removing a node. Setting the value to 0 disables background IO throttling. It is recommended to set the value for this parameter to be 75% of network bandwidth")
     , backup_io_throughput_mb_per_sec(this, "backup_io_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,

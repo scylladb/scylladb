@@ -1325,6 +1325,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
                     .flush_all_tables_before_major = cfg->compaction_flush_all_tables_before_major_seconds() * 1s,
                     .scrub_period = cfg->compaction_scrub_period,
+                    .isolate_on_suspected_disk_error = cfg->automatic_scrub_isolate_on_suspected_disk_error,
                 };
             });
             cm.start(std::move(get_cm_cfg), std::ref(stop_signal.as_sharded_abort_source()), std::ref(task_manager)).get();
