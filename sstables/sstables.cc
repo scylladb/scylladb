@@ -2928,6 +2928,14 @@ uint64_t sstable::filter_size() const {
     return _components->filter->memory_size();
 }
 
+std::optional<db_clock::time_point> sstable::get_last_automatic_validation_attempt_timestamp() {
+    return _automatic_validation_last_attempted;
+}
+
+void sstable::mark_automatic_validation_attempt() {
+    _automatic_validation_last_attempted = db_clock::now();
+}
+
 bool sstable::has_component(component_type f) const {
     return _recognized_components.contains(f);
 }

@@ -677,7 +677,16 @@ private:
     // Used only for writing sstable.
     scylla_metadata::components_digests _components_digests;
     uint32_t _toc_digest{};
+
+    // Stores the time point of the last automatic validation attempt for this sstable.
+    // The value when the sstable was last succesfuly validated is stored in the
+    // Scylla metadata component. This value stores the timestamp of the last
+    // automatic validation attempt, even if unsuccesful.
+    std::optional<db_clock::time_point> _automatic_validation_last_attempted;
 public:
+    std::optional<db_clock::time_point> get_last_automatic_validation_attempt_timestamp();
+    void mark_automatic_validation_attempt();
+
     bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }
     const sstables_manager& manager() const { return _manager; }
