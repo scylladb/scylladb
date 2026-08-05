@@ -171,7 +171,13 @@ async def manager_api_sock_path(suite_log_dir: Path,
             base_dir=str(suite_log_dir),
             sock_path=sock_path,
         )
-        await mgr.start()
+        try:
+            await mgr.start()
+        except BaseException:
+            # Dispose of a partially started manager, e.g. a cluster
+            # created before the API site failed to start.
+            await mgr.stop()
+            raise
         start_event.set()
         try:
             await asyncio.get_running_loop().run_in_executor(None, stop_event.wait)
@@ -179,7 +185,15 @@ async def manager_api_sock_path(suite_log_dir: Path,
             await mgr.stop()
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(asyncio.run, run_manager())
+        # Wake up also when the manager dies before signaling readiness
+        # (e.g. cluster creation failed) instead of waiting forever.
+        # The callback fires only after the future is done, so a
+        # completed future here always means a startup failure.
+        future.add_done_callback(lambda _: start_event.set())
         start_event.wait()
+        if future.done():
+            future.result()  # propagate the startup failure
+            raise RuntimeError("ScyllaClusterManager exited before signaling readiness")
 
         yield sock_path
 
