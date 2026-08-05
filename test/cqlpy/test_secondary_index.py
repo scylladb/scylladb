@@ -319,31 +319,18 @@ def test_too_large_indexed_value_build(cql, test_keyspace):
         assert [(30,big)] == list(cql.execute(f'SELECT * FROM {table} WHERE p=30'))
         # Create an index on v as the new key. The background index-building
         # process should start promptly.
-        cql.execute(f"CREATE INDEX ON {table}(v)")
-        # If Scylla's view builder hangs or stops, there is no way to
-        # tell this state apart from a view build that simply hasn't
-        # completed yet (besides looking at the logs, which we don't).
-        # This means, unfortunately, that a failure of this test is slow -
-        # it needs to wait for a timeout.
-        # However, today we are lucky (?) that the cql.execute(read, [big])
-        # test also fails immediately on Scylla, so this test fails quickly.
+        index_name = unique_name()
+        cql.execute(f"CREATE INDEX {index_name} ON {table}(v)")
+        # Wait for the background index building to complete. If the big key
+        # causes the index build to hang, this wait_for_index() will timeout
+        # and the test will fail.
+        wait_for_index(cql, test_keyspace, index_name)
+        # At this point, the index build should have completed. The "big"
+        # key cannot be searched (trying it results in an InvalidRequest), but
+        # all other keys should be searchable:
         read = cql.prepare(f'SELECT * FROM {table} WHERE v = ?')
-        start_time = time.time()
-        while time.time() < start_time + 30:
-            # The oversized "big" cannot be a key in the view, and
-            # cannot be searched. Cassandra reports: "Index expression
-            # values may not be larger than 64K".
-            with pytest.raises(InvalidRequest):
-                cql.execute(read, [big])
-            # All the other keys should eventually be there
-            c = 0
-            for i in range(30):
-                if list(cql.execute(read, [str(i)])):
-                    c += 1
-            if c == 30:
-                break
-            print(c)
-            time.sleep(0.1)
+        with pytest.raises(InvalidRequest):
+            cql.execute(read, [big])
         for i in range(30):
             assert list(cql.execute(read, [str(i)]))
 
