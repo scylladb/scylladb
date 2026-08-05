@@ -291,7 +291,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
 
     std::vector<std::unique_ptr<cql3::statements::raw::parsed_statement>> raw_statements;
     try {
-        raw_statements = cql3::query_processor::parse_statements(schema_str, cql3::dialect{});
+        raw_statements = cql3::query_processor::parse_statements(schema_str, cql3::internal_dialect());
     } catch (...) {
         throw std::runtime_error(format("tools:do_load_schemas(): failed to parse CQL statements: {}", std::current_exception()));
     }
