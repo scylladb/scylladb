@@ -1,0 +1,58 @@
+keyspace: logstor_ks
+
+keyspace_definition: |
+
+  CREATE KEYSPACE IF NOT EXISTS logstor_ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3};
+
+table: users
+
+table_definition: |
+
+  CREATE TABLE IF NOT EXISTS users (
+    userid bigint,
+    initials int,
+    first_name text,
+    last_name text,
+    password text,
+    email text,
+    address text,
+    userdata blob,
+    PRIMARY KEY(userid)
+  ) WITH storage_engine = 'logstor';
+
+columnspec:
+  - name: userid
+    population: exp(1..10000)
+
+  - name: initials
+    size: fixed(2)
+    population: gaussian(1..20000)
+
+  - name: first_name
+    size: fixed(5)
+
+  - name: last_name
+    size: fixed(5)
+
+  - name: password
+    size: fixed(80)
+
+  - name: email
+    size: uniform(16..50)
+
+  - name: address
+    size: uniform(16..50)
+
+  - name: userdata
+    size: fixed(840) # row size ~ 1k
+
+queries:
+  row-insert:
+    cql: insert into logstor_ks.users(userid, initials, first_name, last_name, password, email, address, userdata) values (?,?,?,?,?,?,?,?)
+    fields: samerow
+  read-cache:
+    cql: select * from logstor_ks.users where userid = ?
+    fields: samerow
+  read-disk:
+    cql: select * from logstor_ks.users where userid = ? BYPASS CACHE
+    fields: samerow
