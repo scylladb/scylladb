@@ -396,5 +396,48 @@ SEASTAR_THREAD_TEST_CASE(sstable_auto_scrub_and_ongiong_compaction) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(sstable_auto_scrub_table_readded_after_compaction) {
+    automatic_scrub_test_framework test(tests::random_schema_specification::compress_sstable::yes);
+
+    auto& test_env = test.env();
+    constexpr auto sst_count = 5;
+
+    test.run(sst_count, [&test_env] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+        auto& cm = test_env.test_compaction_manager();
+
+        // All the sstables should be validated.
+        for (sstables::shared_sstable& sst : sstables) {
+            sst->set_scrub_time(db_clock::from_time_t(0));
+        }
+
+        auto timestamp_before = db_clock::now();
+        auto signal_waits_before = utils::get_local_injector().enter_count("automatic_scrub_wait_for_signal");
+        
+        utils::get_local_injector().enable("major_compaction_wait");
+        auto major_compaction = cm.get_compaction_manager().perform_major_compaction(ts, tasks::task_info{});
+
+        // Enable auto scrub. The sstables should be compacting and not be eligible
+        // for automatic scrub.
+        cm.set_scrub_period(std::chrono::seconds(3600));
+        cm.trigger_auto_scrub_timer();
+        wait_on_enter("automatic_scrub_wait_for_signal", signal_waits_before + 1).get();
+
+        // Resume major compaction. After it finishes, it should schedule the unverified sstables
+        // it owns for an automatic scrub.
+        utils::get_local_injector().receive_message("major_compaction_wait");
+        major_compaction.wait();
+        utils::get_local_injector().disable("major_compaction_wait");
+
+        wait_on_enter("automatic_scrub_wait_for_signal", signal_waits_before + 2).get();
+        
+        BOOST_REQUIRE(!table->get_sstables()->empty());
+        for (auto& sst : *table->get_sstables()) {
+            auto scrub_time = sst->get_scrub_time();
+            BOOST_REQUIRE(scrub_time);
+            BOOST_REQUIRE(*scrub_time > timestamp_before);
+        }
+    }, offstrategy::no);
+}
+
 } // namespace
 
