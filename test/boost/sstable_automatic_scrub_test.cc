@@ -7,21 +7,13 @@
  */
 
 #include <seastar/testing/thread_test_case.hh>
-#include "readers/from_mutations.hh"
-#include "seastarx.hh"
-
 #include <seastar/testing/test_case.hh>
 
 #include "sstables/sstable_writer.hh"
-#include "test/boost/sstable_test.hh"
-#include "test/lib/cql_test_env.hh"
 #include "test/lib/error_injection.hh"
-#include "test/lib/mutation_source_test.hh"
 #include "test/lib/random_schema.hh"
-#include "test/lib/simple_schema.hh"
 #include "test/lib/sstable_test_env.hh"
 #include "test/lib/sstable_utils.hh"
-#include "test/lib/test_utils.hh"
 #include "test/lib/random_utils.hh"
 
 namespace {
@@ -113,4 +105,56 @@ public:
     }
 };
 
+future<> wait_on_enter(std::string_view name, size_t count = 1, std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
+    auto& injector = utils::get_local_injector();
+    constexpr auto sleep_duration = std::chrono::milliseconds(100);
+    std::chrono::milliseconds time_waited{0};
+    while (injector.enter_count(name) < count) {
+        if (time_waited > timeout) {
+            throw std::runtime_error(fmt::format("timeout reached when waiting for {}", name));
+        }
+        co_await sleep(sleep_duration);
+        time_waited += sleep_duration;
+    }
+}
+
+static void corrupt_sstable(sstables::shared_sstable sst, component_type type = component_type::Data) {
+    auto f = sstables::test(sst).open_file(type, {}, {}).get();
+    auto close_f = deferred_close(f);
+    const auto wbuf_align = f.memory_dma_alignment();
+    const auto wbuf_len = f.size().get();
+    auto wbuf = seastar::temporary_buffer<char>::aligned(wbuf_align, wbuf_len);
+    std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
+    auto os = output_stream<char>(sstables::test(sst).get_storage().make_component_sink(*sst, type, open_flags::wo, {}).get());
+    auto close_os = deferred_close(os);
+    os.write(std::move(wbuf)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_auto_scrub_corrupted_ssts_with_scylla_test) {
+    automatic_scrub_test_framework test(tests::random_schema_specification::compress_sstable::yes);
+
+    auto& test_env = test.env();
+    constexpr auto sst_count = 5;
+
+    test.run(sst_count, [&test_env] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+        auto& cm = test_env.test_compaction_manager();
+
+        for (sstables::shared_sstable& sst : sstables) {
+            sst->set_scrub_time(db_clock::from_time_t(0));
+            corrupt_sstable(sst);
+        }
+        
+        cm.set_scrub_period(std::chrono::seconds(3600));
+        cm.trigger_auto_scrub_timer();
+
+        wait_on_enter("automatic_scrub_compaction_done", sst_count).get();
+
+        BOOST_REQUIRE_EQUAL(table->get_sstables()->size(), sstables.size());
+        for (auto& sst : *table->get_sstables()) {
+            BOOST_REQUIRE(sst->is_quarantined());
+        }
+    });
+}
+
 } // namespace
+
