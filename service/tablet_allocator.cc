@@ -301,11 +301,11 @@ struct colocation_source {
 };
 
 using colocation_source_set = utils::chunked_vector<colocation_source>;
-using colocation_sources_by_destination_rack = std::unordered_map<endpoint_dc_rack, colocation_source_set>;
+using colocation_sources_by_dc_rack = std::map<sstring, std::map<sstring, colocation_source_set>>;
 
 struct rack_list_colocation_state {
-    colocation_sources_by_destination_rack dst_dc_rack_to_tablets;
-    std::unordered_map<endpoint_dc_rack, std::unordered_set<utils::UUID>> dst_to_requests;
+    colocation_sources_by_dc_rack dst_dc_rack_to_tablets;
+    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<utils::UUID>>> dst_to_requests;
     utils::UUID request_to_resume;
 
     void maybe_set_request_to_resume(const utils::UUID& id) {
@@ -416,11 +416,10 @@ future<rack_list_colocation_state> find_required_rack_list_colocations(
 
                     for (auto src_dst : zipped) {
                         auto src = std::get<0>(src_dst);
-                        auto dst = std::get<1>(src_dst);
-                        auto endpoint = locator::endpoint_dc_rack{dc, dst};
+                        auto dst_rack = std::get<1>(src_dst);
 
-                        state.dst_dc_rack_to_tablets[endpoint].emplace_back(colocation_source{{table_or_mv->id(), tid}, src});
-                        state.dst_to_requests[endpoint].insert(request_id);
+                        state.dst_dc_rack_to_tablets[dc][dst_rack].emplace_back(colocation_source{{table_or_mv->id(), tid}, src});
+                        state.dst_to_requests[dc][dst_rack].insert(request_id);
                     }
                     return make_ready_future<>();
                 });
@@ -1458,24 +1457,17 @@ public:
         return tablet_group_size;
     }
 
-    future<migration_plan> make_rack_list_colocation_plan(const migration_plan& mplan) {
-        lblogger.debug("In make_rack_list_colocation_plan");
-
+    future<migration_plan> make_rack_list_colocation_plan_for_dc(
+            const sstring& dc,
+            const std::map<sstring, colocation_source_set>& racks,
+            const std::unordered_map<sstring, std::unordered_set<utils::UUID>>& requests_for_dc,
+            const migration_plan& mplan) {
         migration_plan plan;
-        tablet_rack_list_colocation_plan rack_list_plan;
-        if (!ongoing_rack_list_colocation() || utils::get_local_injector().enter("wait_with_rack_list_colocation")) {
-            co_return plan;
-        }
-
         const locator::topology& topo = _tm->get_topology();
-
-        auto migration_tablet_ids = co_await mplan.get_migration_tablet_ids();
-        auto colocation_state = co_await find_required_rack_list_colocations(_db, _tm, _sys_ks,
-            _topology->paused_rf_change_requests, std::move(migration_tablet_ids));
 
         node_load_map nodes;
         topo.for_each_node([&] (const locator::node& node) {
-            if (node.get_state() == locator::node::state::normal && !node.is_excluded()) {
+            if (node.get_state() == locator::node::state::normal && !node.is_excluded() && node.dc_rack().dc == dc) {
                 ensure_node(nodes, node.host_id());
             }
         });
@@ -1486,8 +1478,17 @@ public:
         // Consider load that is about to be scheduled.
         co_await consider_planned_load(nodes, mplan);
 
-        std::unordered_set<global_tablet_id> colocation_tablet_ids;
-        for (auto& [dc_rack, colocation_sources] : colocation_state.dst_dc_rack_to_tablets) {
+        // Rebuild the load sketch for this DC so that get_least_loaded_shard()
+        // returns accurate results for nodes in this DC. Without this, the sketch
+        // may contain stale data from the last DC processed by make_plan(), causing
+        // shard 0 to always be selected for nodes in other DCs.
+        _load_sketch = locator::load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
+        _load_sketch->set_minimal_tablet_size(_minimal_tablet_size);
+        _load_sketch->set_force_capacity_based_load(_force_capacity_based_balancing);
+        co_await _load_sketch->populate_dc(dc);
+
+        for (auto& [rack, colocation_sources] : racks) {
+            auto dc_rack = locator::endpoint_dc_rack{dc, rack};
             auto nodes_by_load_dst = nodes | std::views::filter([&] (const auto& host_load) {
                 auto& [host, load] = host_load;
                 auto& node = *load.node;
@@ -1495,9 +1496,9 @@ public:
             }) | std::views::keys | std::ranges::to<std::vector<host_id>>();
 
             if (nodes_by_load_dst.empty()) {
-                lblogger.warn("No target nodes available for RF change colocation plan in dc {}, rack {}", dc_rack.dc, dc_rack.rack);
-                if (auto it = colocation_state.dst_to_requests.find(dc_rack); it != colocation_state.dst_to_requests.end()) {
-                    rack_list_plan.maybe_add_request_to_resume(*it->second.begin());
+                lblogger.warn("No target nodes available for RF change colocation plan in dc {}, rack {}", dc, rack);
+                if (auto rack_it = requests_for_dc.find(rack); rack_it != requests_for_dc.end()) {
+                    plan.maybe_add_rack_list_request_to_resume(*rack_it->second.begin());
                 }
                 continue;
             }
@@ -1511,8 +1512,9 @@ public:
             std::make_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
 
             const tablet_metadata& tmeta = _tm->tablets();
-            for (colocation_source& source : colocation_sources) {
-                if (colocation_tablet_ids.contains(source.gid)) {
+            for (const colocation_source& source : colocation_sources) {
+                co_await coroutine::maybe_yield();
+                if (_scheduled_tablets.contains(source.gid)) {
                     lblogger.debug("Skipped colocation of replica {} of tablet={}, another replica of which is about to be colocated", source.replica, source.gid);
                     continue;
                 }
@@ -1551,16 +1553,33 @@ public:
                     mark_as_scheduled(mig);
                     for (auto& m : mig) {
                         plan.add(std::move(m));
-                        colocation_tablet_ids.insert(m.tablet);
                     }
                 }
                 update_node_load_on_migration(nodes, src, dst, source_tablets);
             }
         }
-        if (colocation_state.request_to_resume) {
-            rack_list_plan.maybe_add_request_to_resume(colocation_state.request_to_resume);
+        co_return plan;
+    }
+
+    future<migration_plan> make_rack_list_colocation_plan(const migration_plan& mplan) {
+        lblogger.debug("In make_rack_list_colocation_plan");
+
+        migration_plan plan;
+        if (!ongoing_rack_list_colocation() || utils::get_local_injector().enter("wait_with_rack_list_colocation")) {
+            co_return plan;
         }
-        plan.set_rack_list_colocation_plan(std::move(rack_list_plan));
+
+        auto colocation_state = co_await find_required_rack_list_colocations(_db, _tm, _sys_ks,
+            _topology->paused_rf_change_requests, _scheduled_tablets);
+
+        for (auto& [dc, racks] : colocation_state.dst_dc_rack_to_tablets) {
+            auto requests_it = colocation_state.dst_to_requests.find(dc);
+            plan.merge(co_await make_rack_list_colocation_plan_for_dc(dc, racks, requests_it != colocation_state.dst_to_requests.end() ? requests_it->second : std::unordered_map<sstring, std::unordered_set<utils::UUID>>{}, mplan));
+        }
+
+        if (colocation_state.request_to_resume) {
+            plan.maybe_add_rack_list_request_to_resume(colocation_state.request_to_resume);
+        }
         co_return std::move(plan);
     }
 
