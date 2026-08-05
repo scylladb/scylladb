@@ -20,6 +20,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/gate.hh>
 
 using namespace seastar;
 
@@ -73,6 +74,7 @@ private:
     class progress_tracker;
     std::unique_ptr<progress_tracker> _progress_tracker;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
+    seastar::gate _gate;
     void do_abort() noexcept;
 public:
     view_update_generator(replica::database& db, sharded<service::storage_proxy>& proxy, abort_source& as);
