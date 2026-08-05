@@ -537,18 +537,48 @@ BOOST_AUTO_TEST_CASE(test_inet) {
     byte_comparable_test(std::move(test_data));
 }
 
-static data_value make_random_data_value_uuid() { return data_value(utils::make_random_uuid()); }
+static data_value maybe_make_empty(data_value&& value) {
+    auto r = tests::random::get_int<int>(0, 5);
+    if (r == 0) {
+        return value.type()->deserialize_value(bytes_view());
+    }
+    return std::move(value);
+}
+static data_value make_random_data_value_nonempty_uuid() {
+    return data_value(utils::make_random_uuid());
+}
+static data_value make_random_data_value_uuid() {
+    return maybe_make_empty(make_random_data_value_nonempty_uuid());
+}
 static data_value make_random_data_value_bytes() {
     constexpr size_t max_bytes_size = 128 * 1024; // 128 KB
     return data_value(tests::random::get_bytes(tests::random::get_int<size_t>(1, max_bytes_size)));
 }
 
+// Turns roughly a fifth of the generated values into nulls or empties of the same type.
+//
+// Only usable for tuple and UDT fields: CQL rejects a null element inside a collection
+// ("null is not supported inside collections"), and a vector can't hold one either, so
+// there is no CQL-level value here to turn into a null.
+static data_value maybe_make_null_or_empty(data_value&& value) {
+    auto r = tests::random::get_int<int>(0, 9);
+    if (r == 0) {
+        return data_value::make_null(value.type());
+    }
+    if (r == 1) {
+        return value.type()->deserialize_value(bytes_view());
+    }
+    return std::move(value);
+}
+
 extern void encode_component(const abstract_type& type, managed_bytes_view serialized_bytes_view, bytes_ostream& out);
 extern void decode_component(const abstract_type& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out);
+extern void decode_empty_component(bytes_ostream& out);
 BOOST_AUTO_TEST_CASE(test_encode_decode_component) {
     // Verify encode and decode works
     bytes_ostream out;
     constexpr uint8_t NEXT_COMPONENT = 0x40;
+    constexpr uint8_t NEXT_COMPONENT_EMPTY = 0x3f;
     for (const auto& test_value : {
         make_random_data_value_uuid(), // data type with fixed length
         make_random_data_value_bytes(), // data type with variable length
@@ -559,10 +589,14 @@ BOOST_AUTO_TEST_CASE(test_encode_decode_component) {
         encode_component(type, managed_bytes_view(serialized_bytes), out);
         auto comparable_bytes = std::move(out).to_managed_bytes();
         auto comparable_bytes_view = managed_bytes_view(comparable_bytes);
-        // encoded component should begin with a NEXT_COMPONENT marker
-        BOOST_REQUIRE_EQUAL(read_simple_native<uint8_t>(comparable_bytes_view), NEXT_COMPONENT);
         out.clear();
-        decode_component(type, comparable_bytes_view, out);
+        if (serialized_bytes.empty()) {
+            BOOST_REQUIRE_EQUAL(read_simple_native<uint8_t>(comparable_bytes_view), NEXT_COMPONENT_EMPTY);
+            decode_empty_component(out);
+        } else {
+            BOOST_REQUIRE_EQUAL(read_simple_native<uint8_t>(comparable_bytes_view), NEXT_COMPONENT);
+            decode_component(type, comparable_bytes_view, out);
+        }
         auto decoded_bytes = std::move(out).to_managed_bytes();
         auto decoded_bytes_view = managed_bytes_view(decoded_bytes);
         // decoded bytes should match the serialized form
@@ -698,7 +732,8 @@ BOOST_AUTO_TEST_CASE(test_tuple) {
     tuple_test_data.reserve(test_data_size + 30 + 3);
     const auto test_tuple_type = tuple_type_impl::get_instance({uuid_type, bytes_type});
     for (int i = 0; i < test_data_size; i++) {
-        tuple_test_data.emplace_back(make_tuple_value(test_tuple_type, {make_random_data_value_uuid(), make_random_data_value_bytes()}));
+        tuple_test_data.emplace_back(make_tuple_value(test_tuple_type,
+            {maybe_make_null_or_empty(make_random_data_value_uuid()), maybe_make_null_or_empty(make_random_data_value_bytes())}));
     }
 
     // Include few duplicates in the test data with variations
@@ -728,7 +763,9 @@ BOOST_AUTO_TEST_CASE(test_udt) {
     };
     for (int i = 0; i < test_data_size; i++) {
         udt_test_data.emplace_back(user_type_impl::native_type{
-            make_random_data_value_uuid(), make_random_data_value_bytes(), make_random_data_value_int64()});
+            maybe_make_null_or_empty(make_random_data_value_uuid()),
+            maybe_make_null_or_empty(make_random_data_value_bytes()),
+            maybe_make_null_or_empty(make_random_data_value_int64())});
     }
 
     // Include few duplicates in the test data with variations
@@ -781,7 +818,7 @@ BOOST_AUTO_TEST_CASE(test_vector) {
     };
 
     // Test the collection with a data type that has fixed length : UUID (128 bits)
-    do_test(uuid_type, generate_collection_test_data<128>(make_random_data_value_uuid));
+    do_test(uuid_type, generate_collection_test_data<128>(make_random_data_value_nonempty_uuid));
         // Test the collection with a data type that has variable length : bytes
     do_test(bytes_type, generate_collection_test_data<16>(make_random_data_value_bytes));
 }

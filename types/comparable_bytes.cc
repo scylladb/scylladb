@@ -923,7 +923,7 @@ static void encode_empty_component(bytes_ostream& out) {
 }
 
 // Decodes a single "empty" element of a multi-component type, i.e. writes a zero-length value.
-static void decode_empty_component(bytes_ostream& out) {
+void decode_empty_component(bytes_ostream& out) {
     // Write 0 as length for the empty value encoded as 4-byte big endian.
     static const auto empty_length = [] {
         std::array<char, 4> arr{};
