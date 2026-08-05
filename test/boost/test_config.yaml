@@ -51,6 +51,8 @@ custom_args:
         - '-c2 -m2G --logger-log-level s3=trace --logger-log-level http=trace --logger-log-level default_http_retry_strategy=trace'
     batchlog_manager_test:
         - '-c2 -m2G --logger-log-level batchlog_manager=trace:debug_error_injection=trace:testlog=trace'
+    table_streaming_reader_test:
+        - '-c1 -m2G'
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test
 # Tests skipped in debug/sanitize modes because they use many iterations

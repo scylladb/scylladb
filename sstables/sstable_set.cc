@@ -856,14 +856,14 @@ public:
     virtual std::vector<mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
         _pr = &pr;
 
-        auto pos = dht::ring_position_view::for_range_start(*_pr);
-
-        if (dht::ring_position_tri_compare(*_s, pos, _selector_position) >= 0) {
-            return create_new_readers(pos);
-        }
-        // If selector position Y is contained in new range [X, Z], then we should try selecting new
-        // sstables since it might have sstables that overlap with that range.
-        if (!_selector_position.is_max() && dht::ring_position_tri_compare(*_s, _selector_position, pr_end()) <= 0) {
+        // Select new sstables as long as the selector position Y hasn't
+        // advanced past the new range [X, Z], i.e. Y is either before the new
+        // range or contained in it.
+        //
+        // Select with no position restriction, since the next sstables may
+        // start anywhere within the range, and we must return at least one
+        // reader to the caller if any are available within the range.
+        if (!end_of_stream()) {
             return create_new_readers(std::nullopt);
         }
 
