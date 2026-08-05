@@ -1755,6 +1755,51 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
     });
 }
 
+future<shared_sstable> sstable::link_with_rewritten_metadata(std::function<shared_sstable(shared_sstable)> sstable_creator, std::function<void(scylla_metadata&)> modifier, update_sstable_id update_id) {
+    if (!has_scylla_component()) {
+        on_internal_error(sstlog, "SStable must have Scylla component to rewrite metadata");
+    }
+
+    if (_storage->is_object_storage() && !update_id) {
+        on_internal_error(sstlog, "Cannot keep sstable id when rewriting object-storage sstable component");
+    }
+    
+    return seastar::async([this, creator = std::move(sstable_creator), modifier = std::move(modifier), update_id] {
+        auto new_sst = creator(shared_from_this());
+        auto generation = new_sst->generation();
+
+        _storage->link_with_excluded_components(*this, generation, {component_type::Scylla}).get();
+        new_sst->copy_components(*this).get();
+
+        scylla_metadata metadata;
+        read_simple<component_type::Scylla>(metadata).get();
+
+        auto& digests = metadata.get_or_create_components_digests();
+        for (auto type : _recognized_components) {
+            if (type != component_type::Scylla &&
+                type != component_type::Digest &&
+                type != component_type::CRC &&
+                !digests.map.contains(type)) {
+                digests.map[type] = compute_component_file_digest(type).get();
+            }
+        }
+        
+        modifier(metadata);
+        if (update_id) {
+            metadata.set_sstable_identifier();
+        }
+
+        new_sst->write_component_with_metadata(component_type::Scylla, std::move(metadata));
+
+        new_sst->_shards = this->_shards;
+        new_sst->seal_sstable(false).get();
+        new_sst->open_data().get();
+
+        _cloned_to_sstable_filename = new_sst->component_basename(component_type::Data);
+        return new_sst;
+    });
+}
+
 // Rewrites a single SSTable component along with updated Scylla metadata.
 // This is used when modifying components (e.g., Statistics) without rewriting the entire SSTable.
 // 1. Write the component file (e.g., Statistics-*.db)
@@ -1765,12 +1810,14 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 // 5. Set the in-memory Scylla metadata to the new metadata
 void sstable::write_component_with_metadata(component_type type, scylla_metadata metadata) {
     if (!is_component_rewrite_supported(type)) {
-        on_internal_error(sstlog, "Only Statistics component can be rewritten.");
+        on_internal_error(sstlog, "Only Statistics and Scylla components can be rewritten.");
     }
 
-    write_component(type);
+    if (type != component_type::Scylla) {
+        write_component(type);
+        metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
+    }
 
-    metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
     metadata.digest = serialized_checksum(_version, metadata.data);
 
     write_simple<component_type::Scylla>(metadata);
@@ -2163,6 +2210,7 @@ void sstable::disable_component_memory_reload() {
 bool sstable::is_component_rewrite_supported(component_type type) {
     switch (type) {
     case component_type::Statistics:
+    case component_type::Scylla:
         return true;
     default:
         return false;
