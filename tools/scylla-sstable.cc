@@ -1364,6 +1364,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::Schema: return "schema";
         case sstables::scylla_metadata_type::ComponentsDigests: return "components_digests";
         case sstables::scylla_metadata_type::LargeDataRecords: return "large_data_records";
+        case sstables::scylla_metadata_type::ScrubTime: return "scrub_time";
     }
     std::abort();
 }
@@ -1560,6 +1561,10 @@ public:
         (*this)(s.columns);
 
         _writer.EndObject();
+    }
+
+    void operator()(const sstables::scrub_time_type& as) const {
+        _writer.Int64(as.timestamp);
     }
 };
 
