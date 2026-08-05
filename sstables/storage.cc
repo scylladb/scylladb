@@ -73,7 +73,7 @@ private:
     future<> rename_new_file(const sstable& sst, sstring from_name, sstring to_name) const;
     future<> link_with_excluded_components(const sstable& sst, generation_type new_gen,
             const std::unordered_set<component_type>& excluded_components,
-            optimized_optional<sstable_id> new_sid) const override;
+            sstable_id new_sid) const override;
 
     future<> change_dir(sstring new_dir) {
         auto old_dir = std::exchange(_dir, opened_directory(new_dir));
@@ -424,7 +424,7 @@ future<> filesystem_storage::create_links(const sstable& sst, const std::filesys
 
 future<> filesystem_storage::link_with_excluded_components(const sstable& sst, generation_type new_gen,
         const std::unordered_set<component_type>& excluded_components,
-        optimized_optional<sstable_id>) const {
+        sstable_id) const {
     sstlog.trace("link_with_excluded_components: {} -> generation={} excluded={}",
             sst.get_filename(), new_gen, excluded_components);
 
@@ -726,7 +726,7 @@ public:
     }
     future<> link_with_excluded_components(const sstable& sst, generation_type new_gen,
             const std::unordered_set<component_type>& excluded_components,
-            optimized_optional<sstable_id> new_sid) const override;
+            sstable_id new_sid) const override;
     future<> copy_components(const sstable& sst, sstable_id sid, const std::unordered_set<component_type>& excluded_components) const;
     future<> unlink_component(const sstable& sst, component_type) noexcept override;
     future<size_t> num_references(const sstable& sst) const override;
@@ -1143,11 +1143,10 @@ future<> object_storage_base::copy_components(const sstable& sst, sstable_id sid
 
 future<> object_storage_base::link_with_excluded_components(const sstable& sst, generation_type new_gen,
         const std::unordered_set<component_type>& excluded_components,
-        optimized_optional<sstable_id> new_sid) const {
-    if (!new_sid) {
+        sstable_id sid) const {
+    if (!sid) {
         on_internal_error(sstlog, "Object-storage link_with_excluded_components requires an sstable id");
     }
-    auto sid = *new_sid;
     entry_descriptor desc(new_gen, sid, sst.get_version(), sst.get_format(), component_type::TOC);
     desc.state = sst.state();
     auto node_owner = sst.manager().get_local_host_id();
