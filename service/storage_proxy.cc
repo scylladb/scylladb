@@ -7723,11 +7723,18 @@ abortable_topology_task& abortable_topology_task::operator=(abortable_topology_t
     return *this;
 }
 
-future<> abortable_topology_task::wait() {
+future<> abortable_topology_task::wait(topology_state_machine::completion_callback cc) {
     // group0 is only set on shard 0
+    auto me = this_shard_id();
     co_await _sp.container().invoke_on(0, [&](storage_proxy& sp) -> future<> {
         auto& r = sp.remote();
-        co_await r.topology_state_machine().wait_for_request_completion(r.system_keyspace(), _request_id, true);
+        co_await r.topology_state_machine().wait_for_request_completion(r.system_keyspace(), _request_id, true, [&](int32_t pc) {
+            if (cc) {
+                std::ignore = smp::submit_to(me, [pc, &cc] {
+                    cc(pc);
+                });
+            }
+        });
     });
 }
 
