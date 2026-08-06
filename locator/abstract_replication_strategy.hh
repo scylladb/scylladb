@@ -19,6 +19,7 @@
 #include "utils/sequenced_set.hh"
 #include "utils/simple_hashers.hh"
 #include "locator/tablet_types.hh"
+#include "locator/token_replication_factor.hh"
 #include "data_dictionary/consistency_config_options.hh"
 #include "locator/replication_strategy_type.hh"
 #include "locator/abstract_replication_strategy_fwd.hh"
@@ -258,10 +259,23 @@ public:
     const token_metadata& get_token_metadata() const noexcept { return *_tmptr; }
     const token_metadata_ptr& get_token_metadata_ptr() const noexcept { return _tmptr; }
     const topology& get_topology() const noexcept { return _tmptr->get_topology(); }
-    // Get the replication factor across all datacenters as defined by the schema
-    // replication strategy options. During tablet migrations caused by a replication
-    // factor change, individual tablets may not have this many replicas yet (or still).
+    // Replication factor across all datacenters, from the schema. A tablet can have more or fewer
+    // replicas during a replication factor change and until the tablet is rebuilt, see
+    // get_read_replicas_with_rf() and get_write_replicas_with_rf().
     size_t get_schema_replication_factor() const noexcept { return _replication_factor; }
+
+    // The schema replication factor as a token_replication_factor. Per-datacenter counts come
+    // from NetworkTopologyStrategy; other strategies report the total for the local datacenter.
+    token_replication_factor get_replication_factor_from_schema(with_datacenters dcs) const;
+
+    // get_replicas_for_reading() and its replication factor, from one lookup. Vnodes return the
+    // schema replication factor. Tablets count the replicas, and with with_datacenters::yes throw
+    // if a replica's host is missing from topology, as while topology lags tablet metadata (#21856).
+    virtual replicas_with_rf get_read_replicas_with_rf(const token& search_token, with_datacenters dcs) const = 0;
+
+    // Same over get_natural_replicas(), the write replica set. The pending replica is not
+    // counted; write handlers add it on top, as for vnodes.
+    virtual replicas_with_rf get_write_replicas_with_rf(const token& search_token, with_datacenters dcs) const = 0;
 
     void invalidate() const noexcept {
         _validity_abort_source->request_abort();
@@ -284,7 +298,8 @@ public:
     /// scenario. Since we return IPs here, writes to the old replica would be incorrectly routed to the
     /// new replica.
     ///
-    /// The returned addresses are present in the topology object associated with this instance.
+    /// The returned addresses are present in the topology object associated with this
+    /// instance, except while topology lags behind tablet metadata (scylladb/scylladb#21856).
     virtual host_id_vector_replica_set get_natural_replicas(const token& search_token, bool is_vnode = false) const = 0;
 
     /// Same as above but returns host ids instead of addresses
@@ -414,6 +429,14 @@ public:
 
     virtual const local_effective_replication_map* maybe_as_local_effective_replication_map() const {
         return nullptr;
+    }
+
+    virtual replicas_with_rf get_read_replicas_with_rf(const token& search_token, with_datacenters dcs) const override {
+        return {get_replicas_for_reading(search_token), get_replication_factor_from_schema(dcs)};
+    }
+
+    virtual replicas_with_rf get_write_replicas_with_rf(const token& search_token, with_datacenters dcs) const override {
+        return {get_natural_replicas(search_token), get_replication_factor_from_schema(dcs)};
     }
 
     virtual future<mutable_static_effective_replication_map_ptr> clone_gently(replication_strategy_ptr rs, token_metadata_ptr tmptr) const = 0;
