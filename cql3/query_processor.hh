@@ -520,11 +520,14 @@ public:
     // For the local node, waits directly without an RPC.
     future<> wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout);
 
+    // pinned_plan and forced_keyspace re-derive a statement continuing a
+    // paged query: same plan, same keyspace it was prepared against.
     std::unique_ptr<statements::prepared_statement> get_statement(
             utils::chunked_string_view query,
             const service::client_state& client_state,
             dialect d,
-            std::optional<service::pager::query_plan> pinned_plan = std::nullopt);
+            std::optional<service::pager::query_plan> pinned_plan = std::nullopt,
+            std::optional<std::string_view> forced_keyspace = std::nullopt);
 
     // The plan to pin when continuing a paged query, read from the previous
     // page's state. See restrictions::pinned_plan_opt.

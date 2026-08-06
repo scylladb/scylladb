@@ -1992,8 +1992,8 @@ def test_paging_and_drop_index_allow_filtering(cql, test_keyspace):
             got.extend(r.current_rows)
         assert expected == got
 
-# As above but *without* ALLOW FILTERING, so both engines currently raise the
-# usual error about ALLOW FILTERING when the next page follows a DROP INDEX.
+# As above but without ALLOW FILTERING, so neither engine can resume: Scylla's
+# saved position belongs to the dropped index, Cassandra needs the filtering.
 def test_paging_and_drop_index_no_allow_filtering(cql, test_keyspace):
     count = 20
     with new_test_table(cql, test_keyspace,
@@ -2007,24 +2007,19 @@ def test_paging_and_drop_index_no_allow_filtering(cql, test_keyspace):
 
         page_size = 7
         stmt = SimpleStatement(f"SELECT p FROM {table} WHERE v=17", fetch_size=page_size)
-        expected = list(cql.execute(stmt))
+        # The index serves the whole query while it exists.
+        assert len(list(cql.execute(stmt))) == count
         # Run the same paged query again but this time use the page-by-page
         # API, and do a DROP INDEX between the first and second page.
-        got = []
         r = cql.execute(stmt)
         assert len(r.current_rows) == page_size
-        got.extend(r.current_rows)
         cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
-        # Because the query does not have "ALLOW FILTERING", even if we
-        # could resume this query it would be inefficient without the
-        # index, so the resumed query should fail with an error about
-        # ALLOW FILTERING being needed.
-        with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):
-            while r.has_more_pages:
-                r = cql.execute(stmt, paging_state=r.paging_state)
-                assert len(r.current_rows) <= page_size
-                got.extend(r.current_rows)
-            assert expected == got
+        expected_error = "no longer available" if is_scylla(cql) else "ALLOW FILTERING"
+        # On the first resumed page, so a regression that returns wrong rows and
+        # only raises later cannot pass.
+        assert r.has_more_pages
+        with pytest.raises(InvalidRequest, match=expected_error):
+            cql.execute(stmt, paging_state=r.paging_state)
 
 # A base-table read is not tied to the table's identity, so a table dropped and
 # recreated between pages is read on - the same way on Cassandra and on Scylla.

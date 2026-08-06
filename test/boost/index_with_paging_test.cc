@@ -137,4 +137,22 @@ SEASTAR_TEST_CASE(test_query_plan_survives_paging_state_serialization) {
     return make_ready_future<>();
 }
 
+// A plan this version does not understand cannot be kept, and continuing without
+// it would read the saved position with another plan. See #18992.
+SEASTAR_TEST_CASE(test_paging_state_naming_an_unknown_plan_is_refused) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE tab (pk int PRIMARY KEY, v int)").get();
+        e.execute_cql("INSERT INTO tab (pk, v) VALUES (0, 1)").get();
+
+        auto state = make_lw_shared<const service::pager::paging_state>(partition_key::make_empty(),
+                position_in_partition_view::for_partition_start(), 1, query_id::create_random_id(),
+                service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0,
+                std::monostate{});
+        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
+                cql3::query_options::specific_options{1, std::move(state), {}, api::new_timestamp()});
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM tab WHERE v = 1 ALLOW FILTERING", std::move(qo)).get(),
+                exceptions::invalid_request_exception);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
