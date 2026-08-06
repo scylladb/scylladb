@@ -1124,6 +1124,54 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     /// End test
 }
 
+BOOST_AUTO_TEST_CASE(test_truncate_overwrites_two_config_entries) {
+    // Reproducer for a raft::log bookkeeping bug: when a leader's AppendEntries
+    // overwrites a follower's log across *two* configuration entries at once,
+    // truncate_uncommitted() must not leave _last_conf_idx pointing at a
+    // truncated (and possibly replaced) entry.
+    //
+    // This state is reachable after a crash: commit_idx is not persisted, so on
+    // restart a committed configuration and an uncommitted joint configuration on
+    // top of it both look uncommitted, and the current leader may overwrite both.
+    // The old single-level rollback (_last_conf_idx = _prev_conf_idx) left
+    // _last_conf_idx dangling, so a later get_configuration() did
+    // std::get<configuration> on a non-configuration entry and threw
+    // bad_variant_access. This is a pure log logic bug: it triggers
+    // deterministically here, with no cluster and no task reordering.
+    server_id A = id(), B = id(), C = id(), D = id();
+
+    // Original cluster {A,B,C,D} captured in the snapshot at idx 0.
+    raft::configuration snap_cfg = config_from_ids({A, B, C, D});
+
+    // Persisted log reloaded after a crash:
+    //   idx 1 (term 1): committed config {A,B,C}
+    //   idx 2 (term 2): uncommitted joint config curr={A,B} prev={A,B,C}
+    raft::log_entries entries;
+    entries.push_back(seastar::make_lw_shared<const raft::log_entry>(
+            raft::log_entry{term_t{1}, index_t{1}, config_from_ids({A, B, C})}));
+    entries.push_back(seastar::make_lw_shared<const raft::log_entry>(
+            raft::log_entry{term_t{2}, index_t{2},
+                    raft::configuration{config_set({A, B}), config_set({A, B, C})}}));
+
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = snap_cfg},
+            std::move(entries));
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), index_t{2});
+    BOOST_CHECK(log.get_configuration().is_joint());
+
+    // A new leader (term 3) overwrites the log from idx 1 with a non-configuration
+    // entry, conflicting on term. This truncates both config entries at once.
+    raft::log_entry_ptr_list overwrite;
+    overwrite.push_back(seastar::make_lw_shared<const raft::log_entry>(
+            raft::log_entry{term_t{3}, index_t{1}, raft::log_entry::dummy{}}));
+    log.maybe_append(std::move(overwrite));
+
+    // Both configuration entries are gone: the effective configuration must fall
+    // back to the snapshot config, and get_configuration() must not throw.
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), index_t{0});
+    BOOST_CHECK(!log.get_configuration().is_joint());
+    BOOST_CHECK(log.get_configuration().current == snap_cfg.current);
+}
+
 BOOST_AUTO_TEST_CASE(test_empty_configuration) {
     // When a server is joining an existing cluster, its configuration is empty.
     // The leader sends its configuration over in AppendEntries or

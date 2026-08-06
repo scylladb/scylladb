@@ -71,12 +71,16 @@ void log::truncate_uncommitted(index_t idx) {
     _memory_usage -= released_memory;
     stable_to(std::min(_stable_idx, last_idx()));
     if (_last_conf_idx > last_idx()) {
-        // If _prev_conf_idx is 0, this log does not contain any
-        // other configuration changes, since no two uncommitted
-        // configuration changes can be in progress.
-        SCYLLA_ASSERT(_prev_conf_idx < _last_conf_idx);
-        _last_conf_idx = _prev_conf_idx;
-        _prev_conf_idx = index_t{0};
+        // At least the last configuration entry was truncated. A single
+        // rollback to _prev_conf_idx is not always enough: both tracked
+        // configuration entries can be truncated at once. This happens after
+        // crash recovery, where a node may hold an uncommitted configuration
+        // on top of a committed one it has not re-applied yet -- commit_idx is
+        // not persisted, so on restart both look uncommitted -- and a leader
+        // then overwrites both. Re-derive the indices from the entries that
+        // remain in the log (as the constructor does).
+        _last_conf_idx = _prev_conf_idx = index_t{0};
+        init_last_conf_idx();
     }
 }
 
