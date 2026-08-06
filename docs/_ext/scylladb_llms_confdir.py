@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 """
 Fix llms.txt generation for every version of the multiversion documentation.
 
