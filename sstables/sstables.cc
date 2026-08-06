@@ -2625,6 +2625,8 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     _components->scylla_metadata->data.set<scylla_metadata_type::Schema>(std::move(sstable_schema));
     _components->scylla_metadata->data.set<scylla_metadata_type::ComponentsDigests>(scylla_metadata::components_digests{_components_digests});
 
+    _components->scylla_metadata->set_scrub_time(db_clock::now());
+
     _components->scylla_metadata->digest = serialized_checksum(_version, _components->scylla_metadata->data);
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata);
@@ -4645,6 +4647,15 @@ private:
             }
         }
     }
+    future<> update_scrub_time() {
+        co_await load_metadata();
+        auto& metadata = _sst->get_shared_components().scylla_metadata;
+        if (!metadata) {
+            co_return;
+        }
+        metadata->set_scrub_time(db_clock::now());
+        co_await save_metadata();
+    }
 public:
     future<output_stream<char>> output(const file_open_options& foptions, const file_output_stream_options& stream_options) override {
         assert(_type != component_type::TOC);
@@ -4677,6 +4688,8 @@ public:
     }
     future<shared_sstable> close() override {
         if (_last_component) {
+            co_await update_scrub_time();
+
             // If we are the last component in a sequence, we can seal the table.
             if (!_leave_unsealed) {
                 co_await _sst->_storage->seal(*_sst);
