@@ -274,6 +274,25 @@ public:
     // Use get_replication_factor(token) to get the actual replica count for a token.
     size_t get_schema_replication_factor() const noexcept { return _replication_factor; }
 
+    // Get the total replication factor for a token across all data centers.
+    // The vnode-based implementation ignores the token and returns the same value
+    // as get_schema_replication_factor().
+    // The tablets implementation returns the size of the read replica set of the
+    // token's tablet, which accounts for ongoing migrations. When no tablets are
+    // in transition and not undergoing a replication factor change, this returns
+    // the same value as get_schema_replication_factor().
+    virtual size_t get_replication_factor(token search_token) const = 0;
+
+    // Get the replication factor for a token in the given data center.
+    // The vnode-based implementation ignores the token and returns the replication
+    // factor configured for the data center by the replication strategy.
+    // The tablets implementation returns the number of replicas in the read replica
+    // set of the token's tablet which belong to the given data center, which accounts
+    // for ongoing migrations. All replicas are expected to be present in the topology
+    // associated with this instance (nodes which left the cluster are kept in
+    // topology while they appear in tablet replica sets).
+    virtual size_t get_replication_factor(token search_token, const sstring& datacenter) const = 0;
+
     void invalidate() const noexcept {
         _validity_abort_source->request_abort();
     }
@@ -433,6 +452,12 @@ public:
     virtual const local_effective_replication_map* maybe_as_local_effective_replication_map() const {
         return nullptr;
     }
+
+    virtual size_t get_replication_factor(token) const override {
+        return get_schema_replication_factor();
+    }
+
+    virtual size_t get_replication_factor(token, const sstring& datacenter) const override;
 
     virtual future<mutable_static_effective_replication_map_ptr> clone_gently(replication_strategy_ptr rs, token_metadata_ptr tmptr) const = 0;
 
