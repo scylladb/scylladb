@@ -25,6 +25,7 @@
 #include "types/set.hh"
 #include "types/tuple.hh"
 #include "types/user.hh"
+#include "types/vector.hh"
 #include "utils/assert.hh"
 #include "utils/big_decimal.hh"
 #include "utils/UUID_gen.hh"
@@ -104,6 +105,13 @@ type_generator::type_generator(random_schema_specification& spec) : _spec(spec) 
             auto key_type = (*this)(engine, type_generator::is_multi_cell::no);
             auto value_type = (*this)(engine, type_generator::is_multi_cell::no);
             return map_type_impl::get_instance(std::move(key_type), std::move(value_type), bool(multi_cell));
+        });
+    // vector
+    _generators.emplace_back(
+        [this] (std::mt19937& engine, is_multi_cell) {
+            auto element_type = (*this)(engine, type_generator::is_multi_cell::no);
+            const auto dimension = std::uniform_int_distribution<size_t>(1, 4)(engine);
+            return vector_type_impl::get_instance(std::move(element_type), dimension);
         });
 }
 
@@ -590,6 +598,21 @@ data_value generate_frozen_map_value(std::mt19937& engine, const map_type_impl& 
             generate_frozen_map(engine, *type.get_keys_type(), *type.get_values_type(), val_gen, min_size_in_bytes, max_size_in_bytes));
 }
 
+data_value generate_vector_value(std::mt19937& engine, const vector_type_impl& type, value_generator& val_gen,
+        size_t min_size_in_bytes, size_t max_size_in_bytes) {
+    auto element_generator = val_gen.get_atomic_value_generator(*type.get_elements_type());
+    const auto dimension = type.get_dimension();
+    const auto element_min_size_in_bytes = std::max(size_t(1), min_size_in_bytes / dimension);
+    const auto element_max_size_in_bytes = std::max(element_min_size_in_bytes, max_size_in_bytes / dimension);
+
+    vector_type_impl::native_type elements;
+    elements.reserve(dimension);
+    for (size_t i = 0; i < dimension; ++i) {
+        elements.emplace_back(element_generator(engine, element_min_size_in_bytes, element_max_size_in_bytes));
+    }
+    return make_vector_value(type.shared_from_this(), std::move(elements));
+}
+
 } // anonymous namespace
 
 data_value value_generator::generate_atomic_value(std::mt19937& engine, const abstract_type& type, size_t max_size_in_bytes) {
@@ -660,6 +683,10 @@ size_t value_generator::min_size(const abstract_type& type) {
         return generate_frozen_map_value(engine, *maybe_map_type, *this, size_t{}, size_t{}).serialized_size();
     }
 
+    if (auto maybe_vector_type = dynamic_cast<const vector_type_impl*>(&type)) {
+        return generate_vector_value(engine, *maybe_vector_type, *this, size_t{}, size_t{}).serialized_size();
+    }
+
     if (auto maybe_reversed_type = dynamic_cast<const reversed_type_impl*>(&type)) {
         return min_size(*maybe_reversed_type->underlying_type());
     }
@@ -702,6 +729,12 @@ value_generator::atomic_value_generator value_generator::get_atomic_value_genera
     if (auto maybe_map_type = dynamic_cast<const map_type_impl*>(&type)) {
         return [this, maybe_map_type] (std::mt19937& engine, size_t min_size_in_bytes, size_t max_size_in_bytes) {
             return generate_frozen_map_value(engine, *maybe_map_type, *this, min_size_in_bytes, max_size_in_bytes);
+        };
+    }
+
+    if (auto maybe_vector_type = dynamic_cast<const vector_type_impl*>(&type)) {
+        return [this, maybe_vector_type] (std::mt19937& engine, size_t min_size_in_bytes, size_t max_size_in_bytes) {
+            return generate_vector_value(engine, *maybe_vector_type, *this, min_size_in_bytes, max_size_in_bytes);
         };
     }
 
@@ -772,6 +805,12 @@ value_generator::generator value_generator::get_generator(const abstract_type& t
                 return generate_frozen_map_value(engine, *maybe_map_type, *this, 0, no_size_in_bytes_limit).serialize_nonnull();
             };
         }
+    }
+
+    if (auto maybe_vector_type = dynamic_cast<const vector_type_impl*>(&type)) {
+        return [this, maybe_vector_type] (std::mt19937& engine) -> data_model::mutation_description::value {
+            return generate_vector_value(engine, *maybe_vector_type, *this, 0, no_size_in_bytes_limit).serialize_nonnull();
+        };
     }
 
     if (auto maybe_reversed_type = dynamic_cast<const reversed_type_impl*>(&type)) {
@@ -907,6 +946,8 @@ udt_list dump_udts(const std::vector<data_type>& types) {
             udts.merge(dump_udts({maybe_set_type->get_elements_type()}));
         } else if (auto maybe_map_type = dynamic_cast<const map_type_impl*>(type)) {
             udts.merge(dump_udts({maybe_map_type->get_keys_type(), maybe_map_type->get_values_type()}));
+        } else if (auto maybe_vector_type = dynamic_cast<const vector_type_impl*>(type)) {
+            udts.merge(dump_udts({maybe_vector_type->get_elements_type()}));
         } else if (auto maybe_reversed_type = dynamic_cast<const reversed_type_impl*>(type)) {
             udts.merge(dump_udts({maybe_reversed_type->underlying_type()}));
         }
