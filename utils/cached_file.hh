@@ -197,6 +197,7 @@ private:
         size_t size = (idx + read_ahead) > _last_page
                 ? (_last_page_size + (_last_page - idx) * page_size)
                 : read_ahead * page_size;
+        _metrics.disk_read_bytes += size;
 
         std::optional<reader_permit::resource_units> units;
         std::optional<reader_permit::awaits_guard> await_guard;
