@@ -1349,6 +1349,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sstm.stop().get();
             });
 
+            api::set_server_storage_manager(ctx, sstm).get();
+            auto stop_storage_manager_api = defer_verbose_shutdown("storage manager API", [&ctx] {
+                api::unset_server_storage_manager(ctx).get();
+            });
+
             static sharded<auth::service> auth_service;
             static sharded<auth::service> maintenance_auth_service;
             static sharded<qos::service_level_controller> sl_controller;
