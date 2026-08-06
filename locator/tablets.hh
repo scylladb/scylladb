@@ -828,6 +828,20 @@ public:
     /// \throws std::logic_error If the given id does not belong to this instance.
     const tablet_transition_info* get_tablet_transition_info(tablet_id) const;
 
+    /// Returns the set of replicas which should serve reads for a given tablet,
+    /// taking the transition state (if any) into account.
+    const tablet_replica_set& get_replicas_for_reading(tablet_id) const;
+
+    /// Returns the set of replicas which should serve writes for a given tablet,
+    /// taking the transition state (if any) into account. Excludes the pending
+    /// replica, which writes also go to, see get_pending_replica().
+    const tablet_replica_set& get_replicas_for_writing(tablet_id) const;
+
+    /// Returns the replica which receives writes and whose host is not in
+    /// get_replicas_for_writing(), or nullptr if there is none. Returns nullptr for an
+    /// intra-node migration, whose pending replica is on a host already in the write set.
+    const tablet_replica* get_pending_replica(tablet_id) const;
+
     /// Returns true for strongly-consistent tablets.
     /// Use get_tablet_raft_info() to retrieve Raft info for a specific tablet_id.
     bool has_raft_info() const {
