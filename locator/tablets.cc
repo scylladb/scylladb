@@ -1629,6 +1629,29 @@ public:
         return get_for_reading_helper(search_token);
     }
 
+    // The replication factor is calculated on the fly from the current read replica
+    // set of the token's tablet rather than taken from the schema, because during
+    // migrations caused by a replication factor change the schema and the per-tablet
+    // replica sets may temporarily disagree.
+    virtual size_t get_replication_factor(token search_token) const override {
+        auto&& tablets = get_tablet_map();
+        auto tablet = tablets.get_tablet_id(search_token);
+        auto rf = tablets.get_replicas_for_reading(tablet).size();
+        tablet_logger.trace("get_replication_factor({}): table={}, tablet={}, rf={}", search_token, _table, tablet, rf);
+        return rf;
+    }
+
+    virtual size_t get_replication_factor(token search_token, const sstring& datacenter) const override {
+        auto&& tablets = get_tablet_map();
+        auto tablet = tablets.get_tablet_id(search_token);
+        const auto& topo = get_topology();
+        size_t rf = std::ranges::count_if(tablets.get_replicas_for_reading(tablet), [&] (const tablet_replica& r) {
+            return topo.get_datacenter(r.host) == datacenter;
+        });
+        tablet_logger.trace("get_replication_factor({}, {}): table={}, tablet={}, rf={}", search_token, datacenter, _table, tablet, rf);
+        return rf;
+    }
+
     std::optional<tablet_routing_info> check_locality(const token& search_token, unsigned original_shard) const override {
         auto&& tablets = get_tablet_map();
         auto tid = tablets.get_tablet_id(search_token);

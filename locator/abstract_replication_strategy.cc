@@ -21,6 +21,7 @@
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
 #include <variant>
+#include "locator/network_topology_strategy.hh"
 
 namespace locator {
 
@@ -566,6 +567,15 @@ static_effective_replication_map::~static_effective_replication_map() {
     if (is_registered()) {
         _factory->erase_effective_replication_map(this);
     }
+}
+
+size_t static_effective_replication_map::get_replication_factor(token, const sstring& datacenter) const {
+    const auto& rs = get_replication_strategy();
+    if (rs.get_type() == replication_strategy_type::network_topology) {
+        const auto* nts = static_cast<const network_topology_strategy*>(&rs);
+        return nts->get_replication_factor(datacenter);
+    }
+    return get_schema_replication_factor();
 }
 
 vnode_effective_replication_map::~vnode_effective_replication_map() {
