@@ -210,7 +210,7 @@ class ContentionLWTTester(BaseLWTTester):
         )
 
 
-@pytest.mark.nightly
+@pytest.mark.tier2
 @pytest.mark.parametrize("tablets_enabled", [True, False], ids=["tablets", "vnodes"])
 async def test_lwt_contention_many_workers(manager: ManagerClient, scale_timeout, tablets_enabled):
     """
@@ -223,7 +223,7 @@ async def test_lwt_contention_many_workers(manager: ManagerClient, scale_timeout
     Runs for both tablets and vnodes to ensure contention handling
     is correct regardless of the storage backend.
 
-    This is a nightly-only test due to the high contention load.
+    This is a tier2-only test due to the high contention load.
     """
     num_workers = 300
     num_iterations = 1

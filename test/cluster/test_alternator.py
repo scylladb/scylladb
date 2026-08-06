@@ -372,7 +372,7 @@ async def test_localnodes_down_normal_node(manager: ManagerClient):
     assert await wait_for(check_localnodes_one, time.time() + 60)
 
 
-@pytest.mark.nightly
+@pytest.mark.tier2
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_localnodes_joining_nodes(manager: ManagerClient):
     """Test that if a cluster is being enlarged and a node is coming up but

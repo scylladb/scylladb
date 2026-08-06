@@ -131,7 +131,7 @@ async def run_random_resizes(
     }
 
 
-@pytest.mark.nightly
+@pytest.mark.tier2
 async def test_multi_column_lwt_during_split_merge(manager: ManagerClient, scale_timeout):
     """
     Test scenario:

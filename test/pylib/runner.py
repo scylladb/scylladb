@@ -760,8 +760,8 @@ def modify_pytest_item(item: pytest.Item, run_ids: defaultdict[tuple[str, str], 
             raise TypeError(f"Failed to process skip_mode mark, {mark} for test {item}, error {e}")
 
     if (any(mark.name == "xfail" for mark in item.iter_markers("xfail"))
-            and not any(mark.name == "nightly" for mark in item.iter_markers("nightly"))):
-        item.add_marker(pytest.mark.nightly)
+            and not any(mark.name == "tier2" for mark in item.iter_markers("tier2"))):
+        item.add_marker(pytest.mark.tier2)
 
     if (any(mark.name in ("perf", "manual", "unstable") for mark in item.iter_markers())
             and not any(mark.name == "non_gating" for mark in item.iter_markers("non_gating"))):

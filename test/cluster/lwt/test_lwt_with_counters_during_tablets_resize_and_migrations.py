@@ -292,7 +292,7 @@ async def run_random_resizes(
         "seen_merge": merge_count,
     }
 
-@pytest.mark.nightly
+@pytest.mark.tier2
 async def test_multi_column_lwt_migrate_and_random_resizes(manager: ManagerClient, scale_timeout):
 
     cfg = {
