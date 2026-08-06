@@ -4,6 +4,8 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+from cassandra import Unavailable
+from cassandra.cluster import NoHostAvailable
 from cassandra.protocol import ConfigurationException
 from cassandra.connection import UnixSocketEndPoint
 from cassandra.policies import WhiteListRoundRobinPolicy
@@ -57,6 +59,7 @@ async def test_maintenance_mode(manager: ScyllaClusterManager):
             keyspace_options.append(('NetworkTopologyStrategy', rf, tablets_enabled))
 
     key_on_server_a_per_table: dict[str, int] = dict()
+    tablet_tables_with_rf_above_1: set[str] = set()
 
     async def prepare_table(options: KeyspaceOptions):
         replication_strategy, rf, tablets_enabled = options
@@ -70,6 +73,8 @@ async def test_maintenance_mode(manager: ScyllaClusterManager):
         table = f"{ks}.{table_suffix}"
         await cql.run_async(f"CREATE TABLE {table} (k int PRIMARY KEY, v int)")
         logger.info(f"Created table {table}")
+        if tablets_enabled and rf > 1:
+            tablet_tables_with_rf_above_1.add(table)
 
         async def insert_one(cl: ConsistencyLevel):
             key = 1
@@ -146,14 +151,24 @@ async def test_maintenance_mode(manager: ScyllaClusterManager):
     maintenance_cql = maintenance_cluster.connect()
 
     async def update_table_in_maintenance_mode(table: str, key: int):
-        # Check that local data is available in maintenance mode
-        select_stm = SimpleStatement(f"SELECT v FROM {table} WHERE k = {key}", consistency_level=ConsistencyLevel.ONE)
-        res = await maintenance_cql.run_async(select_stm)
-        assert len(res) == 1 and res[0][0] == key, f"Expected {key} for table {table}"
+        # Check that local data is available in maintenance mode. Topology holds only server A, so
+        # LOCAL_ONE cannot resolve the datacenters of the other tablet replicas and uses the schema.
+        for cl in [ConsistencyLevel.ONE, ConsistencyLevel.LOCAL_ONE]:
+            select_stm = SimpleStatement(f"SELECT v FROM {table} WHERE k = {key}", consistency_level=cl)
+            res = await maintenance_cql.run_async(select_stm)
+            assert len(res) == 1 and res[0][0] == key, f"Expected {key} for table {table} at {cl}"
 
-        update_stm = SimpleStatement(f"UPDATE {table} SET v = {key + 1} WHERE k = {key}",
-                                     consistency_level=ConsistencyLevel.ONE)
-        await maintenance_cql.run_async(update_stm)
+        for cl in [ConsistencyLevel.ONE, ConsistencyLevel.LOCAL_ONE]:
+            update_stm = SimpleStatement(f"UPDATE {table} SET v = {key + 1} WHERE k = {key}", consistency_level=cl)
+            await maintenance_cql.run_async(update_stm)
+
+        # The other replicas are down, so LOCAL_QUORUM is unavailable. It must fail as such, not as
+        # a server error.
+        if table in tablet_tables_with_rf_above_1:
+            select_stm = SimpleStatement(f"SELECT v FROM {table} WHERE k = {key}",
+                                         consistency_level=ConsistencyLevel.LOCAL_QUORUM)
+            with pytest.raises((Unavailable, NoHostAvailable), match="Cannot achieve consistency level"):
+                await maintenance_cql.run_async(select_stm)
 
     logger.info("Updating tables in maintenance mode")
     await gather_safely(*(update_table_in_maintenance_mode(table, key)
