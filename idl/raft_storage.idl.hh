@@ -41,12 +41,18 @@ struct configuration {
     std::unordered_set<raft::config_member, raft::config_member_hash, std::equal_to<void>> previous;
 };
 
+struct time_bounds {
+    std::chrono::system_clock::time_point earliest;
+    std::chrono::system_clock::time_point latest;
+};
+
 struct log_entry {
     struct dummy {};
 
     raft::term_t term;
     raft::index_t idx;
     std::variant<bytes_ostream, raft::configuration, raft::log_entry::dummy> data;
+    std::optional<raft::time_bounds> lease_time [[version 2026.3]];
 };
 
 }

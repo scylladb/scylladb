@@ -15,3 +15,7 @@
 [submodule "tools/cqlsh"]
 	path = tools/cqlsh
 	url = ../scylla-cqlsh
+[submodule "clock-bound"]
+	path = clock-bound
+	url = https://github.com/aws/clock-bound.git
+	ignore = dirty

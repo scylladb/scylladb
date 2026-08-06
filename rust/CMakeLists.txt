@@ -61,6 +61,29 @@ endfunction(generate_cxxbridge)
 
 add_rust_library(rust_combined)
 
+# The AWS ClockBound bounded-clock backend links against libclockbound.a, built
+# from the clock-bound git submodule (the clock-bound-ffi workspace member). The
+# submodule is its own cargo workspace with its own Cargo.toml/Cargo.lock, and is
+# always built with the release profile, independent of the Scylla build mode,
+# since it only exposes a plain C ABI.
+set(clockbound_src_dir ${CMAKE_SOURCE_DIR}/clock-bound)
+set(clockbound_target_dir ${CMAKE_CURRENT_BINARY_DIR}/clock-bound)
+set(clockbound_library ${clockbound_target_dir}/libclockbound.a)
+add_custom_command(
+  OUTPUT ${clockbound_library}
+  COMMAND ${CMAKE_COMMAND} -E env CARGO_BUILD_DEP_INFO_BASEDIR=. ${RUSTC_WRAPPER_ENV} ${CARGO} build --locked --release --manifest-path=${clockbound_src_dir}/Cargo.toml -p clock-bound-ffi --target-dir=${clockbound_target_dir}
+  COMMAND ${CMAKE_COMMAND} -E copy ${clockbound_target_dir}/release/libclockbound.a ${clockbound_library}
+  DEPENDS ${clockbound_src_dir}/Cargo.lock
+  WORKING_DIRECTORY ${clockbound_src_dir}
+  COMMENT "Building Rust library: ${clockbound_library}")
+add_custom_target(rust-clockbound
+  DEPENDS ${clockbound_library})
+add_library(Rust::clockbound STATIC IMPORTED GLOBAL)
+add_dependencies(Rust::clockbound rust-clockbound)
+set_target_properties(Rust::clockbound PROPERTIES
+  IMPORTED_LOCATION "${clockbound_library}"
+  INTERFACE_INCLUDE_DIRECTORIES "${clockbound_src_dir}/clock-bound-ffi/include")
+
 set(binding_gen_build_dir "${scylla_gen_build_dir}/rust")
 
 set(cxx_header "${binding_gen_build_dir}/cxx.h")
