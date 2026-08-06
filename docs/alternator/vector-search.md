@@ -269,7 +269,7 @@ response = table.query(
 | `IndexName` | Required. Must name a vector index on this table (not a GSI or LSI). |
 | `VectorSearch.QueryVector` | Required. A DynamoDB `AttributeValue` of type `L` (all elements of type `N`) or the ScyllaDB-specific type `FLOAT32VECTOR` (plain floating-point JSON numbers). |
 | QueryVector length | Must match the `Dimensions` configured for the named vector index. |
-| `Limit` | Required. Defines _k_ — how many nearest neighbors to return. Must be a positive integer. |
+| `Limit` | Required. Defines _k_ — how many nearest neighbors to return. Must be a positive integer no greater than 1000. |
 
 **Differences from standard Query:**
 
@@ -281,7 +281,9 @@ different way, and explicitly rejects others that have no meaningful interpretat
   `ExclusiveStartKey`. In vector search, `Limit` defines _k_: the ANN
   algorithm runs once and returns exactly the _k_ nearest neighbors. There
   is no natural "next page" — each page would require a full re-run of the
-  search — so **`ExclusiveStartKey` is rejected**.
+  search — so **`ExclusiveStartKey` is rejected**. Because vector search does
+  not support pagination, `Limit` is capped at 1000; if you need more results
+  you must issue separate queries with different query vectors.
 
 - **Results are ordered by vector distance, not by sort key.** A standard
   Query returns rows in sort-key order; `ScanIndexForward=false` reverses
@@ -293,13 +295,6 @@ different way, and explicitly rejects others that have no meaningful interpretat
   asynchronously from ScyllaDB via CDC. Like GSIs, vector indexes can never
   reflect writes instantly, so strongly-consistent reads are impossible.
   **`ConsistentRead=true` is rejected.**
-
-- **No key condition.** A standard Query requires a `KeyConditionExpression`
-  to select which partition to read. Vector search queries the vector store
-  globally across all partitions of the table. `KeyConditions` and
-  `KeyConditionExpression` are therefore not applicable and are silently
-  ignored. (Local vector indexes, which would scope the search to a single
-  partition and use `KeyConditionExpression`, are not yet supported.)
 
 **Select parameter:**
 
@@ -328,25 +323,46 @@ therefore significantly slower than returning only projected attributes with
 `ALL_PROJECTED_ATTRIBUTES`.  For latency-sensitive applications, prefer
 `ALL_PROJECTED_ATTRIBUTES` or limiting `SPECIFIC_ATTRIBUTES` to key columns.
 
-**FilterExpression:**
+**Filtering: pre-filter and post-filter:**
 
-Vector search supports `FilterExpression` for post-filtering results. This
-works the same way as `FilterExpression` on a standard DynamoDB `Query`: after
-the ANN search, the filter is applied to each candidate item and only matching
-items are returned.
+Vector search supports two complementary filtering mechanisms:
 
-**Important:** filtering happens _after_ the `Limit` nearest neighbors have
-already been selected by the vector index. If the filter discards some of
-those candidates, the response may contain **fewer than `Limit` items**. The
-server does not automatically fetch additional neighbors to replace filtered-out
-items. This is identical to how `FilterExpression` interacts with `Limit` in a
-standard DynamoDB `Query`.
+**Pre-filtering (`KeyConditionExpression`):** conditions are sent to the vector
+store before the ANN search, so the search is performed only over matching
+items. Because pre-filtering is evaluated inside the vector store, only
+attributes that are projected into the vector index can be referenced — today
+that means the base table's key columns (hash key and range key if present).
+Supported operators are `=`, `<`, `<=`, `>`, `>=`, `IN`, and `BETWEEN`;
+conditions are combined with `AND`. `OR` and `NOT` are rejected because the
+vector store's pre-filter API only accepts a flat list of conditions implicitly
+ANDed together. The `<>` (not-equal) operator is also rejected. In cases where
+`OR` would otherwise test a single attribute against multiple values, `IN` can
+often serve as a replacement: instead of `p = :v1 OR p = :v2`, write
+`p IN (:v1, :v2)`. `KeyConditions` (the legacy non-expression API) is **not**
+supported and will be rejected with a `ValidationException`.
+
+Pre-filtering searches only within the matching subset and returns the items
+most similar to the query vector, but the result count is **not** guaranteed
+to reach `Limit`: the underlying ANN algorithm explores a bounded neighborhood
+of the graph and may return fewer than `Limit` items even when enough matching
+items exist in the index. There is no automatic retry to fill missing slots.
+
+**Post-filtering (`FilterExpression`):** after the ANN search returns its `Limit`
+nearest-neighbor candidates, the filter is applied to each candidate and only
+matching items are returned. Because filtering happens _after_ the `Limit`
+candidates have already been selected, some may be discarded, and the response
+may contain **fewer than `Limit` items**. The server does not automatically
+fetch additional neighbors to replace filtered-out items. Any attribute may be
+referenced in a `FilterExpression`, not only projected columns. This is
+identical to how `FilterExpression` interacts with `Limit` in a standard
+DynamoDB `Query`. `QueryFilter` (the legacy non-expression filter API) is **not**
+supported and will be rejected with a `ValidationException`.
 
 The response always includes two count fields:
 
 | Field | Description |
 |-------|-------------|
-| `ScannedCount` | The number of candidates returned by the vector index (always equal to `Limit`, unless the table contains fewer than `Limit` items). |
+| `ScannedCount` | The number of candidates returned by the vector index. Normally equal to `Limit`, but may be less if there are fewer than `Limit` items in the table (or matching the pre-filtering condition), or if the approximate ANN search did not find enough candidates. |
 | `Count` | The number of items that passed the `FilterExpression` (or equal to `ScannedCount` when no filter is present). |
 
 **Interaction with `Select`:**
@@ -373,10 +389,6 @@ The response always includes two count fields:
   any base-table reads. When a `FilterExpression` is present, however, the full
   item must be fetched from the base table to evaluate the filter, and only the
   projected (key) attributes are returned for items that pass.
-
-> **Note:** `QueryFilter` (the legacy non-expression filter API) is **not**
-> supported for vector search queries and will be rejected with a
-> `ValidationException`. Use `FilterExpression` instead.
 
 **ReturnScores field:**
 

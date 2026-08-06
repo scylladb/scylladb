@@ -25,6 +25,7 @@ from test.pylib.skip_types import skip_env
 from .util import unique_table_name, random_string, new_test_table
 from .test_gsi_updatetable import wait_for_gsi, wait_for_gsi_gone
 from .test_gsi import assert_index_query
+from test.alternator.test_vector import vs, needs_vector_store, wait_for_vector_index_active, table_vs, add_vs_to_client, vector_store_configured, VECTOR_STORE_TIMEOUT
 
 # new_role() is a context manager for temporarily creating a new role with
 # a unique name and returning its name and the secret key needed to connect
@@ -510,6 +511,7 @@ def new_named_table_unauthorized(dynamodb, tabname, **kwargs):
         # table 
         dynamodb.meta.client.get_waiter('table_exists').wait(TableName=tabname)
         dynamodb.meta.client.delete_table(TableName=tabname)
+        raise
 
 
 # When a role is allowed to CreateTable, the role is automatically granted
@@ -1186,3 +1188,190 @@ def test_rbac_system_table_write(dynamodb, cql, test_table_s):
                 UpdateExpression='SET #val = :val',
                 ExpressionAttributeNames={'#val': 'value'},
                 ExpressionAttributeValues={':val': old_val}))
+
+#############################################################################
+# Tests for RBAC on vector search operations - Query with VectorSearch,
+# CreateTable with VectorIndexes, and UpdateTable with VectorIndexUpdates.
+# The tests verify that the permissions required for these operations
+# are as expected, but also that the external vector store is really able to
+# read the base-table data to perform its indexing.
+#
+# Note that unlike GSI/LSI where the index is a separate table (a materialized
+# view) with its own permissions, the vector index is *not* a CQL table so
+# it doesn't have its own permissions. Instead, the permission to do a
+# Query requires SELECT permissions on the *base* table. Having permissions
+# on the base table is also important to allow Select='ALL_ATTRIBUTES'.
+
+# new_vs_for_role() creates a boto3 resource supporting vector search API
+# extensions, authenticated with the given role and key instead of the default
+# credentials. Like new_dynamodb(), but with add_vs_to_client() applied
+# so that the connection can send/receive VectorSearch parameters.
+@contextmanager
+def new_vs_for_role(vs, role, key):
+    with new_dynamodb(vs, role, key) as d:
+        with add_vs_to_client(d.meta.client):
+            yield d
+
+# Like authorized(), but also accepts a "Vector Store is disabled" error:
+# permissions are checked before the vector store is accessed, so this
+# error still means the operation was authorized. Using this function instead
+# of authorized() will allow us to test permissions on Query even if the
+# vector store is not configured.
+def authorized_vs(fn):
+    try:
+        return authorized(fn)
+    except ClientError as e:
+        if 'Vector Store is disabled' not in e.response['Error']['Message']:
+            raise
+
+# Test that a Query with VectorSearch requires SELECT permission on the table,
+# just like a regular Query without VectorSearch does (but unlike a Query on
+# a GSI or LSI, which checks permissions on the separate index table).
+def test_rbac_vector_query(vs, cql, table_vs):
+    with new_role(cql) as (role, key):
+        with new_vs_for_role(vs, role, key) as d:
+            # Sanity check: the original superuser (vs) who created the shared
+            # table_vs can perform a vector search query on it. If the vector
+            # store is not configured, we get "Vector Store is disabled" which
+            # still means it was authorized (see authorized_vs() above).
+            authorized_vs(lambda: table_vs.query(IndexName='vind',
+                VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1))
+            # But in the new role's connection d, without SELECT permissions,
+            # is not allowed to perform the query:
+            tab = d.Table(table_vs.name)
+            unauthorized(lambda: tab.query(IndexName='vind',
+                VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1))
+            # Adding SELECT permission to the table, vector search must succeed:
+            with temporary_grant(cql, 'SELECT', cql_table_name(tab), role):
+                authorized_vs(lambda: tab.query(IndexName='vind',
+                    VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1))
+                # Select=ALL_ATTRIBUTES is also allowed
+                authorized_vs(lambda: tab.query(IndexName='vind',
+                    VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1,
+                    Select='ALL_ATTRIBUTES'))
+
+# Test that creating a table with a VectorIndexes parameter requires the
+# same CREATE permission as creating a regular table without VectorIndexes.
+def test_rbac_createtable_vectorindexes(vs, cql):
+    schema = {
+        'KeySchema': [{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [{'AttributeName': 'p', 'AttributeType': 'S'}],
+        'VectorIndexes': [{'IndexName': 'vind',
+                           'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}],
+    }
+    with new_role(cql) as (role, key):
+        with new_vs_for_role(vs, role, key) as d:
+            table_name = unique_table_name()
+            # Without CREATE permissions, CreateTable with VectorIndexes fails:
+            new_named_table_unauthorized(d, table_name, **schema)
+            # With CREATE permissions, CreateTable with VectorIndexes succeeds:
+            with temporary_grant(cql, 'CREATE', 'ALL KEYSPACES', role):
+                with new_named_table(d, table_name, **schema):
+                    pass
+
+# Test that adding or deleting a vector index via UpdateTable requires
+# ALTER permission on the table, just as adding or deleting a GSI does.
+# The vector index is treated as a feature of the base table (like a GSI),
+# so modifying it requires ALTER rather than CREATE/DROP.
+def test_rbac_updatetable_vectorindex(vs, cql):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        with new_role(cql) as (role, key):
+            with new_vs_for_role(vs, role, key) as d:
+                tab = d.Table(table.name)
+                create_vi = {'VectorIndexUpdates': [{'Create': {
+                    'IndexName': 'vind',
+                    'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                }}]}
+                delete_vi = {'VectorIndexUpdates': [{'Delete': {'IndexName': 'vind'}}]}
+                # Without ALTER permissions, adding a vector index is denied:
+                unauthorized(lambda: tab.meta.client.update_table(
+                    TableName=tab.name, **create_vi))
+                # With ALTER permissions, adding a vector index is allowed:
+                with temporary_grant(cql, 'ALTER', cql_table_name(tab), role):
+                    authorized(lambda: tab.meta.client.update_table(
+                        TableName=tab.name, **create_vi))
+                # Wait for the vector index to actually exist before we try
+                # to delete it. Use the admin vs connection (table) which has
+                # full permissions and a vs-patched client to parse the response.
+                if vector_store_configured(table):
+                    wait_for_vector_index_active(table, 'vind')
+                # Without ALTER permissions, deleting the vector index is denied.
+                # Use a harmless UpdateTable first to wait until the permission
+                # revocation has taken effect, same technique as in
+                # test_rbac_updatetable_gsi above.
+                unauthorized(lambda: tab.meta.client.update_table(
+                    TableName=tab.name, BillingMode='PAY_PER_REQUEST'))
+                with pytest.raises(ClientError, match='AccessDeniedException'):
+                    tab.meta.client.update_table(TableName=tab.name, **delete_vi)
+                # With ALTER permissions, deleting the vector index is allowed:
+                with temporary_grant(cql, 'ALTER', cql_table_name(tab), role):
+                    authorized(lambda: tab.meta.client.update_table(
+                        TableName=tab.name, **delete_vi))
+
+# The previous tests checked which permissions are required to create and
+# query a vector index, but didn't check that the vector store really had
+# the permissions to read the base table, and could successfully index the
+# data. For example, we can create a base table that the user has permissions
+# to ALTER and MODIFY but not SELECT, so the user can create a vector index,
+# write to the table, but not be able to Query on it - but the vector store
+# will still be able to index the data, and this index can be read by another
+# user who has permissions to SELECT the table.
+# This test is needs_vector_store, i.e., it will be skipped if the vector
+# store is not configured.
+def test_rbac_vectorstore_indexing(vs, needs_vector_store, cql):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        with new_role(cql) as (role, key):
+            with new_vs_for_role(vs, role, key) as d:
+                tab = d.Table(table.name)
+                # Grant ALTER and MODIFY to the role, but *not* SELECT.
+                with temporary_grant(cql, 'ALTER', cql_table_name(table), role):
+                    with temporary_grant(cql, 'MODIFY', cql_table_name(table), role):
+                        p1 = random_string()
+                        # The role is allowed to insert an item (we haven't
+                        # created an index yet, we'll expect this item to be
+                        # visible in prefill).
+                        authorized(lambda: tab.put_item(Item={'p': p1, 'v': [1, 0, 0]}))
+                        # Create the vector index - ALTER permission allows this.
+                        authorized(lambda: tab.meta.client.update_table(
+                            TableName=tab.name, VectorIndexUpdates=[{'Create': {
+                                'IndexName': 'vind',
+                                'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}
+                            }}]))
+                        # Without SELECT permissions, the role cannot Query
+                        # the vector index.
+                        unauthorized(lambda: tab.query(IndexName='vind',
+                            VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1))
+                        # Wait for the backfill to complete. We can call
+                        # wait_for_vector_index_active() even on tab, without
+                        # SELECT permissions, because it uses DescribeTable to
+                        # check, not a Query.
+                        wait_for_vector_index_active(table, 'vind')
+                        # The superuser can query and find the prefilled item.
+                        result = table.query(IndexName='vind',
+                            VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1)
+                        assert result.get('Items') and result['Items'][0]['p'] == p1
+                        # Also test the CDC path: the role writes a new item after
+                        # the index is ACTIVE and the vector store should pick it up
+                        # via the CDC log, even though the role lacks SELECT.
+                        p2 = random_string()
+                        authorized(lambda: tab.put_item(Item={'p': p2, 'v': [0, 1, 0]}))
+                        # The superuser ("table") can see the new data:
+                        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+                        while True:
+                            result = table.query(IndexName='vind',
+                                VectorSearch={'QueryVector': [0, 1, 0]}, Limit=1)
+                            if result.get('Items') and result['Items'][0]['p'] == p2:
+                                break
+                            if time.monotonic() > deadline:
+                                pytest.fail('Timed out waiting for vector store to index the item via CDC')
+                            time.sleep(0.1)
+                        # If we now grant SELECT permissions to the role, it should
+                        # be able to query and find both items:
+                        with temporary_grant(cql, 'SELECT', cql_table_name(table), role):
+                            result = authorized(lambda: tab.query(IndexName='vind',
+                                VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2))
+                            assert {item['p'] for item in result['Items']} == {p1, p2}
