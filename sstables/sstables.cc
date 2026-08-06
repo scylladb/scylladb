@@ -2609,6 +2609,8 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     _components->scylla_metadata->data.set<scylla_metadata_type::Schema>(std::move(sstable_schema));
     _components->scylla_metadata->data.set<scylla_metadata_type::ComponentsDigests>(scylla_metadata::components_digests{_components_digests});
 
+    _components->scylla_metadata->set_scrub_time(db_clock::now());
+
     _components->scylla_metadata->digest = serialized_checksum(_version, _components->scylla_metadata->data);
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata);
@@ -4482,6 +4484,7 @@ future<std::vector<std::unique_ptr<sstable_stream_source>>> create_stream_source
 
                 co_await seastar::async([&] {
                     tmp.get_or_create_components_digests();
+                    tmp.set_scrub_time(db_clock::now());
                     tmp.digest = serialized_checksum(_sst->get_version(), tmp.data);
                     using buffer_data_sink_impl = seastar::util::basic_memory_data_sink<decltype(bufs), 128*1024>;
                     file_writer fw(data_sink(std::make_unique<buffer_data_sink_impl>(bufs)));
