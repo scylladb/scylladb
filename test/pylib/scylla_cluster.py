@@ -10,7 +10,6 @@ from functools import wraps
 import asyncio
 import concurrent.futures
 from asyncio.subprocess import Process
-from contextlib import asynccontextmanager
 from collections import ChainMap
 import itertools
 import threading
@@ -21,7 +20,7 @@ import shutil
 import tempfile
 import time
 import traceback
-from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union, NoReturn, \
+from typing import Any, Optional, Dict, List, Set, Tuple, Callable, NamedTuple, Union, NoReturn, \
     Awaitable
 import uuid
 from io import BufferedWriter
@@ -29,7 +28,6 @@ import importlib
 
 from test import TOP_SRC_DIR, TEST_DIR
 from test.pylib.host_registry import Host, HostRegistry
-from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
 from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely, get_xdist_worker_id, scale_timeout_by_mode
 from test.pylib.driver_utils import safe_driver_shutdown
@@ -64,7 +62,12 @@ from cassandra.policies import ExponentialReconnectionPolicy  # type: ignore
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
 from cassandra.connection import UnixSocketEndPoint
 
+
+type ClusterFactory = Callable[[logging.Logger | logging.LoggerAdapter], Awaitable[ScyllaCluster]]
+
+
 io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
+
 
 async def async_rmtree(directory, *args, **kwargs):
     loop = asyncio.get_event_loop()
@@ -1194,6 +1197,24 @@ class ScyllaCluster:
         await gather_safely(*(self.host_registry.release_host(Host(ip))
                                for ip in self.leased_ips))
 
+    async def recycle(self) -> None:
+        """Dispose of the cluster once it's no longer needed: stop it, close the
+           server log files and sockets and release the used IPs. We don't
+           necessarily uninstall() it, which would delete the log file and
+           directory - we might want to preserve these if the cluster was used
+           by a failed test.
+        """
+        await self.stop()
+        for srv in self.servers.values():
+            if srv.log_file is not None:
+                srv.log_file.close()
+            srv.maintenance_socket_dir.cleanup()
+        # Close API client to release connector resources
+        if self.api is not None:
+            self.api.close()
+            self.api = None
+        await self.release_ips()
+
     async def release_ips(self) -> None:
         """Release all IPs leased from the host registry by this cluster.
         Call this function only if the cluster is stopped and will not be started again."""
@@ -1418,10 +1439,9 @@ class ScyllaCluster:
 
     def before_test(self, name) -> None:
         """Check that  the cluster is ready for a test. If
-        there was a start error, throw it here - the server is
-        running when it's added to the pool, which can't be attributed
-        to any specific test, throwing it here would stop a specific
-        test."""
+        there was a start error, throw it here - the cluster is started
+        outside of any specific test, so throwing it at start time
+        wouldn't be attributed to a test."""
         if self.start_exception:
             # Mark as dirty so further test cases don't try to reuse this cluster.
             self.is_dirty = True
@@ -1678,7 +1698,7 @@ class ScyllaClusterManager:
 
     def __init__(self,
                  test_uname: str,
-                 clusters: Pool[ScyllaCluster],
+                 create_cluster: ClusterFactory,
                  base_dir: str,
                  sock_path: str | None = None) -> None:
         self.test_uname: str = test_uname
@@ -1690,7 +1710,7 @@ class ScyllaClusterManager:
         self.current_test_case_full_name: str = ''
         self.cluster: ScyllaCluster | None = None
         self.site: aiohttp.web.UnixSite | None = None
-        self.clusters: Pool[ScyllaCluster] = clusters
+        self.create_cluster: ClusterFactory = create_cluster
         self.is_running: bool = False
         self.is_before_test_ok: bool = False
         self.is_after_test_ok: bool = False
@@ -1722,7 +1742,7 @@ class ScyllaClusterManager:
         if self.is_running:
             self.logger.warning("ScyllaClusterManager already running")
             return
-        self.cluster = await self.clusters.get(self.logger)
+        self.cluster = await self.create_cluster(self.logger)
         self.logger.info("First Scylla cluster: %s", self.cluster)
         self.cluster.setLogger(self.logger)
         await self.runner.setup()
@@ -1745,7 +1765,8 @@ class ScyllaClusterManager:
         if self.cluster.is_dirty:
             self.logger.info(f"Current cluster %s is dirty after test %s, replacing with a new one...",
                              self.cluster.name, self.current_test_case_full_name)
-            self.cluster = await self.clusters.replace_dirty(self.cluster, self.logger)
+            await self.cluster.recycle()
+            self.cluster = await self.create_cluster(self.logger)
             self.logger.info("Got new Scylla cluster: %s", self.cluster.name)
         self.cluster.setLogger(self.logger)
         self.logger.info("Leasing Scylla cluster %s for test %s", self.cluster, self.current_test_case_full_name)
@@ -1755,19 +1776,15 @@ class ScyllaClusterManager:
         return str(self.cluster)
 
     async def stop(self) -> None:
-        """Stop, cycle last cluster if not dirty and present"""
+        """Stop the API server and dispose of the last cluster if present"""
         self.logger.info("ScyllaManager stopping for test %s", self.test_uname)
         if self.site:
             await self.site.stop()
             self.site = None
         if self.cluster:
-            if not self.cluster.is_dirty:
-                self.logger.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
-                await self.clusters.put(self.cluster, is_dirty=False)
-            else:
-                self.logger.info("ScyllaManager: Scylla cluster %s is dirty after %s, stopping it",
-                                self.cluster, self.test_uname)
-                await self.clusters.put(self.cluster, is_dirty=True)
+            self.logger.info("ScyllaManager: stopping Scylla cluster %s after %s",
+                             self.cluster, self.test_uname)
+            await self.cluster.recycle()
             self.cluster = None
         if os.path.exists(self.manager_dir):
             await async_rmtree(self.manager_dir)
@@ -2241,15 +2258,3 @@ class ScyllaClusterManager:
         assert self.cluster
         server_id = ServerNum(int(request.match_info["server_id"]))
         return self.cluster.server_get_process_status(server_id)
-
-
-@asynccontextmanager
-async def get_cluster_manager(test_uname: str, clusters: Pool[ScyllaCluster], test_path: str) \
-        -> AsyncIterator[ScyllaClusterManager]:
-    """Create a temporary manager for the active cluster used in a test
-       and provide the cluster to the caller."""
-    manager = ScyllaClusterManager(test_uname, clusters, test_path)
-    try:
-        yield manager
-    finally:
-        await manager.stop()

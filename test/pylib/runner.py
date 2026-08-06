@@ -35,7 +35,6 @@ from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, HOST_ID, path_to
 from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.ldap_server import start_ldap
 from test.pylib.minio_server import MinioServer
-from test.pylib.pool import Pool
 from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
     SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info
 from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
@@ -59,6 +58,8 @@ if TYPE_CHECKING:
     import _pytest.nodes
     import _pytest.scope
 
+    from test.pylib.scylla_cluster import ClusterFactory
+
 
 TEST_CONFIG_FILENAME = "test_config.yaml"
 PYTEST_LOG_FOLDER = "pytest_log"
@@ -75,8 +76,6 @@ logger = logging.getLogger(__name__)
 
 # Store pytest config globally so we can access it in hooks that only receive report
 _pytest_config: pytest.Config | None = None
-
-_cluster_pools: dict[str, Pool[ScyllaCluster]] = {}
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -312,22 +311,18 @@ def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
 
 
 @pytest.fixture(scope="module")
-def testpy_suite_clusters(request: pytest.FixtureRequest,
-                          build_mode: str,
-                          suite_log_dir: pathlib.Path,
-                          scylla_binary: str) -> Pool[ScyllaCluster]:
-    suite_config = get_params_stash(node=request.node)[TEST_SUITE]
-    suite_key = os.path.join(suite_config.path, build_mode)
-    pool = _cluster_pools.get(suite_key)
-    if not pool:
-        _cluster_pools[suite_key] = pool = create_suite_pool(
-            suite_config=suite_config,
-            options=request.config.option,
-            mode=build_mode,
-            log_dir=suite_log_dir,
-            scylla_exe=scylla_binary,
-        )
-    return pool
+def testpy_cluster_factory(request: pytest.FixtureRequest,
+                           build_mode: str,
+                           suite_log_dir: pathlib.Path,
+                           scylla_binary: str) -> ClusterFactory:
+    """A factory of Scylla clusters configured for the current suite and build mode."""
+    return create_cluster_factory(
+        suite_config=get_params_stash(node=request.node)[TEST_SUITE],
+        options=request.config.option,
+        mode=build_mode,
+        log_dir=suite_log_dir,
+        scylla_exe=scylla_binary,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -342,16 +337,15 @@ def scylla_binary(request: pytest.FixtureRequest, build_mode: str) -> str:
 
 @pytest.fixture(scope="module")
 async def scylla_cluster(request: pytest.FixtureRequest,
-                         testpy_suite_clusters: Pool[ScyllaCluster],
+                         testpy_cluster_factory: ClusterFactory,
                          build_mode: str,
                          testpy_shortname: str,
                          testpy_uname: str) -> AsyncGenerator[ScyllaCluster]:
-    """Lease a ScyllaCluster from the pool for the tests in a module.
+    """Create a ScyllaCluster for the tests in a module.
 
-    Gets a cluster from the suite's pool, runs the before-test hook and
+    Builds a cluster with the suite's factory, runs the before-test hook and
     yields it to the module's tests. Once the module is done the cluster is
-    always returned to the pool marked dirty, so it is recycled rather than
-    reused by a later module.
+    recycled, so a later module always starts from a fresh one.
     """
     logger_prefix = f"{build_mode}/"
     cluster_logger = LogPrefixAdapter(logging.getLogger(logger_prefix), {"prefix": logger_prefix})
@@ -361,7 +355,7 @@ async def scylla_cluster(request: pytest.FixtureRequest,
     is_before_test_ok = False
     is_after_test_ok = False
     try:
-        cluster: ScyllaCluster = await testpy_suite_clusters.get(cluster_logger)
+        cluster = await testpy_cluster_factory(cluster_logger)
         cluster.before_test(testpy_uname)
         cluster_logger.info("Leasing Scylla cluster %s for test %s", cluster, testpy_uname)
         server_log_filename = cluster.server_log_filename()
@@ -383,7 +377,7 @@ async def scylla_cluster(request: pytest.FixtureRequest,
     finally:
         if cluster is not None:
             cluster_logger.info("Test %s finished", testpy_uname)
-            await testpy_suite_clusters.put(cluster, is_dirty=True)
+            await cluster.recycle()
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Config) -> None:
@@ -635,7 +629,7 @@ def pytest_runtest_makereport(item, call):
                     f.write(section[1] + "\n")
 
         # Single source of truth for attaching failed-test logs. cqlpy/alternator
-        # expose a pooled `scylla_cluster`; topology suites publish MANAGER_LOGS_KEY.
+        # expose a `scylla_cluster`; topology suites publish MANAGER_LOGS_KEY.
         if report.failed:
             # C++ items (and early setup failures) lack `funcargs`; nothing to collect.
             funcargs = getattr(item, "funcargs", {})
@@ -649,7 +643,7 @@ def pytest_runtest_makereport(item, call):
                     failed_test_dir_path = make_failed_test_dir(item.config, build_mode, item.name)
 
                     if cluster is not None:
-                        # Copy the pooled server log before the cluster is recycled (unlinks it).
+                        # Copy the server log before the cluster teardown closes it.
                         server_log = cluster.server_log_filename()
                         if server_log is not None and pathlib.Path(server_log).is_file():
                             shutil.copyfile(server_log, failed_test_dir_path / pathlib.Path(server_log).name)
@@ -875,11 +869,12 @@ def prepare_environment(tempdir_base: pathlib.Path,
     start_3rd_party_services(tempdir_base=tempdir_base, toxiproxy_byte_limit=toxiproxy_byte_limit)
 
 
-def create_suite_pool(suite_config: TestSuiteConfig,
-                      options: argparse.Namespace,
-                      mode: str,
-                      log_dir: pathlib.Path,
-                      scylla_exe: str) -> Pool[ScyllaCluster]:
+def create_cluster_factory(suite_config: TestSuiteConfig,
+                           options: argparse.Namespace,
+                           mode: str,
+                           log_dir: pathlib.Path,
+                           scylla_exe: str) -> ClusterFactory:
+    """Build a factory of Scylla clusters configured for the given suite and build mode."""
     # environment variables that should be the base of all processes running in this suit
     base_env = {}
 
@@ -892,7 +887,6 @@ def create_suite_pool(suite_config: TestSuiteConfig,
         base_env["LLVM_PROFILE_FILE"] = str(log_dir / "coverage" / suite_config.name / "%m.profraw")
 
     cluster_size = suite_config.cfg.get("cluster", {}).get("initial_size", 1)
-    pool_size = suite_config.cfg.get("pool_size", int(os.getenv("CLUSTER_POOL_SIZE", 2)))
 
     def create_server(create_cfg: ScyllaCluster.CreateServerParams):
         cmdline_options = suite_config.cfg.get("extra_scylla_cmdline_options", [])
@@ -945,35 +939,14 @@ def create_suite_pool(suite_config: TestSuiteConfig,
 
         await cluster.install_and_start()
         # If cluster failed to start, raise the exception immediately
-        # so the pool doesn't return a broken cluster to tests
+        # so a broken cluster is never handed out to tests
         if cluster.start_exception is not None:
             # Clean up the broken cluster before raising
             try:
-                await cluster.stop()
-                if cluster.api is not None:
-                    cluster.api.close()
-                    cluster.api = None
-                await cluster.release_ips()
+                await cluster.recycle()
             except:
                 pass  # Ignore cleanup errors
             raise cluster.start_exception
         return cluster
 
-    async def recycle_cluster(cluster: ScyllaCluster) -> None:
-        """When a dirty cluster is returned to the cluster pool,
-           stop it and release the used IPs. We don't necessarily uninstall() it yet,
-           which would delete the log file and directory - we might want to preserve
-           these if it came from a failed test.
-        """
-        await cluster.stop()
-        for srv in cluster.servers.values():
-            if srv.log_file is not None:
-                srv.log_file.close()
-            srv.maintenance_socket_dir.cleanup()
-        # Close API client to release connector resources
-        if cluster.api is not None:
-            cluster.api.close()
-            cluster.api = None
-        await cluster.release_ips()
-
-    return Pool(pool_size, create_cluster, recycle_cluster)
+    return create_cluster

@@ -48,8 +48,7 @@ if TYPE_CHECKING:
     from cassandra.connection import EndPoint
 
     from test.pylib.internal_types import IPAddress
-    from test.pylib.pool import Pool
-    from test.pylib.scylla_cluster import ScyllaCluster
+    from test.pylib.scylla_cluster import ClusterFactory
 
 
 Session.run_async = run_async     # patch Session for convenience
@@ -158,7 +157,7 @@ def cluster_con(hosts: list[IPAddress | EndPoint], port: int = 9042, use_ssl: bo
 
 @pytest.fixture(scope="module")
 async def manager_api_sock_path(suite_log_dir: Path,
-                                testpy_suite_clusters: Pool[ScyllaCluster],
+                                testpy_cluster_factory: ClusterFactory,
                                 testpy_uname: str) -> AsyncGenerator[str]:
     sock_path = f"{tempfile.mkdtemp(prefix='manager-', dir='/tmp')}/api"
 
@@ -168,11 +167,17 @@ async def manager_api_sock_path(suite_log_dir: Path,
     async def run_manager() -> None:
         mgr = ScyllaClusterManager(
             test_uname=testpy_uname,
-            clusters=testpy_suite_clusters,
+            create_cluster=testpy_cluster_factory,
             base_dir=str(suite_log_dir),
             sock_path=sock_path,
         )
-        await mgr.start()
+        try:
+            await mgr.start()
+        except BaseException:
+            # Dispose of a partially started manager, e.g. a cluster
+            # created before the API site failed to start.
+            await mgr.stop()
+            raise
         start_event.set()
         try:
             await asyncio.get_running_loop().run_in_executor(None, stop_event.wait)
@@ -180,7 +185,15 @@ async def manager_api_sock_path(suite_log_dir: Path,
             await mgr.stop()
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(asyncio.run, run_manager())
+        # Wake up also when the manager dies before signaling readiness
+        # (e.g. cluster creation failed) instead of waiting forever.
+        # The callback fires only after the future is done, so a
+        # completed future here always means a startup failure.
+        future.add_done_callback(lambda _: start_event.set())
         start_event.wait()
+        if future.done():
+            future.result()  # propagate the startup failure
+            raise RuntimeError("ScyllaClusterManager exited before signaling readiness")
 
         yield sock_path
 
