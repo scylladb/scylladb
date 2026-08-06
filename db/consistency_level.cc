@@ -26,31 +26,25 @@ namespace db {
 
 logging::logger cl_logger("consistency");
 
-size_t quorum_for(const locator::effective_replication_map& erm) {
-    size_t replication_factor = erm.get_schema_replication_factor();
-    return replication_factor ? (replication_factor / 2) + 1 : 0;
+static size_t replication_factor(const locator::effective_replication_map& erm, dht::token token, operation_type op) {
+    return op == operation_type::write ? erm.get_replication_factor_for_writing(token) : erm.get_replication_factor_for_reading(token);
 }
 
-static size_t get_replication_factor_for_dc(const locator::effective_replication_map& erm, const sstring& dc) {
-    using namespace locator;
-
-    const auto& rs = erm.get_replication_strategy();
-
-    if (rs.get_type() == replication_strategy_type::network_topology) {
-        const network_topology_strategy* nts =
-            static_cast<const network_topology_strategy*>(&rs);
-        return nts->get_replication_factor(dc);
-    }
-
-    return erm.get_schema_replication_factor();
+static size_t replication_factor(const locator::effective_replication_map& erm, const sstring& dc, dht::token token, operation_type op) {
+    return op == operation_type::write ? erm.get_replication_factor_for_writing(token, dc) : erm.get_replication_factor_for_reading(token, dc);
 }
 
-size_t local_quorum_for(const locator::effective_replication_map& erm, const sstring& dc) {
-    auto rf = get_replication_factor_for_dc(erm, dc);
+size_t quorum_for(const locator::effective_replication_map& erm, dht::token token, operation_type op) {
+    size_t rf = replication_factor(erm, token, op);
     return rf ? (rf / 2) + 1 : 0;
 }
 
-size_t block_for_local_serial(const locator::effective_replication_map& erm) {
+size_t local_quorum_for(const locator::effective_replication_map& erm, const sstring& dc, dht::token token, operation_type op) {
+    auto rf = replication_factor(erm, dc, token, op);
+    return rf ? (rf / 2) + 1 : 0;
+}
+
+size_t block_for_local_serial(const locator::effective_replication_map& erm, dht::token token, operation_type op) {
     using namespace locator;
 
     //
@@ -61,10 +55,10 @@ size_t block_for_local_serial(const locator::effective_replication_map& erm) {
     //
 
     const auto& topo = erm.get_topology();
-    return local_quorum_for(erm, topo.get_datacenter());
+    return local_quorum_for(erm, topo.get_datacenter(), token, op);
 }
 
-size_t block_for_each_quorum(const locator::effective_replication_map& erm) {
+size_t block_for_each_quorum(const locator::effective_replication_map& erm, dht::token token, operation_type op) {
     using namespace locator;
 
     const auto& rs = erm.get_replication_strategy();
@@ -75,16 +69,21 @@ size_t block_for_each_quorum(const locator::effective_replication_map& erm) {
         size_t n = 0;
 
         for (auto& dc : nrs->get_datacenters()) {
-            n += local_quorum_for(erm, dc);
+            n += each_quorum_block_for_dc(erm, dc, token, op);
         }
 
         return n;
     } else {
-        return quorum_for(erm);
+        return quorum_for(erm, token, op);
     }
 }
 
-size_t block_for(const locator::effective_replication_map& erm, consistency_level cl) {
+size_t each_quorum_block_for_dc(const locator::effective_replication_map& erm, const sstring& dc, dht::token token, operation_type op) {
+    const auto& nrs = static_cast<const locator::network_topology_strategy&>(erm.get_replication_strategy());
+    return nrs.get_replication_factor(dc) ? local_quorum_for(erm, dc, token, op) : 0;
+}
+
+size_t block_for(const locator::effective_replication_map& erm, consistency_level cl, dht::token token, operation_type op) {
     switch (cl) {
     case consistency_level::ONE:
         [[fallthrough]];
@@ -99,15 +98,15 @@ size_t block_for(const locator::effective_replication_map& erm, consistency_leve
     case consistency_level::QUORUM:
         [[fallthrough]];
     case consistency_level::SERIAL:
-        return quorum_for(erm);
+        return quorum_for(erm, token, op);
     case consistency_level::ALL:
-        return erm.get_schema_replication_factor();
+        return replication_factor(erm, token, op);
     case consistency_level::LOCAL_QUORUM:
         [[fallthrough]];
     case consistency_level::LOCAL_SERIAL:
-        return block_for_local_serial(erm);
+        return block_for_local_serial(erm, token, op);
     case consistency_level::EACH_QUORUM:
-        return block_for_each_quorum(erm);
+        return block_for_each_quorum(erm, token, op);
     default:
         abort();
     }
@@ -134,11 +133,8 @@ std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
         dc_endpoints.emplace(dc, dc_node_count());
     }
 
-    //
-    // Since live_endpoints are a subset of a get_natural_endpoints() output we
-    // will never get any endpoints outside the dataceters from
-    // nrs->get_datacenters().
-    //
+    // With tablets, live_endpoints may include a datacenter missing from
+    // nrs->get_datacenters() while tablets move to or from it after an RF change.
 
     for (auto& endpoint : live_endpoints) {
         ++(dc_endpoints[topo.get_datacenter(endpoint)].live);
@@ -155,6 +151,8 @@ bool assure_sufficient_live_nodes_each_quorum(
         consistency_level cl,
         const locator::effective_replication_map& erm,
         const host_id_vector_replica_set& live_endpoints,
+        dht::token token,
+        operation_type op,
         const host_id_vector_topology_change& pending_endpoints) {
     using namespace locator;
 
@@ -162,7 +160,7 @@ bool assure_sufficient_live_nodes_each_quorum(
 
     if (rs.get_type() == replication_strategy_type::network_topology) {
         for (auto& entry : count_per_dc_endpoints(erm, live_endpoints, pending_endpoints)) {
-            auto dc_block_for = local_quorum_for(erm, entry.first);
+            auto dc_block_for = each_quorum_block_for_dc(erm, entry.first, token, op);
             auto dc_live = entry.second.live;
             auto dc_pending = entry.second.pending;
 
@@ -181,8 +179,10 @@ void assure_sufficient_live_nodes(
         consistency_level cl,
         const locator::effective_replication_map& erm,
         const host_id_vector_replica_set& live_endpoints,
+        dht::token token,
+        operation_type op,
         const host_id_vector_topology_change& pending_endpoints) {
-    size_t need = block_for(erm, cl);
+    size_t need = block_for(erm, cl, token, op);
 
     auto adjust_live_for_error = [] (size_t live, size_t pending) {
         // DowngradingConsistencyRetryPolicy uses alive replicas count from Unavailable
@@ -205,7 +205,7 @@ void assure_sufficient_live_nodes(
         // local hint is acceptable, and local node is always live
         break;
     case consistency_level::LOCAL_ONE:
-        if (size_t local_rf = get_replication_factor_for_dc(erm, local_dc); local_rf == 0) {
+        if (size_t local_rf = replication_factor(erm, local_dc, token, op); local_rf == 0) {
             throw exceptions::unavailable_exception(make_rf_zero_error_msg(local_dc), cl, 1, 0);
         }
         if (topo.count_local_endpoints(live_endpoints) < topo.count_local_endpoints(pending_endpoints) + 1) {
@@ -213,7 +213,7 @@ void assure_sufficient_live_nodes(
         }
         break;
     case consistency_level::LOCAL_QUORUM: {
-        if (size_t local_rf = get_replication_factor_for_dc(erm, local_dc); local_rf == 0) {
+        if (size_t local_rf = replication_factor(erm, local_dc, token, op); local_rf == 0) {
             throw exceptions::unavailable_exception(make_rf_zero_error_msg(local_dc), cl, need, 0);
         }
         size_t local_live = topo.count_local_endpoints(live_endpoints);
@@ -225,7 +225,7 @@ void assure_sufficient_live_nodes(
         break;
     }
     case consistency_level::EACH_QUORUM:
-        if (assure_sufficient_live_nodes_each_quorum(cl, erm, live_endpoints, pending_endpoints)) {
+        if (assure_sufficient_live_nodes_each_quorum(cl, erm, live_endpoints, token, op, pending_endpoints)) {
             break;
         }
     // Fallthrough on purpose for SimpleStrategy
@@ -249,7 +249,8 @@ filter_for_query(consistency_level cl,
                  read_repair_decision read_repair,
                  const gms::gossiper& g,
                  std::optional<locator::host_id>* extra,
-                 replica::column_family* cf) {
+                 replica::column_family* cf,
+                 dht::token token) {
     size_t local_count;
 
     if (read_repair == read_repair_decision::GLOBAL) { // take RRD.GLOBAL out of the way
@@ -265,7 +266,7 @@ filter_for_query(consistency_level cl,
         }
     }
 
-    size_t bf = block_for(erm, cl);
+    size_t bf = block_for(erm, cl, token, operation_type::read);
 
     if (read_repair == read_repair_decision::DC_LOCAL) {
         bf = std::max(bf, local_count);
@@ -365,7 +366,8 @@ filter_for_query(consistency_level cl,
 bool
 is_sufficient_live_nodes(consistency_level cl,
                          const locator::effective_replication_map& erm,
-                         const host_id_vector_replica_set& live_endpoints) {
+                         const host_id_vector_replica_set& live_endpoints,
+                         dht::token token) {
     using namespace locator;
     const auto& topo = erm.get_topology();
 
@@ -376,14 +378,14 @@ is_sufficient_live_nodes(consistency_level cl,
     case consistency_level::LOCAL_ONE:
         return topo.count_local_endpoints(live_endpoints) >= 1;
     case consistency_level::LOCAL_QUORUM:
-        return topo.count_local_endpoints(live_endpoints) >= block_for(erm, cl);
+        return topo.count_local_endpoints(live_endpoints) >= block_for(erm, cl, token, operation_type::read);
     case consistency_level::EACH_QUORUM:
     {
         auto& rs = erm.get_replication_strategy();
 
         if (rs.get_type() == replication_strategy_type::network_topology) {
             for (auto& entry : count_per_dc_endpoints(erm, live_endpoints)) {
-                if (entry.second.live < local_quorum_for(erm, entry.first)) {
+                if (entry.second.live < each_quorum_block_for_dc(erm, entry.first, token, operation_type::read)) {
                     return false;
                 }
             }
@@ -394,7 +396,7 @@ is_sufficient_live_nodes(consistency_level cl,
         [[fallthrough]];
         // Fallthrough on purpose for SimpleStrategy
     default:
-        return live_endpoints.size() >= block_for(erm, cl);
+        return live_endpoints.size() >= block_for(erm, cl, token, operation_type::read);
     }
 }
 
