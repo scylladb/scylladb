@@ -55,26 +55,11 @@ public:
     void swap(evictable& o) noexcept {
         _lru_link.swap_nodes(o._lru_link);
     }
-
-    virtual bool is_index() const noexcept {
-        return false;
-    }
 };
 
-// Sstable index cache shares memory with the data cache.
-// To prevent index entries from depriving the data cache of memory,
-// there is a limit (index_cache_fraction) on the total fraction of cache usable
-// by index entries.
-//
-// To maintain this limit, index entries might have to be evicted outside of the regular LRU order.
-// Therefore they are linked both in the common LRU list and in a separate LRU list for index entries.
-class index_evictable : public evictable {
-    friend class lru;
-    evictable::lru_link_type _index_lru_link;
-    bool is_index() const noexcept override {
-        return true;
-    }
-};
+// Backwards-compatibility alias. Index entries now participate in the
+// regular LRU without a separate list or hard capacity cap.
+using index_evictable = evictable;
 
 // Implements LRU cache replacement for row cache and sstable index cache.
 class lru {
@@ -83,12 +68,6 @@ private:
         boost::intrusive::member_hook<evictable, evictable::lru_link_type, &evictable::_lru_link>,
         boost::intrusive::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
     lru_type _list;
-
-    // See the comment to index_evictable.
-    using index_lru_type = boost::intrusive::list<index_evictable,
-        boost::intrusive::member_hook<index_evictable, index_evictable::lru_link_type, &index_evictable::_index_lru_link>,
-        boost::intrusive::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
-    index_lru_type _index_list;
 
     using reclaiming_result = seastar::memory::reclaiming_result;
 
@@ -103,16 +82,10 @@ public:
 
     void remove(evictable& e) noexcept {
         _list.erase(_list.iterator_to(e));
-        if (e.is_index()) {
-            _index_list.erase(_index_list.iterator_to(static_cast<index_evictable&>(e)));
-        }
     }
 
     void add(evictable& e) noexcept {
         _list.push_back(e);
-        if (e.is_index()) {
-            _index_list.push_back(static_cast<index_evictable&>(e));
-        }
     }
 
     // Like add(e) but makes sure that e is evicted right before "more_recent" in the absence of later touches.
@@ -127,11 +100,11 @@ public:
 
     // Evicts a single element from the LRU
     template <bool Shallow = false>
-    reclaiming_result do_evict(bool should_evict_index) noexcept {
+    reclaiming_result do_evict() noexcept {
         if (_list.empty()) {
             return reclaiming_result::reclaimed_nothing;
         }
-        evictable& e = (should_evict_index && !_index_list.empty()) ? _index_list.front() : _list.front();
+        evictable& e = _list.front();
         remove(e);
         if constexpr (!Shallow) {
             e.on_evicted();
@@ -142,14 +115,14 @@ public:
     }
 
     // Evicts a single element from the LRU.
-    reclaiming_result evict(bool should_evict_index = false) noexcept {
-        return do_evict<false>(should_evict_index);
+    reclaiming_result evict() noexcept {
+        return do_evict<false>();
     }
 
     // Evicts a single element from the LRU.
     // Will call on_evicted_shallow() instead of on_evicted().
     reclaiming_result evict_shallow() noexcept {
-        return do_evict<true>(false);
+        return do_evict<true>();
     }
 
     // Evicts all elements.

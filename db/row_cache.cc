@@ -94,34 +94,11 @@ cache_tracker::cache_tracker(utils::updateable_value<double> index_cache_fractio
             }
             current_tracker = this;
 
-            // Cache replacement algorithm:
-            //
-            // if sstable index caches occupy more than index_cache_fraction of cache memory:
-            //     evict the least recently used index entry
-            // else:
-            //     evict the least recently used entry (data or index)
-            //
-            // This algorithm has the following good properties:
-            // 1. When index and data entries contend for cache space, it prevents
-            //    index cache from taking more than index_cache_fraction of memory.
-            //    This makes sure that the index cache doesn't catastrophically
-            //    deprive the data cache of memory in small-partition workloads.
-            // 2. Since it doesn't enforce a lower limit on the index space, but only
-            //    the upper limit, the parameter shouldn't require careful balancing.
-            //    In workloads where it makes sense to cache the index (usually: where
-            //    the index is small enough to fit in RAM), setting the fraction to any big number (e.g. 1.0)
-            //    should work well enough. In workloads where it doesn't make sense to cache the index,
-            //    setting the fraction to any small number (e.g. 0.0) should work well enough.
-            //    Setting it to a medium number (something like 0.2) should work well enough
-            //    for both extremes, although it might be suboptimal for non-extremes.
-            // 3. The parameter is trivially live-updateable.
-            //
-            // Perhaps this logic should be encapsulated somewhere else, maybe in `class lru` itself.
-            size_t total_cache_space = _region.occupancy().total_space();
-            size_t index_cache_space = _partition_index_cache_stats.used_bytes + _index_cached_file_stats.cached_bytes;
-            bool should_evict_index = index_cache_space > total_cache_space * _index_cache_fraction.get();
-
-            return _lru.evict(should_evict_index);
+            // Index entries and row cache entries now share the same LRU.
+            // Hot entries (frequently touched) naturally stay at the back;
+            // cold entries (e.g., index pages read once during a scan) drift
+            // to the front and get evicted first. No hard cap needed.
+            return _lru.evict();
         });
     });
 }
