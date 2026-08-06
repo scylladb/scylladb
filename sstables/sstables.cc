@@ -1709,6 +1709,15 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 
         auto new_sst = creator(shared_from_this());
         auto generation = new_sst->generation();
+        auto sid = this->sstable_identifier();
+        if (update_id || !sid) {
+            // It is okay to use a new sstable_id if update_id==false and the current sstable is missing it
+            // since new sstables are expected to always have a sstable_id and we do not want to preserve
+            // the state of a legacy sstable that doesn't have a sstable_identifier
+            sid = new_sst->ensure_sstable_identifier();
+        } else {
+            new_sst->set_sstable_identifier(*sid);
+        }
 
         // Mark the new sstable as a component-rewrite output so that when the
         // component is written below it preserves the parent sstable's original
@@ -1718,7 +1727,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         // The rest of the sstable is hard-linked and its scylla_metadata is carried over.
         new_sst->mark_created_by_component_rewrite();
 
-        _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla}).get();
+        _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla}, *sid).get();
         new_sst->copy_components(*this).get();
 
         modifier(*new_sst);
@@ -1727,9 +1736,6 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         // If unchanged, reuse the existing _components->scylla_metadata instead.
         scylla_metadata metadata;
         read_simple<component_type::Scylla>(metadata).get();
-        if (update_id) {
-            metadata.set_sstable_identifier();
-        }
 
         new_sst->write_component_with_metadata(component, std::move(metadata));
 
@@ -1758,6 +1764,15 @@ void sstable::write_component_with_metadata(component_type type, scylla_metadata
     write_component(type);
 
     metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
+    // The sstable's identifier is authoritative: make sure the sstable_identifier
+    // we store in scylla_metadata is the one the sstable is known by.  This must
+    // happen before the digest below is computed over metadata.data.
+    auto sid = sstable_identifier();
+    if (!sid) {
+        on_internal_error(sstlog, fmt::format("SSTable {}: cannot rewrite {} without an sstable identifier",
+                get_filename(), component_name(*this, type)));
+    }
+    metadata.set_sstable_identifier(*sid);
     metadata.digest = serialized_checksum(_version, metadata.data);
 
     write_simple<component_type::Scylla>(metadata);
@@ -1901,7 +1916,7 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
     this->set_first_and_last_keys();
     _run_identifier = _components->scylla_metadata->get_optional_run_identifier().value_or(run_id::create_random_id());
 
-    _sstable_identifier = _components->scylla_metadata->get_optional_sstable_identifier();
+    ensure_sstable_identifier();
 
     if (cfg.load_first_and_last_position_metadata) {
         co_await load_first_and_last_position_in_partition();
@@ -2451,6 +2466,13 @@ sstable::read_scylla_metadata() noexcept {
 
             auto computed_digest = co_await compute_component_file_digest(component_type::Scylla);
             validate_component_digest(component_type::Scylla, computed_digest);
+
+            // If we already know which identifier this sstable is, the metadata
+            // we just read must say the same.  On object storage the identifier
+            // we opened the sstable by is the one its component objects are
+            // named after, so a mismatch means those objects and this metadata
+            // do not belong to the same sstable.
+            validate_sstable_identifier();
         });
     });
 }
@@ -2538,16 +2560,7 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
         _components->scylla_metadata->data.set<scylla_metadata_type::ExtTimestampStats>(std::move(*ts_stats));
     }
 
-    sstable_id sid;
-    if (_sstable_identifier) {
-        sid = *_sstable_identifier;
-    } else if (generation().is_uuid_based()) {
-        sid = sstable_id(generation().as_uuid());
-    } else {
-        sid = sstable_id(utils::UUID_gen::get_time_UUID());
-        sstlog.info("SSTable {} has numerical generation. SSTable identifier in scylla_metadata set to {}", get_filename(), sid);
-    }
-    _components->scylla_metadata->set_sstable_identifier(sid);
+    _components->scylla_metadata->set_sstable_identifier(ensure_sstable_identifier());
 
     sstable_schema_type sstable_schema;
     sstable_schema.id = _schema->id();
@@ -2563,6 +2576,53 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     _components->scylla_metadata->digest = serialized_checksum(_version, _components->scylla_metadata->data);
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata);
+}
+
+sstable_id sstable::ensure_sstable_identifier() {
+    optimized_optional<sstable_id> sid;
+
+    // If the sstable already loaded its scylla_metadata, take the identifier
+    // persisted there; that is the one its components were written under.
+    if (_components->scylla_metadata) {
+        // When the identifier is already known, the metadata must not hold a
+        // different one: adopting it below would then leave the sstable
+        // unreachable under the identifier its components are named by.
+        validate_sstable_identifier();
+        sid = _components->scylla_metadata->get_optional_sstable_identifier();
+    }
+
+    // Otherwise, on the write path, _sstable_identifier may have already been set.
+    // If so, use it, else derive the identifier from the generation unless it is
+    // numerical (as might be the case in some legacy unit tests), in which case
+    // generate a new one.
+    if (!sid) {
+        if (_sstable_identifier) {
+            sid = *_sstable_identifier;
+        } else if (generation().is_uuid_based()) {
+            sid = sstable_id(generation().as_uuid());
+        } else {
+            sid = sstable_id(utils::UUID_gen::get_time_UUID());
+            sstlog.info("SSTable {} has numerical generation. SSTable identifier set to {}", get_filename(), sid);
+        }
+    }
+    // Make the sstable carry the identifier its component objects are named
+    // by, rather than depend on whoever created it to have set it.  Stamping it
+    // into the Scylla metadata is left to whoever is about to write that out.
+    _sstable_identifier = sid;
+    return *sid;
+}
+
+void sstable::validate_sstable_identifier() const {
+    if (!_sstable_identifier || !_components->scylla_metadata) {
+        return;
+    }
+    // A null identifier means the metadata predates SSTableIdentifier, or has
+    // not been stamped with one yet; there is nothing to disagree with.
+    auto stored_sid = _components->scylla_metadata->get_optional_sstable_identifier();
+    if (stored_sid && stored_sid != *_sstable_identifier) {
+        on_internal_error(sstlog, fmt::format("SSTable {}: scylla_metadata holds sstable identifier {} while the sstable is identified by {}",
+                get_filename(), stored_sid, *_sstable_identifier));
+    }
 }
 
 bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const {

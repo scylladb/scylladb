@@ -286,6 +286,10 @@ public:
     // put it into the desired destination assigning the given generation
     future<> pick_up_from_upload(sstable_state to, generation_type new_generation);
 
+    // The sstable generation represents the node/shard reference to the sstable.
+    // When the sstable is created, the sstable identifier is equal to the sstable generation,
+    // but over time, e.g. when a sstable is migrated across shards or nodes, its identifier
+    // remains stable, while the generation changes to reflect the new node/shard reference.
     generation_type generation() const {
         return _generation;
     }
@@ -740,6 +744,10 @@ private:
                                std::optional<scylla_metadata::large_data_stats> ld_stats,
                                std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
                                std::optional<scylla_metadata::large_data_records> ld_records = std::nullopt);
+    sstable_id ensure_sstable_identifier();
+    // Verifies that the sstable identifier persisted in the Scylla metadata
+    // agrees with the one this sstable is known by, when both are known.
+    void validate_sstable_identifier() const;
 
     future<> read_filter(sstable_open_config cfg = {});
 
@@ -906,6 +914,11 @@ private:
     void write_toc(std::unique_ptr<crc32_digest_file_writer> w);
     static future<uint32_t> read_digest_from_file(file f);
     static future<lw_shared_ptr<checksum>> read_checksum_from_file(file f);
+
+    void set_sstable_identifier(sstable_id sid) noexcept {
+        _sstable_identifier = sid;
+    }
+
 public:
 
     shareable_components& get_shared_components() const {
@@ -1163,7 +1176,18 @@ public:
         return _unlinked_at;
     }
 
-    // sstable_id is null iff not present in scylla_metadata
+    // The sstable identifier identifies the sstable globally across all nodes, shards, and over time.
+    // When the sstable is created, the sstable identifier is equal to the sstable generation,
+    // but over time, e.g. when a sstable is migrated across shards or nodes, its identifier
+    // remains stable, while the generation changes to reflect the new node/shard reference.
+    //
+    // On object-storage, the sstable identifier comes as part of the sstable prefix,
+    // while the generation is used to identify the node reference to the sstable.
+    // The generation-based references control the sstable lifetime across migrations, sstable sharing,
+    // and across snapshot and backup operations.
+    //
+    // The sstable_identifier is null iff not present in scylla_metadata
+    // It is required to be set for all sstables stored on object storage.
     const optimized_optional<sstable_id>& sstable_identifier() const noexcept {
         return _sstable_identifier;
     }
