@@ -32,7 +32,7 @@ from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
 from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely, get_xdist_worker_id, scale_timeout_by_mode
-from test.pylib.driver_utils import safe_driver_shutdown
+from test.pylib.driver_utils import safe_driver_shutdown, safe_shutting_down
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
 from functools import partial
@@ -724,7 +724,7 @@ class ScyllaServer:
             # here is directed to a node different from the initial contact
             # point, so make sure we execute the checks strictly via
             # this connection
-            with Cluster(**cluster_kwargs) as cluster:
+            with safe_shutting_down(Cluster(**cluster_kwargs)) as cluster:
                 with cluster.connect() as session:
                     connected = True
                     # See the comment above about `auth::standard_role_manager`. We execute
@@ -733,8 +733,17 @@ class ScyllaServer:
                     # Only create the persistent control connection once; re-creating it on
                     # every successful CQL check would leak driver connections.
                     if self.control_connection is None:
-                        self.control_cluster = Cluster(**cluster_kwargs)
-                        self.control_connection = self.control_cluster.connect()
+                        # Connect before publishing the cluster, so a failed connect()
+                        # doesn't leave a leaked Cluster behind for the next check to
+                        # silently overwrite.
+                        control_cluster = Cluster(**cluster_kwargs)
+                        try:
+                            control_connection = control_cluster.connect()
+                        except BaseException:
+                            safe_driver_shutdown(control_cluster)
+                            raise
+                        self.control_cluster = control_cluster
+                        self.control_connection = control_connection
                     cql_queried = True
         except (NoHostAvailable, InvalidRequest, OperationTimedOut) as exc:
             self.logger.debug("Exception when checking if CQL is up: %s", exc)
@@ -969,14 +978,14 @@ class ScyllaServer:
         auth = PlainTextAuthProvider(username='cassandra', password='cassandra')
         profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy(self.seeds),
                                    request_timeout=self.TOPOLOGY_TIMEOUT)
-        with Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                     contact_points=self.seeds,
-                     auth_provider=auth,
-                     # This is the latest version Scylla supports
-                     protocol_version=4,
-                     control_connection_timeout=self.TOPOLOGY_TIMEOUT,
-                     reconnection_policy=_DRIVER_RECONNECTION_POLICY,
-                     ) as cluster:
+        with safe_shutting_down(Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
+                                        contact_points=self.seeds,
+                                        auth_provider=auth,
+                                        # This is the latest version Scylla supports
+                                        protocol_version=4,
+                                        control_connection_timeout=self.TOPOLOGY_TIMEOUT,
+                                        reconnection_policy=_DRIVER_RECONNECTION_POLICY,
+                                        )) as cluster:
             with cluster.connect() as session:
                 session.execute("CREATE KEYSPACE IF NOT EXISTS k WITH REPLICATION = {" +
                                 "'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")

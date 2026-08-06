@@ -7,6 +7,8 @@
 """Utilities for working with the scylla-driver (cassandra-driver)."""
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from cassandra.cluster import Cluster  # type: ignore # pylint: disable=no-name-in-module
 
@@ -43,3 +45,18 @@ def safe_driver_shutdown(cluster: Cluster) -> None:
         scheduler.join(timeout=_SCHEDULER_JOIN_TIMEOUT)
         if scheduler.is_alive():
             logger.warning("Driver Task Scheduler thread did not terminate within %.1fs", _SCHEDULER_JOIN_TIMEOUT)
+
+
+@contextmanager
+def safe_shutting_down(cluster: Cluster) -> Iterator[Cluster]:
+    """Scope a Cluster so it is always torn down with safe_driver_shutdown().
+
+    Cluster starts its "Task Scheduler" thread in the constructor and has no
+    __del__, so a Cluster that is dropped without shutdown() leaks that thread.
+    Cluster's own context manager calls a plain shutdown(), which lacks the
+    Task Scheduler race workaround; use this instead.
+    """
+    try:
+        yield cluster
+    finally:
+        safe_driver_shutdown(cluster)
