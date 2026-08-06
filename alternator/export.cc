@@ -1285,15 +1285,16 @@ seastar::future<> export_scan_table(
         auto tm = proxy.get_token_metadata_ptr();
         auto erm = schema->table().get_effective_replication_map();
         // With RF=0 a read silently returns an empty result (quorum of zero replicas),
-        // so the export would "succeed" with no items.
+        // so the export would "succeed" with no items. The export scans every tablet, so it
+        // checks the schema replication factor, not one tablet's.
         if (erm->get_replication_strategy().get_type() == locator::replication_strategy_type::network_topology) {
             const auto& local_dc = tm->get_topology().get_datacenter();
-            if (db::local_quorum_for(*erm, local_dc) == 0) {
+            if (db::local_quorum_for(erm->get_replication_factor_from_schema(locator::with_datacenters::yes)) == 0) {
                 throw api_error::validation(fmt::format(
                         "Cannot export {}.{}: keyspace has no replicas in the local datacenter {}",
                         schema->ks_name(), schema->cf_name(), local_dc));
             }
-        } else if (db::quorum_for(*erm) == 0) {
+        } else if (db::quorum_for(erm->get_replication_factor_from_schema(locator::with_datacenters::no)) == 0) {
             throw api_error::validation(fmt::format(
                     "Cannot export {}.{}: keyspace has no replicas (replication factor 0)",
                     schema->ks_name(), schema->cf_name()));
