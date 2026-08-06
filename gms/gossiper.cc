@@ -557,7 +557,9 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state
 
     co_await utils::get_local_injector().inject("delay_gossiper_apply", [&node, &remote_state](auto& handler) -> future<> {
         const auto gossip_delay_node = handler.template get<std::string_view>("delay_node");
-        if (gossip_delay_node && !remote_state.get_host_id() && inet_address(sstring(gossip_delay_node.value())) == node) {
+        // with_host_id suspends only the states that carry HOST_ID instead.
+        const bool with_host_id = handler.template get<std::string_view>("with_host_id").has_value();
+        if (gossip_delay_node && bool(remote_state.get_host_id()) == with_host_id && inet_address(sstring(gossip_delay_node.value())) == node) {
             logger.debug("delay_gossiper_apply: suspend for node {}", node);
             co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
             logger.debug("delay_gossiper_apply: resume for node {}", node);
@@ -567,6 +569,35 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state
     // If state does not exist just add it. If it does then add it if the remote generation is greater.
     // If there is a generation tie, attempt to break it by heartbeat version.
     auto permit = co_await lock_endpoint(node, null_permit_id);
+
+    // Re-check under the endpoint lock: the node may have left between the
+    // time the state was queued and now. force_remove_endpoint() runs under
+    // the same lock, so without this a state carrying HOST_ID that was
+    // queued before the removal would re-insert the removed endpoint via
+    // handle_major_state_change(). In gossiper topology mode remove_endpoint()
+    // and evict_from_membership() quarantine the node under the same lock.
+    if (!shadow_round) {
+        if (_topo_sm) {
+            // Deltas of a known node carry no HOST_ID, so take it from the
+            // local state of the address.
+            auto hid = remote_state.get_host_id();
+            if (!hid) {
+                if (const auto local = get_endpoint_state_ptr(node)) {
+                    hid = local->get_host_id();
+                }
+            }
+            if (hid && _topo_sm->_topology.left_nodes.contains(raft::server_id(hid.uuid()))) {
+                logger.debug("do_apply_state_locally: ignoring gossip for {} because it left", node);
+                co_return;
+            }
+        } else {
+            if (_just_removed_endpoints.contains(node)) {
+                logger.debug("do_apply_state_locally: ignoring gossip for {} because it is quarantined", node);
+                co_return;
+            }
+        }
+    }
+
     auto es = get_endpoint_state_ptr(node);
     if (!es && _topo_sm) {
         // Even if there is no endpoint for the given IP the message can still belong to existing endpoint that
