@@ -129,7 +129,7 @@ cql3::statements::select_statement& view_info::select_statement(data_dictionary:
             raw = cql3::util::build_select_statement(base_name(), where_clause(), include_all_columns(), _schema.all_columns());
         }
         raw->prepare_keyspace(_schema.ks_name());
-        raw->set_bound_variables({});
+        raw->set_bound_variables({}, cql3::internal_dialect());
         cql3::cql_stats ignored;
         auto prepared = raw->prepare(db, ignored, cql3::default_cql_config, true);
         _select_statement = static_pointer_cast<cql3::statements::select_statement>(prepared->statement);
