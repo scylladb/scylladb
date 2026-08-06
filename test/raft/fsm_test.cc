@@ -2800,3 +2800,43 @@ BOOST_AUTO_TEST_CASE(test_election_timeout_range_counts_voters_only) {
         BOOST_CHECK_LE(ticks, 2 * ET);
     }
 }
+
+BOOST_AUTO_TEST_CASE(test_fast_bootstrap_prefers_priority_member) {
+    server_id A_id = id(), B_id = id(), C_id = id();
+    BOOST_CHECK(A_id < B_id);
+    BOOST_CHECK(B_id < C_id);
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.config = cfg});
+
+    // The seed alone would bootstrap A, the smallest-id voter. C is the priority
+    // member, so it wins the election anyway - bootstrap it instead of handing the
+    // leadership over afterwards.
+    raft::fsm_config fcfg{.append_request_threshold = 1, .enable_prevoting = true,
+                          .fast_bootstrap_seed = 0,
+                          .get_priority_members = [C_id] { return std::vector<server_id>{C_id}; }};
+
+    fsm_debug C(C_id, term_t{}, server_id{}, raft::log(log), trivial_failure_detector, fcfg);
+    BOOST_CHECK(C.is_candidate());
+
+    fsm_debug A(A_id, term_t{}, server_id{}, raft::log(log), trivial_failure_detector, fcfg);
+    BOOST_CHECK(A.is_follower());
+}
+
+BOOST_AUTO_TEST_CASE(test_fast_bootstrap_falls_back_to_the_seed) {
+    server_id A_id = id(), B_id = id(), C_id = id(), removed_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.config = cfg});
+
+    // No priority member can vote here, so the seed picks the leader as before.
+    raft::fsm_config fcfg{.append_request_threshold = 1, .enable_prevoting = true,
+                          .fast_bootstrap_seed = 0,
+                          .get_priority_members = [removed_id] { return std::vector<server_id>{removed_id}; }};
+
+    fsm_debug A(A_id, term_t{}, server_id{}, raft::log(log), trivial_failure_detector, fcfg);
+    BOOST_CHECK(A.is_candidate());
+
+    fsm_debug C(C_id, term_t{}, server_id{}, raft::log(log), trivial_failure_detector, fcfg);
+    BOOST_CHECK(C.is_follower());
+}

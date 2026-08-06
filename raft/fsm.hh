@@ -67,8 +67,9 @@ struct fsm_config {
     // ascending server_id order. Callers that manage many groups (e.g. one per
     // tablet) can derive the seed from the group id so that leadership is spread
     // across nodes instead of always landing on the smallest-id one; a seed of 0
-    // selects the smallest-id voter. When unset (the default), fast bootstrap is
-    // disabled and a bare fsm starts as a follower; raft::server sets it.
+    // selects the smallest-id voter, and a priority member which can vote takes
+    // precedence over the seed. When unset (the default), fast bootstrap is disabled and
+    // a bare fsm starts as a follower; raft::server sets it.
     std::optional<uint64_t> fast_bootstrap_seed;
     // Servers to prefer as leader, in priority order: element 0 is the strongest
     // candidate, element k the (k+1)-th. Each listed server gets a unique,
