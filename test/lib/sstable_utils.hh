@@ -50,6 +50,14 @@ public:
         return _sst->_components->statistics;
     }
 
+    std::optional<scylla_metadata*> _scylla_metadata() {
+        auto& metadata = _sst->_components->scylla_metadata;
+        if (metadata) {
+            return &*metadata;
+        }
+        return std::nullopt;
+    }
+
     std::unique_ptr<index_reader> make_index_reader(reader_permit permit) {
         return std::make_unique<index_reader>(_sst, std::move(permit));
     }

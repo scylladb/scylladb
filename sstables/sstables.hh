@@ -677,7 +677,16 @@ private:
     // Used only for writing sstable.
     scylla_metadata::components_digests _components_digests;
     uint32_t _toc_digest{};
+
+    // Stores the time point of the last automatic validation attempt for this sstable.
+    // The value when the sstable was last succesfuly validated is stored in the
+    // Scylla metadata component. This value stores the timestamp of the last
+    // automatic validation attempt, even if unsuccesful.
+    std::optional<db_clock::time_point> _automatic_validation_last_attempted;
 public:
+    std::optional<db_clock::time_point> get_last_automatic_validation_attempt_timestamp();
+    void mark_automatic_validation_attempt();
+
     bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }
     const sstables_manager& manager() const { return _manager; }
@@ -1109,6 +1118,9 @@ public:
 
     std::optional<uint32_t> get_component_digest(component_type c) const;
 
+    std::optional<db_clock::time_point> get_scrub_time();
+    void set_scrub_time(db_clock::time_point = db_clock::now());
+
     // Gets ratio of droppable tombstone. A tombstone is considered droppable here
     // for cells and tombstones expired before the time point "GC before", which
     // is the point before which expiring data can be purged.
@@ -1241,6 +1253,11 @@ public:
             component_type component,
             std::function<void(sstable&)> modifier,
             update_sstable_id);
+
+    future<shared_sstable> link_with_rewritten_metadata(std::function<shared_sstable(shared_sstable)> sstable_creator,
+            std::function<void(scylla_metadata&)> modifier,
+            update_sstable_id);
+
     // Must be called in a seastar thread
     void write_component_with_metadata(component_type type, scylla_metadata metadata);
 };

@@ -622,6 +622,32 @@ future<> test_env_compaction_manager::perform_compaction(shared_ptr<compaction::
     co_await task->run_compaction();
 }
 
+future<> test_env_compaction_manager::register_compacting(compaction::compaction_group_view &t, std::span<shared_sstable> ssts) {
+    co_return co_await _cm.run_with_compaction_disabled(t, [this, ssts] -> future<> {
+        _cm._compacting_sstables.insert_range(ssts);
+        co_return;
+    });
+}
+
+future<> test_env_compaction_manager::deregister_compacting(compaction::compaction_group_view &t, std::span<shared_sstable> ssts) {
+    co_return co_await _cm.run_with_compaction_disabled(t, [this, ssts] -> future<> {
+        for (const auto& sst : ssts) {
+            _cm._compacting_sstables.erase(sst);
+        }
+        co_return;
+    });
+}
+
+
+void test_env_compaction_manager::set_scrub_period(std::chrono::seconds period) {
+    _cm._scrub_period = period;
+    _cm.update_automatic_scrub_submission_timer();
+}
+
+void test_env_compaction_manager::trigger_auto_scrub_timer() {
+    _cm.automatic_scrub_submission_callback()();
+}
+
 }
 
 static std::pair<int, char**> rebuild_arg_list_without(int argc, char** argv, const char* filter_out, bool exclude_positional_arg = false) {

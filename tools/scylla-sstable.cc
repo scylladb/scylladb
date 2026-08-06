@@ -900,7 +900,7 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
     scylla_sstable_compaction_group_view compaction_group_view(schema, permit, sst_man, output_dir);
 
     auto compaction_descriptor = compaction::compaction_descriptor(std::move(sstables));
-    compaction_descriptor.options = compaction::compaction_type_options::make_scrub(scrub_mode, compaction::compaction_type_options::scrub::quarantine_invalid_sstables::no);
+    compaction_descriptor.options = compaction::compaction_type_options::make_scrub(scrub_mode, compaction::compaction_type_options::scrub::quarantine_invalid_sstables::no, compaction::compaction_type_options::scrub::drop_unfixable_sstables::no, compaction::compaction_type_options::scrub::may_update_scrub_time::no);
     compaction_descriptor.creator = [&compaction_group_view] (shard_id) { return compaction_group_view.make_sstable(sstables::sstable_state::normal); };
     compaction_descriptor.replacer = [] (compaction::compaction_completion_desc) { };
 
@@ -1363,6 +1363,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::Schema: return "schema";
         case sstables::scylla_metadata_type::ComponentsDigests: return "components_digests";
         case sstables::scylla_metadata_type::LargeDataRecords: return "large_data_records";
+        case sstables::scylla_metadata_type::ScrubTime: return "scrub_time";
     }
     std::abort();
 }
@@ -1560,6 +1561,15 @@ public:
 
         _writer.EndObject();
     }
+
+    void operator()(const sstables::scrub_time_type& as) const {
+        _writer.StartObject();
+
+        _writer.Key("scrub_time");
+        _writer.Int64(as.timestamp);
+
+        _writer.EndObject();
+    } 
 };
 
 void write_scylla_metadata_component(schema_ptr schema, const sstables::shared_sstable& sst, json_writer& writer) {

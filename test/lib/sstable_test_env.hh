@@ -93,6 +93,14 @@ public:
     void propagate_replacement(compaction::compaction_group_view& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);
 
     future<> perform_compaction(shared_ptr<compaction::compaction_task_executor> task);
+
+    future<> register_compacting(compaction::compaction_group_view &t, std::span<shared_sstable> ssts);
+
+    future<> deregister_compacting(compaction::compaction_group_view &t, std::span<shared_sstable> ssts);
+
+    void set_scrub_period(std::chrono::seconds period);
+    
+    void trigger_auto_scrub_timer();
 };
 
 struct test_env_config {
