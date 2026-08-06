@@ -27,7 +27,7 @@ namespace db {
 logging::logger cl_logger("consistency");
 
 size_t quorum_for(const locator::effective_replication_map& erm) {
-    size_t replication_factor = erm.get_replication_factor();
+    size_t replication_factor = erm.get_schema_replication_factor();
     return replication_factor ? (replication_factor / 2) + 1 : 0;
 }
 
@@ -42,7 +42,7 @@ static size_t get_replication_factor_for_dc(const locator::effective_replication
         return nts->get_replication_factor(dc);
     }
 
-    return erm.get_replication_factor();
+    return erm.get_schema_replication_factor();
 }
 
 size_t local_quorum_for(const locator::effective_replication_map& erm, const sstring& dc) {
@@ -101,7 +101,7 @@ size_t block_for(const locator::effective_replication_map& erm, consistency_leve
     case consistency_level::SERIAL:
         return quorum_for(erm);
     case consistency_level::ALL:
-        return erm.get_replication_factor();
+        return erm.get_schema_replication_factor();
     case consistency_level::LOCAL_QUORUM:
         [[fallthrough]];
     case consistency_level::LOCAL_SERIAL:
