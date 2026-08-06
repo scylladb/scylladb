@@ -76,7 +76,8 @@ public:
         // is spread across nodes instead of always landing on the smallest-id
         // one. The default of 0 selects the smallest-id voter. raft::server
         // always enables fast bootstrap (unlike a bare fsm, which disables it
-        // when no seed is provided).
+        // when no seed is provided). A priority member which can vote takes precedence
+        // over the seed.
         uint64_t fast_bootstrap_seed = 0;
 
         // LeaseGuard leader leases. When set, the leader serves linearizable
