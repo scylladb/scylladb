@@ -1749,6 +1749,54 @@ maybe_rederive_with_pinned_plan(cql3::query_processor& qp, const service::client
     return pinned;
 }
 
+// Kept apart from process_execute_internal so a paged EXECUTE costs the common
+// path nothing; the tail is duplicated on purpose - keep the two in step.
+static future<cql_server::process_fn_return_type>
+execute_prepared_with_paging_state(service::client_state& client_state, sharded<cql3::query_processor>& qp,
+        uint16_t stream, cql_protocol_version_type version, cql3::dialect dialect,
+        std::unique_ptr<cql_query_state> q_state, cql3::statements::prepared_statement::checked_weak_ptr prepared,
+        cql3::prepared_cache_key_type cache_key, bool needs_authorization,
+        cql_metadata_id_wrapper metadata_id, bool skip_metadata, bool init_trace,
+        tracing::trace_state_ptr trace_state, semaphore& memory_available) {
+    auto& query_state = q_state->query_state;
+    auto& options = *q_state->options;
+    auto stmt = prepared->statement;
+
+    pinned_plan pinned = maybe_rederive_with_pinned_plan(qp.local(), client_state, dialect,
+            options.get_specific_options().state, *stmt, memory_available, query_state.get_trace_state());
+    if (pinned.statement) {
+        stmt = pinned.statement->statement;
+    }
+
+    // The bound names must come from the statement being executed: they order the
+    // values a client sent by name, and only its own prepare_context numbered them.
+    options.prepare(pinned.statement ? pinned.statement->bound_names : prepared->bound_names);
+
+    if (init_trace && trace_state) {
+        tracing::add_prepared_query_options(trace_state, options);
+    }
+
+    tracing::trace(trace_state, "Processing a statement");
+    auto& statement = *stmt;
+    auto execute_fut = reclassifying_control_connection_needs_user_service_level(statement, query_state)
+            ? query_state.get_service_level_controller().with_user_service_level(query_state.get_client_state().user(),
+                    [&qp, &query_state, &options, stmt = std::move(stmt), prepared = std::move(prepared), cache_key = std::move(cache_key), needs_authorization] () mutable {
+                return qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization);
+            })
+            : qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization);
+    return std::move(execute_fut).then([skip_metadata, q_state = std::move(q_state), stream, version, metadata_id = std::move(metadata_id),
+            pinned = std::move(pinned)] (auto msg) mutable {
+        if (msg->as_bounce()) {
+            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
+        } else if (msg->is_exception()) {
+            return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
+        } else {
+            tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
+            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, std::move(metadata_id), skip_metadata)));
+        }
+    });
+}
+
 static future<cql_server::process_fn_return_type>
 process_execute_internal(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version,
@@ -1829,17 +1877,15 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
         throw exceptions::invalid_request_exception(msg);
     }
 
-    // A paging state can pin a query plan this prepared statement did not
-    // derive; continuing that page takes re-deriving the statement. See #18992.
-    pinned_plan pinned = maybe_rederive_with_pinned_plan(qp.local(), client_state, dialect,
-            options.get_specific_options().state, *stmt, memory_available, query_state.get_trace_state());
-    if (pinned.statement) {
-        stmt = pinned.statement->statement;
+    // A paging state can pin a query plan this statement did not derive, which
+    // takes re-deriving it - all out of line, so this path pays only a branch.
+    if (options.get_specific_options().state) {
+        return execute_prepared_with_paging_state(client_state, qp, stream, version, dialect,
+                std::move(q_state), std::move(prepared), std::move(cache_key), needs_authorization,
+                std::move(metadata_id), skip_metadata, init_trace, trace_state, memory_available);
     }
 
-    // The bound names must come from the statement being executed: they order the
-    // values a client sent by name, and only its own prepare_context numbered them.
-    options.prepare(pinned.statement ? pinned.statement->bound_names : prepared->bound_names);
+    options.prepare(prepared->bound_names);
 
     if (init_trace && trace_state) {
         tracing::add_prepared_query_options(trace_state, options);
@@ -1853,8 +1899,7 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
                 return qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization);
             })
             : qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization);
-    return std::move(execute_fut).then([skip_metadata, q_state = std::move(q_state), stream, version, metadata_id = std::move(metadata_id),
-            pinned = std::move(pinned)] (auto msg) mutable {
+    return std::move(execute_fut).then([skip_metadata, q_state = std::move(q_state), stream, version, metadata_id = std::move(metadata_id)] (auto msg) mutable {
         if (msg->as_bounce()) {
             return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
         } else if (msg->is_exception()) {
