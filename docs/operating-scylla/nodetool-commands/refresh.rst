@@ -79,4 +79,30 @@ The ``--scope`` parameter allows for more advanced constraining of the subset of
 * ``dc`` - replicas in the local datacenter (DC)
 * ``all`` (default) - all replicas in the cluster
 
+Compatibility with Apache Cassandra SSTables
+--------------------------------------------
+
+Uploading SSTable from Apache Cassandra is supported. For the supported SSTable versions, see :doc:`ScyllaDB SSTable Format </architecture/sstable/index/>`. Note that SSTables using Trie-Based Indexes are *not* supported.
+
+Known Problems
+^^^^^^^^^^^^^^
+
+Digest mismatch
+~~~~~~~~~~~~~~~
+
+Apache Cassandra and ScyllaDB slightly diverged on how digests are calculated on SSTable Data components.
+For compressed SSTables, Apache Cassandra allows for a trailing zero-sized (pre-compression) chunk in the Data component.
+This chunk has no data but has non-zero size after compression.
+This trailing chunk is ignored by ScyllaDB and thus excluded from the Digest calculation, therefore the digest calculated by ScyllaDB will not match that in the Digest component.
+Consequently ScyllaDB will reject the SSTable file.
+
+Example:
+
+.. code::
+
+    sstables::malformed_sstable_exception Failed to read partition from SSTable .../me-71-big-Data.db due to Digest mismatch: expected=1580246239, actual=3782253270
+
+Workaround: delete the Digest component (``me-*-big-Digest.crc32``) and remove it from the TOC file (``me-*-big-TOC.txt``) too.
+Before doing so, it is important to confirm that the cause of the digest mismatch is indeed a trailing 0-sized chunk, not a genuine corruption.
+
 .. include:: nodetool-index.rst
