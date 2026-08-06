@@ -354,6 +354,7 @@ filter::filter(parsed::expression_cache& parsed_expression_cache, const rjson::v
             resolve_condition_expression(parsed,
                     expression_attribute_names, expression_attribute_values,
                     used_attribute_names, used_attribute_values);
+            validate_filter_expression(parsed);
             _imp = expression_filter { std::move(parsed) };
         } catch(expressions_syntax_error& e) {
             throw api_error::validation(e.what());
@@ -1892,6 +1893,9 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     // the response size, as DynamoDB does.
     _stats.api_operations.batch_get_item++;
     rjson::value& request_items = request["RequestItems"];
+    if (request_items.MemberCount() == 0) {
+        throw api_error::validation("BatchGetItem requires at least one table in RequestItems");
+    }
     auto start_time = std::chrono::steady_clock::now();
     // We need to validate all the parameters before starting any asynchronous
     // query, and fail the entire request on any parse error. So we parse all

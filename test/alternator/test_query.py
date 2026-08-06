@@ -421,6 +421,25 @@ def test_query_exclusivestartkey_spurious_column(test_table_sn):
             # 'x' is not part of the key, so this should cause an error
             ExclusiveStartKey= { 'p': p, 'c': 0, 'x': 3 })
 
+# Check that ExclusiveStartKey cannot use the wrong types for key columns.
+# In test_table_sn, the partition key should be a string (not a number), and
+# the sort key should be a number (not a string).
+def test_query_exclusivestartkey_wrong_types(test_table_sn):
+    p = random_string()
+    # DynamoDB gives the error message "The provided key element does not match
+    # the schema", while Alternator gives "Type mismatch: expected type S for
+    # key column p, got type "N"".
+    with pytest.raises(ClientError, match='ValidationException.*match'):
+        test_table_sn.query(
+            KeyConditions={'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+            # 'p' should be a string, not a number.
+            ExclusiveStartKey= { 'p': 7, 'c': 42 })
+    with pytest.raises(ClientError, match='ValidationException.*match'):
+        test_table_sn.query(
+            KeyConditions={'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+            # 'c' should be a number, not a string.
+            ExclusiveStartKey= { 'p': p, 'c': 'dog' })
+
 # The previous tests, and actually all tests in this file, all used a table
 # with both a partition key and a sort key. Naturally, "Query" is meant to
 # be used on a table with a sort key. However, it actually works also on
