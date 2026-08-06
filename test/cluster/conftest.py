@@ -222,9 +222,8 @@ async def manager(request: pytest.FixtureRequest,
     Per test fixture to notify Manager client object when tests begin so it can perform checks for cluster state.
     """
     test_case_name = request.node.name
-    test_log = suite_log_dir / f"{Path(testpy_uname).stem}.{test_case_name}.log"
     # this should be consistent with scylla_cluster.py handler name in _before_test method
-    test_py_log_test = suite_log_dir / f"{test_log.stem}_cluster.log"
+    test_py_log_test = suite_log_dir / f"{Path(testpy_uname).stem}.{test_case_name}_cluster.log"
 
     manager_client = manager_internal()  # set up client object in fixture with scope function
     logger.debug("before_test for %s", test_case_name)
@@ -242,9 +241,12 @@ async def manager(request: pytest.FixtureRequest,
 
     # Publish what pytest_runtest_makereport needs to attach this test's logs on
     # failure (single source of truth), so it doesn't re-derive these paths.
+    # The pytest session log is not listed here: it is written per xdist worker
+    # (see PYTEST_LOG_FILE in test/pylib/runner.py) and is already linked from the
+    # failed test's properties by record_failed_test_artifacts().
     request.node.stash[MANAGER_LOGS_KEY] = {
         "client": manager_client,
-        "logs": {"pytest.log": test_log, "test_py.log": test_py_log_test},
+        "logs": {"test_py.log": test_py_log_test},
     }
     yield manager_client
     # `request.node.stash` contains reports stored per phase in `pytest_runtest_makereport`

@@ -239,7 +239,13 @@ class ManagerClient:
             shutil.copyfile(log_file.file, failed_test_path_dir / f"{pathlib.Path(log_file.file).name}")
             allure.attach(log_file.file.read_bytes(), name=log_file.file.name, attachment_type=allure.attachment_type.TEXT)
         for name, log in logs.items():
-            allure.attach(log.read_bytes(), name=name, attachment_type=allure.attachment_type.TEXT) if name != "pytest.log" else None
+            # A log is missing when the handler that writes it was never installed, e.g. the
+            # test failed before before-test ran. Skip it: the caller collects the rest of the
+            # artifacts after this returns, so raising here would lose them all.
+            if not log.is_file():
+                logger.warning("Log %s (%s) does not exist, not attaching it", name, log)
+                continue
+            allure.attach(log.read_bytes(), name=name, attachment_type=allure.attachment_type.TEXT)
             shutil.copyfile(log, failed_test_path_dir / name)
 
     async def is_manager_up(self) -> bool:
