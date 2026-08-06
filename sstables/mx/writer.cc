@@ -1053,13 +1053,6 @@ void writer::close_partitions_writer() {
 
 void writer::close_rows_writer() {
     if (_rows_writer) {
-        // Append some garbage padding to the file just to ensure that it's never empty.
-        // (Otherwise it would be empty if the sstable contains only small partitions).
-        // This is a hack to work around some bad interactions between zero-sized files
-        // and object storage. (It seems that e.g. minio considers a zero-sized file
-        // upload to be a no-op, which breaks some assumptions).
-        uint32_t garbage = seastar::cpu_to_be(0x13371337);
-        _rows_writer->write(reinterpret_cast<const char*>(&garbage), sizeof(garbage));
         _sst.get_components_digests().map[component_type::Rows] = close_digest_writer(_rows_writer);
     }
 }
