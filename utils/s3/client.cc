@@ -362,7 +362,10 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
             }
             if (possible_error->get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
                 s3l.warn("Request failed with EXPIRED_TOKEN. Resetting credentials");
-                _credentials = {};
+                {
+                    auto units = co_await get_units(_creds_sem, 1);
+                    _credentials = {};
+                }
                 should_retry = utils::http::retryable::yes;
                 co_await authorize(request);
             }
