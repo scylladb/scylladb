@@ -23,6 +23,7 @@
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
 #include <variant>
+#include "locator/network_topology_strategy.hh"
 
 namespace locator {
 
@@ -611,6 +612,25 @@ effective_replication_map::effective_replication_map(replication_strategy_ptr rs
         , _replication_factor(replication_factor)
         , _validity_abort_source(std::make_unique<abort_source>())
 { }
+
+token_replication_factor effective_replication_map::get_replication_factor_from_schema(with_datacenters dcs) const {
+    token_replication_factor rf{.total = get_schema_replication_factor()};
+    if (!dcs) {
+        return rf;
+    }
+    auto& counts = rf.dcs.emplace();
+    const auto& rs = get_replication_strategy();
+    if (rs.get_type() != replication_strategy_type::network_topology) {
+        counts.local = rf.total;
+        return rf;
+    }
+    const auto& nts = static_cast<const network_topology_strategy&>(rs);
+    counts.local = nts.get_replication_factor(get_topology().get_datacenter());
+    for (const auto& dc : nts.get_datacenters()) {
+        counts.per_dc.push_back(nts.get_replication_factor(dc));
+    }
+    return rf;
+}
 
 static_effective_replication_map::factory_key static_effective_replication_map::make_factory_key(const replication_strategy_ptr& rs, const token_metadata_ptr& tmptr) {
     return factory_key(rs->get_type(), rs->get_config_options(), tmptr->get_ring_version());
