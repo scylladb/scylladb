@@ -27,10 +27,12 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
 #include "test/lib/eventually.hh"
+#include "test/lib/exception_utils.hh"
 #include "test/lib/error_injection.hh"
 #include "test/lib/topology_builder.hh"
 #include "db/config.hh"
 #include "db/cluster_config_manager.hh"
+#include "db/consistency_level.hh"
 #include "cql3/util.hh"
 #include "db/schema_tables.hh"
 #include "schema/schema_builder.hh"
@@ -9346,6 +9348,107 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_erm_replication_factor) {
                           rf_case{tablet_transition_stage::cleanup, 0, 0}}) {
         check_rf(env.replicas({h1, h2, h3, h5}), env.replicas({h1, h2, h3}), std::nullopt, {{"dc1", sstring("3")}, {"dc2", sstring("1")}}, c);
     }
+}
+
+// Consistency levels are sized from the replication factor of the tablet's replica set.
+// Regression test for scylladb/scylladb#20625.
+SEASTAR_THREAD_TEST_CASE(test_tablet_consistency_level_block_for) {
+    tablet_rf_env env;
+    auto [h1, h2, h3, h5, h6] = std::tie(env.h1, env.h2, env.h3, env.h5, env.h6);
+    const auto token = env.token;
+    using cl = db::consistency_level;
+    auto write_rf = [&] (const effective_replication_map& erm) {
+        return erm.get_write_replicas_with_rf(token, with_datacenters::yes).rf;
+    };
+
+    // Every consistency level is sized from the counts needs_datacenter_counts() asks for.
+    // A per-datacenter level without the counts is an internal error.
+    {
+        const auto live = host_id_vector_replica_set{h1, h2, h3, h5, h6};
+        auto erm = env.make_erm(std::vector<host_id>(live.begin(), live.end()));
+        for (auto c : {cl::ANY, cl::ONE, cl::TWO, cl::THREE, cl::QUORUM, cl::ALL, cl::LOCAL_QUORUM,
+                       cl::EACH_QUORUM, cl::SERIAL, cl::LOCAL_SERIAL, cl::LOCAL_ONE}) {
+            auto rf = erm->get_read_replicas_with_rf(token, db::needs_datacenter_counts(c)).rf;
+            BOOST_TEST_CONTEXT(fmt::format("cl {}", c)) {
+                BOOST_REQUIRE_NO_THROW(db::assure_sufficient_live_nodes(c, *erm, live, rf));
+            }
+        }
+        seastar::testing::scoped_no_abort_on_internal_error abort_guard;
+        auto rf = erm->get_read_replicas_with_rf(token, with_datacenters::no).rf;
+        for (auto c : {cl::LOCAL_ONE, cl::LOCAL_QUORUM, cl::LOCAL_SERIAL, cl::EACH_QUORUM}) {
+            BOOST_TEST_CONTEXT(fmt::format("cl {}", c)) {
+                BOOST_REQUIRE_THROW(db::assure_sufficient_live_nodes(c, *erm, live, rf), std::runtime_error);
+            }
+        }
+    }
+
+    // EACH_QUORUM: a tablet lagging behind dc1's drop to RF 0 still holds a dc1 replica,
+    // which gets no quota, so the per-datacenter quotas add up to block_for.
+    {
+        auto erm = env.make_erm({h2, h5, h6}, {{"dc2", sstring("2")}});
+        auto rf = write_rf(*erm);
+        BOOST_REQUIRE_EQUAL(db::local_quorum_for(rf), 1u);
+        BOOST_REQUIRE_EQUAL(db::each_quorum_block_for_dc(*erm, rf, "dc1"), 0u);
+        BOOST_REQUIRE_EQUAL(db::each_quorum_block_for_dc(*erm, rf, "dc2"), 2u);
+        BOOST_REQUIRE_EQUAL(db::block_for(*erm, cl::EACH_QUORUM, rf),
+                            db::each_quorum_block_for_dc(*erm, rf, "dc1") + db::each_quorum_block_for_dc(*erm, rf, "dc2"));
+    }
+
+    // EACH_QUORUM: a tablet lagging behind dc1's increase from RF 0 has no dc1 replica yet,
+    // so dc1's quota is 0 although the schema replicates to dc1.
+    {
+        auto erm = env.make_erm({h5, h6});
+        auto rf = write_rf(*erm);
+        BOOST_REQUIRE_EQUAL(db::each_quorum_block_for_dc(*erm, rf, "dc1"), 0u);
+        BOOST_REQUIRE_EQUAL(db::each_quorum_block_for_dc(*erm, rf, "dc2"), 2u);
+        BOOST_REQUIRE_EQUAL(db::block_for(*erm, cl::EACH_QUORUM, rf), 2u);
+    }
+
+    // EACH_QUORUM: a rack-list change from dc1 to dc2 moves every replica to dc2 before the schema
+    // drops dc1, so no datacenter gets a quota. The write fails as unavailable, since no ack would count.
+    {
+        auto erm = env.make_erm({h5, h6}, {{"dc1", sstring("3")}});
+        auto rf = write_rf(*erm);
+        BOOST_REQUIRE_EQUAL(db::block_for(*erm, cl::EACH_QUORUM, rf), 0u);
+        BOOST_REQUIRE_EXCEPTION(db::assure_sufficient_live_nodes(cl::EACH_QUORUM, *erm, host_id_vector_replica_set{h5, h6}, rf),
+                                exceptions::unavailable_exception, exception_predicate::message_contains("no datacenter the keyspace replicates to"));
+    }
+
+    // LOCAL_* on a tablet with no replica in the local dc1: the error names the RF change
+    // when the schema replicates to dc1, and RF 0 when the schema does not.
+    for (auto [options, msg] : {std::pair<replication_strategy_config_options, sstring>{{{"dc1", sstring("3")}, {"dc2", sstring("2")}}, "while the keyspace replication factor changes"},
+                                {{{"dc2", sstring("2")}}, "with replication factor 0"}}) {
+        auto erm = env.make_erm({h5, h6}, options);
+        auto rf = erm->get_read_replicas_with_rf(token, with_datacenters::yes).rf;
+        for (auto c : {cl::LOCAL_ONE, cl::LOCAL_QUORUM}) {
+            BOOST_REQUIRE_EXCEPTION(db::assure_sufficient_live_nodes(c, *erm, host_id_vector_replica_set{h5, h6}, rf),
+                                    exceptions::unavailable_exception, exception_predicate::message_contains(msg));
+        }
+    }
+
+    // In write_both_read_new the read and write replica sets differ, and each sizes its own
+    // requests. The write handler adds the pending replica on top.
+    auto check_write_both_read_new = [&] (tablet_replica_set prev, tablet_replica_set next, std::optional<tablet_replica> pending,
+                                          replication_strategy_config_options options, size_t read_total, size_t write_total) {
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{std::move(prev)});
+        tmap.set_tablet_transition_info(tmap.first_tablet(), tablet_transition_info{
+            tablet_transition_stage::write_both_read_new, tablet_transition_kind::rebuild_v2, std::move(next), pending});
+        auto erm = env.make_erm(std::move(tmap), std::move(options));
+        auto read = erm->get_read_replicas_with_rf(token, with_datacenters::yes).rf;
+        auto write = write_rf(*erm);
+        BOOST_REQUIRE_EQUAL(db::block_for(*erm, cl::QUORUM, read), read_total / 2 + 1);
+        BOOST_REQUIRE_EQUAL(db::block_for(*erm, cl::QUORUM, write), write_total / 2 + 1);
+        BOOST_REQUIRE_EQUAL(db::block_for(*erm, cl::ALL, write), write_total);
+        BOOST_REQUIRE_EQUAL(db::block_for(*erm, cl::LOCAL_QUORUM, write), 2u);
+    };
+
+    // dc2 goes from RF 0 to 1. The write set is still {h1, h2, h3} and h5 is pending, so QUORUM
+    // needs 2 + 1 acks out of 4 targets, not 3 + 1.
+    check_write_both_read_new(env.replicas({h1, h2, h3}), env.replicas({h1, h2, h3, h5}), tablet_replica{h5, 0}, {{"dc1", sstring("3")}}, 4, 3);
+    // dc2 goes from RF 1 to 0. h5 still takes writes, so QUORUM needs 3 of 4 acks, or the ack of
+    // h5 and one dc1 replica could complete a write.
+    check_write_both_read_new(env.replicas({h1, h2, h3, h5}), env.replicas({h1, h2, h3}), std::nullopt, {{"dc1", sstring("3")}, {"dc2", sstring("1")}}, 3, 4);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
