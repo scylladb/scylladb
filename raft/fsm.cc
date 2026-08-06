@@ -43,10 +43,11 @@ fsm::fsm(server_id id, sstring tag, term_t current_term, server_id voted_for, lo
     // enabled (fast_bootstrap_seed is set), for one deterministically chosen voter
     // of a fresh multi-node group (empty log, last_idx() == 0). Choosing a single
     // node avoids all nodes racing to call an election at once (wasting a term,
-    // risking split votes). The chosen one is the voter at rank (seed % num_voters)
-    // in ascending server_id order; every node derives the same rank without
-    // coordination. A caller managing many groups can vary the seed per group to
-    // rotate leadership across nodes; seed 0 picks the smallest-id voter. A bare
+    // risking split votes). The chosen one is the holder of the first election timeout
+    // slot if there is one, otherwise the voter at rank (seed % num_voters) in ascending
+    // server_id order; every node derives the same choice without coordination. A caller
+    // managing many groups can vary the seed per group to rotate leadership across nodes;
+    // seed 0 picks the smallest-id voter. A bare
     // fsm (e.g. in unit tests) leaves the seed unset and starts as a follower;
     // raft::server sets it. A multi-node node with a non-empty log has already
     // participated and takes the normal timeout path.
@@ -60,6 +61,14 @@ fsm::fsm(server_id id, sstring tag, term_t current_term, server_id voted_for, lo
         }
         if (!_config.fast_bootstrap_seed.has_value() || _log.last_idx() != index_t{0}) {
             return false;
+        }
+        // Bootstrap the leadership where it would end up anyway - on the holder of the
+        // first election timeout slot - instead of making the group hand it over later.
+        if (_config.get_priority_members) {
+            const auto slots = reserved_election_slots(cfg, _config.get_priority_members());
+            if (!slots.empty()) {
+                return slots.front() == _my_id;
+            }
         }
         unsigned voters = 0;
         unsigned rank = 0;
