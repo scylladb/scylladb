@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <unordered_set>
 #include <memory>
 #include "sstables/shared_sstable.hh"
@@ -18,6 +19,42 @@ class compaction_controller;
 namespace compaction {
 
 class compaction_backlog_manager;
+
+// Minimum size (in bytes) used when accounting for an SSTable's contribution to the
+// compaction backlog.
+//
+// The backlog formulas (see size_tiered_backlog_tracker and incremental_backlog_tracker)
+// are essentially a per-sstable sum of size * log(T/size), so tiny SSTables would barely
+// move the backlog needle. That is a real problem because early commitlog-driven flushes
+// (especially under tablets, where there can be multiple active memtables for a single
+// table on a given shard) can produce many very small SSTables. Many tiny SSTables hurt
+// read amplification badly, causing slow reads and memory pressure (each SSTable being
+// read from has a fixed memory overhead), so the controller must apply enough pressure
+// to compact them away promptly.
+//
+// To avoid the backlog underestimating that pressure, every SSTable is taxed with a
+// minimum size when computing its backlog contribution: its effective size is the
+// maximum of its actual data size and minimum_backlog_sstable_size. This gives even
+// tiny SSTables a meaningful weight without affecting the on-disk size accounting used
+// outside of the backlog calculation.
+//
+// Sizing rationale: a typical cloud node has about 8 GiB of memory per shard, of which
+// roughly ~50% is available for memtables. With ~100 tablet replicas sharing that budget,
+// each memtable is expected to be around ~40 MiB at full size. A full-size flush is thus
+// not "tiny" and should not be penalized. Half of that (~20 MiB) would still risk taxing
+// flushes from slightly under-provisioned deployments (smaller VMs, more tablet replicas,
+// or simply memtables flushed slightly early), so we pick a conservative 10 MiB threshold
+// that only kicks in for clearly tiny SSTables (e.g. produced by commitlog segment
+// flushes well before the memtable fills up).
+static constexpr uint64_t minimum_backlog_sstable_size = 10UL * 1024 * 1024;
+
+// Returns the effective size, in bytes, used by backlog trackers when accounting for an
+// SSTable (or sstable run) whose actual on-disk data size is data_size. Empty objects
+// (data_size == 0) are still treated as having zero contribution; non-empty ones are
+// taxed up to minimum_backlog_sstable_size. See the comment above for rationale.
+static inline uint64_t effective_backlog_size(uint64_t data_size) {
+    return data_size == 0 ? 0 : std::max(data_size, minimum_backlog_sstable_size);
+}
 
 // Read and write progress are provided by structures present in progress_manager.hh
 // However, we don't want to be tied to their lifetimes and for that reason we will not
