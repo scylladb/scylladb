@@ -115,7 +115,7 @@ public:
             std::unique_ptr<cql3::attributes::raw> attrs);
 
     virtual void prepare_keyspace(const service::client_state& state) override;
-    using cf_statement::prepare_keyspace;
+    virtual void prepare_keyspace(std::string_view keyspace) override;
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override {
         return prepare(db, stats, cfg, false);

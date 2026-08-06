@@ -2029,6 +2029,13 @@ void select_statement::prepare_keyspace(const service::client_state& state) {
     }
 }
 
+void select_statement::prepare_keyspace(std::string_view keyspace) {
+    cf_statement::prepare_keyspace(keyspace);
+    if (_no_from) {
+        _session_keyspace = sstring(keyspace);
+    }
+}
+
 std::vector<selection::prepared_selector>
 select_statement::maybe_jsonize_select_clause(std::vector<selection::prepared_selector> prepared_selectors, data_dictionary::database db, schema_ptr schema) {
     // Fill wildcard clause with explicit column identifiers for as_json function
