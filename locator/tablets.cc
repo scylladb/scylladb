@@ -1822,6 +1822,11 @@ class tablet_effective_replication_map : public effective_replication_map {
     table_id _table;
     tablet_sharder _sharder;
     mutable const tablet_map* _tmap = nullptr;
+    // Indexes into tablet_metadata::datacenters(), resolved once per erm. Disengaged for a
+    // datacenter which holds no tablet replica. _schema_dc_indexes is indexed like
+    // network_topology_strategy::get_datacenters().
+    std::optional<size_t> _local_dc_index;
+    utils::small_vector<std::optional<size_t>, 4> _schema_dc_indexes;
 private:
     host_id_vector_replica_set to_host_set(const tablet_replica_set& replicas) const {
         host_id_vector_replica_set result;
@@ -1837,6 +1842,33 @@ private:
             _tmap = &_tmptr->tablets().get_tablet_map(_table);
         }
         return *_tmap;
+    }
+
+    // Picks the counts of the local datacenter and of the datacenters the schema lists. A
+    // datacenter the schema does not list holds replicas while the tablets and the schema
+    // disagree during an RF change, and gets no slot in per_dc.
+    token_replication_factor::datacenter_counts make_datacenter_counts(const tablet_replica_set& replicas, const tablet_dc_counts& counts) const {
+        if (counts.unknown) [[unlikely]] {
+            // A replica host was not in topology when the tablet was loaded. The loader already
+            // reported it, and storage_proxy does not ask for the counts in maintenance mode.
+            throw std::runtime_error(format("Datacenter of a replica in {} is unknown: the host was not in topology when the tablet was loaded", replicas));
+        }
+        token_replication_factor::datacenter_counts result;
+        result.local = _local_dc_index ? counts.at_or_zero(*_local_dc_index) : 0;
+        result.per_dc.reserve(_schema_dc_indexes.size());
+        for (const auto& i : _schema_dc_indexes) {
+            result.per_dc.push_back(i ? counts.at_or_zero(*i) : 0);
+        }
+        return result;
+    }
+
+    // counts is set when the caller asked for with_datacenters::yes.
+    replicas_with_rf make_replicas_with_rf(const tablet_replica_set& replicas, const tablet_dc_counts* counts) const {
+        replicas_with_rf result{to_host_set(replicas), {.total = replicas.size()}};
+        if (counts) {
+            result.rf.dcs = make_datacenter_counts(replicas, *counts);
+        }
+        return result;
     }
 
     const tablet_replica_set& get_replicas_for_write(dht::token search_token) const {
@@ -1858,12 +1890,12 @@ private:
         return {replica->host};
     }
 
-    host_id_vector_replica_set get_for_reading_helper(const token& search_token) const {
+    const tablet_replica_set& get_replicas_for_read(dht::token search_token) const {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
         auto&& replicas = tablets.get_replicas_for_reading(tablet);
-        tablet_logger.trace("get_endpoints_for_reading({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
-        return to_host_set(replicas);
+        tablet_logger.trace("get_replicas_for_read({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
+        return replicas;
     }
 
 
@@ -1875,7 +1907,13 @@ public:
             : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
             , _table(table)
             , _sharder(*_tmptr, table)
-    { }
+    {
+        const auto& dcs = _tmptr->tablets().datacenters();
+        _local_dc_index = dcs.index_of(get_topology().get_datacenter());
+        for (const auto& dc : as_network_topology_strategy(*this).get_datacenters()) {
+            _schema_dc_indexes.push_back(dcs.index_of(dc));
+        }
+    }
 
     virtual ~tablet_effective_replication_map() = default;
 
@@ -1909,7 +1947,31 @@ public:
     }
 
     virtual host_id_vector_replica_set get_replicas_for_reading(const token& search_token, bool is_vnode = false) const override {
-        return get_for_reading_helper(search_token);
+        return to_host_set(get_replicas_for_read(search_token));
+    }
+
+    // The replication factor is the size of the tablet's replica set. The schema and the tablet
+    // replica sets disagree while a replication factor change migrates tablets.
+    virtual replicas_with_rf get_read_replicas_with_rf(const token& search_token, with_datacenters dcs) const override {
+        if (!dcs) {
+            return make_replicas_with_rf(get_replicas_for_read(search_token), nullptr);
+        }
+        auto&& tablets = get_tablet_map();
+        auto tablet = tablets.get_tablet_id(search_token);
+        auto [replicas, counts] = tablets.get_replicas_and_dc_counts_for_reading(tablet);
+        tablet_logger.trace("get_replicas_for_read({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
+        return make_replicas_with_rf(replicas, &counts);
+    }
+
+    virtual replicas_with_rf get_write_replicas_with_rf(const token& search_token, with_datacenters dcs) const override {
+        if (!dcs) {
+            return make_replicas_with_rf(get_replicas_for_write(search_token), nullptr);
+        }
+        auto&& tablets = get_tablet_map();
+        auto tablet = tablets.get_tablet_id(search_token);
+        auto [replicas, counts] = tablets.get_replicas_and_dc_counts_for_writing(tablet);
+        tablet_logger.trace("get_replicas_for_write({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
+        return make_replicas_with_rf(replicas, &counts);
     }
 
     std::optional<tablet_routing_info> check_locality(const token& search_token, unsigned original_shard) const override {
