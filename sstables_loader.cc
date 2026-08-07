@@ -41,7 +41,7 @@
 
 #include "sstables/object_storage_client.hh"
 #include "utils/rjson.hh"
-#include "db/system_distributed_keyspace.hh"
+#include "table_helper.hh"
 
 #include <cfloat>
 #include <algorithm>
@@ -1346,8 +1346,31 @@ protected:
         auto& loader = _loader.local();
 
         auto current_schema = loader.local_db().find_schema(_tid);
-        auto min_tablet_count = current_schema->tablet_options().min_tablet_count;
-        auto max_tablet_count = current_schema->tablet_options().max_tablet_count;
+
+        // The pre-restore schema of the table was persisted in
+        // system_distributed.snapshot_tables before this task started. Recover the
+        // original tablet hints from it rather than from the live schema: the live
+        // hints may already be pinned by an earlier restore attempt that crashed
+        // mid-way.
+        db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
+        auto entries = co_await sth.get_snapshot_tables(_snap_name, current_schema->ks_name(), current_schema->cf_name());
+        schema_ptr original_schema;
+        try {
+            if (entries.empty()) {
+                throw std::runtime_error("no schema entry found in system_distributed.snapshot_tables");
+            }
+            const auto& entry = entries.front();
+            if (entry.type != db::snapshot_table_type::cql_table) {
+                throw std::runtime_error(fmt::format("the entry does not describe a CQL table (type={})", static_cast<int32_t>(entry.type)));
+            }
+            original_schema = table_helper::parse_new_cf_statement(loader._sys_dist_ks.qp(), entry.table_schema);
+        } catch (...) {
+            throw std::runtime_error(fmt::format("Failed to recover the pre-restore schema of table {}.{} stored for snapshot {}: {}",
+                current_schema->ks_name(), current_schema->cf_name(), _snap_name, std::current_exception()));
+        }
+        auto min_tablet_count = original_schema->tablet_options().min_tablet_count;
+        auto max_tablet_count = original_schema->tablet_options().max_tablet_count;
+
         co_await loader._ss.local().alter_table_with_tablet_hints(_tid, _tablet_count, _tablet_count);
 
         std::exception_ptr eptr;
@@ -1422,6 +1445,27 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
 
         // TODO: update state when all restored...
         co_await sth.insert_snapshot_remote_location(snap_name, loc.datacenter, loc.endpoint, loc.bucket, loc.prefix, db::snapshot_state::remote);
+    }
+
+    // Persist the schema of the target table in system_distributed.snapshot_tables
+    // before the restore task pins the tablet hints, so the original hints survive a
+    // crash of this node. If an entry for this snapshot and table already exists, this
+    // restore either resumes an earlier attempt that may have already pinned the
+    // hints, or restores into the same table the snapshot was taken from; in both
+    // cases the restore task recovers the original hints from the persisted schema
+    // instead of the live one.
+    auto entries = co_await sth.get_snapshot_tables(snap_name, keyspace, table);
+    if (entries.empty()) {
+        auto t = _db.local().get_tables_metadata().get_table_if_exists(tid);
+        if (!t) {
+            throw replica::no_such_column_family(tid);
+        }
+        auto entry = sth.make_snapshot_table_entry(snap_name, *t);
+        co_await sth.insert_snapshot_tables(std::span(&entry, 1));
+    } else {
+        // Refresh the TTL of the entry so that repeated crash/re-issue cycles
+        // spanning a long time do not outlive it.
+        co_await sth.insert_snapshot_tables(std::span(&entries.front(), 1));
     }
 
     auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>({}, container(), keyspace, tid, std::move(snap_name), summary);
