@@ -21,6 +21,7 @@
 #include "utils/s3/creds.hh"
 #include "credentials_providers/aws_credentials_provider_chain.hh"
 #include "utils/s3/client_fwd.hh"
+#include "utils/s3/throttling_controller.hh"
 
 using namespace seastar;
 class memory_data_sink_buffers;
@@ -133,10 +134,17 @@ class client : public enable_shared_from_this<client> {
         void register_metrics(std::string class_name, std::string host);
     };
     std::unordered_map<seastar::scheduling_group, group_client> _https;
+    // Client-level adaptive send-rate limiters, shared by all scheduling
+    // groups on this shard (one per S3 endpoint/client instance). Split by
+    // request class: reads (GET) and writes (PUT) are throttled independently.
+    std::unique_ptr<throttling_controller> _request_limiter;
+    seastar::metrics::metric_groups _throttling_metrics;
+    void register_throttling_metrics();
     semaphore _rebalance_sem{1};
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
     std::unique_ptr<seastar::http::retry_strategy> _retry_strategy;
+    throttling_controller_factory _throttling_controller_factory;
 
     struct private_tag {};
 
@@ -177,9 +185,10 @@ class client : public enable_shared_from_this<client> {
     future<> get_object_header(sstring object_name, http::client::reply_handler handler, seastar::abort_source* = nullptr);
 public:
 
-    client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<seastar::http::retry_strategy> rs = nullptr);
+    client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<seastar::http::retry_strategy> rs = nullptr, throttling_controller_factory tcf = {});
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf = {});
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<seastar::http::retry_strategy> rs, global_factory gf = {});
+    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<seastar::http::retry_strategy> rs, throttling_controller_factory tcf, global_factory gf = {});
     static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, global_factory gf = {}, unsigned connections_per_shard = endpoint_config::default_connections_per_shard);
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
