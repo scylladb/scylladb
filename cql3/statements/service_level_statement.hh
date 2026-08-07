@@ -49,6 +49,11 @@ public:
 
     bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
+    // Manages service levels, not user data.
+    bool should_reclassify_control_connection() const override {
+        return false;
+    }
+
     future<> check_access(query_processor& qp, const service::client_state& state) const override;
 protected:
     virtual audit::statement_category category() const override;
