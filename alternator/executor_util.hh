@@ -34,6 +34,7 @@
 #include "alternator/attribute_path.hh"
 #include "audit/audit.hh"
 #include "utils/managed_bytes.hh"
+#include "exceptions/coordinator_result.hh"
 
 namespace query { class partition_slice; class result; }
 namespace cql3::selection { class selection; }
@@ -41,6 +42,7 @@ namespace data_dictionary { class database; }
 namespace service { class storage_proxy; class client_state; }
 
 namespace alternator {
+class api_error;
 
 /// The body_writer is used for streaming responses - where the response body
 /// is written in chunks to the output_stream. This allows for efficient
@@ -250,4 +252,6 @@ std::optional<rjson::value> describe_single_item(schema_ptr,
 /// help avoid large allocations/many re-allocs.
 body_writer make_streamed(rjson::value&&);
 
+/// Convert an exception from the coordinator_exception_container to an api_error with proper error message.
+api_error create_api_error_from_coordinators_exception(const exceptions::coordinator_exception_container &exc);
 } // namespace alternator
