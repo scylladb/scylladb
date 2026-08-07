@@ -236,7 +236,7 @@ public:
     locator::effective_replication_map_ptr get_erm();
 
     size_t get_total_rf() {
-        return get_erm()->get_replication_factor();
+        return get_erm()->get_schema_replication_factor();
     }
 
     future<> repair_range(const dht::token_range& range, table_info table);
