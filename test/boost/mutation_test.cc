@@ -1542,7 +1542,7 @@ SEASTAR_TEST_CASE(test_mutation_equality) {
 
 SEASTAR_TEST_CASE(test_mutation_hash) {
     return seastar::async([] {
-        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
+        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq, std::string_view label) {
             auto test_with_hasher = [&] (auto hasher) {
                 auto get_hash = [&] (const mutation &m) {
                     auto h = hasher;
@@ -1558,7 +1558,7 @@ SEASTAR_TEST_CASE(test_mutation_hash) {
                 } else {
                     // We're using a strong hasher, collision should be unlikely
                     if (h1 == h2) {
-                        BOOST_FAIL(format("Hash should be different for {} and {}", m1, m2));
+                        BOOST_FAIL(fmt::format("Hash should be different for {} and {}, case {}", m1, m2, label));
                     }
                 }
             };
@@ -1590,7 +1590,7 @@ SEASTAR_TEST_CASE(test_query_digest) {
             }
         };
 
-        for_each_mutation_pair([&] (const mutation& m1, const mutation& m2, are_equal eq) {
+        for_each_mutation_pair([&] (const mutation& m1, const mutation& m2, are_equal eq, std::string_view label) {
             if (m1.schema()->version() != m2.schema()->version()) {
                 return;
             }
@@ -1599,7 +1599,7 @@ SEASTAR_TEST_CASE(test_query_digest) {
                 check_digests_equal(compacted(m1, now), m2);
                 check_digests_equal(m1, compacted(m2, now));
             } else {
-                testlog.info("If not equal, they should become so after applying diffs mutually");
+                testlog.info("If not equal (case {}), they should become so after applying diffs mutually", label);
 
                 mutation_application_stats app_stats;
                 schema_ptr s = m1.schema();
@@ -1619,6 +1619,55 @@ SEASTAR_TEST_CASE(test_query_digest) {
                 check_digests_equal(m3, m4);
             }
         });
+    });
+}
+
+// Positive test verifying that every possible kind of difference between two mutations is detected by digest.
+SEASTAR_THREAD_TEST_CASE(test_query_digest_not_equal) {
+    auto now = gc_clock::now();
+
+    for_each_mutation_pair([&] (const mutation& m1, const mutation& m2, are_equal eq, std::string_view label) {
+        if (eq) {
+            return;
+        }
+
+        testlog.info("Running case {}", label);
+
+        if (m1.empty() || m2.empty()) {
+            testlog.info("Skipping case {}, empty mutations have the same digest", label);
+            return;
+        }
+
+        // range tombstones are not included in the digest
+        if (label == "range tombstone") {
+            testlog.info("Skipping case {}, range tombstone is not included in the digest", label);
+            return;
+        }
+
+        if (label == "row tombstone") {
+            testlog.info("Skipping case {}, row tombstone is not included in the digest", label);
+            return;
+        }
+
+        auto m3 = m1;
+        if (m1.schema()->version() != m2.schema()->version()) {
+            m3.upgrade(m2.schema());
+        }
+        const auto schema = m2.schema();
+
+        if (m2 == m3) {
+            // possible if the only difference is eliminated by the schema upgrade above
+            testlog.info("Skipping case {}, mutations identical after schema upgrade", label);
+            return;
+        }
+
+        auto ps = partition_slice_builder(*schema).build();
+        auto digest2 = *query_mutation(mutation(m2), ps, query::max_rows, now,
+                query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
+        auto digest3 = *query_mutation(mutation(m3), ps, query::max_rows, now,
+                query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
+
+        BOOST_CHECK_MESSAGE(digest2 != digest3, fmt::format("Digest should not be the same for:\nm1={}\nm2={}\nCase: {}", m2, m3, label));
     });
 }
 
