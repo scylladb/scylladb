@@ -84,6 +84,7 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
             OPERATION(describe_stream, "DescribeStream")
             OPERATION(get_shard_iterator, "GetShardIterator")
             OPERATION(get_records, "GetRecords")
+            OPERATION(export_table_to_point_in_time, "ExportTableToPointInTime")
     });
     OPERATION_LATENCY(put_item_latency, "PutItem")
     OPERATION_LATENCY(get_item_latency, "GetItem")
