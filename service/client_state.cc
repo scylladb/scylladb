@@ -87,7 +87,7 @@ future<> service::client_state::has_all_keyspaces_access(
 
 future<> service::client_state::has_keyspace_access(const sstring& ks, auth::permission p) const {
     auth::resource r = auth::make_data_resource(ks);
-    co_return co_await has_access(ks, {p, r});
+    co_return co_await has_access(ks, p, r);
 }
 
 future<> service::client_state::has_functions_access(auth::permission p) const {
@@ -97,21 +97,22 @@ future<> service::client_state::has_functions_access(auth::permission p) const {
 
 future<> service::client_state::has_functions_access(const sstring& ks, auth::permission p) const {
     auth::resource r = auth::make_functions_resource(ks);
-    co_return co_await has_access(ks, {p, r});
+    co_return co_await has_access(ks, p, r);
 }
 
 future<> service::client_state::has_function_access(const sstring& ks, const sstring& function_signature, auth::permission p) const {
     auth::resource r = auth::make_functions_resource(ks, function_signature);
-    co_return co_await has_access(ks, {p, r});
+    co_return co_await has_access(ks, p, r);
 }
 
 future<> service::client_state::has_column_family_access(const sstring& ks,
-                const sstring& cf, auth::permission p, auth::command_desc::type t, std::optional<bool> is_vector_indexed) const {
+                const sstring& cf, auth::permission p, auth::command_desc::type t, auth::permission_set additional_permissions) const {
     auto r = auth::make_data_resource(ks, cf);
-    co_return co_await has_access(ks, {p, r, t}, is_vector_indexed);
+    co_return co_await has_access(ks, p, r, t, additional_permissions);
 }
 
-future<> service::client_state::check_internal_table_permissions(std::string_view ks, std::string_view table_name, const auth::command_desc& cmd) const {
+future<> service::client_state::check_internal_table_permissions(std::string_view ks, std::string_view table_name,
+                    auth::permission permission, const auth::resource& resource) const {
     // 1. CDC and $paxos tables are managed internally by Scylla. Users are prohibited
     //    from running ALTER or DROP commands on them.
     // 2. Non-superusers are not allowed to access $paxos tables, even if explicit
@@ -121,53 +122,47 @@ future<> service::client_state::check_internal_table_permissions(std::string_vie
     static constexpr auto forbidden_permissions = auth::permission_set::of<
                     auth::permission::ALTER, auth::permission::DROP>();
 
-    if (forbidden_permissions.contains(cmd.permission)) {
+    if (forbidden_permissions.contains(permission)) {
         if (ks == db::system_distributed_keyspace::NAME
                 && (table_name == db::system_distributed_keyspace::CDC_DESC_V2
                 || table_name == db::system_distributed_keyspace::CDC_TIMESTAMPS)) {
             return make_exception_future(exceptions::unauthorized_exception(
-                    format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource)));
+                    format("Cannot {} {}", auth::permissions::to_string(permission), resource)));
         }
     }
 
     if (service::paxos::paxos_store::try_get_base_table(table_name)) {
-        if (forbidden_permissions.contains(cmd.permission)) {
+        if (forbidden_permissions.contains(permission)) {
             return make_exception_future(exceptions::unauthorized_exception(
-                    format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource)));
+                    format("Cannot {} {}", auth::permissions::to_string(permission), resource)));
         }
 
         return _auth_service->underlying_role_manager().is_superuser(*_user->name)
-            .then([&cmd](bool is_superuser) {
+            .then([permission, &resource](bool is_superuser) {
                 return is_superuser
                     ? make_ready_future<>()
                     : make_exception_future(exceptions::unauthorized_exception(
-                        format("Only superusers are allowed to {} {}", 
-                            auth::permissions::to_string(cmd.permission), cmd.resource)));
+                        format("Only superusers are allowed to {} {}",
+                            auth::permissions::to_string(permission), resource)));
             });
     }
 
     return make_ready_future<>();
 }
 
-future<> service::client_state::has_access(const sstring& ks, auth::command_desc cmd, std::optional<bool> is_vector_indexed) const {
-    if (ks.empty()) {
-        throw exceptions::invalid_request_exception("You have not set a keyspace for this session");
-    }
-    if (_bypass_auth_checks) {
-        co_return;
-    }
+static const auto alteration_permissions = auth::permission_set::of<
+        auth::permission::CREATE, auth::permission::ALTER, auth::permission::DROP>();
 
-    validate_login();
-
-    static const auto alteration_permissions = auth::permission_set::of<
-            auth::permission::CREATE, auth::permission::ALTER, auth::permission::DROP>();
+future<> service::client_state::check_access_rules(const sstring& ks, auth::permission permission,
+                const auth::resource& resource, auth::command_desc::type type, auth::permission_set additional_permissions) const {
+    const bool alter_system_with_allowed_opts = (type == auth::command_desc::type::ALTER_SYSTEM_WITH_ALLOWED_OPTS);
 
     // we only care about schema modification.
-    if (alteration_permissions.contains(cmd.permission)) {
+    if (alteration_permissions.contains(permission)) {
         // prevent system keyspace modification
         auto name = ks;
         std::transform(name.begin(), name.end(), name.begin(), ::tolower);
-        if (is_system_keyspace(name) && cmd.type_ != auth::command_desc::type::ALTER_SYSTEM_WITH_ALLOWED_OPTS) {
+        if (is_system_keyspace(name) && !alter_system_with_allowed_opts) {
             throw exceptions::unauthorized_exception(ks + " keyspace is not user-modifiable.");
         }
 
@@ -177,14 +172,14 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
         //
 
         const bool dropping_anything_in_tracing = (name == tracing::trace_keyspace_helper::KEYSPACE_NAME)
-                && (cmd.permission == auth::permission::DROP);
+                && (permission == auth::permission::DROP);
 
-        const bool dropping_auth_keyspace = (cmd.resource == auth::make_data_resource(auth::meta::legacy::AUTH_KS))
-                && (cmd.permission == auth::permission::DROP);
+        const bool dropping_auth_keyspace = (resource == auth::make_data_resource(auth::meta::legacy::AUTH_KS))
+                && (permission == auth::permission::DROP);
 
         if (dropping_anything_in_tracing || dropping_auth_keyspace) {
             throw exceptions::unauthorized_exception(
-                    format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource));
+                    format("Cannot {} {}", auth::permissions::to_string(permission), resource));
         }
     }
 
@@ -199,24 +194,24 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
         return tmp;
     }();
 
-    if (cmd.permission == auth::permission::SELECT && readable_system_resources.contains(cmd.resource)) {
+    if (permission == auth::permission::SELECT && readable_system_resources.contains(resource)) {
         co_return;
     }
-    if (alteration_permissions.contains(cmd.permission)) {
-        if (auth::is_protected(*_auth_service, cmd)) {
-            throw exceptions::unauthorized_exception(format("{} is protected", cmd.resource));
+    if (alteration_permissions.contains(permission)) {
+        if (auth::is_protected(*_auth_service, auth::command_desc{permission, resource, type})) {
+            throw exceptions::unauthorized_exception(format("{} is protected", resource));
         }
     }
 
-    if (cmd.resource.kind() == auth::resource_kind::data) {
-        const auto resource_view = auth::data_resource_view(cmd.resource);
+    if (resource.kind() == auth::resource_kind::data) {
+        const auto resource_view = auth::data_resource_view(resource);
         if (resource_view.table()) {
-            co_await check_internal_table_permissions(ks, *resource_view.table(), cmd);
+            co_await check_internal_table_permissions(ks, *resource_view.table(), permission, resource);
         }
     }
 
-    if (cmd.resource.kind() == auth::resource_kind::data
-            && !(cmd.permission == auth::permission::SELECT || cmd.permission == auth::permission::DESCRIBE)
+    if (resource.kind() == auth::resource_kind::data
+            && !(permission == auth::permission::SELECT || permission == auth::permission::DESCRIBE)
             && is_system_keyspace(ks)
             && _user
             && !auth::is_anonymous(*_user)
@@ -225,22 +220,44 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
                 ks + " can be granted only SELECT or DESCRIBE permissions to a non-superuser.");
     }
 
-    static const std::unordered_set<auth::resource> vector_search_system_resources = {
+    if (additional_permissions.mask() == 0) {
+        co_return co_await ensure_has_permission(auth::command_desc{permission, resource, type});
+    }
+    additional_permissions.set(permission);
+    co_return co_await ensure_has_permission<auth::command_desc_with_permission_set>({additional_permissions, resource});
+}
+
+future<> service::client_state::has_access(const sstring& ks, auth::permission permission, const auth::resource& resource,
+                auth::command_desc::type type, auth::permission_set additional_permissions) const {
+    if (ks.empty()) {
+        throw exceptions::invalid_request_exception("You have not set a keyspace for this session");
+    }
+    if (_bypass_auth_checks) {
+        co_return;
+    }
+
+    validate_login();
+
+    // `additional_permissions` only ever widens a SELECT check with other read-authorizing
+    // permissions (e.g. VECTOR_SEARCH_INDEXING/TEXT_SEARCH_INDEXING), never anything else.
+    SCYLLA_ASSERT(additional_permissions.mask() == 0 || permission == auth::permission::SELECT);
+
+    // System tables read by an external Vector Store engine.
+    // A user holding VECTOR_SEARCH_INDEXING or TEXT_SEARCH_INDEXING may SELECT from them without
+    // holding full SELECT, so those permissions also authorize the read.
+    static const std::unordered_set<auth::resource> external_index_system_resources = {
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::GROUP0_HISTORY),
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::VERSIONS),
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::CDC_STREAMS),
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::CDC_TIMESTAMPS),
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::TABLETS),
     };
-
-    if ((cmd.resource.kind() == auth::resource_kind::data && cmd.permission == auth::permission::SELECT && is_vector_indexed.has_value() && is_vector_indexed.value()) ||
-        (cmd.permission == auth::permission::SELECT && vector_search_system_resources.contains(cmd.resource))) {
-
-        co_return co_await ensure_has_permission<auth::command_desc_with_permission_set>({auth::permission_set::of<auth::permission::SELECT, auth::permission::VECTOR_SEARCH_INDEXING>(), cmd.resource});
-
+    if (permission == auth::permission::SELECT && external_index_system_resources.contains(resource)) {
+        additional_permissions.set(auth::permission::VECTOR_SEARCH_INDEXING);
+        additional_permissions.set(auth::permission::TEXT_SEARCH_INDEXING);
     }
 
-    co_return co_await ensure_has_permission(cmd);
+    co_return co_await check_access_rules(ks, permission, resource, type, additional_permissions);
 }
 
 static bool intersects_permissions(const auth::permission_set& permissions, const auth::command_desc_with_permission_set& cmd) {
@@ -259,7 +276,14 @@ sstring service::client_state::generate_authorization_error_msg(const auth::comm
 }
 
 sstring service::client_state::generate_authorization_error_msg(const auth::command_desc_with_permission_set& cmd) const {
-    sstring perm_names = fmt::format("{}", fmt::join(auth::permissions::to_strings(cmd.permission), ", "));
+    auto permission = cmd.permission.begin();
+    if (std::next(permission) == cmd.permission.end()) {
+        return generate_authorization_error_msg(auth::command_desc{*permission, cmd.resource});
+    }
+    auto names = auth::permissions::to_strings(cmd.permission);
+    std::vector<sstring> sorted_names(names.begin(), names.end());
+    std::sort(sorted_names.begin(), sorted_names.end());
+    sstring perm_names = fmt::format("{}", fmt::join(sorted_names, ", "));
     return format("User {} has none of the permissions ({}) on {} or any of its parents",
             *_user,
             perm_names,
