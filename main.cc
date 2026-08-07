@@ -56,6 +56,7 @@
 #include "service/view_update_backlog_broker.hh"
 #include "service/qos/service_level_controller.hh"
 #include "streaming/stream_session.hh"
+#include "db/cluster_config_manager.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/batchlog_manager.hh"
@@ -1523,6 +1524,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
             static sharded<db::system_keyspace> sys_ks;
+            static sharded<db::cluster_config_manager> cluster_config_manager;
             static sharded<db::view::view_update_generator> view_update_generator;
             static sharded<db::view::view_builder> view_builder;
             static sharded<db::view::view_building_worker> view_building_worker;
@@ -2093,6 +2095,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             checkpoint(stop_signal, "initializing system schema");
             db::schema_tables::save_system_schema(qp.local()).get();
 
+            checkpoint(stop_signal, "starting cluster config manager");
+            cluster_config_manager.start(std::ref(cluster_config_manager), std::ref(db), std::ref(qp)).get();
+            auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [] {
+                cluster_config_manager.stop().get();
+            });
+            cluster_config_manager.invoke_on_all(&db::cluster_config_manager::start).get();
+
             // making compaction manager api available, after system keyspace has already been established.
             api::set_server_compaction_manager(ctx, cm).get();
             auto stop_cm_api = defer_verbose_shutdown("compaction manager API", [&ctx] {
@@ -2454,6 +2463,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 // state which reference user table schemas.
                 group0_service.enable_group0_state_machine().get();
             }
+
+            cluster_config_manager.local().refresh().get();
 
             // The call to enable_group0_state_machine() above guarantees that, if group0 is
             // created and started, the locally persisted group0 state has been applied

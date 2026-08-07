@@ -18,6 +18,7 @@ options {
 @parser::includes {
 #include "cql3/statements/raw/parsed_statement.hh"
 #include "cql3/statements/raw/select_statement.hh"
+#include "cql3/statements/alter_cluster_config_statement.hh"
 #include "cql3/statements/alter_keyspace_statement.hh"
 #include "cql3/statements/alter_table_statement.hh"
 #include "cql3/statements/alter_view_statement.hh"
@@ -380,6 +381,7 @@ cqlStatement returns [std::unique_ptr<raw::parsed_statement> stmt]
     | st48=pruneMaterializedViewStatement  { $stmt = std::move(st48); }
     | st49=describeStatement           { $stmt = std::move(st49); }
     | st50=listEffectiveServiceLevelStatement { $stmt = std::move(st50); }
+    | st51=alterClusterStatement       { $stmt = std::move(st51); }
     ;
 
 /*
@@ -1062,6 +1064,23 @@ dropTriggerStatement returns [DropTriggerStatement expr]
     ;
 
 #endif
+
+/**
+ * ALTER CLUSTER WITH <property> = <value>;
+ * ALTER DATACENTER <dc> WITH <property> = <value>;
+ * ALTER RACK <dc> <rack> WITH <property> = <value>;
+ * ALTER NODE <node_uuid> WITH <property> = <value>;
+ */
+alterClusterStatement returns [std::unique_ptr<cql3::statements::alter_cluster_config_statement> expr]
+        : K_ALTER K_CLUSTER K_WITH k=ident '=' v=propertyValue
+            { $expr = cql3::statements::alter_cluster_config_statement::for_cluster(k->to_string(), v == "null" ? std::nullopt : std::make_optional(v)); }
+        | K_ALTER K_DATACENTER dc=ident K_WITH k=ident '=' v=propertyValue
+            { $expr = cql3::statements::alter_cluster_config_statement::for_datacenter(dc->to_string(), k->to_string(), v == "null" ? std::nullopt : std::make_optional(v)); }
+        | K_ALTER K_RACK dc=ident rack=ident K_WITH k=ident '=' v=propertyValue
+            { $expr = cql3::statements::alter_cluster_config_statement::for_rack(dc->to_string(), rack->to_string(), k->to_string(), v == "null" ? std::nullopt : std::make_optional(v)); }
+        | K_ALTER K_NODE node_uuid=UUID K_WITH k=ident '=' v=propertyValue
+            { $expr = cql3::statements::alter_cluster_config_statement::for_node(sstring{$node_uuid.text}, k->to_string(), v == "null" ? std::nullopt : std::make_optional(v)); }
+        ;
 
 /**
  * ALTER KEYSPACE <KS> WITH <property> = <value>;
@@ -2186,6 +2205,9 @@ basic_unreserved_keyword returns [sstring str]
         | K_CLUSTER
         | K_CLUSTERING
         | K_COMPACT
+        | K_DATACENTER
+        | K_NODE
+        | K_RACK
         | K_STORAGE
         | K_TABLES
         | K_TYPE
@@ -2382,6 +2404,9 @@ K_OPTIONS:     O P T I O N S;
 
 K_CLUSTER:     C L U S T E R;
 K_CLUSTERING:  C L U S T E R I N G;
+K_DATACENTER:  D A T A C E N T E R;
+K_NODE:        N O D E;
+K_RACK:        R A C K;
 K_ASCII:       A S C I I;
 K_BIGINT:      B I G I N T;
 K_BLOB:        B L O B;

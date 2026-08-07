@@ -347,7 +347,7 @@ future<rack_list_colocation_state> find_required_rack_list_colocations(
         auto& ks = db.find_keyspace(ks_name);
         std::unordered_map<sstring, sstring> saved_ks_props = *req_entry.new_keyspace_rf_change_data;
         cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
-        new_ks_props.validate();
+        new_ks_props.validate(db.features());
         auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, db.features(), db.get_config());
 
         auto tables_with_mvs = ks.metadata()->tables();

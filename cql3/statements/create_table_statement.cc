@@ -34,6 +34,7 @@
 #include "compaction/time_window_compaction_strategy.hh"
 #include "db/tags/extension.hh"
 #include "db/tags/utils.hh"
+#include "db/schema_tables.hh"
 #include "replica/database.hh"
 #include "alternator/ttl_tag.hh"
 
@@ -81,6 +82,7 @@ utils::chunked_vector<column_definition> create_table_statement::get_columns() c
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>
 create_table_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     utils::chunked_vector<mutation> m;
+    bool created = true;
 
     try {
         m = co_await service::prepare_new_column_family_announcement(qp.proxy(), get_cf_meta_data(qp.db()), ts);
@@ -88,6 +90,36 @@ create_table_statement::prepare_schema_mutations(query_processor& qp, const quer
         if (!_if_not_exists) {
             co_return coroutine::exception(std::current_exception());
         }
+        created = false;
+    }
+
+    // Registry-backed config properties (e.g. auto_repair_enabled) live in the out-of-band
+    // `configs` column of system_schema.scylla_tables, which apply_to_builder() knows nothing
+    // about. Without this the properties would be accepted by cf_prop_defs::validate() and
+    // then silently dropped, and replaying DESCRIBE output (which folds the effective value
+    // into CREATE TABLE) would lose every table-scope override.
+    //
+    // Unlike ALTER TABLE there is no existing row to merge with: the table is new, so the
+    // statement's properties are the complete set. A removal (value == nullopt) cannot be
+    // expressed on CREATE, so only assignments are recorded.
+    std::vector<sstring> warnings;
+    if (created && _properties && _properties->has_table_config_properties(qp.db().features())) {
+        std::map<sstring, sstring> configs;
+        for (const auto& [config_name, value] : _properties->get_config_updates(qp.db().features())) {
+            if (value) {
+                configs[config_name] = *value;
+            }
+        }
+        if (!configs.empty()) {
+            m.push_back(db::schema_tables::make_scylla_table_configs_mutation(keyspace(), column_family(), configs, ts));
+        }
+    } else if (!created && _properties && _properties->has_table_config_properties(qp.db().features())) {
+        // The table already existed and IF NOT EXISTS turned the statement into a
+        // no-op, so the supplied config overrides were not applied. Surface this
+        // rather than silently dropping them; the operator must use ALTER TABLE.
+        warnings.emplace_back(format("Table {}.{} already exists; cluster-config properties in the "
+                "CREATE TABLE statement were not applied. Use ALTER TABLE to change them.",
+                keyspace(), column_family()));
     }
 
     // If an IF NOT EXISTS clause was used and resource was already created
@@ -98,7 +130,7 @@ create_table_statement::prepare_schema_mutations(query_processor& qp, const quer
     // are not yet aware of new schema or client's metadata may be outdated.
     // To force synchronization always emit the event (see
     // github.com/scylladb/scylladb/issues/16909).
-    co_return std::make_tuple(created_event(), std::move(m), std::vector<sstring>());
+    co_return std::make_tuple(created_event(), std::move(m), std::move(warnings));
 }
 
 /**

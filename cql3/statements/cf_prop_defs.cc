@@ -26,12 +26,20 @@
 #include "utils/bloom_calculations.hh"
 #include "utils/overloaded_functor.hh"
 #include "db/config.hh"
+#include "db/cluster_config_registry.hh"
+#include "cql3/statements/cluster_config_props.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 
 namespace cql3 {
 
 namespace statements {
+
+namespace {
+
+constexpr auto table_scope = db::cluster_config_registry::scope::table;
+
+}
 
 const sstring cf_prop_defs::KW_COMMENT = "comment";
 const sstring cf_prop_defs::KW_GCGRACESECONDS = "gc_grace_seconds";
@@ -102,6 +110,8 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
 
     const auto& ks = find_keyspace(db, ks_name);
 
+    cluster_config_props::ensure_registry_supported(table_scope, _properties, db.features());
+
     static std::set<sstring> keywords({
         KW_COMMENT,
         KW_GCGRACESECONDS, KW_CACHING, KW_DEFAULT_TIME_TO_LIVE,
@@ -121,7 +131,12 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     });
 
     const auto& exts = db.extensions();
-    property_definitions::validate(keywords, exts.schema_extension_keywords(), obsolete_keywords);
+    auto allowed_keywords = keywords;
+    auto config_keywords = cluster_config_props::supported_config_keywords(table_scope, db.features());
+    allowed_keywords.insert(config_keywords.begin(), config_keywords.end());
+    property_definitions::validate(allowed_keywords, exts.schema_extension_keywords(), obsolete_keywords);
+
+    cluster_config_props::validate_config_values(table_scope, _properties, db.features());
 
     try {
         get_id();
@@ -298,6 +313,26 @@ std::optional<db::tablet_options::map_type> cf_prop_defs::get_tablet_options() c
         return tablet_options.value();
     }
     return std::nullopt;
+}
+
+bool cf_prop_defs::has_table_config_properties(const gms::feature_service& feat) const {
+    return std::ranges::any_of(_properties, [&feat] (const auto& entry) {
+        return cluster_config_props::is_config_property(table_scope, entry.first, feat);
+    });
+}
+
+bool cf_prop_defs::has_non_table_config_properties(const gms::feature_service& feat) const {
+    return std::ranges::any_of(_properties, [&feat] (const auto& entry) {
+        return !cluster_config_props::is_config_property(table_scope, entry.first, feat);
+    });
+}
+
+std::map<sstring, std::optional<sstring>> cf_prop_defs::get_config_updates(const gms::feature_service& feat) const {
+    std::map<sstring, std::optional<sstring>> updates;
+    for (auto& [name, value] : cluster_config_props::config_updates(table_scope, _properties, feat)) {
+        updates.emplace(std::move(name), std::move(value));
+    }
+    return updates;
 }
 
 void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name, bool supports_repair) const {
