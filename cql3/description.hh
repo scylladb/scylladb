@@ -38,10 +38,15 @@ using with_create_statement = bool_class<struct with_create_statement_tag>;
 /// Some entities can generate `cql3::description`s parameterized by those two
 /// characteristics and this type embodies the choice of the user.
 enum class describe_option {
-    NO_STMTS,           /// Describe an entity, but don't generate a create statement.
-    STMTS,              /// Describe an entity and generate a create statement.
-    STMTS_AND_INTERNALS /// Describe an entity and generate a create statement,
-                        /// including internal details.
+    NO_STMTS,                  /// Describe an entity, but don't generate a create statement.
+    STMTS,                     /// Describe an entity and generate a create statement.
+    STMTS_AND_DROPPED_COLUMNS, /// Describe an entity and generate a create statement, including
+                               /// dropped columns (their definitions and the corresponding ALTER DROP/ADD
+                               /// statements), but NOT the entity's id. Used e.g. when writing schema.cql
+                               /// for a snapshot: dropped columns are needed to keep old sstables readable,
+                               /// while the id is intentionally omitted so the table can be restored freely.
+    STMTS_AND_INTERNALS        /// Describe an entity and generate a create statement,
+                               /// including internal details (both the id and dropped columns).
 };
 
 /// Type representing an entity that can be restored by performing

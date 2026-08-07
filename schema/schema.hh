@@ -960,9 +960,11 @@ public:
      * or "CREATE INDEX" depends on the type of index that schema describes (ie. Materialized View, Global
      * Index or Local Index).
      *
-     * When `cql3::describe_option::WITH_STMTS_AND_INTERNALS` is used, the description is extended with
-     * table's id and dropped columns. The dropped columns are present in column definitions and also the `ALTER DROP`
-     * statement (and `ALTER ADD` if the column has been re-added) to the description.
+     * When `cql3::describe_option::STMTS_AND_INTERNALS` is used, the description is extended with
+     * the table's id and its dropped columns. When `cql3::describe_option::STMTS_AND_DROPPED_COLUMNS`
+     * is used, only the dropped columns are added (the id is omitted). The dropped columns are present
+     * in column definitions and also the `ALTER DROP` statement (and `ALTER ADD` if the column has been
+     * re-added) to the description.
      */
     cql3::description describe(const schema_describe_helper& helper, cql3::describe_option) const;
 
@@ -992,7 +994,7 @@ private:
     // Print all schema properties in CQL syntax
     fragmented_ostringstream& schema_properties(const schema_describe_helper& helper, fragmented_ostringstream& os) const;
 
-    managed_string get_create_statement(const schema_describe_helper& helper, bool with_internals) const;
+    managed_string get_create_statement(const schema_describe_helper& helper, bool with_id, bool with_dropped_columns) const;
 public:
     const v3_columns& v3() const {
         return _v3_columns;
