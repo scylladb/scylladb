@@ -16,6 +16,7 @@
 #include "gms/gossiper.hh"
 #include "raft/raft.hh"
 #include "raft_group0.hh"
+#include "utils/error_injection.hh"
 
 namespace service {
 
@@ -491,6 +492,17 @@ future<> group0_voter_handler::update_nodes(
         co_return co_await _group0.modify_voters({}, nodes_removed, as);
     }
 
+    // On the bootstrapping discovery leader the topology has no normal nodes yet (the
+    // leader itself is not yet normal, and any joining peers are only in the transition
+    // set). There is nothing to calculate then, and the self-add below would have no
+    // topology state to work with, so bail out early. Note: this must check normal_nodes
+    // specifically, not topology::is_empty() -- the latter also counts transitioning
+    // (joining) nodes, so it would stay false during bootstrap and let the voter
+    // invariant below fire on the still-stateless leader.
+    if (_topology.normal_nodes.empty()) {
+        co_return;
+    }
+
     auto& raft_server = _group0.group0_server();
 
     const auto& leader_id = raft_server.current_leader();
@@ -573,6 +585,51 @@ future<> group0_voter_handler::update_nodes(
         add_node(id, *node, _gossiper.is_alive(locator::host_id{id.uuid()}));
     }
 
+    // Ensure the current node is present in the nodes list, even if it is not in the gossiper's live or dead
+    // members (e.g., during its own shutdown, when it drops out of its own get_live_members() while still being
+    // the group0 leader driving this calculation). This code runs on the group0 leader, which is a voter and must
+    // be part of the calculation for the quorum math to be correct; add_node() derives votership from the config,
+    // and the leader is effectively alive here (that it is missing from the live members is precisely the bug).
+    //
+    // FIXME(SCYLLADB-86): this relies on the leader still being a member of the group 0 config with topology
+    // state (add_node() ignores non-members, and without a replica state there is nothing to add it with). An
+    // obsolete modify_config initiated by a superseded topology coordinator - though appended and committed by
+    // the current leader, as config changes only go through the leader - can remove the leader from the config,
+    // silently leaving it out of the calculation until the committed change forces it to step down; fixing the
+    // underlying config races is out of scope here.
+    const auto self_id = raft_server.id();
+    if (!nodes.contains(self_id)) {
+        if (const auto* node = get_replica_state(self_id, true)) {
+            add_node(self_id, *node, true);
+        }
+    }
+
+    // Every voting config member is expected to be present in the nodes list (a still-bootstrapping node has no
+    // topology state yet, but must not be a voter before it fully joins).
+    //
+    // Such a voter cannot just be left alone - it still counts towards the raft quorum, while the distribution below is
+    // sized from `nodes` only and would undercount, which is exactly the failure mode of SCYLLADB-3026. Having no
+    // topology state, it cannot be a legitimate voter, so revoke its votership below.
+    //
+    // FIXME(SCYLLADB-86): only a warning rather than an internal error, since an obsolete modify_config initiated
+    // by a superseded topology coordinator (but committed by the current leader and thus observed here, on the
+    // current coordinator) can legitimately grant votership to a node with no topology state - it can even
+    // re-insert an already removed node into the config. Tighten back to on_internal_error() once those races
+    // are fixed.
+    std::unordered_set<raft::server_id> stale_voters;
+    for (const auto& member : group0_config.current) {
+        const raft::server_id id = member.addr.id;
+        if (group0_config.can_vote(id) != raft::is_voter::yes) {
+            continue;
+        }
+        if (!nodes.contains(id)) {
+            // The bootstrapping discovery leader is handled by the early return at the top of update_nodes(), and the
+            // leader itself is added by the "self" block above, so reaching this point is unexpected.
+            rvlogger.warn("group0 voter {} is absent from the node list (no topology state), revoking its votership", id);
+            stale_voters.emplace(id);
+        }
+    }
+
     std::unordered_set<raft::server_id> voters_add;
     std::unordered_set<raft::server_id> voters_del;
 
@@ -592,6 +649,16 @@ future<> group0_voter_handler::update_nodes(
     // Calculate the optimal voter distribution
     const auto& voters = _calculator.distribute_voters(nodes);
 
+    // Revoke the stale voters detected above, but only if a valid voter set remains - demoting them with nothing to
+    // replace them would leave the group with no voter at all.
+    // (An already-removed stale voter is also dropped from the config entirely by the topology coordinator's
+    // cleanup_group0_config_if_needed(); the revocation here additionally covers phantoms not in the `left` state.)
+    if (!voters.empty()) {
+        voters_del.insert(stale_voters.begin(), stale_voters.end());
+    } else if (!stale_voters.empty()) {
+        rvlogger.warn("no voters could be calculated, keeping the votership of the stale voters {}", stale_voters);
+    }
+
     // Calculate the voters diff against the current state
     for (const auto& [id, node] : nodes) {
         if (node.is_voter) {
@@ -606,6 +673,10 @@ future<> group0_voter_handler::update_nodes(
     }
 
     co_await _group0.modify_voters(voters_add, voters_del, as);
+
+    // Marks a fully completed voter recalculation, including any resulting config change. Tests wait on this
+    // injection's enter counter to know a refresh really ran, instead of guessing with a timeout.
+    utils::get_local_injector().inject("group0_voter_update_nodes_done", [] {});
 }
 
 group0_voter_calculator::group0_voter_calculator(std::optional<size_t> voters_max)
