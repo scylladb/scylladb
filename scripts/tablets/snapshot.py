@@ -200,6 +200,25 @@ def pack_snapshot(snapshot_dir: str) -> str:
     return archive_path
 
 
+def take_snapshot(host: str, workdir: Path, output_dir: str | None = None, gz: bool = False) -> Path:
+    """
+    Take a snapshot from a live cluster node and return the created directory, or
+    the tar.gz archive when ``gz`` is set.
+    """
+    args = argparse.Namespace(cluster=host, port=None, user=None, password=None, min_tablet_size=None)
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workdir)
+        snapshot_dir = create_snapshot_dir(output_dir, gz=gz)
+        with get_live_topology_source_from_args(args) as src:
+            write_snapshot(snapshot_dir, src)
+        if gz:
+            return Path(workdir) / pack_snapshot(snapshot_dir)
+        return Path(workdir) / snapshot_dir
+    finally:
+        os.chdir(old_cwd)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Capture tablet layout snapshot from a live cluster")
     add_topology_source_args(parser)
