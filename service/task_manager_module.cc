@@ -16,6 +16,7 @@
 #include "tasks/task_handler.hh"
 #include "tasks/virtual_task_hint.hh"
 #include "utils/UUID_gen.hh"
+#include "db/snapshot_types.hh"
 #include <cmath>
 #include <seastar/coroutine/maybe_yield.hh>
 

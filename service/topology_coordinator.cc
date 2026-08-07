@@ -30,6 +30,7 @@
 #include "cql3/statements/ks_prop_defs.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/system_keyspace.hh"
+#include "db/snapshot/cluster_backup.hh"
 #include "dht/boot_strapper.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
@@ -67,6 +68,7 @@
 
 #include "idl/join_node.dist.hh"
 #include "idl/storage_service.dist.hh"
+#include "idl/snapshot_backup.dist.hh"
 #include "replica/exceptions.hh"
 #include "service/paxos/prepare_response.hh"
 #include "idl/storage_proxy.dist.hh"
@@ -76,6 +78,7 @@
 #include "idl/sstables_loader.dist.hh"
 
 #include "service/topology_coordinator.hh"
+#include "tasks/task_manager.hh"
 
 #include <boost/range/join.hpp>
 #include <seastar/core/metrics_registration.hh>
@@ -1308,6 +1311,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                    .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
                    .set_session(session_id(req_id));
             co_await update_topology_state(std::move(guard), {builder.build()}, "SNAPSHOT TABLES requested");
+        }
+        break;
+        case global_topology_request::backup_snapshot: {
+            rtlogger.info("BACKUP SNAPSHOT requested");
+            topology_mutation_builder builder(guard.write_timestamp());
+            builder.set_transition_state(topology::transition_state::backup_snapshot)
+                   .set_global_topology_request(req)
+                   .set_global_topology_request_id(req_id)
+                   .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
+                   .set_session(session_id(req_id));
+            co_await update_topology_state(std::move(guard), {builder.build()}, "BACKUP SNAPSHOT requested");
         }
         break;
         case global_topology_request::finalize_migration: {
@@ -2850,12 +2864,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         co_await global_tablet_token_metadata_barrier(std::move(guard));
     }
 
+    using do_topo_op_func = std::function<future<std::optional<sstring>>(const db::system_keyspace::topology_requests_entry&, group0_guard&)>;
     using get_table_ids_func = std::function<std::unordered_set<table_id>(const db::system_keyspace::topology_requests_entry&)>;
     using send_rpc_func = std::function<future<>(locator::host_id, const service::frozen_topology_guard&)>;
     using desc_func = std::function<std::string()>;
     using before_finalize_func = std::function<future<>()>;
 
-    future<> handle_topology_ordered_op(group0_guard guard, get_table_ids_func get_table_ids, send_rpc_func send_rpc, desc_func desc, std::string_view what, before_finalize_func bf = {}) {
+    future<> handle_topology_ordered_op0(group0_guard guard, do_topo_op_func do_topo_op, std::string_view what, before_finalize_func bf = {}) {
         // Execute a barrier to make sure the nodes we are performing truncate on see the session
         // and are able to create a topology_guard using the frozen_guard we are sending over RPC
         // TODO: Exclude nodes which don't contain replicas of the table we are truncating
@@ -2867,45 +2882,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         // handler performed the truncate and cleared the session, but crashed before finalizing the request
         if (_topo_sm._topology.session) {
             const auto topology_requests_entry = co_await _sys_ks.get_topology_request_entry(global_request_id);
-            std::unordered_set<table_id> tables;
-            try {
-                tables = get_table_ids(topology_requests_entry);
-            } catch (std::exception& e) {
-                error = e.what();
-            }
-            if (!tables.empty()) {
-                // Collect the IDs of the hosts with replicas, but ignore excluded nodes
-                std::unordered_set<locator::host_id> replica_hosts;
-                for (auto table_id : tables) {
-                    const locator::tablet_map& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
-                    co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) {
-                        for (const locator::tablet_replica& replica: tinfo.replicas) {
-                            if (!_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(replica.host.uuid()))) {
-                                replica_hosts.insert(replica.host);
-                            }
-                        }
-                        return make_ready_future<>();
-                    });
-                }
-
-                // Release the guard to avoid blocking group0 for long periods of time while invoking RPCs
-                release_guard(std::move(guard));
-
-                co_await utils::get_local_injector().inject(fmt::format("{}_table_wait", what), utils::wait_for_message(std::chrono::minutes(2)));
-
-                // Check if all the nodes with replicas are alive
-                for (const locator::host_id& replica_host: replica_hosts) {
-                    if (!_gossiper.is_alive(replica_host)) {
-                        throw std::runtime_error(::format("Cannot perform {} because host {} is down", desc(), replica_host));
-                    }
-                }
-
-                // Send the RPC to all replicas
-                const service::frozen_topology_guard frozen_guard { _topo_sm._topology.session };
-                co_await coroutine::parallel_for_each(replica_hosts, [&] (const locator::host_id& host_id) -> future<> {
-                    co_await send_rpc(host_id, frozen_guard);
-                });
-            }
+            error = co_await do_topo_op(topology_requests_entry, guard);
 
             // Clear the session and save the error message
             while (true) {
@@ -2962,11 +2939,60 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 .build());
 
             try {
-                co_await update_topology_state(std::move(guard), std::move(updates), fmt::format("{}{} has completed", ::toupper(what[0]), what.substr(1)));
+                co_await update_topology_state(std::move(guard), std::move(updates), fmt::format("{}{} has completed", char(::toupper(what[0])), what.substr(1)));
                 break;
             } catch (group0_concurrent_modification&) {
             }
         }
+    }
+
+    future<> handle_topology_ordered_op(group0_guard guard, get_table_ids_func get_table_ids, send_rpc_func send_rpc, desc_func desc, std::string_view what, before_finalize_func bf = {}) {
+        co_await handle_topology_ordered_op0(std::move(guard), [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry, group0_guard& guard) -> future<std::optional<sstring>> {
+            std::unordered_set<table_id> tables;
+            std::optional<sstring> error;
+
+            try {
+                tables = get_table_ids(topology_requests_entry);
+            } catch (std::exception& e) {
+                error = e.what();
+            }
+
+            if (!tables.empty()) {
+                // Collect the IDs of the hosts with replicas, but ignore excluded nodes
+                std::unordered_set<locator::host_id> replica_hosts;
+                for (auto table_id : tables) {
+                    const locator::tablet_map& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
+                    co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) {
+                        for (const locator::tablet_replica& replica: tinfo.replicas) {
+                            if (!_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(replica.host.uuid()))) {
+                                replica_hosts.insert(replica.host);
+                            }
+                        }
+                        return make_ready_future<>();
+                    });
+                }
+
+                // Release the guard to avoid blocking group0 for long periods of time while invoking RPCs
+                release_guard(std::move(guard));
+                assert(!guard);
+                co_await utils::get_local_injector().inject(fmt::format("{}_table_wait", what), utils::wait_for_message(std::chrono::minutes(2)));
+
+                // Check if all the nodes with replicas are alive
+                for (const locator::host_id& replica_host: replica_hosts) {
+                    if (!_gossiper.is_alive(replica_host)) {
+                        throw std::runtime_error(::format("Cannot perform {} because host {} is down", desc(), replica_host));
+                    }
+                }
+
+                // Send the RPC to all replicas
+                const service::frozen_topology_guard frozen_guard { _topo_sm._topology.session };
+                co_await coroutine::parallel_for_each(replica_hosts, [&] (const locator::host_id& host_id) -> future<> {
+                    co_await send_rpc(host_id, frozen_guard);
+                });
+            }
+
+            co_return error;
+        }, what, std::move(bf));
     }
 
     future<> handle_truncate_table(group0_guard guard) {
@@ -3040,6 +3066,112 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 );
             }
         );
+    }
+
+    class topo_request_progress_sink : public tasks::progress_sink {
+        double _total = 0;
+        double _done = 0;
+        double _pub = 0;
+        topology_coordinator& _tc;
+        group0_guard& _guard;
+        utils::UUID _request_id;
+        std::string _what;
+        future<> _background = make_ready_future<>();
+    public:
+        topo_request_progress_sink(topology_coordinator& tc, group0_guard& g, utils::UUID id, std::string_view what)
+            : _tc(tc)
+            , _guard(g)
+            , _request_id(id)
+            , _what(what)
+        {}
+
+        future<> finalize() {
+            return std::exchange(_background, make_ready_future<>());
+        }
+
+        void set_total(double v) override {
+            _total = v;
+        };
+        void add_progress(double v) override {
+            if (_total == 0) {
+                return;
+            }
+            _done += v;
+            auto npcd = uint32_t(100 * _done / _total);
+
+            // avoid doing this too often or while we are still
+            // trying to write a previous update
+            if ((npcd - _pub) < 5 || !_background.available()) {
+                return;
+            }
+
+            // don't (can't) wait for the update until all 
+            // work is done.
+            _background = [this, npcd]() -> future<> {
+                auto n = npcd;
+                auto* me = this;
+                while (true) {
+                    if (!_guard) {
+                        _guard = co_await _tc.start_operation();
+                    }
+                    utils::chunked_vector<canonical_mutation> updates;
+                    updates.push_back(topology_request_tracking_mutation_builder(_request_id)
+                                        .percent_complete(n)
+                                        .build());
+
+                    try {
+                        co_await _tc.update_topology_state(std::move(_guard), std::move(updates), fmt::format("{}{} {} percent complete", char(::toupper(_what[0])), _what.substr(1), n));
+                        me->_pub = n;
+                        break;
+                    } catch (group0_concurrent_modification&) {
+                    }
+                }
+            }();
+        }
+    };
+
+    future<> handle_backup_snapshot(group0_guard guard) {
+        co_await handle_topology_ordered_op0(std::move(guard), [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry, group0_guard& guard) -> future<std::optional<sstring>> {
+            std::optional<sstring> error;
+
+            auto tag = *topology_requests_entry.snapshot_tag;
+            auto move_files = topology_requests_entry.backup_use_move;
+            auto ids = *topology_requests_entry.snapshot_table_ids;
+            auto locations = *topology_requests_entry.backup_locations;
+            std::unordered_multimap<sstring, sstring> ks_tables;
+
+            topo_request_progress_sink ps(*this, guard, topology_requests_entry.id, "backup");
+
+            try {
+                for (auto& id : *topology_requests_entry.snapshot_table_ids) {
+                    lw_shared_ptr<replica::table> table = _db.get_tables_metadata().get_table_if_exists(id);
+                    if (!table) {
+                        throw std::invalid_argument(fmt::format("Cannot BACKUP SNAPSHOT of table with UUID {} because it does not exist.", id));
+                    }
+                    ks_tables.emplace(table->schema()->ks_name(), table->schema()->cf_name());
+                }
+
+                // Release the guard to avoid blocking group0 for long periods of time while invoking RPCs
+                release_guard(std::move(guard));
+
+                const service::frozen_topology_guard frozen_guard { _topo_sm._topology.session };
+
+                co_await db::snapshot::run_global_backup(_sys_ks.query_processor()
+                    , std::move(tag), std::move(ks_tables), std::move(locations), move_files
+                    , [&](locator::host_id host, table_id tid, sstring tag, sstring endpoint, sstring bucket, sstring prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move) -> future<> {
+                        co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&_messaging, host, tid, tag, endpoint, bucket, prefix, first_token, last_token, std::move(sstable_ids), use_move, frozen_guard);
+                    }
+                    , ps
+                );
+            } catch (std::exception& e) {
+                error = e.what();
+            }
+
+            // make sure any progress updates are done before we
+            // signal done.
+            co_await ps.finalize();
+            co_return error;
+        }, "backup");
     }
 
     // This function must not release and reacquire the guard, callers rely
@@ -3803,7 +3935,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 // Denotes the case when this path is already executed before and first topology state update was successful.
                 // So we can skip all steps and perform the second topology state update operation (which modifies node state to left)
                 // and remove node conditionally from group0.
-                if (auto [done, error] = co_await _sys_ks.get_topology_request_state(node.rs->request_id, false); done) {
+                if (auto [done, error, _] = co_await _sys_ks.get_topology_request_state(node.rs->request_id, false); done) {
                     co_await finish_left_token_ring_transition(node);
                     break;
                 }
@@ -3949,6 +4081,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 break;
             case topology::transition_state::snapshot_tables:
                 co_await handle_snapshot_tables(std::move(guard));
+                break;
+            case topology::transition_state::backup_snapshot:
+                co_await handle_backup_snapshot(std::move(guard));
                 break;
         }
         co_return true;

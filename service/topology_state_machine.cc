@@ -146,6 +146,7 @@ static std::unordered_map<topology::transition_state, sstring> transition_state_
     {topology::transition_state::rollback_to_normal, "rollback to normal"},
     {topology::transition_state::truncate_table, "truncate table"},
     {topology::transition_state::snapshot_tables, "snapshot tables"},
+    {topology::transition_state::backup_snapshot, "backup_snapshot"},
     {topology::transition_state::lock, "lock"},
 };
 
@@ -213,6 +214,7 @@ static std::unordered_map<global_topology_request, sstring> global_topology_requ
     {global_topology_request::finalize_migration, "finalize_migration"},
     {global_topology_request::quiesce, "quiesce"},
     {global_topology_request::restore_tablets, "restore_tablets"},
+    {global_topology_request::backup_snapshot, "backup_snapshot"},
 };
 
 global_topology_request global_topology_request_from_string(const sstring& s) {
@@ -275,11 +277,15 @@ validate_removing_node(replica::database& db, locator::host_id host_id) {
     return node_validation_success {};
 }
 
-future<sstring> topology_state_machine::wait_for_request_completion(db::system_keyspace& sys_ks, utils::UUID id, bool require_entry) {
+future<sstring> topology_state_machine::wait_for_request_completion(db::system_keyspace& sys_ks, utils::UUID id, bool require_entry, completion_callback cc) {
     tsmlogger.debug("Start waiting for topology request completion (request id {})", id);
     while (true) {
         auto c = reload_count;
-        auto [done, error] = co_await sys_ks.get_topology_request_state(id, require_entry);
+        auto [done, error, pc] = co_await sys_ks.get_topology_request_state(id, require_entry);
+        if (cc) {
+            tsmlogger.debug("Request with id {} is {} percent complete", id, pc);
+            cc(pc); // maybe report progress
+        }
         if (done) {
             tsmlogger.debug("Request with id {} is completed with status: {}", id, error.empty() ? sstring("success") : error);
             co_return error;
