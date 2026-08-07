@@ -94,11 +94,18 @@ class SSTablesOnLocalStorage:
         topo(rf = 1, nodes = 3, racks = 1, dcs = 1),
         topo(rf = 3, nodes = 5, racks = 1, dcs = 1),
         topo(rf = 1, nodes = 4, racks = 2, dcs = 1),
-        topo(rf = 3, nodes = 6, racks = 2, dcs = 1),
-        topo(rf = 2, nodes = 8, racks = 4, dcs = 2)
     ])
 async def test_refresh_with_streaming_scopes(build_mode: str, manager: ManagerClient, topology):
     '''Check that refreshing of a cluster with stream scopes works'''
+    await do_test_streaming_scopes(build_mode, manager, topology, SSTablesOnLocalStorage())
+
+
+@pytest.mark.parametrize("topology", [
+        topo(rf = 3, nodes = 6, racks = 2, dcs = 1),
+        topo(rf = 2, nodes = 8, racks = 4, dcs = 2)
+    ])
+async def test_refresh_with_streaming_scopes_heavy(build_mode: str, manager: ManagerClient, topology, heavy):
+    '''Check that refreshing of a cluster with stream scopes works (heavy topology)'''
     await do_test_streaming_scopes(build_mode, manager, topology, SSTablesOnLocalStorage())
 
 
