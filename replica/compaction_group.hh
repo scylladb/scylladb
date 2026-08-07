@@ -128,6 +128,10 @@ private:
     // An input SSTable remains linked if it wasn't actually compacted, yet compaction manager wants
     // it to be moved from its original sstable set (e.g. maintenance) into a new one (e.g. main).
     std::vector<sstables::shared_sstable> unused_sstables_for_deletion(compaction::compaction_completion_desc desc) const;
+    // Does the actual work of update_sstable_sets_on_compaction_completion(). Sets `attached` to
+    // true once desc's output sstables are attached to the table, so the caller can tell whether
+    // it still needs to unlink them if this throws or if something later in the caller fails.
+    future<> do_update_sstable_sets_on_compaction_completion(compaction::compaction_completion_desc desc, bool& attached);
     // Tracks the maximum timestamp observed across all SSTables in this group.
     // This is used by the compacting reader to determine if a memtable contains entries
     // with timestamps that overlap with those in the SSTables of the compaction group.
