@@ -4725,53 +4725,60 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
     std::unordered_map<table_id, size_t> total_replicas;
     bool table_load_stats_invalid = false;
 
+    // Helper lambda to query load stats from a single node.
+    // Updates _load_stats_per_node and optionally accumulates into dc_stats.
+    auto query_node_load_stats = [&] (locator::host_id dst, locator::load_stats* dc_stats) -> future<> {
+        auto dst_server = raft::server_id(dst.uuid());
+
+        _as.check();
+
+        // FIXME: if a node is down, completion status cannot be relied upon, but the average tablet size
+        //  could still be inferred from the replicas available.
+
+        auto timeout = netw::messaging_service::clock_type::now() + wait_for_live_nodes_timeout;
+
+        abort_source as;
+        auto request_abort = [&as] () mutable noexcept {
+            as.request_abort();
+        };
+        auto t = timer<lowres_clock>(request_abort);
+        t.arm(timeout);
+        auto sub = _as.subscribe(request_abort);
+
+        locator::load_stats node_stats;
+        if (!_gossiper.is_alive(dst)) {
+            if (require == require_live_nodes::no && _load_stats_per_node.contains(dst) &&
+                    !utils::get_local_injector().enter("force_down_node_load_stats_invalid")) {
+                node_stats = _load_stats_per_node[dst];
+            } else {
+                rtlogger.debug("raft topology: Unable to refresh table load on {} because it's down.", dst);
+                table_load_stats_invalid = true;
+                co_return;
+            }
+        } else if (_feature_service.tablet_load_stats_v2) {
+            node_stats = co_await ser::storage_service_rpc_verbs::send_table_load_stats(&_messaging,
+                                                                                        dst,
+                                                                                        as,
+                                                                                        dst_server);
+        } else {
+            node_stats = locator::load_stats::from_v1(
+                co_await ser::storage_service_rpc_verbs::send_table_load_stats_v1(&_messaging,
+                                                                                  dst,
+                                                                                  as,
+                                                                                  dst_server));
+        }
+
+        _load_stats_per_node[dst] = node_stats;
+        if (dc_stats) {
+            *dc_stats += node_stats;
+        }
+    };
+
     for (auto& [dc, nodes] : tm->get_datacenter_token_owners_nodes()) {
         locator::load_stats dc_stats;
         rtlogger.debug("raft topology: Refreshing table load stats for DC {} that has {} token owners", dc, nodes.size());
         co_await coroutine::parallel_for_each(nodes, [&] (const auto& node) -> future<> {
-            auto dst = node.get().host_id();
-            auto dst_server = raft::server_id(dst.uuid());
-
-            _as.check();
-
-            // FIXME: if a node is down, completion status cannot be relied upon, but the average tablet size
-            //  could still be inferred from the replicas available.
-
-            auto timeout = netw::messaging_service::clock_type::now() + wait_for_live_nodes_timeout;
-
-            abort_source as;
-            auto request_abort = [&as] () mutable noexcept {
-                as.request_abort();
-            };
-            auto t = timer<lowres_clock>(request_abort);
-            t.arm(timeout);
-            auto sub = _as.subscribe(request_abort);
-
-            locator::load_stats node_stats;
-            if (!_gossiper.is_alive(dst)) {
-                if (require == require_live_nodes::no && _load_stats_per_node.contains(dst) &&
-                        !utils::get_local_injector().enter("force_down_node_load_stats_invalid")) {
-                    node_stats = _load_stats_per_node[dst];
-                } else {
-                    rtlogger.debug("raft topology: Unable to refresh table load on {} because it's down.", dst);
-                    table_load_stats_invalid = true;
-                    co_return;
-                }
-            } else if (_feature_service.tablet_load_stats_v2) {
-                node_stats = co_await ser::storage_service_rpc_verbs::send_table_load_stats(&_messaging,
-                                                                                            dst,
-                                                                                            as,
-                                                                                            dst_server);
-            } else {
-                node_stats = locator::load_stats::from_v1(
-                    co_await ser::storage_service_rpc_verbs::send_table_load_stats_v1(&_messaging,
-                                                                                      dst,
-                                                                                      as,
-                                                                                      dst_server));
-            }
-
-            _load_stats_per_node[dst] = node_stats;
-            dc_stats += node_stats;
+            co_await query_node_load_stats(node.get().host_id(), &dc_stats);
         });
 
         for (auto& [table_id, table_stats] : dc_stats.tables) {
@@ -4801,6 +4808,19 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
 
         stats += dc_stats;
     }
+
+    // Also query zero-token nodes (e.g., in arbiter DCs) to populate _load_stats_per_node.
+    // These nodes have no token-ring presence and are excluded from the DC-based loop above.
+    // They must still report load stats for finalization to verify they have migrated to tablets.
+    // Their stats are not included in the DC-level aggregation (their DCs have RF=0).
+    co_await coroutine::parallel_for_each(_topo_sm._topology.normal_nodes, [&] (const auto& entry) -> future<> {
+        auto host_id = to_host_id(entry.first);
+        if (tm->is_normal_token_owner(host_id)) {
+            co_return; // Already queried in the DC-based loop above.
+        }
+        rtlogger.debug("raft topology: Refreshing table load stats for zero-token node {}", host_id);
+        co_await query_node_load_stats(host_id, nullptr);
+    });
 
     for (auto& [table_id, table_load_stats] : stats.tables) {
         if (!total_replicas.contains(table_id)) {
