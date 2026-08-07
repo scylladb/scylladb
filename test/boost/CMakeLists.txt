@@ -97,6 +97,8 @@ add_scylla_test(encryption_at_rest_test
   KIND SEASTAR
   LIBRARIES
     encryption)
+add_scylla_test(endpoint_state_merge_test
+  KIND SEASTAR)
 add_scylla_test(enum_option_test
   KIND BOOST)
 add_scylla_test(enum_set_test
