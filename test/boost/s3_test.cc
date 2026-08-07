@@ -217,6 +217,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_proxy) {
     do_test_client_multipart_upload(make_proxy_client, true);
 }
 
+<<<<<<< HEAD
 void client_multipart_upload_fallback(const client_maker_function& client_maker) {
     const sstring name(fmt::format("/{}/testfbobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
 
@@ -253,6 +254,85 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_fallback_proxy) {
     client_multipart_upload_fallback(make_proxy_client);
 }
 
+||||||| parent of 3f765ecfd6 (test: s3: cover zero-length objects)
+=======
+// A zero-byte component is not hypothetical. BTI's Rows.db is empty for an
+// sstable holding only small partitions, and sstables/mx/writer.cc papers over
+// that by appending four bytes of padding before closing the writer. The tests
+// below pin down what each upload path does when nothing at all is written.
+
+void do_test_client_put_empty_object(const client_maker_function& client_maker) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testemptyobject");
+
+    testlog.info("PUT an empty object\n");
+    cln->put_object(name, temporary_buffer<char>()).get();
+
+    BOOST_REQUIRE(cln->object_exists(name).get());
+    BOOST_REQUIRE_EQUAL(cln->get_object_size(name).get(), 0);
+}
+
+void do_test_client_upload_empty_object(const client_maker_function& client_maker, bool with_copy_upload) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path(fmt::format("testempty{}object", with_copy_upload ? "jumbo" : "large"));
+
+    testlog.info("Upload an empty object (with copy = {})\n", with_copy_upload);
+    auto out = output_stream<char>(
+        with_copy_upload ? cln->make_upload_jumbo_sink(name, 3) : cln->make_upload_sink(name)
+    );
+    auto close = seastar::deferred_close(out);
+
+    // Nothing is written to the stream.
+    testlog.info("Flush upload\n");
+    out.flush().get();
+
+    testlog.info("Closing\n");
+    close.close_now();
+
+    BOOST_REQUIRE(cln->object_exists(name).get());
+    BOOST_REQUIRE_EQUAL(cln->get_object_size(name).get(), 0);
+}
+
+// Reading a zero-length object needs the same care as writing one: no byte range
+// is satisfiable on an empty object, so a ranged GET is answered with 416.
+void do_test_download_empty_object(const client_maker_function& client_maker, bool is_chunked) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testemptydownloadobject");
+
+    cln->put_object(name, temporary_buffer<char>()).get();
+
+    testlog.info("Download an empty object (chunked = {})\n", is_chunked);
+    auto in = is_chunked ? input_stream<char>(cln->make_chunked_download_source(name, s3::full_range))
+                         : input_stream<char>(cln->make_download_source(name, s3::full_range));
+    auto close = seastar::deferred_close(in);
+
+    BOOST_REQUIRE(in.read().get().empty());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_put_empty_object_minio) {
+    do_test_client_put_empty_object(make_minio_client);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_download_empty_object_minio) {
+    do_test_download_empty_object(make_minio_client, false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_empty_object_minio) {
+    do_test_download_empty_object(make_minio_client, true);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_upload_empty_object_minio) {
+    do_test_client_upload_empty_object(make_minio_client, false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_copy_upload_empty_object_minio) {
+    do_test_client_upload_empty_object(make_minio_client, true);
+}
+
+>>>>>>> 3f765ecfd6 (test: s3: cover zero-length objects)
 using with_remainder_t = bool_class<class with_remainder_tag>;
 
 future<> test_client_upload_file(const client_maker_function& client_maker, std::string_view test_name, size_t total_size, size_t memory_size) {
