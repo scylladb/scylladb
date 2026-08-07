@@ -257,10 +257,15 @@ String generate_string_value(std::mt19937& engine, typename String::value_type m
         { 0.1, {1000, 9999}}}};
     auto char_dist = std::uniform_int_distribution<typename String::value_type>(min, max);
 
-    const auto size = std::clamp(
-            size_dist(engine),
-            min_size_in_bytes / sizeof(typename String::value_type),
-            max_size_in_bytes / sizeof(typename String::value_type));
+    constexpr auto char_size = sizeof(typename String::value_type);
+    // Note: if min_size_in_bytes and max_size_in_bytes can't both be satisfied,
+    // we silently choose the smallest size which respects min_size_in_bytes.
+    // Respecting the minimum is more important because some things (e.g. vectors)
+    // can't handle empty values, and they prevent that by setting the minimum to 1.
+    const auto min_size = (min_size_in_bytes + char_size - 1) / char_size;
+    const auto max_size = std::max(min_size, max_size_in_bytes / char_size);
+
+    const auto size = std::clamp(size_dist(engine), min_size, max_size);
     String str(size, '\0');
 
     for (size_t i = 0; i < size; ++i) {
