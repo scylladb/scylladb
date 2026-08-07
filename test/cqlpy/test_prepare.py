@@ -125,18 +125,29 @@ def test_single_pk_indexes_duplicate_named_variables(cql, table1, scylla_only):
     prepared = cql.prepare(f"SELECT p FROM {table1} WHERE c = :x AND p = :x")
     assert prepared.routing_key_indexes == [0]
 
+# In Cassandra compatibility mode (#15559) Scylla treats duplicate bind
+# variable names as separate variables, which is Cassandra's native (and only)
+# behavior. The fixture is therefore a no-op on Cassandra, and the tests below
+# run against it too, verifying that the mode faithfully emulates it.
+@pytest.fixture(scope="function")
+def duplicate_names_are_separate_variables(cql):
+    if is_scylla(cql):
+        with config_value_context(cql, 'cql_duplicate_bind_variable_names_refer_to_same_variable', 'false'):
+            yield
+    else:
+        yield
+
 # Same test as test_single_pk_indexes_duplicate_named_variables, but in Cassandra compatibility mode. #15559
-def test_single_pk_indexes_duplicate_named_variables_cassandra_compatiblity_mode(cql, table1):
-    with config_value_context(cql, 'cql_duplicate_bind_variable_names_refer_to_same_variable', 'false'):
-        prepared = cql.prepare(f"SELECT p FROM {table1} WHERE p = :x")
-        assert prepared.routing_key_indexes == [0]
+def test_single_pk_indexes_duplicate_named_variables_cassandra_compatibility_mode(cql, table1, duplicate_names_are_separate_variables):
+    prepared = cql.prepare(f"SELECT p FROM {table1} WHERE p = :x")
+    assert prepared.routing_key_indexes == [0]
 
-        prepared = cql.prepare(f"SELECT p FROM {table1} WHERE p = :x AND c = :x")
-        assert prepared.routing_key_indexes == [0]
+    prepared = cql.prepare(f"SELECT p FROM {table1} WHERE p = :x AND c = :x")
+    assert prepared.routing_key_indexes == [0]
 
-        prepared = cql.prepare(f"SELECT p FROM {table1} WHERE c = :x AND p = :x")
-        # Without #15559 this would be [0].
-        assert prepared.routing_key_indexes == [1]
+    prepared = cql.prepare(f"SELECT p FROM {table1} WHERE c = :x AND p = :x")
+    # Without #15559 this would be [0].
+    assert prepared.routing_key_indexes == [1]
 
 
 # Test generating pk indexes with named bind variables where the same variable is used multiple times.
@@ -165,28 +176,27 @@ def test_composite_pk_indexes_duplicate_named_variables(cql, table2, scylla_only
     assert prepared.routing_key_indexes == [0, 0, 1, 2]
 
 # Same test as test_composite_pk_indexes_duplicate_named_variables, but in Cassandra compatibility mode. #15559
-def test_composite_pk_indexes_duplicate_named_variables_cassandra_compatibility_mode(cql, table2):
-    with config_value_context(cql, 'cql_duplicate_bind_variable_names_refer_to_same_variable', 'false'):
-        prepared = cql.prepare(f"SELECT * FROM {table2} WHERE p1 = :x AND p2 = :x AND p3 = :x AND p4 = :x")
-        assert prepared.routing_key_indexes == [0, 1, 2, 3]
+def test_composite_pk_indexes_duplicate_named_variables_cassandra_compatibility_mode(cql, table2, duplicate_names_are_separate_variables):
+    prepared = cql.prepare(f"SELECT * FROM {table2} WHERE p1 = :x AND p2 = :x AND p3 = :x AND p4 = :x")
+    assert prepared.routing_key_indexes == [0, 1, 2, 3]
 
-        prepared = cql.prepare(f"SELECT * FROM {table2} WHERE p1 = :a AND p2 = :a AND p3 = :b AND p4 = :b")
-        assert prepared.routing_key_indexes == [0, 1, 2, 3]
+    prepared = cql.prepare(f"SELECT * FROM {table2} WHERE p1 = :a AND p2 = :a AND p3 = :b AND p4 = :b")
+    assert prepared.routing_key_indexes == [0, 1, 2, 3]
 
-        prepared = cql.prepare(f"SELECT * FROM {table2} WHERE p1 = :a AND p2 = :b AND p3 = :a AND p4 = :b")
-        assert prepared.routing_key_indexes == [0, 1, 2, 3]
+    prepared = cql.prepare(f"SELECT * FROM {table2} WHERE p1 = :a AND p2 = :b AND p3 = :a AND p4 = :b")
+    assert prepared.routing_key_indexes == [0, 1, 2, 3]
 
-        prepared = cql.prepare(
-            f"SELECT * FROM {table2} WHERE c1 = :a AND c2 = :b AND p1 = :a AND p2 = :b AND p3 = :a AND p4 = :b")
-        assert prepared.routing_key_indexes == [2, 3, 4, 5]
+    prepared = cql.prepare(
+        f"SELECT * FROM {table2} WHERE c1 = :a AND c2 = :b AND p1 = :a AND p2 = :b AND p3 = :a AND p4 = :b")
+    assert prepared.routing_key_indexes == [2, 3, 4, 5]
 
-        prepared = cql.prepare(
-            f"SELECT * FROM {table2} WHERE p1 = :a AND p2 = :b AND p3 = :a AND p4 = :b AND c1 = :a AND c2 = :b ")
-        assert prepared.routing_key_indexes == [0, 1, 2, 3]
+    prepared = cql.prepare(
+        f"SELECT * FROM {table2} WHERE p1 = :a AND p2 = :b AND p3 = :a AND p4 = :b AND c1 = :a AND c2 = :b ")
+    assert prepared.routing_key_indexes == [0, 1, 2, 3]
 
-        prepared = cql.prepare(
-            f"SELECT * FROM {table2} WHERE p1 = :x AND p2 = :x AND p3 = :z AND p4 = :y AND c1 = :y AND c2 = :z ")
-        assert prepared.routing_key_indexes == [0, 1, 2, 3]
+    prepared = cql.prepare(
+        f"SELECT * FROM {table2} WHERE p1 = :x AND p2 = :x AND p3 = :z AND p4 = :y AND c1 = :y AND c2 = :z ")
+    assert prepared.routing_key_indexes == [0, 1, 2, 3]
 
 # Test what happens when using a bind marker with the same name (e.g., ":x")
 # twice in a query. Above we tested which "routing_key_indexes" is returned
@@ -232,33 +242,32 @@ def test_duplicate_named_bind_marker_prepared(cql, table1, scylla_only):
         assert [(x,x+1)] == list(cql.execute(stmt, (x,x+1)))
 
 # Same test as test_duplicate_named_bind_marker_prepared, but in Cassandra compatibility mode. #15559
-def test_duplicate_named_bind_marker_prepared_cassandra_compatibility_mode(cql, table1):
-    with config_value_context(cql, 'cql_duplicate_bind_variable_names_refer_to_same_variable', 'false'):
-        x = unique_key_int()
-        cql.execute(f'INSERT INTO {table1} (p,c) VALUES ({x},{x})')
-        cql.execute(f'INSERT INTO {table1} (p,c) VALUES ({x},{x+1})')
-        # Sanity check: query without bind markers, with unnamed bind markers,
-        # and with two different bind-marker names. All should work.
-        assert [(x,x)] == list(cql.execute(f'SELECT * FROM {table1} WHERE p={x} AND c={x}'))
-        stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p=? AND c=?')
-        assert [(x,x)] == list(cql.execute(stmt, (x,x)))
-        stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p=:x1 AND c=:x2')
-        assert [(x,x)] == list(cql.execute(stmt, {'x1': x, 'x2': x}))
-        assert [(x,x)] == list(cql.execute(stmt, (x,x)))
-        # Now for the real test: Use the same bind-marker name twice.
-        stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p=:x AND c=:x')
-        # If EXECUTE is passed a bound value with a name "x", both bind markers
-        # named "x" are assigned, and the query works:
-        assert [(x,x)] == list(cql.execute(stmt, {'x': x}))
-        # In Cassandra, if EXECUTE is passed unnamed bound values, they go to the
-        # bind markers no matter what their name is - using ":x" twice in the
-        # query has the same effect as using "?" twice - you still need to pass
-        # two bound values.
-        assert [(x,x)] == list(cql.execute(stmt, (x,x)))
-        # Passing unnamed values, one can pass two different values even when the
-        # query's bind markers have the same name :x. Exactly like two different
-        # "?" bind markers can also be bound to different values:
-        assert [(x,x+1)] == list(cql.execute(stmt, (x,x+1)))
+def test_duplicate_named_bind_marker_prepared_cassandra_compatibility_mode(cql, table1, duplicate_names_are_separate_variables):
+    x = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p,c) VALUES ({x},{x})')
+    cql.execute(f'INSERT INTO {table1} (p,c) VALUES ({x},{x+1})')
+    # Sanity check: query without bind markers, with unnamed bind markers,
+    # and with two different bind-marker names. All should work.
+    assert [(x,x)] == list(cql.execute(f'SELECT * FROM {table1} WHERE p={x} AND c={x}'))
+    stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p=? AND c=?')
+    assert [(x,x)] == list(cql.execute(stmt, (x,x)))
+    stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p=:x1 AND c=:x2')
+    assert [(x,x)] == list(cql.execute(stmt, {'x1': x, 'x2': x}))
+    assert [(x,x)] == list(cql.execute(stmt, (x,x)))
+    # Now for the real test: Use the same bind-marker name twice.
+    stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p=:x AND c=:x')
+    # If EXECUTE is passed a bound value with a name "x", both bind markers
+    # named "x" are assigned, and the query works:
+    assert [(x,x)] == list(cql.execute(stmt, {'x': x}))
+    # In Cassandra, if EXECUTE is passed unnamed bound values, they go to the
+    # bind markers no matter what their name is - using ":x" twice in the
+    # query has the same effect as using "?" twice - you still need to pass
+    # two bound values.
+    assert [(x,x)] == list(cql.execute(stmt, (x,x)))
+    # Passing unnamed values, one can pass two different values even when the
+    # query's bind markers have the same name :x. Exactly like two different
+    # "?" bind markers can also be bound to different values:
+    assert [(x,x+1)] == list(cql.execute(stmt, (x,x+1)))
 
 # The tests from here on cover the name of the IN bind variable, SCYLLADB-3454.
 # The bind variable created for the right-hand side of an IN restriction is
