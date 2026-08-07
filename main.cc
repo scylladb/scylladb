@@ -2031,6 +2031,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             groups_manager.start(std::ref(messaging), std::ref(raft_gr), std::ref(qp), 
                 std::ref(db), std::ref(mm), std::ref(sys_ks), std::ref(feature_service), std::ref(gossiper),
                 std::ref(raft_replay_buffer)).get();
+            // On every shard: each shard's database gets that shard's manager
+            // instance, so the flush hook works wherever a tablet lives.
+            db.invoke_on_all([&groups_manager] (replica::database& local_db) {
+                local_db.set_strong_consistency_groups_manager(groups_manager.local());
+            }).get();
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [&] {
                 groups_manager.stop().get();
             });
@@ -2208,10 +2213,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     // uncommitted entries are now in new segments).
                     supervisor::notify("processing raft replay buffer");
                     raft_replay_buffer.invoke_on_all([&db, &qp](db::raft_commitlog_replay_buffer& buffer) mutable {
-                        if (buffer.remaining_groups()) {
-                            return buffer.process_raft_replayed_items(db.local(), qp.local(), sys_ks.local());
-                        }
-                        return make_ready_future<>();
+                        // Called unconditionally — the buffer returns early when it
+                        // holds nothing. A group may have a recovered commit_idx to
+                        // restore even with no replayed log entries (its entries'
+                        // segment was reclaimed while the commit_idx entry's was not).
+                        return buffer.process_raft_replayed_items(db.local(), qp.local(), sys_ks.local());
                     }).get();
 
                     startlog.info("replaying commit log - flushing memtables");
@@ -2228,6 +2234,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         return make_ready_future<>();
                     }).get();
                 }
+
+                // Reconcile system.raft_groups_snapshots.idx with system.raft_groups.commit_idx
+                // for every known strongly-consistent tablet raft group. Must run unconditionally
+                // (independent of whether there were commitlog segments to replay): after a clean
+                // shutdown all SC tablet segments have been reclaimed, yet the persisted
+                // commit_idx may still be ahead of the persisted snapshot idx, which would
+                // otherwise trip the "committed index cannot be larger then persisted one"
+                // assert in raft::server::start.
+                supervisor::notify("bumping raft snapshot indices");
+                raft_replay_buffer.invoke_on_all([&db, &qp](db::raft_commitlog_replay_buffer& buffer) mutable {
+                    return buffer.bump_snapshot_indices(db.local(), qp.local());
+                }).get();
             }
 
             // Once stuff is replayed, we can empty RP:s from truncation records. 
