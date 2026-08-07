@@ -15,6 +15,9 @@ from test.pylib.util import start_writes, scale_timeout_by_mode
 from test.cluster.util import (
     wait_for_cql_and_get_hosts, new_test_keyspace, reconnect_driver, wait_for,
     wait_for_no_pending_topology_transition, get_topology_coordinator,
+    FeatureConfig,
+    feature_configs,
+    FeatureConfigurations
 )
 import time
 import pytest
@@ -177,10 +180,13 @@ async def test_bootstrap_starts_while_tablet_migration_is_blocked(manager: Manag
         await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
 
 
+@pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
+    FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
 @pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "cleanup", "cleanup_target", "end_migration", "revert_migration"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail_replica, fail_stage, build_mode):
+async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail_replica, fail_stage, build_mode,
+                                                    feature_config: FeatureConfig):
     if fail_stage == 'cleanup' and fail_replica == 'destination':
         skip_env('Failing destination during cleanup is pointless')
     if fail_stage == 'cleanup_target' and fail_replica == 'source':
@@ -194,6 +200,9 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
         'write_request_timeout_in_ms': request_timeout_ms,
         'read_request_timeout_in_ms': request_timeout_ms,
     }
+    cfg = feature_config.get_cluster_cfg(cfg)
+    keyspace_opts = feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}")
     host_ids = []
     servers = []
 
@@ -210,8 +219,8 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
 
     cql = manager.get_cql()
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(feature_config.get_table_opts(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);"))
 
         keys = range(256)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
@@ -338,9 +347,15 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
         # For dropping the keyspace after the node failure
         await reconnect_driver(manager)
 
-async def test_tablet_back_and_forth_migration(manager: ManagerClient):
+
+@pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
+    FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
+async def test_tablet_back_and_forth_migration(manager: ManagerClient, feature_config: FeatureConfig):
     logger.info("Bootstrapping cluster")
-    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
+    cfg = feature_config.get_cluster_cfg(
+        {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'})
+    keyspace_opts = feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
     host_ids = []
     servers = []
 
@@ -356,8 +371,8 @@ async def test_tablet_back_and_forth_migration(manager: ManagerClient):
     await make_server()
     await manager.disable_tablet_balancing()
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(feature_config.get_table_opts(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);"))
         await make_server()
 
         await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({1}, {1});")
@@ -564,21 +579,28 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
         await wait_for(tablets_merged, time.time() + 60)
 
 
+@pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
+    FeatureConfigurations.STRONG_CONSISTENCY, FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY,
+    FeatureConfigurations.LOGSTOR_STRONG_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_restart_in_cleanup_stage_after_cleanup(manager: ManagerClient):
+async def test_restart_in_cleanup_stage_after_cleanup(manager: ManagerClient, feature_config: FeatureConfig):
     """
     Migrate a tablet from one node to another, and restart the leaving replica during
     the tablet cleanup stage, after tablet cleanup is completed.
     Reproduces issue #24857
     """
-    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1}
+    keyspace_opts = feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
+    cfg = feature_config.get_cluster_cfg({'tablet_load_stats_refresh_interval_in_seconds': 1})
+
     servers = await manager.servers_add(2, config=cfg)
 
     await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 8}};")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(feature_config.get_table_opts(
+            f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 8}};"))
 
         total_keys = 10
         for pk in range(total_keys):
