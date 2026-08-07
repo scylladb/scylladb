@@ -15,6 +15,7 @@
 #include "exceptions/exceptions.hh"
 #include "db/system_keyspace.hh"
 #include "db/schema_tables.hh"
+#include "service/qos/service_level_controller.hh"
 #include "tracing/trace_keyspace_helper.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "replica/database.hh"
@@ -391,3 +392,23 @@ service::forwarded_client_state::forwarded_client_state(const client_state& cs)
     , remote_address(cs.get_client_address())
     , remote_port(cs.get_client_port())
 { }
+
+std::optional<seastar::scheduling_group> service::client_state::maybe_get_default_batch_scheduling_group() const {
+    if (!_sl_controller) {
+        return std::nullopt;
+    }
+
+    // Only redirect to `sl:default_batch` when the request would otherwise run in the
+    // default scheduling group, i.e. the user has no specific service level attached.
+    // If the user is attached to a service level, honor it and don't redirect.
+    const auto default_sg = _sl_controller->get_scheduling_group(qos::service_level_controller::default_service_level_name);
+    if (default_sg != current_scheduling_group()) {
+        return std::nullopt;
+    }
+
+    if (!_sl_controller->has_service_level(qos::service_level_controller::default_batch_service_level_name)) {
+        return std::nullopt;
+    }
+
+    return _sl_controller->get_scheduling_group(qos::service_level_controller::default_batch_service_level_name);
+}
