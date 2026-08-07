@@ -8059,4 +8059,110 @@ SEASTAR_TEST_CASE(test_size_tiering_for_tiny_sstables) {
     });
 }
 
+// Returns the sealed sstables present in `dir`, identified by their TOC file.
+// An sstable whose deletion already started is renamed to
+// "<...>-TemporaryTOC.txt" first and is reclaimed by the sstable directory scan
+// on boot, so it is deliberately not counted here: only fully sealed leftovers
+// -- the ones that survive a restart and get loaded again -- are.
+static std::vector<sstring> list_sealed_sstables(const fs::path& dir) {
+    std::vector<sstring> tocs;
+    for (const auto& de : fs::directory_iterator(dir)) {
+        auto name = de.path().filename().string();
+        if (name.ends_with("-TOC.txt")) {
+            tocs.push_back(sstring(name));
+        }
+    }
+    std::ranges::sort(tocs);
+    return tocs;
+}
+
+// Reproducer for SCYLLADB-3531
+//
+// When compaction_group::update_sstable_sets_on_compaction_completion() fails
+// to attach a compaction's output sstable(s) to the table, the sealed output
+// is neither attached to the table nor scheduled for deletion, so its file(s)
+// stay on disk forever: it is sealed already, and seal_sstable() clears
+// mark_for_deletion::implicit, so ~sstable() does not unlink it either.
+//
+// Nothing is logged on this path, since no deletion is ever attempted.
+//
+// Trigger this here the same way it happens in production: hand a completion
+// descriptor whose old_sstables aren't actually part of the compaction
+// group's sstable set to on_compaction_completion(). This is exactly the
+// "Unable to remove input SSTable" guard in sstable_list_updater::prepare(),
+// which is one of the reachable failure modes of this function (the same
+// thing happens for real e.g. when a tablet split or migration moves an
+// sstable out from under a running compaction). The leaked output is a
+// complete, loadable sstable, so on tablet tables the directory scan picks it
+// up on the next restart and can trip on it there instead.
+SEASTAR_TEST_CASE(test_compaction_output_is_not_leaked_when_attach_fails) {
+    return test_env::do_with_async([] (test_env& env) {
+        // Single-shard sharder so the fixed keys below are always owned by the
+        // shard running the test, regardless of --smp.
+        auto builder = schema_builder(1, "tests", "replacer_failure")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        auto s = builder.build();
+
+        auto cf = env.make_table_for_tests(s);
+        auto stop_cf = deferred_stop(cf);
+        auto sst_gen = env.make_sst_factory(s);
+
+        auto make_mut = [&] (std::string_view key, int32_t value) {
+            mutation m(s, partition_key::from_exploded(*s, {to_bytes(sstring(key))}));
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(value), api::new_timestamp());
+            return m;
+        };
+
+        auto sst1 = make_sstable_containing(sst_gen, {make_mut("a", 1)}).get();
+        column_family_test(cf).add_sstable(sst1).get();
+
+        // Stands in for a compaction's old_sstables that no longer belong to
+        // this group's sstable set by the time on_compaction_completion() runs,
+        // e.g. because a split or migration moved it away. It is sealed on disk
+        // like a real input, but deliberately never added to the table.
+        auto phantom_old_sstable = make_sstable_containing(sst_gen, {make_mut("b", 2)}).get();
+        // Stands in for the compaction's sealed output.
+        auto new_sstable = make_sstable_containing(sst_gen, {make_mut("c", 3)}).get();
+
+        const auto dir = tests::table_dir(*cf);
+        const auto before = list_sealed_sstables(dir);
+        BOOST_REQUIRE_EQUAL(before.size(), 3u);
+
+        compaction::compaction_completion_desc desc {
+            .old_sstables = {phantom_old_sstable},
+            .new_sstables = {new_sstable},
+        };
+        // The failure below goes through on_internal_error(), which aborts by
+        // default in test binaries. Disable that so it throws instead, like it
+        // does in production (abort_on_internal_error defaults to false there).
+        const auto prev_abort = seastar::set_abort_on_internal_error(false);
+        auto reset_abort = defer([prev_abort] noexcept { seastar::set_abort_on_internal_error(prev_abort); });
+        BOOST_REQUIRE_THROW(
+            cf.as_compaction_group_view().on_compaction_completion(std::move(desc), sstables::offstrategy::no).get(),
+            std::runtime_error);
+
+        // on_compaction_completion() failed, so its output is unreachable and
+        // must not be left behind on disk. An unreferenced sstable is unlinked
+        // by a background task, hence the retry loop.
+        const auto new_sstable_toc = sstring(new_sstable->component_basename(sstables::component_type::TOC));
+        auto leaked = [&] {
+            auto sealed = list_sealed_sstables(dir);
+            return std::ranges::find(sealed, new_sstable_toc) != sealed.end();
+        };
+        (void) eventually_true([&] { return !leaked(); });
+
+        // Fails today: the output sstable's TOC file is still there.
+        BOOST_REQUIRE_MESSAGE(!leaked(),
+                fmt::format("compaction output leaked on disk after failed attach: [{}]", new_sstable_toc));
+
+        // sst1 was untouched by the failed call: only the output sstable was unlinked,
+        // and the phantom old sstable (never part of any set) was left alone too.
+        auto after = list_sealed_sstables(dir);
+        auto expected = before;
+        std::erase(expected, new_sstable_toc);
+        BOOST_REQUIRE_EQUAL(after, expected);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
