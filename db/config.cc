@@ -1806,6 +1806,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Throttles background I/O to the specified total throughput (in MiBs/s) across the entire system. Background I/O includes the one performed by repair and both RBNO and legacy topology operations such as adding or removing a node. Setting the value to 0 disables background IO throttling. It is recommended to set the value for this parameter to be 75% of network bandwidth")
     , backup_io_throughput_mb_per_sec(this, "backup_io_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
         "Throttles backup I/O to the specified total throughput (in MiBs/s) across the entire system")
+    , force_effective_capacity_to_raw_disk_capacity(this, "force_effective_capacity_to_raw_disk_capacity", liveness::LiveUpdate, value_status::Used, false,
+        "Forces effective_capacity used in tablets load balancing to be the equal to the raw disk capacity instead of the sum of tablet "
+        "sizes and available disk space.")
     , default_log_level(this, "default_log_level", value_status::Used, seastar::log_level::info, "Default log level for log messages")
     , logger_log_level(this, "logger_log_level", value_status::Used, {}, "Map of logger name to log level. Valid log levels are 'error', 'warn', 'info', 'debug' and 'trace'")
     , log_to_stdout(this, "log_to_stdout", value_status::Used, true, "Send log output to stdout")
