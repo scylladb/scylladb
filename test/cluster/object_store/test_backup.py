@@ -1190,6 +1190,61 @@ async def test_restore_tablets_with_different_tablet_hints(build_mode: str, mana
         assert f"'min_tablet_count': '{min_tablet_count_before_restore}'" in desc, f"Expected min_tablet_count={min_tablet_count_before_restore} in: {desc}"
         assert f"'max_tablet_count': '{max_tablet_count_before_restore}'" in desc, f"Expected max_tablet_count={max_tablet_count_before_restore} in: {desc}"
 
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_tablets_hints_survive_node_loss(build_mode: str, manager: ManagerClient, object_storage):
+    '''Check that the tablet hints configured on the table before restore survive the
+    loss of the node driving the restore.
+
+    During tablet-aware restore, the table's tablet hints are pinned to the tablet
+    count from the backup manifest and altered back to their pre-restore values once
+    the restore is done. The pre-restore hints must be persisted before the pinning
+    so that they survive node crashes during restore.'''
+
+    topology = topo(rf = 2, nodes = 4, racks = 2, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
+    log = await manager.server_open_log(servers[0].server_id)
+    await log.wait_for("raft_topology - start topology coordinator fiber", timeout=10)
+
+    cql = manager.get_cql()
+
+    num_keys = 24
+    backup_tablet_count = 8
+    min_tablet_count_before_restore = 2
+    max_tablet_count_before_restore = 2
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {backup_tablet_count}}};")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
+        snap_name, _ = await take_snapshot(ks, servers, manager, logger)
+        await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}', ks, 'test', object_storage, manager, logger) for s in servers))
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {min_tablet_count_before_restore}, 'max_tablet_count': {max_tablet_count_before_restore}}};")
+
+        await manager.api.enable_injection(servers[2].ip_addr, "pause_tablet_restore", one_shot=True)
+
+        manifests = [ f'{s.server_id}/{snap_name}/manifest.json' for s in servers ]
+        tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[1].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        await manager.api.wait_for_injection_enter(servers[2].ip_addr, "pause_tablet_restore", deadline=time.time() + 120)
+
+        await manager.server_stop(servers[1].server_id, convict=True)
+        with pytest.raises(aiohttp.client_exceptions.ClientConnectorError):
+            await manager.api.wait_task(servers[1].ip_addr, tid)
+
+        tid = await manager.api.restore_tablets(servers[3].ip_addr, ks, 'test', snap_name, servers[3].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        await manager.api.message_injection(servers[2].ip_addr, "pause_tablet_restore")
+        status = await asyncio.wait_for(manager.api.wait_task(servers[3].ip_addr, tid), timeout=120)
+        logger.info(f'Re-issued restore finished with: {status}')
+
+        host3 = (await wait_for_cql_and_get_hosts(cql, [servers[3]], time.time() + 60))[0]
+        desc = (await cql.run_async(f"DESC TABLE {ks}.test", host=host3))[0].create_statement
+        assert f"'min_tablet_count': '{min_tablet_count_before_restore}'" in desc, f"Expected min_tablet_count={min_tablet_count_before_restore} in: {desc}"
+        assert f"'max_tablet_count': '{max_tablet_count_before_restore}'" in desc, f"Expected max_tablet_count={max_tablet_count_before_restore} in: {desc}"
+
+
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_storage):
     '''Check that restore task fails well when given a non-existing sstable'''
 
