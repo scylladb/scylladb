@@ -600,7 +600,7 @@ alter_table_statement::raw_statement::prepare(data_dictionary::database db, cql_
         mylogger.warn("{}", *warning);
     }
 
-    auto ctx = get_prepare_context();
+    prepare_context& ctx = get_prepare_context();
     auto prepared_attrs = _attrs->prepare(db, keyspace(), column_family());
     prepared_attrs->fill_prepare_context(ctx);
 

@@ -23,8 +23,9 @@ namespace statements {
 class truncate_statement : public cql_statement {
     schema_ptr _schema;
     const std::unique_ptr<attributes> _attrs;
+    const uint32_t _bound_terms;
 public:
-    truncate_statement(schema_ptr schema, std::unique_ptr<attributes> prepared_attrs);
+    truncate_statement(schema_ptr schema, std::unique_ptr<attributes> prepared_attrs, uint32_t bound_terms);
     truncate_statement(const truncate_statement&);
 
     const sstring& keyspace() const;
