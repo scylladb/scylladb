@@ -1186,7 +1186,7 @@ lw_shared_ptr<const service::pager::paging_state> view_indexed_table_select_stat
     }
 
     auto index_ck = clustering_key::from_range(std::move(exploded_index_ck));
-    if (partition_key::tri_compare(*_view_schema)(paging_state->get_partition_key(), index_pk) == 0
+    if (paging_state->get_partition_key().equal(*_view_schema, index_pk)
             && (!paging_state->get_clustering_key() || clustering_key::prefix_equal_tri_compare(*_view_schema)(*paging_state->get_clustering_key(), index_ck) == 0)) {
         return paging_state;
     }

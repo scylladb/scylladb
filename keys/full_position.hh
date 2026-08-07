@@ -36,7 +36,7 @@ struct full_position {
 
     static std::strong_ordering cmp(const schema& s, const full_position& a, const full_position& b) {
         // Use ring order (token first, then legacy raw-byte compare) to match the physical
-        // SSTable ordering. Using the type-aware partition_key::tri_compare here would give
+        // SSTable ordering. Using a type-aware value comparison here would give
         // wrong results for key types (e.g. timeuuid) where semantic order differs from the
         // raw-byte order used on disk, potentially causing paging cursors to be advanced past
         // partitions that haven't been returned yet.
