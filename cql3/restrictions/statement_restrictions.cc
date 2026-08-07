@@ -2595,6 +2595,9 @@ void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const 
         }
         const auto col = on_col->column;
         auto col_in_index = idx_tbl_schema.get_column_definition(col->name());
+        if (!col_in_index) {
+            break;
+        }
         auto replaced = replace_column_def(e.filter, col_in_index);
         auto a = to_predicate_on_column(replaced, col_in_index, &idx_tbl_schema);
         _idx_tbl_ck_prefix->push_back(std::move(a));
