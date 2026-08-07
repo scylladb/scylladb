@@ -143,7 +143,11 @@ const log_entry& fsm::add_entry(T command) {
     utils::get_local_injector().inject("fsm::add_entry/test-failure",
                                        [] { throw std::runtime_error("fsm::add_entry/test-failure"); });
 
-    _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(command)}));
+    // LeaseGuard: stamp the entry with the leader's current time interval so
+    // that future leaders can reason about this lease's age. Empty when leases
+    // are disabled or the clock is unsynchronized.
+    _log.emplace_back(seastar::make_lw_shared<log_entry>(
+            {_current_term, _log.next_idx(), std::move(command), lease_time_now()}));
     _sm_events.signal();
 
     if constexpr (std::is_same_v<T, configuration>) {
@@ -217,6 +221,19 @@ void fsm::become_leader() {
 
     _last_election_time = _clock.now();
     _ping_leader = false;
+
+    // LeaseGuard: at election time every existing log entry predates this
+    // leader's term, so the newest of them is the deposed leader's lease. Record
+    // its index (before we append our own dummy entry below) and the current
+    // time, so we can defer committing until that lease is more than delta old.
+    if (leaseguard_enabled()) {
+        leader_state().last_prev_term_idx = _log.last_idx();
+        leader_state().lease_wait_start = lease_time_now();
+        // No prior-term entry means no deposed lease to wait for, so the
+        // deferred-commit restriction does not apply for this leadership term.
+        leader_state().lease_wait_done = leader_state().last_prev_term_idx == index_t{0};
+    }
+
     // a new leader needs to commit at least one entry to make sure that
     // all existing entries in its log are committed as well. Also it should
     // send append entries RPC as soon as possible to establish its leadership
@@ -504,6 +521,23 @@ void fsm::maybe_commit() {
             _tag, _log[new_commit_idx.value()]->term, _current_term);
         return;
     }
+
+    // LeaseGuard deferred commit: committing this current-term entry would
+    // indirectly commit all prior-term entries, including the deposed leader's
+    // lease. Do not advance the commit index until that lease is more than delta
+    // old, so the deposed leader can no longer serve linearizable reads from
+    // stale data. The writes stay replicated and durable meanwhile; a later
+    // tick retries this commit once the lease expires.
+    if (leaseguard_enabled() && !leader_state().lease_wait_done) {
+        if (prev_term_lease_expired()) {
+            leader_state().lease_wait_done = true;
+        } else {
+            logger.trace("maybe_commit[{}]: deferring commit to {}, deposed leader's lease "
+                "not yet expired", _tag, new_commit_idx);
+            return;
+        }
+    }
+
     logger.trace("maybe_commit[{}]: commit {}", _tag, new_commit_idx);
 
     _commit_idx = new_commit_idx;
@@ -521,7 +555,12 @@ void fsm::maybe_commit() {
             configuration cfg(_log.get_configuration());
             cfg.leave_joint();
             logger.trace("[{}] appending non-joint config entry at {}: {}", _tag, _log.next_idx(), cfg);
-            _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(cfg)}));
+            // LeaseGuard: stamp it like any other entry we create (add_entry()
+            // does the same). An unstamped entry would silently drop our lease
+            // once it becomes the newest committed entry, and would force the
+            // next leader onto the conservative full-delta wait.
+            _log.emplace_back(seastar::make_lw_shared<log_entry>(
+                    {_current_term, _log.next_idx(), std::move(cfg), lease_time_now()}));
             leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
             // Leaving joint configuration may commit more entries
             // even if we had no new acks. Imagine the cluster is
@@ -566,6 +605,55 @@ void fsm::maybe_commit() {
             broadcast_read_quorum(leader_state().last_read_id);
         }
     }
+}
+
+bool fsm::prev_term_lease_expired() {
+    const auto now = _config.leaseguard->clock.interval_now();
+    if (!now) {
+        // The clock is unsynchronized: we cannot bound any time, so we cannot
+        // prove the deposed leader's lease has expired. Defer conservatively;
+        // tick_leader() steps down if this persists.
+        return false;
+    }
+    const auto delta = _config.leaseguard->delta;
+    auto& state = leader_state();
+    // Record the first available clock reading since becoming leader. Every
+    // prior-term entry was created before the election, so this is a safe upper
+    // bound on their age when the deposed leader's own entry is unavailable.
+    if (!state.lease_wait_start) {
+        state.lease_wait_start = now;
+    }
+    // Prefer the deposed leader's own recorded interval when its entry is still
+    // present in the in-memory log (above the snapshot); this lets us commit as
+    // soon as that specific entry is more than delta old.
+    const auto prev_idx = state.last_prev_term_idx;
+    if (prev_idx > _log.get_snapshot().idx) {
+        const auto& lease_entry = *_log[prev_idx.value()];
+        if (lease_entry.lease_time) {
+            return lease_entry.lease_time->older_than(delta, *now);
+        }
+    }
+    // The deposed leader's entry is folded into a snapshot, the log was empty at
+    // election, or the entry carries no interval of its own. Fall back to
+    // waiting a full delta since we became leader.
+    return state.lease_wait_start->older_than(delta, *now);
+}
+
+bool fsm::can_serve_lease_read() {
+    if (!leaseguard_enabled()) {
+        return false;
+    }
+    // The committed entry must be present in the in-memory log (not folded into
+    // a snapshot) for its recorded interval to be available.
+    if (_commit_idx <= _log.get_snapshot().idx) {
+        return false;
+    }
+    const auto now = _config.leaseguard->clock.interval_now();
+    if (!now) {
+        return false;
+    }
+    const auto& entry = *_log[_commit_idx.value()];
+    return entry.lease_time && entry.lease_time->younger_than(_config.leaseguard->delta, *now);
 }
 
 void fsm::tick_leader() {
@@ -639,6 +727,94 @@ void fsm::tick_leader() {
             logger.trace("tick[{}]: resend timeout_now", _tag);
             // resend timeout now in case it was lost
             send_to(*state.timeout_now_sent, timeout_now{_current_term});
+        }
+    }
+
+    // LeaseGuard: while a deposed leader's lease may still be valid we defer
+    // committing. Retry now that physical time has advanced; once the lease has
+    // expired this commits the pending, already-replicated entries without
+    // needing any new messages from followers. If the clock stays unavailable we
+    // cannot bound the lease, so step down to let a node with a healthy clock
+    // take over instead of stalling here indefinitely.
+    if (leaseguard_enabled() && !leader_state().lease_wait_done) {
+        auto& state = leader_state();
+        if (_config.leaseguard->clock.interval_now()) {
+            state.clock_unavailable_since.reset();
+            maybe_commit();
+            // maybe_commit() may have stepped us down (committing a C_new that
+            // removes this node calls transfer_leadership()), destroying the
+            // leader state `state` refers to. Nothing below may run then.
+            if (!is_leader()) {
+                return;
+            }
+        } else if (!state.clock_unavailable_since) {
+            state.clock_unavailable_since = _clock.now();
+            logger.warn("[{}]: LeaseGuard clock is unsynchronized while a commit is deferred; "
+                "commits are stalled and this leader will step down if it persists", _tag);
+        } else if (_clock.now() - *state.clock_unavailable_since >= ELECTION_TIMEOUT) {
+            logger.error("[{}]: LeaseGuard clock has been unsynchronized for over an election "
+                "timeout; stepping down so a node with a healthy clock can lead", _tag);
+            become_follower(server_id{});
+            return;
+        }
+    }
+
+    // LeaseGuard automatic lease extension (arXiv:2512.15659 "Raft Leases Done
+    // Right", Section 5.1). A lease is only refreshed by committing entries, so
+    // under a read-only workload the newest committed entry would age past delta
+    // and every read would fall back to a quorum barrier. While reads are
+    // flowing, proactively commit a no-op that keeps can_serve_lease_read() true.
+    // The no-op is an ordinary lease-stamped entry, so safety is unchanged (a
+    // future leader defers commit for it like any other prior-term entry) and the
+    // "log is the lease" gray-failure protection is preserved: a leader that
+    // cannot replicate cannot renew.
+    //
+    // Renewal both EXTENDS a lease that is about to expire and RE-ESTABLISHES one
+    // that has already lapsed (Section 5.1: the leader writes a no-op "whenever
+    // needed to serve a read"). Re-establishing matters because a leader can end
+    // up leaseless with no write traffic to fix it: right after a failover (the
+    // dummy entry is stamped at election time but only commits once the deposed
+    // lease expires), after a snapshot moves the commit index, after a clock
+    // outage spanning delta, or when the newest committed entry carries no
+    // interval at all. Without this, a read-only workload would fall back to a
+    // quorum barrier for every read, permanently.
+    //
+    // Renewal is still gated to avoid destabilizing a cluster under stress: only
+    // when the log is fully committed (nothing in flight), so at most one renewal
+    // no-op is outstanding and a leader that cannot commit (partitioned or
+    // churning under failovers) does not pile up no-ops -- which would grow the
+    // log without bound and can livelock the group. `read_since_renewal` means an
+    // idle group appends nothing.
+    //
+    // A leader that is stepping down must not append at all (3.10), and
+    // add_entry() enforces that by throwing not_a_leader, which would escape
+    // tick(). Note this is not covered by the is_leader() check above: stepdown
+    // is a state of a node that is still the leader, and it can be entered
+    // either by the maybe_commit() above or by an earlier leadership transfer.
+    if (leaseguard_enabled() && leader_state().lease_wait_done && leader_state().read_since_renewal
+            && !leader_state().stepdown && _commit_idx == _log.last_idx()) {
+        if (auto now = _config.leaseguard->clock.interval_now()) {
+            const auto delta = _config.leaseguard->delta;
+            // The newest committed entry, when it is still in the in-memory log.
+            // Once it has been folded into a snapshot its interval is gone, which
+            // is indistinguishable from holding no lease -- and note this is a
+            // state a read-only workload cannot leave on its own, since only a new
+            // entry can restore a lease. So treat it like an unstamped entry and
+            // renew. (The bounds check also keeps _log[] indexing in range.)
+            const log_entry* newest = _commit_idx > _log.get_snapshot().idx
+                    ? &*_log[_commit_idx.value()] : nullptr;
+            // Renew once the newest committed entry is past half the lease
+            // duration -- early enough that a still-valid lease stays valid
+            // across the replication + commit round-trip, and late enough that a
+            // steady read stream costs at most one no-op per delta/2. An entry
+            // with no recorded interval gives us no lease at all, so renew
+            // immediately.
+            if (!newest || !newest->lease_time || newest->lease_time->older_than(delta / 2, *now)) {
+                logger.trace("tick[{}]: LeaseGuard renewing lease with a no-op at idx {}",
+                    _tag, _log.next_idx());
+                add_entry(log_entry::dummy());
+                leader_state().read_since_renewal = false;
+            }
         }
     }
 }
@@ -1149,6 +1325,14 @@ void fsm::handle_read_quorum_reply(server_id from, const read_quorum_reply& repl
 std::optional<std::pair<read_id, index_t>> fsm::start_read_barrier(server_id requester) {
     check_is_leader();
 
+    // LeaseGuard: record that a read is being served this term so tick_leader()
+    // proactively renews the lease under a read-only workload. Set for both the
+    // lease-served and quorum-barrier paths below, since either way keeping the
+    // lease warm avoids future quorum round-trips.
+    if (leaseguard_enabled()) {
+        leader_state().read_since_renewal = true;
+    }
+
     // Make sure that only a leader or a node that is part of the config can request read barrier
     // Nodes outside of the config may never get the data, so they will not be able to read it.
     follower_progress* opt_progress = leader_state().tracker.find(requester);
@@ -1176,6 +1360,22 @@ std::optional<std::pair<read_id, index_t>> fsm::start_read_barrier(server_id req
     }
 
     read_id id = next_read_id();
+
+    if (can_serve_lease_read()) {
+        // We hold a valid lease. LeaseGuard guarantees no other leader is
+        // committing writes while our lease is valid, so our committed state is
+        // the most recent in the group and this read is linearizable without
+        // contacting followers. Resolve it locally by marking its id as having
+        // reached quorum, and suppress the read_quorum broadcast that
+        // next_read_id() would otherwise trigger in get_output().
+        leader_state().last_read_id_changed = false;
+        leader_state().max_read_id_with_quorum = id;
+        _output.max_read_id_with_quorum = id;
+        logger.trace("start_read_barrier[{}] lease read, resolving id {} locally at commit idx {}",
+            _tag, id, _commit_idx);
+        return std::make_pair(id, _commit_idx);
+    }
+
     logger.trace("start_read_barrier[{}] starting read barrier with id {}", _tag, id);
     return std::make_pair(id, _commit_idx);
 }
