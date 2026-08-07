@@ -160,7 +160,6 @@ def test_table_gsi_1h2r(dynamodb):
 
 
 # Test that creating a GSI with 2 HASH keys and no RANGE keys succeeds.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 def test_gsi_composite_create_2h(dynamodb):
     with new_composite_gsi_table(
         dynamodb, "gsi", hash_keys=[("a", "S"), ("b", "S")], range_keys=[]
@@ -174,7 +173,6 @@ def test_gsi_composite_create_2h(dynamodb):
 
 
 # Test that creating a GSI with max 4 HASH + 4 RANGE succeeds.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 def test_gsi_composite_create_4h4r(test_table_gsi_4h4r):
     desc = test_table_gsi_4h4r.meta.client.describe_table(
         TableName=test_table_gsi_4h4r.name
@@ -188,7 +186,6 @@ def test_gsi_composite_create_4h4r(test_table_gsi_4h4r):
 # Test that a single HASH attr + composite 2-attribute RANGE key succeeds.
 # This is the AWS doc's PlayerMatchHistoryIndex pattern: single hash
 # key + multi-attribute range key.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 def test_gsi_composite_create_1h2r(test_table_gsi_1h2r):
     desc = test_table_gsi_1h2r.meta.client.describe_table(
         TableName=test_table_gsi_1h2r.name
@@ -204,7 +201,6 @@ def test_gsi_composite_create_1h2r(test_table_gsi_1h2r):
 
 
 # 5 HASH attributes exceeds the limit of 4.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 def test_gsi_composite_create_5h_rejected(dynamodb):
     with pytest.raises(ClientError, match="ValidationException.*HASH"):
         with new_composite_gsi_table(
@@ -214,7 +210,6 @@ def test_gsi_composite_create_5h_rejected(dynamodb):
 
 
 # 1 HASH + 5 RANGE exceeds the limit of 4 RANGE.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 def test_gsi_composite_create_5r_rejected(dynamodb):
     with pytest.raises(ClientError, match="ValidationException.*RANGE"):
         with new_composite_gsi_table(
@@ -227,7 +222,6 @@ def test_gsi_composite_create_5r_rejected(dynamodb):
 
 
 # Interleaved HASH, RANGE, HASH is not allowed.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 def test_gsi_composite_interleaved_rejected(dynamodb):
     with pytest.raises(ClientError, match="ValidationException.*HASH.*precede.*RANGE"):
         with new_test_table(
@@ -258,7 +252,6 @@ def test_gsi_composite_interleaved_rejected(dynamodb):
 # whether duplicated within the same role (HASH+HASH) or reused across
 # roles (HASH and RANGE). Both shapes exercise the same "same name"
 # validation rule, so they are parametrized into a single test.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 @pytest.mark.parametrize(
     "key_schema",
     [
@@ -301,7 +294,6 @@ def test_gsi_composite_duplicate_attr_rejected(dynamodb, key_schema):
 
 
 # GSI key attribute referenced but not in AttributeDefinitions.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 def test_gsi_composite_missing_attribute_definition(dynamodb):
     with pytest.raises(ClientError, match="ValidationException.*AttributeDefinitions"):
         with new_test_table(
@@ -331,7 +323,6 @@ def test_gsi_composite_missing_attribute_definition(dynamodb):
 
 # Verify DescribeTable returns the correct KeySchema and AttributeDefinitions
 # for a 2H+2R composite GSI.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2626)")
 def test_gsi_composite_describe_2h2r(test_table_gsi_2h2r):
     desc = test_table_gsi_2h2r.meta.client.describe_table(
         TableName=test_table_gsi_2h2r.name
@@ -357,7 +348,6 @@ def test_gsi_composite_describe_2h2r(test_table_gsi_2h2r):
 
 # Verify DescribeTable returns the correct KeySchema and AttributeDefinitions
 # for max 4H+4R.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2626)")
 def test_gsi_composite_describe_4h4r(test_table_gsi_4h4r):
     desc = test_table_gsi_4h4r.meta.client.describe_table(
         TableName=test_table_gsi_4h4r.name
@@ -419,7 +409,6 @@ def test_gsi_composite_describe_projection_keys_only(dynamodb):
 # is a different scenario from test_gsi_composite_create_4h4r (one GSI with
 # 4 HASH + 4 RANGE components): here two separate composite GSIs coexist on
 # the same base table and share an attribute ('b') across their key schemas.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2626)")
 def test_gsi_composite_describe_multiple_gsi(dynamodb):
     with new_test_table(
         dynamodb,
@@ -613,7 +602,6 @@ def test_gsi_composite_swapped_hash_range_keys(dynamodb):
 
 
 # Add a composite GSI via UpdateTable and verify it becomes queryable.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2622)")
 def test_gsi_composite_updatetable_create_2h2r(dynamodb):
     with new_test_table(
         dynamodb,
@@ -652,7 +640,6 @@ def test_gsi_composite_updatetable_create_2h2r(dynamodb):
 
 
 # Add a composite GSI to a table with existing data; verify backfill.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2622)")
 def test_gsi_composite_updatetable_backfill(dynamodb):
     with new_test_table(
         dynamodb,
@@ -695,7 +682,6 @@ def test_gsi_composite_updatetable_backfill(dynamodb):
 
 
 # UpdateTable with 5 HASH attrs should be rejected.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2622)")
 def test_gsi_composite_updatetable_5h_rejected(dynamodb):
     with new_test_table(
         dynamodb,
@@ -723,7 +709,6 @@ def test_gsi_composite_updatetable_5h_rejected(dynamodb):
 
 
 # UpdateTable with HASH after RANGE should be rejected.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2622)")
 def test_gsi_composite_updatetable_hash_after_range_rejected(dynamodb):
     with new_test_table(
         dynamodb,
@@ -956,7 +941,6 @@ def test_gsi_composite_delete_item_removes_from_gsi(test_table_gsi_2h2r):
 # keys: type validation must be enforced for every attribute that
 # participates in a HASH or RANGE key, not just a single key attribute
 # as already covered for single-key GSIs in test_gsi.py.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2625)")
 @pytest.mark.parametrize("wrong_type_attr", ["h1", "h2", "r1", "r2"])
 def test_gsi_composite_wrong_type_key_attr(test_table_gsi_2h2r, wrong_type_attr):
     table = test_table_gsi_2h2r
@@ -1001,7 +985,6 @@ def test_gsi_composite_mixed_types_correct(test_table_gsi_mixed_types):
 
 
 # PutItem with empty string for a composite GSI key attr should fail.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2625)")
 def test_gsi_composite_empty_string_key_attr(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     p = random_string()
@@ -1099,7 +1082,6 @@ def test_gsi_composite_query_4h_all_eq(test_table_gsi_4h4r):
 
 # Query with wrong type for a hash key attr value. h1 is defined as type S, but
 # we pass a Number literal (boto3 serializes it as N).
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_query_hk_wrong_type(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     with pytest.raises(ClientError, match="ValidationException.*[Tt]ype"):
@@ -1447,7 +1429,6 @@ def test_gsi_composite_query_rk_between(test_table_gsi_2h2r):
 
 # Query with only the hash key attr - every item under that partition, across
 # all range key combinations, is returned.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_1h_hash_only(test_table_gsi_1h2r):
     table = test_table_gsi_1h2r
     h_val = random_string()
@@ -2027,7 +2008,6 @@ def test_gsi_composite_query_pagination_roundtrip(test_table_gsi_2h2r, limit):
 
 
 # Scan pagination on composite GSI.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 @pytest.mark.parametrize("limit", [1, 2, 5, 8])
 def test_gsi_composite_scan_pagination(dynamodb, limit):
     with new_test_table(
@@ -2155,7 +2135,6 @@ def test_gsi_composite_keyconditions_blocked(test_table_gsi_2h2r):
 # Scan composite GSI returns all indexed items. Uses its own table (rather
 # than a shared fixture) so the item count can be checked exactly, without
 # leftover items from other tests sharing the same fixture/index.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_scan_returns_all(dynamodb):
     with new_test_table(
         dynamodb,
@@ -2201,7 +2180,6 @@ def test_gsi_composite_scan_returns_all(dynamodb):
 
 
 # Scan with FilterExpression on non-key attr.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_scan_with_filter(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     marker = random_string()
@@ -2338,7 +2316,6 @@ def test_gsi_composite_and_single_key_gsi_with_shared_hash_key_coexist(dynamodb)
         )
 
 # ConsistentRead=True on a composite GSI query - should fail.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_consistent_read_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     with pytest.raises(ClientError, match="ValidationException.*[cC]onsistent"):
@@ -2507,7 +2484,6 @@ def test_gsi_composite_batchwrite_correct(test_table_gsi_2h2r):
 # BatchWriteItem where one item has a wrong-type composite GSI key attribute
 # rejects the whole batch - none of the items get written, even to the base
 # table.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2625)")
 def test_gsi_composite_batchwrite_wrong_type_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     p1, p2 = random_string(), random_string()
@@ -2596,7 +2572,6 @@ def test_gsi_composite_batchwrite_delete(test_table_gsi_2h2r):
 
 # Test specifically Alternator for correct key reporting when base table keys
 # are appended (or not) by the user as range keys.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 @pytest.mark.parametrize("base_table_key_used", ["both", "hash_only", "range_only", "none"])
 def test_gsi_composite_base_pk_ck_as_range(dynamodb, base_table_key_used):
     key_schema = []
@@ -2651,5 +2626,6 @@ def test_gsi_composite_base_pk_ck_as_range(dynamodb, base_table_key_used):
         assert gsi["KeySchema"] == [
             {"AttributeName": "a1", "KeyType": "HASH"},
             {"AttributeName": "a2", "KeyType": "RANGE"},
+            {"AttributeName": "a3", "KeyType": "RANGE"},
             *key_schema
         ]

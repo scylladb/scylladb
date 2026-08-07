@@ -129,14 +129,57 @@ bool is_alternator_keyspace(std::string_view ks_name) {
     return ks_name.starts_with(executor::KEYSPACE_NAME_PREFIX);
 }
 
-// This tag is set on a GSI when the user did not specify a range key, causing
-// Alternator to add the base table's range key as a spurious range key. It is
-// used by describe_key_schema() to suppress reporting that key.
+extern const sstring NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY;
 extern const sstring SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY;
+
+std::optional<uint8_t> genuine_gsi_range_key_count(const schema& schema, const std::map<sstring, sstring>* tags) {
+    // When GSI doesn't carry the NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY
+    // tag, to preserve behavior of existing tables we translate the presence of
+    // SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY
+    // to "0" in NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY
+    // and absence of the tag to "supress nothing".
+    // When there is NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY tag but
+    // it has been corrupted - the value is not a number or is a number bigger
+    // than maximal number allowed for user-specified RANGE keys (4) it is
+    // translated to std::nullopt.
+    if (tags != nullptr) {
+        auto it = tags->find(NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY);
+        if (it != tags->end() && !it->second.empty()) {
+            unsigned long parsed;
+            auto [ptr, ec] = std::from_chars(it->second.data(), it->second.data() + it->second.size(), parsed);
+            if (ec != std::errc{}
+                || ptr != it->second.end()
+                || parsed > 4
+                || parsed > static_cast<unsigned long>(schema.clustering_key_size())) {
+                // This should never happen, because this tag is only ever
+                // written by our own code (as std::to_string() of a size_t),
+                // never user-facing, and validated at GSI creation/update
+                // time. If it does happen anyway (e.g., due to a corrupted
+                // tag), we fallback to std::nullopt. We will have to report
+                // all clustering keys as RANGE see scylladb/pull/30768.
+                elogger.error(
+                        "Unexpected non-integer {} tag value '{}' for table {}.{}, falling back to reporting all clustering columns as RANGE keys",
+                        NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY, it->second, schema.ks_name(), schema.cf_name());
+                return std::nullopt;
+            }
+            return static_cast<uint8_t>(parsed);
+        }
+        else if (tags->contains(SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY)) {
+            return 0;
+        }
+    }
+    // This allows for preserving "no supress" behavior.
+    // If a GSI has *0* clustering key columns and no tag, that means there are
+    // no genuine range keys and we need to report 0.
+    // NOTE: This will report incorrect range key count for a GSI
+    // with more than 1 user specified range key that doesn't bear the
+    // NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY tag which shouldn't
+    // happen.
+    return std::min(uint8_t{1}, static_cast<uint8_t>(schema.clustering_key_size()));
+}
 
 void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string, std::string>* attribute_types, const std::map<sstring, sstring>* tags) {
     rjson::value key_schema = rjson::empty_array();
-    const bool ignore_range_keys_as_spurious = tags != nullptr && tags->contains(SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY);
 
     for (const column_definition& cdef : schema.partition_key_columns()) {
         rjson::value key = rjson::empty_object();
@@ -147,19 +190,16 @@ void describe_key_schema(rjson::value& parent, const schema& schema, std::unorde
             (*attribute_types)[cdef.name_as_text()] = type_to_string(cdef.type);
         }
     }
-    if (!ignore_range_keys_as_spurious) {
-        // NOTE: user requested key (there can be at most one) will always come first.
-        // There might be more keys following it, which were added, but those were
-        // not requested by the user, so we ignore them.
-        for (const column_definition& cdef : schema.clustering_key_columns()) {
-            rjson::value key = rjson::empty_object();
-            rjson::add(key, "AttributeName", rjson::from_string(cdef.name_as_text()));
-            rjson::add(key, "KeyType", "RANGE");
-            rjson::push_back(key_schema, std::move(key));
-            if (attribute_types) {
-                (*attribute_types)[cdef.name_as_text()] = type_to_string(cdef.type);
-            }
-            break;
+    uint8_t range_keys_to_report = genuine_gsi_range_key_count(schema, tags).value_or(static_cast<uint8_t>(schema.clustering_key_size()));
+    uint8_t i = 0;
+    for (const column_definition& cdef : schema.clustering_key_columns()) {
+        if (i++ >= range_keys_to_report) break;
+        rjson::value key = rjson::empty_object();
+        rjson::add(key, "AttributeName", rjson::from_string(cdef.name_as_text()));
+        rjson::add(key, "KeyType", "RANGE");
+        rjson::push_back(key_schema, std::move(key));
+        if (attribute_types) {
+            (*attribute_types)[cdef.name_as_text()] = type_to_string(cdef.type);
         }
     }
     rjson::add(parent, "KeySchema", std::move(key_schema));
