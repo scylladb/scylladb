@@ -303,10 +303,18 @@ class DTestSetup:
             # longer than a test timeout.
             reconnection_policy=ExponentialReconnectionPolicy(1.0, 4.0),
         )
-        session = cluster.connect(wait_for_all_pools=True)
+        try:
+            session = cluster.connect(wait_for_all_pools=True)
 
-        if keyspace is not None:
-            session.set_keyspace(keyspace)
+            if keyspace is not None:
+                session.set_keyspace(keyspace)
+        except BaseException:
+            # The Cluster constructor already started the driver's "Task Scheduler" thread,
+            # and Cluster has no __del__, so a half-built Cluster would keep that thread
+            # running forever and eventually crash the pytest worker with
+            # "cannot schedule new futures after shutdown".
+            safe_driver_shutdown(cluster)
+            raise
 
         if keep_session:
             self.connections.append(session)
