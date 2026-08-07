@@ -160,7 +160,6 @@ def test_table_gsi_1h2r(dynamodb):
 
 
 # Test that creating a GSI with 2 HASH keys and no RANGE keys succeeds.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 def test_gsi_composite_create_2h(dynamodb):
     with new_composite_gsi_table(
         dynamodb, "gsi", hash_keys=[("a", "S"), ("b", "S")], range_keys=[]
@@ -174,7 +173,6 @@ def test_gsi_composite_create_2h(dynamodb):
 
 
 # Test that creating a GSI with max 4 HASH + 4 RANGE succeeds.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 def test_gsi_composite_create_4h4r(test_table_gsi_4h4r):
     desc = test_table_gsi_4h4r.meta.client.describe_table(
         TableName=test_table_gsi_4h4r.name
@@ -188,7 +186,6 @@ def test_gsi_composite_create_4h4r(test_table_gsi_4h4r):
 # Test that a single HASH attr + composite 2-attribute RANGE key succeeds.
 # This is the AWS doc's PlayerMatchHistoryIndex pattern: single hash
 # key + multi-attribute range key.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 def test_gsi_composite_create_1h2r(test_table_gsi_1h2r):
     desc = test_table_gsi_1h2r.meta.client.describe_table(
         TableName=test_table_gsi_1h2r.name
@@ -204,7 +201,6 @@ def test_gsi_composite_create_1h2r(test_table_gsi_1h2r):
 
 
 # 5 HASH attributes exceeds the limit of 4.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 def test_gsi_composite_create_5h_rejected(dynamodb):
     with pytest.raises(ClientError, match="ValidationException.*HASH"):
         with new_composite_gsi_table(
@@ -214,7 +210,6 @@ def test_gsi_composite_create_5h_rejected(dynamodb):
 
 
 # 1 HASH + 5 RANGE exceeds the limit of 4 RANGE.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 def test_gsi_composite_create_5r_rejected(dynamodb):
     with pytest.raises(ClientError, match="ValidationException.*RANGE"):
         with new_composite_gsi_table(
@@ -227,7 +222,6 @@ def test_gsi_composite_create_5r_rejected(dynamodb):
 
 
 # Interleaved HASH, RANGE, HASH is not allowed.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 def test_gsi_composite_interleaved_rejected(dynamodb):
     with pytest.raises(ClientError, match="ValidationException.*HASH.*precede.*RANGE"):
         with new_test_table(
@@ -258,7 +252,6 @@ def test_gsi_composite_interleaved_rejected(dynamodb):
 # whether duplicated within the same role (HASH+HASH) or reused across
 # roles (HASH and RANGE). Both shapes exercise the same "same name"
 # validation rule, so they are parametrized into a single test.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 @pytest.mark.parametrize(
     "key_schema",
     [
@@ -301,7 +294,6 @@ def test_gsi_composite_duplicate_attr_rejected(dynamodb, key_schema):
 
 
 # GSI key attribute referenced but not in AttributeDefinitions.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 def test_gsi_composite_missing_attribute_definition(dynamodb):
     with pytest.raises(ClientError, match="ValidationException.*AttributeDefinitions"):
         with new_test_table(
@@ -331,7 +323,6 @@ def test_gsi_composite_missing_attribute_definition(dynamodb):
 
 # Verify DescribeTable returns the correct KeySchema and AttributeDefinitions
 # for a 2H+2R composite GSI.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2626)")
 def test_gsi_composite_describe_2h2r(test_table_gsi_2h2r):
     desc = test_table_gsi_2h2r.meta.client.describe_table(
         TableName=test_table_gsi_2h2r.name
@@ -357,7 +348,6 @@ def test_gsi_composite_describe_2h2r(test_table_gsi_2h2r):
 
 # Verify DescribeTable returns the correct KeySchema and AttributeDefinitions
 # for max 4H+4R.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2626)")
 def test_gsi_composite_describe_4h4r(test_table_gsi_4h4r):
     desc = test_table_gsi_4h4r.meta.client.describe_table(
         TableName=test_table_gsi_4h4r.name
@@ -419,7 +409,6 @@ def test_gsi_composite_describe_projection_keys_only(dynamodb):
 # is a different scenario from test_gsi_composite_create_4h4r (one GSI with
 # 4 HASH + 4 RANGE components): here two separate composite GSIs coexist on
 # the same base table and share an attribute ('b') across their key schemas.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2626)")
 def test_gsi_composite_describe_multiple_gsi(dynamodb):
     with new_test_table(
         dynamodb,
@@ -467,7 +456,6 @@ def test_gsi_composite_describe_multiple_gsi(dynamodb):
 # Verify that the same set of attributes can play HASH role in one GSI and
 # RANGE role in another GSI on the same table - key-attribute roles are
 # per-index, not a global property of the attribute.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627, SCYLLADB-2629)")
 def test_gsi_composite_swapped_hash_range_keys(dynamodb):
     with new_test_table(
         dynamodb,
@@ -613,7 +601,6 @@ def test_gsi_composite_swapped_hash_range_keys(dynamodb):
 
 
 # Add a composite GSI via UpdateTable and verify it becomes queryable.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2622)")
 def test_gsi_composite_updatetable_create_2h2r(dynamodb):
     with new_test_table(
         dynamodb,
@@ -652,7 +639,6 @@ def test_gsi_composite_updatetable_create_2h2r(dynamodb):
 
 
 # Add a composite GSI to a table with existing data; verify backfill.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2622)")
 def test_gsi_composite_updatetable_backfill(dynamodb):
     with new_test_table(
         dynamodb,
@@ -695,7 +681,6 @@ def test_gsi_composite_updatetable_backfill(dynamodb):
 
 
 # UpdateTable with 5 HASH attrs should be rejected.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2622)")
 def test_gsi_composite_updatetable_5h_rejected(dynamodb):
     with new_test_table(
         dynamodb,
@@ -723,7 +708,6 @@ def test_gsi_composite_updatetable_5h_rejected(dynamodb):
 
 
 # UpdateTable with HASH after RANGE should be rejected.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2622)")
 def test_gsi_composite_updatetable_hash_after_range_rejected(dynamodb):
     with new_test_table(
         dynamodb,
@@ -760,7 +744,6 @@ def test_gsi_composite_updatetable_hash_after_range_rejected(dynamodb):
 
 
 # Item missing any single GSI key attr (HASH or RANGE) is NOT indexed.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2625)")
 def test_gsi_composite_sparse_missing_one_key_attr(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -817,7 +800,6 @@ def test_gsi_composite_sparse_missing_one_key_attr(test_table_gsi_2h2r):
     ],
     ids=lambda attrs: "+".join(attrs),
 )
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2625)")
 def test_gsi_composite_sparse_update_attr(test_table_gsi_2h2r, removed_attrs):
     table = test_table_gsi_2h2r
     p = random_string()
@@ -871,7 +853,6 @@ def test_gsi_composite_sparse_update_attr(test_table_gsi_2h2r, removed_attrs):
 # UpdateItem that changes a fully-indexed composite key tuple to a
 # *different* fully-indexed tuple must remove the old GSI entry and add a
 # new one - not just add the new entry while leaving the old one behind.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2625)")
 def test_gsi_composite_update_key_tuple_change(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     p = random_string()
@@ -919,7 +900,6 @@ def test_gsi_composite_update_key_tuple_change(test_table_gsi_2h2r):
 
 
 # DeleteItem removes an item from a composite GSI, not just the base table.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2625)")
 def test_gsi_composite_delete_item_removes_from_gsi(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     p = random_string()
@@ -956,7 +936,6 @@ def test_gsi_composite_delete_item_removes_from_gsi(test_table_gsi_2h2r):
 # keys: type validation must be enforced for every attribute that
 # participates in a HASH or RANGE key, not just a single key attribute
 # as already covered for single-key GSIs in test_gsi.py.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2625)")
 @pytest.mark.parametrize("wrong_type_attr", ["h1", "h2", "r1", "r2"])
 def test_gsi_composite_wrong_type_key_attr(test_table_gsi_2h2r, wrong_type_attr):
     table = test_table_gsi_2h2r
@@ -971,7 +950,6 @@ def test_gsi_composite_wrong_type_key_attr(test_table_gsi_2h2r, wrong_type_attr)
 
 
 # PutItem with correct mixed types (S, N, B) in composite key.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2625)")
 def test_gsi_composite_mixed_types_correct(test_table_gsi_mixed_types):
     table = test_table_gsi_mixed_types
     p, c = random_string(), random_string()
@@ -1001,7 +979,6 @@ def test_gsi_composite_mixed_types_correct(test_table_gsi_mixed_types):
 
 
 # PutItem with empty string for a composite GSI key attr should fail.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2625)")
 def test_gsi_composite_empty_string_key_attr(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     p = random_string()
@@ -1014,7 +991,6 @@ def test_gsi_composite_empty_string_key_attr(test_table_gsi_2h2r):
 
 
 # Query with equality on all hash key attrs succeeds and returns correct items.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_all_hk_eq(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -1039,7 +1015,6 @@ def test_gsi_composite_query_all_hk_eq(test_table_gsi_2h2r):
 
 
 # Query specifying only one of two hash key attrs - should fail.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_query_missing_one_hk(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     with pytest.raises(ClientError, match="ValidationException.*HASH.*equality"):
@@ -1053,7 +1028,6 @@ def test_gsi_composite_query_missing_one_hk(test_table_gsi_2h2r):
 
 
 # Inequality on a hash key attr - should fail.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_query_hk_inequality(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     with pytest.raises(ClientError, match="ValidationException.*HASH.*equality"):
@@ -1067,7 +1041,6 @@ def test_gsi_composite_query_hk_inequality(test_table_gsi_2h2r):
 
 
 # Query with all 4 HASH attrs equality on max composite - succeeds.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_4h_all_eq(test_table_gsi_4h4r):
     table = test_table_gsi_4h4r
     h_vals = [random_string() for _ in range(4)]
@@ -1099,7 +1072,6 @@ def test_gsi_composite_query_4h_all_eq(test_table_gsi_4h4r):
 
 # Query with wrong type for a hash key attr value. h1 is defined as type S, but
 # we pass a Number literal (boto3 serializes it as N).
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_query_hk_wrong_type(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     with pytest.raises(ClientError, match="ValidationException.*[Tt]ype"):
@@ -1113,7 +1085,6 @@ def test_gsi_composite_query_hk_wrong_type(test_table_gsi_2h2r):
 
 
 # BETWEEN on a hash key attr - should fail.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_query_hk_between_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     with pytest.raises(ClientError, match="ValidationException.*HASH.*equality"):
@@ -1127,7 +1098,6 @@ def test_gsi_composite_query_hk_between_rejected(test_table_gsi_2h2r):
 
 
 # begins_with() on a hash key attr - should fail.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_query_hk_begins_with_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     with pytest.raises(ClientError, match="ValidationException.*HASH.*equality"):
@@ -1144,7 +1114,6 @@ def test_gsi_composite_query_hk_begins_with_rejected(test_table_gsi_2h2r):
 
 
 # Query with just the first range key attr (equality) as well as required hash key equality.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_rk_first_only_eq(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -1179,7 +1148,6 @@ def test_gsi_composite_query_rk_first_only_eq(test_table_gsi_2h2r):
 
 
 # Query with all 2 range key attrs (r1 AND r2).
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_rk_all_two_eq(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -1202,7 +1170,6 @@ def test_gsi_composite_query_rk_all_two_eq(test_table_gsi_2h2r):
 
 
 # Query with all 4 range key attrs on max composite (equality on all).
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_rk_all_eq(test_table_gsi_4h4r):
     table = test_table_gsi_4h4r
     h_vals = [random_string() for _ in range(4)]
@@ -1248,7 +1215,6 @@ def test_gsi_composite_query_rk_all_eq(test_table_gsi_4h4r):
 # specific wording risks a spurious mismatch once it lands. Tighten this
 # match once the real implementation exists and the actual message is
 # known.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_query_rk_skip_first_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     with pytest.raises(ClientError, match="ValidationException.*RANGE.*equality"):
@@ -1262,7 +1228,6 @@ def test_gsi_composite_query_rk_skip_first_rejected(test_table_gsi_2h2r):
 
 
 # Gap in range key attrs (r1 and r3 but not r2) - should fail.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_query_rk_gap_rejected(test_table_gsi_4h4r):
     table = test_table_gsi_4h4r
     with pytest.raises(ClientError, match="ValidationException.*RANGE.*equality"):
@@ -1291,7 +1256,6 @@ def test_gsi_composite_query_rk_gap_rejected(test_table_gsi_4h4r):
 # equality (no gap), writing r2's clause before r1's clause in the
 # expression text is just a different way to write the same condition set,
 # and must succeed like test_gsi_composite_query_rk_all_two_eq does.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_rk_out_of_order(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -1312,7 +1276,6 @@ def test_gsi_composite_query_rk_out_of_order(test_table_gsi_2h2r):
     )
 
 
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_rk_inequality_not_last(test_table_gsi_4h4r):
     table = test_table_gsi_4h4r
     h1_val, h2_val, h3_val, h4_val = random_string(), random_string(), random_string(), random_string()
@@ -1352,7 +1315,6 @@ def test_gsi_composite_query_rk_inequality_not_last(test_table_gsi_4h4r):
 
 
 # Inequality on the last queried range key attr.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_rk_inequality_last(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -1384,7 +1346,6 @@ def test_gsi_composite_query_rk_inequality_last(test_table_gsi_2h2r):
 
 
 # Inequality on a non-last range key attr followed by equality - should fail.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_query_rk_inequality_not_last_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     with pytest.raises(ClientError, match="ValidationException.*RANGE.*equality"):
@@ -1398,7 +1359,6 @@ def test_gsi_composite_query_rk_inequality_not_last_rejected(test_table_gsi_2h2r
 
 
 # Using inequality operators on more than one range key attr at once - should fail
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_query_rk_multiple_inequalities_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     with pytest.raises(ClientError, match="ValidationException.*RANGE.*equality"):
@@ -1412,7 +1372,6 @@ def test_gsi_composite_query_rk_multiple_inequalities_rejected(test_table_gsi_2h
 
 
 # BETWEEN on the last queried range key attr.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_rk_between(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -1447,7 +1406,6 @@ def test_gsi_composite_query_rk_between(test_table_gsi_2h2r):
 
 # Query with only the hash key attr - every item under that partition, across
 # all range key combinations, is returned.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_1h_hash_only(test_table_gsi_1h2r):
     table = test_table_gsi_1h2r
     h_val = random_string()
@@ -1472,7 +1430,6 @@ def test_gsi_composite_query_1h_hash_only(test_table_gsi_1h2r):
 
 
 # begins_with() on the last queried range key attr.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_rk_begins_with_last(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -1505,7 +1462,6 @@ def test_gsi_composite_query_rk_begins_with_last(test_table_gsi_2h2r):
 
 
 # begins_with() on a non-last range key attr followed by another condition - fail.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_query_rk_begins_with_not_last_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     with pytest.raises(ClientError, match="ValidationException.*RANGE.*equality"):
@@ -1521,7 +1477,6 @@ def test_gsi_composite_query_rk_begins_with_not_last_rejected(test_table_gsi_2h2
 
 
 # begins_with() on a Number type range key attr - should fail.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_query_rk_begins_with_number_rejected(test_table_gsi_4h4r):
     table = test_table_gsi_4h4r
     # r1 is type N in the 4h4r fixture
@@ -1545,7 +1500,6 @@ def test_gsi_composite_query_rk_begins_with_number_rejected(test_table_gsi_4h4r)
 
 
 # Less-than on the last queried range key attr.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_rk_lt(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -1576,7 +1530,6 @@ def test_gsi_composite_query_rk_lt(test_table_gsi_2h2r):
 
 
 # Greater-or-equal on the last queried range key attr.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_rk_ge(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -1607,7 +1560,6 @@ def test_gsi_composite_query_rk_ge(test_table_gsi_2h2r):
 
 
 # Less-or-equal on the last queried range key attr.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_rk_le(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -1638,7 +1590,6 @@ def test_gsi_composite_query_rk_le(test_table_gsi_2h2r):
 
 
 # Greater-than on the last queried range key attr.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_rk_gt(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -1673,7 +1624,6 @@ def test_gsi_composite_query_rk_gt(test_table_gsi_2h2r):
 # equality on r1 and inequality on r2 (the last/second attr); this covers
 # an inequality as the very first (and only-constrained) range key condition,
 # which the "no gaps" rule permits since r2 is simply never referenced.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_rk_inequality_on_first_only(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -1702,7 +1652,6 @@ def test_gsi_composite_query_rk_inequality_on_first_only(test_table_gsi_2h2r):
 
 
 # FilterExpression referencing a composite HASH attr - should fail.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_filter_on_hash_attr_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     with pytest.raises(ClientError, match="ValidationException.*[fF]ilter.*[kK]ey"):
@@ -1717,7 +1666,6 @@ def test_gsi_composite_filter_on_hash_attr_rejected(test_table_gsi_2h2r):
 
 
 # FilterExpression referencing a composite RANGE attr - should fail.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_filter_on_range_attr_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     with pytest.raises(ClientError, match="ValidationException.*[fF]ilter.*[kK]ey"):
@@ -1732,7 +1680,6 @@ def test_gsi_composite_filter_on_range_attr_rejected(test_table_gsi_2h2r):
 
 
 # FilterExpression on a non-key attr - allowed.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_filter_on_nonkey_attr_allowed(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -1765,7 +1712,6 @@ def test_gsi_composite_filter_on_nonkey_attr_allowed(test_table_gsi_2h2r):
 
 
 # FilterExpression on base table key attr 'p' (not a GSI key) - allowed.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_filter_on_base_table_key_allowed(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -1788,7 +1734,6 @@ def test_gsi_composite_filter_on_base_table_key_allowed(test_table_gsi_2h2r):
 # KeyConditionExpression - the parser must still recognize aliased
 # attribute names as the HASH/RANGE key attrs of the index (AWS examples
 # commonly alias reserved words such as #region).
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_key_condition_with_aliases(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -1820,7 +1765,6 @@ def test_gsi_composite_query_key_condition_with_aliases(test_table_gsi_2h2r):
 # still be rejected, just like the unaliased case above - the parser
 # needs to resolve the alias before checking whether it targets a key
 # attribute of the queried index.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_filter_on_key_attr_with_alias_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     with pytest.raises(ClientError, match="ValidationException.*[fF]ilter.*[kK]ey"):
@@ -1838,10 +1782,61 @@ def test_gsi_composite_filter_on_key_attr_with_alias_rejected(test_table_gsi_2h2
 ###############################################################################
 
 
-# Ascending sort order on composite range key.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
+# Ascending/Descending sort order on composite range key.
 @pytest.mark.parametrize("scan_index_forward", [True, False])
 def test_gsi_composite_sort_order(test_table_gsi_2h2r, scan_index_forward):
+    table = test_table_gsi_2h2r
+    h1_val, h2_val = random_string(), random_string()
+    keys = [
+        ("bbb", "ccc"),
+        ("aaa", "aaa"),
+        ("bbb", "aaa"),
+        ("aaa", "ccc"),
+        ("bbb", "bbb"),
+        ("aaa", "bbb"),
+    ]
+    items = []
+    for r1_val, r2_val in keys:
+        item = {
+            "p": random_string(),
+            "h1": h1_val,
+            "h2": h2_val,
+            "r1": r1_val,
+            "r2": r2_val,
+        }
+        table.put_item(Item=item)
+        items.append(item)
+    # Wait for all items to converge in the index before checking order.
+    assert_index_query(
+        table,
+        "idx_2h2r",
+        items,
+        KeyConditionExpression="h1 = :h1 AND h2 = :h2",
+        ExpressionAttributeValues={
+            ":h1": h1_val,
+            ":h2": h2_val,
+        },
+    )
+    result = full_query(
+        table,
+        IndexName="idx_2h2r",
+        ConsistentRead=False,
+        KeyConditionExpression="h1 = :h1 AND h2 = :h2",
+        ExpressionAttributeValues={
+            ":h1": h1_val,
+            ":h2": h2_val,
+        },
+        ScanIndexForward=scan_index_forward,
+    )
+    got = [(item["r1"], item["r2"]) for item in result]
+    assert got == sorted(keys, reverse=not scan_index_forward), (
+        f"Expected {'ascending' if scan_index_forward else 'descending'} "
+        f"(r1, r2) order, got {got}"
+    )
+
+# Ascending/Descending sort order on composite range key with RANGE key constraint.
+@pytest.mark.parametrize("scan_index_forward", [True, False])
+def test_gsi_composite_sort_order_with_key_condition(test_table_gsi_2h2r, scan_index_forward):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
     # Items with same r1, varying r2
@@ -1900,7 +1895,6 @@ def test_gsi_composite_sort_order(test_table_gsi_2h2r, scan_index_forward):
     )
 
 # Sort order with mixed-type range key (N then B). Numbers sort numerically.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_sort_order_mixed_types(test_table_gsi_mixed_types):
     table = test_table_gsi_mixed_types
     mh1_val = random_string()
@@ -1952,7 +1946,6 @@ def test_gsi_composite_sort_order_mixed_types(test_table_gsi_mixed_types):
 
 
 # Verify LastEvaluatedKey contains all composite key attrs.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_pagination(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -2000,7 +1993,6 @@ def test_gsi_composite_query_pagination(test_table_gsi_2h2r):
 
 # Full pagination roundtrip - all items eventually returned without loss.
 @pytest.mark.parametrize("limit", [1, 2, 3, 8, 10, 15])
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_query_pagination_roundtrip(test_table_gsi_2h2r, limit):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -2027,7 +2019,6 @@ def test_gsi_composite_query_pagination_roundtrip(test_table_gsi_2h2r, limit):
 
 
 # Scan pagination on composite GSI.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 @pytest.mark.parametrize("limit", [1, 2, 5, 8])
 def test_gsi_composite_scan_pagination(dynamodb, limit):
     with new_test_table(
@@ -2095,7 +2086,6 @@ def test_gsi_composite_scan_pagination(dynamodb, limit):
 
 
 # ExclusiveStartKey missing a composite key attr - should fail.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_exclusivestartkey_missing_column_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     # Construct an incomplete ExclusiveStartKey (missing h2). h1 matches the
@@ -2114,7 +2104,7 @@ def test_gsi_composite_exclusivestartkey_missing_column_rejected(test_table_gsi_
 
 # ExclusiveStartKey with a spurious extra attr beyond the base table key and
 # composite GSI key attrs - should fail.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
+@pytest.mark.xfail(reason="issue #26988")
 def test_gsi_composite_exclusivestartkey_spurious_column_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     query_args = {
@@ -2134,7 +2124,7 @@ def test_gsi_composite_exclusivestartkey_spurious_column_rejected(test_table_gsi
 
 
 # This test will fail due to message mismatch. Correct message will be implemented in the future.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
+# Note: DynamoDB will not raise this. Expect the test to fail against AWS.
 def test_gsi_composite_keyconditions_blocked(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     with pytest.raises(ClientError, match="Legacy KeyConditions are not supported for composite key GSIs in Alternator"):
@@ -2155,7 +2145,6 @@ def test_gsi_composite_keyconditions_blocked(test_table_gsi_2h2r):
 # Scan composite GSI returns all indexed items. Uses its own table (rather
 # than a shared fixture) so the item count can be checked exactly, without
 # leftover items from other tests sharing the same fixture/index.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_scan_returns_all(dynamodb):
     with new_test_table(
         dynamodb,
@@ -2201,7 +2190,6 @@ def test_gsi_composite_scan_returns_all(dynamodb):
 
 
 # Scan with FilterExpression on non-key attr.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_scan_with_filter(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     marker = random_string()
@@ -2239,7 +2227,6 @@ def test_gsi_composite_scan_with_filter(test_table_gsi_2h2r):
 
 
 # Table with both a composite-key GSI and a single-key GSI.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_and_single_key_gsi_coexist(dynamodb):
     with new_test_table(
         dynamodb,
@@ -2289,7 +2276,6 @@ def test_gsi_composite_and_single_key_gsi_coexist(dynamodb):
         )
 
 # Table with both a composite-key GSI and a single-key GSI sharing 1 hash key.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2629)")
 def test_gsi_composite_and_single_key_gsi_with_shared_hash_key_coexist(dynamodb):
     with new_test_table(
         dynamodb,
@@ -2338,7 +2324,6 @@ def test_gsi_composite_and_single_key_gsi_with_shared_hash_key_coexist(dynamodb)
         )
 
 # ConsistentRead=True on a composite GSI query - should fail.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2627)")
 def test_gsi_composite_consistent_read_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     with pytest.raises(ClientError, match="ValidationException.*[cC]onsistent"):
@@ -2359,7 +2344,6 @@ def test_gsi_composite_consistent_read_rejected(test_table_gsi_2h2r):
 # untouched, and the type constraint the GSI key imposed on its attributes
 # is no longer enforced - mirroring test_gsi_delete() in
 # test_gsi_updatetable.py for a single-key GSI.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2623)")
 def test_gsi_composite_updatetable_delete_gsi(dynamodb):
     with new_test_table(
         dynamodb,
@@ -2437,7 +2421,6 @@ def test_gsi_composite_updatetable_delete_gsi(dynamodb):
 # the table and its composite GSI disappear, and a new table can immediately
 # be created under the same name with the same composite-key GSI schema
 # without any leftover state from the deleted table's GSI.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2623)")
 def test_gsi_composite_table_deletion_cleanup(dynamodb):
     name = unique_table_name()
     kwargs = composite_gsi_table_kwargs(
@@ -2480,7 +2463,6 @@ def test_gsi_composite_table_deletion_cleanup(dynamodb):
 
 # BatchWriteItem with correctly-typed composite GSI key attributes indexes
 # all items, just like individual PutItem calls do.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2625)")
 def test_gsi_composite_batchwrite_correct(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     items = []
@@ -2507,7 +2489,6 @@ def test_gsi_composite_batchwrite_correct(test_table_gsi_2h2r):
 # BatchWriteItem where one item has a wrong-type composite GSI key attribute
 # rejects the whole batch - none of the items get written, even to the base
 # table.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2625)")
 def test_gsi_composite_batchwrite_wrong_type_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     p1, p2 = random_string(), random_string()
@@ -2525,7 +2506,6 @@ def test_gsi_composite_batchwrite_wrong_type_rejected(test_table_gsi_2h2r):
 # BatchWriteItem with items missing one composite GSI key attribute writes
 # them to the base table, but they remain unindexed. The sparse-index rule
 # applies to BatchWriteItem just like it does to PutItem/UpdateItem.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2625)")
 def test_gsi_composite_batchwrite_sparse(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     p1, p2 = random_string(), random_string()
@@ -2554,7 +2534,6 @@ def test_gsi_composite_batchwrite_sparse(test_table_gsi_2h2r):
 
 # BatchWriteItem delete requests remove items from a composite GSI, just
 # like individual DeleteItem calls do.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2625)")
 def test_gsi_composite_batchwrite_delete(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     h1_val, h2_val = random_string(), random_string()
@@ -2596,7 +2575,6 @@ def test_gsi_composite_batchwrite_delete(test_table_gsi_2h2r):
 
 # Test specifically Alternator for correct key reporting when base table keys
 # are appended (or not) by the user as range keys.
-@pytest.mark.xfail(reason="Composite GSI keys not implemented yet (SCYLLADB-2620)")
 @pytest.mark.parametrize("base_table_key_used", ["both", "hash_only", "range_only", "none"])
 def test_gsi_composite_base_pk_ck_as_range(dynamodb, base_table_key_used):
     key_schema = []
@@ -2651,5 +2629,6 @@ def test_gsi_composite_base_pk_ck_as_range(dynamodb, base_table_key_used):
         assert gsi["KeySchema"] == [
             {"AttributeName": "a1", "KeyType": "HASH"},
             {"AttributeName": "a2", "KeyType": "RANGE"},
+            {"AttributeName": "a3", "KeyType": "RANGE"},
             *key_schema
         ]
