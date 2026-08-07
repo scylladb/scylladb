@@ -6,13 +6,15 @@
 """
 Test LWT (Paxos) contention with many concurrent workers.
 
-Re-implementation of test_contention_test_many_threads from scylla-dtest/paxos_tests.py
+Re-implementation of test_contention_test_many_threads and
+test_contention_test_multi_iterations from scylla-dtest/paxos_tests.py
 using asyncio instead of threads.
 
-The test spawns many async workers that all contend on the same row via a conditional
-batch statement (UPDATE IF v=? + INSERT IF NOT EXISTS). Each worker tries to increment
-a shared static column `v` exactly `iterations` times. At the end we verify that the
-final value equals workers * iterations, confirming linearizability under contention.
+Both scenarios spawn async workers that contend on the same row via a
+conditional batch statement (UPDATE IF v=? + INSERT IF NOT EXISTS). Each
+worker tries to increment a shared static column `v` exactly `iterations`
+times. At the end we verify that the final value equals workers * iterations,
+confirming linearizability under contention.
 """
 
 import asyncio
@@ -54,7 +56,6 @@ class ContentionWorker:
         delete_stmt: PreparedStatement,
         iterations: int,
         stop_event: asyncio.Event,
-        scale_timeout,
         max_retries_per_iteration: int,
     ):
         self.worker_id = worker_id
@@ -63,7 +64,6 @@ class ContentionWorker:
         self.delete_stmt = delete_stmt
         self.iterations = iterations
         self.stop_event = stop_event
-        self.scale_timeout = scale_timeout
         self.max_retries_per_iteration = max_retries_per_iteration
         self.retries = 0
         self.uncertainty_timeouts = 0
@@ -73,7 +73,7 @@ class ContentionWorker:
 
     async def __call__(self):
         prev = 0
-        for _ in range(self.iterations):
+        for i in range(self.iterations):
             attempt = 0
             while not self.stop_event.is_set():
                 if attempt >= self.max_retries_per_iteration:
@@ -107,7 +107,6 @@ class ContentionWorker:
                             "[worker %d] Uncertainty timeout (prev=%d, attempt=%d): %s",
                             self.worker_id, prev, attempt, e,
                         )
-                    await asyncio.sleep(self.scale_timeout(0.01))
                 except Exception as e:
                     logger.error(
                         "[worker %d] CAS error (prev=%d): %r",
@@ -116,13 +115,13 @@ class ContentionWorker:
                     self.stop()
                     raise
 
-            # Clean up our row for next iteration
-            while not self.stop_event.is_set():
-                try:
-                    await self.cql.run_async(self.delete_stmt, [self.worker_id])
-                    break
-                except (WriteTimeout, ReadTimeout, OperationTimedOut):
-                    await asyncio.sleep(self.scale_timeout(0.01))
+            if i < self.iterations - 1:
+                while not self.stop_event.is_set():
+                    try:
+                        await self.cql.run_async(self.delete_stmt, [self.worker_id])
+                        break
+                    except (WriteTimeout, ReadTimeout, OperationTimedOut):
+                        pass
 
         logger.info("ContentionWorker %d finished", self.worker_id)
 
@@ -147,7 +146,6 @@ class ContentionLWTTester(BaseLWTTester):
         self.max_retries_per_iteration = max_retries_per_iteration
 
     async def create_schema(self):
-        """Create table with static column v and clustering column id."""
         await self.cql.run_async(
             f"CREATE TABLE {self.ks}.{self.tbl} "
             f"(k int, v int static, id int, PRIMARY KEY (k, id))"
@@ -155,13 +153,11 @@ class ContentionLWTTester(BaseLWTTester):
         logger.info("Created contention table %s.%s", self.ks, self.tbl)
 
     async def initialize_rows(self):
-        """Insert initial row with v=0."""
         await self.cql.run_async(
             f"INSERT INTO {self.ks}.{self.tbl} (k, v) VALUES (0, 0)"
         )
 
     def create_workers(self, stop_event) -> list:
-        """Create ContentionWorker instances with batch LWT statements."""
         batch_stmt = self.cql.prepare(f"""
             BEGIN BATCH
                 UPDATE {self.ks}.{self.tbl} SET v = ? WHERE k = 0 IF v = ?;
@@ -171,7 +167,6 @@ class ContentionLWTTester(BaseLWTTester):
         delete_stmt = self.cql.prepare(
             f"DELETE FROM {self.ks}.{self.tbl} WHERE k = 0 AND id = ? IF EXISTS"
         )
-
         return [
             ContentionWorker(
                 worker_id=i,
@@ -180,14 +175,12 @@ class ContentionLWTTester(BaseLWTTester):
                 delete_stmt=delete_stmt,
                 iterations=self.iterations,
                 stop_event=stop_event,
-                scale_timeout=self.scale_timeout,
                 max_retries_per_iteration=self.max_retries_per_iteration,
             )
             for i in range(self.num_workers)
         ]
 
     async def verify_consistency(self):
-        """Verify final value equals num_workers * iterations."""
         query = SimpleStatement(
             f"SELECT v FROM {self.ks}.{self.tbl} WHERE k = 0",
             consistency_level=ConsistencyLevel.ALL,
@@ -210,49 +203,57 @@ class ContentionLWTTester(BaseLWTTester):
         )
 
 
-@pytest.mark.nightly
-@pytest.mark.parametrize("tablets_enabled", [True, False], ids=["tablets", "vnodes"])
-async def test_lwt_contention_many_workers(manager: ManagerClient, scale_timeout, tablets_enabled):
-    """
-    Test many async workers repeatedly contending on the same row via LWT.
-
-    Verifies that under heavy contention (300 workers, 1 iteration each),
-    Paxos correctly serializes all conditional updates and the final value
-    equals the total number of successful increments (300).
-
-    Runs for both tablets and vnodes to ensure contention handling
-    is correct regardless of the storage backend.
-
-    This is a nightly-only test due to the high contention load.
-    """
-    num_workers = 300
-    num_iterations = 1
-    max_retries_per_iteration = 500
-
+def _cluster_config(tablets_enabled: bool) -> tuple[dict, str]:
+    """Return (server config, keyspace options) for the contention scenario."""
+    replication = "{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
     if tablets_enabled:
-        cfg = {"tablets_mode_for_new_keyspaces": "enabled"}
-        ks_opts = (
-            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
-            "AND tablets = {'initial': 1}"
+        return (
+            {"tablets_mode_for_new_keyspaces": "enabled"},
+            f"WITH replication = {replication} AND tablets = {{'initial': 1}}",
         )
-    else:
-        cfg = {"tablets_mode_for_new_keyspaces": "disabled"}
-        ks_opts = (
-            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
-        )
+    return (
+        {"tablets_mode_for_new_keyspaces": "disabled"},
+        f"WITH replication = {replication}",
+    )
 
-    cmdline = [
-        '--logger-log-level', 'paxos=trace',
-    ]
 
+@pytest.fixture(params=[True, False], ids=["tablets", "vnodes"])
+async def contention_cluster(request, manager: ManagerClient) -> str:
+    """
+    Boot a 3-node cluster (dc1/rack1..3, --smp=2, paxos=trace) for LWT contention.
+
+    Parametrized over tablets and vnodes so any test depending on this fixture
+    automatically runs against both storage backends.
+
+    Returns the keyspace options string ready for `new_test_keyspace(...)`.
+    """
+    tablets_enabled = request.param
+    cfg, ks_opts = _cluster_config(tablets_enabled)
+    cmdline = ['--logger-log-level', 'paxos=trace']
     await manager.servers_add(3, config=cfg, auto_rack_dc="dc1", cmdline=cmdline)
+    return ks_opts
 
+
+async def _run_workload(
+    manager: ManagerClient,
+    scale_timeout,
+    ks_opts: str,
+    *,
+    num_workers: int,
+    iterations: int,
+    max_retries_per_iteration: int,
+    test_timeout_s: int = 300,
+):
+    """
+    Run the contention workload against an already-booted cluster:
+    create keyspace/table, spawn workers, wait for completion, verify.
+    """
     async with new_test_keyspace(manager, ks_opts) as ks:
         stop_event = asyncio.Event()
         tester = ContentionLWTTester(
             manager, ks, "test",
             num_workers=num_workers,
-            iterations=num_iterations,
+            iterations=iterations,
             max_retries_per_iteration=max_retries_per_iteration,
             scale_timeout=scale_timeout,
         )
@@ -262,23 +263,53 @@ async def test_lwt_contention_many_workers(manager: ManagerClient, scale_timeout
 
         start = time.time()
         logger.info(
-            "Starting contention test: %d workers, %d iterations",
-            num_workers, num_iterations,
+            "Starting contention scenario: %d workers, %d iterations",
+            num_workers, iterations,
         )
 
         try:
             await tester.start_workers(stop_event)
-            # Workers will finish after completing their iterations
-            # Use a timeout to prevent hanging if workers get stuck in retry loops
-            timeout = scale_timeout(300)  # 5 minutes base, scaled for slow environments
             await asyncio.wait_for(
                 asyncio.gather(*tester._tasks, return_exceptions=False),
-                timeout=timeout,
+                timeout=scale_timeout(test_timeout_s),
             )
         finally:
             await tester.stop_workers()
 
-        elapsed = time.time() - start
-        logger.info("Contention test completed in %.2f seconds", elapsed)
-
+        logger.info("Contention scenario completed in %.2fs", time.time() - start)
         await tester.verify_consistency()
+
+
+@pytest.mark.nightly
+async def test_lwt_contention_many_workers(manager: ManagerClient, scale_timeout, build_mode, contention_cluster):
+    """
+    Many workers × 1 iteration — massive one-shot contention on a single row.
+
+    Verifies Paxos serializes all conditional updates so the final value
+    equals num_workers. Nightly-only due to the high contention load.
+
+    Worker count is scaled down to 100 in debug builds (matching the original
+    dtest) so the test finishes in reasonable time under slower Scylla.
+    """
+    num_workers = 100 if build_mode == "debug" else 300
+    await _run_workload(
+        manager, scale_timeout, contention_cluster,
+        num_workers=num_workers,
+        iterations=1,
+        max_retries_per_iteration=500,
+    )
+
+
+async def test_lwt_contention_multi_iterations(manager: ManagerClient, scale_timeout, contention_cluster):
+    """
+    8 workers × 100 iterations — sustained contention over many CAS rounds.
+
+    Each worker performs 100 CAS+DELETE cycles on the same row. Verifies
+    the final value equals num_workers * iterations (800).
+    """
+    await _run_workload(
+        manager, scale_timeout, contention_cluster,
+        num_workers=8,
+        iterations=100,
+        max_retries_per_iteration=50,
+    )
