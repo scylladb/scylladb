@@ -17,6 +17,7 @@
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/with_scheduling_group.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/defer.hh>
 #include "seastarx.hh"
@@ -38,6 +39,7 @@
 #include "utils/aws_sigv4.hh"
 #include "client_data.hh"
 #include "utils/updateable_value.hh"
+#include "utils/exceptions.hh"
 #include <zlib.h>
 #include "alternator/http_compression.hh"
 
@@ -48,6 +50,16 @@ using request = http::request;
 using reply = http::reply;
 
 namespace alternator {
+// Converts an exception pointer to an `api_error` value.
+static api_error convert_exception_ptr_to_api_error(std::exception_ptr eptr) {
+    if (auto* ae = try_catch<api_error>(eptr)) {
+        return std::move(*ae);
+    } else if (auto* re = try_catch<rjson::error>(eptr)) {
+        return api_error::validation(re->what());
+    } else {
+        return api_error::internal(format("Internal server error: {}", eptr));
+    }
+}
 
 inline std::vector<std::string_view> split(std::string_view text, char separator) {
     std::vector<std::string_view> tokens;
@@ -131,25 +143,7 @@ public:
          sstring accept_encoding = _response_compressor.get_accepted_encoding(*req);
          return seastar::futurize_invoke(_handle, std::move(req)).then_wrapped(
             [this, rep = std::move(rep), accept_encoding=std::move(accept_encoding)](future<executor::request_return_type> resf) mutable {
-             if (resf.failed()) {
-                 // Exceptions of type api_error are wrapped as JSON and
-                 // returned to the client as expected. Other types of
-                 // exceptions are unexpected, and returned to the user
-                 // as an internal server error:
-                 try {
-                     resf.get();
-                 } catch (api_error &ae) {
-                     generate_error_reply(*rep, ae);
-                 } catch (rjson::error & re) {
-                     generate_error_reply(*rep,
-                             api_error::validation(re.what()));
-                 } catch (...) {
-                     generate_error_reply(*rep,
-                             api_error::internal(format("Internal server error: {}", std::current_exception())));
-                 }
-                 return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
-             }
-             auto res = resf.get();
+             auto res = !resf.failed() ? resf.get() : convert_exception_ptr_to_api_error(resf.get_exception());
              return std::visit(overloaded_functor {
                 [&] (std::string&& str) {
                     return _response_compressor.generate_reply(std::move(rep), std::move(accept_encoding),
@@ -809,19 +803,20 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
             co_return api_error::validation("Request content must be an object");
         }
         std::unique_ptr<audit::audit_info_alternator> audit_info;
-        std::exception_ptr ex = {};
-        executor::request_return_type ret;
-        try {
-            ret = co_await callback(_executor, client_state, trace_state, make_service_permit(std::move(units)), std::move(json_request), std::move(req), audit_info);
-        } catch (...) {
-            ex = std::current_exception();
-        }
+
+        // We need to futurize here as `callback` might be a normal function returning a future and
+        // if that function throws `as_future` won't catch it - the exception will be propagated to the caller and
+        // `audit::inspect` will not be called.
+        auto ret_fut = co_await seastar::coroutine::as_future(
+            seastar::futurize_invoke(
+                callback,
+                _executor, client_state, trace_state, make_service_permit(std::move(units)), std::move(json_request), std::move(req), audit_info
+            )
+        );
+        auto ret = ret_fut.failed() ? convert_exception_ptr_to_api_error(ret_fut.get_exception()) : ret_fut.get();
         if (audit_info) {
-            bool error = ex != nullptr || std::holds_alternative<api_error>(ret);
-            co_await audit::inspect(*audit_info, client_state, error);
-        }
-        if (ex) {
-            co_return coroutine::exception(std::move(ex));
+            bool has_error = std::holds_alternative<api_error>(ret);
+            co_await audit::inspect(*audit_info, client_state, has_error);
         }
         co_return ret;
     };
