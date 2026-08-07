@@ -34,6 +34,7 @@
 #include "cdc/log.hh"
 #include "gms/feature_service.hh"
 #include "service/migration_listener.hh"
+#include "service/raft/group0_state_machine.hh"
 
 extern logging::logger cdc_log;
 
@@ -643,7 +644,7 @@ future<mutation> get_switch_streams_mutation(table_id table, db_clock::time_poin
     co_return std::move(m);
 }
 
-future<> generation_service::generate_tablet_resize_update(utils::chunked_vector<canonical_mutation>& muts, table_id table, const locator::tablet_map& new_tablet_map, api::timestamp_type ts) {
+future<> generation_service::generate_tablet_resize_update(service::group0_update_collector& muts, table_id table, const locator::tablet_map& new_tablet_map, api::timestamp_type ts) {
     if (!_cdc_metadata.get_all_tablet_streams().contains(table)) {
         // not a CDC table
         co_return;
@@ -669,7 +670,7 @@ future<> generation_service::generate_tablet_resize_update(utils::chunked_vector
 
     auto diff = co_await _cdc_metadata.generate_stream_diff(current_streams.streams, new_streams);
     auto mut = co_await get_switch_streams_mutation(table, new_ts, std::move(diff), ts);
-    muts.emplace_back(std::move(mut));
+    co_await muts.add(std::move(mut));
 }
 
 future<utils::chunked_vector<mutation>> get_cdc_stream_gc_mutations(table_id table, db_clock::time_point base_ts, const utils::chunked_vector<cdc::stream_id>& base_stream_set, api::timestamp_type ts) {
