@@ -579,8 +579,6 @@ public:
 private:
     uint64_t _nr_run = 0;
     uint64_t _msg_processing = 0;
-
-    class msg_proc_guard;
 private:
     abort_source& _abort_source;
     const locator::shared_token_metadata& _shared_token_metadata;
