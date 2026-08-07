@@ -15,7 +15,6 @@
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/join.hpp>
 #include <boost/lexical_cast.hpp>
-#include <map>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/shared_future.hh>
@@ -28,6 +27,7 @@
 #include <seastar/core/gate.hh>
 
 #include "fsm.hh"
+#include "log_indexed_container.hh"
 #include "log.hh"
 #include "raft.hh"
 
@@ -213,8 +213,8 @@ private:
         optimized_optional<seastar::abort_source::subscription> abort; // abort subscription
     };
 
-    // Waiters for entry commit/apply status, keyed by entry index.
-    using waiters_map = std::map<index_t, op_status>;
+    // Waiters for entry commit/apply status, indexed by entry index.
+    using waiter_queue = log_indexed_container<op_status>;
 
     // Entries that have a waiter that needs to be notified when the
     // respective entry is known to be committed.
@@ -223,13 +223,13 @@ private:
     // fiber's progress (abort() fails whatever is left). Dropping the waiters
     // in a single fiber, in commit order, is what maintains the ordering
     // invariant asserted in notify_waiters().
-    waiters_map _awaited_commits;
+    waiter_queue _awaited_commits;
 
     // Entries that have a waiter that needs to be notified after
     // the respective entry is applied.
     // Waiters are inserted by wait_for_entry() and dropped by the applier
     // fiber, in apply order (abort() fails whatever is left).
-    waiters_map _awaited_applies;
+    waiter_queue _awaited_applies;
 
     // Maps each destination to the abort_source of the currently active
     // snapshot transfer.  The abort_source itself lives on the coroutine
@@ -264,7 +264,7 @@ private:
     server_requests _new_server_requests;
 
     // Called to commit entries (on a leader or otherwise).
-    void notify_waiters(waiters_map& waiters, const log_entry_ptr_list& entries);
+    void notify_waiters(waiter_queue& waiters, const log_entry_ptr_list& entries);
 
     // Drop waiters that we lost track of, can happen due to a snapshot transfer,
     // or a leader removed from cluster while some entries added on it are uncommitted.
@@ -272,7 +272,7 @@ private:
     // snapshot index are dropped, and those whose term matches the snapshot term
     // are resolved successfully, since the snapshot-term match proves they were
     // committed and included in the snapshot (by the Log Matching Property).
-    void drop_waiters(waiters_map& waiters, const snapshot_descriptor* snp = nullptr);
+    void drop_waiters(waiter_queue& waiters, const snapshot_descriptor* snp = nullptr);
 
     // Wake up all waiter that wait for entries with idx smaller of equal to the one provided
     // to be applied.
@@ -617,14 +617,16 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
     auto& container = type == wait_type::committed ? _awaited_commits : _awaited_applies;
     logger.trace("[{}] waiting for entry {}.{}", _tag, eid.term, eid.idx);
 
-    // This will track the commit/apply status of the entry
-    auto [it, inserted] = container.emplace(eid.idx, op_status{eid.term, promise<>()});
-    if (!inserted) {
+    // Check for an existing entry with the same index.
+    // This can happen when a leadership change causes a new entry to be
+    // proposed at the same index with a different term.
+    auto* existing = container.find(eid.idx);
+    if (existing) {
         // No two leaders can exist with the same term.
-        SCYLLA_ASSERT(it->second.term != eid.term);
+        SCYLLA_ASSERT(existing->term != eid.term);
 
         auto term_of_commit_idx = *_fsm->log_term_for(_fsm->commit_idx());
-        if (it->second.term > eid.term) {
+        if (existing->term > eid.term) {
             if (term_of_commit_idx > eid.term) {
                 // There are some entries committed with a term
                 // bigger than ours, our entry must have been
@@ -644,9 +646,8 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
             }
         }
         // Let's replace an older-term entry with a newer-term one.
-        auto prev_wait = std::move(it->second);
-        container.erase(it);
-        std::tie(it, inserted) = container.emplace(eid.idx, op_status{eid.term, promise<>()});
+        auto prev_wait = std::move(*existing);
+        *existing = op_status{eid.term, promise<>()};
         // Set the status of the replaced entry. Same reasoning
         // applies for choosing the right exception status as earlier.
         if (term_of_commit_idx > prev_wait.term) {
@@ -657,18 +658,24 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
             _stats.waiters_dropped++;
         }
     }
-    SCYLLA_ASSERT(inserted);
+
+    // Get a reference to the entry: either the in-place replacement above,
+    // or a new entry at the corresponding slot.
+    auto& status = existing ? *existing : container.emplace(eid.idx, op_status{eid.term, promise<>()});
     if (as) {
-        it->second.abort = as->subscribe([this, it = it, &container] noexcept {
-            it->second.done.set_exception(
-                request_aborted(format(
-                        "Abort requested while waiting for entry with idx: {}, term: {}; last committed entry: {}, last applied entry: {}",
-                        it->first, it->second.term, _fsm->commit_idx(), _applied_idx)));
-            container.erase(it);
+        status.abort = as->subscribe([this, &container, idx = eid.idx, term = eid.term] noexcept {
+            auto ex = request_aborted(format(
+                    "Abort requested while waiting for entry with idx: {}, term: {}; last committed entry: {}, last applied entry: {}",
+                    idx, term, _fsm->commit_idx(), _applied_idx));
+            // extract() moves the op_status out of the container, and with it
+            // the subscription whose callback we are in. The captures live in
+            // that subscription, so none of them may be touched afterwards -
+            // hence the exception is constructed above, before the extraction.
+            container.extract(idx).done.set_exception(std::move(ex));
         });
-        SCYLLA_ASSERT(it->second.abort);
+        SCYLLA_ASSERT(status.abort);
     }
-    co_await it->second.done.get_future();
+    co_await status.done.get_future();
     logger.trace("[{}] done waiting for {}.{}", _tag, eid.term, eid.idx);
     co_return;
 }
@@ -966,23 +973,22 @@ void server_impl::read_quorum_reply(server_id from, struct read_quorum_reply rea
     _fsm->step(from, std::move(read_quorum_reply));
 }
 
-void server_impl::notify_waiters(waiters_map& waiters,
+void server_impl::notify_waiters(waiter_queue& waiters,
         const log_entry_ptr_list& entries) {
     index_t commit_idx = entries.back()->idx;
     index_t first_idx = entries.front()->idx;
 
-    while (waiters.size() != 0) {
-        auto it = waiters.begin();
-        if (it->first > commit_idx) {
+    while (!waiters.empty()) {
+        index_t entry_idx = waiters.base_index();
+        if (entry_idx > commit_idx) {
             break;
         }
-        auto [entry_idx, status] = std::move(*it);
 
         // if there is a waiter entry with an index smaller than first entry
         // it means that notification is out of order which is prohibited
         SCYLLA_ASSERT(entry_idx >= first_idx);
 
-        waiters.erase(it);
+        auto status = waiters.extract(entry_idx);
         if (status.term == entries[(entry_idx - first_idx).value()]->term) {
             status.done.set_value();
         } else {
@@ -997,11 +1003,10 @@ void server_impl::notify_waiters(waiters_map& waiters,
     // since there is no way they will be committed any longer (terms in
     // the log only grow).
     term_t last_committed_term = entries.back()->term;
-    while (waiters.size() != 0) {
-        auto it = waiters.begin();
-        if (it->second.term < last_committed_term) {
-            it->second.done.set_exception(dropped_entry());
-            waiters.erase(it);
+    while (auto* status = waiters.peek_front()) {
+        if (status->term < last_committed_term) {
+            status->done.set_exception(dropped_entry());
+            waiters.extract(waiters.base_index());
             _stats.waiters_awoken++;
         } else {
             break;
@@ -1009,14 +1014,13 @@ void server_impl::notify_waiters(waiters_map& waiters,
     }
 }
 
-void server_impl::drop_waiters(waiters_map& waiters, const snapshot_descriptor* snp) {
-    while (waiters.size() != 0) {
-        auto it = waiters.begin();
-        if (snp && it->first > snp->idx) {
+void server_impl::drop_waiters(waiter_queue& waiters, const snapshot_descriptor* snp) {
+    while (!waiters.empty()) {
+        index_t entry_idx = waiters.base_index();
+        if (snp && entry_idx > snp->idx) {
             break;
         }
-        auto [entry_idx, status] = std::move(*it);
-        waiters.erase(it);
+        auto status = waiters.extract(entry_idx);
         if (snp && status.term == snp->term) {
             // entry_idx <= snapshot index and the entry's term matches the snapshot term.
             // By the Log Matching Property the entry was committed and included in the snapshot.
@@ -1709,12 +1713,12 @@ future<> server_impl::abort(sstring reason) {
     // Destroy entry waiters before waiting for `abort_rpc`,
     // since the RPC implementation may wait for forwarded `modify_config` calls to finish
     // (and `modify_config` does not finish until the configuration entry is committed or an error occurs).
-    for (auto& ac: _awaited_commits) {
-        ac.second.done.set_exception(stopped_error(*_aborted));
-    }
-    for (auto& aa: _awaited_applies) {
-        aa.second.done.set_exception(stopped_error(*_aborted));
-    }
+    _awaited_commits.for_each([&](index_t, op_status& status) {
+        status.done.set_exception(stopped_error(*_aborted));
+    });
+    _awaited_applies.for_each([&](index_t, op_status& status) {
+        status.done.set_exception(stopped_error(*_aborted));
+    });
     _awaited_commits.clear();
     _awaited_applies.clear();
     if (_non_joint_conf_commit_promise) {
