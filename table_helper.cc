@@ -25,13 +25,25 @@ static logging::logger tlogger("table_helper");
 schema_ptr table_helper::parse_new_cf_statement(cql3::query_processor& qp, const sstring& create_cql) {
     auto db = qp.db();
 
-    auto parsed = cql3::query_processor::parse_statement(create_cql, cql3::dialect{});
+    // The input may contain trailing statements after the leading CREATE TABLE one,
+    // e.g. a schema described with internals appends an ALTER TABLE statement for
+    // each dropped column.
+    auto parsed_statements = cql3::query_processor::parse_statements(create_cql, cql3::dialect{});
+    if (parsed_statements.empty()) {
+        throw std::runtime_error(format("Expected a CREATE TABLE statement, got no statements: {}", create_cql));
+    }
+    auto& parsed = parsed_statements.front();
 
-    cql3::statements::raw::cf_statement* parsed_cf_stmt = static_cast<cql3::statements::raw::cf_statement*>(parsed.get());
+    auto* parsed_cf_stmt = dynamic_cast<cql3::statements::raw::cf_statement*>(parsed.get());
+    if (!parsed_cf_stmt) {
+        throw std::runtime_error(format("Expected a CREATE TABLE statement: {}", create_cql));
+    }
     (void)parsed_cf_stmt->keyspace(); // This will SCYLLA_ASSERT if cql statement did not contain keyspace
-    ::shared_ptr<cql3::statements::create_table_statement> statement =
-                    static_pointer_cast<cql3::statements::create_table_statement>(
+    auto statement = dynamic_pointer_cast<cql3::statements::create_table_statement>(
                                     parsed_cf_stmt->prepare(db, qp.get_cql_stats(), qp.get_cql_config())->statement);
+    if (!statement) {
+        throw std::runtime_error(format("Expected a CREATE TABLE statement: {}", create_cql));
+    }
     auto schema = statement->get_cf_meta_data(db);
 
     // Generate the CF UUID based on its KF names. This is needed to ensure that
