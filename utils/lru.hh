@@ -9,8 +9,18 @@
 #pragma once
 
 #include "utils/assert.hh"
+#include "utils/count_min_sketch.hh"
 #include <boost/intrusive/list.hpp>
 #include <seastar/core/memory.hh>
+#include <algorithm>
+
+// Identifies which W-TinyLFU segment an evictable belongs to.
+enum class lru_segment : uint8_t {
+    none = 0,
+    window = 1,
+    probation = 2,
+    protected_ = 3,
+};
 
 class evictable {
     friend class lru;
@@ -32,6 +42,11 @@ protected:
     static_assert(std::is_nothrow_constructible_v<lru_link_type, lru_link_type&&>);
 private:
     lru_link_type _lru_link;
+    // Stable key for frequency estimation in the Count-Min Sketch.
+    // Assigned when the entry is first added to the LRU, preserved across LSA
+    // compaction moves (which change the object address but preserve members).
+    uint32_t _frequency_hash = 0;
+    lru_segment _segment = lru_segment::none;
 protected:
     // Prevent destruction via evictable pointer. LRU is not aware of allocation strategy.
     // Prevent destruction of a linked evictable. While we could unlink the evictable here
@@ -54,6 +69,8 @@ public:
 
     void swap(evictable& o) noexcept {
         _lru_link.swap_nodes(o._lru_link);
+        std::swap(_frequency_hash, o._frequency_hash);
+        std::swap(_segment, o._segment);
     }
 
     virtual bool is_index() const noexcept {
@@ -76,13 +93,27 @@ class index_evictable : public evictable {
     }
 };
 
-// Implements LRU cache replacement for row cache and sstable index cache.
+// Implements W-TinyLFU cache replacement for row cache and sstable index cache.
+//
+// W-TinyLFU uses a small admission window backed by an LRU and a main cache
+// organized as a Segmented LRU (SLRU) with probation and protected segments.
+// Admission to the main cache is controlled by a TinyLFU frequency filter
+// implemented via a Count-Min Sketch.
+//
+// New entries enter the window. When eviction is needed, the window victim
+// competes with the probation victim: the entry with higher estimated
+// frequency survives in probation while the other is evicted.
+// Touching an entry in probation promotes it to the protected segment.
+// When the protected segment exceeds its target size, the least-recently-used
+// protected entry is demoted back to probation.
 class lru {
 private:
     using lru_type = boost::intrusive::list<evictable,
         boost::intrusive::member_hook<evictable, evictable::lru_link_type, &evictable::_lru_link>,
         boost::intrusive::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
-    lru_type _list;
+    lru_type _window;
+    lru_type _probation;
+    lru_type _protected;
 
     // See the comment to index_evictable.
     using index_lru_type = boost::intrusive::list<index_evictable,
@@ -92,24 +123,225 @@ private:
 
     using reclaiming_result = seastar::memory::reclaiming_result;
 
-public:
-    ~lru() {
-        while (!_list.empty()) {
-            evictable& e = _list.front();
-            remove(e);
-            e.on_evicted();
+    static constexpr size_t sketch_width_log2 = 16;
+    static constexpr size_t sketch_width = size_t(1) << sketch_width_log2;
+    static constexpr size_t sample_threshold = sketch_width * 10;
+    // Window segment target: ~1% of total cache entries.
+    static constexpr size_t window_percent = 1;
+    // Protected segment target: ~80% of total cache entries.
+    static constexpr size_t protected_percent = 80;
+
+    utils::count_min_sketch _sketch{sketch_width_log2};
+    size_t _window_size = 0;
+    size_t _probation_size = 0;
+    size_t _protected_size = 0;
+    size_t _sample_count = 0;
+    // Monotonic counter for assigning stable frequency hash keys.
+    // Using object addresses as sketch keys is incorrect because LSA
+    // relocates objects during compaction, changing their address.
+    uint32_t _next_hash = 0;
+
+    size_t total_size() const noexcept {
+        return _window_size + _probation_size + _protected_size;
+    }
+
+    size_t max_window_size() const noexcept {
+        return std::max(size_t(1), total_size() * window_percent / 100);
+    }
+
+    size_t max_protected_size() const noexcept {
+        return total_size() * protected_percent / 100;
+    }
+
+    static uint64_t entry_key(const evictable& e) noexcept {
+        return e._frequency_hash;
+    }
+
+    void assign_frequency_hash(evictable& e) noexcept {
+        // Only assign a new hash if the entry doesn't have one yet.
+        // Re-added entries (after remove()) keep their existing hash
+        // to preserve frequency tracking across remove/add cycles.
+        if (e._frequency_hash == 0) {
+            // Skip 0 on wrap-around to keep it as the "unassigned" sentinel.
+            if (++_next_hash == 0) {
+                ++_next_hash;
+            }
+            e._frequency_hash = _next_hash;
         }
     }
 
+    void record_access(const evictable& e) noexcept {
+        _sketch.increment(entry_key(e));
+        if (++_sample_count >= sample_threshold) {
+            _sketch.decay();
+            _sample_count /= 2;
+        }
+    }
+
+    lru_type& segment_list(lru_segment seg) noexcept {
+        switch (seg) {
+            case lru_segment::none:
+                SCYLLA_ASSERT(false && "segment_list called with none");
+                __builtin_unreachable();
+            case lru_segment::window: return _window;
+            case lru_segment::probation: return _probation;
+            case lru_segment::protected_: return _protected;
+        }
+        __builtin_unreachable();
+    }
+
+    void increment_size(lru_segment seg) noexcept {
+        switch (seg) {
+            case lru_segment::none: break;
+            case lru_segment::window: ++_window_size; break;
+            case lru_segment::probation: ++_probation_size; break;
+            case lru_segment::protected_: ++_protected_size; break;
+        }
+    }
+
+    void decrement_size(lru_segment seg) noexcept {
+        switch (seg) {
+            case lru_segment::none: break;
+            case lru_segment::window: --_window_size; break;
+            case lru_segment::probation: --_probation_size; break;
+            case lru_segment::protected_: --_protected_size; break;
+        }
+    }
+
+    void remove_from_segment(evictable& e) noexcept {
+        auto& list = segment_list(e._segment);
+        list.erase(list.iterator_to(e));
+        decrement_size(e._segment);
+        e._segment = lru_segment::none;
+    }
+
+    void add_to_segment(evictable& e, lru_segment seg) noexcept {
+        e._segment = seg;
+        segment_list(seg).push_back(e);
+        increment_size(seg);
+    }
+
+    // Move excess protected entries to probation.
+    // Bounded to avoid reactor stalls when the protected segment is
+    // significantly oversized (e.g. after many promotions without eviction).
+    static constexpr size_t max_rebalance_per_call = 128;
+    void rebalance_protected() noexcept {
+        size_t max_prot = max_protected_size();
+        size_t moved = 0;
+        while (_protected_size > max_prot && !_protected.empty() && moved < max_rebalance_per_call) {
+            evictable& victim = _protected.front();
+            remove_from_segment(victim);
+            add_to_segment(victim, lru_segment::probation);
+            ++moved;
+        }
+    }
+
+    // Evicts a single element using W-TinyLFU policy.
+    template <bool Shallow = false>
+    reclaiming_result do_evict(bool should_evict_index) noexcept {
+        // Index eviction path: evict the least recently used index entry.
+        if (should_evict_index && !_index_list.empty()) {
+            evictable& e = _index_list.front();
+            remove(e);
+            if constexpr (!Shallow) {
+                e.on_evicted();
+            } else {
+                e.on_evicted_shallow();
+            }
+            return reclaiming_result::reclaimed_something;
+        }
+
+        if (_window.empty() && _probation.empty() && _protected.empty()) {
+            return reclaiming_result::reclaimed_nothing;
+        }
+
+        rebalance_protected();
+
+        // Drain excess from window using TinyLFU admission.
+        while (_window_size > max_window_size() && !_window.empty()) {
+            evictable& w_victim = _window.front();
+
+            if (!_probation.empty()) {
+                // Competition: window victim vs. probation victim.
+                evictable& p_victim = _probation.front();
+                uint8_t w_freq = _sketch.estimate(entry_key(w_victim));
+                uint8_t p_freq = _sketch.estimate(entry_key(p_victim));
+
+                if (w_freq >= p_freq) {
+                    // Admit window victim to probation; evict probation victim.
+                    remove_from_segment(w_victim);
+                    add_to_segment(w_victim, lru_segment::probation);
+                    remove(p_victim);
+                    if constexpr (!Shallow) {
+                        p_victim.on_evicted();
+                    } else {
+                        p_victim.on_evicted_shallow();
+                    }
+                } else {
+                    // Reject window victim.
+                    remove(w_victim);
+                    if constexpr (!Shallow) {
+                        w_victim.on_evicted();
+                    } else {
+                        w_victim.on_evicted_shallow();
+                    }
+                }
+                return reclaiming_result::reclaimed_something;
+            }
+
+            // Probation is empty: move window victim to probation and retry.
+            remove_from_segment(w_victim);
+            add_to_segment(w_victim, lru_segment::probation);
+        }
+
+        // Window is within target. Evict from probation, then window, then protected.
+        evictable* victim = nullptr;
+        if (!_probation.empty()) {
+            victim = &_probation.front();
+        } else if (!_window.empty()) {
+            victim = &_window.front();
+        } else if (!_protected.empty()) {
+            victim = &_protected.front();
+        } else {
+            return reclaiming_result::reclaimed_nothing;
+        }
+        remove(*victim);
+        if constexpr (!Shallow) {
+            victim->on_evicted();
+        } else {
+            victim->on_evicted_shallow();
+        }
+        return reclaiming_result::reclaimed_something;
+    }
+
+public:
+    ~lru() {
+        auto drain = [this](lru_type& list) {
+            while (!list.empty()) {
+                evictable& e = list.front();
+                remove(e);
+                e.on_evicted();
+            }
+        };
+        drain(_window);
+        drain(_probation);
+        drain(_protected);
+    }
+
     void remove(evictable& e) noexcept {
-        _list.erase(_list.iterator_to(e));
+        auto& list = segment_list(e._segment);
+        list.erase(list.iterator_to(e));
+        decrement_size(e._segment);
+        e._segment = lru_segment::none;
         if (e.is_index()) {
             _index_list.erase(_index_list.iterator_to(static_cast<index_evictable&>(e)));
         }
     }
 
     void add(evictable& e) noexcept {
-        _list.push_back(e);
+        assign_frequency_hash(e);
+        record_access(e);
+        add_to_segment(e, lru_segment::window);
         if (e.is_index()) {
             _index_list.push_back(static_cast<index_evictable&>(e));
         }
@@ -117,36 +349,52 @@ public:
 
     // Like add(e) but makes sure that e is evicted right before "more_recent" in the absence of later touches.
     void add_before(evictable& more_recent, evictable& e) noexcept {
-        _list.insert(_list.iterator_to(more_recent), e);
+        assign_frequency_hash(e);
+        record_access(e);
+        lru_segment seg = more_recent._segment;
+        auto& list = segment_list(seg);
+        list.insert(list.iterator_to(more_recent), e);
+        e._segment = seg;
+        increment_size(seg);
     }
 
+    // Handles access to an entry:
+    //  - In window: moves to back of window.
+    //  - In probation: promotes to protected.
+    //  - In protected: moves to back of protected.
+    //  - Not linked: adds to window.
     void touch(evictable& e) noexcept {
-        remove(e);
-        add(e);
+        record_access(e);
+
+        switch (e._segment) {
+            case lru_segment::none:
+                assign_frequency_hash(e);
+                add_to_segment(e, lru_segment::window);
+                break;
+            case lru_segment::window:
+                _window.erase(_window.iterator_to(e));
+                _window.push_back(e);
+                break;
+            case lru_segment::probation:
+                _probation.erase(_probation.iterator_to(e));
+                --_probation_size;
+                e._segment = lru_segment::protected_;
+                _protected.push_back(e);
+                ++_protected_size;
+                break;
+            case lru_segment::protected_:
+                _protected.erase(_protected.iterator_to(e));
+                _protected.push_back(e);
+                break;
+        }
     }
 
-    // Evicts a single element from the LRU
-    template <bool Shallow = false>
-    reclaiming_result do_evict(bool should_evict_index) noexcept {
-        if (_list.empty()) {
-            return reclaiming_result::reclaimed_nothing;
-        }
-        evictable& e = (should_evict_index && !_index_list.empty()) ? _index_list.front() : _list.front();
-        remove(e);
-        if constexpr (!Shallow) {
-            e.on_evicted();
-        } else {
-            e.on_evicted_shallow();
-        }
-        return reclaiming_result::reclaimed_something;
-    }
-
-    // Evicts a single element from the LRU.
+    // Evicts a single element using the W-TinyLFU policy.
     reclaiming_result evict(bool should_evict_index = false) noexcept {
         return do_evict<false>(should_evict_index);
     }
 
-    // Evicts a single element from the LRU.
+    // Evicts a single element using the W-TinyLFU policy.
     // Will call on_evicted_shallow() instead of on_evicted().
     reclaiming_result evict_shallow() noexcept {
         return do_evict<true>(false);
