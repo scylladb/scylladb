@@ -622,6 +622,10 @@ private:
     } _pi_write_m;
     run_id _run_identifier;
     bool _write_regular_as_static; // See #4139
+    // Size threshold used by can_split_partition_at_clustering_boundary() in consume(clustering_row&&)
+    // to decide whether the current partition may be split at a clustering boundary.
+    // Derived once from _cfg.max_sstable_size, which never changes for the lifetime of the writer.
+    const uint64_t _size_threshold;
     large_data_stats_entry _partition_size_entry;
     large_data_stats_entry _rows_in_partition_entry;
     large_data_stats_entry _row_size_entry;
@@ -842,6 +846,17 @@ public:
         , _sst_schema(make_sstable_schema(s, _enc_stats, _cfg))
         , _run_identifier(cfg.run_identifier)
         , _write_regular_as_static(s.is_static_compact_table())
+        , _size_threshold([this] {
+                    // will allow size limit to be exceeded for 10%, so we won't perform unnecessary split
+                    // of a partition which crossed the limit by a small margin.
+                    const uint64_t max_size = std::numeric_limits<uint64_t>::max();
+                    if (_cfg.max_sstable_size == max_size) {
+                        return max_size;
+                    }
+                    uint64_t threshold_goal = _cfg.max_sstable_size * 1.1;
+                    // handle overflow.
+                    return threshold_goal < _cfg.max_sstable_size ? max_size : threshold_goal;
+                }())
         , _partition_size_entry(
                     large_data_stats_entry{
                         .threshold = _sst.get_large_data_handler().get_partition_threshold_bytes(),
@@ -1597,22 +1612,11 @@ stop_iteration writer::consume(clustering_row&& cr) {
     write_clustered(cr, _current_tombstone);
 
     auto can_split_partition_at_clustering_boundary = [this] {
-        // will allow size limit to be exceeded for 10%, so we won't perform unnecessary split
-        // of a partition which crossed the limit by a small margin.
-        uint64_t size_threshold = [this] {
-            const uint64_t max_size = std::numeric_limits<uint64_t>::max();
-            if (_cfg.max_sstable_size == max_size) {
-                return max_size;
-            }
-            uint64_t threshold_goal = _cfg.max_sstable_size * 1.1;
-            // handle overflow.
-            return threshold_goal < _cfg.max_sstable_size ? max_size : threshold_goal;
-        }();
         // Check there are enough promoted index entries, meaning that current fragment won't
         // unnecessarily cut the current partition in the middle.
         bool has_enough_promoted_index_entries = _pi_write_m.promoted_index_size >= 2;
 
-        return get_data_offset() > size_threshold && has_enough_promoted_index_entries;
+        return get_data_offset() > _size_threshold && has_enough_promoted_index_entries;
     };
 
     return stop_iteration(can_split_partition_at_clustering_boundary());
