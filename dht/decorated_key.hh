@@ -30,11 +30,12 @@ namespace dht {
 // Total ordering defined by comparators is compatible with Origin's ordering.
 class decorated_key {
 public:
-    dht::token _token;
+    raw_token _token;
     partition_key _key;
 
+    // Accepts only key-kind tokens, or minimum_token() as a sentinel.
     decorated_key(dht::token t, partition_key k)
-        : _token(std::move(t))
+        : _token(t.is_minimum() ? raw_token() : raw_token(t))
         , _key(std::move(k)) {
     }
 
@@ -56,8 +57,8 @@ public:
     std::strong_ordering tri_compare(const schema& s, const decorated_key& other) const;
     std::strong_ordering tri_compare(const schema& s, const ring_position& other) const;
 
-    const dht::token& token() const noexcept {
-        return _token;
+    dht::token token() const noexcept {
+        return dht::token(_token);
     }
 
     const partition_key& key() const {
@@ -65,7 +66,7 @@ public:
     }
 
     size_t external_memory_usage() const {
-        return _key.external_memory_usage() + _token.external_memory_usage();
+        return _key.external_memory_usage();
     }
 
     size_t memory_usage() const {
@@ -102,6 +103,6 @@ template <> struct fmt::formatter<dht::decorated_key> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     template <typename FormatContext>
     auto format(const dht::decorated_key& dk, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{{key: {}, token: {}}}", dk._key, dk._token);
+        return fmt::format_to(ctx.out(), "{{key: {}, token: {}}}", dk._key, dk.token());
     }
 };
