@@ -237,6 +237,7 @@ ar.reloc_add('scylla-gdb.py')
 ar.reloc_add('bin/nodetool')
 ar.reloc_add(args.debian_dir, arcname='debian')
 ar.reloc_add('ubsan-suppressions.supp')
+ar.reloc_add('lsan-suppressions.supp')
 ar.reloc_add('fix_system_distributed_tables.py')
 
 # Complete the tar output, and wait for the gzip process to complete

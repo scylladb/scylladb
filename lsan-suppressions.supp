@@ -1,0 +1,22 @@
+#
+# Copyright (C) 2026-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
+# liblttng-ust registers its tracepoint providers from library constructors and
+# keeps the allocated registry alive for the lifetime of the process, so
+# LeakSanitizer reports it as a leak on every exit - even for a command as
+# trivial as "scylla --version".
+#
+# The allocations belong to the third-party library, not to Scylla. They only
+# became visible when we started linking lttng-ust: the seastar update in
+# dafe9e9a80 ("Update seastar submodule") pulled in seastar's LTTng-UST
+# tracepoints, which added liblttng-ust to the relocatable package for the
+# first time.
+#
+# The pattern is a substring match on the module name, so it covers both
+# liblttng-ust.so and liblttng-ust-tracepoint.so.
+leak:liblttng-ust

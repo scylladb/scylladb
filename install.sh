@@ -157,6 +157,7 @@ adjust_bin() {
 export GNUTLS_SYSTEM_PRIORITY_FILE="\${GNUTLS_SYSTEM_PRIORITY_FILE-$prefix/libreloc/gnutls.config}"
 export LD_LIBRARY_PATH="$prefix/libreloc"
 export UBSAN_OPTIONS="${UBSAN_OPTIONS:+$UBSAN_OPTIONS:}suppressions=$prefix/libexec/ubsan-suppressions.supp"
+export LSAN_OPTIONS="${LSAN_OPTIONS:+$LSAN_OPTIONS:}suppressions=$prefix/libexec/lsan-suppressions.supp"
 ${p11_trust_paths:+export SCYLLA_P11_TRUST_PATHS="$p11_trust_paths"}
 exec -a "\$0" "$prefix/libexec/$bin" "\$@"
 EOF
@@ -446,6 +447,7 @@ for bin in libexec/*; do
     adjust_bin "${bin#libexec/}"
 done
 install -m644 ubsan-suppressions.supp -Dt "$rprefix/libexec"
+install -m644 lsan-suppressions.supp -Dt "$rprefix/libexec"
 
 install -d -m755 "$rdoc"/scylla
 install -m644 README.md -Dt "$rdoc"/scylla/
