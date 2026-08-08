@@ -24,7 +24,6 @@ namespace alternator {
 // Call respective factory method below (`create_in_memory_sink_pipeline`) to construct.
 // Call `process()` method for each item (they might come in random order) - they will be serialized and written to the appropriate sink.
 // After all items are processed, call `flush_and_close()` to flush and finalize the pipeline - the call is mandatory, otherwise part of the data might not be written.
-// Calling `flush_and_close()` is required and needs to be done manually.
 // Calls to `process()` and `flush_and_close()` must be serialized, i.e. each call is allowed only after previous call's future is completed.
 struct export_pipeline_interface {
     // Invokes whole pipeline for a single item. The future will complete once item is processed.
