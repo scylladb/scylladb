@@ -1893,7 +1893,7 @@ async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_tok
         replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_dead=True)
         await manager.server_add(replace_cfg=replace_cfg, property_file=node_to_remove.property_file())
 
-@pytest.mark.nightly
+@pytest.mark.tier2
 @pytest.mark.parametrize("with_zero_token_node", [False, True])
 async def test_replace_with_no_normal_token_owners_in_dc(manager: ManagerClient, with_zero_token_node: bool):
     """

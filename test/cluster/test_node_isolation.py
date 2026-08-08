@@ -20,7 +20,7 @@ from test.cluster.util import create_new_test_keyspace
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.nightly
+@pytest.mark.tier2
 async def test_banned_node_notification(manager: ManagerClient, failure_detector_timeout) -> None:
     """Test that a node banned from the cluster get notification about been banned"""
     # Decrease the failure detector threshold so we don't have to wait for too long.
