@@ -2,7 +2,8 @@
 
 ## Introduction
 
-Logstor is a log-structured storage engine for ScyllaDB optimized for key-value workloads. It provides an alternative storage backend for key-value tables - tables with a partition key only, with no clustering columns.
+Logstor is a log-structured storage engine for ScyllaDB optimized for key-value workloads. It provides an alternative storage backend for key-value tables - tables with a partition key only, with no clustering columns, and where rows are written whole, as a single value (individual
+columns are usually not updated separately).
 
 Unlike the traditional LSM-tree based storage, logstor uses a log-structured approach with in-memory indexing, making it particularly suitable for workloads with frequent overwrites and point lookups.
 
@@ -24,7 +25,7 @@ The `segment_manager` handles the allocation and management of fixed-size segmen
 - **Space reclamation**: Tracks free space in each segment
 - **Compaction**: Copies live data from sparse segments to reclaim space
 - **Recovery**: Scans segments on startup to rebuild the index
-- **Separator**: Rewrites segments that have records from different compaction groups into new segments that are separated by compaction group.
+- **Separator**: Writes to all _compaction groups_ (tablets and even tables) go to a single active segment. The separator splits these mixed segments, which have records from different compaction groups, into segments that each has a single compaction group. This separation is useful when migrating tablets.
 
 The data in the segments consists of records of type `log_record`. Each record contains the value for some key as a `canonical_mutation` and additional metadata.
 
@@ -46,6 +47,8 @@ The `buffered_writer` manages multiple write buffers for user writes, an active 
 5. Index is updated with new record locations
 6. Old record locations (for overwrites) are marked as free
 
+Only step 4 writes to the disk - all other steps only update in-memory metadata.
+
 **Read Path:**
 1. Application requests data for a partition key
 2. Index lookup returns record location
@@ -58,7 +61,7 @@ The `buffered_writer` manages multiple write buffers for user writes, an active 
 3. After the separator buffer is flushed and all records from the original segment are moved, it releases the reference of the segment. When there are no more reference to the segment it is freed.
 
 **Compaction:**
-1. The amount of live data is tracked for each segment in its segment_descriptor. The segment descriptors are stored in a histogram by live data.
+1. The amount of live data is tracked for each segment in its (in-memory) segment_descriptor. The segment descriptors are stored in a histogram by live data. This histogram is called a `segment_set` and each compaction group owns one.
 2. A segment set from a single compaction group is submitted for compaction.
 3. Compaction picks segments for compaction from the segment set. It chooses segments with the lowest utilization such that compacting them results in net gain of free segments.
 4. It reads the segments, finding all live records, and writing them into a write buffer. When the buffer is full it is flushed into a new segment, and for each recording updating the index location to the new location.
