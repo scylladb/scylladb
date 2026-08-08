@@ -428,6 +428,18 @@ functions::try_get(data_dictionary::database db,
         return fun;
     }
 
+    if (func_name == ANN_FUNCTION_NAME) {
+        // ANN() is a planning-only function: its argument types are inferred from the indexed
+        // column (first argument) and the query vector (second argument), which must be float
+        // vectors of the same dimension - the same rule as the similarity functions above.
+        auto arg_types = retrieve_vector_arg_types(func_name, provided_args);
+        auto fun = make_ann_function(arg_types);
+        if (auto err = check_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf)) {
+            return resolution_failed(std::move(*err));
+        }
+        return fun;
+    }
+
     if (name.has_keyspace()
                 ? name == TOKEN_FUNCTION_NAME
                 : name.name == TOKEN_FUNCTION_NAME.name) {

@@ -592,7 +592,7 @@ def test_bm25_on_clustering_key_with_fulltext_index(cql, test_keyspace):
 
 def test_non_scoring_function_in_order_by_rejected(cql, fulltext_table):
     """A non-scoring function call in ORDER BY clause must be rejected."""
-    with pytest.raises(InvalidRequest, match="Only BM25 scoring function"):
+    with pytest.raises(InvalidRequest, match="supported as scoring functions in ORDER BY"):
         cql.execute(f"SELECT * FROM {fulltext_table} ORDER BY now() LIMIT 1")
 
 

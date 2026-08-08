@@ -11,6 +11,7 @@
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/functions/functions.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/util.hh"
@@ -55,13 +56,31 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
         return std::nullopt;
     }
 
-    auto [column_id, ordering] = parameters->orderings().front();
-    const auto& ann_vector = std::get_if<raw::select_statement::ann_vector>(&ordering);
-    if (!ann_vector) {
+    const auto& ordering = parameters->orderings().front().second;
+
+    // Both 'ORDER BY ANN(column, query_vector)' and the legacy
+    // 'ORDER BY column ANN OF query_vector' are parsed into an ann() scoring ordering.
+    // Classify by the raw function name so that a scoring ordering owned by another
+    // resolver (e.g. BM25) is left untouched, in particular unprepared.
+    if (raw::select_statement::scoring_order_raw_name(ordering) != functions::ANN_FUNCTION_NAME.name) {
         return std::nullopt;
     }
+    const auto* scoring_ord = std::get_if<raw::select_statement::scoring_function_ordering>(&ordering);
+    const auto* fc = expr::as_if<expr::function_call>(&scoring_ord->func_expr);
 
-    ::shared_ptr<column_identifier> column = column_id->prepare_column_identifier(*schema);
+    // The arguments are resolved one by one rather than by preparing the whole ann() call:
+    // the query vector must be prepared against the ordered column's specification so that it
+    // gets that column's vector type and dimension, and so that a bare literal or a bind marker
+    // is diagnosed in terms of the column.
+    if (fc->args.size() != 2) {
+        throw exceptions::invalid_request_exception("ANN() takes exactly two arguments: ANN(column, query_vector)");
+    }
+
+    const auto* ann_column = expr::as_if<expr::unresolved_identifier>(&fc->args[0]);
+    if (!ann_column) {
+        throw exceptions::invalid_request_exception("First argument to ANN() must be a column reference");
+    }
+    ::shared_ptr<column_identifier> column = ann_column->ident->prepare_column_identifier(*schema);
     const column_definition* def = schema->get_column_definition(column->name());
     if (!def) {
         throw exceptions::invalid_request_exception(
@@ -72,10 +91,15 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
         throw exceptions::invalid_request_exception("ANN ordering is only supported on float vector indexes");
     }
 
-    auto e =  expr::prepare_expression(*ann_vector, db, schema->ks_name(), nullptr, def->column_specification);
-    expr::fill_prepare_context(e, ctx);
+    // Checked before preparing, which is done without a schema and so cannot resolve columns.
+    if (expr::find_in_expression<expr::unresolved_identifier>(fc->args[1], [](const expr::unresolved_identifier&) { return true; })) {
+        throw exceptions::invalid_request_exception("Second argument to ANN() must not be a column reference");
+    }
 
-    raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering = std::make_pair(std::move(def), std::move(e));
+    auto query_vector = expr::prepare_expression(fc->args[1], db, schema->ks_name(), nullptr, def->column_specification);
+    expr::fill_prepare_context(query_vector, ctx);
+
+    raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering = std::make_pair(def, std::move(query_vector));
 
     auto cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();

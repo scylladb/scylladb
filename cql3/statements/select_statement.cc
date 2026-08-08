@@ -33,6 +33,7 @@
 #include "transport/messages/result_message.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/as_json_function.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
@@ -1992,6 +1993,25 @@ audit::statement_category select_statement::category() const {
     return audit::statement_category::QUERY;
 }
 
+std::string_view select_statement::scoring_order_raw_name(const ordering_type& ordering) {
+    const auto* scoring_ord = std::get_if<scoring_function_ordering>(&ordering);
+    if (!scoring_ord) {
+        return {};
+    }
+    const auto* fc = expr::as_if<expr::function_call>(&scoring_ord->func_expr);
+    if (!fc) {
+        return {};
+    }
+    // Before prepare_expression() the function_call holds an unresolved function_name;
+    // afterwards it holds a shared_ptr<function>. Classification must happen before
+    // preparation, so only the unresolved variant is meaningful here.
+    const auto* fname = std::get_if<functions::function_name>(&fc->func);
+    if (!fname) {
+        return {};
+    }
+    return fname->name;
+}
+
 select_statement::select_statement(std::optional<cf_name> cf_name,
                                    lw_shared_ptr<const parameters> parameters,
                                    std::vector<::shared_ptr<selection::raw_selector>> select_clause,
@@ -2096,6 +2116,14 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     std::optional<bm25_ordering_info> bm25_ordering_info_opt = get_bm25_ordering_info(db, schema, _parameters, ctx);
     bool has_bm25_ordering = bm25_ordering_info_opt.has_value();
 
+    if (!is_ann_query && !has_bm25_ordering && !_parameters->orderings().empty()
+            && std::holds_alternative<raw::select_statement::scoring_function_ordering>(_parameters->orderings().front().second)) {
+        // A function call in ORDER BY that no scoring-function resolver claimed. The
+        // regular-ordering path below skips scoring orderings, so reject it explicitly
+        // instead of silently ignoring the ORDER BY clause.
+        throw exceptions::invalid_request_exception("Only ANN() and BM25() are supported as scoring functions in ORDER BY");
+    }
+
     if (prepared_selectors.empty() && (!_group_by_columns.empty() || (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled))) {
         // We have a "SELECT * GROUP BY" or "SELECT * ORDER BY ANN" with rescoring enabled. If we leave prepared_selectors
         // empty, below we choose selection::wildcard() for SELECT *, and either:
@@ -2116,6 +2144,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     for (auto& ps : prepared_selectors) {
         if (expr::is_native_function_call(ps.expr, "bm25")) {
             throw exceptions::invalid_request_exception("BM25() is not supported in the SELECT clause");
+        }
+        if (expr::is_native_function_call(ps.expr, functions::ANN_FUNCTION_NAME.name)) {
+            throw exceptions::invalid_request_exception("ANN() is not supported in the SELECT clause");
         }
         expr::fill_prepare_context(ps.expr, ctx);
     }
@@ -2185,7 +2216,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     if (!orderings.empty() && !is_ann_query && !is_fts_query) {
         std::visit([&](auto&& ordering) {
             using T = std::decay_t<decltype(ordering)>;
-            if constexpr (!std::is_same_v<T, select_statement::ann_vector> && !std::is_same_v<T, raw::select_statement::scoring_function_ordering>) {
+            if constexpr (!std::is_same_v<T, raw::select_statement::scoring_function_ordering>) {
                 throwing_assert(!for_view);
                 verify_ordering_is_allowed(*_parameters, *restrictions);
                 prepared_orderings_type prepared_orderings = prepare_orderings(*schema);

@@ -90,6 +90,12 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
     }
 
     auto [column_id, ordering] = parameters->orderings().front();
+    // Classify by the raw function name before preparing anything: other scoring
+    // functions (e.g. ANN) have their own resolver, and preparing their expression
+    // here would register their bind markers a second time.
+    if (raw::select_statement::scoring_order_raw_name(ordering) != "bm25") {
+        return std::nullopt;
+    }
     auto* scoring_ord = std::get_if<raw::select_statement::scoring_function_ordering>(&ordering);
     if (!scoring_ord) {
         return std::nullopt;
