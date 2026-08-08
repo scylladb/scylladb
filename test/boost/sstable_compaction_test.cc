@@ -2182,6 +2182,88 @@ SEASTAR_FIXTURE_TEST_CASE(time_window_strategy_correctness_gcs_test, gcs_fixture
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
+// Verifies that TWCS schedules compaction for SSTables spanning multiple time windows
+// (e.g. those produced by ICS before switching to TWCS without a prior major compaction),
+// and that after all compaction rounds complete, no such multi-window SSTables remain.
+//
+// Each multi-window SSTable is given a unique max_timestamp so it lands in its own past
+// window bucket. This ensures that without the fix, normal STCS (which requires at least
+// min_threshold SSTables per bucket) would never trigger on them, and they would never
+// be compacted away.
+SEASTAR_TEST_CASE(twcs_multi_window_sstables_are_compacted_test) {
+    return test_env::do_with_async([](test_env& env) {
+        using namespace std::chrono;
+
+        // Use a 1-hour window.
+        std::map<sstring, sstring> opts_map = {
+            { compaction::time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "1" },
+            { compaction::time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY, "HOURS" },
+        };
+        compaction::time_window_compaction_strategy twcs(opts_map);
+        compaction::time_window_compaction_strategy_options twcs_opts(opts_map);
+
+        auto s = schema_builder("tests", "twcs_multi_window")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type)
+                .set_compaction_strategy(compaction::compaction_strategy_type::time_window)
+                .build();
+
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+
+        const auto keys = tests::generate_partition_keys(2, s);
+        const auto& first_key = keys.front().key();
+        const auto& last_key = keys.back().key();
+
+        // Window size in microseconds (1 hour).
+        const int64_t window_us = duration_cast<microseconds>(hours(1)).count();
+
+        auto spans_multiple_windows = [&](const shared_sstable& sst) {
+            auto min = sst->get_stats_metadata().min_timestamp;
+            auto max = sst->get_stats_metadata().max_timestamp;
+            return compaction::time_window_compaction_strategy::get_window_for(twcs_opts, min) !=
+                   compaction::time_window_compaction_strategy::get_window_for(twcs_opts, max);
+        };
+
+        // Create multi-window SSTables, each with a unique max_timestamp landing in its own
+        // past window bucket. This means without the fix, each bucket holds only one SSTable —
+        // below min_threshold — so normal STCS would never compact them.
+        // Use more than max_threshold (32) to verify multiple compaction rounds are scheduled.
+        std::vector<shared_sstable> candidates;
+        const int num_multi_window = 40;
+        for (int i = 0; i < num_multi_window; i++) {
+            // min is in window i, max is in window i+1, so the SSTable spans two windows.
+            const int64_t ts_min = window_us * i + window_us / 2;
+            const int64_t ts_max = window_us * (i + 1) + window_us / 2;
+            auto sst = env.make_sstable(s);
+            sstables::test(sst).set_values(first_key, last_key,
+                    build_stats(ts_min, ts_max, std::numeric_limits<int32_t>::max()));
+            BOOST_REQUIRE(spans_multiple_windows(sst));
+            candidates.push_back(std::move(sst));
+        }
+
+        // Simulate the compaction loop: in each round, TWCS selects multi-window SSTables.
+        // We remove them from the candidate set (simulating compaction completing with
+        // window-aligned output SSTables, which will no longer span multiple windows).
+        while (true) {
+            auto desc = get_sstables_for_compaction(twcs, cf.as_compaction_group_view(), candidates).get();
+            if (desc.sstables.empty()) {
+                break;
+            }
+            // Every SSTable selected must span multiple windows.
+            for (const auto& sst : desc.sstables) {
+                BOOST_REQUIRE(spans_multiple_windows(sst));
+            }
+            std::erase_if(candidates, [&](const shared_sstable& sst) {
+                return std::ranges::find(desc.sstables, sst) != desc.sstables.end();
+            });
+        }
+
+        // After all rounds, no multi-window SSTables should remain.
+        BOOST_REQUIRE(std::ranges::none_of(candidates, spans_multiple_windows));
+    });
+}
+
 // Check that TWCS will only perform size-tiered on the current window and also
 // the past windows that were already previously compacted into a single SSTable.
 void time_window_strategy_size_tiered_behavior_correctness_fn(test_env& env) {
