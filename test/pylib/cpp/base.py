@@ -19,7 +19,7 @@ import pytest
 from _pytest._code.code import ReprFileLocation
 
 from scripts import coverage as coverage_script
-from test import DEBUG_MODES, TEST_DIR, TOP_SRC_DIR, path_to
+from test import DEBUG_MODES, TEST_DIR, TOP_SRC_DIR, asan_options, path_to, ubsan_options
 from test.pylib.runner import BUILD_MODE, RUN_ID, TEST_SUITE
 from test.pylib.scylla_cluster import merge_cmdline_options
 
@@ -31,21 +31,9 @@ if TYPE_CHECKING:
     from _pytest._io import TerminalWriter
 
 
-UBSAN_OPTIONS = [
-    "halt_on_error=1",
-    "abort_on_error=1",
-    f"suppressions={TOP_SRC_DIR / 'ubsan-suppressions.supp'}",
-    os.getenv("UBSAN_OPTIONS"),
-]
-ASAN_OPTIONS = [
-    "disable_coredump=0",
-    "abort_on_error=1",
-    "detect_stack_use_after_return=1",
-    os.getenv("ASAN_OPTIONS"),
-]
 BASE_TEST_ENV = {
-    "UBSAN_OPTIONS": ":".join(filter(None, UBSAN_OPTIONS)),
-    "ASAN_OPTIONS": ":".join(filter(None, ASAN_OPTIONS)),
+    "UBSAN_OPTIONS": ubsan_options(inherit=True),
+    "ASAN_OPTIONS": asan_options(inherit=True),
     "SCYLLA_TEST_ENV": "yes",
 }
 

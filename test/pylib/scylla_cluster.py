@@ -26,7 +26,7 @@ import uuid
 from io import BufferedWriter
 import importlib
 
-from test import TOP_SRC_DIR, TEST_DIR
+from test import TEST_DIR, asan_options, ubsan_options
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
 from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely, get_xdist_worker_id, scale_timeout_by_mode
@@ -867,8 +867,8 @@ class ScyllaServer:
         # remove from env to make sure user's SCYLLA_HOME has no impact
         env.pop('SCYLLA_HOME', None)
         env.update(self.append_env if append_env_override is None else append_env_override)
-        env['UBSAN_OPTIONS'] = f'halt_on_error=1:abort_on_error=1:suppressions={TOP_SRC_DIR / "ubsan-suppressions.supp"}'
-        env['ASAN_OPTIONS'] = f'disable_coredump=0:abort_on_error=1:detect_stack_use_after_return=1'
+        env['UBSAN_OPTIONS'] = ubsan_options()
+        env['ASAN_OPTIONS'] = asan_options()
 
         # Set up socket for receiving sd_notify messages from Scylla
         self._setup_notify_socket()
