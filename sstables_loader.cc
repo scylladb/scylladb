@@ -187,23 +187,36 @@ public:
 protected:
     virtual host_id_vector_replica_set get_primary_endpoints(const dht::token& token, std::function<bool(const locator::host_id&)> filter) const;
     future<> stream_sstables(const dht::partition_range&, std::vector<sstables::shared_sstable>, shared_ptr<stream_progress> progress, defer_unlinking defer);
+    // Re-fetches _erm between streaming batches so a topology version
+    // superseded mid-operation is released promptly, instead of being held
+    // for the whole (potentially hours-long) operation.
+    //
+    // Synchronous by design: must not suspend before dropping the old _erm,
+    // or a topology change waiting via barrier_and_drain for that erm to be
+    // released could deadlock against it.
+    virtual void refresh_erm();
 private:
     host_id_vector_replica_set get_all_endpoints(const dht::token& token) const;
 };
 
 class tablet_sstable_streamer : public sstable_streamer {
     sharded<replica::database>& _db;
-    const locator::tablet_map& _tablet_map;
+    // Pointer, not reference, so refresh_erm() can repoint it together with
+    // _erm, whose token_metadata_ptr keeps the pointee alive.
+    const locator::tablet_map* _tablet_map;
 public:
     tablet_sstable_streamer(netw::messaging_service& ms, sharded<replica::database>& db, ::table_id table_id, locator::effective_replication_map_ptr erm,
                             std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, unlink_sstables unlink, stream_scope scope)
         : sstable_streamer(ms, db.local(), table_id, std::move(erm), std::move(sstables), primary, unlink, scope)
         , _db(db)
-        , _tablet_map(_erm->get_token_metadata().tablets().get_tablet_map(table_id)) {
+        , _tablet_map(&_erm->get_token_metadata().tablets().get_tablet_map(table_id)) {
     }
 
     virtual future<> stream(shared_ptr<stream_progress> on_streamed) override;
     virtual host_id_vector_replica_set get_primary_endpoints(const dht::token& token, std::function<bool(const locator::host_id&)> filter) const override;
+
+protected:
+    void refresh_erm() override;
 
 private:
     host_id_vector_replica_set to_replica_set(const locator::tablet_replica_set& replicas) const {
@@ -318,6 +331,23 @@ host_id_vector_replica_set sstable_streamer::get_all_endpoints(const dht::token&
     return current_targets;
 }
 
+void sstable_streamer::refresh_erm() {
+    auto erm = _table.get_effective_replication_map();
+    if (erm == _erm) {
+        return; // unchanged since the last refresh (the common case)
+    }
+    if (!erm) {
+        // Shouldn't happen for a live table; guard defensively rather than
+        // crash on the next dereference of a null erm.
+        llog.debug("sstable_streamer: table {}.{} has no effective_replication_map; "
+                   "deferring refresh", _table.schema()->ks_name(), _table.schema()->cf_name());
+        return;
+    }
+    _erm = std::move(erm);
+    llog.debug("sstable_streamer: refreshed effective_replication_map for table {}.{} to topology version {}",
+               _table.schema()->ks_name(), _table.schema()->cf_name(), _erm->get_token_metadata().get_version());
+}
+
 host_id_vector_replica_set sstable_streamer::get_primary_endpoints(const dht::token& token, std::function<bool(const locator::host_id&)> filter) const {
     auto current_targets = _erm->get_natural_replicas(token) | std::views::filter(std::move(filter)) | std::ranges::to<host_id_vector_replica_set>();
     current_targets.resize(1);
@@ -325,11 +355,52 @@ host_id_vector_replica_set sstable_streamer::get_primary_endpoints(const dht::to
 }
 
 host_id_vector_replica_set tablet_sstable_streamer::get_primary_endpoints(const dht::token& token, std::function<bool(const locator::host_id&)> filter) const {
-    auto tid = _tablet_map.get_tablet_id(token);
-    auto replicas = locator::get_primary_replicas(_tablet_map, tid, _erm->get_topology(), [filter = std::move(filter)] (const locator::tablet_replica& replica) {
+    auto tid = _tablet_map->get_tablet_id(token);
+    auto replicas = locator::get_primary_replicas(*_tablet_map, tid, _erm->get_topology(), [filter = std::move(filter)] (const locator::tablet_replica& replica) {
         return filter(replica.host);
     });
     return to_replica_set(replicas);
+}
+
+void tablet_sstable_streamer::refresh_erm() {
+    auto erm = _table.get_effective_replication_map();
+    if (erm == _erm) {
+        return; // unchanged since the last refresh (the common case)
+    }
+    if (!erm) {
+        // See sstable_streamer::refresh_erm(): shouldn't happen, guard anyway.
+        llog.debug("tablet_sstable_streamer: table {}.{} has no effective_replication_map; "
+                   "deferring refresh", _table.schema()->ks_name(), _table.schema()->cf_name());
+        return;
+    }
+    const locator::tablet_map* new_tablet_map = nullptr;
+    try {
+        new_tablet_map = &erm->get_token_metadata().tablets().get_tablet_map(_table.schema()->id());
+    } catch (const locator::no_such_tablet_map&) {
+        // Table's tablet metadata is gone from this snapshot (e.g. concurrent
+        // drop); nothing valid to refresh to, so keep the current pair.
+        llog.debug("tablet_sstable_streamer: no tablet map for table {}.{} in the latest topology; "
+                   "deferring effective_replication_map refresh",
+                   _table.schema()->ks_name(), _table.schema()->cf_name());
+        return;
+    }
+    // Compare boundaries, not just tablet_count(): pow2-convergence merges
+    // (tablet_allocator.cc) can restore a previous count with different
+    // boundaries, which stream()'s up-front sstable-to-tablet classification
+    // depends on.
+    if (new_tablet_map->get_sorted_raw_tokens() != _tablet_map->get_sorted_raw_tokens()) {
+        // Keep the current, self-consistent pair and retry next batch. Worst
+        // case: held for the whole operation, same as before this change.
+        llog.debug("tablet_sstable_streamer: tablet boundaries changed (tablet_count {} -> {}) for table {}.{} "
+                   "while streaming is in progress; deferring effective_replication_map refresh",
+                   _tablet_map->tablet_count(), new_tablet_map->tablet_count(),
+                   _table.schema()->ks_name(), _table.schema()->cf_name());
+        return;
+    }
+    _erm = std::move(erm);
+    _tablet_map = new_tablet_map;
+    llog.debug("tablet_sstable_streamer: refreshed effective_replication_map for table {}.{} to topology version {}, tablet_count={}",
+               _table.schema()->ks_name(), _table.schema()->cf_name(), _erm->get_token_metadata().get_version(), _tablet_map->tablet_count());
 }
 
 future<> sstable_streamer::stream(shared_ptr<stream_progress> progress) {
@@ -347,7 +418,7 @@ bool tablet_sstable_streamer::tablet_in_scope(locator::tablet_id tid) const {
     }
 
     const auto& topo = _erm->get_topology();
-    for (const auto& r : _tablet_map.get_tablet_info(tid).replicas) {
+    for (const auto& r : _tablet_map->get_tablet_info(tid).replicas) {
         switch (_stream_scope) {
         case stream_scope::node:
             if (topo.is_me(r.host)) {
@@ -444,12 +515,12 @@ future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_ssta
 
 future<> tablet_sstable_streamer::stream(shared_ptr<stream_progress> progress) {
     if (progress) {
-        progress->start(_tablet_map.tablet_count());
+        progress->start(_tablet_map->tablet_count());
     }
 
     auto classified_sstables = co_await get_sstables_for_tablets(
-        _sstables, _tablet_map.tablet_ids() | std::views::filter([this](auto tid) { return tablet_in_scope(tid); }) | std::views::transform([this](auto tid) {
-                       return _tablet_map.get_token_range(tid);
+        _sstables, _tablet_map->tablet_ids() | std::views::filter([this](auto tid) { return tablet_in_scope(tid); }) | std::views::transform([this](auto tid) {
+                       return _tablet_map->get_token_range(tid);
                    }) | std::ranges::to<std::vector>());
 
     for (auto& [tablet_range, sstables_fully_contained, sstables_partially_contained] : classified_sstables) {
@@ -477,6 +548,9 @@ future<> sstable_streamer::stream_sstables(const dht::partition_range& pr, std::
     while (!sstables.empty()) {
         co_await utils::get_local_injector().inject("load_and_stream_before_streaming_batch",
             utils::wait_for_message(60s));
+
+        // See refresh_erm()'s declaration for why this is needed.
+        refresh_erm();
 
         const size_t batch_sst_nr = std::min(16uz, sstables.size());
         auto sst_processed = sstables
@@ -642,8 +716,9 @@ future<locator::effective_replication_map_ptr> sstables_loader::await_topology_q
 future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
         ::table_id table_id, std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, bool unlink, stream_scope scope,
         shared_ptr<stream_progress> progress) {
-    // streamer guarantees topology stability, for correctness, by holding effective_replication_map
-    // throughout its lifetime.
+    // refresh_erm() re-fetches this erm between streaming batches (see its
+    // declaration), so a superseded topology version is released promptly
+    // instead of being held for the whole operation.
     auto erm = co_await await_topology_quiesced_and_get_erm(table_id);
 
     // Obtain a phaser guard to prevent the table from being destroyed

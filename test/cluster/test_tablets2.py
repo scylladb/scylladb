@@ -22,6 +22,7 @@ import time
 import random
 import os
 import glob
+import shutil
 from collections import defaultdict
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
@@ -1093,6 +1094,107 @@ async def test_tablet_load_and_stream(manager: ManagerClient, primary_replica_on
     logger.info("All SSTable files successfully deleted after streaming")
 
     await asyncio.gather(*[cql.run_async(f"drop keyspace {i}") for i in [ks, ks2]])
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_load_and_stream_releases_stale_topology_version(manager: ManagerClient):
+    """
+    Tablet variant of test_refresh_load_and_stream_releases_stale_topology_version
+    (see its docstring for SCYLLADB-3336 background). Exercises
+    tablet_sstable_streamer::refresh_erm()'s common "compatible" case: a
+    plain migration, which changes the topology version but not tablet
+    boundaries. The incompatible (split/merge) case is covered by
+    test_tablet_load_and_stream_and_split_synchronization.
+    """
+    cmdline = ['--logger-log-level', 'sstables_loader=debug']
+    servers = await manager.servers_add(2, cmdline=cmdline)
+    await manager.disable_tablet_balancing()
+
+    cql = manager.get_cql()
+    ks = unique_name("ks_")
+    cf = "test"
+    await cql.run_async(
+        f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+        f"AND tablets = {{'initial': 1}}")
+    try:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY, c int)")
+
+        tablet_token = 0  # single tablet, so any token maps to it
+        src_host, src_shard = await get_tablet_replica(manager, servers[0], ks, cf, tablet_token)
+        host_ids = {await manager.get_host_id(s.server_id): s for s in servers}
+        server = host_ids[src_host]
+        dst_host = next(hid for hid in host_ids if hid != src_host)
+
+        # One sstable per row: with num_sstables=20 > batch size (16), we get
+        # more than one streaming batch.
+        num_sstables = 20
+        for pk in range(num_sstables):
+            await cql.run_async(f"INSERT INTO {ks}.{cf} (pk, c) VALUES ({pk}, {pk})")
+            await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        snap_name = unique_name("snap_")
+        await manager.api.take_snapshot(server.ip_addr, ks, snap_name)
+
+        workdir = await manager.server_get_workdir(server.server_id)
+        cf_dir = os.listdir(f"{workdir}/data/{ks}")[0]
+        cf_path = os.path.join(f"{workdir}/data/{ks}", cf_dir)
+        upload_dir = os.path.join(cf_path, "upload")
+        os.makedirs(upload_dir, exist_ok=True)
+        snapshots_dir = os.path.join(cf_path, "snapshots", snap_name)
+        exclude_list = ["manifest.json", "schema.cql"]
+        for item in os.listdir(snapshots_dir):
+            if item not in exclude_list:
+                shutil.copy2(os.path.join(snapshots_dir, item), os.path.join(upload_dir, item))
+
+        hosts = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+        version_before = await get_topology_version(cql, hosts[0])
+
+        await manager.api.enable_injection(server.ip_addr, "load_and_stream_before_streaming_batch", one_shot=True)
+        server_log = await manager.server_open_log(server.server_id)
+        log_mark = await server_log.mark()
+
+        refresh_task = asyncio.create_task(
+            manager.api.load_new_sstables(server.ip_addr, ks, cf, load_and_stream=True))
+        await manager.api.wait_for_injection_enter(server.ip_addr, "load_and_stream_before_streaming_batch")
+        logger.info("load_and_stream paused before its first batch, holding erm at topology version %d", version_before)
+
+        # Same tablet_count, ownership change only -- the "compatible"
+        # refresh path. move_tablet() blocks until committed, so run it as a
+        # background task.
+        migration_task = asyncio.create_task(
+            manager.api.move_tablet(server.ip_addr, ks, cf, src_host, src_shard, dst_host, 0, tablet_token))
+
+        await server_log.wait_for(
+            r"Got raft_topology_cmd::barrier_and_drain,.*stale versions \(version: use_count\):.*"
+            rf"\b{version_before}\b",
+            from_mark=log_mark, timeout=60)
+        logger.info("tablet migration's barrier_and_drain reported our erm's topology version %d as stale", version_before)
+
+        # Resume load_and_stream; refresh_erm() runs first and releases the
+        # stale erm/tablet_map.
+        await manager.api.message_injection(server.ip_addr, "load_and_stream_before_streaming_batch")
+
+        _, matches = await server_log.wait_for(
+            r"tablet_sstable_streamer: refreshed effective_replication_map for table .* "
+            r"to topology version (\d+), tablet_count=1",
+            from_mark=log_mark, timeout=30)
+        refreshed_version = int(matches[0][1].group(1))
+        assert refreshed_version > version_before, \
+            f"expected refresh_erm() to move past the stale version {version_before}, got {refreshed_version}"
+
+        # Must complete promptly, not after load_and_stream streams every
+        # remaining batch.
+        await asyncio.wait_for(migration_task, timeout=60)
+        logger.info("tablet migration completed")
+
+        await asyncio.wait_for(refresh_task, timeout=60)
+        logger.info("load_and_stream completed")
+
+        new_replica = await get_tablet_replica(manager, servers[0], ks, cf, tablet_token)
+        assert new_replica[0] == dst_host
+        assert {row.pk for row in cql.execute(f"SELECT pk FROM {ks}.{cf}")} == set(range(num_sstables))
+    finally:
+        await cql.run_async(f"DROP KEYSPACE IF EXISTS {ks}")
 
 async def test_storage_service_api_uneven_ownership_keyspace_and_table_params_used(manager: ManagerClient):
     # Given two running servers
