@@ -19,7 +19,7 @@
 
 namespace netw {
 
-logging::logger arc_logger("advanced_rpc_compressor");
+static logging::logger arc_logger("advanced_rpc_compressor");
 
 static const shared_dict null_dict;
 

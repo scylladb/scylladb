@@ -19,12 +19,14 @@
 #include <seastar/core/loop.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/query_processor.hh"
 #include "locator/host_id.hh"
-#include "locator/tablets.hh"
+#include "locator/tablets_fwd.hh"
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "gms/feature_service.hh"
 #include "system_keyspace_view_types.hh"
 #include "schema/schema_builder.hh"
@@ -949,7 +951,7 @@ schema_ptr system_keyspace::truncated() {
     return local;
 }
 
-thread_local data_type replay_position_type = tuple_type_impl::get_instance({long_type, int32_type});
+static thread_local data_type replay_position_type = tuple_type_impl::get_instance({long_type, int32_type});
 
 schema_ptr system_keyspace::commitlog_cleanups() {
     static thread_local auto local = [] {

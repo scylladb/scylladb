@@ -809,6 +809,13 @@ arg_parser.add_argument('--sccache-rust', action=argparse.BooleanOptionalAction,
                         help='Use sccache for rust code (if sccache is selected as compiler cache). Doesn\'t work with distributed builds.')
 add_tristate(arg_parser, name='dpdk', dest='dpdk', default=False,
                         help='Use dpdk (from seastar dpdk sources)')
+add_tristate(arg_parser, name='perf-tools', dest='perf_tools', default=True,
+                        help='build the perf-* dev subcommands and test/lib into the scylla binary '
+                             '(disabling saves ~5%% of full-build CPU; default keeps current behavior)')
+add_tristate(arg_parser, name='wasmtime', dest='wasmtime', default=True,
+                        help='build the wasmtime (WASM UDF) backend into the scylla binary '
+                             '(disabling skips the heaviest Rust dependency and the lang/wasm* '
+                             'sources; default keeps current behavior)')
 arg_parser.add_argument('--dpdk-target', action='store', dest='dpdk_target', default='',
                         help='Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
 arg_parser.add_argument('--debuginfo', action='store', dest='debuginfo', type=int, default=1,
@@ -872,6 +879,15 @@ if args.help:
     arg_parser.print_help()
     arg_parser.exit()
 
+if not args.wasmtime:
+    # Without the wasmtime backend there is nothing to run WASM UDFs (or
+    # their tests, or the .wat test fixtures) with.
+    _wasmtime_tests = {'test/boost/wasm_alloc_test', 'test/boost/wasm_test'}
+    scylla_tests -= _wasmtime_tests
+    tests -= _wasmtime_tests
+    all_artifacts -= _wasmtime_tests | wasms
+    wasms = set()
+
 PROFILES_LIST_FILE_NAME = "coverage_sources.list"
 
 outdir = args.build_dir
@@ -894,10 +910,67 @@ scylla_raft_core = [
     'raft/log.cc',
 ]
 
+# TUs measured at >=1.5GB peak compiler RSS (dev mode, clang). Their compiles
+# go through heavy_mem_pool so a high -j can't co-schedule enough multi-GB
+# clang processes to OOM the machine (ninja's default -j is nproc+2, which on
+# a 16-thread/30GB box would otherwise allow ~35GB of concurrent compile RSS).
+# To regenerate: configure with --compiler-cache=<wrapper recording
+# ru_maxrss per compile via os.wait4>, full clean build, take TUs >= 1.5GB.
+heavy_mem_compiles = {
+    'alternator/executor.cc',
+    'api/column_family.cc',
+    'api/storage_service.cc',
+    'cql3/statements/describe_statement.cc',
+    'cql3/statements/select_statement.cc',
+    'db/config.cc',
+    'db/schema_applier.cc',
+    'db/schema_tables.cc',
+    'db/snapshot/cluster_backup.cc',
+    'db/system_keyspace.cc',
+    'db/view/view.cc',
+    'db/view/view_building_worker.cc',
+    'db/virtual_tables.cc',
+    'main.cc',
+    'message/messaging_service.cc',
+    'repair/repair.cc',
+    'repair/row_level.cc',
+    'replica/database.cc',
+    'replica/table.cc',
+    'service/storage_proxy.cc',
+    'service/storage_service.cc',
+    'service/tablet_allocator.cc',
+    'service/topology_coordinator.cc',
+    'sstables_loader.cc',
+    'sstables/sstables.cc',
+    'test/lib/cql_test_env.cc',
+    'test/perf/perf_fast_forward.cc',
+    'test/perf/perf_simple_query.cc',
+    'test/perf/perf_sstable.cc',
+    'tools/schema_loader.cc',
+    'tools/scylla-sstable.cc',
+}
+
 scylla_core = (['message/messaging_service.cc',
+                # These 7 are individually slow (7-22s each) but were
+                # positioned at the very end of this list, where a clean
+                # build's ninja has no prior .ninja_log history to know
+                # that - they ended up as a solo, ~20s-longer tail after
+                # everything else finished. Moved next to messaging_service.cc
+                # (the first scylla_core entry, itself already scheduled
+                # early) so they get picked up in the same early wave.
+                'service/raft/raft_group0.cc',
+                'tasks/task_manager.cc',
+                'service/topology_state_machine.cc',
+                'service/topology_mutation.cc',
+                'service/topology_coordinator.cc',
+                'node_ops/task_manager_module.cc',
+                'vector_search/vector_store_client.cc',
                 'message/advanced_rpc_compressor.cc',
                 'message/stream_compressor.cc',
                 'message/dict_trainer.cc',
+                ] + scylla_raft_core + [  # raft/server.cc (~6s) was the last
+                # TU of every clean build when appended at the end (see the
+                # scheduling note above).
                 'replica/database.cc',
                 'replica/schema_describe_helper.cc',
                 'replica/table.cc',
@@ -1126,6 +1199,8 @@ scylla_core = (['message/messaging_service.cc',
                 'cql3/column_specification.cc',
                 'cql3/constants.cc',
                 'cql3/query_processor.cc',
+                'cql3/prepared_statements_cache.cc',
+                'cql3/authorized_prepared_statements_cache.cc',
                 'cql3/query_options.cc',
                 'cql3/user_types.cc',
                 'cql3/untyped_result_set.cc',
@@ -1367,9 +1442,6 @@ scylla_core = (['message/messaging_service.cc',
                 'mutation_writer/feed_writers.cc',
                 'lang/manager.cc',
                 'lang/lua.cc',
-                'lang/wasm.cc',
-                'lang/wasm_alien_thread_runner.cc',
-                'lang/wasm_instance_cache.cc',
                 'service/strong_consistency/groups_manager.cc',
                 'service/strong_consistency/coordinator.cc',
                 'service/strong_consistency/state_machine.cc',
@@ -1385,26 +1457,21 @@ scylla_core = (['message/messaging_service.cc',
                 'service/raft/raft_rpc.cc',
                 'service/raft/raft_group_registry.cc',
                 'service/raft/discovery.cc',
-                'service/raft/raft_group0.cc',
                 'service/direct_failure_detector/failure_detector.cc',
                 'service/raft/raft_group0_client.cc',
                 'tasks/task_handler.cc',
-                'tasks/task_manager.cc',
-                'rust/wasmtime_bindings/src/lib.rs',
                 'utils/to_string.cc',
-                'service/topology_state_machine.cc',
-                'service/topology_mutation.cc',
-                'service/topology_coordinator.cc',
-                'node_ops/task_manager_module.cc',
                 'reader_concurrency_semaphore_group.cc',
                 'utils/disk_space_monitor.cc',
-                'vector_search/vector_store_client.cc',
                 'vector_search/dns.cc',
                 'vector_search/client.cc',
                 'vector_search/clients.cc',
                 'vector_search/truststore.cc'
-                ] + [Antlr3Grammar('cql3/Cql.g')] \
-                  + scylla_raft_core
+                ] + (['lang/wasm.cc',
+                      'lang/wasm_alien_thread_runner.cc',
+                      'lang/wasm_instance_cache.cc',
+                      'rust/wasmtime_bindings/src/lib.rs'] if args.wasmtime else []) \
+                  + [Antlr3Grammar('cql3/Cql.g')]
                )
 
 api = ['api/api.cc',
@@ -1576,6 +1643,19 @@ scylla_tools = ['tools/scylla-local-file-key-generator.cc',
                 'tools/load_system_tablets.cc',
                 'tools/utils.cc',
                 'tools/lua_sstable_consumer.cc']
+
+# test/lib is a genuine shared dependency, not perf-exclusive - e.g.
+# tools/scylla-sstable.cc calls do_with_cql_env_noreentrant_in_thread() from
+# test/lib/cql_test_env.cc - so it's always built, unlike scylla_perfs below.
+scylla_perf_test_lib = ['test/lib/cql_test_env.cc',
+                'test/lib/log.cc',
+                'test/lib/test_services.cc',
+                'test/lib/test_utils.cc',
+                'test/lib/tmpdir.cc',
+                'test/lib/key_utils.cc',
+                'test/lib/random_schema.cc',
+                'test/lib/data_model.cc',
+                'test/lib/eventually.cc']
 scylla_perfs = ['test/perf/perf_alternator.cc',
                 'test/perf/perf_fast_forward.cc',
                 'test/perf/perf_row_cache_update.cc',
@@ -1586,19 +1666,14 @@ scylla_perfs = ['test/perf/perf_alternator.cc',
                 'test/perf/perf_tablets.cc',
                 'test/perf/tablet_load_balancing.cc',
                 'test/perf/perf.cc',
-                'test/lib/cql_test_env.cc',
-                'test/lib/log.cc',
-                'test/lib/test_services.cc',
-                'test/lib/test_utils.cc',
-                'test/lib/tmpdir.cc',
-                'test/lib/key_utils.cc',
-                'test/lib/random_schema.cc',
-                'test/lib/data_model.cc',
-                'test/lib/eventually.cc',
                 'seastar/tests/perf/linux_perf_event.cc']
 
 deps = {
-    'scylla': idls + ['main.cc'] + scylla_core + api + alternator + scylla_tools + scylla_perfs,
+    # Smaller groups first so their slow stragglers (storage_service.cc,
+    # scylla-sstable.cc, cql_test_env.cc) overlap scylla_core's tail instead
+    # of only starting once it's nearly done. List order doesn't affect
+    # correctness, only scheduling.
+    'scylla': idls + ['main.cc'] + api + alternator + scylla_tools + (scylla_perfs if args.perf_tools else []) + scylla_perf_test_lib + scylla_core,
     'patchelf': ['tools/patchelf.cc'],
 }
 
@@ -1926,6 +2001,10 @@ globals().update(vars(args))
 total_memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
 # assuming each link job takes around 7GiB of memory without LTO
 link_pool_depth = max(int(total_memory / 7e9), 1)
+# Cap on concurrently-compiling memory-hungry TUs (heavy_mem_compiles
+# below): each peaks at 1.5-3.1GB RSS; unbounded, a high -j (ninja's
+# default is nproc+2) can co-schedule enough of them to OOM the machine.
+heavy_mem_pool_depth = max(int(total_memory / 7e9), 2)
 if args.lto:
     # ThinLTO provides its own parallel linking, use 16GiB for RAM size used
     # by each link job
@@ -2231,6 +2310,21 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
     dpdk = args.dpdk
     if dpdk:
         seastar_cmake_args += ['-DSeastar_DPDK=ON', '-DSeastar_DPDK_MACHINE=x86-64-v3']
+    # configure_seastar() is called with the lowercase mode key from the
+    # direct-ninja path but with mode_config['cmake_build_type'] (e.g. 'Dev')
+    # from the --use-cmake path - compare case-insensitively so this doesn't
+    # silently no-op on the latter.
+    if mode.lower() == 'dev':
+        # SEASTAR_LOGGER_COMPILE_TIME_FMT (on by default) validates every
+        # logger/fmt::format() call's format string at compile time via a
+        # consteval fmt::formatter instantiation. That's pure frontend cost
+        # with zero generated code, paid on every logging call site - real
+        # measured cost from a full-build -ftime-trace/ClangBuildAnalyzer
+        # profile (see github.com/scylladb/scylladb#1): ~2315s of ~24360s
+        # total CPU time (~9.5%) across ~5000 call sites. Format-string
+        # mismatches become runtime errors instead of compile errors in dev
+        # builds only; release/debug builds keep compile-time checking.
+        seastar_cmake_args += ['-DSeastar_LOGGER_COMPILE_TIME_FMT=OFF']
     if args.split_dwarf:
         seastar_cmake_args += ['-DSeastar_SPLIT_DWARF=ON']
     if args.alloc_failure_injector:
@@ -2269,6 +2363,16 @@ def configure_abseil(build_dir, mode, mode_config, compiler_cache=None):
             cxx_flags = cxx_flags.replace(f' {flag}', '')
 
     cxx_flags += ' ' + abseil_cflags.strip()
+
+    # Scylla-specific defines and PCH flags are meaningless to Abseil TUs
+    # (Abseil includes no Scylla or Seastar headers). Dropping them keeps
+    # Abseil's flags stable when Scylla options toggle (e.g. --disable-wasmtime),
+    # avoiding spurious full Abseil rebuilds.
+    cxx_flags = ' '.join(tok for tok in cxx_flags.split()
+                         if not (tok.startswith('-DSCYLLA_')
+                                 or tok.startswith('-DSEASTAR_')
+                                 or tok == '-DDEVEL'
+                                 or tok == '-fpch-validate-input-files-content'))
     cmake_mode = mode_config['cmake_build_type']
     abseil_cmake_args = [
         '-DCMAKE_BUILD_TYPE={}'.format(cmake_mode),
@@ -2444,12 +2548,30 @@ def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
                               if flag_supported(flag=o, compiler=cxx)]
         cxxflags += optimization_flags
 
+    if mode == 'dev':
+        # Trims backend compile time; dev doesn't need release's vectorization.
+        # Isolated A/B (official -j8/cache-disabled full build, same tip
+        # with/without this block): 557s -> 548s, -1.6%.
+        optimization_flags = [
+            '-fno-vectorize',
+            '-fno-slp-vectorize',
+        ]
+        optimization_flags = [o
+                              for o in optimization_flags
+                              if flag_supported(flag=o, compiler=cxx)]
+        cxxflags += optimization_flags
+
     if flag_supported(flag='-Wstack-usage=4096', compiler=cxx):
         stack_usage_threshold = mode_config['stack-usage-threshold']
         cxxflags += [f'-Wstack-usage={stack_usage_threshold}',
                      '-Wno-error=stack-usage=']
 
     cxxflags.append(f'-DSCYLLA_BUILD_MODE={mode}')
+
+    if args.perf_tools:
+        cxxflags.append('-DSCYLLA_BUILD_PERF_TOOLS')
+    if args.wasmtime:
+        cxxflags.append('-DSCYLLA_BUILD_WASMTIME')
 
     if debuginfo and mode_config['can_have_debug_info']:
         cxxflags += ['-g', '-gz']
@@ -2490,6 +2612,19 @@ def write_build_file(f,
     cxx_with_cache = f'{compiler_cache} {args.cxx}' if compiler_cache else args.cxx
     # For Rust, sccache is used via RUSTC_WRAPPER environment variable
     rustc_wrapper = f'RUSTC_WRAPPER={compiler_cache} ' if compiler_cache and 'sccache' in compiler_cache and args.sccache_rust else ''
+    # cargo build runs as a single ninja job but internally spawns its own
+    # rustc jobs sized to all available cores, uncoordinated with ninja's -j
+    # budget - stacking on top of ninja's parallel clang jobs and risking an
+    # OOM on a clean build (observed on a 16-core/30GB machine). Cap cargo to
+    # a quarter of the cores, mirroring rust/CMakeLists.txt's Scylla_RUST_JOBS.
+    rust_jobs = max(1, ((os.cpu_count() or 4) + 3) // 4)
+    # The Seastar/Abseil sub-ninjas default to nproc+2 jobs each, on top of
+    # the outer ninja's -j and cargo: on a clean build the first ~50s ran
+    # ~40 jobs on 16 cores, stretching the PCH (which gates every scylla TU)
+    # ~3x. Now that scylla compiles no longer wait for the submodule libs
+    # (only the final link does, ~480s later), capping the sub-ninjas to
+    # half the cores trades idle submodule slack for PCH/TU throughput.
+    submodule_jobs = max(4, (os.cpu_count() or 8) // 2)
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -2500,8 +2635,22 @@ def write_build_file(f,
         libs = {libs}
         pool link_pool
             depth = {link_pool_depth}
-        pool submodule_pool
+        # Separate pools (not one shared one) so Seastar's and Abseil's
+        # builds can overlap, while same-subdirectory targets (e.g.
+        # seastar/seastar_testing) stay serialized: two concurrent recursive
+        # ninja invocations in the same subdir don't coordinate at all and
+        # will race-rebuild shared objects (confirmed empirically).
+        pool seastar_pool
             depth = 1
+        pool abseil_pool
+            depth = 1
+        # Bounds how many memory-hungry TUs (measured >=1.5GB peak RSS,
+        # see heavy_mem_compiles in configure.py) compile concurrently,
+        # so high -j (including ninja's default of nproc+2) can't stack
+        # several multi-GB clang processes into an OOM. Sized like
+        # link_pool: one slot per ~7GB of RAM, at least 2.
+        pool heavy_mem_pool
+            depth = {heavy_mem_pool_depth}
         rule gen
             command = echo -e $text > $out
             description = GEN $out
@@ -2515,7 +2664,10 @@ def write_build_file(f,
             command = ./utils/s3/gen_aws_service_errors.py --output-dir $out_dir
             description = AWS service errors generator $out
         rule ninja
-            command = {ninja} -C $subdir $target
+            # nice: when scylla TUs saturate the cores the submodule builds
+            # yield to them (they have huge slack before the final link);
+            # on an otherwise idle machine they still run at full speed.
+            command = nice -n10 {ninja} -C $subdir $jobs $target
             restat = 1
             description = NINJA $out
         rule ragel
@@ -2584,6 +2736,7 @@ def write_build_file(f,
                     rustc_target=rustc_target,
                     rustc_wrapper=rustc_wrapper,
                     link_pool_depth=link_pool_depth,
+                    heavy_mem_pool_depth=heavy_mem_pool_depth,
                     seastar_path=args.seastar_path,
                     ninja=ninja,
                     ragel_exec=args.ragel_exec))
@@ -2601,9 +2754,19 @@ def write_build_file(f,
 
     for mode in build_modes:
         modeval = modes[mode]
+        # -fpch-codegen (dev/debug only): emit inline/template code instantiated
+        # in the PCH once, into stdafx.o, instead of weak copies in every
+        # including TU. Kept out of release to leave the LTO'd build untouched.
+        use_pch_codegen = use_precompiled_header and mode in ('dev', 'debug')
+        pch_codegen_flag = '-fpch-codegen' if use_pch_codegen else ''
+        pch_object = f'$builddir/{mode}/stdafx.o' if use_pch_codegen else ''
         seastar_lib_ext = 'so' if modeval['build_seastar_shared_libs'] else 'a'
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
+        # Sub-ninja step building only Seastar's generated headers (ragel
+        # parsers, metrics2.pb.h) - all that compiling (vs linking) scylla
+        # TUs needs from the seastar build; see the build statement below.
+        seastar_gen_headers_dep = f'$builddir/{mode}/seastar/gen/include/seastar/http/request_parser.hh'
         abseil_dep = ' '.join(f'$builddir/{mode}/abseil/{lib}' for lib in abseil_libs)
         fmt_lib = 'fmt'
         f.write(textwrap.dedent('''\
@@ -2618,9 +2781,16 @@ def write_build_file(f,
               description = CXX $out
               depfile = $out.d
             rule cxx_build_precompiled_header.{mode}
-              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -fpch-instantiate-templates -Xclang -emit-pch -DSCYLLA_USE_PRECOMPILED_HEADER
+              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -fpch-instantiate-templates {pch_codegen_flag} -Xclang -emit-pch -DSCYLLA_USE_PRECOMPILED_HEADER
               description = CXX-PRECOMPILED-HEADER $out
               depfile = $out.d
+            # Compiles the PCH itself to an object holding the single strong copy of
+            # inline/template code the -fpch-codegen PCH externalized; every binary
+            # linking PCH-built objects must link it. Include paths/-MD don't apply
+            # to a serialized AST input, hence the unused-argument suppression.
+            rule cxx_pch_object.{mode}
+              command = $cxx {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Wno-unused-command-line-argument
+              description = CXX-PCH-OBJECT $out
             rule cxx_with_pch.{mode}
               command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -Xclang -include-pch -Xclang $builddir/{mode}/stdafx.hh.pch
               description = CXX $out
@@ -2667,10 +2837,10 @@ def write_build_file(f,
               description = TEST {mode}
             # This rule is unused for PGO stages. They use the rust lib from the parent mode.
             rule rust_lib.{mode}
-              command = CARGO_BUILD_DEP_INFO_BASEDIR='.' CARGO_NET_RETRY=10 {rustc_wrapper}cargo build --locked --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
+              command = CARGO_BUILD_DEP_INFO_BASEDIR='.' CARGO_NET_RETRY=10 nice -n10 {rustc_wrapper}cargo build --locked --jobs={rust_jobs} {rust_features} --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
                         && touch $out
               description = RUST_LIB $out
-            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, **modeval))
+            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, rust_jobs=rust_jobs, rust_features=('' if args.wasmtime else '--no-default-features'), pch_codegen_flag=pch_codegen_flag, **modeval))
         aws_errors_gen_dir = '$builddir/{}/gen'.format(mode)
         aws_errors_gen_hh = '{}/utils/s3/aws_error_definitions_generated.hh'.format(aws_errors_gen_dir)
         aws_errors_gen_cc = '{}/utils/s3/aws_error_definitions_generated.cc'.format(aws_errors_gen_dir)
@@ -2690,9 +2860,11 @@ def write_build_file(f,
         compiles = {}
         compiles_with_pch = set()
         swaggers = set()
+        swaggers_with_pch = set()
         serializers = {}
         ragels = {}
         antlr3_grammars = set()
+        antlr3_grammars_with_pch = set()
         rust_headers = {}
 
         # We want LTO, but with the regular LTO, clang generates special LLVM IR files instead of
@@ -2703,6 +2875,7 @@ def write_build_file(f,
         # object code. And we enable LTO when linking the main Scylla executable, while disable
         # it when linking anything else.
 
+        scylla_srcs = frozenset(deps['scylla'])
         for binary in sorted(build_artifacts):
             if modeval['is_profile'] and binary != "scylla":
                 # Just to avoid clutter in build.ninja
@@ -2759,10 +2932,19 @@ def write_build_file(f,
             objs.extend([f'$builddir/{mode}/abseil/{lib}' for lib in abseil_libs])
 
             if do_lto:
-                local_libs += ' -flto=thin -ffat-lto-objects'
+                # --thinlto-jobs=all: use all logical CPUs for the ThinLTO
+                # backend (lld defaults to physical cores only, leaving SMT
+                # idle during the multi-minute LTO link). Scheduling-only:
+                # thread count does not affect the generated code.
+                local_libs += ' -flto=thin -ffat-lto-objects -Wl,--thinlto-jobs=all'
             else:
                 local_libs += ' -fno-lto'
             use_pch = use_precompiled_header and binary == 'scylla'
+            # With -fpch-codegen, any binary linking objects compiled against the
+            # PCH must also link stdafx.o (the externalized PCH code lives there).
+            links_pch_object = use_pch_codegen and (binary == 'scylla' or any(src in scylla_srcs for src in srcs))
+            if links_pch_object:
+                objs.append(pch_object)
             if binary in tests:
                 if binary in pure_boost_tests:
                     local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
@@ -2770,6 +2952,12 @@ def write_build_file(f,
                     local_libs += f' {seastar_testing_libs}'
                 else:
                     local_libs += ' ' + '-lgnutls' + ' ' + '-lboost_unit_test_framework'
+                    if links_pch_object:
+                        # stdafx.o emits every inline instantiated in the PCH,
+                        # including liburing's inline wrappers; the seastar
+                        # testing lib set (which carries -luring) isn't linked
+                        # into these tests, so add it explicitly.
+                        local_libs += ' -luring'
                 # Our code's debugging information is huge, and multiplied
                 # by many tests yields ridiculous amounts of disk space.
                 # So we strip the tests by default; The user can very
@@ -2798,11 +2986,15 @@ def write_build_file(f,
                     serializers[hh] = src
                 elif src.endswith('.json'):
                     swaggers.add(src)
+                    if use_pch:
+                        swaggers_with_pch.add(src)
                 elif src.endswith('.rl'):
                     hh = '$builddir/' + mode + '/gen/' + src.replace('.rl', '.hh')
                     ragels[hh] = src
                 elif src.endswith('.g'):
                     antlr3_grammars.add(src)
+                    if use_pch:
+                        antlr3_grammars_with_pch.add(src)
                 elif src.endswith('.rs'):
                     idx = src.rindex('/src/')
                     hh = '$builddir/' + mode + '/gen/' + src[:idx] + '.hh'
@@ -2817,6 +3009,10 @@ def write_build_file(f,
         )
 
         headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])
+        if not args.wasmtime:
+            # The wasm headers need the generated rust/wasmtime_bindings.hh,
+            # which does not exist in this configuration.
+            headers = [hh for hh in headers if not hh.startswith('lang/wasm')]
         f.write(
             'build {mode}-headers: phony {header_objs}\n'.format(
                 mode=mode,
@@ -2871,22 +3067,103 @@ def write_build_file(f,
             f.write('build {}: rust_source {}\n'.format(cc, src))
             obj = cc.replace('.cc', '.o')
             compiles[obj] = cc
-        for obj in compiles:
-            src = compiles[obj]
-            seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
-            abseil_dep = ' '.join(f'$builddir/{mode}/abseil/{lib}' for lib in abseil_libs)
-            pch_dep = f'$builddir/{mode}/stdafx.hh.pch' if obj in compiles_with_pch else ''
-            cxx_cmd = 'cxx_with_pch' if obj in compiles_with_pch else 'cxx'
-            f.write(f'build {obj}: {cxx_cmd}.{mode} {src} | {profile_dep} {seastar_dep} {abseil_dep} {gen_headers_dep} {pch_dep}\n')
-            if src in modeval['per_src_extra_cxxflags']:
-                f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=modeval["per_src_extra_cxxflags"][src], **modeval))
+        # Seastar's generated headers (ragel parsers, metrics2.pb.h) are all
+        # scylla TUs and the PCH actually need from the sub-build; they take
+        # <1s vs ~45s for libseastar. A dedicated sub-ninja step lets scylla
+        # compiles start immediately instead of idling behind the full lib.
+        # Ordered before the lib steps (shared seastar_pool, depth 1).
+        # Emitted (with the abseil steps) ahead of the compiles so ninja's
+        # clean-build tie-break dispatches them as soon as a slot frees:
+        # libseastar_testing.so used to be picked up only at t~534s, gating
+        # the final link (which order-depends on it) by ~3s.
+        f.write(f'build {seastar_gen_headers_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n')
+        f.write('  pool = seastar_pool\n')
+        f.write(f'  subdir = $builddir/{mode}/seastar\n')
+        f.write('  target = seastar_http_request_parser seastar_http_response_parser seastar_http_chunk_parsers seastar_proto_metrics2\n')
+        f.write(f'build {seastar_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep} || {seastar_gen_headers_dep}\n')
+        f.write('  pool = seastar_pool\n')
+        f.write(f'  subdir = $builddir/{mode}/seastar\n')
+        f.write('  target = seastar\n')
+        f.write(f'  jobs = -j{submodule_jobs}\n')
+        f.write(f'build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep} || {seastar_gen_headers_dep}\n')
+        f.write('  pool = seastar_pool\n')
+        f.write(f'  subdir = $builddir/{mode}/seastar\n')
+        f.write('  target = seastar_testing\n')
+        f.write(f'  jobs = -j{submodule_jobs}\n')
+        for lib in abseil_libs:
+            f.write(f'build $builddir/{mode}/abseil/{lib}: ninja $builddir/{mode}/abseil/build.ninja | always {profile_dep}\n')
+            f.write(f'  pool = abseil_pool\n')
+            f.write(f'  subdir = $builddir/{mode}/abseil\n')
+            f.write(f'  target = {lib}\n')
+            f.write(f'  jobs = -j{submodule_jobs}\n')
+        # PCH, stdafx.o and the ANTLR-generated lexers/parsers are emitted
+        # before the regular compiles: on a clean build ninja breaks ties
+        # between equal-priority ready edges by statement order, and these
+        # are the heaviest TUs - left last (their old position) CqlParser.o
+        # (~11s) and stdafx.o (~8s) started only after every other TU and
+        # directly gated the final link.
+        # No abseil_dep on the PCH: it only parses abseil's checked-in
+        # headers (-isystem abseil), never its compiled .a archives, so it
+        # needn't wait on abseil's build.
+        f.write(f'build $builddir/{mode}/stdafx.hh.pch: cxx_build_precompiled_header.{mode} stdafx.hh | {profile_dep} {seastar_gen_headers_dep} {gen_headers_dep}\n')
+        if use_pch_codegen:
+            f.write(f'build $builddir/{mode}/stdafx.o: cxx_pch_object.{mode} $builddir/{mode}/stdafx.hh.pch\n')
+        for grammar in antlr3_grammars:
+            outs = ' '.join(grammar.generated('$builddir/{}/gen'.format(mode)))
+            f.write('build {}: antlr3.{} {}\n  stem = {}\n'.format(outs, mode, grammar.source,
+                                                                   grammar.source.rsplit('.', 1)[0]))
+            for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
+                obj = cc.replace('.cpp', '.o')
+                # The ANTLR-generated lexers/parsers are among the heaviest TUs
+                # in the build and skipped the PCH entirely, paying the full
+                # header-parse cost (same reasoning as the swagger objects).
+                # Parsers in -O0/g/s modes get an -O1 override below; keep
+                # those off the PCH so their options match how it was built.
+                use_grammar_pch = (grammar in antlr3_grammars_with_pch
+                                   and not (cc.endswith('Parser.cpp')
+                                            and modes[mode]['optimization-level'] in ['0', 'g', 's']))
+                if use_grammar_pch:
+                    grammar_pch_dep = f'$builddir/{mode}/stdafx.hh.pch'
+                    f.write(f'build {obj}: cxx_with_pch.{mode} {cc} | {profile_dep} {grammar_pch_dep} || {" ".join(serializers)}\n')
+                else:
+                    f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep} || {" ".join(serializers)}\n')
+                flags = '-Wno-parentheses-equality'
+                if cc.endswith('Parser.cpp'):
+                    # Unoptimized parsers end up using huge amounts of stack space and overflowing their stack
+                    flags += ' -O1' if modes[mode]['optimization-level'] in ['0', 'g', 's'] else ''
+
+                    if '-DSANITIZE' in modeval['cxxflags'] and has_sanitize_address_use_after_scope:
+                        flags += ' -fno-sanitize-address-use-after-scope'
+                f.write('  obj_cxxflags = %s\n' % flags)
+        # Swagger objects are emitted before the regular compiles for the
+        # same tie-break reason as the ANTLR objects above; left after them
+        # they were consistently the second-to-last tail cluster.
         for swagger in swaggers:
             hh = swagger.headers(gen_dir)[0]
             cc = swagger.sources(gen_dir)[0]
             obj = swagger.objects(gen_dir)[0]
             src = swagger.source
             f.write('build {} | {} : swagger {} | {}/scripts/seastar-json2code.py\n'.format(hh, cc, src, args.seastar_path))
-            f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep}\n')
+            # Generated api-doc .cc files skipped the PCH entirely, paying full
+            # header-parse cost per file for no reason - use it when eligible.
+            if swagger in swaggers_with_pch:
+                swagger_pch_dep = f'$builddir/{mode}/stdafx.hh.pch'
+                f.write(f'build {obj}: cxx_with_pch.{mode} {cc} | {profile_dep} {swagger_pch_dep}\n')
+            else:
+                f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep} {seastar_gen_headers_dep}\n')
+        for obj in compiles:
+            src = compiles[obj]
+            # Compiling (not linking) needs only Seastar's generated headers,
+            # not libseastar itself, and only Abseil's checked-in headers, not
+            # its archives - gating TUs on the full submodule builds kept the
+            # first ~45s of a clean build free of any scylla compiles.
+            pch_dep = f'$builddir/{mode}/stdafx.hh.pch' if obj in compiles_with_pch else ''
+            cxx_cmd = 'cxx_with_pch' if obj in compiles_with_pch else 'cxx'
+            f.write(f'build {obj}: {cxx_cmd}.{mode} {src} | {profile_dep} {seastar_gen_headers_dep} {gen_headers_dep} {pch_dep}\n')
+            if src in heavy_mem_compiles:
+                f.write('    pool = heavy_mem_pool\n')
+            if src in modeval['per_src_extra_cxxflags']:
+                f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=modeval["per_src_extra_cxxflags"][src], **modeval))
         for hh in serializers:
             src = serializers[hh]
             f.write('build {}: serializer {} | idl-compiler.py\n'.format(hh, src))
@@ -2899,10 +3176,16 @@ def write_build_file(f,
         # The generated .cc lives under $builddir/{mode}/gen/utils/s3/ but
         # still uses `#include "aws_error.hh"` inherited from the template,
         # so we add an extra -iquote for utils/s3 to resolve it.
-        f.write('build {obj}: cxx.{mode} {cc} | {profile_dep}\n'
-                '  obj_cxxflags = -iquote utils/s3\n'.format(
-                    obj=aws_errors_gen_obj, mode=mode, cc=aws_errors_gen_cc,
-                    profile_dep=profile_dep))
+        if use_precompiled_header:
+            f.write('build {obj}: cxx_with_pch.{mode} {cc} | {profile_dep} $builddir/{mode}/stdafx.hh.pch\n'
+                    '  obj_cxxflags = -iquote utils/s3\n'.format(
+                        obj=aws_errors_gen_obj, mode=mode, cc=aws_errors_gen_cc,
+                        profile_dep=profile_dep))
+        else:
+            f.write('build {obj}: cxx.{mode} {cc} | {profile_dep}\n'
+                    '  obj_cxxflags = -iquote utils/s3\n'.format(
+                        obj=aws_errors_gen_obj, mode=mode, cc=aws_errors_gen_cc,
+                        profile_dep=profile_dep))
         for hh in ragels:
             src = ragels[hh]
             f.write('build {}: ragel {}\n'.format(hh, src))
@@ -2910,49 +3193,13 @@ def write_build_file(f,
         if 'parent_mode' not in modes[mode]:
             librust = '$builddir/{}/rust-{}/librust_combined'.format(mode, mode)
             f.write('build {}.a: rust_lib.{} rust/Cargo.lock\n  depfile={}.d\n'.format(librust, mode, librust))
-        for grammar in antlr3_grammars:
-            outs = ' '.join(grammar.generated('$builddir/{}/gen'.format(mode)))
-            f.write('build {}: antlr3.{} {}\n  stem = {}\n'.format(outs, mode, grammar.source,
-                                                                   grammar.source.rsplit('.', 1)[0]))
-            for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
-                obj = cc.replace('.cpp', '.o')
-                f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep} || {" ".join(serializers)}\n')
-                flags = '-Wno-parentheses-equality'
-                if cc.endswith('Parser.cpp'):
-                    # Unoptimized parsers end up using huge amounts of stack space and overflowing their stack
-                    flags += ' -O1' if modes[mode]['optimization-level'] in ['0', 'g', 's'] else ''
-
-                    if '-DSANITIZE' in modeval['cxxflags'] and has_sanitize_address_use_after_scope:
-                        flags += ' -fno-sanitize-address-use-after-scope'
-                f.write('  obj_cxxflags = %s\n' % flags)
         f.write(f'build $builddir/{mode}/gen/empty.cc: gen\n')
         for hh in headers:
             f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} | $builddir/{mode}/gen/empty.cc {profile_dep} || {gen_headers_dep}\n'.format(
                     mode=mode, hh=hh, gen_headers_dep=gen_headers_dep, profile_dep=profile_dep))
 
-        seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
-        seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
-        f.write(f'build {seastar_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n')
-        f.write('  pool = submodule_pool\n')
-        f.write(f'  subdir = $builddir/{mode}/seastar\n')
-        f.write('  target = seastar\n')
-        f.write(f'build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n')
-        f.write('  pool = submodule_pool\n')
-        f.write(f'  subdir = $builddir/{mode}/seastar\n')
-        f.write('  target = seastar_testing\n')
-        f.write(f'  profile_dep = {profile_dep}\n')
-
-        for lib in abseil_libs:
-            f.write(f'build $builddir/{mode}/abseil/{lib}: ninja $builddir/{mode}/abseil/build.ninja | always {profile_dep}\n')
-            f.write(f'  pool = submodule_pool\n')
-            f.write(f'  subdir = $builddir/{mode}/abseil\n')
-            f.write(f'  target = {lib}\n')
-            f.write(f'  profile_dep = {profile_dep}\n')
-
-        f.write(f'build $builddir/{mode}/stdafx.hh.pch: cxx_build_precompiled_header.{mode} stdafx.hh | {profile_dep} {seastar_dep} {abseil_dep} {gen_headers_dep} {pch_dep}\n')
-
         f.write(f'build $builddir/{mode}/seastar/apps/iotune/iotune: ninja $builddir/{mode}/seastar/build.ninja | $builddir/{mode}/seastar/libseastar.{seastar_lib_ext}\n')
-        f.write('  pool = submodule_pool\n')
+        f.write('  pool = seastar_pool\n')
         f.write(f'  subdir = $builddir/{mode}/seastar\n')
         f.write('  target = iotune\n')
         f.write(f'  profile_dep = {profile_dep}\n')
@@ -3259,7 +3506,11 @@ def configure_using_cmake(args):
         'CMAKE_DEFAULT_CONFIGS': selected_configs,
         'CMAKE_C_COMPILER': args.cc,
         'CMAKE_CXX_COMPILER': args.cxx,
-        'CMAKE_CXX_FLAGS': args.user_cflags + ("" if args.disable_precompiled_header else " -fpch-validate-input-files-content"),
+        # -fpch-validate-input-files-content is deliberately NOT added here:
+        # CMakeLists.txt adds it via add_compile_options() after the seastar
+        # and abseil subdirectories, keeping it (correctly) off their TUs.
+        # Adding it to the global CMAKE_CXX_FLAGS would leak it into both.
+        'CMAKE_CXX_FLAGS': args.user_cflags,
         'CMAKE_EXE_LINKER_FLAGS': args.user_ldflags,
         'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
         'Scylla_CHECK_HEADERS': 'ON',
@@ -3269,6 +3520,8 @@ def configure_using_cmake(args):
         'Scylla_ENABLE_LTO': 'ON' if args.lto else 'OFF',
         'Scylla_WITH_DEBUG_INFO' : 'ON' if args.debuginfo else 'OFF',
         'Scylla_USE_PRECOMPILED_HEADER': 'OFF' if args.disable_precompiled_header else 'ON',
+        'Scylla_BUILD_PERF_TOOLS': 'ON' if args.perf_tools else 'OFF',
+        'Scylla_BUILD_WASMTIME': 'ON' if args.wasmtime else 'OFF',
     }
 
     if compiler_cache:

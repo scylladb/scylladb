@@ -11,6 +11,7 @@
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
 #include "repair/row_level.hh"
+#include "gms/gossiper.hh"
 #include "service/task_manager_module.hh"
 #include "service/topology_state_machine.hh"
 #include "tasks/task_handler.hh"

@@ -22,11 +22,16 @@
 #include "utils/chunked_vector.hh"
 #include "utils/overloaded_functor.hh"
 #include "service/storage_service.hh"
+#include "gms/gossiper.hh"
 #include "tasks/task_handler.hh"
 #include "task_manager.hh"
 #include "tasks/virtual_task_hint.hh"
 #include "utils/error_injection.hh"
 #include "idl/tasks.dist.hh"
+
+// Explicit instantiation matching the `extern template` declaration in
+// tasks/types.hh; see the comment there.
+template struct utils::tagged_uuid<tasks::task_id_tag>;
 
 using namespace std::chrono_literals;
 

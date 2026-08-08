@@ -57,6 +57,7 @@
 #include "service/qos/service_level_controller.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
@@ -101,6 +102,7 @@
 #include "sstables/exceptions.hh"
 #include "gms/feature_service.hh"
 #include "replica/distributed_loader.hh"
+#include "replica/tablets.hh"
 #include "sstables_loader.hh"
 #include "cql3/cql_config.hh"
 #include "transport/controller.hh"
@@ -115,7 +117,9 @@
 #include "alternator/controller.hh"
 #include "alternator/ttl.hh"
 #include "tools/entry_point.hh"
+#ifdef SCYLLA_BUILD_PERF_TOOLS
 #include "test/perf/entry_point.hh"
+#endif
 #include "lang/manager.hh"
 #include "sstables/sstables_manager.hh"
 #include "db/virtual_tables.hh"
@@ -144,13 +148,13 @@ namespace fs = std::filesystem;
 #include <seastar/core/metrics_api.hh>
 #include <seastar/core/relabel_config.hh>
 
-seastar::metrics::metric_groups app_metrics;
+static seastar::metrics::metric_groups app_metrics;
 
 using namespace std::chrono_literals;
 
 namespace bpo = boost::program_options;
 
-logging::logger diaglog("diagnostics");
+static logging::logger diaglog("diagnostics");
 extern seastar::logger dsmlog;
 
 // Must live in a seastar::thread
@@ -2889,6 +2893,7 @@ int main(int ac, char** av) {
         {"sstable", tools::scylla_sstable_main, "a multifunctional command-line tool to examine the content of sstables"},
         {"nodetool", tools::scylla_nodetool_main, "a command-line tool to administer local or remote ScyllaDB nodes"},
         {"local-file-key-generator", tools::scylla_local_file_key_generator_main, "a command-line tool to generate encryption at rest keys"},
+#ifdef SCYLLA_BUILD_PERF_TOOLS
         {"perf-fast-forward", perf::scylla_fast_forward_main, "run performance tests by fast forwarding the reader on this server"},
         {"perf-row-cache-update", perf::scylla_row_cache_update_main, "run performance tests by updating row cache on this server"},
         {"perf-tablets", perf::scylla_tablets_main, "run performance tests of tablet metadata management"},
@@ -2897,7 +2902,8 @@ int main(int ac, char** av) {
         {"perf-sstable", perf::scylla_sstable_main, "run performance tests by exercising sstable related operations on this server"},
         {"perf-compaction-efficiency", perf::scylla_compaction_efficiency_main, "benchmark compaction strategy efficiency with simulated workloads"},
         {"perf-alternator", perf::alternator(scylla_main, &after_init_func), "run performance tests on full alternator stack"},
-        {"perf-cql-raw", perf::perf_cql_raw(scylla_main, &after_init_func), "run performance tests using raw CQL protocol frames"}
+        {"perf-cql-raw", perf::perf_cql_raw(scylla_main, &after_init_func), "run performance tests using raw CQL protocol frames"},
+#endif
     };
 
     main_func_type main_func;

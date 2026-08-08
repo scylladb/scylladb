@@ -28,7 +28,7 @@
 
 namespace sstables {
 
-logging::logger smlogger("sstables_manager");
+static logging::logger smlogger("sstables_manager");
 
 const storage& atomic_deletion::get_storage(const std::vector<shared_sstable>& ssts) {
     auto& storage = ssts.front()->get_storage();

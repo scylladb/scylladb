@@ -13,8 +13,11 @@ function(enable_lto name)
     set_property(TARGET ${name} PROPERTY
       INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON)
     if(type MATCHES "SHARED_LIBRARY|EXECUTABLE")
+      # --thinlto-jobs=all: use all logical CPUs for the ThinLTO backend
+      # (lld defaults to physical cores only, leaving SMT idle during the
+      # multi-minute LTO link). Scheduling-only: does not affect codegen.
       target_link_options(${name}
-        PRIVATE $<$<CONFIG:RelWithDebInfo>:-ffat-lto-objects>)
+        PRIVATE $<$<CONFIG:RelWithDebInfo>:-ffat-lto-objects;-Wl,--thinlto-jobs=all>)
     endif()
   elseif(type STREQUAL "INTERFACE_LIBRARY")
     if (name MATCHES "^scylla_(.*)$")
