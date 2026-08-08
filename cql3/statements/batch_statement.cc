@@ -13,6 +13,7 @@
 #include "cql3/cql_config.hh"
 #include "db/consistency_level_validations.hh"
 #include "data_dictionary/data_dictionary.hh"
+#include <ranges>
 #include <seastar/core/execution_stage.hh>
 #include "cas_request.hh"
 #include "cql3/query_processor.hh"
@@ -20,6 +21,8 @@
 #include "db/large_data_handler.hh"
 #include "tracing/trace_state.hh"
 #include "utils/unique_view.hh"
+#include "cql3/statements/strong_consistency/statement_helpers.hh"
+#include "cql3/statements/strong_consistency/batch_statement.hh"
 
 template<typename T = void>
 using coordinator_result = exceptions::coordinator_result<T>;
@@ -465,6 +468,8 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
 
     std::vector<cql3::statements::batch_statement::single_statement> statements;
     statements.reserve(_parsed_statements.size());
+    std::vector<std::reference_wrapper<const audit::audit_info>> batch_audit_infos;
+    batch_audit_infos.reserve(_parsed_statements.size());
 
     for (auto&& parsed : _parsed_statements) {
         if (!first_ks) {
@@ -474,25 +479,40 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
             have_multiple_cfs |= first_ks.value() != parsed->keyspace();
             have_multiple_cfs |= first_cf.value() != parsed->column_family();
         }
-        statements.emplace_back(parsed->prepare(db, meta, stats));
-        auto audit_info = statements.back().statement->get_audit_info();
-        if (audit_info) {
+        auto statement = parsed->prepare(db, meta, stats);
+        if (auto* audit_info = statement->get_audit_info()) {
             audit_info->set_query_string(parsed->get_raw_cql());
+            batch_audit_infos.emplace_back(*audit_info);
         }
+        statements.emplace_back(std::move(statement));
     }
 
     auto&& prep_attrs = _attrs->prepare(db, "[batch]", "[batch]");
     prep_attrs->fill_prepare_context(meta);
 
-    cql3::statements::batch_statement batch_statement_(meta.bound_variables_size(), _type, std::move(statements), std::move(prep_attrs), stats);
-
     std::vector<uint16_t> partition_key_bind_indices;
-    if (!have_multiple_cfs && batch_statement_.get_statements().size() > 0) {
-        partition_key_bind_indices = meta.get_partition_key_bind_indexes(*batch_statement_.get_statements()[0].statement->s);
+    if (!have_multiple_cfs && !statements.empty()) {
+        partition_key_bind_indices = meta.get_partition_key_bind_indexes(*statements[0].statement->s);
     }
-    return std::make_unique<prepared_statement>(audit_info(), make_shared<cql3::statements::batch_statement>(std::move(batch_statement_)),
-                                                     meta.get_variable_specifications(),
-                                                     std::move(partition_key_bind_indices));
+
+    shared_ptr<cql_statement> statement;
+    if (first_ks && strong_consistency::is_strongly_consistent(db, *first_ks)) {
+        auto sc_statements = statements | std::views::as_rvalue | std::views::transform([] (auto&& s) {
+            return strong_consistency::batch_statement::single_statement{::make_shared<strong_consistency::modification_statement>(std::move(s.statement))};
+        }) | std::ranges::to<std::vector>();
+        statement = ::make_shared<strong_consistency::batch_statement>(meta.bound_variables_size(), _type, std::move(sc_statements), std::move(prep_attrs));
+    } else {
+        statement = ::make_shared<cql3::statements::batch_statement>(meta.bound_variables_size(), _type, std::move(statements), std::move(prep_attrs), stats);
+    }
+
+    auto ai = audit_info();
+    if (ai) {
+        ai->set_batch_infos(std::move(batch_audit_infos));
+    }
+
+    return std::make_unique<prepared_statement>(std::move(ai), std::move(statement),
+                                                      meta.get_variable_specifications(),
+                                                      std::move(partition_key_bind_indices));
 }
 
 audit::statement_category batch_statement::category() const {

@@ -42,6 +42,20 @@ static void validate_consistency_level(const db::consistency_level& cl) {
     }
 }
 
+mutation modification_statement::get_mutation(const query_options& options, api::timestamp_type ts,
+        base_statement::json_cache_opt& json_cache, const std::vector<dht::partition_range>& keys) const {
+    const auto prefetch_data = update_parameters::prefetch_data(_statement->s);
+    const auto ttl = _statement->get_time_to_live(options);
+    const auto params = update_parameters(_statement->s, options, ts, ttl, prefetch_data);
+    const auto ranges = _statement->create_clustering_ranges(options, json_cache);
+    auto muts = _statement->apply_updates(keys, ranges, params, json_cache);
+    if (muts.size() != 1) {
+        on_internal_error(logger, ::format("statement '{}' has unexpected number of mutations {}",
+            raw_cql_statement.linearize(), muts.size()));
+    }
+    return std::move(*muts.begin());
+}
+
 future<shared_ptr<result_message>> modification_statement::execute_without_checking_exception_message(
         query_processor& qp, service::query_state& qs, const query_options& options,
         std::optional<service::group0_guard> guard) const
@@ -54,12 +68,6 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
     if (keys.size() != 1 || !query::is_single_partition(keys[0])) {
         throw exceptions::invalid_request_exception("Strongly consistent queries can only target a single partition");
     }
-    if (_statement->requires_read()) {
-        throw exceptions::invalid_request_exception("Strongly consistent updates don't support data prefetch");
-    }
-    if (_statement->is_timestamp_set()) {
-        throw exceptions::invalid_request_exception("Strongly consistent queries don't support user-provided timestamps");
-    }
 
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
     const auto token = keys[0].start()->value().token();
@@ -67,16 +75,7 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
     auto mutate_result = co_await coordinator.get().mutate(_statement->s,
         token,
         [&](api::timestamp_type ts) {
-            const auto prefetch_data = update_parameters::prefetch_data(_statement->s);
-            const auto ttl = _statement->get_time_to_live(options);
-            const auto params = update_parameters(_statement->s, options, ts, ttl, prefetch_data);
-            const auto ranges = _statement->create_clustering_ranges(options, json_cache);
-            auto muts = _statement->apply_updates(keys, ranges, params, json_cache);
-            if (muts.size() != 1) {
-                on_internal_error(logger, ::format("statement '{}' has unexpected number of mutations {}",
-                    raw_cql_statement.linearize(), muts.size()));
-            }
-            return std::move(*muts.begin());
+            return get_mutation(options, ts, json_cache, keys);
         }, timeout, qs.get_client_state().get_abort_source());
 
     using namespace service::strong_consistency;
@@ -116,6 +115,10 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
 
 future<> modification_statement::check_access(query_processor& qp, const service::client_state& state) const {
     return _statement->check_access(qp, state);
+}
+
+void modification_statement::validate(query_processor& qp, const service::client_state& state) const {
+    _statement->validate(qp, state);
 }
 
 uint32_t modification_statement::get_bound_terms() const {
