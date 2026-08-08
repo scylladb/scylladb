@@ -89,7 +89,7 @@ struct tester {
     }
 
     future<> start() {
-        return server.listen(addr(), nullptr, false, false, {});
+        return server.listen(addr(), nullptr, false, {});
     }
 
     future<> run() {
