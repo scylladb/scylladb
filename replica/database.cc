@@ -972,6 +972,7 @@ database::init_logstor() {
             .max_separator_memory = _cfg.logstor_separator_max_memory_in_mb() * 1024ull * 1024ull,
         },
         .flush_sg = _dbcfg.commitlog_scheduling_group,
+        .max_queued_write_bytes = _dbcfg.available_memory * 1 / 100,
     };
     _logstor = std::make_unique<logstor::logstor>(std::move(cfg), _row_cache_tracker);
 
