@@ -208,8 +208,9 @@ std::string lsi_name(std::string_view table_name, std::string_view index_name, b
     return view_name(table_name, index_name, "!:", validate_len);
 }
 
-void check_key(const rjson::value& key, const schema_ptr& schema) {
-    if (key.MemberCount() != (schema->clustering_key_size() == 0 ? 1 : 2)) {
+void check_key(const rjson::value& key, const schema_ptr& schema, bool allow_extra_attribute) {
+    const unsigned expected = (schema->clustering_key_size() == 0 ? 1 : 2) + (allow_extra_attribute ? 1 : 0);
+    if (key.MemberCount() != expected) {
         throw api_error::validation("Given key attribute not in schema");
     }
 }
