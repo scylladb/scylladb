@@ -74,8 +74,18 @@ public:
         // is spread across nodes instead of always landing on the smallest-id
         // one. The default of 0 selects the smallest-id voter. raft::server
         // always enables fast bootstrap (unlike a bare fsm, which disables it
-        // when no seed is provided).
+        // when no seed is provided). A priority member which can vote takes precedence
+        // over the seed.
         uint64_t fast_bootstrap_seed = 0;
+        // Servers to prefer as leader, in priority order: element 0 is the strongest
+        // candidate, element k the (k+1)-th. Each listed server gets a unique,
+        // deterministic election-timeout slot ahead of every other server, so while a
+        // listed server is alive it wins leadership. Servers not listed randomize
+        // within the remaining slots and can never undercut a listed one. Listed servers
+        // which cannot vote are skipped, they cannot win an election anyway. The callback
+        // is invoked only when (re)arming the election timer, so it always reflects the
+        // current topology. Empty vector / unset => ordinary Raft.
+        std::function<std::vector<server_id>()> get_priority_members;
     };
 
     virtual ~server() {}
