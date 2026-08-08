@@ -283,7 +283,7 @@ def test_accept_encoding_header(dynamodb, test_table_s):
 # It turns out that in DynamoDB headers are correctly combined for signature verification,
 # but then it only uses the first Accept-Encoding header, which may be considered a bug.
 # In Alternator, having multiple Accept-Encoding works well.
-def test_multiple_accept_encoding_headers(dynamodb, test_table_s):
+def test_multiple_accept_encoding_headers(request, dynamodb, test_table_s):
     p = random_string()
     compressible_data = 'x' * DDB_RESPONSE_COMPRESSION_THRESHOLD
     test_table_s.put_item(Item={'p': p, 'x': compressible_data})
@@ -335,9 +335,14 @@ def test_multiple_accept_encoding_headers(dynamodb, test_table_s):
 
             # Now lets make it a part of signature
             # Replacing signed header causes signature errors in both DynamoDB and Alternator.
-            with request_custom_headers(dynamodb, {"Accept-Encoding": "identity"}):
-                with pytest.raises(ClientError, match="signature"): # InvalidSignatureException
-                    check_replaced_accept_encoding_headers([("Accept-Encoding", b'gzip')], expected_compression=None)
+            # This doesn't apply under mTLS, though: the connection is
+            # authenticated by the client certificate, and any SigV4
+            # signature (mismatched or not) is silently ignored, so no
+            # signature error is raised - skip this part of the test.
+            if not request.config.getoption('mtls'):
+                with request_custom_headers(dynamodb, {"Accept-Encoding": "identity"}):
+                    with pytest.raises(ClientError, match="signature"): # InvalidSignatureException
+                        check_replaced_accept_encoding_headers([("Accept-Encoding", b'gzip')], expected_compression=None)
 
             # We can split the header into multiple ones and it works with signing
             with request_custom_headers(dynamodb, {"Accept-Encoding": "gzip,identity"}):

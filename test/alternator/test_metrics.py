@@ -1055,7 +1055,7 @@ def test_batch_write_item_size_separate_tables_track_metrics_independently(dynam
 def test_unsupported_operation(dynamodb, metrics):
     with check_increases_metric(metrics, ['scylla_alternator_unsupported_operations', 'scylla_alternator_total_operations']):
         req = get_signed_request(dynamodb, 'BoguousOperationName', '{}')
-        requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+        requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
 
 # Test that also supported operations (such as DescribeEndPoints in this
 # example) increment the total_operations metric:
@@ -1575,7 +1575,7 @@ def test_system_errors(dynamodb, test_table_s, metrics):
         req = get_signed_request(dynamodb, 'DescribeEndpoints', payload)
         headers = dict(req.headers)
         headers.update({'Content-Encoding': 'garbage'})
-        r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+        r = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
         assert r.status_code == 500
 
 # Test that reads_before_write is incremented exactly once per RMW operation.

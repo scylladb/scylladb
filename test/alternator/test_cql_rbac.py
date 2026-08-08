@@ -22,7 +22,7 @@ from functools import cache
 import re
 
 from test.pylib.skip_types import skip_env
-from .util import unique_table_name, random_string, new_test_table
+from .util import unique_table_name, random_string, new_test_table, get_cert
 from .test_gsi_updatetable import wait_for_gsi, wait_for_gsi_gone
 from .test_gsi import assert_index_query
 from test.alternator.test_vector import vs, needs_vector_store, wait_for_vector_index_active, table_vs, add_vs_to_client, vector_store_configured, VECTOR_STORE_TIMEOUT
@@ -64,6 +64,13 @@ def new_role(cql, login=True, superuser=False):
 # and key.
 @contextmanager
 def new_dynamodb(dynamodb, role, key):
+    # Under mTLS, identity is determined solely by the client certificate
+    # presented on the connection (and SigV4 signatures, if any, are
+    # ignored) - so there is no way to authenticate as a different role
+    # using a role/key pair. Skip such tests instead of silently
+    # reconnecting as whatever identity the certificate maps to.
+    if get_cert(dynamodb):
+        skip_env("new_dynamodb() authenticates using SigV4 role/key pairs, which are not supported under mTLS")
     url = dynamodb.meta.client._endpoint.host
     config = dynamodb.meta.client._client_config
     region_name = dynamodb.meta.client.meta.region_name
@@ -78,6 +85,8 @@ def new_dynamodb(dynamodb, role, key):
 
 @contextmanager
 def new_dynamodb_streams(dynamodb, role, key):
+    if get_cert(dynamodb):
+        skip_env("new_dynamodb_streams() authenticates using SigV4 role/key pairs, which are not supported under mTLS")
     url = dynamodb.meta.client._endpoint.host
     config = dynamodb.meta.client._client_config
     region_name = dynamodb.meta.client.meta.region_name

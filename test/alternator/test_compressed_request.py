@@ -34,8 +34,9 @@ import gzip
 import zlib
 import requests
 import pytest
+from botocore import UNSIGNED
 
-from .util import random_string
+from .util import random_string, get_cert
 from .test_manual_requests import get_signed_request
 
 # The compressed_req fixture is like the dynamodb fixture - providing a
@@ -47,21 +48,27 @@ from .test_manual_requests import get_signed_request
 #      tab = compressed_req.Table(test_table.name)
 # and use the new "tab" object to perform requests.
 @pytest.fixture(scope="module")
-def compressed_req(dynamodb):
-    # Copy URL, most configuration, and credentials from the existing
-    # "dynamodb" fixture:
+def compressed_req(request, dynamodb):
+    # Copy URL, most configuration, and credentials (or, under mTLS, the
+    # client certificate) from the existing "dynamodb" fixture:
     url = dynamodb.meta.client._endpoint.host
     config = dynamodb.meta.client._client_config
-    credentials = dynamodb.meta.client._request_signer._credentials
     verify = not url.startswith('https')
     region_name = dynamodb.meta.client.meta.region_name
     # By default, the SDK only bothers to compress requests larger than 10KB.
     # Let's drop that limit to 1 byte.
     config = config.merge(botocore.client.Config(request_min_compression_size_bytes=1))
-    ret = boto3.resource('dynamodb', endpoint_url=url, verify=verify,
-        aws_access_key_id=credentials.access_key,
-        aws_secret_access_key=credentials.secret_key,
-        region_name=region_name, config=config)
+    if request.config.getoption('mtls'):
+        cert = get_cert(dynamodb)
+        ret = boto3.resource('dynamodb', endpoint_url=url, verify=verify,
+            region_name=region_name,
+            config=config.merge(botocore.client.Config(signature_version=UNSIGNED, client_cert=cert)))
+    else:
+        credentials = dynamodb.meta.client._request_signer._credentials
+        ret = boto3.resource('dynamodb', endpoint_url=url, verify=verify,
+            aws_access_key_id=credentials.access_key,
+            aws_secret_access_key=credentials.secret_key,
+            region_name=region_name, config=config)
     # Unfortunately, request compression is currently not enabled by default
     # for DynamoDB requests, and there is no user-visible way to enable it.
     # Instead, compression needs to be chosen by botocore for each individual
@@ -128,7 +135,7 @@ def test_garbage_content_encoding(dynamodb, test_table):
     # but the server will not know how to decode the request.
     headers = dict(req.headers)
     headers.update({'Content-Encoding': 'garbage'})
-    r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    r = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
     assert r.status_code == 500
     # Check the PutItem request really wasn't done
     assert 'Item' not in test_table.get_item(Key={'p': p, 'c': 'x'}, ConsistentRead=True)
@@ -147,7 +154,7 @@ def test_broken_gzip_content(dynamodb, test_table):
     # should fail decompressing it and return a 500 error
     headers = dict(req.headers)
     headers.update({'Content-Encoding': 'gzip'})
-    r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    r = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
     assert r.status_code == 500
     # Check the PutItem request really wasn't done
     assert 'Item' not in test_table.get_item(Key={'p': p, 'c': 'x'}, ConsistentRead=True)
@@ -167,7 +174,7 @@ def test_gzip_request_valid(dynamodb, test_table):
     # payload is compressed:
     headers = dict(req.headers)
     headers.update({'Content-Encoding': 'gzip'})
-    r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    r = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
     assert r.status_code == 200
     got = test_table.get_item(Key={'p': p, 'c': 'x'}, ConsistentRead=True)['Item']
     assert got == {'p': p, 'c': 'x', 'v': v}
@@ -186,7 +193,7 @@ def test_gzip_request_two_gzips(dynamodb, test_table):
     req = get_signed_request(dynamodb, 'PutItem', payload)
     headers = dict(req.headers)
     headers.update({'Content-Encoding': 'gzip'})
-    r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    r = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
     assert r.status_code == 200
     got = test_table.get_item(Key={'p': p, 'c': 'x'}, ConsistentRead=True)['Item']
     assert got == {'p': p, 'c': 'x', 'v': v}
@@ -206,7 +213,7 @@ def test_gzip_request_with_extra_junk(dynamodb, test_table, dynamodb_bug):
     req = get_signed_request(dynamodb, 'PutItem', payload)
     headers = dict(req.headers)
     headers.update({'Content-Encoding': 'gzip'})
-    r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    r = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
     assert r.status_code == 500
     assert 'Item' not in test_table.get_item(Key={'p': p, 'c': 'x'}, ConsistentRead=True)
 
@@ -222,7 +229,7 @@ def test_gzip_request_with_missing_character(dynamodb, test_table):
     req = get_signed_request(dynamodb, 'PutItem', payload)
     headers = dict(req.headers)
     headers.update({'Content-Encoding': 'gzip'})
-    r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    r = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
     assert r.status_code == 500
     assert 'Item' not in test_table.get_item(Key={'p': p, 'c': 'x'}, ConsistentRead=True)
 
@@ -250,7 +257,7 @@ def test_gzip_request_oversized(dynamodb, test_table):
     req = get_signed_request(dynamodb, 'PutItem', payload)
     headers = dict(req.headers)
     headers.update({'Content-Encoding': 'gzip'})
-    r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    r = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
     # Alternator returns 413 (Content Too Large), DynamoDB currently returns
     # 500 (Internal Server Error), which is arguably less suitable but let's
     # accept both in the test. The important thing is that the oversized
@@ -266,7 +273,7 @@ def test_gzip_request_empty(dynamodb):
     req = get_signed_request(dynamodb, 'PutItem', '')
     headers = dict(req.headers)
     headers.update({'Content-Encoding': 'gzip'})
-    r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    r = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
     assert r.status_code == 500
 
 # After testing requests compressed with "Content-Encoding: gzip", let's
@@ -282,7 +289,7 @@ def test_deflate_request_valid(dynamodb, test_table):
     req = get_signed_request(dynamodb, 'PutItem', payload)
     headers = dict(req.headers)
     headers.update({'Content-Encoding': 'deflate'})
-    r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    r = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
     assert r.status_code == 200, f'Request failed: {r.content}'
     got = test_table.get_item(Key={'p': p, 'c': 'x'}, ConsistentRead=True)['Item']
     assert got == {'p': p, 'c': 'x', 'v': v}
@@ -296,7 +303,7 @@ def test_deflate_request_empty(dynamodb):
     req = get_signed_request(dynamodb, 'PutItem', '')
     headers = dict(req.headers)
     headers.update({'Content-Encoding': 'deflate'})
-    r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    r = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
     assert r.status_code == 500
 
 # Like test_broken_gzip_content also when the content is not a valid deflate
@@ -312,7 +319,7 @@ def test_deflate_request_not_deflated(dynamodb, test_table):
     # Of course it isn't - it's an uncompressed request.
     headers = dict(req.headers)
     headers.update({'Content-Encoding': 'deflate'})
-    r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    r = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
     assert r.status_code == 500
     # Check the PutItem request really wasn't done
     assert 'Item' not in test_table.get_item(Key={'p': p, 'c': 'x'}, ConsistentRead=True)
@@ -335,7 +342,7 @@ def test_deflate_request_two_deflates(dynamodb, test_table, scylla_only):
     req = get_signed_request(dynamodb, 'PutItem', payload)
     headers = dict(req.headers)
     headers.update({'Content-Encoding': 'deflate'})
-    r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    r = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
     assert r.status_code == 200
     got = test_table.get_item(Key={'p': p, 'c': 'x'}, ConsistentRead=True)['Item']
     assert got == {'p': p, 'c': 'x', 'v': v}

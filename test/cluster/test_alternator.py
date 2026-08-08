@@ -16,10 +16,11 @@
 import pytest
 import asyncio
 import logging
+import os
 import time
 import boto3
 import botocore
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ConnectionClosedError, SSLError
 import requests
 import json
 from cassandra.auth import PlainTextAuthProvider
@@ -36,6 +37,10 @@ from test.pylib.tablets import get_all_tablet_replicas
 from test.pylib.tablets import get_tablet_replica
 
 logger = logging.getLogger(__name__)
+
+def system(cmd):
+    """Like os.system(), but asserts the command succeeded (exit code 0)."""
+    assert os.system(cmd) == 0, f'Command failed: {cmd}'
 
 # Convenience function to open a connection to Alternator usable by the
 # AWS SDK.
@@ -1520,3 +1525,563 @@ async def test_deferred_stream_enablement_on_tablets(manager: ManagerClient):
     finally:
         table.delete()
         table.meta.client.get_waiter('table_not_exists').wait(TableName=table.name)
+
+def make_ca(tmp_path, name='ca', cn='TestCA'):
+    """Generate a self-signed CA key and certificate (tmp_path/{name}.key,
+    tmp_path/{name}.crt), for use as an Alternator mTLS truststore or to
+    sign client certificates via make_client_cert() below."""
+    system(f'openssl genrsa 2048 > "{tmp_path}/{name}.key" 2>/dev/null')
+    system(f'openssl req -new -x509 -nodes -sha256 -days 365 '
+              f'-subj "/CN={cn}" -key "{tmp_path}/{name}.key" -out "{tmp_path}/{name}.crt" 2>/dev/null')
+
+def make_client_cert(tmp_path, name, cn=None, *, subj=None, ca='ca', extfile=None,
+                      serial=None, not_before=None, not_after=None):
+    """Generate a client key and certificate (tmp_path/{name}.key,
+    tmp_path/{name}.crt) signed by the CA created by make_ca(tmp_path, ca).
+    The subject defaults to "/CN={cn}"; pass subj= directly for a subject
+    that doesn't fit that shape (e.g. one with no CN at all). extfile= adds
+    a SAN (or other x509v3 extension) file. serial= uses a fixed serial
+    number instead of the default auto-incrementing one (needed when
+    signing more than one certificate with the same CA without
+    -CAcreateserial). not_before/not_after (openssl's "YYYYMMDDHHMMSSZ"
+    format) override the default 365-day validity period, e.g. to create an
+    already-expired certificate."""
+    if subj is None:
+        subj = f'/CN={cn}'
+    system(f'openssl genrsa 2048 > "{tmp_path}/{name}.key" 2>/dev/null')
+    system(f'openssl req -new -sha256 -subj "{subj}" '
+              f'-key "{tmp_path}/{name}.key" -out "{tmp_path}/{name}.csr" 2>/dev/null')
+    validity = f'-not_before {not_before} -not_after {not_after}' if not_before else '-days 365'
+    serial_opt = f'-set_serial {serial}' if serial is not None else '-CAcreateserial'
+    extfile_opt = f'-extfile "{extfile}" ' if extfile else ''
+    system(f'openssl x509 -req -sha256 {validity} {serial_opt} '
+              f'-in "{tmp_path}/{name}.csr" {extfile_opt}'
+              f'-CA "{tmp_path}/{ca}.crt" -CAkey "{tmp_path}/{ca}.key" '
+              f'-out "{tmp_path}/{name}.crt" 2>/dev/null')
+
+async def test_alternator_mtls(manager: ManagerClient, tmp_path):
+    """A regression test for mTLS (mutual TLS) authentication in Alternator.
+    We create an Alternator instance configured with require_client_auth=true,
+    providing a CA certificate as the truststore. We then verify that:
+    1. Requests with a valid client certificate (signed by the trusted CA)
+       succeed: basic CRUD operations (CreateTable, PutItem, GetItem,
+       DeleteTable) all work.
+    2. Requests without a client certificate are rejected during TLS handshake.
+    3. Requests with a client certificate signed by an untrusted CA are also
+       rejected.
+    4. Requests with an expired client certificate are also rejected.
+    """
+    # Generate a CA and a client certificate signed by it. The CN must match
+    # a valid CQL role name, since Alternator uses the CN as the username
+    # for authorization. We use "cassandra", the default superuser role.
+    make_ca(tmp_path)
+    make_client_cert(tmp_path, 'client', 'cassandra')
+    # Generate an untrusted CA and a client cert signed by it, for rejection
+    # tests.
+    make_ca(tmp_path, name='bad_ca', cn='BadCA')
+    make_client_cert(tmp_path, 'bad_client', 'cassandra', ca='bad_ca')
+    # Generate an expired client key and certificate: signed by the trusted CA
+    # but with validity dates in the distant past, for the expiry-rejection test.
+    make_client_cert(tmp_path, 'expired_client', 'cassandra',
+        not_before='20000101000000Z', not_after='20000102000000Z')
+
+    # Start a single Alternator node. The mTLS/HTTPS options are passed via
+    # cmdline rather than YAML config because the test framework's startup
+    # readiness check (ScyllaServer._alternator_ports) only discovers
+    # Alternator ports from the YAML config dict. The check probes each
+    # discovered port with unsigned requests that carry no client certificate,
+    # which would fail the TLS handshake on an mTLS port and cause server_add
+    # to time out. Keeping the HTTPS port in cmdline makes it invisible to
+    # that check, so only the plain HTTP port (8000) is probed. The HTTPS port
+    # is still guaranteed to be ready before server_add returns because Scylla
+    # sends sd_notify STATUS=serving only after all configured listeners are
+    # up.
+    servers = await manager.servers_add(1,
+        config=alternator_config | {
+            'alternator_enforce_authorization': True,
+            # CassandraAuthorizer is needed so that CQL roles can be used
+            # for Alternator authorization. We don't intend to check
+            # authorization in this test, but just doing CreateTable
+            # tries to auto-grant permissions to the table creator
+            # and refuses without CassandraAuthorizer: "GRANT operation
+            # is not supported by AllowAllAuthorizer".
+            'authorizer': 'CassandraAuthorizer',
+        },
+        cmdline=[
+            '--alternator-https-port', '8043',
+            '--alternator-encryption-options', 'certificate=conf/scylla.crt',
+            '--alternator-encryption-options', 'keyfile=conf/scylla.key',
+            '--alternator-encryption-options', 'require_client_auth=true',
+            '--alternator-encryption-options', f'truststore={tmp_path}/ca.crt',
+        ])
+    url = f"https://{servers[0].ip_addr}:8043"
+
+    # Helper: create a boto3 Alternator connection for mTLS.
+    # Authentication is via the client certificate (CN used as username),
+    # so we use botocore.UNSIGNED to avoid SigV4 signing. The server uses a
+    # self-signed TLS certificate, so we set verify=False.
+    def get_alternator_mtls(cert=None):
+        config_kwargs = dict(
+            retries={"max_attempts": 0},
+            read_timeout=300,
+            signature_version=botocore.UNSIGNED,
+        )
+        if cert:
+            config_kwargs['client_cert'] = cert
+        return boto3.resource('dynamodb', endpoint_url=url, verify=False,
+            region_name='us-east-1',
+            config=botocore.client.Config(**config_kwargs))
+
+    # Test 1: Requests with a valid client certificate should succeed.
+    alternator = get_alternator_mtls(
+        cert=(f'{tmp_path}/client.crt', f'{tmp_path}/client.key'))
+    table = alternator.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'N'}])
+    table.put_item(Item={'p': 42})
+    item = table.get_item(Key={'p': 42}, ConsistentRead=True)['Item']
+    assert item['p'] == 42
+    table.delete()
+
+    # Test 2: Requests without a client certificate should be rejected.
+    # With require_client_auth=true the TLS handshake fails if the client
+    # doesn't present a certificate signed by the trusted CA.
+    alternator_no_cert = get_alternator_mtls()
+    with pytest.raises(SSLError, match='certificate required'):
+        alternator_no_cert.meta.client.list_tables()
+
+    # Test 3: Requests with a client certificate signed by an untrusted CA
+    # should also be rejected.
+    # Ideally, the server should send a TLS alert, which Python would report
+    # as an SSLError mentioning "unknown ca". But in practice, right now the
+    # server just closes the connection in this case (see Seastar#3525)
+    # and we get ConnectionClosedError. In both cases, the important thing is
+    # that the request is *rejected*, so the certificate check was properly
+    # performed.
+    alternator_bad_cert = get_alternator_mtls(
+        cert=(f'{tmp_path}/bad_client.crt', f'{tmp_path}/bad_client.key'))
+    with pytest.raises((SSLError, ConnectionClosedError)):
+        alternator_bad_cert.meta.client.list_tables()
+
+    # Test 4: Requests with an expired client certificate (signed by the
+    # trusted CA but outside its validity period) should also be rejected.
+    # Ideally, the server should send a certificate_expired TLS alert, which
+    # Python would report as an SSLError mentioning "certificate expired".
+    # But in practice, right now the server just closes the connection in
+    # this case - we are not sure if this is a genuine bug in Seastar HTTPD
+    # or a timing issue in the TLS protocol (where the server closes the
+    # connection before the alert is received). In any case, the important
+    # thing is that the request is *rejected*, so the expiration check was
+    # properly performed.
+    alternator_expired = get_alternator_mtls(
+        cert=(f'{tmp_path}/expired_client.crt', f'{tmp_path}/expired_client.key'))
+    with pytest.raises((SSLError, ConnectionClosedError)):
+        alternator_expired.meta.client.list_tables()
+
+    # TODO: we should test that requests rejected by missing or bad client
+    # certificate are counted in a metric. However, currently no such metric
+    # exists - see https://github.com/scylladb/seastar/issues/3521.
+
+
+async def test_alternator_mtls_optional(manager: ManagerClient, tmp_path):
+    """Test Alternator over HTTPS with require_client_auth=optional, which allows both
+       mTLS and SigV4 authentication to coexist on the same port.
+       With require_client_auth=optional, Seastar uses optional (not required) client
+       certificate verification: it requests a client cert during the TLS handshake but
+       does not mandate one.
+       This test verifies the following three scenarios:
+       1. A client without a valid client certificate can still authenticate
+          via SigV4.
+       2. A client presenting a valid cert (signed by the configured CA)
+          does not need SigV4 signatures on requests.
+       3. A client with neither a cert nor a valid SigV4 signature is rejected.
+    """
+    # Generate a CA and a client certificate signed by it. The CN is the role
+    # name we want to use - "cassandra" (the default superuser).
+    make_ca(tmp_path)
+    make_client_cert(tmp_path, 'client', 'cassandra')
+
+    servers = await manager.servers_add(1,
+        config=alternator_config | {
+            'alternator_enforce_authorization': True,
+            # PasswordAuthenticator is needed just so the "cassandra"
+            # role will have a salted hash, to be used in the SigV4
+            # case we want to check.
+            'authenticator': 'PasswordAuthenticator',
+            # CassandraAuthorizer is needed so that CQL roles can be used
+            # for Alternator authorization. We don't intend to check
+            # authorization in this test, but just doing CreateTable
+            # tries to auto-grant permissions to the table creator
+            # and refuses without CassandraAuthorizer: "GRANT operation
+            # is not supported by AllowAllAuthorizer".
+            'authorizer': 'CassandraAuthorizer',
+        },
+        driver_connect_opts={'auth_provider': PlainTextAuthProvider(username='cassandra', password='cassandra')},
+        cmdline=[
+            '--alternator-https-port', '8043',
+            '--alternator-encryption-options', 'certificate=conf/scylla.crt',
+            '--alternator-encryption-options', 'keyfile=conf/scylla.key',
+            # require_client_auth=optional asks the server to request (but not require)
+            # a client certificate. Clients without one use SigV4 instead.
+            '--alternator-encryption-options', 'require_client_auth=optional',
+            '--alternator-encryption-options', f'truststore={tmp_path}/ca.crt',
+        ])
+    url = f"https://{servers[0].ip_addr}:8043"
+
+    # Get the cassandra superuser's secret key (the salted_hash from the
+    # system tables), which is used as the SigV4 secret access key.
+    cql = manager.get_cql()
+    cassandra_key = await get_secret_key(cql, 'cassandra')
+
+    # Test 1: SigV4 request without a client certificate should work.
+    alternator_sigv4 = boto3.resource('dynamodb', endpoint_url=url, verify=False,
+        region_name='us-east-1',
+        aws_access_key_id='cassandra',
+        aws_secret_access_key=cassandra_key,
+        config=botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300))
+    table = alternator_sigv4.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'N'}])
+    table.put_item(Item={'p': 42})
+    assert table.get_item(Key={'p': 42}, ConsistentRead=True)['Item']['p'] == 42
+    table.delete()
+
+    # Test 2: Certificate-based request (no SigV4) with a valid client cert
+    # should also work - the server validates the cert and uses its CN as
+    # the Alternator username, just as with require_client_auth=true.
+    alternator_cert = boto3.resource('dynamodb', endpoint_url=url, verify=False,
+        region_name='us-east-1',
+        config=botocore.client.Config(
+            retries={"max_attempts": 0},
+            read_timeout=300,
+            signature_version=botocore.UNSIGNED,
+            client_cert=(f'{tmp_path}/client.crt', f'{tmp_path}/client.key')))
+    table = alternator_cert.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'N'}])
+    table.put_item(Item={'p': 42})
+    assert table.get_item(Key={'p': 42}, ConsistentRead=True)['Item']['p'] == 42
+    table.delete()
+
+    # Test 3: A request with neither a client certificate nor a valid SigV4
+    # signature should be rejected. With alternator_enforce_authorization=true,
+    # every request must be authenticated by one of the two mechanisms.
+    alternator_no_auth = boto3.resource('dynamodb', endpoint_url=url, verify=False,
+        region_name='us-east-1',
+        config=botocore.client.Config(
+            retries={"max_attempts": 0},
+            read_timeout=300,
+            signature_version=botocore.UNSIGNED))
+    with pytest.raises(ClientError, match='MissingAuthenticationTokenException'):
+        alternator_no_auth.meta.client.list_tables()
+
+
+async def test_alternator_mtls_authorization(manager: ManagerClient, tmp_path):
+    """Test that when mTLS is active, the CN of the client certificate is used
+       as the CQL role name for Alternator authorization. A cert whose CN names
+       a role with limited privileges should succeed for unprivileged operations
+       (ListTables) but be denied for privileged ones (CreateTable).
+    """
+    # Generate a CA and two client certificates: one for the built-in superuser
+    # "cassandra" and one for a "limited_user" role we create below.
+    make_ca(tmp_path)
+    for serial, cn in enumerate(['cassandra', 'limited_user'], start=1):
+        make_client_cert(tmp_path, cn, cn, serial=serial)
+
+    servers = await manager.servers_add(1,
+        config=alternator_config | {
+            'alternator_enforce_authorization': True,
+            # 'authenticator' is not needed for Alternator, but we need it
+            # to use username/password authentication for CQL below...
+            'authenticator': 'PasswordAuthenticator',
+            'authorizer': 'CassandraAuthorizer',
+        },
+        driver_connect_opts={'auth_provider': PlainTextAuthProvider(username='cassandra', password='cassandra')},
+        cmdline=[
+            '--alternator-https-port', '8043',
+            '--alternator-encryption-options', 'certificate=conf/scylla.crt',
+            '--alternator-encryption-options', 'keyfile=conf/scylla.key',
+            '--alternator-encryption-options', 'require_client_auth=true',
+            '--alternator-encryption-options', f'truststore={tmp_path}/ca.crt',
+        ])
+    url = f"https://{servers[0].ip_addr}:8043"
+
+    def get_alternator_mtls(cn):
+        return boto3.resource('dynamodb', endpoint_url=url, verify=False,
+            region_name='us-east-1',
+            config=botocore.client.Config(
+                retries={"max_attempts": 0},
+                read_timeout=300,
+                signature_version=botocore.UNSIGNED,
+                client_cert=(f'{tmp_path}/{cn}.crt', f'{tmp_path}/{cn}.key'),
+            ))
+
+    # Create a "limited_user" role with no permissions granted.
+    cql = manager.get_cql()
+    cql.execute("CREATE ROLE limited_user WITH LOGIN=TRUE")
+
+    # The cassandra superuser can create and use a table.
+    alternator_super = get_alternator_mtls('cassandra')
+    table = alternator_super.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'N'}])
+    try:
+        # limited_user can list tables (no special permission needed) ...
+        alternator_limited = get_alternator_mtls('limited_user')
+        alternator_limited.meta.client.list_tables()
+        # ... but is denied CreateTable (requires CREATE permission).
+        with pytest.raises(ClientError, match='AccessDeniedException'):
+            alternator_limited.create_table(TableName=unique_table_name(),
+                BillingMode='PAY_PER_REQUEST',
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'N'}])
+    finally:
+        table.delete()
+
+
+async def test_alternator_mtls_role_checks(manager: ManagerClient, tmp_path):
+    """Test that mTLS authentication in Alternator validates the role given
+    by the certificate's CN - it must be a valid CQL role with LOGIN=TRUE.
+    Three failure cases are tested:
+    1. The CN names a role that does not exist in the database.
+    2. The CN names a role that exists but has LOGIN=FALSE.
+    3. The certificate's subject DN has no CN field, so the default
+       auth_certificate_role_queries pattern cannot extract a role name.
+    All three should be rejected with UnrecognizedClientException when
+    alternator_enforce_authorization=true.
+    """
+    # Generate a CA and one client certificate per test role.
+    make_ca(tmp_path)
+    for cn in ['nonexistent_user', 'no_login_user']:
+        make_client_cert(tmp_path, cn, cn)
+    # A cert whose subject has no CN field at all, so the default
+    # auth_certificate_role_queries pattern (CN=([^,]+)) cannot extract a role.
+    make_client_cert(tmp_path, 'no_cn', subj='/O=NoCNOrg')
+
+    servers = await manager.servers_add(1,
+        config=alternator_config | {
+            'alternator_enforce_authorization': True,
+            'authenticator': 'PasswordAuthenticator',
+            'authorizer': 'CassandraAuthorizer',
+        },
+        driver_connect_opts={'auth_provider': PlainTextAuthProvider(username='cassandra', password='cassandra')},
+        cmdline=[
+            '--alternator-https-port', '8043',
+            '--alternator-encryption-options', 'certificate=conf/scylla.crt',
+            '--alternator-encryption-options', 'keyfile=conf/scylla.key',
+            '--alternator-encryption-options', 'require_client_auth=true',
+            '--alternator-encryption-options', f'truststore={tmp_path}/ca.crt',
+        ])
+    url = f"https://{servers[0].ip_addr}:8043"
+
+    def get_alternator_mtls(cn):
+        return boto3.resource('dynamodb', endpoint_url=url, verify=False,
+            region_name='us-east-1',
+            config=botocore.client.Config(
+                retries={"max_attempts": 0},
+                read_timeout=300,
+                signature_version=botocore.UNSIGNED,
+                client_cert=(f'{tmp_path}/{cn}.crt', f'{tmp_path}/{cn}.key'),
+            ))
+
+    # Test 1: CN names a role that does not exist in the database.
+    # Alternator must reject the request, not silently treat the CN as a
+    # valid username (which was the pre-fix behaviour).
+    with pytest.raises(ClientError, match='UnrecognizedClientException'):
+        get_alternator_mtls('nonexistent_user').meta.client.list_tables()
+
+    # Test 2: CN names a role that exists but has LOGIN=FALSE.
+    # Such a role cannot be used for authentication, so the request must
+    # also be rejected even though the role entry is present in the table.
+    cql = manager.get_cql()
+    cql.execute("CREATE ROLE no_login_user WITH LOGIN=FALSE")
+    with pytest.raises(ClientError, match='UnrecognizedClientException'):
+        get_alternator_mtls('no_login_user').meta.client.list_tables()
+
+    # Test 3: A cert whose subject DN has no CN field does not match the
+    # default auth_certificate_role_queries pattern (CN=([^,]+)), so no role
+    # can be extracted. The request must be rejected rather than falling back
+    # to SigV4 (which was the pre-fix behaviour).
+    with pytest.raises(ClientError, match='UnrecognizedClientException'):
+        get_alternator_mtls('no_cn').meta.client.list_tables()
+
+    # Repeat Tests 1-3 with connections that carry the problematic client
+    # certificate but also have the potential to sign the requests with valid
+    # SigV4 credentials (cassandra's key). Because we do send a bad cert (not
+    # a missing cert), the entire request will fail - Alternator does *not*
+    # reach the check of SigV4 signature. It has to be this way, because in
+    # the simple case of a client certificate signed by an untrusted CA, the
+    # HTTPS server rejects the connection and Alternator doesn't even get a
+    # chance to fall back to checking SigV4 signatures.
+    cassandra_key = await get_secret_key(cql, 'cassandra')
+    def get_alternator_mtls_and_sigv4(cn):
+        return boto3.resource('dynamodb', endpoint_url=url, verify=False,
+            region_name='us-east-1',
+            aws_access_key_id='cassandra',
+            aws_secret_access_key=cassandra_key,
+            config=botocore.client.Config(
+                retries={"max_attempts": 0},
+                read_timeout=300,
+                client_cert=(f'{tmp_path}/{cn}.crt', f'{tmp_path}/{cn}.key'),
+            ))
+
+    with pytest.raises(ClientError, match='UnrecognizedClientException'):
+        get_alternator_mtls_and_sigv4('nonexistent_user').meta.client.list_tables()
+    with pytest.raises(ClientError, match='UnrecognizedClientException'):
+        get_alternator_mtls_and_sigv4('no_login_user').meta.client.list_tables()
+    with pytest.raises(ClientError, match='UnrecognizedClientException'):
+        get_alternator_mtls_and_sigv4('no_cn').meta.client.list_tables()
+
+
+async def test_alternator_mtls_san(manager: ManagerClient, tmp_path):
+    """Test that mTLS authentication in Alternator can extract the role name
+    from a Subject Alternative Name (SAN) instead of the subject DN, using
+    auth_certificate_role_queries with source: ALTNAME.
+
+    The SAN list is formatted as a comma-separated "TYPE=value" string
+    (e.g. "EMAIL=cassandra@scylladb.example") and matched against the
+    configured regex. EMAIL SANs (rfc822Name) are the standard way to carry
+    user identity in client certificates in enterprise PKI.
+    Three scenarios are tested:
+    1. A cert with EMAIL SAN=cassandra@scylladb.example (but CN=irrelevant)
+       succeeds: the role is extracted from the local part of the email SAN,
+       not the CN.
+    2. A cert with EMAIL SAN naming a non-existent role is rejected.
+    3. A cert with CN=cassandra but no SAN is also rejected, because the
+       ALTNAME query produces an empty string that does not match the regex.
+    """
+    # Generate a CA.
+    make_ca(tmp_path)
+
+    # A cert with CN=irrelevant but EMAIL SAN=cassandra@scylladb.example.
+    # Using an email SAN to carry user identity is standard enterprise PKI practice.
+    san_ext = tmp_path / 'san_cassandra.ext'
+    san_ext.write_text('subjectAltName = email:cassandra@scylladb.example\n')
+    make_client_cert(tmp_path, 'san_client', 'irrelevant', extfile=san_ext, serial=1)
+
+    # A cert with an EMAIL SAN naming a role that does not exist.
+    san_bad_ext = tmp_path / 'san_bad.ext'
+    san_bad_ext.write_text('subjectAltName = email:nonexistent_role@scylladb.example\n')
+    make_client_cert(tmp_path, 'san_bad_client', 'also_irrelevant', extfile=san_bad_ext, serial=2)
+
+    # A cert with CN=cassandra but no SAN at all.
+    make_client_cert(tmp_path, 'no_san_client', 'cassandra', serial=3)
+
+    servers = await manager.servers_add(1,
+        config=alternator_config | {
+            'alternator_enforce_authorization': True,
+            'authorizer': 'CassandraAuthorizer',
+            # Use an ALTNAME query: extract the role from the local part of the EMAIL SAN.
+            'auth_certificate_role_queries': [{'source': 'ALTNAME', 'query': 'EMAIL=([^@,]+)@'}],
+        },
+        cmdline=[
+            '--alternator-https-port', '8043',
+            '--alternator-encryption-options', 'certificate=conf/scylla.crt',
+            '--alternator-encryption-options', 'keyfile=conf/scylla.key',
+            '--alternator-encryption-options', 'require_client_auth=true',
+            '--alternator-encryption-options', f'truststore={tmp_path}/ca.crt',
+        ])
+    url = f"https://{servers[0].ip_addr}:8043"
+
+    def get_alternator_mtls(cert_name):
+        return boto3.resource('dynamodb', endpoint_url=url, verify=False,
+            region_name='us-east-1',
+            config=botocore.client.Config(
+                retries={"max_attempts": 0},
+                read_timeout=300,
+                signature_version=botocore.UNSIGNED,
+                client_cert=(f'{tmp_path}/{cert_name}.crt', f'{tmp_path}/{cert_name}.key'),
+            ))
+
+    # Test 1: A cert whose EMAIL SAN is "cassandra@scylladb.example" authenticates as
+    # the cassandra superuser role (local part extracted via the ALTNAME query),
+    # even though the CN is "irrelevant" and would not match the default SUBJECT query.
+    alternator = get_alternator_mtls('san_client')
+    table = alternator.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'N'}])
+    table.put_item(Item={'p': 1})
+    assert table.get_item(Key={'p': 1}, ConsistentRead=True)['Item']['p'] == 1
+    table.delete()
+
+    # Test 2: A cert whose EMAIL SAN names a non-existent role should be rejected.
+    with pytest.raises(ClientError, match='UnrecognizedClientException'):
+        get_alternator_mtls('san_bad_client').meta.client.list_tables()
+
+    # Test 3: A cert with CN=cassandra but no SAN should also be rejected:
+    # the ALTNAME query matches against the empty SAN string and does not
+    # extract a role, even though the CN would satisfy the default SUBJECT query.
+    with pytest.raises(ClientError, match='UnrecognizedClientException'):
+        get_alternator_mtls('no_san_client').meta.client.list_tables()
+
+
+async def test_alternator_mtls_and_plain_http(manager: ManagerClient, tmp_path):
+    """Test that require_client_auth=true, configured for the Alternator
+    HTTPS port, has no effect on a separate, plain HTTP Alternator port
+    enabled at the same time.
+
+    The unencrypted HTTP port has no TLS handshake at all, so client
+    certificates are not applicable there - the only authentication
+    mechanism on that port is SigV4. This test verifies that SigV4
+    authentication keeps working normally on the HTTP port (a request
+    with the right secret key is accepted, one with a wrong secret key is
+    rejected) despite the HTTPS port's require_client_auth=true.
+    """
+    # Generate a CA, needed just to configure the HTTPS port with
+    # require_client_auth=true. We never actually send a client certificate
+    # in this test.
+    make_ca(tmp_path)
+
+    servers = await manager.servers_add(1,
+        config=alternator_config | {
+            'alternator_enforce_authorization': True,
+            'authenticator': 'PasswordAuthenticator',
+            # CassandraAuthorizer is needed so that CQL roles can be used
+            # for Alternator authorization. We don't intend to check
+            # authorization in this test, but just doing CreateTable
+            # tries to auto-grant permissions to the table creator
+            # and refuses without CassandraAuthorizer: "GRANT operation
+            # is not supported by AllowAllAuthorizer".
+            'authorizer': 'CassandraAuthorizer',
+        },
+        driver_connect_opts={'auth_provider': PlainTextAuthProvider(username='cassandra', password='cassandra')},
+        cmdline=[
+            # The plain HTTP Alternator port (8000) is already enabled via
+            # alternator_config's 'alternator_port' above - here we just
+            # add an HTTPS port alongside it.
+            '--alternator-https-port', '8043',
+            '--alternator-encryption-options', 'certificate=conf/scylla.crt',
+            '--alternator-encryption-options', 'keyfile=conf/scylla.key',
+            '--alternator-encryption-options', 'require_client_auth=true',
+            '--alternator-encryption-options', f'truststore={tmp_path}/ca.crt',
+        ])
+
+    cql = manager.get_cql()
+    cassandra_key = await get_secret_key(cql, 'cassandra')
+
+    # A SigV4-authenticated request on the plain HTTP port with the correct
+    # secret key succeeds, even though the HTTPS port was configured with
+    # require_client_auth=true - that option only governs the TLS handshake
+    # on the HTTPS port and doesn't apply to the separate, unencrypted port.
+    alternator = get_alternator(servers[0].ip_addr, 'cassandra', cassandra_key)
+    table = alternator.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'N'}])
+    table.put_item(Item={'p': 42})
+    assert table.get_item(Key={'p': 42}, ConsistentRead=True)['Item']['p'] == 42
+    table.delete()
+
+    # A SigV4-authenticated request on the same HTTP port with a wrong
+    # secret key is rejected.
+    alternator_bad = get_alternator(servers[0].ip_addr, 'cassandra', 'wrong_secret_key')
+    with pytest.raises(ClientError, match='UnrecognizedClientException'):
+        alternator_bad.meta.client.list_tables()
+
+
+
