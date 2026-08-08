@@ -571,4 +571,8 @@ void filter_batch_request_items_by_tbl_name(rjson::value& request, const audit::
     }
 }
 
+bool projection_is_keys_only(const schema& s) {
+    return s.get_column_definition(bytes(executor::ATTRS_COLUMN_NAME)) == nullptr;
+}
+
 } // namespace alternator

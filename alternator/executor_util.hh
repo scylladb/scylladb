@@ -250,4 +250,8 @@ std::optional<rjson::value> describe_single_item(schema_ptr,
 /// help avoid large allocations/many re-allocs.
 body_writer make_streamed(rjson::value&&);
 
+/// Returns true if the given GSI or LSI view schema has KEYS_ONLY projection.
+/// Such views do not contain the executor::ATTRS_COLUMN_NAME column.
+bool projection_is_keys_only(const schema& s);
+
 } // namespace alternator
