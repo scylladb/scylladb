@@ -53,8 +53,8 @@ void cache_tracker::evict(const primary_index_entry& pie) {
     });
 }
 
-std::optional<mutation> cache_tracker::lookup(const primary_index_entry& pie, schema_ptr target_schema) {
-    std::optional<mutation> cached_mut;
+std::optional<mutation_partition> cache_tracker::lookup(const primary_index_entry& pie, schema_ptr target_schema) {
+    std::optional<mutation_partition> cached_mut;
     _read_section(region(), [&] {
         if (pie._cached_entry) {
             get_lru().touch(*pie._cached_entry);
@@ -63,7 +63,7 @@ std::optional<mutation> cache_tracker::lookup(const primary_index_entry& pie, sc
                     pie._cached_entry->upgrade(target_schema);
                 });
             }
-            cached_mut = mutation(target_schema, dht::decorated_key(pie.key()), pie._cached_entry->partition());
+            cached_mut.emplace(*target_schema, pie._cached_entry->partition());
         }
     });
 

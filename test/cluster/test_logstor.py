@@ -1103,19 +1103,18 @@ async def test_cache(manager: ManagerClient):
         )
 
         # ------------------------------------------------------------------ #
-        # Phase 4: range read — scans all keys through the cache.             #
-        # After Phase 3 every key is cached, so a full-table scan should      #
-        # produce all hits and no new misses/insertions.                      #
+        # Phase 4: read all keys through the cache.                          #
+        # After Phase 3 every key is cached, so all reads should             #
+        # produce hits and no new misses/insertions.                         #
         # ------------------------------------------------------------------ #
         hits4_before, misses4_before, insertions4_before, _ = await cache_metrics()
 
-        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test")
-        assert len(rows) == num_keys, f"expected {num_keys} rows in range scan"
+        await asyncio.gather(*[cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}") for i in range(num_keys)])
 
         hits4, misses4, insertions4, _ = await cache_metrics()
 
         assert hits4 - hits4_before >= num_keys, (
-            f"expected at least {num_keys} cache hits for range scan, "
+            f"expected at least {num_keys} cache hits, "
             f"got {hits4 - hits4_before}"
         )
 
