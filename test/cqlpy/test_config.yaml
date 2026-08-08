@@ -10,3 +10,19 @@ extra_scylla_cmdline_options:
   - '--logstor-disk-size-in-mb=8'
   - '--logstor-file-size-in-mb=4'
   - '--logstor-separator-max-memory-in-mb=8'
+extra_scylla_config_options:
+  # Enable the Web Shell HTTPS listener, so test_webshell.py can test the
+  # Web Shell over HTTPS, including TLS client-certificate authentication.
+  # The certificate, key and truststore are the ones test/pylib installs into
+  # every server's conf/ directory. The truststore is a self-signed CA
+  # certificate, which is why the tests can sign client certificates with the
+  # matching private key (see test_webshell.py's sign_client_certificate()).
+  webshell_https_port: 10002
+  webshell_https_encryption_options:
+    certificate: conf/scylla.crt
+    keyfile: conf/scylla.key
+    truststore: conf/scyllacadb.pem
+  # Accept either a TLS client certificate (subject CN mapped to a role) or a
+  # username/password pair, so the Web Shell client-certificate tests and all
+  # the tests relying on password authentication can share the same server.
+  authenticator: CertificateOrPasswordAuthenticator

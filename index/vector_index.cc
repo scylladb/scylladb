@@ -71,7 +71,7 @@ static constexpr auto FC_TARGET_KEY = "fc";
 //   {"tc":"v","pk":["p1","p2"]}               -> "(p1, p2), v"
 //   {"tc":"v","pk":["p1","p2"],"fc":["f1"]}   -> "(p1, p2), v, f1"
 static sstring targets_to_cql(const sstring& targets) {
-    std::optional<rjson::value> json_value = rjson::try_parse(targets);
+    auto json_value = rjson::try_parse(targets);
     if (!json_value || !json_value->IsObject()) {
         return cql3::util::maybe_quote(cql3::statements::index_target::column_name_from_target_string(targets));
     }
@@ -163,7 +163,7 @@ sstring vector_index::serialize_targets(const std::vector<::shared_ptr<cql3::sta
 }
 
 sstring vector_index::get_target_column(const sstring& targets) {
-    std::optional<rjson::value> json_value = rjson::try_parse(targets);
+    auto json_value = rjson::try_parse(targets);
     if (!json_value || !json_value->IsObject()) {
         return cql3::statements::index_target::column_name_from_target_string(targets);
     }
@@ -339,7 +339,7 @@ void vector_index::validate(const schema &schema, const cql3::statements::index_
 }
 
 bool vector_index::is_local(const sstring& target_string) {
-    std::optional<rjson::value> json_value = rjson::try_parse(target_string);
+    auto json_value = rjson::try_parse(target_string);
     if (!json_value || !json_value->IsObject()) {
         return false;
     }

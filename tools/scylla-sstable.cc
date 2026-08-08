@@ -2188,6 +2188,7 @@ void shard_of_operation(schema_ptr schema, reader_permit permit,
 
 class query_operation_result_visitor : public cql_transport::messages::result_message::visitor {
     output_format _output_format;
+    future<> _printed = make_ready_future<>();
 private:
     [[noreturn]] void throw_on_unexpected_message(const char* message_kind) {
         throw std::runtime_error(std::format("unexpected result message, expected rows, got {}", message_kind));
@@ -2205,13 +2206,15 @@ public:
         const auto& result = rows.rs();
         switch (_output_format) {
             case output_format::text:
-                cql3::print_query_results_text(std::cout, result);
+                _printed = cql3::print_query_results_text(std::cout, result);
                 break;
             case output_format::json:
-                cql3::print_query_results_json(std::cout, result);
+                _printed = cql3::print_query_results_json(std::cout, result);
                 break;
         }
     }
+
+    future<> printed() { return std::move(_printed); }
 };
 
 void query_operation(schema_ptr sstable_schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
@@ -2279,6 +2282,7 @@ void query_operation(schema_ptr sstable_schema, reader_permit permit, const std:
 
         query_operation_result_visitor visitor{format};
         result->accept(visitor);
+        co_await visitor.printed();
     }, {});
 }
 
