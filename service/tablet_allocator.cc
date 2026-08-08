@@ -505,8 +505,11 @@ struct fmt::formatter<service::plan_summary> : fmt::formatter<std::string_view> 
         if (plan.resize_plan().finalize_resize.size()) {
             fmt::format_to(ctx.out(), "{}resize-ready: {}", get_delim(), plan.resize_plan().finalize_resize.size());
         }
-        if (plan.rack_list_colocation_plan().size()) {
+        if (plan.rack_list_colocation_plan().request_to_resume()) {
             fmt::format_to(ctx.out(), "{}rack-list colocation ready: {}", get_delim(), plan.rack_list_colocation_plan().request_to_resume());
+        }
+        if (const auto& failure = plan.rack_list_colocation_plan().request_to_fail(); failure) {
+            fmt::format_to(ctx.out(), "{}rack-list colocation failed: {} ({})", get_delim(), failure->request_id, failure->error);
         }
         if (!plan.restore_completions().empty()) {
             fmt::format_to(ctx.out(), "{}restore completed for: {}", get_delim(), plan.restore_completions() | std::views::transform(&service::restore_completion_info::table));
@@ -1466,7 +1469,7 @@ public:
         const locator::topology& topo = _tm->get_topology();
 
         node_load_map nodes;
-        topo.for_each_node([&] (const locator::node& node) {
+        _tm->for_each_token_owner([&] (const locator::node& node) {
             if (node.get_state() == locator::node::state::normal && !node.is_excluded() && node.dc_rack().dc == dc) {
                 ensure_node(nodes, node.host_id());
             }
@@ -1496,9 +1499,10 @@ public:
             }) | std::views::keys | std::ranges::to<std::vector<host_id>>();
 
             if (nodes_by_load_dst.empty()) {
-                lblogger.warn("No target nodes available for RF change colocation plan in dc {}, rack {}", dc, rack);
+                auto error = format("No target nodes available for RF change colocation plan in dc {}, rack {}", dc, rack);
+                lblogger.warn("{}", error);
                 if (auto rack_it = requests_for_dc.find(rack); rack_it != requests_for_dc.end()) {
-                    plan.maybe_add_rack_list_request_to_resume(*rack_it->second.begin());
+                    plan.maybe_add_rack_list_request_to_fail(*rack_it->second.begin(), std::move(error));
                 }
                 continue;
             }
