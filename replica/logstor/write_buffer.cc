@@ -39,6 +39,11 @@ void log_record_writer::write(ostream& out) const {
     ser::serialize(out, _record.mut);
 }
 
+void log_record_bytes_writer::write(ostream& out) const {
+    out.write(reinterpret_cast<const char*>(_header_bytes.data()), _header_bytes.size());
+    out.write(reinterpret_cast<const char*>(_data_bytes.data()), _data_bytes.size());
+}
+
 // raw_write_buffer
 
 raw_write_buffer::raw_write_buffer(size_t buffer_size, segment_kind kind)
@@ -78,36 +83,37 @@ bool raw_write_buffer::has_data() const noexcept {
     return offset_in_buffer() > header_size();
 }
 
-raw_write_buffer::append_result raw_write_buffer::append(const log_record_writer& writer) {
-    const auto content_size = writer.size();
-
-    if (!can_fit(content_size)) {
-        throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", content_size, _stream.size()));
+template <std::invocable<raw_write_buffer::ostream&> WriteRecordPayload>
+raw_write_buffer::append_result raw_write_buffer::append_record(const log_record_header& header,
+        size_t header_size, size_t data_size, WriteRecordPayload write_payload) {
+    const auto payload_size = header_size + data_size;
+    if (!can_fit(payload_size)) {
+        throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", payload_size, _stream.size()));
     }
-    if (content_size == 0) {
+    if (payload_size == 0) {
         throw std::runtime_error("Cannot write empty record");
     }
 
     size_t record_header_offset = offset_in_buffer();
     auto rh = ondisk::record_header {
-        .header_size = static_cast<uint32_t>(writer.header_size()),
-        .data_size = static_cast<uint32_t>(writer.data_size())
+        .header_size = static_cast<uint32_t>(header_size),
+        .data_size = static_cast<uint32_t>(data_size)
     };
     ser::serialize(_stream, rh);
 
-    // Write actual data
-    auto data_out = _stream.write_substream(content_size);
-    writer.write(data_out);
+    // write_payload writes the serialized record header and then the serialized record data
+    auto payload_out = _stream.write_substream(payload_size);
+    write_payload(payload_out);
 
-    const size_t total_size = ondisk::record_header_size + content_size;
+    const size_t total_size = ondisk::record_header_size + payload_size;
 
     _net_data_size += total_size;
     _record_count++;
-    if (!_min_token || writer.record().header.key.dk.token() < *_min_token) {
-        _min_token = writer.record().header.key.dk.token();
+    if (!_min_token || header.key.dk.token() < *_min_token) {
+        _min_token = header.key.dk.token();
     }
-    if (!_max_token || writer.record().header.key.dk.token() > *_max_token) {
-        _max_token = writer.record().header.key.dk.token();
+    if (!_max_token || header.key.dk.token() > *_max_token) {
+        _max_token = header.key.dk.token();
     }
 
     // Add padding to align record
@@ -204,7 +210,12 @@ future<> write_buffer::close() {
     }
 }
 
-future<log_location_with_holder> write_buffer::write(log_record_writer writer, compaction_group* cg, seastar::gate::holder cg_holder) {
+bool write_buffer::is_closed() const noexcept {
+    return _write_gate.is_closed();
+}
+
+template <log_record_writer_concept Writer>
+future<log_location_with_holder> write_buffer::write(Writer writer, write_target target) {
     auto append_result = _raw.append(writer);
 
     auto record_location = [record_header_offset = append_result.record_header_offset, total_size = append_result.total_size] (log_location base_location) {
@@ -216,12 +227,15 @@ future<log_location_with_holder> write_buffer::write(log_record_writer writer, c
     };
 
     if (with_record_copy()) {
-        _records_copy.push_back(record_in_buffer {
-            .writer = std::move(writer),
-            .loc = _written.get_shared_future().then(record_location),
-            .cg = cg,
-            .cg_holder = std::move(cg_holder)
-        });
+        if constexpr (std::same_as<Writer, log_record_writer>) {
+            _records_copy.push_back(record_in_buffer {
+                .writer = std::move(writer),
+                .loc = _written.get_shared_future().then(record_location),
+                .target = std::move(target)
+            });
+        } else {
+            on_internal_error(logstor_logger, "Record byte writes are not supported for mixed write buffers");
+        }
     }
 
     // hold the write buffer until the write is complete, and pass the holder to the
@@ -234,23 +248,33 @@ future<log_location_with_holder> write_buffer::write(log_record_writer writer, c
     });
 }
 
-std::vector<write_buffer::record_in_buffer>& write_buffer::records_for_separator() {
-    if (!with_record_copy()) {
-        on_internal_error(logstor_logger, "requesting records but the write buffer has no record copy enabled");
-    }
-    return _records_copy;
+template future<log_location_with_holder> write_buffer::write<log_record_writer>(log_record_writer, write_target);
+template future<log_location_with_holder> write_buffer::write<log_record_bytes_writer>(log_record_bytes_writer, write_target);
+
+std::vector<write_buffer::record_in_buffer> write_buffer::take_separator_records() {
+    return std::move(_records_copy);
 }
 
-size_t raw_write_buffer::estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size) {
-    // Calculate total size needed including headers and alignment padding.
-    // net_data_size includes record headers.
-    size_t total_size = net_data_size;
+size_t raw_write_buffer::estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size, segment_kind kind) {
+    if (record_count == 0 || net_data_size == 0) {
+        return 0;
+    }
 
-    // not perfect so let's multiply by some overhead constant
-    total_size = static_cast<size_t>(total_size * 1.1);
+    size_t fixed_overhead = ondisk::buffer_header_size;
+    if (kind == segment_kind::full) {
+        fixed_overhead += ondisk::segment_header_size;
+    }
 
-    return align_up(total_size, segment_size) / segment_size;
+    if (segment_size <= fixed_overhead) {
+        return 1;
+    }
 
+    const auto usable_bytes = segment_size - fixed_overhead;
+    auto records_per_segment = (usable_bytes * record_count) / net_data_size;
+    if (records_per_segment == 0) {
+        records_per_segment = 1;
+    }
+    return (record_count + records_per_segment - 1) / records_per_segment;
 }
 
 uint32_t ondisk::buffer_header::calculate_crc() const {
@@ -326,7 +350,7 @@ future<> buffered_writer::stop() {
     logstor_logger.info("Write buffer stopped");
 }
 
-future<log_location_with_holder> buffered_writer::write(log_record record, db::timeout_clock::time_point timeout, compaction_group* cg, seastar::gate::holder cg_holder) {
+future<log_location_with_holder> buffered_writer::write(log_record record, db::timeout_clock::time_point timeout, write_target target) {
     auto holder = _async_gate.hold();
 
     log_record_writer writer(std::move(record));
@@ -357,7 +381,7 @@ future<log_location_with_holder> buffered_writer::write(log_record record, db::t
         }
     }
 
-    auto fut = head_buf().write(std::move(writer), cg, std::move(cg_holder));
+    auto fut = head_buf().write(std::move(writer), std::move(target));
 
     // Wake the consumer: there is now data at the tail.
     _tail_can_advance.broadcast();

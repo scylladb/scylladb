@@ -40,6 +40,20 @@ namespace logstor {
 class primary_index;
 }
 
+class compaction_group_logstor_state final : public logstor::logstor_group {
+    compaction_group* _cg;
+public:
+    explicit compaction_group_logstor_state(compaction_group& cg) noexcept;
+
+    ::table_id table_id() const noexcept override;
+
+    logstor::primary_index& logstor_index() noexcept override;
+    const logstor::primary_index& logstor_index() const noexcept override;
+
+protected:
+    logstor::compaction_manager& logstor_compaction_manager() noexcept override;
+};
+
 using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
 
 enum class repair_sstable_classification {
@@ -101,10 +115,7 @@ class compaction_group {
 
     counter_id _counter_id;
 
-    lw_shared_ptr<logstor::segment_set> _logstor_segments;
-    std::optional<logstor::separator_buffer> _logstor_separator;
-    std::vector<future<>> _separator_flushes;
-    seastar::semaphore _separator_flush_sem{1};
+    std::unique_ptr<compaction_group_logstor_state> _logstor_state;
 
     db::replay_position _lowest_rp;
     friend class table;
@@ -173,6 +184,9 @@ public:
 
     // Clear sstable sets
     void clear_sstables();
+
+    // Unlink logstor segments from this group without freeing them, for shutdown.
+    void clear_logstor_segments();
 
     // Clear memtable(s) content
     future<> clear_memtables();
@@ -308,27 +322,25 @@ public:
 
     logstor::primary_index& get_logstor_index() noexcept;
 
+    logstor::logstor_group& as_logstor_group() noexcept;
+    const logstor::logstor_group& as_logstor_group() const noexcept;
+
     future<> split(compaction::compaction_type_options::split opt, tasks::task_info tablet_split_task_info);
 
     void set_repair_sstable_classifier(repair_classifier_func repair_sstable_classifier) {
         _repair_sstable_classifier = std::move(repair_sstable_classifier);
     }
 
-    void add_logstor_segment(logstor::segment_descriptor& desc) {
-        _logstor_segments->add_segment(desc);
-    }
-
     future<> discard_logstor_segments();
 
     future<> flush_separator(std::optional<logstor::segment_sequence> seq_num = std::nullopt);
-    logstor::separator_buffer& get_separator_buffer(size_t write_size);
 
     logstor::segment_set& logstor_segments() noexcept {
-        return *_logstor_segments;
+        return _logstor_state->logstor_segments();
     }
 
     const logstor::segment_set& logstor_segments() const noexcept {
-        return *_logstor_segments;
+        return _logstor_state->logstor_segments();
     }
 
     future<utils::chunked_vector<logstor::segment_snapshot>> take_logstor_snapshot();
@@ -437,6 +449,7 @@ public:
 
     // Clear sstable sets
     void clear_sstables();
+    void clear_logstor_segments();
 };
 
 using storage_group_ptr = lw_shared_ptr<storage_group>;

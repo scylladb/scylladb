@@ -11,6 +11,7 @@ target_sources(replica
     dirty_memory_manager.cc
     logstor/segment_io.cc
     logstor/cache.cc
+    logstor/compaction.cc
     logstor/segment_manager.cc
     logstor/logstor.cc
     logstor/write_buffer.cc

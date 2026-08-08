@@ -51,6 +51,10 @@ future<> logstor::do_recovery(replica::database& db) {
     co_await _segment_manager.do_recovery(db);
 }
 
+future<> logstor::do_recovery_for_test() {
+    co_await _segment_manager.do_recovery_for_test();
+}
+
 future<> logstor::start() {
     logstor_logger.info("Starting logstor");
 
@@ -97,10 +101,11 @@ std::unique_ptr<primary_index> logstor::make_primary_index(schema_ptr schema, bo
     return index;
 }
 
-future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout) {
+future<> logstor::write(const mutation& m, write_target target, db::timeout_clock::time_point timeout) {
+    auto& cg = *target.cg;
     primary_index_key key(m.decorated_key());
     table_id table = m.schema()->id();
-    auto& index = cg.get_logstor_index();
+    auto& index = cg.logstor_index();
 
     const auto ts = extract_logstor_record_timestamp(m);
 
@@ -113,7 +118,7 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
         .mut = canonical_mutation(m)
     };
 
-    return _write_buffer.write(std::move(record), timeout, &cg, std::move(cg_holder)).then_unpack([index_ptr = &index, ts, key = std::move(key)]
+    return _write_buffer.write(std::move(record), timeout, std::move(target)).then_unpack([index_ptr = &index, ts, key = std::move(key)]
             (log_location location, seastar::gate::holder op) {
         index_entry new_entry {
             .location = location,
@@ -309,12 +314,8 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
     );
 }
 
-void logstor::set_trigger_compaction_hook(std::function<void()> fn) {
-    _segment_manager.set_trigger_compaction_hook(std::move(fn));
-}
-
-void logstor::set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn) {
-    _segment_manager.set_trigger_separator_flush_hook(std::move(fn));
+future<> logstor::flush_to_separator() {
+    co_await _segment_manager.await_pending_writes();
 }
 
 }
