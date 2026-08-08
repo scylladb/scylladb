@@ -132,6 +132,7 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 %{_bindir}/scylla
 %{_bindir}/iotune
 %{_bindir}/scyllatop
+%{_bindir}/scylla-tablets
 %{_bindir}/nodetool
 %{_sbindir}/scylla*
 %{_sbindir}/node_health_check
@@ -140,6 +141,7 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 /opt/scylladb/swagger-ui/dist/*
 /opt/scylladb/api/api-doc/*
 /opt/scylladb/scyllatop/*
+/opt/scylladb/lib-python/*
 /opt/scylladb/bin/*
 /opt/scylladb/libreloc/*
 /opt/scylladb/libreloc/.*.hmac
