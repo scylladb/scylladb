@@ -96,7 +96,7 @@ async def wait_for(
             before_retry()
 
 
-async def wait_for_cql(cql: Session, host: Host, deadline: float) -> None:
+async def wait_for_cql(cql: Session, deadline: float, host: Optional[Host] = None) -> None:
     async def cql_ready():
         try:
             await cql.run_async("select * from system.local", host=host)
@@ -143,7 +143,7 @@ async def wait_for_cql_and_get_hosts(cql: Session, servers: list[ServerInfo], de
     servers_by_ip = {srv.rpc_address: i for i, srv in enumerate(servers)}
     hosts.sort(key=lambda x: servers_by_ip[x.address])
 
-    await asyncio.gather(*(wait_for_cql(cql, h, deadline) for h in hosts))
+    await asyncio.gather(*(wait_for_cql(cql, deadline, h) for h in hosts))
 
     return hosts
 
