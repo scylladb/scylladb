@@ -1981,89 +1981,6 @@ void sstable::write_filter() {
     _components_digests.map[component_type::Filter] = digest;
 }
 
-void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
-    if (!has_component(component_type::Filter)) {
-        return;
-    }
-    if (!has_component(component_type::Index)) {
-        return;
-    }
-
-    // Skip rebuilding the bloom filter if the false positive rate based
-    // on the current bitset size is within 75% to 125% of the configured
-    // false positive rate.
-    auto curr_bitset_size = downcast_ptr<utils::filter::bloom_filter>(_components->filter.get())->bits().memory_size();
-    auto bitset_size_lower_bound = utils::i_filter::get_filter_size(num_partitions,
-                                                                    _schema->bloom_filter_fp_chance() * 1.25);
-    auto bitset_size_upper_bound = utils::i_filter::get_filter_size(num_partitions,
-                                                                    _schema->bloom_filter_fp_chance() * 0.75);
-    if (bitset_size_lower_bound <= curr_bitset_size && curr_bitset_size <= bitset_size_upper_bound) {
-        return;
-    }
-
-    // The initial partition estimate was inaccurate but perform resize only if it is worth doing, based on the following criteria.
-    // 1. Do not resize if the size difference is less than 10% of the current size, or less than 1K.
-    //    - to prevent resizing for small sstables where the savings are minimal.
-    // 2. Do not resize if the current filter is larger than the optimal one but still under 16K.
-    //    - to avoid downsizing when the savings are minimal.
-    //    - the fp rate is also already at least at the configured value, so no gain there.
-    // 3. Do not resize filters of garbage_collected sstables.
-    const auto optimal_filter_size = utils::i_filter::get_filter_size(num_partitions, _schema->bloom_filter_fp_chance());
-    const auto filter_size_diff = std::abs<int64_t>(optimal_filter_size - curr_bitset_size);
-    if (filter_size_diff < 1024 || filter_size_diff < 0.1 * curr_bitset_size || // [1]
-            (curr_bitset_size > optimal_filter_size && curr_bitset_size < 16384) || // [2]
-            _origin == "garbage_collection") { // [3]
-        return;
-    }
-
-    // Consumer that adds the keys from index entries to the given bloom filter
-    class bloom_filter_builder {
-        utils::filter_ptr& _filter;
-    public:
-        bloom_filter_builder(utils::filter_ptr &filter) : _filter(filter) {}
-        void consume_entry(parsed_partition_index_entry&& e) {
-            _filter->add(to_bytes_view(e.key));
-        }
-    };
-
-    // Create a new filter that can optimally represent the given num_partitions.
-    auto optimal_filter = utils::i_filter::get_filter(num_partitions, _schema->bloom_filter_fp_chance(), get_filter_format(_version));
-    sstlog.info("Rebuilding bloom filter {}: resizing bitset from {} bytes to {} bytes. sstable origin: {}", filename(component_type::Filter), curr_bitset_size,
-                downcast_ptr<utils::filter::bloom_filter>(optimal_filter.get())->bits().memory_size(), _origin);
-
-    auto index_file = open_file(component_type::Index, open_flags::ro).get();
-    auto index_file_closer = deferred_action([&index_file] noexcept {
-        try {
-            index_file.close().get();
-        } catch (...) {
-            sstlog.warn("sstable close index_file failed: {}", std::current_exception());
-            general_disk_error();
-        }
-    });
-    auto index_file_size = index_file.size().get();
-
-    auto sem = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "sstable::rebuild_filter_from_index",
-            reader_concurrency_semaphore::register_metrics::no);
-    auto sem_stopper = deferred_stop(sem);
-
-    // rebuild the filter using index_consume_entry_context
-    bloom_filter_builder bfb_consumer(optimal_filter);
-    index_consume_entry_context<bloom_filter_builder> consumer_ctx(
-            *this, sem.make_tracking_only_permit(_schema, "rebuild_filter_from_index", db::no_timeout, {}), bfb_consumer, trust_promoted_index::no,
-            make_file_input_stream(index_file, 0, index_file_size, {.buffer_size = sstable_buffer_size}), 0, index_file_size,
-            get_column_translation(*_schema), _manager._abort);
-    auto consumer_ctx_closer = deferred_close(consumer_ctx);
-    try {
-        consumer_ctx.consume_input().get();
-    } catch (...) {
-        sstlog.warn("Failed to rebuild bloom filter {} : {}. Existing bloom filter will be written to disk.", filename(component_type::Filter), std::current_exception());
-        return;
-    }
-
-    // Replace the existing filter with the new optimal filter.
-    _components->filter.swap(optimal_filter);
-}
-
 void sstable::build_delayed_filter(uint64_t num_partitions) {
     auto optimal_filter = utils::i_filter::get_filter(num_partitions, _schema->bloom_filter_fp_chance(), get_filter_format(_version));
     sstlog.debug("Building delayed bloom filter {}: {} filter bytes. sstable origin: {}", filename(component_type::Filter),
@@ -2107,6 +2024,18 @@ void sstable::build_delayed_filter(uint64_t num_partitions) {
 
     _components->filter.swap(optimal_filter);
     unlink_component(component_type::TemporaryHashes).get();
+}
+
+void sstable::ensure_filter() {
+    // Reads (filter_has_key()) dereference _components->filter unconditionally,
+    // so it must never be null. For sstables that have no Filter component
+    // (bloom_filter_fp_chance == 1.0) neither build_delayed_filter() nor
+    // maybe_rebuild_filter_from_index() installs one, so do it here.
+    // This matches read_filter(), which installs an always_present_filter when
+    // loading an sstable that lacks a Filter component.
+    if (!_components->filter) {
+        _components->filter = std::make_unique<utils::filter::always_present_filter>();
+    }
 }
 
 size_t sstable::total_reclaimable_memory_size() const {

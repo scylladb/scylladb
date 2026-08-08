@@ -84,6 +84,7 @@ const sstable_version_constants::component_map_t sstable_version_constants_m::cr
     result.emplace(component_type::Index, "Index.db");
     result.emplace(component_type::Summary, "Summary.db");
     result.emplace(component_type::Digest, "Digest.crc32");
+    result.emplace(component_type::TemporaryHashes, "TemporaryHashes.db.tmp");
     return result;
 }
 
@@ -94,9 +95,11 @@ const sstable_version_constants::component_map_t sstable_version_constants_m_bti
     auto result = sstable_version_constants_m::create_component_map();
     // Note: for `ms`-`mt`, we inherit all components from `me`.
     // This means that we allow `ms`-`mt` to have Index.db and Summary.db components.
+    // TemporaryHashes moved to the base `m` map (above) because delayed-filter
+    // building now applies to mc/md/me too, not just the trie-indexed formats
+    // (see build_delayed_filter()) -- it is already inherited here from `m`.
     result.emplace(component_type::Rows, "Rows.db");
     result.emplace(component_type::Partitions, "Partitions.db");
-    result.emplace(component_type::TemporaryHashes, "TemporaryHashes.db.tmp");
     return result;
 }
 

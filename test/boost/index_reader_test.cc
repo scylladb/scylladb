@@ -23,9 +23,9 @@ using namespace sstables;
 // so it won't meaningfully delay node shutdown.
 //
 // But `index_consume_entry_context` supports `abort_source`
-// for the sake of the optional bloom filter rebuild (from Index) that
-// happens before sstable sealing (see `sstable::maybe_rebuild_filter_from_index`).
-// This is a test for this.
+// so that an in-progress index read can be cancelled promptly
+// (e.g. on shutdown), independent of which consumer is driving it.
+// This is a test for that.
 SEASTAR_TEST_CASE(test_abort_during_index_read) {
     return test_env::do_with_async([](test_env& env) {
         simple_schema ss;
