@@ -37,6 +37,7 @@ class response {
     int16_t           _stream;
     cql_binary_opcode _opcode;
     uint8_t           _flags = 0; // a bitwise OR mask of zero or more cql_frame_flags values
+    bool              _pre_compressed = false; // body is already compressed, skip compression in write_message
     bytes_ostream _body;
 public:
     template<typename T>
@@ -65,6 +66,12 @@ public:
         _flags |= flag;
     }
 
+    // Mark the response body as already compressed; write_message will
+    // skip compression even if the connection has compression enabled.
+    void mark_as_pre_compressed() noexcept {
+        _pre_compressed = true;
+    }
+
     void serialize(const event::schema_change& event, uint8_t version);
     void serialize(const event::client_routes_change& event, uint8_t version);
     void write_byte(uint8_t b);
@@ -82,6 +89,7 @@ public:
     void write_consistency(db::consistency_level c);
     void write_string_map(std::map<sstring, sstring> string_map);
     void write_string_multimap(std::multimap<sstring, sstring> string_map);
+    void append_body(bytes_view body);
     void write_string_bytes_map(const std::unordered_map<sstring, bytes>& map);
     void write_value(bytes_opt value);
     void write_value(std::optional<managed_bytes_view> value);

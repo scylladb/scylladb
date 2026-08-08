@@ -243,6 +243,8 @@ private:
     std::unique_ptr<event_notifier> _notifier;
 private:
     client_options_cache_type _connection_options_keys_and_values;
+    bytes_ostream _supported_body; // cached serialized body for SUPPORTED responses
+    bytes _supported_body_lz4; // cached lz4-compressed body for SUPPORTED responses
     transport_stats _stats;
     auth::service& _auth_service;
     qos::service_level_controller& _sl_controller;
@@ -283,6 +285,8 @@ public:
     future<std::vector<connection_service_level_params>> get_connections_service_level_params();
 private:
     class fmt_visitor;
+    void build_supported_body();
+    cql_protocol_extension_enum_set supported_cql_protocol_extensions() const;
     friend class connection;
     friend std::unique_ptr<cql_server::response> make_result(int16_t stream, messages::result_message& msg,
             const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, cql_metadata_id_wrapper&& metadata_id, bool skip_metadata);
@@ -363,6 +367,8 @@ private:
 
         std::unique_ptr<cql_server::response> make_ready(int16_t stream, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_supported(int16_t stream, const tracing::trace_state_ptr& tr_state) const;
+        std::unique_ptr<cql_server::response> make_supported_from_cache(int16_t stream) const;
+        std::unique_ptr<cql_server::response> make_supported_with_tracing(int16_t stream, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_topology_change_event(const cql_transport::event::topology_change& event) const;
         std::unique_ptr<cql_server::response> make_status_change_event(const cql_transport::event::status_change& event) const;
         std::unique_ptr<cql_server::response> make_schema_change_event(const cql_transport::event::schema_change& event) const;
