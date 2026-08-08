@@ -13,7 +13,10 @@
 #include "test/lib/eventually.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/query_processor.hh"
+#include "schema/schema_builder.hh"
+#include "service/pager/paging_state.hh"
 #include "transport/messages/result_message.hh"
+#include "utils/UUID_gen.hh"
 
 BOOST_AUTO_TEST_SUITE(index_with_paging_test)
 
@@ -104,6 +107,29 @@ SEASTAR_TEST_CASE(test_index_with_paging_with_base_short_read_no_ck) {
             BOOST_REQUIRE_EQUAL(count, row_count);
         });
     });
+}
+
+// A null id must survive the round trip as a null id rather than as no id at
+// all, which means no plan was recorded and pins nothing. See #18992.
+SEASTAR_TEST_CASE(test_query_plan_id_survives_paging_state_serialization) {
+    auto schema = schema_builder(this_smp_shard_count(), "ks", "tab")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("v", int32_type)
+            .build();
+    auto pk = partition_key::from_single_value(*schema, int32_type->decompose(data_value(0)));
+
+    auto round_trip = [&] (std::optional<table_id> plan_id) {
+        auto state = service::pager::paging_state(pk, std::nullopt, 0, query_id::create_null_id(),
+                service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0, 0, 0,
+                bound_weight::equal, partition_region::partition_start, std::move(plan_id));
+        return service::pager::paging_state::deserialize(state.serialize())->get_query_plan_id();
+    };
+
+    const auto plan_id = table_id(utils::UUID_gen::get_time_UUID());
+    BOOST_REQUIRE(round_trip(std::nullopt) == std::nullopt);
+    BOOST_REQUIRE(round_trip(plan_id) == std::optional<table_id>(plan_id));
+    BOOST_REQUIRE(round_trip(table_id::create_null_id()) == std::optional<table_id>(table_id::create_null_id()));
+    return make_ready_future<>();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

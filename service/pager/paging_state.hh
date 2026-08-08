@@ -18,6 +18,8 @@
 #include "db/read_repair_decision.hh"
 #include "mutation/position_in_partition.hh"
 #include "locator/host_id.hh"
+#include "schema/schema_fwd.hh"
+#include "seastarx.hh"
 
 namespace service {
 
@@ -40,6 +42,11 @@ private:
     bound_weight _ck_weight = bound_weight::equal;
     partition_region _region = partition_region::partition_start;
 
+    // Id of the index view scanned, or a null id for the base table. std::nullopt
+    // when no plan was recorded - by a version predating this field, or by a
+    // producer with no CQL plan to pin - and then nothing is pinned. #18992
+    std::optional<table_id> _query_plan_id;
+
 public:
     // IDL ctor
     paging_state(partition_key pk,
@@ -52,7 +59,8 @@ public:
             uint32_t remaining_ext,
             uint32_t rows_fetched_for_last_partition_high_bits,
             bound_weight ck_weight,
-            partition_region region);
+            partition_region region,
+            std::optional<table_id> query_plan_id);
 
     paging_state(partition_key pk,
             position_in_partition_view pos,
@@ -60,7 +68,8 @@ public:
             query_id reader_recall_uuid,
             replicas_per_token_range last_replicas,
             std::optional<db::read_repair_decision> query_read_repair_decision,
-            uint64_t rows_fetched_for_last_partition);
+            uint64_t rows_fetched_for_last_partition,
+            std::optional<table_id> query_plan_id);
 
     void set_partition_key(partition_key pk) {
         _partition_key = std::move(pk);
@@ -76,6 +85,10 @@ public:
     void set_remaining(uint64_t remaining) {
         _remaining_low_bits = static_cast<uint32_t>(remaining);
         _remaining_high_bits = static_cast<uint32_t>(remaining >> 32);
+    }
+
+    const std::optional<table_id>& get_query_plan_id() const {
+        return _query_plan_id;
     }
 
     /**
@@ -179,7 +192,7 @@ public:
         return _query_read_repair_decision;
     }
 
-    static lw_shared_ptr<paging_state> deserialize(bytes_opt bytes);
+    static lw_shared_ptr<const paging_state> deserialize(bytes_opt bytes);
     bytes_opt serialize() const;
 };
 

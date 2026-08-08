@@ -11,6 +11,7 @@
 #pragma once
 
 #include "cql3/cf_name.hh"
+#include "schema/schema_fwd.hh"
 
 #include <optional>
 
@@ -36,7 +37,10 @@ public:
     virtual void prepare_keyspace(const service::client_state& state);
 
     // Only for internal calls, use the version with ClientState for user queries
-    void prepare_keyspace(std::string_view keyspace);
+    virtual void prepare_keyspace(std::string_view keyspace);
+
+    // Only SELECT is ever paged, so only SELECT overrides this. See #18992.
+    virtual void set_forced_plan_id(std::optional<table_id>) {}
 
     virtual bool has_keyspace() const;
 

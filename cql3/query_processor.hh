@@ -49,6 +49,10 @@ class query_state;
 class mapreduce_service;
 class raft_group0_client;
 
+namespace pager {
+class paging_state;
+}
+
 namespace strong_consistency {
 class coordinator;
 }
@@ -515,10 +519,19 @@ public:
     // For the local node, waits directly without an RPC.
     future<> wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout);
 
+    // forced_plan_id and forced_keyspace re-derive a statement continuing a
+    // paged query: same plan, same keyspace it was prepared against.
     std::unique_ptr<statements::prepared_statement> get_statement(
             utils::chunked_string_view query,
             const service::client_state& client_state,
-            dialect d);
+            dialect d,
+            std::optional<table_id> forced_plan_id = std::nullopt,
+            std::optional<std::string_view> forced_keyspace = std::nullopt);
+
+    // The plan to pin when continuing a paged query, read from the previous
+    // page's state. See restrictions::forced_plan_id_opt.
+    static std::optional<table_id> forced_plan_id_from_paging_state(
+            const lw_shared_ptr<const service::pager::paging_state>& paging_state);
 
     friend class migration_subscriber;
 

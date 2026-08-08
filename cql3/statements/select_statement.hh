@@ -125,6 +125,10 @@ public:
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
+    virtual std::optional<query_plan> query_plan_for_paging() const override {
+        return query_plan{query_plan_id(), keyspace()};
+    }
+
     virtual bool should_reclassify_control_connection() const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute(query_processor& qp,
@@ -163,6 +167,10 @@ public:
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 
 protected:
+    // Id of the index view this statement scans, or a null id for the base
+    // table, whose identity a resumed read is not tied to. See #18992.
+    virtual table_id query_plan_id() const;
+
     uint64_t get_limit(const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit = false) const;
     static uint64_t get_inner_loop_limit(uint64_t limit, bool is_aggregate);
 
@@ -228,6 +236,9 @@ public:
                                    const secondary_index::index& index,
                                    schema_ptr view_schema,
                                    std::unique_ptr<cql3::attributes> attrs);
+
+protected:
+    virtual table_id query_plan_id() const override;
 
 private:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_processor& qp,

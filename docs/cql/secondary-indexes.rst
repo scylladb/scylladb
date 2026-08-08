@@ -397,6 +397,30 @@ the system stops the build process and cleans up any partially built data associ
 .. If the index does not exists, the statement will return an error, unless ``IF EXISTS`` is used in which case the
 .. operation is a no-op.
 
+Changing Indexes During a Paged Read
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A paged read keeps using the query plan it started with. The paging state
+returned to the client records whether the read scans the base table or uses a
+particular secondary index, and every subsequent page is served by that same
+plan, so creating an index that could serve the query affects only new queries.
+Because a new index takes a moment to become known cluster-wide, a read that
+already uses one may be resumed by a node that does not know it yet, and then
+fails as described below.
+
+Dropping the index a paged read uses is different: the position saved in the
+paging state belongs to that index's scan, and no other plan can interpret it.
+Requesting the next page fails with an ``InvalidRequest`` error stating that the
+index is no longer available, and the query has to be retried from the
+beginning. Creating another index under the same name does not help, because the
+read is tied to the specific index it started with; and if the query cannot be
+prepared without the index - for example, one lacking ``ALLOW FILTERING`` -
+re-preparing it after the ``DROP`` is what fails instead. A read scanning the
+base table, in contrast, is not tied to that table's identity: dropping and
+re-creating the base table does not change the plan, and the next page is served
+from the new table - resuming where the old table's scan stopped, so whatever
+the new table holds before that position is skipped without an error.
+
 Additional Information
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
