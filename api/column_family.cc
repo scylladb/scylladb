@@ -897,19 +897,22 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 
     cf::get_cas_prepare.set(r, [&db] (std::unique_ptr<http::request> req) {
         return map_reduce_cf_time_histogram(db, req->get_path_param("name"), [](const replica::column_family& cf) {
-            return cf.get_stats().cas_prepare.histogram();
+            auto& s = cf.get_stats();
+            return s.cas_prepare ? s.cas_prepare->histogram() : utils::time_estimated_histogram{};
         });
     });
 
     cf::get_cas_propose.set(r, [&db] (std::unique_ptr<http::request> req) {
         return map_reduce_cf_time_histogram(db, req->get_path_param("name"), [](const replica::column_family& cf) {
-            return cf.get_stats().cas_accept.histogram();
+            auto& s = cf.get_stats();
+            return s.cas_accept ? s.cas_accept->histogram() : utils::time_estimated_histogram{};
         });
     });
 
     cf::get_cas_commit.set(r, [&db] (std::unique_ptr<http::request> req) {
         return map_reduce_cf_time_histogram(db, req->get_path_param("name"), [](const replica::column_family& cf) {
-            return cf.get_stats().cas_learn.histogram();
+            auto& s = cf.get_stats();
+            return s.cas_learn ? s.cas_learn->histogram() : utils::time_estimated_histogram{};
         });
     });
 
