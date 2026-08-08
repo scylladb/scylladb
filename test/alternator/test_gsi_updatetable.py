@@ -573,6 +573,25 @@ def test_gsi_updatetable_errors(dynamodb, table1):
                 { 'Delete': {  'IndexName': 'ind2' } }
             ])
 
+# Test that a single UpdateTable cannot combine GlobalSecondaryIndexUpdates
+# (creating a GSI) with StreamSpecification (enabling streams) in one request.
+# DynamoDB rejects this combination with the error:
+# "You cannot create or delete index while changing stream status".
+def test_gsi_updatetable_combined_with_stream(dynamodb):
+    with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
+        with pytest.raises(ClientError, match='ValidationException.*while'):
+            dynamodb.meta.client.update_table(
+                TableName=table.name,
+                AttributeDefinitions=[{ 'AttributeName': 'x', 'AttributeType': 'S' }],
+                GlobalSecondaryIndexUpdates=[ { 'Create': {
+                    'IndexName': 'gsi',
+                    'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                }}],
+                StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'})
+
 # Whereas CreateTable rejects spurious entries in AttributeDefinitions
 # (entries which aren't used as a key of the table or any GSI or LSI),
 # as tested in test_table.py::test_create_table_spurious_attribute_definitions
