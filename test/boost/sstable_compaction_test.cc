@@ -2286,19 +2286,6 @@ SEASTAR_FIXTURE_TEST_CASE(time_window_strategy_size_tiered_behavior_correctness_
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
-static void check_min_max_column_names(const sstable_ptr& sst, std::vector<bytes> min_components, std::vector<bytes> max_components) {
-    const auto& st = sst->get_stats_metadata();
-    BOOST_TEST_MESSAGE(fmt::format("min {}/{} max {}/{}", st.min_column_names.elements.size(), min_components.size(), st.max_column_names.elements.size(), max_components.size()));
-    BOOST_REQUIRE(st.min_column_names.elements.size() == min_components.size());
-    for (auto i = 0U; i < st.min_column_names.elements.size(); i++) {
-        BOOST_REQUIRE(min_components[i] == st.min_column_names.elements[i].value);
-    }
-    BOOST_REQUIRE(st.max_column_names.elements.size() == max_components.size());
-    for (auto i = 0U; i < st.max_column_names.elements.size(); i++) {
-        BOOST_REQUIRE(max_components[i] == st.max_column_names.elements[i].value);
-    }
-}
-
 future<> min_max_clustering_key_2(test_env& env) {
     for (const auto version : writable_sstable_versions) {
         auto s = schema_builder(this_smp_shard_count(), "ks", "cf")

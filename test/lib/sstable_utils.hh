@@ -10,6 +10,7 @@
 
 #include <optional>
 
+#include <boost/test/unit_test.hpp>
 #include "sstables/sstables.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/index_reader.hh"
@@ -34,6 +35,19 @@ future<sstables::shared_sstable> make_sstable_containing(sstables::shared_sstabl
 namespace sstables {
 
 using sstable_ptr = shared_sstable;
+
+inline void check_min_max_column_names(const sstable_ptr& sst, std::vector<bytes> min_components, std::vector<bytes> max_components) {
+    const auto& st = sst->get_stats_metadata();
+    BOOST_TEST_MESSAGE(fmt::format("min {}/{} max {}/{}", st.min_column_names.elements.size(), min_components.size(), st.max_column_names.elements.size(), max_components.size()));
+    BOOST_REQUIRE(st.min_column_names.elements.size() == min_components.size());
+    for (auto i = 0U; i < st.min_column_names.elements.size(); i++) {
+        BOOST_REQUIRE(min_components[i] == st.min_column_names.elements[i].value);
+    }
+    BOOST_REQUIRE(st.max_column_names.elements.size() == max_components.size());
+    for (auto i = 0U; i < st.max_column_names.elements.size(); i++) {
+        BOOST_REQUIRE(max_components[i] == st.max_column_names.elements[i].value);
+    }
+}
 
 class test {
 protected:

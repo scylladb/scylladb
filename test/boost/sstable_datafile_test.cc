@@ -926,19 +926,6 @@ SEASTAR_TEST_CASE(test_promoted_index_read) {
     });
 }
 
-static void check_min_max_column_names(const sstable_ptr& sst, std::vector<bytes> min_components, std::vector<bytes> max_components) {
-    const auto& st = sst->get_stats_metadata();
-    BOOST_TEST_MESSAGE(fmt::format("min {}/{} max {}/{}", st.min_column_names.elements.size(), min_components.size(), st.max_column_names.elements.size(), max_components.size()));
-    BOOST_REQUIRE(st.min_column_names.elements.size() == min_components.size());
-    for (auto i = 0U; i < st.min_column_names.elements.size(); i++) {
-        BOOST_REQUIRE(min_components[i] == st.min_column_names.elements[i].value);
-    }
-    BOOST_REQUIRE(st.max_column_names.elements.size() == max_components.size());
-    for (auto i = 0U; i < st.max_column_names.elements.size(); i++) {
-        BOOST_REQUIRE(max_components[i] == st.max_column_names.elements[i].value);
-    }
-}
-
 static void test_min_max_clustering_key(test_env& env, schema_ptr s, std::vector<bytes> exploded_pk, std::vector<std::vector<bytes>> exploded_cks,
         std::vector<bytes> min_components, std::vector<bytes> max_components, sstable_version_types version, bool remove = false) {
     auto mt = make_lw_shared<replica::memtable>(s);
@@ -1070,6 +1057,8 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
             }
             if (version >= sstable_version_types::mc) {
                 {
+                    // The prefix row {"a"} compares as after_all_prefixed, so the later
+                    // full-key row {"a", "z"} must not displace it from max_column_names.
                     auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
                             .with(schema_builder::compact_storage::yes)
                             .with_column("pk", utf8_type, column_kind::partition_key)
@@ -1408,6 +1397,67 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
                     check_min_max_column_names(sst, {"a"}, {});
                 }
             }
+        }
+    });
+}
+
+// A partition tombstone seeds min/max tracking with the before_all/after_all
+// sentinels, which bound every real position and carry no key components, so
+// min/max_column_names must come out empty despite the rows.
+SEASTAR_TEST_CASE(sstable_partition_tombstone_with_rows_metadata_check) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (const auto version : writable_sstable_versions) {
+            auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                    .with_column("pk", utf8_type, column_kind::partition_key)
+                    .with_column("ck1", utf8_type, column_kind::clustering_key)
+                    .with_column("ck2", utf8_type, column_kind::clustering_key)
+                    .with_column("r1", int32_type)
+                    .build();
+            auto sst_gen = env.make_sst_factory(s, version);
+            auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+            const column_definition& r1_col = *s->get_column_definition("r1");
+
+            BOOST_TEST_MESSAGE(fmt::format("version {}", version));
+
+            mutation m(s, key);
+            tombstone tomb(api::new_timestamp(), gc_clock::now());
+            m.partition().apply(tomb);
+            // Rows inserted out of order on purpose; the partition tombstone must win.
+            for (auto& exploded_ck : std::vector<std::vector<bytes>>{
+                    {to_bytes("z1"), to_bytes("z2")},
+                    {to_bytes("a1"), to_bytes("a2")},
+                    {to_bytes("m1"), to_bytes("m2")}}) {
+                auto c_key = clustering_key_prefix::from_exploded(*s, exploded_ck);
+                m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
+            }
+            auto sst = make_sstable_containing(sst_gen, {std::move(m)}).get();
+            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
+            check_min_max_column_names(sst, {}, {});
+        }
+    });
+}
+
+// A static-row-only partition feeds no clustering positions into the collector,
+// so min/max_column_names must stay empty.
+SEASTAR_TEST_CASE(sstable_static_row_only_metadata_check) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (const auto version : writable_sstable_versions) {
+            auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                    .with_column("pk", utf8_type, column_kind::partition_key)
+                    .with_column("ck1", utf8_type, column_kind::clustering_key)
+                    .with_column("s1", int32_type, column_kind::static_column)
+                    .with_column("r1", int32_type)
+                    .build();
+            auto sst_gen = env.make_sst_factory(s, version);
+            auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+            const column_definition& s1_col = *s->get_column_definition("s1");
+
+            BOOST_TEST_MESSAGE(fmt::format("version {}", version));
+
+            mutation m(s, key);
+            m.set_static_cell(s1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
+            auto sst = make_sstable_containing(sst_gen, {std::move(m)}).get();
+            check_min_max_column_names(sst, {}, {});
         }
     });
 }
