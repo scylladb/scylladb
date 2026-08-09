@@ -2474,7 +2474,7 @@ static future<stop_iteration> repair_get_full_row_hashes_with_rpc_stream_process
             auto rm = local_repair.get_repair_meta(from, repair_meta_id);
             rm->set_repair_state_for_local_node(repair_state::get_full_row_hashes_started);
             repair_hash_set hashes = co_await rm->get_full_row_hashes_handler();
-            rm->set_repair_state_for_local_node(repair_state::get_full_row_hashes_started);
+            rm->set_repair_state_for_local_node(repair_state::get_full_row_hashes_finished);
             _metrics.tx_hashes_nr += hashes.size();
             co_return hashes;
         });
