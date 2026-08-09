@@ -1499,7 +1499,13 @@ private:
                 bool(_rs.get_config().repair_multishard_reader_enable_read_ahead()));
         }
         try {
-            while (cur_size < _max_row_buf_size) {
+            // Logstor replaces whole partitions on write, so the whole-partition
+            // convergence in repair requires that a sync window never splits a
+            // partition. Keep reading past the byte budget until the current
+            // partition is complete (its partition_end clears the current dk).
+            // Logstor partitions are small (at most a partition tombstone plus
+            // one row), so the overrun is bounded.
+            while (cur_size < _max_row_buf_size || (_uses_logstor && _repair_reader->get_current_dk())) {
                 _gate.check();
                 mutation_fragment_opt mfopt = co_await _repair_reader->read_mutation_fragment();
                 if (!mfopt) {
@@ -1551,6 +1557,19 @@ private:
         std::optional<repair_sync_boundary> sb_max;
         if (!_row_buf.empty()) {
             sb_max = _row_buf.back().boundary();
+            if (_uses_logstor) {
+                if (_repair_reader->get_current_dk()) {
+                    on_internal_error(rlogger, format("Repair row buffer ends inside a partition, table={}.{} range={}",
+                            _schema->ks_name(), _schema->cf_name(), _range));
+                }
+                // The buffer ends at a partition boundary (see read_rows_from_disk),
+                // but the last row's own position may lie inside the partition (e.g.
+                // a partition tombstone at the partition-start position). Report the
+                // boundary at the end of the partition instead, so the common sync
+                // boundary chosen by the master never cuts inside a partition on any
+                // replica.
+                sb_max->position = position_in_partition::after_all_clustered_rows();
+            }
         }
         rlogger.debug("get_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
                       new_rows_nr, sb_max, row_buf_bytes, row_buf_combined_hash, skipped_sync_boundary);
