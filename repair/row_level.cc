@@ -59,6 +59,7 @@
 #include "readers/queue.hh"
 #include "readers/filtering.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
+#include "readers/from_mutations.hh"
 #include "repair/hash.hh"
 #include "repair/decorated_key_with_hash.hh"
 #include "repair/row.hh"
@@ -971,6 +972,7 @@ private:
     repair_hasher _repair_hasher;
     gc_clock::time_point _compaction_time;
     bool _is_tablet;
+    bool _uses_logstor;
     reader_concurrency_semaphore::inactive_read_handle _fake_inactive_read_handle;
     std::unique_ptr<const locator::token_metadata> _small_table_optimization_tm;
     seastar::semaphore _small_table_optimization_tm_sem{1};
@@ -1104,6 +1106,7 @@ public:
             , _repair_hasher(_seed, _schema)
             , _compaction_time(compaction_time)
             , _is_tablet(cf.uses_tablets())
+            , _uses_logstor(cf.uses_logstor())
             , _frozen_topology_guard(topo_guard)
             , _topology_guard(_frozen_topology_guard)
             , _is_eligible_to_repair_rejection(cf.is_eligible_to_write_rejection_on_critical_disk_utilization())
@@ -1630,6 +1633,42 @@ private:
         co_return rows;
     }
 
+    // Copy every row of each partition that has at least one row in set_diff.
+    // Used when sending to logstor followers: logstor replaces whole partitions
+    // on write, so a follower must receive the complete converged partition
+    // rather than only the rows it is missing. Otherwise a partial partition
+    // could overwrite (or be overwritten relative to) the follower's version and
+    // lose data.
+    //
+    // The selection is by partition, not by hash, which also makes it immune to
+    // repair_hash collisions: a collision can only pull in an extra whole
+    // partition, which is harmless, and can never truncate a partition the way
+    // filtering rows by hash membership could. _working_row_buf is ordered by
+    // (partition, position), so rows of a partition are contiguous.
+    future<std::list<repair_row>>
+    copy_partitions_from_working_row_buf_within_set_diff(const repair_hash_set& set_diff) {
+        std::list<repair_row> rows;
+        auto it = _working_row_buf.begin();
+        while (it != _working_row_buf.end()) {
+            const dht::decorated_key& dk = it->get_dk_with_hash()->dk;
+            auto group_end = it;
+            bool touched = false;
+            while (group_end != _working_row_buf.end() && group_end->get_dk_with_hash()->dk.equal(*_schema, dk)) {
+                touched = touched || set_diff.contains(group_end->hash());
+                ++group_end;
+            }
+            if (touched) {
+                for (auto r = it; r != group_end; ++r) {
+                    rows.push_back(*r);
+                    co_await coroutine::maybe_yield();
+                }
+            }
+            it = group_end;
+            co_await coroutine::maybe_yield();
+        }
+        co_return rows;
+    }
+
     // Return rows in the _working_row_buf with hash within the given sef_diff
     // Give a set of row hashes, return the corresponding rows
     // If needs_all_rows is set, return all the rows in _working_row_buf, ignore the set_diff
@@ -1699,7 +1738,161 @@ private:
         // Clear gently to avoid stalls
         utils::clear_gently(row_diff).get();
     }
+
+private:
+    // Merge all versions/fragments of a single partition (the master's own rows
+    // plus the rows pulled from the followers) into one logical mutation using
+    // cell-level last-writer-wins semantics.
+    future<mutation> merge_partition_versions_for_logstor(const dht::decorated_key& dk, std::list<repair_row>& group) {
+        mutation_rebuilder rb(_schema);
+        rb.consume_new_partition(dk);
+        for (repair_row& r : group) {
+            mutation_fragment mf = r.get_frozen_mutation().unfreeze(*_schema, _permit);
+            if (mf.is_partition_start()) {
+                rb.consume(std::move(mf).as_partition_start().partition_tombstone());
+            } else if (mf.is_static_row()) {
+                rb.consume(std::move(mf).as_static_row());
+            } else if (mf.is_clustering_row()) {
+                rb.consume(std::move(mf).as_clustering_row());
+            } else if (mf.is_range_tombstone()) {
+                rb.consume(std::move(mf).as_range_tombstone());
+            } else {
+                // handle_mutation_fragment() and to_repair_rows_list() never put
+                // any other fragment kind in the row buffers. Silently dropping
+                // one here would lose data, so report it instead.
+                on_internal_error(rlogger, format("Logstor repair converge: unexpected fragment kind={} table={}.{} key={}",
+                        mf.mutation_fragment_kind(), _schema->ks_name(), _schema->cf_name(), dk));
+            }
+            co_await coroutine::maybe_yield();
+        }
+        rb.consume_end_of_partition();
+        mutation_opt m = rb.consume_end_of_stream();
+        if (!m) {
+            throw std::runtime_error(format("Logstor repair converge: failed to rebuild partition table={}.{} key={}",
+                    _schema->ks_name(), _schema->cf_name(), dk));
+        }
+        co_return std::move(*m);
+    }
+
+    // Split a converged partition mutation back into repair rows, following the
+    // same fragment selection as read_rows_from_disk (skip empty partition_start
+    // and partition_end). The resulting rows are marked dirty so the master flush
+    // rewrites the whole converged partition and Step C sends it to the followers.
+    future<std::list<repair_row>> refragment_partition_for_logstor(const dht::decorated_key& dk, mutation m) {
+        auto dk_with_hash = make_lw_shared<const decorated_key_with_hash>(*_schema, dk, _seed);
+        std::list<repair_row> rows;
+        auto rd = mutation_fragment_v1_stream(make_mutation_reader_from_mutations(_schema, _permit, std::move(m)));
+        std::exception_ptr ex;
+        try {
+            while (mutation_fragment_opt mfopt = co_await rd()) {
+                mutation_fragment& mf = *mfopt;
+                if (mf.is_partition_start()) {
+                    if (!mf.as_partition_start().partition_tombstone()) {
+                        continue;
+                    }
+                } else if (mf.is_end_of_partition()) {
+                    continue;
+                }
+                auto hash = _repair_hasher.do_hash_for_mf(*dk_with_hash, mf);
+                auto fm = freeze(*_schema, mf);
+                auto pos = position_in_partition(mf.position());
+                auto mf_ptr = make_lw_shared<mutation_fragment>(std::move(mf));
+                rows.push_back(repair_row(std::move(fm), std::move(pos), dk_with_hash, std::move(hash),
+                        is_dirty_on_master::yes, std::move(mf_ptr)));
+                co_await coroutine::maybe_yield();
+            }
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await rd.close();
+        if (ex) {
+            std::rethrow_exception(ex);
+        }
+        co_return std::move(rows);
+    }
+
 public:
+    // For logstor tables, reconcile _working_row_buf so that every partition
+    // touched by repair is represented by its complete, converged value.
+    //
+    // Row-level repair reconciles at row-hash granularity and normally relies on
+    // the storage engine to merge overlapping rows at read time (cell-level LWW).
+    // Logstor has no such merge: a write replaces the whole partition, keeping the
+    // record with the highest record timestamp. Sending or flushing only the
+    // differing rows would therefore drop the cells that live in the other
+    // versions. To avoid that, merge all versions of each touched partition into a
+    // single mutation and re-expand it into repair rows. The master flush then
+    // stores the converged partition locally, and Step C sends the converged
+    // partition to the followers.
+    //
+    // Must run inside a seastar thread.
+    void converge_working_row_buf_for_logstor() {
+        if (!_uses_logstor || _working_row_buf.empty()) {
+            return;
+        }
+        std::list<repair_row> converged;
+        // The rows of a partition are moved out of _working_row_buf while they
+        // are merged, so a merge that throws would leave them, and every
+        // partition converged so far, owned by locals that the unwind destroys.
+        // Hand the rows back unconditionally instead: a throw fails the repair
+        // round and the range is retried, but _working_row_buf stays complete
+        // for clear_gently() in stop().
+        auto restore = defer([&] noexcept {
+            converged.splice(converged.end(), _working_row_buf);
+            _working_row_buf = std::move(converged);
+        });
+        bool converged_any = false;
+        auto it = _working_row_buf.begin();
+        while (it != _working_row_buf.end()) {
+            const dht::decorated_key& dk = it->get_dk_with_hash()->dk;
+            auto group_end = it;
+            bool any_dirty = false;
+            while (group_end != _working_row_buf.end() && group_end->get_dk_with_hash()->dk.equal(*_schema, dk)) {
+                any_dirty = any_dirty || bool(group_end->dirty_on_master());
+                ++group_end;
+            }
+            std::list<repair_row> group;
+            group.splice(group.end(), _working_row_buf, it, group_end);
+            it = group_end;
+
+            // A partition is only at risk when repair pulled a differing version
+            // into it (any_dirty) and there is more than one version to merge.
+            // Otherwise the single row already is the complete partition value.
+            if (!any_dirty || group.size() < 2) {
+                converged.splice(converged.end(), group);
+                thread::maybe_yield();
+                continue;
+            }
+
+            try {
+                auto merged = merge_partition_versions_for_logstor(dk, group).get();
+                thread::maybe_yield();
+                auto rebuilt = refragment_partition_for_logstor(dk, std::move(merged)).get();
+                converged.splice(converged.end(), rebuilt);
+            } catch (...) {
+                // Put the unconverged rows back where they came from, so that
+                // the restore above reassembles the buffer without losing them.
+                _working_row_buf.splice(_working_row_buf.begin(), group);
+                throw;
+            }
+            converged_any = true;
+            thread::maybe_yield();
+        }
+        restore.cancel();
+        _working_row_buf = std::move(converged);
+        if (!converged_any) {
+            // Nothing was merged, so the rows and their hashes are unchanged.
+            return;
+        }
+        // The merge changed the rows, so recompute the combined hash to keep it
+        // consistent with the converged working row buffer.
+        _working_row_buf_combined_hash.clear();
+        for (const repair_row& r : _working_row_buf) {
+            _working_row_buf_combined_hash.add(r.hash());
+            thread::maybe_yield();
+        }
+    }
+
     future<const locator::token_metadata*> get_tm_for_small_table_optimization_check(const locator::token_metadata* tm) {
         auto sem_units = co_await get_units(_small_table_optimization_tm_sem, 1);
         if (!tm) {
@@ -2211,11 +2404,18 @@ public:
             if (remote_node == myhostid()) {
                 co_return;
             }
-            size_t sz = set_diff.size();
-            std::list<repair_row> row_diff = co_await get_row_diff(std::move(set_diff), needs_all_rows);
-            if (row_diff.size() != sz) {
-                rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
-                        _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
+            std::list<repair_row> row_diff;
+            if (_uses_logstor && !needs_all_rows) {
+                // Logstor replaces whole partitions, so send the complete converged
+                // partition for every partition that differs, not only the delta rows.
+                row_diff = co_await copy_partitions_from_working_row_buf_within_set_diff(set_diff);
+            } else {
+                size_t sz = set_diff.size();
+                row_diff = co_await get_row_diff(std::move(set_diff), needs_all_rows);
+                if (row_diff.size() != sz) {
+                    rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
+                            _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
+                }
             }
             size_t row_bytes = co_await get_repair_rows_size(row_diff);
             stats().tx_row_nr += row_diff.size();
@@ -2283,12 +2483,18 @@ public:
         if (remote_node == myhostid()) {
             co_return;
         }
-        size_t sz = set_diff.size();
-
-        std::list<repair_row> row_diff = co_await get_row_diff(std::move(set_diff), needs_all_rows);
-        if (row_diff.size() != sz) {
-            rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
-                    _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
+        std::list<repair_row> row_diff;
+        if (_uses_logstor && !needs_all_rows) {
+            // Logstor replaces whole partitions, so send the complete converged
+            // partition for every partition that differs, not only the delta rows.
+            row_diff = co_await copy_partitions_from_working_row_buf_within_set_diff(set_diff);
+        } else {
+            size_t sz = set_diff.size();
+            row_diff = co_await get_row_diff(std::move(set_diff), needs_all_rows);
+            if (row_diff.size() != sz) {
+                rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
+                        _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
+            }
         }
         if (small_table_optimization) {
             auto& strat = small_table_optimization->erm->get_replication_strategy();
@@ -3535,6 +3741,10 @@ private:
             throw;
           }
         }
+        // For logstor tables, merge every touched partition into its complete
+        // converged value before flushing it locally and sending it to followers,
+        // because logstor replaces whole partitions instead of merging rows.
+        master.converge_working_row_buf_for_logstor();
         master.flush_rows_in_working_row_buf(_small_table_optimization ? std::make_optional(small_table_optimization_params{ .erm = get_erm() }) : std::nullopt);
         return op_status::next_step;
     }
