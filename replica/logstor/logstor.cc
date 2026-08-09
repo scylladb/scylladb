@@ -149,12 +149,11 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
     index.insert(key, std::move(new_entry));
 }
 
-future<std::optional<mutation>> logstor::read(const schema& s, const primary_index& index, const dht::decorated_key& dk, const query::partition_slice& slice) {
+future<std::optional<mutation>> logstor::read(const schema& s, const primary_index& index, const dht::decorated_key& dk, bool bypass_cache) {
     auto gate_holder = _async_gate.hold();
 
     auto op = index.start_read();
 
-    const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
     auto* cache = bypass_cache ? nullptr : index.cache_tracker();
 
     auto it = index.find(dk);
@@ -193,6 +192,120 @@ future<std::optional<mutation>> logstor::read(const schema& s, const primary_ind
     }
 
     co_return std::move(m);
+}
+
+std::map<sstring, mutation_source> logstor::make_mutation_sources_for_dump(schema_ptr s, const primary_index& index, const dht::decorated_key& dk) {
+    // Reads the on-disk log record of a single key, bypassing the cache. The
+    // disk read happens on the first fill_buffer() call; the record location
+    // is re-resolved from the index at that point, since compaction may have
+    // moved the record after the reader was created (in which case the source
+    // name, captured at creation time, names the record's old location).
+    class log_record_dump_reader : public mutation_reader::impl {
+        logstor* _logstor;
+        const primary_index& _index;
+        dht::decorated_key _dk;
+        query::partition_slice _slice;
+        streamed_mutation::forwarding _fwd;
+        mutation_reader_opt _inner;
+    public:
+        log_record_dump_reader(schema_ptr s, reader_permit permit, logstor* ls, const primary_index& index,
+                dht::decorated_key dk, query::partition_slice slice, streamed_mutation::forwarding fwd)
+            : impl(std::move(s), std::move(permit))
+            , _logstor(ls)
+            , _index(index)
+            , _dk(std::move(dk))
+            , _slice(std::move(slice))
+            , _fwd(fwd)
+        {}
+
+        virtual future<> fill_buffer() override {
+            if (!_inner) {
+                auto guard = reader_permit::awaits_guard(_permit);
+                auto mut = co_await _logstor->read(*_schema, _index, _dk, true);
+                if (!mut) {
+                    _end_of_stream = true;
+                    co_return;
+                }
+                _inner = make_mutation_reader_from_mutations(_schema, _permit, std::move(*mut), _slice, _fwd);
+            }
+            co_await _inner->fill_buffer();
+            _inner->move_buffer_content_to(*this);
+            _end_of_stream = _inner->is_end_of_stream();
+        }
+
+        virtual future<> next_partition() override {
+            clear_buffer_to_next_partition();
+            if (is_buffer_empty() && _inner) {
+                return _inner->next_partition();
+            }
+            // Without _inner nothing was read yet, so the reader sits at the
+            // start of the only partition and next_partition() does nothing, or
+            // fill_buffer() found no record and already set end of stream.
+            return make_ready_future<>();
+        }
+
+        virtual future<> fast_forward_to(const dht::partition_range&) override {
+            throw std::bad_function_call();
+        }
+
+        virtual future<> fast_forward_to(position_range pr) override {
+            if (_inner) {
+                clear_buffer();
+                // Each sub-stream ends with end of stream set; forwarding opens
+                // the next one, so the flag has to be cleared or the forwarded
+                // fragments are never read.
+                _end_of_stream = false;
+                return _inner->fast_forward_to(std::move(pr));
+            }
+            throw std::bad_function_call();
+        }
+
+        virtual future<> close() noexcept override {
+            if (_inner) {
+                return _inner->close();
+            }
+            return make_ready_future<>();
+        }
+    };
+
+    std::map<sstring, mutation_source> sources;
+
+    auto it = index.find(dk);
+    if (it == index.end()) {
+        return sources;
+    }
+
+    // Snapshot the cached mutation now; the cache entry may be evicted by the
+    // time the source is read from.
+    if (auto* cache = index.cache_tracker()) {
+        if (auto cached = cache->lookup(*it, s)) {
+            sources.emplace("logstor-cache", mutation_source([mut = std::move(*cached)] (
+                    schema_ptr s,
+                    reader_permit permit,
+                    const dht::partition_range&,
+                    const query::partition_slice& slice,
+                    tracing::trace_state_ptr,
+                    streamed_mutation::forwarding fwd,
+                    mutation_reader::forwarding) {
+                return make_mutation_reader_from_mutations(std::move(s), std::move(permit), mutation(mut), slice, fwd);
+            }));
+        }
+    }
+
+    const auto location = it->entry().location;
+    auto name = format("logstor-log:{}:{}:{}", _segment_manager.get_segment_file_path(location.segment), location.segment.value, location.offset);
+    sources.emplace(std::move(name), mutation_source([this, &index, dk] (
+            schema_ptr s,
+            reader_permit permit,
+            const dht::partition_range&,
+            const query::partition_slice& slice,
+            tracing::trace_state_ptr,
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding) {
+        return make_mutation_reader<log_record_dump_reader>(std::move(s), std::move(permit), this, index, dk, slice, fwd);
+    }));
+
+    return sources;
 }
 
 mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& index, reader_permit permit, const dht::partition_range& pr,
@@ -271,7 +384,8 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
                 auto current_key = it->key();
 
                 auto guard = reader_permit::awaits_guard(_permit);
-                auto mut = co_await _logstor->read(*_schema, _index, current_key, _slice);
+                auto mut = co_await _logstor->read(*_schema, _index, current_key,
+                        _slice.options.contains(query::partition_slice::option::bypass_cache));
 
                 _last_key = current_key; // mark as visited even if not found (tombstoned)
 

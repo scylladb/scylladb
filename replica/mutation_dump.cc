@@ -12,6 +12,7 @@
 #include "partition_slice_builder.hh"
 #include "readers/foreign.hh"
 #include "replica/database.hh"
+#include "replica/logstor/logstor.hh"
 #include "replica/mutation_dump.hh"
 #include "replica/query_state.hh"
 #include "schema/schema_builder.hh"
@@ -64,6 +65,9 @@ private:
         if (tbl.is_virtual()) {
             all_mutation_sources.emplace("virtual-table", tbl.as_mutation_source());
             return all_mutation_sources;
+        }
+        if (tbl.uses_logstor()) {
+            return tbl.get_logstor().make_mutation_sources_for_dump(_underlying_schema, tbl.logstor_index(), _dk);
         }
         {
             auto mss = tbl.select_memtables_as_mutation_sources(_dk.token());
