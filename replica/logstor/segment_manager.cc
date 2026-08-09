@@ -2574,6 +2574,10 @@ future<> segment_manager_impl::recover_segment(replica::database& db, log_segmen
                 if (!t.uses_logstor()) {
                     return want_data::no;
                 }
+                // A record rejected for token overflow stays unindexed on purpose: the
+                // write that produced it had already failed for the same reason, and
+                // leaving it out keeps the bound an invariant across restarts. insert()
+                // logs the rejection.
                 t.logstor_index().insert(header.key, new_entry, cmp);
             } catch (const replica::no_such_column_family&) {
                 // ignore record

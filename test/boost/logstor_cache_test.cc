@@ -236,15 +236,24 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalan
     shared_logstor_cache cache;
     primary_index index(schema, noop_space_accounting, &cache.logstor_tracker);
 
-    constexpr int64_t fixed_token = 7;
-    auto hot_keys = insert_same_token_keys(index, *schema, fixed_token, 0, 24);
+    // A token holds at most primary_index::max_keys_per_token keys, so bucket growth is
+    // exercised by half-filling many buckets rather than one deep bucket.
+    constexpr int token_count = 12;
+    constexpr int hot_per_token = int(primary_index::max_keys_per_token) / 2;
+    constexpr int grown_per_token = int(primary_index::max_keys_per_token) - hot_per_token;
 
+    std::vector<primary_index_key> hot_keys;
     std::vector<mutation> hot_mutations;
-    hot_mutations.reserve(hot_keys.size());
-    for (size_t i = 0; i < hot_keys.size(); ++i) {
-        auto m = make_mutation(schema, format("fixed-pk-{:06d}", i), format("v{}", i));
-        populate(index, hot_keys[i], m);
-        hot_mutations.push_back(std::move(m));
+    for (int token = 1; token <= token_count; ++token) {
+        for (int i = 0; i < hot_per_token; ++i) {
+            auto pk = format("fixed-pk-{:06d}", token * 100 + i);
+            auto key = make_fixed_token_key(*schema, token, pk);
+            BOOST_REQUIRE(index.insert(key, make_index_entry(500 + i, i * 8, 8, 1)).inserted());
+            auto m = make_mutation(schema, pk, format("v{}", token * 100 + i));
+            populate(index, key, m);
+            hot_keys.push_back(std::move(key));
+            hot_mutations.push_back(std::move(m));
+        }
     }
 
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_insertions, hot_keys.size());
@@ -256,14 +265,19 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalan
         assert_that(schema, lookup(index, hot_keys[i], schema)).is_equal_to(hot_mutations[i].partition());
     }
 
-    auto grown_keys = insert_same_token_keys(index, *schema, fixed_token, 10'000, 96);
+    std::vector<primary_index_key> grown_keys;
+    for (int token = 1; token <= token_count; ++token) {
+        auto keys = insert_same_token_keys(index, *schema, token, 10'000 + token * 100, grown_per_token);
+        grown_keys.insert(grown_keys.end(), keys.begin(), keys.end());
+    }
     BOOST_REQUIRE_EQUAL(index.get_key_count(), hot_keys.size() + grown_keys.size());
 
-    for (int i = 0; i < 48; ++i) {
-        BOOST_REQUIRE(index.erase(grown_keys[i], make_index_entry(500 + i, i * 8, 8, 1).location));
+    // Erase one grown key per token, compacting each bucket in place.
+    for (int token = 0; token < token_count; ++token) {
+        BOOST_REQUIRE(index.erase(grown_keys[token * grown_per_token], make_index_entry(500, 0, 8, 1).location));
     }
 
-    BOOST_REQUIRE_EQUAL(index.get_key_count(), hot_keys.size() + grown_keys.size() - 48);
+    BOOST_REQUIRE_EQUAL(index.get_key_count(), hot_keys.size() + grown_keys.size() - token_count);
 
     for (size_t i = 0; i < hot_keys.size(); ++i) {
         BOOST_REQUIRE(lookup_exists(index, hot_keys[i], schema));
@@ -330,7 +344,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_keeps_oversized_same_to
     auto schema = make_logstor_schema();
     primary_index index(schema, noop_space_accounting, nullptr);
 
-    insert_same_token_keys(index, *schema, 23, 0, 5);
+    insert_same_token_keys(index, *schema, 23, 0, int(primary_index::max_keys_per_token));
     insert_same_token_keys(index, *schema, 29, 100, 1);
 
     auto scan = index.scan();
@@ -339,7 +353,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_keeps_oversized_same_to
     BOOST_REQUIRE(batch0);
     BOOST_REQUIRE_EQUAL(batch0->first_token, dht::token::from_int64(23));
     BOOST_REQUIRE_EQUAL(batch0->last_token, dht::token::from_int64(23));
-    BOOST_REQUIRE_EQUAL(batch0->entry_count, 5u);
+    BOOST_REQUIRE_EQUAL(batch0->entry_count, primary_index::max_keys_per_token);
     BOOST_REQUIRE(!batch0->exhausted);
 
     auto batch1 = scan.next_batch(2);
@@ -355,8 +369,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_excha
     shared_logstor_cache cache;
     primary_index index(schema, noop_space_accounting, &cache.logstor_tracker);
 
-    constexpr int64_t fixed_token = 19;
-    auto keys = insert_same_token_keys(index, *schema, fixed_token, 20'000, 8);
+    // Spread over two tokens because a token holds at most max_keys_per_token keys.
+    constexpr int keys_per_token = int(primary_index::max_keys_per_token);
+    auto keys = insert_same_token_keys(index, *schema, 19, 20'000, keys_per_token);
+    auto more_keys = insert_same_token_keys(index, *schema, 21, 20'000 + keys_per_token, keys_per_token);
+    keys.insert(keys.end(), more_keys.begin(), more_keys.end());
 
     std::vector<mutation> mutations;
     mutations.reserve(keys.size());

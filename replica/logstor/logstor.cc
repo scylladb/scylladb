@@ -158,7 +158,19 @@ future<> logstor::write(const mutation& m, write_target target, db::timeout_cloc
         .location = location,
         .timestamp = ts,
     };
-    index.insert(key, std::move(new_entry));
+
+    switch (index.insert(key, std::move(new_entry)).result) {
+        case primary_index::insert_result::inserted:
+            break;
+        case primary_index::insert_result::superseded:
+            // A newer write for this key already won the race; the record we just
+            // made durable is dead space that compaction reclaims on its own.
+            break;
+        case primary_index::insert_result::token_overflow:
+            // The record is already durable, but leaving it out of the index makes it
+            // dead space that compaction reclaims on its own.
+            co_await coroutine::return_exception(token_overflow_error(key.token()));
+    }
 }
 
 future<std::optional<mutation>> logstor::read(schema_ptr s, const primary_index& index, const dht::decorated_key& dk, const query::partition_slice& slice) {

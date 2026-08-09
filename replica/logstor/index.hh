@@ -11,6 +11,7 @@
 #include <functional>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <optional>
+#include <stdexcept>
 #include "dht/token.hh"
 #include "types.hh"
 #include "utils/bptree.hh"
@@ -130,6 +131,10 @@ public:
 
     using entry_reference = std::reference_wrapper<const primary_index_entry>;
 
+    // Maximum number of distinct keys allowed to share a single token.
+    // The probability of exceeding this limit is negligible for any realistic dataset.
+    static constexpr size_t max_keys_per_token = 4;
+
     struct read_lookup_result {
         index_entry entry;
         std::optional<mutation> cached_mutation;
@@ -140,6 +145,8 @@ public:
         inserted,
         // The index already holds a newer entry for this key; nothing changed.
         superseded,
+        // The key's token already holds max_keys_per_token distinct keys; nothing changed.
+        token_overflow,
     };
 
     struct insert_outcome {
@@ -358,6 +365,12 @@ private:
         return _partitions.upper_bound(token.raw(), primary_index_key_cmp{});
     }
 
+    // Number of distinct keys currently stored under `token`.
+    size_t token_key_count(dht::token token) const {
+        auto begin = _partitions.lower_bound(token.raw(), primary_index_key_cmp{});
+        return size_t(std::distance(begin, upper_bound(token)));
+    }
+
 public:
     explicit primary_index(schema_ptr schema, space_accounting_subscriber& space_accounting, cache_tracker* ct)
         : _partitions(dht::raw_token_less_comparator{})
@@ -473,6 +486,13 @@ public:
             }
         }
 
+        // hint.key_match means the token is already present but holds only other keys.
+        // Token collisions are vanishingly rare, so counting the bucket never runs on a
+        // healthy write path.
+        if (hint.key_match && token_key_count(key.token()) >= max_keys_per_token) [[unlikely]] {
+            return {insert_result::token_overflow, std::nullopt};
+        }
+
         auto it = _partitions.emplace_before(i, key.token().raw(), hint, key, std::move(new_entry));
         _space_accounting.on_add_record(it->_e.location);
         on_entry_added(*it);
@@ -535,6 +555,16 @@ private:
             }
         }, location);
     }
+};
+
+// Thrown by the write path when a record cannot be indexed because its token already
+// holds primary_index::max_keys_per_token distinct keys.
+class token_overflow_error : public std::runtime_error {
+public:
+    explicit token_overflow_error(dht::token token)
+        : std::runtime_error(format("logstor: token {} already holds the maximum of {} distinct keys",
+                token, primary_index::max_keys_per_token))
+    { }
 };
 
 }
