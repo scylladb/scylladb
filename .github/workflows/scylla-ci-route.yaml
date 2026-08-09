@@ -221,9 +221,10 @@ jobs:
 
             while IFS= read -r FILE; do
               [ -z "$FILE" ] && continue
-              # Check for docs files that DON'T need Sphinx build
-              # (.github/*, docs/dev/*, README.md, docs/*.py, top-level *.md)
-              if echo "$FILE" | grep -qE '^docs/dev/|(/)?README\.md$|^docs/.*\.py$|^\.github|^[a-zA-Z0-9]+\.md$'; then
+              # Check for files that DON'T need Sphinx build
+              # (.github/*, docs/dev/*, README.md, docs/*.py, top-level *.md,
+              # .coderabbit.yaml - review config, must live at the repo root)
+              if echo "$FILE" | grep -qE '^docs/dev/|(/)?README\.md$|^docs/.*\.py$|^\.github|^[a-zA-Z0-9]+\.md$|^\.coderabbit\.yaml$'; then
                 HAS_DOC_FILES=true
               # Check for docs files that DO need Sphinx build
               elif echo "$FILE" | grep -qE '^docs/'; then
