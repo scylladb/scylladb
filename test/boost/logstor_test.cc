@@ -901,9 +901,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     const log_location loc5{.segment = log_segment_id{6}, .offset = 0, .size = 29};
 
     // insert(pk0, loc0): new entry, succeeds, no previous entry to free  →  {pk0: loc0}
-    auto [inserted0, prev0] = index.insert(pk0, index_entry{.location = loc0, .timestamp = api::timestamp_type(10)});
-    BOOST_REQUIRE(inserted0);
-    BOOST_REQUIRE(!prev0);
+    auto outcome0 = index.insert(pk0, index_entry{.location = loc0, .timestamp = api::timestamp_type(10)});
+    BOOST_REQUIRE(outcome0.inserted());
+    BOOST_REQUIRE(!outcome0.previous_entry);
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc0.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 1u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 0u);
@@ -911,11 +911,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     BOOST_REQUIRE(accounting.is_live(loc0));
 
     // insert(pk0, loc0_old): older timestamp, rejected, no accounting change  →  {pk0: loc0}
-    auto [inserted_old, prev_old] = index.insert(pk0, index_entry{.location = loc0_old, .timestamp = api::timestamp_type(9)});
-    BOOST_REQUIRE(!inserted_old);
-    BOOST_REQUIRE(prev_old);
-    BOOST_REQUIRE(prev_old->location == loc0);
-    BOOST_REQUIRE_EQUAL(prev_old->timestamp, api::timestamp_type(10));
+    auto outcome_old = index.insert(pk0, index_entry{.location = loc0_old, .timestamp = api::timestamp_type(9)});
+    BOOST_REQUIRE(outcome_old.result == primary_index::insert_result::superseded);
+    BOOST_REQUIRE(outcome_old.previous_entry);
+    BOOST_REQUIRE(outcome_old.previous_entry->location == loc0);
+    BOOST_REQUIRE_EQUAL(outcome_old.previous_entry->timestamp, api::timestamp_type(10));
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc0.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 1u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 0u);
@@ -923,11 +923,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     BOOST_REQUIRE(accounting.is_live(loc0));
 
     // insert(pk0, loc1): newer timestamp, replaces loc0, old location freed via accounting  →  {pk0: loc1}
-    auto [inserted1, prev1] = index.insert(pk0, index_entry{.location = loc1, .timestamp = api::timestamp_type(11)});
-    BOOST_REQUIRE(inserted1);
-    BOOST_REQUIRE(prev1);
-    BOOST_REQUIRE(prev1->location == loc0);
-    BOOST_REQUIRE_EQUAL(prev1->timestamp, api::timestamp_type(10));
+    auto outcome1 = index.insert(pk0, index_entry{.location = loc1, .timestamp = api::timestamp_type(11)});
+    BOOST_REQUIRE(outcome1.inserted());
+    BOOST_REQUIRE(outcome1.previous_entry);
+    BOOST_REQUIRE(outcome1.previous_entry->location == loc0);
+    BOOST_REQUIRE_EQUAL(outcome1.previous_entry->timestamp, api::timestamp_type(10));
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc1.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 2u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 1u);
@@ -938,9 +938,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     BOOST_REQUIRE(accounting.freed_locations.back() == loc0);
 
     // insert(pk1, loc2): new key, succeeds, adds to live bytes  →  {pk0: loc1, pk1: loc2}
-    auto [inserted2, prev2] = index.insert(pk1, index_entry{.location = loc2, .timestamp = api::timestamp_type(7)});
-    BOOST_REQUIRE(inserted2);
-    BOOST_REQUIRE(!prev2);
+    auto outcome2 = index.insert(pk1, index_entry{.location = loc2, .timestamp = api::timestamp_type(7)});
+    BOOST_REQUIRE(outcome2.inserted());
+    BOOST_REQUIRE(!outcome2.previous_entry);
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc1.size + loc2.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 3u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 1u);
@@ -985,13 +985,13 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     BOOST_REQUIRE(accounting.freed_locations.back() == loc2);
 
     // insert(pk1, loc4): new entry for pk1 (previously erased), succeeds  →  {pk0: loc3, pk1: loc4}
-    auto [inserted4, prev4] = index.insert(pk1, index_entry{.location = loc4, .timestamp = api::timestamp_type(12)});
-    BOOST_REQUIRE(inserted4);
-    BOOST_REQUIRE(!prev4);
+    auto outcome4 = index.insert(pk1, index_entry{.location = loc4, .timestamp = api::timestamp_type(12)});
+    BOOST_REQUIRE(outcome4.inserted());
+    BOOST_REQUIRE(!outcome4.previous_entry);
     // insert(pk2, loc5): new key, succeeds  →  {pk0: loc3, pk1: loc4, pk2: loc5}
-    auto [inserted5, prev5] = index.insert(pk2, index_entry{.location = loc5, .timestamp = api::timestamp_type(13)});
-    BOOST_REQUIRE(inserted5);
-    BOOST_REQUIRE(!prev5);
+    auto outcome5 = index.insert(pk2, index_entry{.location = loc5, .timestamp = api::timestamp_type(13)});
+    BOOST_REQUIRE(outcome5.inserted());
+    BOOST_REQUIRE(!outcome5.previous_entry);
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc3.size + loc4.size + loc5.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 6u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
@@ -1062,9 +1062,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     });
 
     auto insert = [&] (const entry& e, api::timestamp_type ts) {
-        auto [inserted, prev] = index.insert(e.key, index_entry{.location = e.loc, .timestamp = ts});
-        BOOST_REQUIRE(inserted);
-        BOOST_REQUIRE(!prev);
+        auto outcome = index.insert(e.key, index_entry{.location = e.loc, .timestamp = ts});
+        BOOST_REQUIRE(outcome.inserted());
+        BOOST_REQUIRE(!outcome.previous_entry);
     };
 
     insert(entries[0], api::timestamp_type(10));
