@@ -3558,7 +3558,8 @@ public:
             bool enable_incremental_repair = _shard_task.db.local().features().tablet_incremental_repair && _is_tablet &&
                                               _shard_task.sched_info.incremental_mode != locator::tablet_repair_incremental_mode::disabled &&
                                              _shard_task.sched_info.sched_by_scheduler &&
-                                             !_shard_task.sched_info.for_tablet_rebuild;
+                                             !_shard_task.sched_info.for_tablet_rebuild &&
+                                             !s->logstor_enabled();
             if (enable_incremental_repair) {
                 auto& table = _shard_task.db.local().find_column_family(_table_id);
                 auto erm = table.get_effective_replication_map();
