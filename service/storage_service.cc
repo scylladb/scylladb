@@ -4212,11 +4212,13 @@ future<locator::tablet_map> storage_service::build_tablet_map_for_migration(
 }
 
 future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_sizes_for_migration(
-    const locator::token_metadata& tm,
+    const locator::static_effective_replication_map_ptr& erm,
     const locator::tablet_aware_replication_strategy* trs,
     const std::vector<std::pair<table_id, sstring>>& tables_to_estimate) {
 
     std::unordered_map<table_id, uint64_t> table_sizes;
+
+    const auto& tm = *erm->get_token_metadata_ptr();
 
     const auto& local_dc = tm.get_topology().get_location().dc;
     auto local_rf = trs->get_replication_factor(local_dc);
@@ -4227,12 +4229,25 @@ future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_si
 
     const auto local_host = tm.get_my_id();
 
+    // Compute the token ring fraction for which this node is a replica.
+    // (Same logic as in storage_service::effective_ownership(), but only for a single node.)
     double local_fraction = 0.0;
-    auto token_ownership = dht::token::describe_ownership(tm.sorted_tokens());
-    for (const auto& [tok, fraction] : token_ownership) {
-        if (tm.get_endpoint(tok) == local_host) {
-            local_fraction += fraction;
+    const auto token_ownership = dht::token::describe_ownership(tm.sorted_tokens());
+    const auto ranges = co_await erm->get_ranges(local_host);
+    for (const auto& r : ranges) {
+        // Corner case for wrap-around range:
+        // get_ranges() unwraps the wrapping range (t1, t0] as two ranges
+        // (t1, +inf) and (-inf, t0]. Skipping the former yields the same
+        // ownership as if the range were not split.
+        if (!r.end()) {
+            continue;
         }
+        auto end_token = r.end()->value();
+        auto it = token_ownership.find(end_token);
+        if (it == token_ownership.end()) {
+            on_internal_error(slogger, fmt::format("Cannot find token ownership for token {}", end_token));
+        }
+        local_fraction += it->second;
     }
 
     if (local_fraction <= 0) {
@@ -4246,7 +4261,7 @@ future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_si
         auto local_size = co_await _db.map_reduce0([tid] (replica::database& db) {
             return uint64_t(db.find_column_family(tid).get_stats().live_disk_space_used.on_disk);
         }, uint64_t(0), std::plus<uint64_t>());
-        auto estimated_total_size = static_cast<uint64_t>(local_size / local_fraction) / local_rf;
+        auto estimated_total_size = static_cast<uint64_t>(local_size / local_fraction);
         table_sizes.emplace(tid, estimated_total_size);
     }
 
@@ -4345,7 +4360,6 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         //   |------------|-------------|-------------|------------|
 
         const auto tmptr = get_token_metadata_ptr();
-        const auto& tm = *tmptr;
 
         // Estimate table sizes when pow2 convergence is enabled.
         // The estimates are used by the tablet allocator to determine the
@@ -4361,7 +4375,8 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         target_pow2_per_table_map target_pow2s;
         bool use_pow2_presplit = bool(_feature_service.tablet_pow2_convergence);
         if (use_pow2_presplit) {
-            auto estimated_sizes = co_await collect_table_sizes_for_migration(tm, trs, tables_to_migrate);
+            auto erm = ks.get_static_effective_replication_map();
+            auto estimated_sizes = co_await collect_table_sizes_for_migration(erm, trs, tables_to_migrate);
             target_pow2s = co_await _tablet_allocator.local().compute_migration_target_pow2s(trs, estimated_sizes);
         }
 
