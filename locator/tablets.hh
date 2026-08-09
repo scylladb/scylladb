@@ -8,24 +8,21 @@
 
 #pragma once
 
+#include "locator/tablets_fwd.hh"
 #include "dht/token.hh"
 #include "locator/token_metadata_fwd.hh"
-#include "utils/small_vector.hh"
-#include "locator/host_id.hh"
 #include "service/session.hh"
 #include "dht/i_partitioner_fwd.hh"
 #include "dht/token-sharding.hh"
 #include "dht/ring_position.hh"
-#include "locator/topology.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/hash.hh"
 #include "utils/UUID.hh"
-#include "raft/raft.hh"
+#include "raft/raft_fwd.hh"
 
 #include <memory>
 #include <ranges>
-#include <seastar/core/reactor.hh>
 #include <seastar/util/log.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
@@ -43,20 +40,6 @@ extern seastar::logger tablet_logger;
 using token = dht::token;
 
 using tablet_task_id = utils::tagged_uuid<struct tablet_task_id_tag>;
-
-// Identifies tablet within the scope of a single tablet_map,
-// which has a scope of (table_id, token metadata version).
-// Different tablets of different tables can have the same tablet_id.
-// Different tablets in subsequent token metadata version can have the same tablet_id.
-// When splitting a tablet, one of the new tablets (in the new token metadata version)
-// will have the same tablet_id as the old one.
-struct tablet_id {
-    size_t id;
-    explicit tablet_id(size_t id) : id(id) {}
-    size_t value() const { return id; }
-    explicit operator size_t() const { return id; }
-    auto operator<=>(const tablet_id&) const = default;
-};
 
 /// Determines properties of tablet layout in a given table (tablet_map).
 enum class tablet_layout {
@@ -88,14 +71,6 @@ enum class tablet_layout {
 sstring tablet_layout_to_string(tablet_layout);
 tablet_layout tablet_layout_from_string(const sstring&);
 
-/// Identifies tablet (not be confused with tablet replica) in the scope of the whole cluster.
-struct global_tablet_id {
-    table_id table;
-    tablet_id tablet;
-
-    auto operator<=>(const global_tablet_id&) const = default;
-};
-
 struct range_based_tablet_id {
     table_id table;
 
@@ -105,48 +80,6 @@ struct range_based_tablet_id {
 
     bool operator==(const range_based_tablet_id&) const = default;
 };
-
-struct tablet_replica {
-    host_id host;
-    shard_id shard;
-
-    auto operator<=>(const tablet_replica&) const = default;
-};
-
-using tablet_replica_set = utils::small_vector<tablet_replica, 3>;
-
-/// A 64-bit hash computed from a tablet's replica list after ordering it.
-/// Used by TABLETS_ROUTING_V2 to detect when a driver's cached routing is stale.
-///
-/// Tablet version is computed differently for eventually-consistent and
-/// strongly-consistent tablets. For more details, see: docs/dev/tablets-routing-v2.md.
-using tablet_version = utils::tagged_integer<struct tablet_version_tag, uint64_t>;
-
-/// A single-byte encoding of one 4-bit block of a tablet_version.
-/// The high nibble is the block index (0-15), the low nibble is the block's value.
-/// Used in EXECUTE requests to minimize network usage.
-///
-/// Blocks are indexed from the least significant bits to the most significant ones.
-/// For more details, see: docs/dev/tablets-routing-v2.md.
-using tablet_version_block = utils::tagged_integer<struct tablet_version_block_tag, uint8_t>;
-
-inline bool compare_tablet_version_block(tablet_version hash, tablet_version_block block) noexcept {
-    uint64_t hash_value = hash.value();
-
-    // Extract the value of the block.
-    const uint8_t block_value = block.value() & 0x0F;
-
-    // Extract the index of the block.
-    const uint8_t block_index = (block.value() & 0xF0) >> 4;
-
-    // Shift the hash so that the block corresponds to the 4 least significant bits.
-    hash_value >>= (block_index * 4);
-
-    // Extract the block value.
-    const uint8_t hash_block = static_cast<uint8_t>(hash_value & 0x0F);
-
-    return hash_block == block_value;
-}
 
 namespace internal {
 
@@ -245,44 +178,6 @@ inline
 bool contains(const tablet_replica_set& rs, const tablet_replica& r) {
     return std::ranges::any_of(rs, [&] (auto&& r_) { return r_ == r; });
 }
-
-
-enum class tablet_task_type {
-    none,
-    user_repair,
-    auto_repair,
-    migration,
-    intranode_migration,
-    split,
-    merge
-};
-
-sstring tablet_task_type_to_string(tablet_task_type);
-tablet_task_type tablet_task_type_from_string(const sstring&);
-
-
-// - incremental (incremental repair): The incremental repair logic is enabled.
-//   Unrepaired sstables will be included for repair. Repaired sstables will be
-//   skipped. The incremental repair states will be updated after repair.
-
-// - full (full repair): The incremental repair logic is enabled.
-//   Both repaired and unrepaired sstables will be included for repair. The
-//   incremental repair states will be updated after repair.
-
-// - disabled (non incremental repair): The incremental repair logic is disabled
-//   completely. The incremental repair states, e.g., repaired_at in sstables and
-//   sstables_repaired_at in system.tablets table, will not be updated after
-//   repair.
-enum class tablet_repair_incremental_mode : uint8_t {
-    incremental,
-    full,
-    disabled,
-};
-
-constexpr tablet_repair_incremental_mode default_tablet_repair_incremental_mode{tablet_repair_incremental_mode::incremental};
-
-sstring tablet_repair_incremental_mode_to_string(tablet_repair_incremental_mode);
-tablet_repair_incremental_mode tablet_repair_incremental_mode_from_string(const sstring&);
 
 
 struct tablet_task_info {
@@ -1076,11 +971,6 @@ public:
 future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this_host);
 
 std::optional<tablet_replica> maybe_get_primary_replica(tablet_id id, const tablet_replica_set& replica_set, const locator::topology& topo, std::function<bool(const tablet_replica&)> filter);
-
-struct tablet_routing_info {
-    tablet_replica_set tablet_replicas;
-    std::pair<dht::token, dht::token> token_range;
-};
 
 struct tablet_routing_info_v2 {
     tablet_replica_set tablet_replicas;

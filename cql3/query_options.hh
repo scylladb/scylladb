@@ -21,7 +21,7 @@
 #include "utils/result.hh"
 #include "utils/small_vector.hh"
 #include "service/storage_proxy_fwd.hh"
-#include "locator/tablets.hh"
+#include "locator/tablets_fwd.hh"
 
 namespace cql3 {
 

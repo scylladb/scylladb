@@ -7,6 +7,7 @@
  */
 
 #include "server.hh"
+#include "gms/gossiper.hh"
 
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
@@ -26,6 +27,7 @@
 #include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
 #include "service/qos/service_level_controller.hh"
+#include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "db/write_type.hh"
 #include <seastar/core/coroutine.hh>

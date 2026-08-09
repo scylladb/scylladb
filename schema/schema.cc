@@ -46,6 +46,10 @@
 
 extern logging::logger dblog;
 
+// Explicit instantiation matching the `extern template` declaration in
+// schema/schema_fwd.hh; see the comment there.
+template struct utils::tagged_uuid<table_id_tag>;
+
 sstring
 speculative_retry::to_sstring() const {
     if (_t == type::NONE) {
@@ -197,9 +201,9 @@ auto fmt::formatter<column_mapping>::format(const column_mapping& cm, fmt::forma
 }
 
 thread_local std::map<sstring, std::unique_ptr<dht::i_partitioner>> partitioners;
-thread_local std::map<std::pair<unsigned, unsigned>, std::unique_ptr<dht::static_sharder>> sharders;
-sstring default_partitioner_name = "org.apache.cassandra.dht.Murmur3Partitioner";
-unsigned default_partitioner_ignore_msb = 12;
+static thread_local std::map<std::pair<unsigned, unsigned>, std::unique_ptr<dht::static_sharder>> sharders;
+static sstring default_partitioner_name = "org.apache.cassandra.dht.Murmur3Partitioner";
+static unsigned default_partitioner_ignore_msb = 12;
 
 static const dht::i_partitioner& get_partitioner(const sstring& name) {
     auto it = partitioners.find(name);
@@ -2461,3 +2465,7 @@ schema_mismatch_error::schema_mismatch_error(table_schema_version expected, cons
     : std::runtime_error(fmt::format("Attempted to deserialize schema-dependent object of version {} using {}.{} {}",
         expected, access.ks_name(), access.cf_name(), access.version()))
 { }
+
+table_schema_version reversed(table_schema_version v) noexcept {
+    return table_schema_version(utils::UUID_gen::negate(v.uuid()));
+}

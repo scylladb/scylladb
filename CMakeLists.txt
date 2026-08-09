@@ -62,6 +62,19 @@ set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 add_compile_definitions(SEASTAR_NO_EXCEPTION_HACK)
 # Hacks needed to expose internal APIs for xxhash dependencies
 add_compile_definitions(XXH_PRIVATE_API)
+
+# Match configure.py's --enable-perf-tools/--disable-perf-tools (default: on).
+# Define is added later, alongside SEASTAR_TESTING_MAIN, to avoid leaking
+# into the seastar/abseil subdirectories.
+option(Scylla_BUILD_PERF_TOOLS
+  "Build the perf-* dev subcommands and their test/perf harness into the scylla binary"
+  ON)
+# Match configure.py's --enable-wasmtime/--disable-wasmtime (default: on).
+# Define is added later, alongside SCYLLA_BUILD_PERF_TOOLS, to avoid leaking
+# into the seastar/abseil subdirectories.
+option(Scylla_BUILD_WASMTIME
+  "Build the wasmtime (WASM UDF) backend into the scylla binary"
+  ON)
 # SEASTAR_TESTING_MAIN is added later (after add_subdirectory(seastar) and
 # add_subdirectory(abseil)) to avoid leaking into the seastar subdirectory.
 # If SEASTAR_TESTING_MAIN is defined globally before seastar, it causes a
@@ -122,6 +135,10 @@ else()
     else()
         set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
     endif()
+    # Match configure.py: dev mode skips fmt's compile-time format checks.
+    if(CMAKE_BUILD_TYPE STREQUAL "Dev")
+        set(Seastar_LOGGER_COMPILE_TIME_FMT OFF CACHE BOOL "" FORCE)
+    endif()
     add_subdirectory(seastar)
 
     # Coverage mode sets cmake_build_type='Debug' for Seastar
@@ -181,6 +198,12 @@ set_target_properties(absl_strerror PROPERTIES EXCLUDE_FROM_ALL TRUE)
 # SEASTAR_TESTING_MAIN globally. This matches configure.py's global define
 # without leaking into seastar (which would cause duplicate main symbols).
 add_compile_definitions(SEASTAR_TESTING_MAIN)
+if(Scylla_BUILD_PERF_TOOLS)
+  add_compile_definitions(SCYLLA_BUILD_PERF_TOOLS)
+endif()
+if(Scylla_BUILD_WASMTIME)
+  add_compile_definitions(SCYLLA_BUILD_WASMTIME)
+endif()
 
 # System libraries dependencies
 find_package(Boost REQUIRED
@@ -281,6 +304,11 @@ endif()
 
 target_sources(scylla-main
   PRIVATE
+    # Here, not on the scylla executable target: CMake schedules an
+    # executable's own sources last regardless of declaration order,
+    # making main.cc.o (~40s) a solo tail. As a library source it
+    # schedules early like everything else here.
+    main.cc
     absl-flat_hash_map.cc
     bytes.cc
     client_data.cc
@@ -396,8 +424,7 @@ add_subdirectory(vector_search)
 add_version_library(scylla_version
     release.cc)
 
-add_executable(scylla
-  main.cc)
+add_executable(scylla)
 set(scylla_libs
     audit
     scylla-main
@@ -429,13 +456,15 @@ set(scylla_libs
     service
     sstables
     streaming
-    test-perf
     tools
     tracing
     transport
     types
     utils
     vector_search)
+if(Scylla_BUILD_PERF_TOOLS)
+  list(APPEND scylla_libs test-perf)
+endif()
 target_link_libraries(scylla PRIVATE
     ${scylla_libs})
 

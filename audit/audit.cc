@@ -12,6 +12,7 @@
 #include "audit/preprocessed_audit_rules.hh"
 #include "utils/rjson.hh"
 #include "db/config.hh"
+#include "locator/token_metadata.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/batch_statement.hh"

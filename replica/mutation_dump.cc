@@ -12,6 +12,7 @@
 #include "partition_slice_builder.hh"
 #include "readers/foreign.hh"
 #include "replica/database.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "replica/mutation_dump.hh"
 #include "replica/query_state.hh"
 #include "schema/schema_builder.hh"

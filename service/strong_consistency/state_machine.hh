@@ -11,7 +11,7 @@
 #include "service/raft/raft_state_machine.hh"
 #include "mutation/frozen_mutation.hh"
 #include <functional>
-#include "locator/tablets.hh"
+#include "locator/tablets_fwd.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
 
 namespace db {

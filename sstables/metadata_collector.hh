@@ -11,6 +11,7 @@
 #pragma once
 
 #include "sstables/types.hh"
+#include "sstables/metadata.hh"
 #include "sstables/component_type.hh"
 #include "mutation/timestamp.hh"
 #include "utils/extremum_tracking.hh"
@@ -19,6 +20,8 @@
 #include "db/commitlog/replay_position.hh"
 #include "mutation/position_in_partition.hh"
 #include "locator/host_id.hh"
+#include "utils/streaming_histogram.hh"
+#include "utils/estimated_histogram.hh"
 
 
 namespace sstables {

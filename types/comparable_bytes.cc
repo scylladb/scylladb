@@ -21,7 +21,7 @@
 #include "utils/multiprecision_int.hh"
 #include "vint-serialization.hh"
 
-logging::logger cblogger("comparable_bytes");
+static logging::logger cblogger("comparable_bytes");
 
 static constexpr uint8_t BYTE_SIGN_MASK = 0x80;
 static constexpr int VARINT_FULL_FORM_THRESHOLD = 7;

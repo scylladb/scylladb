@@ -9,7 +9,7 @@
 #pragma once
 
 #include "locator/abstract_replication_strategy.hh"
-#include "locator/tablets.hh"
+#include "locator/tablets_fwd.hh"
 #include "message/messaging_service.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "cql3/query_processor.hh"
