@@ -19,6 +19,9 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "mutation/mutation_fragment.hh"
+#include "mutation/mutation_fragment_v2.hh"
+#include "mutation/mutation_rebuilder.hh"
+#include "schema/schema_registry.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/sharder.hh"
@@ -548,6 +551,152 @@ sharder_helper get_sharder_helper(replica::table& t, const schema& s, service::f
     }
 }
 
+class logstor_direct_writer_queue_impl : public mutation_fragment_queue::impl {
+    schema_ptr _schema;
+    sharded<replica::database>& _db;
+    service::frozen_topology_guard _topo_guard;
+    sharder_helper _sharder;
+    db::timeout_clock::time_point _timeout;
+    std::optional<mutation_rebuilder_v2> _rebuilder;
+    std::exception_ptr _aborted;
+
+private:
+    future<> apply_rebuilt_partition(mutation m) {
+        auto shards = _sharder.sharder.shard_for_writes(m.token());
+        if (shards.empty()) {
+            return make_exception_future<>(std::runtime_error(format("No local shards for token {} of {}.{}",
+                    m.token(), _schema->ks_name(), _schema->cf_name())));
+        }
+
+        rlogger.debug("logstor repair writer: applying rebuilt partition table={}.{} token={} shards={} clustered_rows_empty={}",
+                _schema->ks_name(), _schema->cf_name(), m.token(), shards,
+                m.partition().clustered_rows().empty());
+
+        return parallel_for_each(shards, [&db = _db, fm = freeze(m), gs = global_schema_ptr(_schema), topo_guard = _topo_guard, timeout = _timeout] (shard_id shard) mutable {
+            return db.invoke_on(shard, [fm, gs, topo_guard, timeout] (replica::database& db) mutable -> future<> {
+                service::topology_guard guard(topo_guard);
+                guard.check();
+                schema_ptr schema = gs.get();
+                auto& table = db.find_column_family(schema->id());
+                auto stream_op = table.stream_in_progress();
+                rlogger.debug("logstor repair writer: applying rebuilt partition on shard={} table={}.{}",
+                        this_shard_id(), schema->ks_name(), schema->cf_name());
+                co_await table.apply(fm, schema, db::rp_handle(), timeout, db::noop_large_data_guardrail::instance());
+            });
+        });
+    }
+
+    future<> rebuild(mutation_fragment_v2 mf) {
+        if (mf.is_partition_start()) {
+            if (_rebuilder) {
+                // The same lost partition_end that push_end_of_stream() reports,
+                // just detected earlier. Starting a new rebuilder here would
+                // silently drop the partition opened by the previous one.
+                on_internal_error(rlogger, format("Logstor repair writer: partition start with an open partition, table={}.{}",
+                        _schema->ks_name(), _schema->cf_name()));
+            }
+            auto ps = std::move(mf).as_partition_start();
+            rlogger.debug("logstor repair writer: start partition table={}.{} key={}",
+                    _schema->ks_name(), _schema->cf_name(), ps.key());
+            _rebuilder.emplace(_schema);
+            (void)_rebuilder->consume(std::move(ps));
+            return make_ready_future<>();
+        }
+
+        if (!_rebuilder) {
+            return make_exception_future<>(std::runtime_error("Logstor repair writer got non-partition-start fragment without an active rebuilder"));
+        }
+
+        if (mf.is_end_of_partition()) {
+            (void)_rebuilder->consume(std::move(mf));
+            auto mut = _rebuilder->consume_end_of_stream();
+            _rebuilder.reset();
+            if (!mut) {
+                return make_exception_future<>(std::runtime_error("Logstor repair writer ended a partition without a rebuilt mutation"));
+            }
+            rlogger.debug("logstor repair writer: finished rebuilding partition table={}.{} token={}",
+                    _schema->ks_name(), _schema->cf_name(), mut->token());
+            return apply_rebuilt_partition(std::move(*mut));
+        }
+
+        (void)_rebuilder->consume(std::move(mf));
+        return make_ready_future<>();
+    }
+
+public:
+    logstor_direct_writer_queue_impl(schema_ptr schema, sharded<replica::database>& db, service::frozen_topology_guard topo_guard,
+            db::timeout_clock::time_point timeout)
+        : _schema(std::move(schema))
+        , _db(db)
+        , _topo_guard(topo_guard)
+        , _sharder(get_sharder_helper(_db.local().find_column_family(_schema->id()), *_schema, _topo_guard))
+        , _timeout(timeout) {
+    }
+
+    virtual future<> push(mutation_fragment_v2 mf) override {
+        if (_aborted) {
+            co_await coroutine::return_exception_ptr(_aborted);
+        }
+        std::exception_ptr ep;
+        try {
+            co_await rebuild(std::move(mf));
+            co_return;
+        } catch (...) {
+            ep = std::current_exception();
+        }
+        // The partition being rebuilt is incomplete now, and a logstor write
+        // replaces the whole partition, so it must never be applied. Drop it and
+        // fail every later push, which also keeps push_end_of_stream() from
+        // reporting the dropped partition as an error of its own and masking
+        // the failure that repair actually propagates.
+        this->abort(ep);
+        co_await coroutine::return_exception_ptr(std::move(ep));
+    }
+
+    virtual void abort(std::exception_ptr ep) override {
+        _aborted = std::move(ep);
+        // Drop any partially rebuilt partition so it can never be applied.
+        _rebuilder.reset();
+    }
+
+    virtual void push_end_of_stream() override {
+        // repair_writer closes the open partition before signaling end of
+        // stream, so a live rebuilder here means a partition_end was lost. A
+        // failed push cannot land here: it aborts the queue, which drops the
+        // rebuilder, so this never masks an earlier failure.
+        if (_rebuilder) {
+            on_internal_error(rlogger, format("Logstor repair writer: end of stream with an open partition, table={}.{}",
+                    _schema->ks_name(), _schema->cf_name()));
+        }
+    }
+};
+
+class logstor_repair_writer_impl : public repair_writer::impl {
+    mutation_fragment_queue _mq;
+
+    static mutation_fragment_queue make_queue(schema_ptr schema, reader_permit permit, sharded<replica::database>& db,
+            service::frozen_topology_guard topo_guard) {
+        auto timeout = permit.timeout();
+        return mutation_fragment_queue(schema, std::move(permit), seastar::shared_ptr<mutation_fragment_queue::impl>(
+                seastar::make_shared<logstor_direct_writer_queue_impl>(schema, db, topo_guard, timeout)));
+    }
+public:
+    logstor_repair_writer_impl(schema_ptr schema, reader_permit permit, sharded<replica::database>& db, service::frozen_topology_guard topo_guard)
+        : _mq(make_queue(schema, std::move(permit), db, topo_guard)) {
+    }
+
+    virtual mutation_fragment_queue& queue() override {
+        return _mq;
+    }
+
+    virtual future<> wait_for_writer_done() override {
+        return make_ready_future<>();
+    }
+
+    virtual void create_writer(lw_shared_ptr<repair_writer>) override {
+    }
+};
+
 void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
     if (_writer_done) {
         return;
@@ -596,9 +745,14 @@ lw_shared_ptr<repair_writer> make_repair_writer(
             db::view::view_builder& view_builder,
             sharded<db::view::view_building_worker>& view_building_worker,
             service::frozen_topology_guard topo_guard) {
-    auto [queue_reader, queue_handle] = make_queue_reader(schema, permit);
-    auto queue = make_mutation_fragment_queue(schema, permit, std::move(queue_handle));
-    auto i = std::make_unique<repair_writer_impl>(schema, repaired_at, permit, db, view_builder, view_building_worker, reason, std::move(queue), std::move(queue_reader), topo_guard);
+    std::unique_ptr<repair_writer::impl> i;
+    if (schema->logstor_enabled()) {
+        i = std::make_unique<logstor_repair_writer_impl>(schema, permit, db, topo_guard);
+    } else {
+        auto [queue_reader, queue_handle] = make_queue_reader(schema, permit);
+        auto queue = make_mutation_fragment_queue(schema, permit, std::move(queue_handle));
+        i = std::make_unique<repair_writer_impl>(schema, repaired_at, permit, db, view_builder, view_building_worker, reason, std::move(queue), std::move(queue_reader), topo_guard);
+    }
     return make_lw_shared<repair_writer>(schema, permit, std::move(i));
 }
 
