@@ -42,6 +42,6 @@ public:
 };
 
 template <typename Iterator>
-static range_assert<Iterator> assert_that_range(Iterator begin, Iterator end) {
+range_assert<Iterator> assert_that_range(Iterator begin, Iterator end) {
     return { begin, end };
 }
