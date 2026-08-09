@@ -110,8 +110,8 @@ std::vector<primary_index_key> insert_same_token_keys(primary_index& index, cons
     keys.reserve(count);
     for (int i = 0; i < count; ++i) {
         auto key = make_fixed_token_key(schema, token, format("fixed-pk-{:06d}", start + i));
-        auto [ok, prev] = index.insert(key, make_index_entry(500 + i, i * 8, 8, 1));
-        BOOST_REQUIRE(ok && !prev);
+        auto outcome = index.insert(key, make_index_entry(500 + i, i * 8, 8, 1));
+        BOOST_REQUIRE(outcome.inserted() && !outcome.previous_entry);
         keys.push_back(std::move(key));
     }
     return keys;
@@ -129,10 +129,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_invalidation_and_evict
     auto key2 = make_primary_index_key(*schema, "pk2");
     auto key3 = make_primary_index_key(*schema, "pk3");
 
-    BOOST_REQUIRE(!index.insert(key0, make_index_entry(1, 0, 10, 1)).second);
-    BOOST_REQUIRE(!index.insert(key1, make_index_entry(1, 10, 10, 1)).second);
-    BOOST_REQUIRE(!index.insert(key2, make_index_entry(1, 20, 10, 1)).second);
-    BOOST_REQUIRE(!index.insert(key3, make_index_entry(1, 30, 10, 1)).second);
+    BOOST_REQUIRE(!index.insert(key0, make_index_entry(1, 0, 10, 1)).previous_entry);
+    BOOST_REQUIRE(!index.insert(key1, make_index_entry(1, 10, 10, 1)).previous_entry);
+    BOOST_REQUIRE(!index.insert(key2, make_index_entry(1, 20, 10, 1)).previous_entry);
+    BOOST_REQUIRE(!index.insert(key3, make_index_entry(1, 30, 10, 1)).previous_entry);
 
     auto mut0 = make_mutation(schema, "pk0", "v0");
     auto mut1 = make_mutation(schema, "pk1", "v1");
@@ -151,19 +151,19 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_invalidation_and_evict
 
     assert_that(schema, lookup(index, key0, schema)).is_equal_to(mut0.partition());
 
-    auto [inserted1, old_entry1] = index.insert(key1, make_index_entry(2, 10, 12, 2));
-    BOOST_REQUIRE(inserted1);
-    BOOST_REQUIRE(old_entry1);
+    auto outcome1 = index.insert(key1, make_index_entry(2, 10, 12, 2));
+    BOOST_REQUIRE(outcome1.inserted());
+    BOOST_REQUIRE(outcome1.previous_entry);
     BOOST_REQUIRE(!lookup_exists(index, key1, schema));
 
-    auto [inserted2, old_entry2] = index.insert(key2, make_index_entry(2, 20, 12, 2));
-    BOOST_REQUIRE(inserted2);
-    BOOST_REQUIRE(old_entry2);
+    auto outcome2 = index.insert(key2, make_index_entry(2, 20, 12, 2));
+    BOOST_REQUIRE(outcome2.inserted());
+    BOOST_REQUIRE(outcome2.previous_entry);
     BOOST_REQUIRE(!lookup_exists(index, key2, schema));
 
-    auto [inserted0, old_entry0] = index.insert(key0, make_index_entry(3, 0, 14, 0));
-    BOOST_REQUIRE(!inserted0);
-    BOOST_REQUIRE(old_entry0);
+    auto outcome0 = index.insert(key0, make_index_entry(3, 0, 14, 0));
+    BOOST_REQUIRE(outcome0.result == primary_index::insert_result::superseded);
+    BOOST_REQUIRE(outcome0.previous_entry);
     BOOST_REQUIRE(lookup_exists(index, key0, schema));
 
     BOOST_REQUIRE(index.erase(key1, make_index_entry(1, 10, 10, 1).location) == false);
@@ -212,8 +212,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_drain_cache_preserves_index_
     auto key0 = make_primary_index_key(*schema, "pk0");
     auto key1 = make_primary_index_key(*schema, "pk1");
 
-    BOOST_REQUIRE(!index.insert(key0, make_index_entry(1, 0, 10, 1)).second);
-    BOOST_REQUIRE(!index.insert(key1, make_index_entry(1, 10, 10, 1)).second);
+    BOOST_REQUIRE(!index.insert(key0, make_index_entry(1, 0, 10, 1)).previous_entry);
+    BOOST_REQUIRE(!index.insert(key1, make_index_entry(1, 10, 10, 1)).previous_entry);
 
     auto mut0 = make_mutation(schema, "pk0", "v0");
     auto mut1 = make_mutation(schema, "pk1", "v1");
@@ -384,9 +384,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_excha
         assert_that(schema, lookup(index, keys[i], schema)).is_equal_to(mutations[i].partition());
     }
 
-    auto [replaced, old_entry] = index.insert(keys[2], make_index_entry(900, 0, 32, 2));
-    BOOST_REQUIRE(replaced);
-    BOOST_REQUIRE(old_entry);
+    auto replace_outcome = index.insert(keys[2], make_index_entry(900, 0, 32, 2));
+    BOOST_REQUIRE(replace_outcome.inserted());
+    BOOST_REQUIRE(replace_outcome.previous_entry);
     BOOST_REQUIRE(!lookup_exists(index, keys[2], schema));
 
     auto replacement = make_mutation(schema, "fixed-pk-020002", "compaction-replaced");
@@ -401,7 +401,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_upgrades_cached_partition_after_sche
     primary_index index(schema, noop_space_accounting, &cache.logstor_tracker);
 
     auto key = make_primary_index_key(*schema, "pk0");
-    BOOST_REQUIRE(!index.insert(key, make_index_entry(1, 0, 10, 1)).second);
+    BOOST_REQUIRE(!index.insert(key, make_index_entry(1, 0, 10, 1)).previous_entry);
 
     auto original = make_mutation(schema, "pk0", "v0");
     populate(index, key, original);

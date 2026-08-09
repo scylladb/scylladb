@@ -135,6 +135,21 @@ public:
         std::optional<mutation> cached_mutation;
     };
 
+    enum class insert_result {
+        // The index now holds the new entry, either under a new key or over an older entry.
+        inserted,
+        // The index already holds a newer entry for this key; nothing changed.
+        superseded,
+    };
+
+    struct insert_outcome {
+        insert_result result;
+        // The entry the index held for this key before the call, if it held one.
+        std::optional<index_entry> previous_entry;
+
+        bool inserted() const noexcept { return result == insert_result::inserted; }
+    };
+
 private:
     using iterator = typename partitions_type::iterator;
     using const_iterator = typename partitions_type::const_iterator;
@@ -439,7 +454,7 @@ public:
         return a.timestamp <=> b.timestamp;
     }
 
-    std::pair<bool, std::optional<index_entry>> insert(const primary_index_key& key, index_entry new_entry, entry_cmp_fn cmp = default_entry_cmp) {
+    insert_outcome insert(const primary_index_key& key, index_entry new_entry, entry_cmp_fn cmp = default_entry_cmp) {
         partitions_type::bound_hint hint;
         auto i = _partitions.lower_bound(key, primary_index_key_cmp{}, hint);
         if (hint.match) {
@@ -452,16 +467,16 @@ public:
                 i->_e = std::move(new_entry);
                 _space_accounting.on_free_record(old_entry.location);
                 _space_accounting.on_add_record(i->_e.location);
-                return {true, std::make_optional(old_entry)};
+                return {insert_result::inserted, std::make_optional(old_entry)};
             } else {
-                return {false, std::make_optional(i->_e)};
+                return {insert_result::superseded, std::make_optional(i->_e)};
             }
-        } else {
-            auto it = _partitions.emplace_before(i, key.token().raw(), hint, key, std::move(new_entry));
-            _space_accounting.on_add_record(it->_e.location);
-            on_entry_added(*it);
-            return {true, std::nullopt};
         }
+
+        auto it = _partitions.emplace_before(i, key.token().raw(), hint, key, std::move(new_entry));
+        _space_accounting.on_add_record(it->_e.location);
+        on_entry_added(*it);
+        return {insert_result::inserted, std::nullopt};
     }
 
     bool erase(const primary_index_key& key, log_location loc) {
