@@ -3499,6 +3499,10 @@ private:
             // For small table optimization, we reduce the buffer size to reduce memory consumption.
             size /= _all_live_peer_nodes.size();
         }
+        utils::get_local_injector().inject("repair_tiny_max_row_buf_size", [&size] {
+            // Force many small sync windows to exercise window-boundary handling.
+            size = 100;
+        });
         return size;
     }
 
