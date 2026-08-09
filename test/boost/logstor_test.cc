@@ -613,6 +613,75 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[4].loc), 1);
 }
 
+// Checks that primary_index caps the number of distinct keys sharing a token at
+// max_keys_per_token, and that freeing a slot lets another key in.
+SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_bounds_keys_per_token) {
+    struct noop_accounting : space_accounting_subscriber {
+        void on_add_record(log_location) noexcept override {}
+        void on_free_record(log_location) noexcept override {}
+    } accounting;
+
+    auto schema = make_kv_schema();
+    primary_index index(schema, accounting, nullptr);
+
+    const auto colliding_token = dht::token::from_int64(0x1234567890abcdef);
+    // Keys that share a token but differ in their key hash.
+    auto make_colliding_key = [&] (uint8_t suffix) {
+        key_hash hash{};
+        hash.back() = suffix;
+        return primary_index_key(colliding_token, hash);
+    };
+
+    auto entry_at = [] (uint32_t segment) {
+        return index_entry{
+            .location = log_location{.segment = log_segment_id{segment}, .offset = 0, .size = 8},
+            .timestamp = api::timestamp_type(1),
+        };
+    };
+
+    std::vector<primary_index_key> keys;
+    for (size_t i = 0; i < primary_index::max_keys_per_token + 1; ++i) {
+        keys.push_back(make_colliding_key(uint8_t(i)));
+    }
+
+    for (size_t i = 0; i < primary_index::max_keys_per_token; ++i) {
+        BOOST_REQUIRE(index.insert(keys[i], entry_at(i)).inserted());
+    }
+    BOOST_REQUIRE_EQUAL(index.get_key_count(), primary_index::max_keys_per_token);
+
+    // One key too many for this token: rejected, and the index is left untouched.
+    const auto& extra_key = keys.back();
+    auto overflow = index.insert(extra_key, entry_at(100));
+    BOOST_REQUIRE(overflow.result == primary_index::insert_result::token_overflow);
+    BOOST_REQUIRE(!overflow.previous_entry);
+    BOOST_REQUIRE(!index.get(extra_key));
+    BOOST_REQUIRE_EQUAL(index.get_key_count(), primary_index::max_keys_per_token);
+    for (size_t i = 0; i < primary_index::max_keys_per_token; ++i) {
+        auto entry = index.get(keys[i]);
+        BOOST_REQUIRE(entry);
+        BOOST_REQUIRE(entry->location == entry_at(i).location);
+    }
+
+    // The bound counts distinct keys, so overwriting a resident key still works.
+    auto overwrite = index.insert(keys[0], index_entry{.location = entry_at(200).location, .timestamp = api::timestamp_type(2)});
+    BOOST_REQUIRE(overwrite.inserted());
+    BOOST_REQUIRE(overwrite.previous_entry);
+    BOOST_REQUIRE_EQUAL(index.get_key_count(), primary_index::max_keys_per_token);
+
+    // A key on another token is unaffected by the full bucket.
+    auto other_token_key = primary_index_key(dht::token::from_int64(1), key_hash{});
+    BOOST_REQUIRE(index.insert(other_token_key, entry_at(300)).inserted());
+    BOOST_REQUIRE_EQUAL(index.get_key_count(), primary_index::max_keys_per_token + 1);
+
+    // Freeing a slot admits the previously rejected key.
+    BOOST_REQUIRE(index.erase(keys[1], entry_at(1).location));
+    BOOST_REQUIRE(index.insert(extra_key, entry_at(100)).inserted());
+    BOOST_REQUIRE(index.get(extra_key));
+    BOOST_REQUIRE_EQUAL(index.get_key_count(), primary_index::max_keys_per_token + 1);
+
+    index.clear().get();
+}
+
 // Checks that scan_segment() returns mixed-buffer log locations that can be used to read back the expected records.
 SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_buffers_report_readable_log_locations) {
     auto schema = make_kv_schema();
