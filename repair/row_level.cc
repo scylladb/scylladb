@@ -3562,7 +3562,8 @@ public:
             bool enable_incremental_repair = _rstate.db.local().features().tablet_incremental_repair && _is_tablet &&
                                               _rstate.sched_info.incremental_mode != locator::tablet_repair_incremental_mode::disabled &&
                                              _rstate.sched_info.sched_by_scheduler &&
-                                             !_rstate.sched_info.for_tablet_rebuild;
+                                             !_rstate.sched_info.for_tablet_rebuild &&
+                                             !s->logstor_enabled();
             if (enable_incremental_repair) {
                 auto& table = _rstate.db.local().find_column_family(_table_id);
                 auto erm = table.get_effective_replication_map();
