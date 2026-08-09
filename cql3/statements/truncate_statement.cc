@@ -38,18 +38,20 @@ truncate_statement::truncate_statement(cf_name name, std::unique_ptr<attributes:
 std::unique_ptr<prepared_statement> truncate_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto prepared_attributes = _attrs->prepare(db, keyspace(), column_family());
-    auto ctx = get_prepare_context();
+    prepare_context& ctx = get_prepare_context();
     prepared_attributes->fill_prepare_context(ctx);
-    auto stmt = ::make_shared<cql3::statements::truncate_statement>(std::move(schema), std::move(prepared_attributes));
-    return std::make_unique<prepared_statement>(audit_info(), std::move(stmt));
+    auto stmt = ::make_shared<cql3::statements::truncate_statement>(std::move(schema), std::move(prepared_attributes), ctx.bound_variables_size());
+    // TRUNCATE has no restrictions, so no bind marker can stand for a partition key component.
+    return std::make_unique<prepared_statement>(audit_info(), std::move(stmt), ctx, std::vector<uint16_t>());
 }
 
 } // namespace raw
 
-truncate_statement::truncate_statement(schema_ptr schema, std::unique_ptr<attributes> prepared_attrs)
+truncate_statement::truncate_statement(schema_ptr schema, std::unique_ptr<attributes> prepared_attrs, uint32_t bound_terms)
     : cql_statement(&timeout_config::truncate_timeout)
     , _schema{std::move(schema)}
     , _attrs(std::move(prepared_attrs))
+    , _bound_terms(bound_terms)
 {
 }
 
@@ -57,6 +59,7 @@ truncate_statement::truncate_statement(const truncate_statement& ts)
     : cql_statement(ts)
     , _schema(ts._schema)
     , _attrs(std::make_unique<attributes>(*ts._attrs))
+    , _bound_terms(ts._bound_terms)
 { }
 
 const sstring& truncate_statement::keyspace() const {
@@ -69,7 +72,7 @@ const sstring& truncate_statement::column_family() const {
 
 uint32_t truncate_statement::get_bound_terms() const
 {
-    return 0;
+    return _bound_terms;
 }
 
 bool truncate_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const
