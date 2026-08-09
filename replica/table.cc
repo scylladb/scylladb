@@ -364,6 +364,15 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
                            const query::partition_slice* slice_opt) const {
     auto& slice = slice_opt ? *slice_opt : s->full_slice();
 
+    if (_logstor) {
+        auto source = mutation_source([this] (schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& slice,
+                                          tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
+            return _logstor->make_reader(std::move(s), logstor_index(), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr);
+        });
+
+        return make_multi_range_reader(s, std::move(permit), std::move(source), ranges, slice, nullptr, mutation_reader::forwarding::no);
+    }
+
     auto source = mutation_source([this, &ranges] (schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& slice,
                                       tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
         std::vector<mutation_reader> readers;
@@ -388,6 +397,10 @@ mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit pe
     auto trace_state = tracing::trace_state_ptr();
     const auto fwd = streamed_mutation::forwarding::no;
 
+    if (_logstor) {
+        return _logstor->make_reader(std::move(schema), logstor_index(), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr);
+    }
+
     std::vector<mutation_reader> readers;
     add_memtables_to_reader_list(readers, schema, permit, range, slice, trace_state, fwd, fwd_mr, [&] (size_t memtable_count) {
         readers.reserve(memtable_count + 1);
@@ -404,6 +417,10 @@ mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit pe
 
 mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
         lw_shared_ptr<sstables::sstable_set> sstables, gc_clock::time_point compaction_time) const {
+    if (_logstor) {
+        throw std::runtime_error(fmt::format("Cannot stream sstables into the logstor table {}.{}, because logstor tables do not support sstables",
+                schema->ks_name(), schema->cf_name()));
+    }
     auto& slice = schema->full_slice();
     auto trace_state = tracing::trace_state_ptr();
     const auto fwd = streamed_mutation::forwarding::no;
