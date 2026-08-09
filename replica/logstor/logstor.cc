@@ -200,6 +200,69 @@ future<std::optional<mutation>> logstor::read(const schema& s, const primary_ind
     co_return std::move(m);
 }
 
+std::map<sstring, mutation_source> logstor::make_mutation_sources_for_dump(schema_ptr s, const primary_index& index,
+        const dht::decorated_key& dk, reader_permit permit) {
+    // The snapshot of the cached mutation, held until the dump is done with its source.
+    // The source is copyable, so the snapshot and the memory it is accounted with are
+    // shared between its copies.
+    struct cache_snapshot {
+        mutation mut;
+        reader_permit::resource_units memory;
+    };
+
+    std::map<sstring, mutation_source> sources;
+
+    auto lookup = index.lookup_for_dump(dk, s);
+    if (!lookup) {
+        return sources;
+    }
+
+    // The cached mutation is snapshotted by the lookup above; the cache entry may be
+    // evicted by the time the source is read from.
+    if (lookup->cached_mutation) {
+        auto memory = permit.consume_memory(lookup->cached_mutation->memory_usage(*s));
+        auto snapshot = make_lw_shared<cache_snapshot>(cache_snapshot{std::move(*lookup->cached_mutation), std::move(memory)});
+        sources.emplace("logstor-cache", mutation_source([snapshot = std::move(snapshot)] (
+                schema_ptr s,
+                reader_permit permit,
+                const dht::partition_range&,
+                const query::partition_slice& slice,
+                tracing::trace_state_ptr,
+                streamed_mutation::forwarding fwd,
+                mutation_reader::forwarding) {
+            return make_mutation_reader_from_mutations(std::move(s), std::move(permit), mutation(snapshot->mut), slice, fwd);
+        }));
+    }
+
+    // The name identifies the segment holding the record, the way an sstable source is
+    // named after the sstable holding the row, and not the record's position inside it.
+    // All the records of a segment therefore share one source name, so that a dump can be
+    // restricted to the contents of a single segment. The name changes when compaction or
+    // an overwrite moves the record to another segment.
+    const auto location = lookup->entry.location;
+    auto name = format("logstor-log:{}:{}", _segment_manager.get_segment_file_path(location.segment), location.segment.value);
+
+    // The record is read through the regular read path, with the cache bypassed so that
+    // inspecting a table neither reads from nor populates it. The read happens on the
+    // first fill_buffer() call and resolves the record location from the index again, so
+    // a compaction which moved the record in the meantime is followed (in which case the
+    // source name, computed above, names the record's old location).
+    sources.emplace(std::move(name), mutation_source([this, &index] (
+            schema_ptr s,
+            reader_permit permit,
+            const dht::partition_range& pr,
+            const query::partition_slice& slice,
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding,   // The dump consumes whole partitions and never
+            mutation_reader::forwarding) {   // forwards the readers it creates.
+        auto dump_slice = slice;
+        dump_slice.options.set<query::partition_slice::option::bypass_cache>();
+        return make_reader(std::move(s), index, std::move(permit), pr, dump_slice, std::move(trace_state));
+    }));
+
+    return sources;
+}
+
 mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& index, reader_permit permit, const dht::partition_range& pr,
         const query::partition_slice& slice, tracing::trace_state_ptr trace_state) {
 

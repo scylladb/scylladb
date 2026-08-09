@@ -65,6 +65,9 @@ private:
             all_mutation_sources.emplace("virtual-table", tbl.as_mutation_source());
             return all_mutation_sources;
         }
+        if (tbl.uses_logstor()) {
+            return tbl.make_logstor_mutation_sources_for_dump(_underlying_schema, _dk, _permit);
+        }
         {
             auto mss = tbl.select_memtables_as_mutation_sources(_dk.token());
             for (size_t i = 0; i < mss.size(); ++i) {

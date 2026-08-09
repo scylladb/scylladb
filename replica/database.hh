@@ -898,6 +898,12 @@ public:
         return _logstor != nullptr;
     }
 
+    // The mutation sources of this table for SELECT ... FROM MUTATION_FRAGMENTS(), see
+    // logstor::make_mutation_sources_for_dump(). Only valid when uses_logstor().
+    std::map<sstring, mutation_source> make_logstor_mutation_sources_for_dump(schema_ptr s, const dht::decorated_key& dk, reader_permit permit) {
+        return _logstor->make_mutation_sources_for_dump(std::move(s), *_logstor_index, dk, std::move(permit));
+    }
+
     logstor::primary_index& logstor_index() noexcept {
         return *_logstor_index;
     }
