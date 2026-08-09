@@ -26,7 +26,7 @@ namespace utils {
     // SourceTuple and ResultTuple can be arbitrary specialisations of std::tuple or rpc::tuple.
     template<Tuple ResultTuple, Tuple SourceTuple, typename NewItem>
     requires (tuple_ex_size_v<SourceTuple> + 1 == tuple_ex_size_v<ResultTuple>)
-    static ResultTuple tuple_insert(SourceTuple&& source_tuple, NewItem&& new_item) {
+    ResultTuple tuple_insert(SourceTuple&& source_tuple, NewItem&& new_item) {
         constexpr auto source_size = tuple_ex_size_v<SourceTuple>;
         constexpr auto result_size = tuple_ex_size_v<ResultTuple>;
         constexpr auto match = std::invoke([]<std::size_t... Is>(std::index_sequence<Is...>) {
