@@ -246,8 +246,8 @@ def get_region(dynamodb):
 # and only in specific build modes (dev, debug, sanitize), so this function
 # will trigger a test to be skipped if it cannot be executed.
 @contextmanager
-def scylla_inject_error(rest_api, err, one_shot=False):
-    requests.post(f'{rest_api}/v2/error_injection/injection/{err}?one_shot={one_shot}')
+def scylla_inject_error(rest_api, err, one_shot=False, parameters={}):
+    requests.post(f'{rest_api}/v2/error_injection/injection/{err}?one_shot={one_shot}', json=parameters)
     response = requests.get(f'{rest_api}/v2/error_injection/injection')
     print("Enabled error injections:", response.content.decode('utf-8'))
     if response.content.decode('utf-8') == "[]":
