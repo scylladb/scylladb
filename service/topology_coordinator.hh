@@ -58,6 +58,9 @@ namespace service {
 
 class raft_group0;
 class tablet_allocator;
+namespace strong_consistency {
+class groups_manager;
+}
 
 extern logging::logger rtlogger;
 
@@ -92,6 +95,7 @@ future<> run_topology_coordinator(
         seastar::sharded<db::system_distributed_keyspace>& sys_dist_ks, gms::gossiper& gossiper,
         netw::messaging_service& messaging, locator::shared_token_metadata& shared_tm,
         db::system_keyspace& sys_ks, replica::database& db, service::raft_group0& group0,
+        service::strong_consistency::groups_manager& groups_manager,
         service::topology_state_machine& topo_sm, db::view::view_building_state_machine& vb_sm, seastar::abort_source& as, raft::server& raft,
         raft_topology_cmd_handler_type raft_topology_cmd_handler,
         tablet_allocator& tablet_allocator,
