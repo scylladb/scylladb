@@ -1,6 +1,8 @@
 ScyllaDB Architecture - Fault Tolerance
 ========================================
 
+.. tip:: Jump to the `Interactive Demo`_ to experiment with Replication Factor and Consistency Level yourself.
+
 ScyllaDB replicates data according to a :term:`replication<Replication>` strategy that you choose. This strategy will determine the placement of the replicated data.  ScyllaDB runs nodes in a hash ring. All nodes are equal: there are no master, slave, or replica sets.
 
 The :term:`Replication Factor (RF)<Replication Factor (RF)>` is equivalent to the number of nodes where data (rows and partitions) are replicated.   Data is replicated to multiple (RF=N) nodes.
@@ -69,6 +71,22 @@ ScyllaDB chooses availability and partition tolerance over consistency, such tha
 
 You’ll need to design your application around ScyllaDB’s data modeling, but the net result is an application that will never go down.
 
+
+Interactive Demo
+----------------
+
+Use the interactive demo below to see how the Replication Factor and Consistency Level
+affect availability and fault tolerance.
+
+.. raw:: html
+
+   <iframe
+     src="https://tzach.github.io/scylladb-ha-demo/"
+     width="100%"
+     height="1050px"
+     style="border: 0;"
+     loading="lazy">
+   </iframe>
 
 Additional Resources
 --------------------
