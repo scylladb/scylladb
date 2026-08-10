@@ -2125,10 +2125,14 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
             std::move(loaded_endpoints), start_hm, new_generation);
 }
 
-future<token_metadata_change> storage_service::prepare_token_metadata_change(mutable_token_metadata_ptr tmptr, const schema_getter& schema_getter) {
+future<token_metadata_change> storage_service::prepare_token_metadata_change(
+        mutable_token_metadata_ptr tmptr,
+        const schema_getter& schema_getter,
+        const std::optional<locator::tablet_metadata_change_hint>& tablet_hint) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     std::exception_ptr ex;
     token_metadata_change change;
+    change.tablet_hint = tablet_hint;
 
     // Collect open sessions
     {
@@ -2160,34 +2164,38 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(mut
         // Precalculate new effective_replication_map for all keyspaces
         // and clone to all shards;
         //
+        // The base shard goes first so its ERMs are already cached on shard 0
+        // for create_static_effective_replication_map() on the other shards to clone.
+        //
         // TODO: at the moment create on shard 0 first
         // but in the future we may want to use hash() % this_smp_shard_count()
         // to evenly distribute the load.
-        auto replications = schema_getter.get_keyspaces_replication();
-        for (const auto& [ks_name, rs] : replications) {
-            if (rs->is_per_table()) {
-                continue;
-            }
-            auto erm = co_await get_erm_factory().create_static_effective_replication_map(rs, tmptr);
-            change.pending_effective_replication_maps[base_shard].emplace(ks_name, std::move(erm));
-        }
-        co_await container().invoke_on_others([&] (storage_service& ss) -> future<> {
-            auto replications = schema_getter.get_keyspaces_replication();
+        auto make_keyspace_erms = [&change] (storage_service& ss,
+                const flat_hash_map<sstring, locator::replication_strategy_ptr>& replications) -> future<> {
+            auto tmptr = change.pending_token_metadata_ptr[this_shard_id()];
             for (const auto& [ks_name, rs] : replications) {
                 if (rs->is_per_table()) {
                     continue;
                 }
-                auto tmptr = change.pending_token_metadata_ptr[this_shard_id()];
                 auto erm = co_await ss.get_erm_factory().create_static_effective_replication_map(rs, tmptr);
                 change.pending_effective_replication_maps[this_shard_id()].emplace(ks_name, std::move(erm));
             }
-        });
-        // Prepare per-table erms.
+        };
+        auto replications = schema_getter.get_keyspaces_replication();
+        co_await make_keyspace_erms(*this, replications);
+        // Prepare per-table erms, plus remaining per-keyspace erms on non-base shards.
         co_await container().invoke_on_all([&] (storage_service& ss) -> future<> {
             auto tmptr = change.pending_token_metadata_ptr[this_shard_id()];
-            auto replications = schema_getter.get_keyspaces_replication();
+            // `replications` holds the base shard's shard-local strategy pointers;
+            // every other shard must fetch its own.
+            std::optional<flat_hash_map<sstring, locator::replication_strategy_ptr>> shard_replications;
+            if (this_shard_id() != base_shard) {
+                shard_replications = schema_getter.get_keyspaces_replication();
+                co_await make_keyspace_erms(ss, *shard_replications);
+            }
+            const auto& local_replications = shard_replications ? *shard_replications : replications;
             co_await schema_getter.for_each_table_schema_gently([&] (table_id id, schema_ptr table_schema) {
-                auto rs = replications.at(table_schema->ks_name());
+                auto rs = local_replications.at(table_schema->ks_name());
                 locator::effective_replication_map_ptr erm;
                 if (auto pt_rs = rs->maybe_as_per_table()) {
                     erm = pt_rs->make_replication_map(id, tmptr);
@@ -2270,7 +2278,7 @@ void storage_service::commit_token_metadata_change(token_metadata_change& change
         for (auto it = table_erms.begin(); it != table_erms.end(); ) {
             // Update base/views effective_replication_maps atomically.
             auto& cf = db.find_column_family(it->first);
-            cf.update_effective_replication_map(std::move(it->second));
+            cf.update_effective_replication_map(std::move(it->second), change.tablet_hint);
             for (const auto& view_ptr : cf.views()) {
                 const auto& view_id = view_ptr->id();
                 auto& view = db.find_column_family(view_id);
@@ -2278,7 +2286,7 @@ void storage_service::commit_token_metadata_change(token_metadata_change& change
                 if (view_it == view_erms.end()) {
                     throw std::runtime_error(format("Could not find pending effective_replication_map for view {}.{} id={}", view_ptr->ks_name(), view_ptr->cf_name(), view_id));
                 }
-                view.update_effective_replication_map(std::move(view_it->second));
+                view.update_effective_replication_map(std::move(view_it->second), change.tablet_hint);
                 if (view.uses_tablets()) {
                     register_tablet_split_candidate(view_it->first);
                 }

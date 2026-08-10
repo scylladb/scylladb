@@ -1969,6 +1969,52 @@ SEASTAR_TEST_CASE(test_large_tablet_metadata) {
     }, tablet_cql_test_config());
 }
 
+SEASTAR_THREAD_TEST_CASE(test_tablet_metadata_copy_shares_tablet_maps) {
+    tablet_metadata tm;
+    auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+    auto id1 = table_id(utils::UUID_gen::get_time_UUID());
+    auto id2 = table_id(utils::UUID_gen::get_time_UUID());
+
+    for (auto id : {id1, id2}) {
+        tablet_map tmap(4);
+        for (tablet_id j : tmap.tablet_ids()) {
+            tmap.set_tablet(j, tablet_info{tablet_replica_set{{h1, 0}}});
+        }
+        tm.set_tablet_map(id, std::move(tmap));
+    }
+
+    // Unchanged tables must keep the same tablet_map object across copy();
+    // replica-side ERM-update gating relies on this pointer stability.
+    auto copy = tm.copy().get();
+    BOOST_REQUIRE(&copy.get_tablet_map(id1) == &tm.get_tablet_map(id1));
+    BOOST_REQUIRE(&copy.get_tablet_map(id2) == &tm.get_tablet_map(id2));
+
+    // Mutating one table's map must replace only that table's object.
+    copy.mutate_tablet_map_async(id1, [] (tablet_map&) { return make_ready_future<>(); }).get();
+    BOOST_REQUIRE(&copy.get_tablet_map(id1) != &tm.get_tablet_map(id1));
+    BOOST_REQUIRE(&copy.get_tablet_map(id2) == &tm.get_tablet_map(id2));
+
+    // Seed a map from another shard so copy() exercises the cross-shard batch path.
+    if (this_smp_shard_count() > 1) {
+        auto id3 = table_id(utils::UUID_gen::get_time_UUID());
+        smp::submit_to(1, [&] {
+            tablet_map tmap(4);
+            for (tablet_id j : tmap.tablet_ids()) {
+                tmap.set_tablet(j, tablet_info{tablet_replica_set{{h1, 0}}});
+            }
+            tm.set_tablet_map(id3, std::move(tmap));
+        }).get();
+
+        auto copy2 = tm.copy().get();
+        BOOST_REQUIRE(&copy2.get_tablet_map(id1) == &tm.get_tablet_map(id1));
+        BOOST_REQUIRE(&copy2.get_tablet_map(id3) == &tm.get_tablet_map(id3));
+        copy2.clear_gently().get();
+    }
+
+    copy.clear_gently().get();
+    tm.clear_gently().get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_token_ownership_splitting) {
     const auto real_min_token = dht::token::first();
     const auto real_max_token = dht::token::last();
