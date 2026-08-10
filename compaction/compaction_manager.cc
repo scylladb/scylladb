@@ -1291,7 +1291,11 @@ future<> compaction_manager::await_tasks(std::vector<shared_ptr<compaction_task_
 
 std::vector<shared_ptr<compaction_task_executor>>
 compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt) noexcept {
-    auto ongoing_compactions = get_compactions(filter).size();
+    // Avoid get_compactions(filter): it builds a vector<compaction_info>, copying ks_name/cf_name
+    // for every matching task, just to be discarded here for its count.
+    auto ongoing_compactions = std::ranges::count_if(_tasks, [&filter] (const compaction_task_executor& task) {
+        return filter(task.compacting_table());
+    });
     auto tasks = _tasks
             | std::views::filter([&filter, type_opt] (const auto& task) {
                 return filter(task.compacting_table()) && (!type_opt || task.compaction_type() == *type_opt);
