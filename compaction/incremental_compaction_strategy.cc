@@ -459,12 +459,10 @@ incremental_compaction_strategy::sstables_to_runs(std::vector<sstables::shared_s
 }
 
 void incremental_compaction_strategy::sort_run_bucket_by_first_key(size_bucket_t& bucket, size_t max_elements, const schema_ptr& schema) {
+    // sstable_run::all() is already ordered by first key, so its first entry is the minimum.
     std::partial_sort(bucket.begin(), bucket.begin() + max_elements, bucket.end(), [&schema](const sstables::frozen_sstable_run& a, const sstables::frozen_sstable_run& b) {
-        auto sst_first_key_less = [&schema] (const sstables::shared_sstable& sst_a, const sstables::shared_sstable& sst_b) {
-            return sst_a->get_first_decorated_key().tri_compare(*schema, sst_b->get_first_decorated_key()) <= 0;
-        };
-        auto& a_first = *std::ranges::min_element(a->all(), sst_first_key_less);
-        auto& b_first = *std::ranges::min_element(b->all(), sst_first_key_less);
+        auto& a_first = *a->all().begin();
+        auto& b_first = *b->all().begin();
         return a_first->get_first_decorated_key().tri_compare(*schema, b_first->get_first_decorated_key()) <= 0;
     });
 }
