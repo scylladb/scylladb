@@ -293,7 +293,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // or (re)started. Unlike acquire_server(), doesn't wait for a start.
     std::optional<raft_server> try_acquire_server(raft::group_id gid, raft_group_state& state);
 
-    future<> leader_info_updater(raft_group_state& state, locator::global_tablet_id tablet, raft::group_id gid);
+    future<> leader_info_updater(raft_group_state& state, table_id table, raft::group_id gid,
+        dht::token token);
 
     // The outcome of a colocate_leaders() round. Tells the caller how to wait before re-checking.
     enum class colocation_status {
