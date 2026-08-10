@@ -43,6 +43,25 @@ class logstor_group;
 
 using separator_write_completion = seastar::noncopyable_function<void(log_location, seastar::gate::holder)>;
 
+// The number of compaction jobs that may run concurrently on a shard, counted in output buffers:
+// a normal compaction takes one, a split compaction takes two. It sizes the compaction buffer pool,
+// which is what enforces it, and the segment pool's compaction reserve, which is what keeps an
+// output segment available for every concurrent flush.
+constexpr size_t max_compaction_parallelism = 8;
+
+// The buffers a split compaction takes, and therefore the slots automatic compaction leaves free so
+// that a tablet split is never queued behind it.
+constexpr size_t split_compaction_buffers = 2;
+
+// The largest number of automatic compactions that can be in flight at once. The dynamic limit is
+// derived per disk by make_compaction_limits(); this is the bound the semaphore is sized for.
+constexpr size_t max_auto_compaction_parallelism = std::min<size_t>(4, max_compaction_parallelism - split_compaction_buffers);
+
+// The smallest batch worth compacting. A batch reclaims only when its mean utilization is below
+// `1 - 1/n_in`, so a smaller batch could not reclaim anything from a disk that is even moderately
+// packed. It also anchors the free-segment target's absolute floor.
+constexpr size_t min_segments_per_compaction = 8;
+
 // How much reclamation efficiency a batch may give up in exchange for being larger. On its own the
 // efficiency score picks short batches, which is per-job overhead for no write-amplification
 // benefit; extending within this tolerance trades about 1% of efficiency for half as many jobs.
@@ -60,8 +79,7 @@ struct free_segment_watermarks {
 // knob (see logstor_compaction.md), with an absolute floor that keeps the target meaningful on
 // small disks, where a fraction of the disk rounds down to a segment or two.
 // `target_fraction` is logstor_compaction_trigger_threshold; 0 disables the trigger.
-free_segment_watermarks make_free_segment_watermarks(uint64_t segment_count, double target_fraction,
-        size_t max_segments_per_compaction) noexcept;
+free_segment_watermarks make_free_segment_watermarks(uint64_t segment_count, double target_fraction) noexcept;
 
 // Whether the free-segment level wants automatic compaction running, given whether it is running
 // now. The two watermarks are a hysteresis band: compaction starts once the free-segment target is
@@ -71,6 +89,28 @@ free_segment_watermarks make_free_segment_watermarks(uint64_t segment_count, dou
 //
 // This is only the space half of the decision; whether compaction may run at all is the caller's.
 bool auto_compaction_wanted(bool running, uint64_t available_segments, free_segment_watermarks watermarks) noexcept;
+
+// How much automatic compaction may take on at once, derived from the free-segment target.
+// The defaults are the most conservative limits make_compaction_limits() can return, so that a
+// value that has not been refreshed yet still admits compaction rather than blocking it.
+struct compaction_limits {
+    // Automatic compaction jobs kept in flight.
+    size_t auto_parallelism = 1;
+    // Input segments one job may take.
+    size_t batch_cap = min_segments_per_compaction;
+};
+
+// A compaction job allocates its output segments as it goes but frees its inputs only when it is
+// done, so every job in flight can hold up to `batch_cap` segments of the free-segment target at
+// once. Deriving both limits from `low` is what keeps `auto_parallelism * batch_cap <= low`: without
+// it, concurrent jobs can consume the whole target and then wait for a segment that only one of them
+// could free. `max_batch_cap` is segment_manager_config::max_segments_per_compaction, the upper bound
+// the derived cap is clamped to.
+//
+// The invariant cannot hold on a disk so small that the target is below one batch; there the floor
+// of make_free_segment_watermarks() has already been capped by the disk size and a batch of
+// `min_segments_per_compaction` is the least that can reclaim anything.
+compaction_limits make_compaction_limits(free_segment_watermarks watermarks, size_t max_batch_cap) noexcept;
 
 // The cost of one candidate compaction batch: `n_in` segments are read and rewritten into `n_out`
 // segments, copying `live_bytes` of live data.

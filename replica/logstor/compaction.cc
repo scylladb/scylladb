@@ -11,7 +11,7 @@
 
 namespace replica::logstor {
 
-free_segment_watermarks make_free_segment_watermarks(uint64_t segment_count, double target_fraction, size_t max_segments_per_compaction) noexcept {
+free_segment_watermarks make_free_segment_watermarks(uint64_t segment_count, double target_fraction) noexcept {
     // target_fraction is a live-updatable config value with no range check at the config layer, so
     // it may arrive negative, NaN or above 1.0; treat anything outside (0, 1] as disabling the trigger.
     if (!std::isfinite(target_fraction) || target_fraction <= 0) {
@@ -20,11 +20,12 @@ free_segment_watermarks make_free_segment_watermarks(uint64_t segment_count, dou
 
     const auto fraction = std::min(target_fraction, 1.0);
     const auto by_fraction = static_cast<uint64_t>(std::ceil(segment_count * fraction));
-    // A compaction job needs an open output segment, and the segment pool holds back
-    // max_segments_per_compaction segments that normal writes cannot take, so a target below that
-    // leaves the write path nothing to make progress with. The floor is itself capped, so that it
-    // cannot claim an unreasonable share of a small disk.
-    const auto min_target = std::min<uint64_t>(2 * max_segments_per_compaction, std::max<uint64_t>(1, segment_count / 8));
+    // The target has to cover what compaction holds while it works: a job takes up to a batch of
+    // segments before it gives any back (see make_compaction_limits()), and the segment pool holds
+    // back segments that normal writes cannot take, so a target of less than two batches leaves the
+    // write path nothing to make progress with. The floor is itself capped, so that it cannot claim
+    // an unreasonable share of a small disk.
+    const auto min_target = std::min<uint64_t>(2 * min_segments_per_compaction, std::max<uint64_t>(1, segment_count / 8));
     const auto low = std::min(segment_count, std::max(by_fraction, min_target));
     // Relative hysteresis, so that the band does not grow out of proportion as the target shrinks.
     // Capped at segment_count so a high fraction can't push `high` out of reach of available_segments,
@@ -35,6 +36,24 @@ free_segment_watermarks make_free_segment_watermarks(uint64_t segment_count, dou
 
 bool auto_compaction_wanted(bool running, uint64_t available_segments, free_segment_watermarks watermarks) noexcept {
     return available_segments < (running ? watermarks.high : watermarks.low);
+}
+
+compaction_limits make_compaction_limits(free_segment_watermarks watermarks, size_t max_batch_cap) noexcept {
+    // With the trigger disabled there is no target to protect, and automatic compaction never runs;
+    // the limits still have to be sane for compaction submitted explicitly, so fall back to the
+    // smallest batch rather than to zero.
+    const auto budget = std::max<uint64_t>(watermarks.low, min_segments_per_compaction);
+    // Spend the budget on concurrency first, up to the number of jobs the buffer pool can carry,
+    // then give what is left to the batch. Both directions of the clamp matter: a batch below
+    // min_segments_per_compaction cannot reclaim, and one above max_batch_cap makes a single job
+    // hold too much of the target.
+    const auto parallelism = std::clamp<uint64_t>(budget / min_segments_per_compaction, 1, max_auto_compaction_parallelism);
+    const auto batch_cap = std::clamp<uint64_t>(budget / parallelism, min_segments_per_compaction, std::max<uint64_t>(max_batch_cap, min_segments_per_compaction));
+
+    return {
+        .auto_parallelism = static_cast<size_t>(parallelism),
+        .batch_cap = static_cast<size_t>(batch_cap)
+    };
 }
 
 bool compaction_candidate_score::operator<(const compaction_candidate_score& other) const noexcept {
