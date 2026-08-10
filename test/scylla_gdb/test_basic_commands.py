@@ -15,11 +15,6 @@ pytestmark = [
         mode=["dev", "debug"],
         reason="Scylla was built without debug symbols; use release mode",
     ),
-    pytest.mark.skip_mode(
-        mode=["dev", "debug", "release"],
-        platform_key="aarch64",
-        reason="GDB is broken on aarch64: https://sourceware.org/bugzilla/show_bug.cgi?id=27886",
-    ),
 ]
 
 
