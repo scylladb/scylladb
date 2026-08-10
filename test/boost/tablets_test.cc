@@ -3417,6 +3417,60 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_shrinks_respecting_rack_allocation)
     }, cfg).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_size_scaling_is_not_order_dependent) {
+    auto run_scenario = [] (bool large_table_first) {
+        cql_test_config cfg{};
+        cfg.db_config->tablets_per_shard_goal.set(10);
+        cfg.db_config->tablets_initial_scale_factor.set(1);
+
+        size_t large_tablet_count = 0;
+
+        do_with_cql_env_thread([&] (auto& e) {
+            topology_builder topo(e);
+            topo.add_node(node_state::normal, 1);
+
+            auto& load_stats = topo.get_shared_load_stats();
+            auto ks_name = add_keyspace(e, {{topo.dc(), 1}});
+
+            auto add_small_tables = [&] (size_t count) {
+                while (count--) {
+                    auto table = add_table(e, ks_name).get();
+                    load_stats.set_size(table, 0);
+                }
+            };
+
+            table_id large_table;
+            if (large_table_first) {
+                large_table = add_table(e, ks_name).get();
+                load_stats.set_size(large_table, service::default_target_tablet_size * 64);
+                rebalance_tablets(e, &load_stats);
+                add_small_tables(9);
+            } else {
+                add_small_tables(9);
+                rebalance_tablets(e, &load_stats);
+                large_table = add_table(e, ks_name).get();
+                load_stats.set_size(large_table, service::default_target_tablet_size * 64);
+            }
+
+            rebalance_tablets(e, &load_stats);
+
+            auto& stm = e.shared_token_metadata().local();
+            large_tablet_count = stm.get()->tablets().get_tablet_map(large_table).tablet_count();
+        }, std::move(cfg)).get();
+
+        return large_tablet_count;
+    };
+
+    const auto large_first_count = run_scenario(true);
+    const auto large_last_count = run_scenario(false);
+
+    // The large table wants 64 tablets from size alone. With 9 empty 1-tablet tables
+    // and tablets_per_shard_goal=10, proportional scaling should converge to 8 tablets
+    // regardless of whether the large table appears before or after the small tables.
+    BOOST_REQUIRE_EQUAL(large_first_count, 8);
+    BOOST_REQUIRE_EQUAL(large_first_count, large_last_count);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_merge_does_not_overload_racks) {
     cql_test_config cfg{};
     // This test relies on the fact that we use an RF strictly smaller than the number of racks.
@@ -5296,6 +5350,73 @@ SEASTAR_THREAD_TEST_CASE(test_split_and_merge_of_colocated_tables) {
         BOOST_REQUIRE_EQUAL(tablet_count_after_merge, stm.get()->tablets().get_tablet_map(table2).tablet_count());
         BOOST_REQUIRE_EQUAL(tablet_count_after_merge, 1);
     }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_uses_correct_desired_count_for_colocated_tables) {
+    cql_test_config cfg{};
+    cfg.db_config->tablets_per_shard_goal.set(4);
+    cfg.db_config->tablets_initial_scale_factor.set(1);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto host1 = topo.add_node(node_state::normal, 1);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto table1 = add_table(e, ks_name).get();
+        auto table2 = add_table(e, ks_name).get();
+        auto small1 = add_table(e, ks_name).get();
+        auto small2 = add_table(e, ks_name).get();
+        auto small3 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(1);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                    }
+            });
+
+            tablet_map tmap1 = co_await tmap.clone_gently();
+            tmeta.set_tablet_map(table1, std::move(tmap1));
+            co_await tmeta.set_colocated_table(table2, table1);
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(table1).tablet_count());
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(table2).tablet_count());
+
+        // For a 2-table colocated group, sizing thresholds use default_target_tablet_size / 2,
+        // but the desired tablet count must still be based on the whole group's migration-unit
+        // target of default_target_tablet_size. The total size below is 5 * default_target_tablet_size,
+        // so the correct desired count for the colocated group is 5, not 10.
+        //
+        // We add 3 empty tables and set tablets_per_shard_goal=4 to make this observable:
+        //  - total desired count before scaling is 5 + 1 + 1 + 1 = 8
+        //  - scale factor is 4 / 8
+        //  - colocated group scaled desired count is 5 * 4 / 8 = 2.5
+        //
+        // So it will give 2 tablets to the group.
+        //
+        // The buggy colocated math advertises 10, which scales to 10 * 4/13 > 3 and then rounds up to 4.
+        const uint64_t colocated_target_tablet_size = service::default_target_tablet_size / 2;
+
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_size(table1, 4 * colocated_target_tablet_size);
+        load_stats.set_size(table2, 6 * colocated_target_tablet_size);
+        load_stats.set_size(small1, 0);
+        load_stats.set_size(small2, 0);
+        load_stats.set_size(small3, 0);
+
+        rebalance_tablets(e, &load_stats);
+
+        BOOST_REQUIRE_EQUAL(2, stm.get()->tablets().get_tablet_map(table1).tablet_count());
+        BOOST_REQUIRE_EQUAL(2, stm.get()->tablets().get_tablet_map(table2).tablet_count());
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(small1).tablet_count());
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(small2).tablet_count());
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(small3).tablet_count());
+    }, cfg).get();
 }
 
 // This test verifies that per-table tablet count is adjusted
