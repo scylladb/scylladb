@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/future-util.hh>
+#include <seastar/core/on_internal_error.hh>
 #include "audit/audit.hh"
 #include "audit/audit_rule.hh"
 #include "audit/preprocessed_audit_rules.hh"
@@ -14,8 +15,6 @@
 #include "db/config.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/query_processor.hh"
-#include "cql3/statements/batch_statement.hh"
-#include "cql3/statements/modification_statement.hh"
 #include "storage_helper.hh"
 #include "audit_cf_storage_helper.hh"
 #include "audit_syslog_storage_helper.hh"
@@ -478,9 +477,12 @@ future<> inspect(shared_ptr<cql3::cql_statement> statement, const service::query
         return make_ready_future<>();
     }
     if (audit_info->batch()) {
-        cql3::statements::batch_statement* batch = static_cast<cql3::statements::batch_statement*>(statement.get());
-        return do_for_each(batch->statements().begin(), batch->statements().end(), [&query_state, &options, error] (auto&& m) {
-            return inspect(m.statement, query_state, options, error);
+        const auto& batch_infos = audit_info->batch_infos();
+        if (!batch_infos) {
+            on_internal_error(logger, "batch statements need to return valid inner statements");
+        }
+        return do_for_each(*batch_infos, [&query_state, &options, error] (const auto& inner) {
+            return inspect(inner.get(), query_state, options, error);
         });
     } else {
         return inspect(*audit_info, query_state, options, error);
