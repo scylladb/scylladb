@@ -4212,6 +4212,7 @@ future<locator::tablet_map> storage_service::build_tablet_map_for_migration(
 }
 
 future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_sizes_for_migration(
+    const sstring& ks_name,
     const locator::static_effective_replication_map_ptr& erm,
     const locator::tablet_aware_replication_strategy* trs,
     const std::vector<std::pair<table_id, sstring>>& tables_to_estimate) {
@@ -4255,7 +4256,11 @@ future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_si
             "Cannot estimate table sizes for migration: local token ownership fraction is {}", local_fraction));
     }
 
-    for (const auto& [tid, ignored_cf_name] : tables_to_estimate) {
+    slogger.info("Estimating table sizes for migration of keyspace {} (dc={}, rf={}): "
+            "this node is a replica for {:.2f}% of the token ring",
+            ks_name, local_dc, local_rf, local_fraction * 100);
+
+    for (const auto& [tid, cf_name] : tables_to_estimate) {
         // Table statistics are per-shard, so the size of the local dataset is
         // the sum over all shards.
         auto local_size = co_await _db.map_reduce0([tid] (replica::database& db) {
@@ -4263,6 +4268,8 @@ future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_si
         }, uint64_t(0), std::plus<uint64_t>());
         auto estimated_total_size = static_cast<uint64_t>(local_size / local_fraction);
         table_sizes.emplace(tid, estimated_total_size);
+        slogger.info("Estimated size of table {}.{}: {} byte(s) (local data set is {} byte(s))",
+                ks_name, cf_name, estimated_total_size, local_size);
     }
 
     co_return table_sizes;
@@ -4376,7 +4383,7 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         bool use_pow2_presplit = bool(_feature_service.tablet_pow2_convergence);
         if (use_pow2_presplit) {
             auto erm = ks.get_static_effective_replication_map();
-            auto estimated_sizes = co_await collect_table_sizes_for_migration(erm, trs, tables_to_migrate);
+            auto estimated_sizes = co_await collect_table_sizes_for_migration(ks_name, erm, trs, tables_to_migrate);
             target_pow2s = co_await _tablet_allocator.local().compute_migration_target_pow2s(trs, estimated_sizes);
         }
 

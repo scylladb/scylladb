@@ -388,6 +388,7 @@ public:
             size_t target_pow2 = 0);
 private:
     future<std::unordered_map<table_id, uint64_t>> collect_table_sizes_for_migration(
+        const sstring& ks_name,
         const locator::static_effective_replication_map_ptr& erm,
         const locator::tablet_aware_replication_strategy* trs,
         const std::vector<std::pair<table_id, sstring>>& tables_to_estimate);
