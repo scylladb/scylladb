@@ -42,6 +42,8 @@
 #include "utils/managed_string.hh"
 #include "alternator/ttl_tag.hh"
 
+#include <cmath>
+
 #include <boost/lexical_cast.hpp>
 
 extern logging::logger dblog;
@@ -85,10 +87,14 @@ speculative_retry::from_sstring(sstring str) {
     } else if (str.size() >= ms.size() && str.compare(str.size() - ms.size(), ms.size(), ms) == 0) {
         t = type::CUSTOM;
         v = convert(ms);
+        if (!std::isfinite(v) || v < 0.0) {
+            throw exceptions::configuration_exception(
+                format("Invalid value {} for option 'speculative_retry': the number of milliseconds must be non-negative and finite", str));
+        }
     } else if (str.size() >= percentile.size() && str.compare(str.size() - percentile.size(), percentile.size(), percentile) == 0) {
         t = type::PERCENTILE;
         v = convert(percentile) / 100;
-        if  (v < 0.0 || v > 1.0) {
+        if  (!std::isfinite(v) || v < 0.0 || v > 1.0) {
             throw exceptions::configuration_exception(
                 format("Invalid value {} for PERCENTILE option 'speculative_retry': must be between [0.0 and 100.0]", str));
         }
