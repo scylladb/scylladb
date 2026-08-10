@@ -54,6 +54,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/loop.hh>
+#include <seastar/core/when_all.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <boost/range/algorithm/find_end.hpp>
 #include <unordered_set>
@@ -3543,8 +3544,17 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         previous_items_sizes.reserve(mutation_builders.size());
 
         // Parallel get all previous item sizes
+        // Note - after starting we need to wait for all the `get_previous_item_size` requests to
+        // complete first before processing the results.
+        // This needs to be done, because `get_previous_item_size` fiber contains reference to `client_state`, which
+        // is allocated on heap in `server::handle_api_request` and partition / clustering key from `mutation_builders`.
+        // If it throws an error and `co_await` returns early (either here or when `.get()` is called) without
+        // waiting for other fibers the function will conclude and those objects be deleted.
+        // Once remaining `get_previous_item_size` fibers resume, they will access deleted memory and crash.
+        // We use `futurize_invoke` to avoid early returning here and `when_all_succeed` below to wait for all fibers to finish
+        // before processing any results.
         for (const auto& b : mutation_builders) {
-            previous_items_sizes.emplace_back(get_previous_item_size(
+            previous_items_sizes.emplace_back(futurize_invoke(get_previous_item_size,
                 _proxy,
                 client_state,
                 b.first,
@@ -3552,10 +3562,14 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 b.second.ck(),
                 permit));
         }
+
+        // We are going to wait for all the requests.
+        // This will throw if any fiber throws an error, but other fibers will be waited for and their results collected
+        // or `ignore_ready_future()` will be called.
+        auto results = co_await when_all_succeed(std::move(previous_items_sizes));
+
         size_t pos = 0;
-        // We are going to wait for all the requests
-        for (auto&& pi : previous_items_sizes) {
-            auto res = co_await std::move(pi);
+        for (auto res : results) {
             if (mutation_builders[pos].second.length_in_bytes() < res) {
                 mutation_builders[pos].second.set_length_in_bytes(res);
             }
