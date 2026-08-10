@@ -8,7 +8,8 @@ from cassandra.protocol import InvalidRequest
 from cassandra.cluster import TruncateError
 from cassandra.policies import FallthroughRetryPolicy
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import get_topology_coordinator, new_test_keyspace
+from test.cluster.util import get_topology_coordinator, new_test_keyspace, FeatureConfig, feature_configs, \
+    FeatureConfigurations, count_rows
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for
 import time
@@ -18,13 +19,19 @@ import asyncio
 
 logger = logging.getLogger(__name__)
 
+
+@pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
+                                                           FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_migration(manager: ManagerClient):
+async def test_truncate_while_migration(manager: ManagerClient, feature_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
             'error_injections_at_startup': ['migration_streaming_wait']
             }
+    cfg = feature_config.get_cluster_cfg(cfg)
+    keyspace_opts = feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
 
     servers = []
     servers.append(await manager.server_add(config=cfg))
@@ -32,8 +39,8 @@ async def test_truncate_while_migration(manager: ManagerClient):
     cql = manager.get_cql()
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(feature_config.get_table_opts(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);'))
 
         keys = range(1024)
         await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});') for k in keys])
@@ -55,8 +62,8 @@ async def test_truncate_while_migration(manager: ManagerClient):
         await pending_log.wait_for('raft_topology - Streaming for tablet migration of.*successful')
 
         # Check if we have any data
-        row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.test', consistency_level=ConsistencyLevel.ALL))
-        assert row[0].count == 0
+        assert await count_rows(cql, feature_config,
+                                query_template="SELECT COUNT(*) FROM {ks}.{table}", ks=ks, table='test', keys=keys, partition_key='pk') == 0
 
 
 async def get_raft_leader_and_log(manager: ManagerClient, servers):
@@ -119,11 +126,18 @@ async def test_truncate_with_concurrent_drop(manager: ManagerClient):
             await trunc_future
 
 
+@pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
+                                                           FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY,
+                                                           FeatureConfigurations.STRONG_CONSISTENCY,
+                                                           FeatureConfigurations.LOGSTOR_STRONG_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_node_restart(manager: ManagerClient):
+async def test_truncate_while_node_restart(manager: ManagerClient, feature_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled' }
+    cfg = feature_config.get_cluster_cfg(cfg)
+    keyspace_opts = feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
 
     servers = []
     servers.append(await manager.server_add(config=cfg))
@@ -134,8 +148,8 @@ async def test_truncate_while_node_restart(manager: ManagerClient):
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(feature_config.get_table_opts(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);'))
 
         keys = range(1024)
         await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});') for k in keys])
@@ -162,8 +176,8 @@ async def test_truncate_while_node_restart(manager: ManagerClient):
         await trunc_future
 
         # Check if truncate was successful
-        row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.test', consistency_level=ConsistencyLevel.ALL))
-        assert row[0].count == 0
+        assert await count_rows(cql, feature_config,
+                                query_template="SELECT COUNT(*) FROM {ks}.{table}", ks=ks, table='test', keys=keys, partition_key='pk') == 0
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -211,13 +225,18 @@ async def test_truncate_with_coordinator_crash(manager: ManagerClient):
         assert row[0].count == 0
 
 
+@pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
+                                                           FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_truncate_already_waiting(manager: ManagerClient):
+async def test_truncate_while_truncate_already_waiting(manager: ManagerClient, feature_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
             'error_injections_at_startup': ['migration_streaming_wait']
             }
+    cfg = feature_config.get_cluster_cfg(cfg)
+    keyspace_opts = feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
 
     servers = []
     servers.append(await manager.server_add(config=cfg))
@@ -225,8 +244,8 @@ async def test_truncate_while_truncate_already_waiting(manager: ManagerClient):
     cql = manager.get_cql()
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(feature_config.get_table_opts(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);'))
 
         keys = range(1024)
         await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});') for k in keys])
@@ -255,21 +274,27 @@ async def test_truncate_while_truncate_already_waiting(manager: ManagerClient):
         await truncate_future
 
         # Check if we have any data
-        row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.test', consistency_level=ConsistencyLevel.ALL))
-        assert row[0].count == 0
+        assert await count_rows(cql, feature_config,
+                                query_template="SELECT COUNT(*) FROM {ks}.{table}", ks=ks, table='test', keys=keys, partition_key='pk') == 0
 
 # Reproduces https://github.com/scylladb/scylladb/issues/23771.
+@pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
+                                                           FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY,
+                                                           FeatureConfigurations.STRONG_CONSISTENCY,
+                                                           FeatureConfigurations.LOGSTOR_STRONG_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_replay_position_check_during_truncate(manager):
+async def test_replay_position_check_during_truncate(manager, feature_config: FeatureConfig):
     logger.info("Bootstrapping cluster")
-    cfg = { 'auto_snapshot': True }
+    cfg = feature_config.get_cluster_cfg({'auto_snapshot': True})
+    keyspace_opts = feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
     cmdline = ['--smp=1']
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
     server = servers[0]
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(feature_config.get_table_opts(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);"))
 
         keys = range(10)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
@@ -293,13 +318,17 @@ async def test_replay_position_check_during_truncate(manager):
         await s1_log.wait_for(f"database_truncate_wait: message received", from_mark=s1_mark)
         await truncate_task
 
+
+@pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
+                                                           FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_parallel_truncate(manager: ManagerClient):
+async def test_parallel_truncate(manager: ManagerClient, feature_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
-    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
-            'error_injections_at_startup': ['migration_streaming_wait']
-            }
+    cfg = feature_config.get_cluster_cfg(
+        {'tablets_mode_for_new_keyspaces': 'enabled', 'error_injections_at_startup': ['migration_streaming_wait']})
+    keyspace_opts = feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
 
     servers = []
     servers.append(await manager.server_add(config=cfg))
@@ -307,9 +336,9 @@ async def test_parallel_truncate(manager: ManagerClient):
     cql = manager.get_cql()
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
-        await cql.run_async(f'CREATE TABLE {ks}.test1 (pk int PRIMARY KEY, c int);')
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(feature_config.get_table_opts(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);'))
+        await cql.run_async(feature_config.get_table_opts(f'CREATE TABLE {ks}.test1 (pk int PRIMARY KEY, c int);'))
 
         keys = range(1024)
         await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});') for k in keys])
@@ -335,10 +364,10 @@ async def test_parallel_truncate(manager: ManagerClient):
         await tf2
 
         # Check if we have any data
-        row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.test', consistency_level=ConsistencyLevel.ALL))
-        assert row[0].count == 0
-        row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.test1', consistency_level=ConsistencyLevel.ALL))
-        assert row[0].count == 0
+        assert await count_rows(cql, feature_config,
+                                query_template="SELECT COUNT(*) FROM {ks}.{table}", ks=ks, table='test', keys=keys, partition_key='pk') == 0
+        assert await count_rows(cql, feature_config,
+                                query_template="SELECT COUNT(*) FROM {ks}.{table}", ks=ks, table='test1', keys=keys, partition_key='pk') == 0
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_split_emitted_during_truncate(manager: ManagerClient):
