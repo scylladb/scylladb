@@ -98,6 +98,8 @@ public:
     }
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
+    size_t object_size() const override { return sizeof(*this); }
+    size_t external_memory_usage() const override;
 
     // A control connection never has a legitimate reason to run a batch, so any
     // batch arriving on one means it is being used for user load.
