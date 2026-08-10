@@ -387,10 +387,16 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
         // SA would be calculated incorrectly, which may result in an unneeded cross-tier compaction.
 
         auto find_two_largest_tiers = [this] (std::vector<size_bucket_t>&& buckets) -> std::tuple<size_bucket_t, size_bucket_t> {
-            std::partial_sort(buckets.begin(), buckets.begin()+2, buckets.end(), [this] (size_bucket_t& i, size_bucket_t& j) {
-                return avg_size(i) > avg_size(j); // descending order
+            // avg_size() is O(bucket.size()); cache it per bucket instead of recomputing it on every comparison.
+            std::vector<std::pair<uint64_t, size_bucket_t>> sized_buckets;
+            sized_buckets.reserve(buckets.size());
+            for (auto& b : buckets) {
+                sized_buckets.emplace_back(avg_size(b), std::move(b));
+            }
+            std::partial_sort(sized_buckets.begin(), sized_buckets.begin()+2, sized_buckets.end(), [] (auto& i, auto& j) {
+                return i.first > j.first; // descending order
             });
-            return { std::move(buckets[0]), std::move(buckets[1]) };
+            return { std::move(sized_buckets[0].second), std::move(sized_buckets[1].second) };
         };
 
         auto total_size = [] (const size_bucket_t& bucket) -> uint64_t {
