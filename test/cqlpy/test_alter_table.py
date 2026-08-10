@@ -8,7 +8,7 @@ import re
 import pytest
 
 from cassandra.protocol import ConfigurationException
-from .util import new_test_table, unique_name
+from .util import is_scylla, new_test_table, unique_name
 from .nodetool import flush
 
 # Test checks only case of preparing `ALTER TABLE ... DROP ... USING TIMESTAMP ?` statement.
@@ -119,3 +119,37 @@ def test_invalid_percentile_speculative_retry_values(cql, test_keyspace, percent
     with new_test_table(cql, test_keyspace, "id UUID PRIMARY KEY, value TEXT") as table:
         with pytest.raises(ConfigurationException, match=message):
             cql.execute(f"ALTER TABLE {table} WITH speculative_retry = '{percentile}PERCENTILE'")
+
+def test_invalid_speculative_retry_values(cql, test_keyspace):
+    """
+    Verify that speculative_retry values that match none of the supported
+    formats (ALWAYS, NONE, XPERCENTILE, Yms) are rejected with a proper
+    configuration error, including values shorter than the "ms" and
+    "PERCENTILE" suffixes and non-finite or negative numbers.
+    """
+
+    with new_test_table(cql, test_keyspace, "id UUID PRIMARY KEY, value TEXT") as table:
+        for value in ["", "x", "ms", "percentile", "dog",
+                      "nanPERCENTILE", "infPERCENTILE", "-infPERCENTILE",
+                      "nanms", "infms", "-1ms"]:
+            with pytest.raises(ConfigurationException):
+                cql.execute(f"ALTER TABLE {table} WITH speculative_retry = '{value}'")
+
+def test_valid_speculative_retry_values(cql, test_keyspace):
+    """
+    Verify that all supported speculative_retry formats are accepted,
+    case-insensitively. On Scylla, also verify the canonical form the value
+    is normalized to in the schema tables; Cassandra normalizes to different
+    spellings (e.g. 99p), so that part of the check is Scylla-only.
+    """
+
+    with new_test_table(cql, test_keyspace, "id UUID PRIMARY KEY, value TEXT") as table:
+        ks, cf = table.split('.')
+        for value, canonical in [('NONE', 'NONE'), ('none', 'NONE'), ('ALWAYS', 'ALWAYS'),
+                                 ('200ms', '200.00ms'), ('0ms', '0.00ms'),
+                                 ('99PERCENTILE', '99.0PERCENTILE'), ('99.0percentile', '99.0PERCENTILE')]:
+            cql.execute(f"ALTER TABLE {table} WITH speculative_retry = '{value}'")
+            if is_scylla(cql):
+                r = list(cql.execute(f"SELECT speculative_retry FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'"))
+                assert len(r) == 1
+                assert r[0].speculative_retry == canonical
