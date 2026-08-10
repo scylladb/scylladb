@@ -1835,10 +1835,7 @@ class ScyllaClusterManager:
         def add_put(route: str, handler: Callable):
             app.router.add_put(route, make_catching_handler(route_history_wrapper(True)(handler)))
 
-        add_get('/up', self._manager_up)
-        add_get('/cluster/up', self._cluster_up)
         add_get('/cluster/is-dirty', self._is_dirty)
-        add_get('/cluster/replicas', self._cluster_replicas)
         add_get('/cluster/running-servers', self._cluster_running_servers)
         add_get('/cluster/all-servers', self._cluster_all_servers)
         add_get('/cluster/starting-servers', self._cluster_starting_servers)
@@ -1874,22 +1871,10 @@ class ScyllaClusterManager:
         add_get('/cluster/server/{server_id}/process_status', self._server_get_process_status)
         add_get('/cluster/server/{server_id}/returncode', self._server_get_returncode)
 
-    async def _manager_up(self, _request) -> bool:
-        return self.is_running
-
-    async def _cluster_up(self, _request) -> bool:
-        """Is cluster running"""
-        return self.cluster is not None and self.cluster.is_running
-
     async def _is_dirty(self, _request) -> bool:
         """Report if current cluster is dirty"""
         assert self.cluster
         return self.cluster.is_dirty
-
-    async def _cluster_replicas(self, _request) -> int:
-        """Return cluster's configured number of replicas (replication factor)"""
-        assert self.cluster
-        return self.cluster.replicas
 
     async def _cluster_running_servers(self, _request) -> list[tuple[ServerNum, IPAddress, IPAddress]]:
         """Return a dict of running server ids to IPs"""

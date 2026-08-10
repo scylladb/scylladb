@@ -248,21 +248,9 @@ class ManagerClient:
             allure.attach(log.read_bytes(), name=name, attachment_type=allure.attachment_type.TEXT)
             shutil.copyfile(log, failed_test_path_dir / name)
 
-    async def is_manager_up(self) -> bool:
-        """Check if Manager server is up"""
-        return await self.client.get_json("/up")
-
-    async def is_cluster_up(self) -> bool:
-        """Check if cluster is up"""
-        return await self.client.get_json("/cluster/up")
-
     async def is_dirty(self) -> bool:
         """Check if current cluster dirty."""
         return await self.client.get_json("/cluster/is-dirty")
-
-    async def replicas(self) -> int:
-        """Get number of configured replicas for the cluster (replication factor)"""
-        return await self.client.get_json("/cluster/replicas")
 
     async def running_servers(self) -> list[ServerInfo]:
         """Get List of server info (id and IP address) of running servers"""
