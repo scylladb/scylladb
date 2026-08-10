@@ -60,10 +60,6 @@ private:
         , _max_sstable_size_in_bytes(max_sstable_size_in_MB * 1024 * 1024)
         , _stcs_options(stcs_options)
     {
-        // allocate enough generations for a PB of data, with a 1-MB sstable size.  (Note that if maxSSTableSize is
-        // updated, we will still have sstables of the older, potentially smaller size.  So don't make this
-        // dependent on maxSSTableSize.)
-        _generations.resize(MAX_LEVELS);
     }
 public:
     static std::vector<std::vector<sstables::shared_sstable>> get_levels(const std::vector<sstables::shared_sstable>& sstables) {
