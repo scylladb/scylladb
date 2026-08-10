@@ -396,9 +396,9 @@ async def scylla_2025_1(request, build_mode, internet_dependency_enabled) -> Asy
     yield await get_scylla_2025_1_description(build_mode)
 
 @pytest.fixture(scope="function", params=list(KeyProvider))
-async def key_provider(request, tmpdir, scylla_binary):
+async def key_provider(request, tmpdir, suite_log_dir, scylla_binary):
     """Encryption providers fixture"""
-    async with make_key_provider_factory(request.param, tmpdir, scylla_binary) as res:
+    async with make_key_provider_factory(request.param, tmpdir, suite_log_dir, scylla_binary) as res:
         yield res
 
 
@@ -407,7 +407,7 @@ def failure_detector_timeout(build_mode):
     return 5000 * MODES_TIMEOUT_FACTOR[build_mode]
 
 @pytest.fixture(params=[None, 's3', 'gs'], ids=['local', 's3', 'gs'])
-async def storage(request, pytestconfig, tmpdir):
+async def storage(request, pytestconfig, tmpdir, suite_log_dir):
     """Parametrize tests over local / S3 / GCS storage.
 
     When storage is None the test runs with local (filesystem) storage.
@@ -417,5 +417,5 @@ async def storage(request, pytestconfig, tmpdir):
         yield None
         return
 
-    async with make_object_storage(request.param, pytestconfig, tmpdir, request.node.name) as server:
+    async with make_object_storage(request.param, pytestconfig, tmpdir, suite_log_dir, request.node.name) as server:
         yield server

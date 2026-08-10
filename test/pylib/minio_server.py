@@ -37,7 +37,14 @@ class MinioServer:
 
     log_file: BufferedWriter
 
-    def __init__(self, tempdir_base, address, logger):
+    def __init__(self, tempdir_base, address, logger, log_dir=None):
+        """
+        `tempdir_base` holds the server's scratch data (per-test, discarded by
+        CI), while `log_dir`, if given, must be a CI-archived directory
+        (testlog) so that the server's log survives for post-mortem analysis.
+        Defaults to `tempdir_base` for callers that already pass an archived
+        directory in that argument.
+        """
         self.srv_exe = shutil.which('minio')
         self.address = address
         self.port = self.DEFAULT_PORT
@@ -54,7 +61,9 @@ class MinioServer:
         self.bucket_name = 'testbucket'
         self.access_key = os.environ.get(self.ENV_ACCESS_KEY, ''.join(random.choice(string.hexdigits) for i in range(16)))
         self.secret_key = os.environ.get(self.ENV_SECRET_KEY, ''.join(random.choice(string.hexdigits) for i in range(32)))
-        self.log_filename = (self.tempdir_base / 'minio').with_suffix(".log")
+        log_path = pathlib.Path(log_dir if log_dir is not None else self.tempdir_base)
+        log_path.mkdir(parents=True, exist_ok=True)
+        self.log_filename = log_path / f'minio-{self.tempdir.name}.log'
         self.old_env = dict()
         self.default_config = None
 
