@@ -20,6 +20,9 @@
 #include "cql3/util.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
+#include "speculative_retry_initializer.hh"
+#include "db/config.hh"
+#include "db/extensions.hh"
 #include "db/marshal/type_parser.hh"
 #include "schema_registry.hh"
 #include <type_traits>
@@ -1788,6 +1791,39 @@ void schema_builder::restore_schema_initializers_checkpoint(schema_initializers_
         throw std::logic_error("Invalid schema initializer checkpoint");
     }
     initializers.resize(checkpoint.size);
+}
+
+void register_speculative_retry_initializer(db::config& cfg) {
+    if (cfg.speculative_retry_user_table_default.is_set()) {
+        try {
+            speculative_retry::from_sstring(cfg.speculative_retry_user_table_default());
+        } catch (const exceptions::configuration_exception& e) {
+            throw exceptions::configuration_exception(
+                format("Invalid speculative_retry_user_table_default: {}", e.what()));
+        }
+    }
+    schema_builder::register_schema_initializer([&cfg](schema_builder& builder) {
+        if (!cfg.speculative_retry_user_table_default.is_set()) {
+            return;
+        }
+        if (is_internal_keyspace(builder.ks_name()) || cfg.extensions().is_extension_internal_keyspace(builder.ks_name())) {
+            return;
+        }
+        static thread_local sstring last_value;
+        static thread_local std::optional<speculative_retry> last_retry;
+        const sstring& value = cfg.speculative_retry_user_table_default();
+        if (value != last_value) {
+            last_value = value;
+            try {
+                last_retry = speculative_retry::from_sstring(value);
+            } catch (const exceptions::configuration_exception& e) {
+                dblog.warn("Ignoring invalid speculative_retry_user_table_default value: {}", e.what());
+            }
+        }
+        if (last_retry) {
+            builder.set_speculative_retry(*last_retry);
+        }
+    });
 }
 
 void schema_builder::set_properties(schema::user_properties props) {

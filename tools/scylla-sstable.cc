@@ -39,6 +39,7 @@
 #include "readers/multi_range.hh"
 #include "schema/schema_builder.hh"
 #include "schema/compression_initializer.hh"
+#include "schema/speculative_retry_initializer.hh"
 #include "sstables/index_reader.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
@@ -3112,6 +3113,10 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         // Since scylla-sstable has no context about features, we optimistically
         // assume that the feature is enabled.
         register_compression_initializer(dbcfg, true);
+
+        // Apply the configured default speculative_retry value to user
+        // tables, so that schemas built here match the node's.
+        register_speculative_retry_initializer(dbcfg);
 
         {
             unsigned schema_sources = 0;

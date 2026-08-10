@@ -50,6 +50,7 @@
 #include "db/batchlog_manager.hh"
 #include "schema/schema_builder.hh"
 #include "schema/compression_initializer.hh"
+#include "schema/speculative_retry_initializer.hh"
 #include "db/view/view_building_state.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/log.hh"
@@ -615,6 +616,7 @@ private:
             register_compression_initializer(*cfg, [this] {
                 return bool(_feature_service.local().sstable_compression_dicts);
             });
+            register_speculative_retry_initializer(*cfg);
 
             // Important to restore schema initializers during shutdown to
             // support tests that repeatedly create `cql_test_env` instances.
