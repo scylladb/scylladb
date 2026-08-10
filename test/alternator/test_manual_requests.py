@@ -38,7 +38,7 @@ def test_deeply_nested_put(dynamodb, test_table):
     # responded with a comprehensible message - it can be either
     # a success report or an error - both are acceptable as long as
     # the oversized message did not make the server crash.
-    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     print(response, response.text)
 
     # If the PutItem request above failed, the deeply nested item
@@ -112,7 +112,7 @@ def test_too_large_request_chunked(dynamodb, test_table):
     def generator(s):
         yield s
     try:
-        response = requests.post(req.url, headers=req.headers, data=generator(req.body), verify=False)
+        response = requests.post(req.url, headers=req.headers, data=generator(req.body), verify=False, cert=req.cert)
     # Until #12166 is fixed, we need this except. See comment above why.
     except requests.exceptions.ConnectionError as e:
         return
@@ -133,7 +133,7 @@ def test_too_large_request_content_length(dynamodb, test_table, mb):
     req = get_signed_request(dynamodb, 'PutItem',
         '{"TableName": "' + test_table.name + '", ' + spaces + '"Item": {"p": {"S": "x"}, "c": {"S": "x"}}}')
     try:
-        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     # Until #12166 is fixed, we need this except. See comment above why.
     except requests.exceptions.ConnectionError as e:
         return
@@ -154,14 +154,14 @@ def test_too_large_request_headers(dynamodb, test_table):
     # First prepare a valid signed request, which works:
     req = get_signed_request(dynamodb, 'PutItem',
         '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}}}')
-    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     assert response.status_code == 200
     # Add to the valid request, two extra headers "header1" and "header2",
     # with short values. These extra headers are ignored (and do not change
     # the signature computation), and the request still works:
     headers = dict(req.headers)
     headers.update({'header1': 'dog', 'header2': 'cat'})
-    response = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    response = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
     assert response.status_code == 200
     # Finally, make the two extra headers long - totaling more than 16 KB.
     # The request should now fail with a 400 Bad Request. Although such a
@@ -169,7 +169,7 @@ def test_too_large_request_headers(dynamodb, test_table):
     # between this request and the previous ones is the length of the extra
     # headers, so it proves the server caught the oversized headers.
     headers.update({'header1': 'x'*8192, 'header2': 'y'*8192})
-    response = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    response = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
     assert response.status_code == 400
 
 # In addition to oversized request bodies and headers tested in the above
@@ -184,14 +184,14 @@ def test_too_large_request_line(dynamodb, test_table):
     # First prepare a valid signed request, which works:
     req = get_signed_request(dynamodb, 'PutItem',
         '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}}}')
-    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     assert response.status_code == 200
     # Add to the valid request's URL some unnecessary garbage at the end,
     # but short. Because the URL is part of the signed data, we expect to
     # either get a InvalidSignatureException (this is what happens on AWS)
     # or a 404 error (this is what happens on Scylla).
     url = req.url + '/' + 'garbage'
-    response = requests.post(url, headers=req.headers, data=req.body, verify=False)
+    response = requests.post(url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     assert response.status_code == 404 or 'InvalidSignatureException' in response.text
     # Finally, add some very long garbage to the end of the URL. Now we
     # don't want to the 404 or InvalidSignatureException that were fine
@@ -200,7 +200,7 @@ def test_too_large_request_line(dynamodb, test_table):
     # This time, we need to see a 400 Bad Request - but not one with a
     # InvalidSignatureException error in its body.
     url = req.url + '/' + 'x' * 17000
-    response = requests.post(url, headers=req.headers, data=req.body, verify=False)
+    response = requests.post(url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     assert response.status_code == 400 and not 'InvalidSignatureException' in response.text
 
 def test_incorrect_json(dynamodb, test_table):
@@ -212,7 +212,7 @@ def test_incorrect_json(dynamodb, test_table):
     validate_resp = lambda t: "SerializationException" in t or "ValidationException" in t or "Page Not Found" in t
     for i in range(len(correct_req)):
         req = get_signed_request(dynamodb, 'PutItem', correct_req[:i])
-        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
         assert validate_resp(response.text)
 
     incorrect_reqs = [
@@ -221,14 +221,14 @@ def test_incorrect_json(dynamodb, test_table):
     ]
     for incorrect_req in incorrect_reqs:
         req = get_signed_request(dynamodb, 'PutItem', incorrect_req)
-        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
         assert validate_resp(response.text)
 
 # Test that the value returned by PutItem is always a JSON object, not an empty string (see #6568)
 def test_put_item_return_type(dynamodb, test_table):
     payload = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}}}'
     req = get_signed_request(dynamodb, 'PutItem', payload)
-    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     assert response.text
     # json::loads throws on invalid input
     json.loads(response.text)
@@ -238,10 +238,10 @@ def test_tags_return_empty_body(dynamodb, test_table):
     descr = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
     arn =  descr['TableArn']
     req = get_signed_request(dynamodb, 'TagResource', '{"ResourceArn": "' + arn + '", "Tags": [{"Key": "k", "Value": "v"}]}')
-    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     assert not response.text
     req = get_signed_request(dynamodb, 'UntagResource', '{"ResourceArn": "' + arn + '", "TagKeys": ["k"]}')
-    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     assert not response.text
 
 # Test that incorrect number values are detected
@@ -249,7 +249,7 @@ def test_incorrect_numbers(dynamodb, test_table):
     for incorrect in ["NaN", "Infinity", "-Infinity", "-NaN", "dog", "-dog"]:
         payload = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}, "v": {"N": "' + incorrect + '"}}}'
         req = get_signed_request(dynamodb, 'PutItem', payload)
-        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
         assert "ValidationException" in response.text and "numeric" in response.text
 
 # Although the DynamoDB API responses are JSON, additional conventions apply
@@ -271,7 +271,7 @@ def test_content_type(dynamodb, test_table):
     # in the response (today, DynamoDB doesn't allow any other content type
     # in the request anyway).
     req = get_signed_request(dynamodb, 'PutItem', payload)
-    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     assert response.headers['Content-Type'] == 'application/x-amz-json-1.0'
 
 # Alternator implements long responses using a different code path - using a
@@ -287,7 +287,7 @@ def test_content_type_long(dynamodb, test_table):
             batch.put_item({'p': p, 'c': str(i), 'x': 'x'*10000})
     payload = '{"TableName": "' + test_table.name + '", "KeyConditions":  {"p": {"AttributeValueList": [{"S": "' + p + '"}], "ComparisonOperator": "EQ"}}}'
     req = get_signed_request(dynamodb, 'Query', payload)
-    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     assert response.status_code == 200
     assert len(response.text) > 200000
     assert response.headers['Content-Type'] == 'application/x-amz-json-1.0'
@@ -298,7 +298,7 @@ def test_content_type_error(dynamodb, test_table):
     # PutItem without a TableName will generate an error:
     payload = '{"Item": {"p": {"S": "x"}, "c": {"S": "x"}}}'
     req = get_signed_request(dynamodb, 'PutItem', payload)
-    r = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    r = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     assert r.status_code == 400 and 'ValidationException' in r.text
     assert r.headers['Content-Type'] == 'application/x-amz-json-1.0'
 
@@ -306,7 +306,7 @@ def test_content_type_error(dynamodb, test_table):
 # An unknown operation should result with an UnknownOperationException:
 def test_unknown_operation(dynamodb):
     req = get_signed_request(dynamodb, 'BoguousOperationName', '{}')
-    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     assert response.status_code == 400
     assert 'UnknownOperationException' in response.text
     print(response.text)
@@ -337,7 +337,7 @@ def test_exception_escape(test_table_s):
 def test_exception_escape_raw(dynamodb, test_table_s):
     payload = '{"TableName": "' + test_table_s.name + '", "Key": {"p": {"S": "hello"}}, "UpdateExpression": "ADD n :inc", "ExpressionAttributeValues": {":inc": {"S": "1"}}}'
     req = get_signed_request(dynamodb, 'UpdateItem', payload)
-    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     assert response.status_code == 400
     # In issue #10278, the JSON parsing fails:
     r = json.loads(response.text)
@@ -346,7 +346,7 @@ def test_exception_escape_raw(dynamodb, test_table_s):
 def put_item_binary_data_in_key(dynamodb, test_table_b, item_data):
     payload = '{"TableName": "%s", "Item": {"p": {"B": "%s"}}}' % (test_table_b.name, item_data)
     req = get_signed_request(dynamodb, 'PutItem', payload)
-    return requests.post(req.url, headers=req.headers, data=req.body, verify=True)
+    return requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
 
 def put_item_binary_data_in_non_key(dynamodb, test_table_b, item_data):
     payload ='''{
@@ -361,7 +361,7 @@ def put_item_binary_data_in_non_key(dynamodb, test_table_b, item_data):
         }
     }''' % (test_table_b.name, base64.b64encode(random_bytes()).decode(), item_data)
     req = get_signed_request(dynamodb, 'PutItem', payload)
-    return requests.post(req.url, headers=req.headers, data=req.body, verify=True)
+    return requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
 
 # Reproduces issue #6487 where setting binary values with missing "=" padding characters
 # was allowed in Scylla.
@@ -394,7 +394,7 @@ def test_base64_malformed_255(dynamodb, test_table_b):
     table_name_bytes = test_table_b.name.encode('UTF-8')
     payload_bytes = b'{"TableName": "' + table_name_bytes + b'", "Item": {"p": {"B": "\xFFdog"}}}'
     req = get_signed_request(dynamodb, 'PutItem', payload_bytes)
-    r = requests.post(req.url, headers=req.headers, data=req.body, verify=True)
+    r = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     assert r.status_code == 400 and 'SerializationException' in r.text
 
 def update_item_binary_data(dynamodb, test_table_b, item_data):
@@ -405,7 +405,7 @@ def update_item_binary_data(dynamodb, test_table_b, item_data):
         "ExpressionAttributeValues": {":val": {"B": "%s"} }
     }''' % (test_table_b.name, base64.b64encode(random_bytes()).decode(), item_data)
     req = get_signed_request(dynamodb, 'UpdateItem', payload)
-    return requests.post(req.url, headers=req.headers, data=req.body, verify=True)
+    return requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
 
 # The same tests as above for invalid B (binary) values, just for UpdateItem
 # instead of PutItem, attempting to reproduce issue #17539.
@@ -427,7 +427,7 @@ def scan_with_binary_data_in_cond_expr(dynamodb, test_table_b, filter_expr, expr
         "ExpressionAttributeValues": { %s }
     }''' % (test_table_b.name, filter_expr, expr_attr_values)
     req = get_signed_request(dynamodb, 'Scan', payload)
-    return requests.post(req.url, headers=req.headers, data=req.body, verify=True)
+    return requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
 
 # Tests the case where malformed binary data is placed as part of filter expression
 def test_base64_malformed_cond_expr(dynamodb, test_table_b):
@@ -506,7 +506,7 @@ def test_batch_write_item_invalid_payload(dynamodb, test_table):
     for body in cases:
         body = body.replace("__TABLE__", test_table.name)
         req = get_signed_request(dynamodb, "BatchWriteItem", body)
-        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
         assert_validation_exception(response.text, f"payload: \'{body}\'", accept_serialization_exception=True)
 
 
@@ -521,17 +521,17 @@ def test_batch_write_item_empty_request_list(dynamodb, test_table, test_table_s)
     for body in cases:
         body = body.replace("__TABLE__", test_table.name).replace("__TABLE_S__", test_table_s.name)
         req = get_signed_request(dynamodb, "BatchWriteItem", body)
-        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
         assert_validation_exception(response.text, f"payload: \'{body}\'")
 
 # Tests that non-object payload of a request will result with ValidationException.
 def test_request_payload_must_be_object(dynamodb):
     for body in ['null', '[]']:
         req = get_signed_request(dynamodb, "ListTables", body)
-        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
         assert_validation_exception(response.text, f"payload: \'{body}\'", accept_serialization_exception=True)
     req = get_signed_request(dynamodb, "ListTables", '{}')
-    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     r = json.loads(response.text)
     assert "__type" not in r and "TableNames" in r
 
@@ -579,8 +579,8 @@ def test_keep_alive(dynamodb, test_table, use_keep_alive):
         # Note that by default (stream=False), post() reads the entire
         # response body before returning. So the connection should be
         # immediately reusable if the server kept it alive.
-        session.post(req.url, headers=req.headers, data=req.body, verify=False)
-        session.post(req.url, headers=req.headers, data=req.body, verify=False)
+        session.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
+        session.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
         if use_keep_alive:
             assert connect_count == 1 # one connection reused.
         else:

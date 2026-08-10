@@ -101,6 +101,37 @@ to allow the alternator HTTPS server to think it's been authorized and properly 
 Still, boto3 library issues warnings that the certificate used for communication is self-signed,
 and thus should not be trusted. For the sake of running local tests this warning is explicitly ignored.
 
+## Mutual TLS (mTLS) support
+
+To test client certificate authentication in addition to HTTPS, pass both
+`--https` and `--mtls` to `run` or `pytest`. The `run` script will
+automatically generate a CA certificate and a client certificate with
+CN `cassandra` (matching the role used for SigV4 authentication), and
+start ScyllaDB with `require_client_auth=true` and the generated CA as the
+truststore so that it verifies the client certificate.
+
+If you are running ScyllaDB manually, you need to set up the certificates
+yourself:
+
+```
+openssl genrsa 2048 > ca.key
+openssl req -new -x509 -nodes -sha256 -days 365 -subj "/CN=TestCA" -key ca.key -out ca.crt
+openssl genrsa 2048 > client.key
+openssl req -new -sha256 -subj "/CN=cassandra" -key client.key -out client.csr
+openssl x509 -req -sha256 -days 365 -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out client.crt
+```
+
+Then start ScyllaDB with the additional alternator encryption options:
+```
+--alternator-encryption-options require_client_auth=true
+--alternator-encryption-options truststore=ca.crt
+```
+
+And run pytest with the client certificate options:
+```
+pytest --https --mtls --client-cert-file client.crt --client-key-file client.key
+```
+
 
 ## Authorization
 

@@ -6,10 +6,12 @@
 
 import requests
 
+from .util import get_cert
+
 # Test that a health check can be performed with a GET packet
 def test_health_works(dynamodb):
     url = dynamodb.meta.client._endpoint.host
-    response = requests.get(url, verify=False)
+    response = requests.get(url, verify=False, cert=get_cert(dynamodb))
     assert response.ok
     assert response.content.decode('utf-8').strip()  == 'healthy: {}'.format(url.replace('https://', '').replace('http://', ''))
 
@@ -18,5 +20,5 @@ def test_health_only_works_for_root_path(dynamodb):
     url = dynamodb.meta.client._endpoint.host
     for suffix in ['/abc', '/-', '/index.htm']:
         print(url + suffix)
-        response = requests.get(url + suffix, verify=False)
+        response = requests.get(url + suffix, verify=False, cert=get_cert(dynamodb))
         assert response.status_code in range(400, 405)

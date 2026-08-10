@@ -12,6 +12,7 @@ import requests
 import json
 import pytest
 from contextlib import contextmanager
+from botocore import UNSIGNED
 from botocore.hooks import HierarchicalEmitter
 
 from test.pylib.skip_types import skip_env
@@ -376,6 +377,19 @@ def scylla_config_temporary(dynamodb, name, value, nop = False):
     finally:
         scylla_config_write(dynamodb, name, original_value)
 
+# get_cert() returns the (cert_file, key_file) tuple that should be passed
+# as the "cert" parameter of requests.get()/post() to authenticate to the
+# given dynamodb connection's endpoint, or None if that connection does not
+# use a client certificate. Tests which send raw HTTP requests (i.e., not
+# through boto3) to the same endpoint as "dynamodb" - instead of through
+# get_signed_request()/manual_request() below - need to pass this "cert" too,
+# because under mTLS (--mtls) the TLS handshake itself will fail without it,
+# regardless of the request's content.
+def get_cert(dynamodb):
+    session = dynamodb.meta.client._endpoint.http_session
+    cert_file = getattr(session, '_cert_file', None)
+    return (cert_file, session._key_file) if cert_file else None
+
 # manual_request() can be used to send a DynamoDB API request without any
 # boto3 involvement in preparing the request - the operation name and
 # operation payload (a JSON string) are created by the caller. Use this
@@ -385,7 +399,7 @@ def scylla_config_temporary(dynamodb, name, value, nop = False):
 # sent by a real-life SDK.
 def manual_request(dynamodb, op, payload):
     req = get_signed_request(dynamodb, op, payload)
-    res = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    res = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
     if res.status_code == 200:
         return json.loads(res.text)
     else:
@@ -419,10 +433,17 @@ def get_signed_request(dynamodb, op, payload, extra_headers=None):
         url=dynamodb.meta.client._endpoint.host
         headers={'X-Amz-Target': 'DynamoDB_20120810.' + op, 'Content-Type': 'application/x-amz-json-1.0'} | (extra_headers or {})
         body=payload_bytes
+        cert=get_cert(dynamodb)
         method='POST'
         context={}
         params={}
     req = Request()
     signer = dynamodb.meta.client._request_signer
-    signer.get_auth(signer.signing_name, signer.region_name).add_auth(request=req)
+    # Under mTLS, "dynamodb" is configured with signature_version=UNSIGNED
+    # (the client certificate is the sole authentication, and any SigV4
+    # signature is ignored) - so there is no signer to use, and trying to
+    # sign anyway raises UnknownSignatureVersionError. Leave the request
+    # unsigned in that case; it authenticates via req.cert instead.
+    if signer._signature_version != UNSIGNED:
+        signer.get_auth(signer.signing_name, signer.region_name).add_auth(request=req)
     return req
