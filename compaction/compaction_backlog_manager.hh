@@ -73,7 +73,7 @@ public:
     compaction_backlog_tracker(const compaction_backlog_tracker&) = delete;
     ~compaction_backlog_tracker();
 
-    double backlog() const;
+    double backlog();
     // FIXME: Should provide strong exception safety guarantees
     void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts);
     void register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp);
