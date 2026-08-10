@@ -175,9 +175,10 @@ class KmipKeyProviderFactory(KeyProviderFactory):
 
 class KMSKeyProviderFactory(KeyProviderFactory):
     """KMSKeyProviderFactory proxy"""
-    def __init__(self, tmpdir):
+    def __init__(self, tmpdir, log_dir):
         super(KMSKeyProviderFactory, self).__init__(KeyProvider.kms, tmpdir)
         self.tmpdir = tmpdir
+        self.log_dir = log_dir
         self.master_key = "alias/Scylla-test"
         self.kms_host = "kms_test"
         self.endpoint_url = None
@@ -189,7 +190,7 @@ class KMSKeyProviderFactory(KeyProviderFactory):
         aws_region = os.getenv('KMS_AWS_REGION')
  
         if master_key is None:
-            self.server = DockerizedServer("docker.io/nsmithuk/local-kms:3", self.tmpdir,
+            self.server = DockerizedServer("docker.io/nsmithuk/local-kms:3", self.log_dir,
                                            logfilenamebase="local-kms",
                                            success_string="Local KMS started on",
                                            failure_string="address already in use",
@@ -378,8 +379,12 @@ class GcpKeyProviderFactory(KeyProviderFactory):
         return True
 
 
-def make_key_provider_factory(provider: KeyProvider, tmpdir, scylla_exe):
-    """Create key provider factory for enum"""
+def make_key_provider_factory(provider: KeyProvider, tmpdir, log_dir, scylla_exe):
+    """Create key provider factory for enum
+
+    `tmpdir` holds per-test scratch data, `log_dir` must be a CI-archived
+    directory (testlog) so that container logs survive the test run.
+    """
     res = None
     if provider == KeyProvider.local:
         res = LocalFileSystemKeyProviderFactory(tmpdir)
@@ -388,7 +393,7 @@ def make_key_provider_factory(provider: KeyProvider, tmpdir, scylla_exe):
     elif provider == KeyProvider.kmip:
         res = KmipKeyProviderFactory(tmpdir)
     elif provider == KeyProvider.kms:
-        res = KMSKeyProviderFactory(tmpdir)
+        res = KMSKeyProviderFactory(tmpdir, log_dir)
     elif provider == KeyProvider.azure:
         res = AzureKeyProviderFactory(tmpdir)
     elif provider == KeyProvider.gcp:

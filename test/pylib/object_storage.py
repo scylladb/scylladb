@@ -115,10 +115,11 @@ S3_Server = S3Server
 
 
 class MinioWrapper(S3Server):
-    def __init__(self, tempdir):
+    def __init__(self, tempdir, log_dir=None):
         self.host_registry = HostRegistry()
         self.leased_host = None
         self.server = None
+        self.log_dir = log_dir
         # Fields are fully initialized by start(); base-class values are
         # placeholders until then.
         super().__init__(tempdir, '', 0, '', '', MinioServer.DEFAULT_REGION, '')
@@ -130,7 +131,8 @@ class MinioWrapper(S3Server):
         self.leased_host = await self.host_registry.lease_host()
         self.server = MinioServer(self.tempdir,
                                   self.leased_host,
-                                  logging.getLogger('minio'))
+                                  logging.getLogger('minio'),
+                                  log_dir=self.log_dir)
         try:
             await self.server.start()
         except Exception:
@@ -206,7 +208,7 @@ class GSFront:
 
 
 class GSServerImpl(GSFront):
-    def __init__(self, tmpdir):
+    def __init__(self, log_dir):
         super(GSServerImpl, self).__init__(None, 'testbucket', None)
         self.server = None
         self.host = None
@@ -216,7 +218,7 @@ class GSServerImpl(GSFront):
                       'GS_BUCKET_FOR_TEST': attrgetter('bucket_name'),
                       'GS_CREDENTIALS_FILE': attrgetter('credentials_file'),
                       }
-        self.tmpdir = tmpdir
+        self.log_dir = log_dir
 
     def publish(self):
         self.endpoint = f'http://{self.host}:{self.port}'
@@ -240,7 +242,7 @@ class GSServerImpl(GSFront):
         return ["-scheme", "http", "-log-level", "debug", "--port", f'{port}', '-public-host', '127.0.0.1']
 
     async def start(self):
-        self.server = DockerizedServer("docker.io/fsouza/fake-gcs-server:1.54.0", self.tmpdir,
+        self.server = DockerizedServer("docker.io/fsouza/fake-gcs-server:1.54.0", self.log_dir,
                                        logfilenamebase="fake-gcs-server",
                                        image_args=self._image_args,
                                        success_string="server started at",
@@ -289,7 +291,7 @@ class GSServerImpl(GSFront):
 GSServer = GSServerImpl
 
 
-def create_s3_server(pytestconfig, tmpdir):
+def create_s3_server(pytestconfig, tmpdir, log_dir=None):
     server = None
     s3_server_address = pytestconfig.getoption('--s3-server-address')
     s3_server_port = pytestconfig.getoption('--s3-server-port')
@@ -326,23 +328,23 @@ def create_s3_server(pytestconfig, tmpdir):
                           default_region,
                           default_bucket)
     else:
-        server = MinioWrapper(tempdir)
+        server = MinioWrapper(tempdir, log_dir)
     return server
 
 
-def create_gs_server(tmpdir):
+def create_gs_server(log_dir):
     endpoint = os.environ.get('GS_SERVER_ADDRESS_FOR_TEST')
     bucket = os.environ.get('GS_BUCKET_FOR_TEST')
     credentials_file = os.environ.get('GS_CREDENTIALS_FILE')
 
     if endpoint is not None and bucket is not None:
         return GSFront(endpoint, bucket, credentials_file)
-    return GSServerImpl(tmpdir)
+    return GSServerImpl(log_dir)
 
 
 @pytest.fixture(scope="function")
-async def s3_server(request, pytestconfig, tmpdir):
-    server = create_s3_server(pytestconfig, tmpdir)
+async def s3_server(request, pytestconfig, tmpdir, suite_log_dir):
+    server = create_s3_server(pytestconfig, tmpdir, suite_log_dir)
     await server.start()
     bucket_created = False
     try:

@@ -29,11 +29,17 @@ def pytest_addoption(parser):
 
 
 @asynccontextmanager
-async def make_object_storage(kind, pytestconfig, tmpdir, test_name):
+async def make_object_storage(kind, pytestconfig, tmpdir, log_dir, test_name):
+    """Start an object-storage backend for a test.
+
+    `tmpdir` holds the server's scratch data (per-test, discarded by CI), while
+    `log_dir` must be a CI-archived directory (testlog) so that container logs
+    survive for post-mortem analysis.
+    """
     if kind == 'gs':
-        server = create_gs_server(tmpdir)
+        server = create_gs_server(log_dir)
     else:
-        server = create_s3_server(pytestconfig, tmpdir)
+        server = create_s3_server(pytestconfig, tmpdir, log_dir)
 
     bucket_created = False
     try:
@@ -48,18 +54,18 @@ async def make_object_storage(kind, pytestconfig, tmpdir, test_name):
 
 
 @pytest.fixture(scope="function", params=['s3', 'gs'])
-async def object_storage(request, pytestconfig, tmpdir):
-    async with make_object_storage(request.param, pytestconfig, tmpdir, request.node.name) as server:
+async def object_storage(request, pytestconfig, tmpdir, suite_log_dir):
+    async with make_object_storage(request.param, pytestconfig, tmpdir, suite_log_dir, request.node.name) as server:
         yield server
 
 
 @pytest.fixture(scope="function")
-async def s3_storage(request, pytestconfig, tmpdir):
-    async with make_object_storage('s3', pytestconfig, tmpdir, request.node.name) as server:
+async def s3_storage(request, pytestconfig, tmpdir, suite_log_dir):
+    async with make_object_storage('s3', pytestconfig, tmpdir, suite_log_dir, request.node.name) as server:
         yield server
 
 
 @pytest.fixture(scope="function")
-async def gs_storage(request, pytestconfig, tmpdir):
-    async with make_object_storage('gs', pytestconfig, tmpdir, request.node.name) as server:
+async def gs_storage(request, pytestconfig, tmpdir, suite_log_dir):
+    async with make_object_storage('gs', pytestconfig, tmpdir, suite_log_dir, request.node.name) as server:
         yield server

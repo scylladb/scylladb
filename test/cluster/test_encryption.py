@@ -271,10 +271,10 @@ async def test_wrong_cipher_algorithm(manager, key_provider):
     assert len(expected_errors) == len(broken_ciphers), expected_errors
 
 @pytest.mark.parametrize(argnames="compression", argvalues=("LZ4", "Snappy", "Deflate"))
-async def test_encryption_table_compression(manager, tmpdir, compression, scylla_binary):
+async def test_encryption_table_compression(manager, tmpdir, suite_log_dir, compression, scylla_binary):
     """Test compression + ear"""
     logger.debug("---- Test with compression: %s -----", compression)
-    async with make_key_provider_factory(KeyProvider.local, tmpdir, scylla_binary) as key_provider:
+    async with make_key_provider_factory(KeyProvider.local, tmpdir, suite_log_dir, scylla_binary) as key_provider:
         await _smoke_test(manager, key_provider,
                           ciphers={"AES/CBC/PKCS5Padding": [128]},
                           compression=compression)
@@ -391,12 +391,12 @@ async def test_alter(manager, key_provider):
                       ciphers={"AES/CBC/PKCS5Padding": [128]},
                       restart=restart)
 
-async def test_per_table_master_key(manager: ManagerClient, tmpdir):
+async def test_per_table_master_key(manager: ManagerClient, tmpdir, suite_log_dir):
     """Test per table KMS master key"""
     class MultiAliasKMSProvider (KMSKeyProviderFactory):
         """Special KMS using different master keys for each table"""
-        def __init__(self, tmpdir):
-            super(MultiAliasKMSProvider, self).__init__(tmpdir)
+        def __init__(self, tmpdir, log_dir):
+            super(MultiAliasKMSProvider, self).__init__(tmpdir, log_dir)
             self.key_count: int = 0
             self.key_ids: list = []
             self.aliases: list = []
@@ -409,7 +409,7 @@ async def test_per_table_master_key(manager: ManagerClient, tmpdir):
             self.key_count += 1
             return super().additional_cf_options() | {"master_key": alias_name}
 
-    async with MultiAliasKMSProvider(tmpdir) as kp:
+    async with MultiAliasKMSProvider(tmpdir, suite_log_dir) as kp:
         async def restart(manager: ManagerClient, servers: list[ServerInfo],
                           table_names: list[str]):
             await manager.rolling_restart(servers)
@@ -435,14 +435,14 @@ async def test_per_table_master_key(manager: ManagerClient, tmpdir):
                           restart=restart)
 
 
-async def test_non_existant_table_master_key(manager: ManagerClient, tmpdir):
+async def test_non_existant_table_master_key(manager: ManagerClient, tmpdir, suite_log_dir):
     """Test we fail properly if using a non-existant master key"""
     class NoSuchKeyKMSProvider (KMSKeyProviderFactory):
         """Special KMS using nonexisting master key"""
         def additional_cf_options(self):
             return super().additional_cf_options() | {"master_key": "alias/NoSuchKey"}
 
-    async with NoSuchKeyKMSProvider(tmpdir) as kp:
+    async with NoSuchKeyKMSProvider(tmpdir, suite_log_dir) as kp:
         with pytest.raises(Exception):
             await _smoke_test(manager, kp, ciphers={"AES/CBC/PKCS5Padding": [128]})
 
