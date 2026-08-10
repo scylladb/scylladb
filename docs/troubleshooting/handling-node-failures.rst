@@ -147,6 +147,7 @@ will leave the recovery mode and remove the obsolete internal Raft data.
 
         cqlsh> TRUNCATE TABLE system.discovery;
         cqlsh> DELETE value FROM system.scylla_local WHERE key = 'raft_group0_id';
+        cqlsh> DELETE FROM system.scylla_local WHERE key = 'ensure_committed_by_group0_done';
 
 #. Perform a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart/>` of all live nodes,
    but:
