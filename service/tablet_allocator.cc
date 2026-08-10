@@ -2408,22 +2408,35 @@ public:
             if (total_size_opt) {
                 auto total_size = *total_size_opt;
 
+<<<<<<< HEAD
                 auto cur_decision = _tm->tablets().get_tablet_map(table).resize_decision();
                 auto avg_tablet_size = total_size / std::max<size_t>(table_plan.current_tablet_count * tables.size(), 1);
                 auto tablet_count_from_size = table_plan.current_tablet_count;
+||||||| parent of a231531e5f (tablets: Take into account true desired tablet count based on size when scaling tablet count)
+                auto avg_tablet_size = total_size / std::max<size_t>(tablet_count * tables.size(), 1);
+                auto tablet_count_from_size = tablet_count;
+=======
+                // Prefer smaller tablets by rounding up because tables have upward growth tendency.
+                auto final_count = div_ceil(total_size, target_tablet_size * tables.size());
+
+                auto avg_tablet_size = total_size / std::max<size_t>(tablet_count * tables.size(), 1);
+                auto tablet_count_from_size = tablet_count;
+>>>>>>> a231531e5f (tablets: Take into account true desired tablet count based on size when scaling tablet count)
 
                 // Split based on avg_tablet_size, or if the current resize_decision is split, apply hysteresis,
                 // so it would get cancelled only when crossing back the half-way point.
                 if (avg_tablet_size > target_max_tablet_size(target_tablet_size) ||
                     (cur_decision.is_split() && avg_tablet_size >= target_tablet_size)) {
-                    // TODO: extend to n-way split when needed
-                    tablet_count_from_size *= 2;
+                    // We want to split, so advertise at least 2x the current count. We should also take into account
+                    // desired count which reflects the current table size, which may be higher.
+                    // Otherwise, scaling factor due to the per-shard limit may keep it stuck at current count.
+                    tablet_count_from_size = std::max(2 * tablet_count, final_count);
                 } else {
                     // Consider merge. If the current resize_decision is merge, apply hysteresis,
                     // so it would get cancelled only when crossing back the half-way point.
                     if (avg_tablet_size < target_min_tablet_size(target_tablet_size) ||
                         (cur_decision.is_merge() && avg_tablet_size <= target_tablet_size)) {
-                        tablet_count_from_size = div_ceil(tablet_count_from_size, 2);
+                        tablet_count_from_size = std::min(div_ceil(tablet_count, 2), final_count);
                     }
                 }
 
