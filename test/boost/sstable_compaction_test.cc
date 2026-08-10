@@ -1171,6 +1171,42 @@ SEASTAR_FIXTURE_TEST_CASE(leveled_07_gcs, gcs_fixture, *tests::check_run_test_de
     return test_env::do_with_async([](test_env& env) { leveled_07_fn(env); }, test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
+// Regression test for get_compaction_candidates()'s cached per-level byte totals.
+SEASTAR_TEST_CASE(leveled_fan_out_cache) {
+    return test_env::do_with_async([](test_env& env) {
+        auto schema = table_for_tests::make_default_schema();
+        auto max_sstable_size_in_mb = 1;
+        auto max_sstable_size_in_bytes = uint64_t(max_sstable_size_in_mb) * 1024 * 1024;
+        auto max_bytes_for_l1 = compaction::leveled_manifest::max_bytes_for_level(1, max_sstable_size_in_bytes);
+
+        auto run_with_level2_size = [&] (uint64_t level1_size, uint64_t level2_size) {
+            auto cf = env.make_table_for_tests(schema);
+            auto stop_cf = deferred_stop(cf);
+            const auto keys = tests::generate_partition_keys(2, cf.schema());
+            add_sstable_for_leveled_test(env, cf, level1_size, /*level*/1, keys[0].key(), keys[1].key());
+            add_sstable_for_leveled_test(env, cf, level2_size, /*level*/2, keys[0].key(), keys[1].key());
+
+            auto candidates = get_candidates_for_leveled_strategy(*cf);
+            compaction::size_tiered_compaction_strategy_options stcs_options;
+            compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+            std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+            std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
+            return manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
+        };
+
+        // Both levels stay under TARGET_SCORE, so control falls through to the fan-out loop.
+        auto level1_size = max_bytes_for_l1 / 20;
+
+        // Not too far ahead (level2 < level1 * fan_out): promotion expected.
+        auto promotes = run_with_level2_size(level1_size, level1_size * 2);
+        BOOST_REQUIRE(!promotes.sstables.empty());
+
+        // Too far ahead (level2 >= level1 * fan_out): no compaction expected.
+        auto skips = run_with_level2_size(level1_size, level1_size * compaction::leveled_manifest::leveled_fan_out);
+        BOOST_REQUIRE(skips.sstables.empty());
+    });
+}
+
 void leveled_invariant_fix_fn(test_env& env) {
     auto schema = table_for_tests::make_default_schema();
     auto cf = env.make_table_for_tests(schema);

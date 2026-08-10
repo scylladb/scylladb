@@ -186,6 +186,15 @@ public:
         // This isn't a magic wand -- if you are consistently writing too fast for LCS to keep
         // up, you're still screwed.  But if instead you have intermittent bursts of activity,
         // it can help a lot.
+
+        // Cache each level's byte total.
+        std::array<std::optional<uint64_t>, MAX_LEVELS> level_bytes_cache;
+        auto level_bytes = [&] (size_t level) {
+            if (!level_bytes_cache[level]) {
+                level_bytes_cache[level] = get_total_bytes(get_level(level));
+            }
+            return *level_bytes_cache[level];
+        };
         for (auto i = _generations.size() - 1; i > 0; i--) {
             auto& sstables = get_level(i);
             if (sstables.empty()) {
@@ -196,7 +205,7 @@ public:
             Set<SSTableReader> sstablesInLevel = Sets.newHashSet(sstables);
             Set<SSTableReader> remaining = Sets.difference(sstablesInLevel, cfs.getDataTracker().getCompacting());
 #endif
-            double score = (double) get_total_bytes(sstables) / (double) max_bytes_for_level(i);
+            double score = (double) level_bytes(i) / (double) max_bytes_for_level(i);
 
             logger.debug("Compaction score for level {} is {}", i, score);
 
@@ -239,7 +248,7 @@ public:
             }
 
             // stop pushing data to higher levels once L is 10x (fan out) larger than L-1.
-            if (get_total_bytes(sstables) >= (get_total_bytes(sstables_prev_level) * leveled_fan_out)) {
+            if (level_bytes(i) >= (level_bytes(i - 1) * leveled_fan_out)) {
                 continue;
             }
 
