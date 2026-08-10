@@ -2722,8 +2722,18 @@ void compaction_backlog_tracker::retire() {
     disable();
 }
 
-double compaction_backlog_tracker::backlog() const {
-    return disabled() ? compaction_controller::disable_backlog : _impl->backlog(_ongoing_writes, _ongoing_compactions);
+double compaction_backlog_tracker::backlog() {
+    if (disabled()) {
+        return compaction_controller::disable_backlog;
+    }
+    try {
+        return _impl->backlog(_ongoing_writes, _ongoing_compactions);
+    } catch (...) {
+        // Isolate the failure to this tracker instead of poisoning the whole shard's backlog poll.
+        cmlog.error("Disabling backlog tracker due to exception during backlog computation: {}", std::current_exception());
+        disable();
+        return compaction_controller::disable_backlog;
+    }
 }
 
 void compaction_backlog_tracker::replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) {
