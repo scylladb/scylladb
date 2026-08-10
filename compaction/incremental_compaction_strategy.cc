@@ -270,7 +270,8 @@ incremental_compaction_strategy::most_interesting_bucket(std::vector<std::vector
 
 compaction_descriptor
 incremental_compaction_strategy::find_garbage_collection_job(const compaction::compaction_group_view& t, std::vector<size_bucket_t>& buckets) {
-    auto worth_dropping_tombstones = [this, &t, now = db_clock::now()] (const sstables::sstable_run& run, gc_clock::time_point compaction_time) {
+    // min_memtable_timestamp() scans all memtables; hoist it out of the per-run loop below.
+    auto worth_dropping_tombstones = [this, &t, now = db_clock::now(), min_memtable_ts = t.min_memtable_timestamp()] (const sstables::sstable_run& run, gc_clock::time_point compaction_time) {
         if (run.all().empty()) {
             return false;
         }
@@ -291,7 +292,7 @@ incremental_compaction_strategy::find_garbage_collection_job(const compaction::c
         }));
         bool satisfy_staleness = (now - _tombstone_compaction_interval) > run_write_time;
         // Staleness condition becomes mandatory if memtable's data is possibly shadowed by tombstones.
-        if (run_max_timestamp >= t.min_memtable_timestamp() && !satisfy_staleness) {
+        if (run_max_timestamp >= min_memtable_ts && !satisfy_staleness) {
             return false;
         }
         // If interval is not satisfied, we still consider tombstone GC if the gain outweighs the increased frequency.
