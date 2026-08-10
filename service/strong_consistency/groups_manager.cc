@@ -66,6 +66,24 @@ static void apply_applier_queue_max_size(raft::server* server, bool is_child) {
         : raft::server::default_applier_queue_max_size);
 }
 
+// Returns a token the given tablet owns. During a resize, returns one owned both by that tablet
+// and by the tablet the given group will serve once the resize is finalized. Such a token always
+// exists: the ranges of a parent and its children always overlap.
+static dht::token stable_token_of_group(const tablet_map& tablet_map, tablet_id tid, raft::group_id gid) {
+    if (tablet_map.get_tablet_raft_info(tid).group_id == gid) {
+        return tablet_map.get_last_token(tid);
+    }
+    // A child of this tablet's group. It serves a part of the tablet's token range now and a
+    // tablet of its own once the resize is finalized.
+    //
+    // The left child owns the tokens up to and including the split token, the right one the rest.
+    // A merge produces a single child, which owns every token of each of its parents.
+    if (tablet_map.resize_decision().is_split() && gid == tablet_map.get_split_child_gids(tid).first) {
+        return tablet_map.get_split_token(tid);
+    }
+    return tablet_map.get_last_token(tid);
+}
+
 // Precondition: The passed group_leader must be a non-trivial raft::server_id.
 static std::optional<locator::tablet_replica_set> prepare_replicas_for_sc_tablet_version(locator::tablet_replica_set replicas, raft::server_id group_leader) {
     std::ranges::sort(replicas);
@@ -483,9 +501,10 @@ future<> groups_manager::wait_for_table_raft_groups_on_all_hosts(table_id table,
     });
 }
 
-future<> groups_manager::leader_info_updater(raft_group_state& state, global_tablet_id tablet, raft::group_id gid) {
+future<> groups_manager::leader_info_updater(raft_group_state& state, table_id table, raft::group_id gid,
+        dht::token token) {
     try {
-        const auto schema = _db.find_schema(tablet.table);
+        const auto schema = _db.find_schema(table);
         const auto server_id = state.server->id();
 
         while (true) {
@@ -496,7 +515,7 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
 
             if (current_leader == server_id) {
                 logger.debug("leader_info_updater({}-{}): current term {}, running read_barrier()",
-                    tablet, gid,
+                    table, gid,
                     current_term);
                 // We intentionally pass nullptr here. If the tablet is leaving this node,
                 // the Raft server will be aborted and the loop will break.
@@ -504,18 +523,21 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
                 // There's no reason to abort this operation in any other case.
                 co_await state.server->read_barrier(nullptr);
 
+                auto& cf = schema->table();
+                const auto tid = cf.get_effective_replication_map()->get_token_metadata()
+                        .tablets().get_tablet_map(table).get_tablet_id(token);
                 state.leader_info = leader_info {
                     .term = current_term,
-                    .last_timestamp = schema->table().get_max_timestamp_for_tablet(tablet.tablet)
+                    .last_timestamp = cf.get_max_timestamp_for_tablet(tid)
                 };
                 logger.debug("leader_info_updater({}-{}): read_barrier() completed, "
-                    "new leader term {}, last_timestamp {}",
-                    tablet, gid,
-                    state.leader_info->term,
+                    "new leader term {}, tablet now served {}, last_timestamp {}",
+                    table, gid,
+                    state.leader_info->term, tid,
                     state.leader_info->last_timestamp);
             } else if (state.leader_info) {
                 logger.debug("leader_info_updater({}-{}): this replica {} is no longer a leader, current leader {}",
-                    tablet, gid, server_id, current_leader);
+                    table, gid, server_id, current_leader);
                 state.leader_info = std::nullopt;
             }
             state.leader_info_cond.broadcast();
@@ -529,18 +551,18 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
     } catch (const raft::request_aborted&) {
         // thrown from read_barrier() and wait_for_state_change when the tablet leaves this shard
         logger.debug("leader_info_updater({}-{}): got raft::request_aborted {}",
-            tablet, gid, std::current_exception());
+            table, gid, std::current_exception());
     } catch (const raft::stopped_error&) {
         // thrown from read_barrier() and wait_for_state_change when the tablet leaves this shard
         logger.debug("leader_info_updater({}-{}): got raft::stopped_error {}",
-            tablet, gid, std::current_exception());
+            table, gid, std::current_exception());
     } catch (const replica::no_such_column_family&) {
         // thrown from find_schema() and schema->table() when the table is dropped
         logger.debug("leader_info_updater({}-{}): got replica::no_such_column_family {}",
-            tablet, gid, std::current_exception());
+            table, gid, std::current_exception());
     } catch (...) {
         on_internal_error(logger, ::format("leader_info_updater({}-{}): unexpected exception: {}",
-            tablet, gid, std::current_exception()));
+            table, gid, std::current_exception()));
     }
 }
 
@@ -625,7 +647,8 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             logger.info("update(): starting raft server for tablet {}, group id {}", tablet, id);
             state.gate = make_lw_shared<gate>();
             _starting_groups.push_back(state);
-            state.server_control_op = futurize_invoke([&state, this, tablet, id, new_tm, parent_id](this auto) -> future<> {
+            const auto token = stable_token_of_group(tablet_map, tid, id);
+            state.server_control_op = futurize_invoke([&state, this, tablet, id, new_tm, parent_id, token](this auto) -> future<> {
                 co_await state.server_control_op.get_future();
                 co_await start_raft_group(tablet, id, std::move(new_tm), parent_id);
                 state.server = &_raft_gr.get_server(id);
@@ -633,7 +656,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
                 // yet. A stale limit is corrected by the next update(), which finalizing or rolling
                 // back the resize triggers.
                 apply_applier_queue_max_size(state.server, parent_id.has_value());
-                state.leader_info_updater = leader_info_updater(state, tablet, id);
+                state.leader_info_updater = leader_info_updater(state, tablet.table, id, token);
 
                 // We want to make sure the server is ready to serve requests before
                 // we report it as started in wait_for_groups_to_start().
