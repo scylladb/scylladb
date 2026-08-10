@@ -195,8 +195,10 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
         return i.second < j.second;
     });
 
-    auto min_sstable_size_check = [&runs, &options] (uint64_t size) {
-        return !tiny_sstables_written_recently(options.min_sstable_size, options.min_sstable_age, runs) && size < options.min_sstable_size;
+    // Loop-invariant: compute once instead of rescanning all runs per check (was O(n^2)).
+    bool recently_written = tiny_sstables_written_recently(options.min_sstable_size, options.min_sstable_age, runs);
+    auto min_sstable_size_check = [&options, recently_written] (uint64_t size) {
+        return !recently_written && size < options.min_sstable_size;
     };
 
     using bucket_type = std::vector<sstables::frozen_sstable_run>;
