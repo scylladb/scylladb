@@ -10,7 +10,6 @@
 #include <exception>
 #include <initializer_list>
 #include <memory>
-#include <regex>
 #include <stdexcept>
 #if __has_include(<rapidxml.h>)
 #include <rapidxml.h>
@@ -715,6 +714,11 @@ protected:
     named_gate _bg_flushes;
     std::optional<tag> _tag;
     seastar::abort_source* _as;
+    // Set once this sink has produced its object, either with a plain PUT or with
+    // a completed multipart upload. finalize_upload() clears _upload_id and
+    // output_stream::close() flushes a second time, so upload_started() alone
+    // cannot tell "nothing was ever written" from "already uploaded".
+    bool _object_produced = false;
 
     future<> start_upload();
     future<> finalize_upload();
@@ -724,6 +728,15 @@ protected:
 
     bool upload_started() const noexcept {
         return !_upload_id.empty();
+    }
+
+    // Create the object even though nothing was written into the sink. A
+    // zero-length component is still a component, and object stores hold
+    // zero-length objects. Without this the object is silently missing.
+    future<> put_empty_object() {
+        s3l.trace("PUT empty object {}", _object_name);
+        _object_produced = true;
+        return _client->put_object(_object_name, temporary_buffer<char>());
     }
 
     multipart_upload(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag, seastar::abort_source* as)
@@ -1011,6 +1024,10 @@ future<> client::multipart_upload::abort_upload() {
 }
 
 future<> client::multipart_upload::finalize_upload() {
+    // Set before the request rather than after it: on failure the caller aborts the
+    // upload, which clears _upload_id, and a later flush must not then mistake this
+    // sink for one that never wrote anything and PUT an empty object over it.
+    _object_produced = true;
     s3l.trace("wait for {} parts to complete (upload id {})", _part_etags.size(), _upload_id);
     co_await _bg_flushes.close();
 
@@ -1078,21 +1095,31 @@ public:
         : upload_sink_base(std::move(cln), std::move(object_name), std::move(tag), as)
     {}
 
+    // True while nothing has been written into the sink, so it has no object to
+    // copy-upload from. Used by upload_jumbo_sink to skip such a piece.
+    bool empty() const noexcept {
+        return _bufs.size() == 0 && !upload_started();
+    }
+
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
         append_buffers(_bufs, std::move(data));
         return maybe_flush();
     }
 
     virtual future<> flush() override {
-        if (_bufs.size() != 0) {
+        if (!_object_produced) {
             // This is handy for small objects that are uploaded via the sink. It makes
-            // upload happen in one REST call, instead of three (create + PUT + wrap-up)
+            // upload happen in one REST call, instead of three (create + PUT + wrap-up).
+            // Empty _bufs get here too and make the zero-length object
             if (!upload_started()) {
                 s3l.trace("Sink fallback to plain PUT for {}", _object_name);
+                _object_produced = true;
                 co_return co_await _client->put_object(_object_name, std::move(_bufs));
             }
 
-            co_await upload_part(std::move(_bufs));
+            if (_bufs.size() != 0) {
+                co_await upload_part(std::move(_bufs));
+            }
         }
         if (upload_started()) {
             std::exception_ptr ex;
@@ -1187,7 +1214,15 @@ public:
 
     virtual future<> flush() override {
         if (_current) {
-            co_await upload_part(std::exchange(_current, nullptr));
+            auto piece = std::exchange(_current, nullptr);
+            if (piece->empty()) {
+                // Nothing was written into the piece, so upload_sink::flush()
+                // would not create its object and the copy-upload below would
+                // fail with NoSuchKey, leaving the ETag list short. Drop it.
+                co_await piece->close();
+            } else {
+                co_await upload_part(std::move(piece));
+            }
         }
         if (upload_started()) {
             std::exception_ptr ex;
@@ -1200,6 +1235,8 @@ public:
                 co_await abort_upload();
                 std::rethrow_exception(ex);
             }
+        } else if (!_object_produced) {
+            co_await put_empty_object();
         }
     }
 
@@ -1227,11 +1264,6 @@ class client::chunked_download_source final : public seastar::data_source_impl {
         claimed_buffer(temporary_buffer<char>&& buf, std::optional<semaphore_units<>>&& claimed_memory) noexcept
             : _buffer(std::move(buf)), _claimed_memory(std::move(claimed_memory)) {}
     };
-    struct content_range {
-        uint64_t start;
-        uint64_t end;
-        uint64_t total;
-    };
     shared_ptr<client> _client;
     sstring _object_name;
     seastar::abort_source* _as;
@@ -1247,16 +1279,6 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     condition_variable _bg_fiber_cv;
     condition_variable _get_cv;
     future<> _filling_fiber = make_ready_future<>();
-
-    static content_range parse_content_range(const std::string& header) {
-        static const std::regex pattern(R"(bytes (\d+)-(\d+)/(\d+))");
-        std::smatch match;
-
-        if (std::regex_match(header, match, pattern)) {
-            return {std::stoull(match[1].str()), std::stoull(match[2].str()), std::stoull(match[3].str())};
-        }
-        throw std::runtime_error("Invalid Content-Range header format");
-    }
 
     future<> make_filling_fiber() {
         seastar::http::experimental::no_retry_strategy no_retry;
@@ -1280,34 +1302,45 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                     co_return;
                 }
 
+                // The object size is not known yet, so ask for the whole object and
+                // learn the size from Content-Length. Requesting a byte range instead
+                // would fail on an empty object: no byte range is satisfiable when the
+                // object is zero-length (RFC 7233), so the server answers 416. Only the
+                // first request per object is range-less, the rest are chunked below.
+                const bool discover_size = _range == s3::full_range;
                 range current_range{0};
-                if (_range == s3::full_range) {
-                    current_range = {0, _max_buffers_size};
-                    s3l.trace(
-                        "No download range for object '{}' was provided. Setting the download range to `_max_buffers_size` {}", _object_name, current_range);
-                } else if (_is_contiguous_mode) {
-                    current_range = _range;
-                    s3l.trace("Setting contiguous download mode for '{}', range: {}", _object_name, current_range);
-                } else {
-                    // In non-contiguous mode we download the object in chunks of _max_buffers_size
-                    current_range = {_range.offset(), std::min(_range.length(), _max_buffers_size - _buffers_size)};
-                    s3l.trace("Setting ranged download mode for '{}', range: {}", _object_name, current_range);
-                }
-                if (current_range.length() == 0) {
-                    s3l.trace("Fiber for object '{}' completed downloading, signals EOS and leaving fiber", _object_name);
+                if (!discover_size) {
+                    if (_is_contiguous_mode) {
+                        current_range = _range;
+                        s3l.trace("Setting contiguous download mode for '{}', range: {}", _object_name, current_range);
+                    } else {
+                        // In non-contiguous mode we download the object in chunks of _max_buffers_size
+                        current_range = {_range.offset(), std::min(_range.length(), _max_buffers_size - _buffers_size)};
+                        s3l.trace("Setting ranged download mode for '{}', range: {}", _object_name, current_range);
+                    }
+                    if (current_range.length() == 0) {
+                        s3l.trace("Fiber for object '{}' completed downloading, signals EOS and leaving fiber", _object_name);
                     _buffers.emplace_back(temporary_buffer<char>(), co_await _client->claim_memory(0, _as));
-                    _get_cv.signal();
-                    _is_finished = true;
-                    co_return;
+                        _get_cv.signal();
+                        _is_finished = true;
+                        co_return;
+                    }
                 }
 
                 auto req = http::request::make("GET", _client->_host, _object_name);
-                req._headers["Range"] = current_range.to_header_string();
+                if (!discover_size) {
+                    req._headers["Range"] = current_range.to_header_string();
+                }
 
-                s3l.trace("Fiber for object '{}' will make HTTP request within range {}", _object_name, current_range);
+                if (discover_size) {
+                    s3l.trace("Fiber for object '{}' will request the whole object", _object_name);
+                } else {
+                    s3l.trace("Fiber for object '{}' will make HTTP request within range {}", _object_name, current_range);
+                }
                 co_await _client->make_request(
                     std::move(req),
-                    [this, start = s3_clock::now(), pf_length = current_range.length()](group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
+                    [this, start = s3_clock::now(), discover_size, pf_length = discover_size ? 0 : current_range.length()](
+                        group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
                         if (reply._status != http::reply::status_type::ok && reply._status != http::reply::status_type::partial_content) {
                             s3l.warn("Fiber for object '{}' failed: {}. Exiting", _object_name, reply._status);
                             throw httpd::unexpected_status_error(reply._status);
@@ -1315,10 +1348,12 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                         gc.read_stats.ops++;
                         gc.read_stats.duration += s3_clock::now() - start;
                         gc.prefetch_bytes += pf_length;
-                        if (_range == s3::full_range && !reply.get_header("Content-Range").empty()) {
-                            auto content_range_header = parse_content_range(reply.get_header("Content-Range"));
-                            _range = range{content_range_header.start, content_range_header.total};
-                            s3l.trace("No range for object '{}' was provided. Setting the range to {} from the Content-Range header", _object_name, _range);
+                        if (discover_size) {
+                            // A zero length here needs no special case: the read loop
+                            // below sees an empty buffer with nothing left to fetch and
+                            // signals EOS on its own.
+                            _range = range{0, reply.content_length};
+                            s3l.trace("No range for object '{}' was provided. Setting the range to {} from Content-Length", _object_name, _range);
                         }
                         auto in = std::move(in_);
                         while (_buffers_size < _max_buffers_size && !_is_finished) {
@@ -1465,7 +1500,12 @@ data_source client::make_download_source(sstring object_name, range download_ran
 auto client::download_source::request_body() -> future<external_body> {
     auto req = http::request::make("GET", _client->_host, _object_name);
     s3l.trace("GET {} download range {}", _object_name, _range);
-    req._headers["Range"] = _range.to_header_string();
+    if (_range != s3::full_range) {
+        // Asking for the whole object needs no Range header, and adding one would
+        // make an empty object unreadable: no byte range is satisfiable when the
+        // object is zero-length (RFC 7233), so the server answers 416.
+        req._headers["Range"] = _range.to_header_string();
+    }
 
     auto bp = std::make_unique<std::optional<promise<external_body>>>(std::in_place);
     auto& p = *bp;
