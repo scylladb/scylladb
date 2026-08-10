@@ -59,6 +59,7 @@ SCRUB MODES
 Scrub mode                                                            Description
 ====================================================================  ==================================================================================================================
 VALIDATE                                                              Read-only mode: report any corruptions found while scrubbing but do not fix them.
+                                                                      Additionally, validate component integrity by verifying the stored digests if available.
                                                                       By default, corrupt SSTables are moved into a "quarantine" subdirectory so they will not be subject to compaction.
                                                                       (default).
 --------------------------------------------------------------------  ------------------------------------------------------------------------------------------------------------------
