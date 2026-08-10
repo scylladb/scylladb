@@ -82,10 +82,10 @@ speculative_retry::from_sstring(sstring str) {
         t = type::NONE;
     } else if (str == "ALWAYS") {
         t = type::ALWAYS;
-    } else if (str.compare(str.size() - ms.size(), ms.size(), ms) == 0) {
+    } else if (str.size() >= ms.size() && str.compare(str.size() - ms.size(), ms.size(), ms) == 0) {
         t = type::CUSTOM;
         v = convert(ms);
-    } else if (str.compare(str.size() - percentile.size(), percentile.size(), percentile) == 0) {
+    } else if (str.size() >= percentile.size() && str.compare(str.size() - percentile.size(), percentile.size(), percentile) == 0) {
         t = type::PERCENTILE;
         v = convert(percentile) / 100;
         if  (v < 0.0 || v > 1.0) {
