@@ -680,6 +680,14 @@ BOOST_AUTO_TEST_CASE(test_vector) {
     BOOST_REQUIRE(t->compare(b2, b2) == 0);
 }
 
+BOOST_AUTO_TEST_CASE(test_vector_rejects_truncated_variable_element_length) {
+    auto t = vector_type_impl::get_instance(utf8_type, 1);
+
+    BOOST_REQUIRE_THROW(t->validate(bytes()), exceptions::invalid_request_exception);
+    // 0x80 starts a two-byte unsigned vint, but the second byte is missing.
+    BOOST_REQUIRE_THROW(t->validate(from_hex("80")), exceptions::invalid_request_exception);
+}
+
 void test_validation_fails(const shared_ptr<const abstract_type>& type, bytes_view v)
 {
     try {
