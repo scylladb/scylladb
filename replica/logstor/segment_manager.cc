@@ -540,6 +540,8 @@ public:
 
     struct compaction_config {
         bool compaction_enabled;
+        // Upper bound on the batch cap; the cap actually used is derived from the free-segment
+        // target by make_compaction_limits().
         size_t max_segments_per_compaction;
         seastar::scheduling_group compaction_sg;
         utils::updateable_value<float> compaction_static_shares;
@@ -591,9 +593,10 @@ private:
     using group_compaction_state_map = absl::flat_hash_map<logstor_group*, std::unique_ptr<group_compaction_state>>;
     group_compaction_state_map _groups;
 
-    static constexpr size_t auto_compaction_parallelism = 4;
     shared_future<> _auto_compaction_completion{make_ready_future<>()};
-    seastar::semaphore auto_compaction_sem{auto_compaction_parallelism};
+    // Sized for the static maximum; a run holds back the difference between it and the current
+    // limit for its duration, see run_auto_compaction().
+    seastar::semaphore _auto_compaction_sem{max_auto_compaction_parallelism};
 
     bool auto_compaction_active() const noexcept {
         return !_auto_compaction_completion.available();
@@ -637,18 +640,19 @@ public:
 
     void schedule_auto_compaction();
 
-    // Refreshes the cached free segment watermarks. Called from start() and whenever
-    // trigger_compaction_threshold changes; segment counts and max_segments_per_compaction
-    // are fixed for the lifetime of the segment manager, so those two are the only inputs
-    // that can make the watermarks change.
+    // Refreshes the cached free segment watermarks and the compaction limits derived from them.
+    // Called from start() and whenever trigger_compaction_threshold changes; the segment count and
+    // the configured batch bound are fixed for the lifetime of the segment manager, so the
+    // threshold is the only other input.
     void refresh_free_segment_watermarks() noexcept;
 
 private:
 
-    // Cached result of make_free_segment_watermarks(). should_run_auto_compaction() and
-    // admission_pressure() call get_free_segment_watermarks() on every write, so caching
-    // avoids repeating the same computation on every hot-path call.
+    // Cached result of make_free_segment_watermarks(). should_run_auto_compaction() calls
+    // get_free_segment_watermarks() on every write, so caching avoids repeating the same
+    // computation on every hot-path call.
     free_segment_watermarks _free_segment_watermarks{};
+    compaction_limits _compaction_limits{};
 
     const free_segment_watermarks& get_free_segment_watermarks() const noexcept {
         return _free_segment_watermarks;
@@ -851,8 +855,6 @@ class segment_manager_impl {
     seastar::gate _async_gate;
     future<> _reserve_replenisher{make_ready_future<>()};
     seastar::condition_variable _segment_freed_cv;
-
-    static constexpr size_t max_compaction_parallelism = 8;
 
     write_buffer_pool _compaction_buffer_pool;
 
@@ -1066,8 +1068,12 @@ float compaction_manager_impl::compaction_pressure() const noexcept {
 }
 
 void compaction_manager_impl::refresh_free_segment_watermarks() noexcept {
-    _free_segment_watermarks = make_free_segment_watermarks(_sm._max_segments.configured,
-            _sm._cfg.trigger_compaction_threshold(), _cfg.max_segments_per_compaction);
+    _free_segment_watermarks = make_free_segment_watermarks(_sm._max_segments.configured, _sm._cfg.trigger_compaction_threshold());
+    _compaction_limits = make_compaction_limits(_free_segment_watermarks, _cfg.max_segments_per_compaction);
+
+    logstor_logger.debug("Free segment target {} (stop at {}), compaction parallelism {}, up to {} segments per compaction",
+            _free_segment_watermarks.low, _free_segment_watermarks.high,
+            _compaction_limits.auto_parallelism, _compaction_limits.batch_cap);
 }
 
 compaction_manager_impl::group_compaction_state& compaction_manager_impl::get_group_state(logstor_group& cg) {
@@ -1104,7 +1110,9 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     , _segments_per_file(config.file_size / config.segment_size)
     , _max_segments{(config.disk_size / config.file_size) * _segments_per_file, (config.disk_size / config.file_size) * _segments_per_file}
     , _segment_descs(static_cast<size_t>(_max_segments.actual))
-    , _segment_pool(segment_pool_size, config.max_segments_per_compaction)
+    // A compaction job takes one segment from the pool per flush, so the reserve that keeps normal
+    // writes from draining the pool is one segment per concurrent job.
+    , _segment_pool(segment_pool_size, max_compaction_parallelism)
     // Compaction concurrency is limited by buffer availability. Normal compaction
     // uses one buffer; split compaction allocates two buffers. The buffers are built up front and
     // all of them are kept, so that a compaction never waits for memory to build one.
@@ -1764,7 +1772,7 @@ compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor
 std::optional<compaction_manager_impl::compaction_candidate>
 compaction_manager_impl::select_segments_for_compaction(logstor_group& cg) {
     const auto segment_size = _sm.get_segment_size();
-    auto batch = select_compaction_batch(cg.logstor_segments(), segment_size, _cfg.max_segments_per_compaction);
+    auto batch = select_compaction_batch(cg.logstor_segments(), segment_size, _compaction_limits.batch_cap);
     if (!batch) {
         return std::nullopt;
     }
@@ -1866,17 +1874,24 @@ void compaction_manager_impl::schedule_auto_compaction() {
 }
 
 future<> compaction_manager_impl::run_auto_compaction() {
+    // The parallelism is snapshotted for the whole run. It only changes with the free-segment
+    // target, which is a rarely moved live-updatable setting, and holding back the difference to
+    // the semaphore's static size for the duration of the run is what lets the drain below wait
+    // for exactly the jobs this run submitted.
+    const auto parallelism = _compaction_limits.auto_parallelism;
+    auto held_back = co_await get_units(_auto_compaction_sem, max_auto_compaction_parallelism - parallelism);
+
     std::vector<compaction_candidate> pending;
 
     while (can_submit_compaction() && should_run_auto_compaction()) {
-        auto units = co_await get_units(auto_compaction_sem, 1);
+        auto units = co_await get_units(_auto_compaction_sem, 1);
 
         if (!can_submit_compaction() || !should_run_auto_compaction()) {
             break;
         }
 
         if (pending.empty()) {
-            pending = co_await find_top_compaction_candidates(auto_compaction_parallelism);
+            pending = co_await find_top_compaction_candidates(parallelism);
             if (pending.empty()) {
                 co_await seastar::sleep(std::chrono::milliseconds(100));
                 continue;
@@ -1899,7 +1914,7 @@ future<> compaction_manager_impl::run_auto_compaction() {
     }
 
     // Wait for submitted jobs to complete.
-    co_await get_units(auto_compaction_sem, auto_compaction_parallelism);
+    co_await get_units(_auto_compaction_sem, parallelism);
 }
 
 // A single buffer used by compaction for rewriting records into new segments in a single compaction group.
