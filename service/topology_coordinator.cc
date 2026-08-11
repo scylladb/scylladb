@@ -2955,7 +2955,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 .build());
 
             try {
-                co_await update_topology_state(std::move(guard), std::move(updates), fmt::format("{}{} has completed", ::toupper(what[0]), what.substr(1)));
+                co_await update_topology_state(std::move(guard), std::move(updates), fmt::format("{}{} has completed", char(::toupper(what[0])), what.substr(1)));
                 break;
             } catch (group0_concurrent_modification&) {
             }
