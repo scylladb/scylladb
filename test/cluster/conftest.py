@@ -206,7 +206,11 @@ async def manager_server(suite_log_dir: Path,
             yield server
         finally:
             stop_event.set()
-            future.result()
+            # Wait for the manager thread off the event loop.  Stopping the
+            # manager recycles the cluster, and recycling runs teardown
+            # callbacks that belong to this loop; blocking it here would
+            # deadlock them.
+            await asyncio.get_running_loop().run_in_executor(None, future.result)
 
 
 @pytest.fixture(scope="module")
