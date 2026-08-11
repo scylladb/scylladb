@@ -235,7 +235,7 @@ async def manager(request: pytest.FixtureRequest,
     Per test fixture to notify Manager client object when tests begin so it can perform checks for cluster state.
     """
     test_case_name = request.node.name
-    # this should be consistent with scylla_cluster.py handler name in _before_test method
+    # this should be consistent with scylla_cluster.py ScyllaClusterManager.before_test()
     test_py_log_test = suite_log_dir / f"{Path(testpy_uname).stem}.{test_case_name}_cluster.log"
 
     manager_client = manager_internal()  # set up client object in fixture with scope function
