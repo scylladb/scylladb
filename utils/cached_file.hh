@@ -61,7 +61,7 @@ private:
                 if (--cp->_use_count == 0) {
                     cp->parent->_metrics.bytes_in_std -= cp->_buf.size();
                     cp->_buf = {};
-                    cp->parent->_lru.add(*cp);
+                    cp->parent->_lru.add_index(*cp);
                 }
             }
         };
@@ -73,7 +73,9 @@ private:
         ptr_type share() noexcept {
             if (_use_count++ == 0) {
                 if (is_linked()) {
-                    parent->_lru.remove(*this);
+                    // Accessed while resident: counts as a touch, the release
+                    // path re-adds into the protected segment.
+                    parent->_lru.unlink_touched(*this);
                 }
             }
             return std::unique_ptr<cached_page, cached_page_del>(this);
