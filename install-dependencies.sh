@@ -69,6 +69,7 @@ fedora_packages=(
     clang
     clang-tools-extra
     compiler-rt
+    conan
     libasan
     libubsan
     gdb
@@ -77,7 +78,6 @@ fedora_packages=(
     jsoncpp-devel
     rapidjson-devel
     snappy-devel
-    libdeflate-devel
     systemd-devel
     cryptopp-devel
     git
@@ -101,7 +101,6 @@ fedora_packages=(
     ethtool
     hwloc
     glibc-langpack-en
-    xxhash-devel
     makeself
     libzstd-static libzstd-devel
     lz4-static lz4-devel
