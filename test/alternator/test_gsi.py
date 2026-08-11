@@ -305,6 +305,27 @@ def test_gsi_missing_attribute_definition(dynamodb):
                 }
             ])
 
+# A GSI's KeySchema, just like a base table's, must list the HASH key before
+# the RANGE key.
+def test_gsi_key_schema_wrong_order(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*(first.*HASH|HASH.*precede)'):
+        create_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'x', 'AttributeType': 'S' },
+                { 'AttributeName': 'y', 'AttributeType': 'S' },
+            ],
+            GlobalSecondaryIndexes=[
+                {   'IndexName': 'hello',
+                    'KeySchema': [
+                        { 'AttributeName': 'y', 'KeyType': 'RANGE' },
+                        { 'AttributeName': 'x', 'KeyType': 'HASH' },
+                    ],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                }
+            ])
+
 # test_table_gsi_1_hash_only is a variant of test_table_gsi_1: It's another
 # case where the index doesn't involve non-key attributes. Again the base
 # table has a hash and sort key, but in this case the index has *only* a
