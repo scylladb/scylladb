@@ -10,6 +10,7 @@
 
 import argparse
 import copy
+import json
 import os
 import pathlib
 import platform
@@ -19,8 +20,10 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+from dataclasses import dataclass
+from pathlib import Path
 from shutil import which
-from typing import NamedTuple
+from typing import NamedTuple, Union
 
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:] if not x.startswith('--out=') and not x.startswith('--out-final-name=')])
@@ -100,17 +103,19 @@ def have_pkg(package):
     return subprocess.call(['pkg-config', package]) == 0
 
 
-def pkg_config(package, *options):
-    pkg_config_path = os.environ.get('PKG_CONFIG_PATH', '')
+def pkg_config(package, *options, pkg_config_path=None):
+    search_path = os.environ.get('PKG_CONFIG_PATH', '')
+    if pkg_config_path:
+        search_path = f'{pkg_config_path}:{search_path}' if search_path else pkg_config_path
     # Add the directory containing the package to the search path, if a file is
     # specified instead of a name.
     if package.endswith('.pc'):
         local_path = os.path.dirname(package)
-        pkg_config_path = '{}:{}'.format(local_path, pkg_config_path)
+        search_path = '{}:{}'.format(local_path, search_path)
 
     output = subprocess.check_output(['pkg-config'] + list(options) + [package],
                                      env = {**os.environ,
-                                            'PKG_CONFIG_PATH': pkg_config_path})
+                                            'PKG_CONFIG_PATH': search_path})
 
     return output.decode('utf-8').strip()
 
@@ -2007,6 +2012,122 @@ user_ldflags = forced_ldflags + ' ' + args.user_ldflags
 curdir = os.getcwd()
 user_cflags = args.user_cflags + f" -ffile-prefix-map={curdir}=."
 
+
+def conan_build_type(mode):
+    """Map a Scylla build mode to the Conan build type used for its libraries."""
+    return 'Release' if mode == 'release' else 'Debug'
+
+
+def conan_pkg_config_dependencies(install_result):
+    """Return the pkg-config names of Conan's resolved direct dependencies."""
+    packages = []
+    graph = install_result['graph']
+    root_id = next(iter(graph['root']))
+    root = graph['nodes'][root_id]
+
+    for node_id, dependency in root['dependencies'].items():
+        if not dependency['direct'] or dependency['build'] or dependency['skip']:
+            continue
+
+        node = graph['nodes'][node_id]
+        properties = node['cpp_info']['root']['properties'] or {}
+        package = properties.get('pkg_config_name') or node['name']
+        if package != 'none' and package not in packages:
+            packages.append(package)
+
+    return packages
+
+
+@dataclass(frozen=True)
+class ConanPkgConfigDependencies:
+    by_mode: dict
+
+
+@dataclass(frozen=True)
+class ConanCMakeDependencies:
+    generators_dir: Path
+
+
+ConanDependencies = Union[ConanPkgConfigDependencies, ConanCMakeDependencies]
+
+
+def install_conan_dependencies() -> ConanDependencies:
+    """Install Conan dependencies for every requested library build type."""
+    conan = which('conan')
+    if not conan:
+        print('Conan 2 is required. Run ./install-dependencies.sh first.', file=sys.stderr)
+        sys.exit(1)
+
+    conan_home = Path(os.environ.get('CONAN_HOME', '~/.conan2')).expanduser().resolve()
+    generators_dir = (Path(outdir) / 'conan').resolve()
+    conan_home.mkdir(parents=True, exist_ok=True)
+    generators_dir.mkdir(parents=True, exist_ok=True)
+
+    conan_environment = {
+        **os.environ,
+        'CC': args.cc,
+        'CXX': args.cxx,
+        'CONAN_HOME': str(conan_home),
+    }
+    conan_profile = generators_dir / 'profile'
+    subprocess.run(
+        [conan, 'profile', 'detect', '--force', f'--name={conan_profile}'],
+        cwd=curdir,
+        env=conan_environment,
+        check=True)
+
+    conanfile_path = str(Path(curdir) / 'conanfile.py')
+
+    conan_modes = args.selected_modes or (default_modes if args.use_cmake else selected_modes)
+
+    def run_conan_install(mode, output_folder, generator, cmake_configuration=None):
+        build_type = conan_build_type(mode)
+        command = [
+            conan,
+            'install',
+            conanfile_path,
+            f'--profile:all={conan_profile}',
+            f'--settings:host=build_type={build_type}',
+            f'--conf:host=user.scylla:generator={generator}',
+            '--build=missing',
+            f'--output-folder={output_folder}',
+            '--format=json',
+        ]
+        if cmake_configuration:
+            command.append(f'--conf:host=user.scylla:cmake-configuration={cmake_configuration}')
+
+        install_result = subprocess.check_output(
+            command,
+            cwd=curdir,
+            env=conan_environment,
+            text=True)
+        return conan_pkg_config_dependencies(json.loads(install_result))
+
+    if args.use_cmake:
+        cmake_generators_dir = generators_dir / 'cmake'
+        cmake_generators_dir.mkdir(parents=True, exist_ok=True)
+        for mode in conan_modes:
+            cmake_configuration = 'Coverage' if mode == 'coverage' else modes[mode]['cmake_build_type']
+            run_conan_install(mode, cmake_generators_dir, 'cmake', cmake_configuration)
+        return ConanCMakeDependencies(cmake_generators_dir)
+
+    pkg_config_dependencies_by_type = {}
+    for mode in conan_modes:
+        build_type = conan_build_type(mode)
+        if build_type not in pkg_config_dependencies_by_type:
+            pkg_config_dir = generators_dir / 'pkgconfig' / build_type.lower()
+            pkg_config_dir.mkdir(parents=True, exist_ok=True)
+            packages = run_conan_install(mode, pkg_config_dir, 'pkg-config')
+            pkg_config_dependencies_by_type[build_type] = pkg_config_dir, packages
+
+    return ConanPkgConfigDependencies({
+        mode: pkg_config_dependencies_by_type[conan_build_type(mode)]
+        for mode in conan_modes
+    })
+
+
+conan_dependencies = install_conan_dependencies()
+
 # Since gcc 13, libgcc doesn't need the exception workaround
 user_cflags += ' -DSEASTAR_NO_EXCEPTION_HACK'
 
@@ -2355,8 +2476,6 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                  maybe_static(True, '-llz4'),
                  maybe_static(args.staticboost, '-lboost_container'),
                  maybe_static(args.staticboost, '-lboost_date_time -lboost_regex -licuuc -licui18n'),
-                 '-lxxhash',
-                 '-ldeflate',
                 ])
 
 user_cflags += " " + pkg_config('p11-kit-1', '--cflags')
@@ -2367,6 +2486,15 @@ if not args.staticboost:
 for pkg in pkgs:
     user_cflags += ' ' + pkg_config(pkg, '--cflags')
     libs += ' ' + pkg_config(pkg, '--libs')
+
+if isinstance(conan_dependencies, ConanPkgConfigDependencies):
+    for mode, (pkg_config_dir, packages) in conan_dependencies.by_mode.items():
+        modes[mode]['conan_cflags'] = ''
+        modes[mode]['conan_libs'] = ''
+        for pkg in packages:
+            modes[mode]['conan_cflags'] += ' ' + pkg_config(pkg, '--cflags', pkg_config_path=pkg_config_dir)
+            modes[mode]['conan_libs'] += ' ' + pkg_config(pkg, '--libs', pkg_config_path=pkg_config_dir)
+
 user_cflags += ' -fvisibility-inlines-hidden'
 user_ldflags += ' -fvisibility-inlines-hidden'
 if args.staticcxx:
@@ -2601,6 +2729,8 @@ def write_build_file(f,
 
     for mode in build_modes:
         modeval = modes[mode]
+        modeval.setdefault('conan_cflags', '')
+        modeval.setdefault('conan_libs', '')
         seastar_lib_ext = 'so' if modeval['build_seastar_shared_libs'] else 'a'
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
@@ -2609,8 +2739,8 @@ def write_build_file(f,
         f.write(textwrap.dedent('''\
             cxx_ld_flags_{mode} = {cxx_ld_flags}
             ld_flags_{mode} = $cxx_ld_flags_{mode} {lib_ldflags}
-            cxxflags_{mode} = {lib_cflags} {cxxflags} -iquote. -iquote $builddir/{mode}/gen
-            libs_{mode} = -l{fmt_lib}
+            cxxflags_{mode} = {lib_cflags} {conan_cflags} {cxxflags} -iquote. -iquote $builddir/{mode}/gen
+            libs_{mode} = -l{fmt_lib} {conan_libs}
             seastar_libs_{mode} = {seastar_libs}
             seastar_testing_libs_{mode} = {seastar_testing_libs}
             rule cxx.{mode}
@@ -3117,7 +3247,7 @@ def write_build_file(f,
           command = ./configure.py --out={buildfile_final_name}.new --out-final-name={buildfile_final_name} $configure_args && mv {buildfile_final_name}.new {buildfile_final_name}
           generator = 1
           description = CONFIGURE $configure_args
-        build {buildfile_final_name} {build_ninja_list}: configure | configure.py SCYLLA-VERSION-GEN $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE {args.seastar_path}/CMakeLists.txt
+        build {buildfile_final_name} {build_ninja_list}: configure | configure.py conanfile.py SCYLLA-VERSION-GEN $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE {args.seastar_path}/CMakeLists.txt
         rule cscope
             command = find -name '*.[chS]' -o -name "*.cc" -o -name "*.hh" | cscope -bq -i-
             description = CSCOPE
@@ -3259,6 +3389,7 @@ def configure_using_cmake(args):
         'CMAKE_DEFAULT_CONFIGS': selected_configs,
         'CMAKE_C_COMPILER': args.cc,
         'CMAKE_CXX_COMPILER': args.cxx,
+        'CMAKE_PREFIX_PATH': conan_dependencies.generators_dir,
         'CMAKE_CXX_FLAGS': args.user_cflags + ("" if args.disable_precompiled_header else " -fpch-validate-input-files-content"),
         'CMAKE_EXE_LINKER_FLAGS': args.user_ldflags,
         'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',

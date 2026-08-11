@@ -217,12 +217,12 @@ find_package(Lua REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(ICU COMPONENTS uc i18n REQUIRED)
 find_package(fmt 10.0.0 REQUIRED)
-find_package(libdeflate REQUIRED)
+find_package(libdeflate CONFIG REQUIRED)
 find_package(libxcrypt REQUIRED)
 find_package(p11-kit REQUIRED)
 find_package(Snappy REQUIRED)
 find_package(RapidJSON REQUIRED)
-find_package(xxHash REQUIRED)
+find_package(xxHash CONFIG REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(zstd REQUIRED)
 find_package(lz4 REQUIRED)
@@ -241,7 +241,9 @@ target_link_libraries(scylla-precompiled-header PRIVATE
     absl::hash
     absl::raw_hash_set
     Seastar::seastar
+    libdeflate::libdeflate
     Snappy::snappy
+    xxHash::xxhash
     systemd
     ZLIB::ZLIB
     lz4::lz4_static
