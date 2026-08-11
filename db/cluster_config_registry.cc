@@ -117,6 +117,14 @@ constexpr std::array registry_options = {
         // overflow.
         .valid_range = integer_range{.min = 1, .max = 10 * 365 * 24 * 3600},
     },
+    option{
+        .name = option_name::cql_response_compression_threshold_in_bytes,
+        .description = "CQL responses with a body smaller than this are sent uncompressed, even on connections that negotiated compression; compressing small bodies costs CPU and saves few or no bytes. 0 compresses every response of 32 bytes or more",
+        .scopes = scope_set::of<scope::cluster>(),
+        .default_value = int64_t(256),
+        // Compression clearly pays off well below 1 MiB; to never compress, don't negotiate it.
+        .valid_range = integer_range{.min = 0, .max = 1024 * 1024},
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {
