@@ -483,6 +483,10 @@ public:
         db::data_listeners* data_listeners = nullptr;
         uint32_t tombstone_warn_threshold{0};
         unsigned x_log2_compaction_groups{0};
+        // The goal for the number of tablet replicas per shard, used for estimating
+        // how many memtables share the shard's memtable memory.
+        // See table::expected_memtable_size().
+        utils::updateable_value<unsigned> tablets_per_shard_goal{0};
         utils::updateable_value<bool> enable_compacting_data_for_streaming_and_repair;
         utils::updateable_value<bool> enable_tombstone_gc_for_streaming_and_repair;
         db::guardrail_config guardrail_config;
@@ -510,6 +514,16 @@ private:
 
     lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
     lw_shared_ptr<memtable_list> make_memtable_list(compaction_group& cg);
+
+    // Creates a compaction strategy of the given type, using the compaction options
+    // from the table's schema. The defaults of the options that aren't set there are
+    // derived from expected_memtable_size().
+    compaction::compaction_strategy create_compaction_strategy(compaction::compaction_strategy_type strategy) const;
+
+    // An estimate of the size a memtable of this table reaches before it is flushed,
+    // i.e. the shard's memtable memory divided by the number of memtables sharing it.
+    // Zero if it cannot be estimated.
+    uint64_t expected_memtable_size() const;
 
     compaction::compaction_manager& _compaction_manager;
     compaction::compaction_strategy _compaction_strategy;

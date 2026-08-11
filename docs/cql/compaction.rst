@@ -124,6 +124,22 @@ The following options only apply to SizeTieredCompactionStrategy:
 ``min_sstable_size`` (default: 52,428,800)
    All SSTables smaller than this number of bytes are eligible to be put into the same bucket, provided they are at least ``min_sstable_age`` old.
 
+   Rather than being a fixed value, the default is derived from the size a memtable of the table is expected to reach before it is
+   flushed, so that it captures the SSTables that are too small to be tiered by their size, rather than the ones a full memtable is
+   flushed into. It is half of that expected size, clamped to the range of 4,096 to 52,428,800 bytes.
+
+   The expected memtable size is the memtable memory of the shard, divided by the number of memtables sharing it. The memtable
+   memory is ``available memory per shard * 0.5 * unspooled_dirty_soft_limit``, which is the amount of dirty memory the memtables
+   are expected to use before flushing starts. A table that uses tablets has one memtable per tablet replica, and the number of
+   replicas per shard varies between ``tablets_per_shard_goal`` and twice as much, so it is divided by ``tablets_per_shard_goal *
+   1.5``.
+
+   For example, on a shard with 8 GiB of available memory and the default ``unspooled_dirty_soft_limit`` of 0.6, the memtable
+   memory is 2.4 GiB. With the default ``tablets_per_shard_goal`` of 100, a table that uses tablets expects a memtable of 16 MiB,
+   so ``min_sstable_size`` defaults to 8 MiB.
+
+   If the expected memtable size cannot be determined, the default is 52,428,800 bytes.
+
 =====
 
 ``min_sstable_age`` (default: 3600)
@@ -232,8 +248,24 @@ The following options only apply to IncrementalCompactionStrategy:
 
 =====
 
-``min_sstable_size`` (default: 50)
-   All SSTables smaller than this number of megabytes are eligible to be put into the same bucket, provided they are at least ``min_sstable_age`` old.
+``min_sstable_size`` (default: 52,428,800)
+   All SSTables smaller than this number of bytes are eligible to be put into the same bucket, provided they are at least ``min_sstable_age`` old.
+
+   Rather than being a fixed value, the default is derived from the size a memtable of the table is expected to reach before it is
+   flushed, so that it captures the SSTables that are too small to be tiered by their size, rather than the ones a full memtable is
+   flushed into. It is half of that expected size, clamped to the range of 4,096 to 52,428,800 bytes.
+
+   The expected memtable size is the memtable memory of the shard, divided by the number of memtables sharing it. The memtable
+   memory is ``available memory per shard * 0.5 * unspooled_dirty_soft_limit``, which is the amount of dirty memory the memtables
+   are expected to use before flushing starts. A table that uses tablets has one memtable per tablet replica, and the number of
+   replicas per shard varies between ``tablets_per_shard_goal`` and twice as much, so it is divided by ``tablets_per_shard_goal *
+   1.5``.
+
+   For example, on a shard with 8 GiB of available memory and the default ``unspooled_dirty_soft_limit`` of 0.6, the memtable
+   memory is 2.4 GiB. With the default ``tablets_per_shard_goal`` of 100, a table that uses tablets expects a memtable of 16 MiB,
+   so ``min_sstable_size`` defaults to 8 MiB.
+
+   If the expected memtable size cannot be determined, the default is 52,428,800 bytes.
 
    Unlike Apache Cassandra, scylla uses **uncompressed** size when bucketing similar-sized tiers together.
    Since compaction works on uncompressed data, SSTables containing similar amounts of data should be compacted together, even when they have different compression ratios.
