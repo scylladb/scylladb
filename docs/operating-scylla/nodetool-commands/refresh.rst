@@ -7,10 +7,11 @@ Copy the files to the table's upload directory, by default it is located under `
 
 If the table has any :doc:`Materialized Views (MV)</cql/mv/>` or :doc:`Secondary Indexes (SI)</cql/secondary-indexes/>`, content view updates will be generated from the uploaded SSTables. Uploading MV or SI SSTables is not required and will fail.
 
-.. note:: ``nodetool refresh`` (with or without ``--load-and-stream``) runs in the same I/O scheduling
-   group as backup and restore, and is therefore throttled by the
-   :ref:`backup_io_throughput_mb_per_sec <confprop_backup_io_throughput_mb_per_sec>` setting rather than
-   :ref:`stream_io_throughput_mb_per_sec <confprop_stream_io_throughput_mb_per_sec>`.
+.. note:: ``nodetool refresh`` (with or without ``--load-and-stream``) runs in the streaming
+   scheduling group, so its I/O is throttled by the
+   :ref:`stream_io_throughput_mb_per_sec <confprop_stream_io_throughput_mb_per_sec>` setting.
+   That group is part of the maintenance supergroup, which is capped in turn by
+   :ref:`maintenance_io_throughput_mb_per_sec <confprop_maintenance_io_throughput_mb_per_sec>`.
 
 .. _nodetool-refresh-local:
 
