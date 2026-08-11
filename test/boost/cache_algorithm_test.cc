@@ -177,7 +177,7 @@ SEASTAR_TEST_CASE(test_index_is_cached_in_big_partition_workload) {
                 ++reads_expected;
             }
         }
-        uint64_t reads_after = e.local_db().row_cache_tracker().get_stats().reads_done;
+        uint64_t reads_after = e.local_db().row_cache_tracker().get_stats().reads;
         uint64_t misses_after = get_misses();
         if (misses_after != misses_before) {
             BOOST_REQUIRE_GT(reads_after, reads_expected);

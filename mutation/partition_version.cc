@@ -198,7 +198,13 @@ static partition_version& append_version(partition_version& pv, const schema& s,
     new_version->partition().set_static_row_continuous(pv.partition().static_row_continuous());
     new_version->insert_after(pv);
     if (tracker) {
-        tracker->insert(*new_version);
+        // The freshly appended version carries only a keyless dummy anchor
+        // (make_incomplete). Keyless entries must never enter the W-TinyLFU
+        // admission window -- they carry no frequency (see lru::freq_estimate
+        // and the assert in lru::add) -- so route the version to the protected
+        // segment regardless of schema, the same treatment multi-row
+        // partitions already receive.
+        tracker->insert_to_protected(*new_version);
     }
     return *new_version;
 }
@@ -410,7 +416,13 @@ partition_version& partition_entry::add_version(const schema& s, cache_tracker* 
     new_version->insert_before(*_version);
     set_version(new_version);
     if (tracker) {
-        tracker->insert(*new_version);
+        // The freshly appended version carries only a keyless dummy anchor
+        // (make_incomplete). Keyless entries must never enter the W-TinyLFU
+        // admission window -- they carry no frequency (see lru::freq_estimate
+        // and the assert in lru::add) -- so route the version to the protected
+        // segment regardless of schema, the same treatment multi-row
+        // partitions already receive.
+        tracker->insert_to_protected(*new_version);
     }
     return *new_version;
 }

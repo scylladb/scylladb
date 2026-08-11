@@ -57,13 +57,29 @@ row_cache::create_underlying_reader(read_context& ctx, mutation_source& src, con
 
 static thread_local mutation_application_stats dummy_app_stats;
 static thread_local utils::updateable_value<double> dummy_index_cache_fraction(1.0);
+static thread_local utils::updateable_value<double> dummy_tinylfu_sketch_entries_per_mb(1024.0);
+// 1.0 = the whole cache is admission window, i.e. classic LRU (see
+// lru::set_window_fraction()). Default-constructed trackers are only used
+// by tests, which largely assert plain LRU eviction order; tests exercising
+// the W-TinyLFU policy set a production-like fraction explicitly.
+static thread_local utils::updateable_value<double> dummy_tinylfu_initial_window_fraction(1.0);
 
 cache_tracker::cache_tracker()
-    : cache_tracker(dummy_index_cache_fraction, dummy_app_stats, register_metrics::no)
+    : cache_tracker(dummy_index_cache_fraction, dummy_tinylfu_sketch_entries_per_mb,
+                    dummy_tinylfu_initial_window_fraction,
+                    dummy_app_stats, register_metrics::no)
 {}
 
 cache_tracker::cache_tracker(utils::updateable_value<double> index_cache_fraction, register_metrics with_metrics)
-    : cache_tracker(std::move(index_cache_fraction), dummy_app_stats, with_metrics)
+    : cache_tracker(std::move(index_cache_fraction), dummy_tinylfu_sketch_entries_per_mb,
+                    dummy_tinylfu_initial_window_fraction,
+                    dummy_app_stats, with_metrics)
+{}
+
+cache_tracker::cache_tracker(utils::updateable_value<double> index_cache_fraction, mutation_application_stats& app_stats, register_metrics with_metrics)
+    : cache_tracker(std::move(index_cache_fraction), dummy_tinylfu_sketch_entries_per_mb,
+                    dummy_tinylfu_initial_window_fraction,
+                    app_stats, with_metrics)
 {}
 
 static thread_local cache_tracker* current_tracker;
@@ -72,11 +88,18 @@ cache_tracker* get_current_cache_tracker() noexcept {
     return current_tracker;
 }
 
-cache_tracker::cache_tracker(utils::updateable_value<double> index_cache_fraction, mutation_application_stats& app_stats, register_metrics with_metrics)
+cache_tracker::cache_tracker(utils::updateable_value<double> index_cache_fraction,
+                             utils::updateable_value<double> tinylfu_sketch_entries_per_mb,
+                             utils::updateable_value<double> tinylfu_initial_window_fraction,
+                             mutation_application_stats& app_stats, register_metrics with_metrics)
     : _garbage(_region, this, app_stats)
     , _memtable_cleaner(_region, nullptr, app_stats)
     , _app_stats(app_stats)
     , _index_cache_fraction(std::move(index_cache_fraction))
+    , _tinylfu_sketch_entries_per_mb(std::move(tinylfu_sketch_entries_per_mb))
+    , _tinylfu_initial_window_fraction(std::move(tinylfu_initial_window_fraction))
+    , _sketch_ratio_observer(utils::dummy_observer<double>())
+    , _window_fraction_observer(utils::dummy_observer<double>())
 {
     if (with_metrics) {
         setup_metrics();
@@ -93,14 +116,54 @@ cache_tracker::cache_tracker(utils::updateable_value<double> index_cache_fractio
                 return memory::reclaiming_result::reclaimed_something;
             }
             current_tracker = this;
-
-            // Index entries and row cache entries now share the same LRU.
-            // Hot entries (frequently touched) naturally stay at the back;
-            // cold entries (e.g., index pages read once during a scan) drift
-            // to the front and get evicted first. No hard cap needed.
             return _lru.evict();
         });
     });
+
+    // Observe ratio changes: resize the sketch whenever the config is updated.
+    _sketch_ratio_observer = _tinylfu_sketch_entries_per_mb.observe([this](const double&) noexcept {
+        try {
+            resize_sketch();
+        } catch (...) {
+            // Sketch resize failure is non-fatal; the old sketch continues to work.
+        }
+    });
+
+    // Observe window fraction changes.
+    _window_fraction_observer = _tinylfu_initial_window_fraction.observe([this](const double& v) noexcept {
+        _lru.set_window_fraction(v);
+    });
+    _lru.set_window_fraction(_tinylfu_initial_window_fraction.get());
+
+    // Set initial sketch size.
+    resize_sketch();
+}
+
+cache_tracker::cache_tracker(utils::updateable_value<double> index_cache_fraction,
+                             utils::updateable_value<double> tinylfu_sketch_entries_per_mb,
+                             utils::updateable_value<double> tinylfu_initial_window_fraction,
+                             register_metrics with_metrics)
+    : cache_tracker(std::move(index_cache_fraction), std::move(tinylfu_sketch_entries_per_mb),
+                    std::move(tinylfu_initial_window_fraction),
+                    dummy_app_stats, with_metrics)
+{}
+
+void cache_tracker::set_current_tracker() noexcept {
+    current_tracker = this;
+}
+
+void cache_tracker::resize_sketch() {
+    size_t cache_bytes = _region.occupancy().total_space();
+    if (cache_bytes == 0) {
+        cache_bytes = seastar::memory::stats().total_memory() / seastar::smp::count;
+    }
+    double entries_per_mb = _tinylfu_sketch_entries_per_mb.get();
+    auto new_width = lru::compute_sketch_width_log2(cache_bytes, entries_per_mb);
+    _lru.resize_sketch(new_width);
+}
+
+void cache_tracker::reset_sketch() noexcept {
+    _lru.reset_sketch();
 }
 
 cache_tracker::~cache_tracker() {
@@ -170,6 +233,29 @@ cache_tracker::setup_metrics() {
             sm::description("total amount of attempts to compact expired rows during read")),
         sm::make_counter("rows_compacted_away", _stats.rows_compacted_away,
             sm::description("total amount of compacted and removed rows during read")),
+        // W-TinyLFU segment sizes
+        sm::make_gauge("tinylfu_window_size", sm::description("current entries in W-TinyLFU window segment"), [this] { return _lru.window_size(); }),
+        sm::make_gauge("tinylfu_probation_size", sm::description("current entries in W-TinyLFU probation segment"), [this] { return _lru.probation_size(); }),
+        sm::make_gauge("tinylfu_protected_size", sm::description("current entries in W-TinyLFU protected segment"), [this] { return _lru.protected_size(); }),
+        sm::make_gauge("tinylfu_max_window_size", sm::description("target window segment size"), [this] { return _lru.current_max_window_size(); }),
+        sm::make_gauge("tinylfu_max_protected_size", sm::description("target protected segment size"), [this] { return _lru.current_max_protected_size(); }),
+        // W-TinyLFU sampled frequency
+        sm::make_gauge("tinylfu_avg_freq_window", sm::description("sampled average sketch frequency in window segment"), [this] { return _lru.get_stats().sampled_avg_freq_window; }),
+        sm::make_gauge("tinylfu_avg_freq_probation", sm::description("sampled average sketch frequency in probation segment"), [this] { return _lru.get_stats().sampled_avg_freq_probation; }),
+        sm::make_gauge("tinylfu_avg_freq_protected", sm::description("sampled average sketch frequency in protected segment"), [this] { return _lru.get_stats().sampled_avg_freq_protected; }),
+        // W-TinyLFU sketch aging
+        sm::make_gauge("tinylfu_sample_count", sm::description("accesses since last sketch reset"), [this] { return _lru.sample_count(); }),
+        sm::make_gauge("tinylfu_sample_threshold", sm::description("accesses needed to trigger next sketch reset"), [this] { return _lru.sample_threshold(); }),
+        // W-TinyLFU admission gate
+        sm::make_counter("tinylfu_admissions", sm::description("admissions through frequency gate"), [this] { return _lru.get_stats().tinylfu_admissions; }),
+        sm::make_counter("tinylfu_rejections", sm::description("rejections by frequency gate"), [this] { return _lru.get_stats().tinylfu_rejections; }),
+        sm::make_counter("tinylfu_jitter_admissions", sm::description("admissions via hash-DoS jitter (freq >= 6, 1/128 chance)"), [this] { return _lru.get_stats().tinylfu_jitter_admissions; }),
+        sm::make_counter("tinylfu_direct_evictions", sm::description("evictions bypassing admission gate (path 2)"), [this] { return _lru.get_stats().direct_evictions; }),
+        // W-TinyLFU segment flow
+        sm::make_counter("tinylfu_protected_promotions", sm::description("entries promoted from probation to protected on hit"), [this] { return _lru.get_stats().protected_promotions; }),
+        sm::make_counter("tinylfu_protected_demotions", sm::description("entries demoted from protected to probation on overflow"), [this] { return _lru.get_stats().protected_demotions; }),
+        sm::make_counter("tinylfu_window_to_probation", sm::description("entries moved from window to probation"), [this] { return _lru.get_stats().window_to_probation; }),
+        sm::make_counter("tinylfu_sketch_resets", sm::description("number of sketch aging/reset cycles"), [this] { return _lru.get_stats().sketch_resets; }),
     });
     sstables::register_index_page_cache_metrics(_metrics, _index_cached_file_stats);
     sstables::register_index_page_metrics(_metrics, _partition_index_cache_stats);
@@ -185,6 +271,7 @@ void cache_tracker::clear() {
         _memtable_cleaner.clear();
         current_tracker = this;
         _lru.evict_all();
+        _lru.reset_sketch();
         // Eviction could have produced garbage.
         _garbage.clear();
         _memtable_cleaner.clear();
@@ -195,22 +282,30 @@ void cache_tracker::clear() {
 }
 
 void cache_tracker::touch(rows_entry& e) {
-    // last dummy may not be linked if evicted
-    if (e.is_linked()) {
-        _lru.remove(e);
-    }
-    _lru.add(e);
+    _lru.touch(e);
 }
 
-void cache_tracker::insert(cache_entry& entry) {
-    insert(entry.partition());
-    on_partition_insert();
+void cache_tracker::insert(cache_entry& entry, bool single_row_partition) {
+    uint64_t skey = compute_sketch_key(entry.key().token());
+    for (partition_version& pv : entry.partition().versions_from_oldest()) {
+        for (rows_entry& row : pv.partition().clustered_rows()) {
+            row.set_sketch_key(skey);
+        }
+    }
+    if (single_row_partition) {
+        insert(entry.partition());
+    } else {
+        insert_to_protected(entry.partition());
+    }
+    ++_stats.partition_insertions;
+    ++_stats.partitions;
     // partition_range_cursor depends on this to detect invalidation of _end
     _region.allocator().invalidate_references();
 }
 
 void cache_tracker::on_partition_erase() noexcept {
-    on_partition_remove();
+    --_stats.partitions;
+    ++_stats.partition_removals;
     allocator().invalidate_references();
 }
 
@@ -918,7 +1013,7 @@ cache_entry& row_cache::find_or_create_incomplete(const partition_start& ps, row
         mutation_partition mp = mutation_partition::make_incomplete(*_schema, ps.partition_tombstone());
         partitions_type::iterator entry = _partitions.emplace_before(i, ps.key().token().raw(), hint,
                 _schema, ps.key(), std::move(mp));
-        _tracker.insert(*entry);
+        _tracker.insert(*entry, _single_row_partitions);
         return entry;
     }, [&] (auto i) { // visit
         _tracker.on_miss_already_populated();
@@ -934,7 +1029,7 @@ cache_entry& row_cache::find_or_create_missing(const dht::decorated_key& key) {
         bool cont = i->continuous();
         partitions_type::iterator entry = _partitions.emplace_before(i, key.token().raw(), hint,
                 _schema, key, std::move(mp));
-        _tracker.insert(*entry);
+        _tracker.insert(*entry, _single_row_partitions);
         entry->set_continuous(cont);
         return entry;
     }, [&] (auto i) {
@@ -947,7 +1042,7 @@ void row_cache::populate(const mutation& m, const previous_entry_pointer* previo
     do_find_or_create_entry(m.decorated_key(), previous, [&] (auto i, const partitions_type::bound_hint& hint) {
         partitions_type::iterator entry = _partitions.emplace_before(i, m.decorated_key().token().raw(), hint,
                 m.schema(), m.decorated_key(), m.partition());
-        _tracker.insert(*entry);
+        _tracker.insert(*entry, _single_row_partitions);
         entry->set_continuous(i->continuous());
         upgrade_entry(*entry);
         return entry;
@@ -1124,7 +1219,7 @@ future<> row_cache::update(external_updater eu, replica::memtable& m, preemption
                 cache_entry::evictable_tag(), _schema, dht::decorated_key(mem_e.key()),
                 partition_entry::make_evictable(*_schema, mutation_partition(*_schema)));
             entry->set_continuous(cache_i->continuous());
-            _tracker.insert(*entry);
+            _tracker.insert(*entry, _single_row_partitions);
             mem_e.upgrade_schema(_tracker.region(), _schema, _tracker.memtable_cleaner());
             return entry->partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), _tracker.memtable_cleaner(),
                 alloc, _tracker.region(), _tracker, _underlying_phase, acc, preempt_src);
@@ -1274,6 +1369,7 @@ void row_cache::evict() {
 row_cache::row_cache(schema_ptr s, snapshot_source src, cache_tracker& tracker, is_continuous cont)
     : _tracker(tracker)
     , _schema(std::move(s))
+    , _single_row_partitions(_schema->clustering_key_size() == 0)
     , _partitions(dht::raw_token_less_comparator{})
     , _underlying(src())
     , _snapshot_source(std::move(src))
@@ -1319,6 +1415,7 @@ void cache_entry::evict(cache_tracker& tracker) noexcept {
 
 void row_cache::set_schema(schema_ptr new_schema) noexcept {
     _schema = std::move(new_schema);
+    _single_row_partitions = (_schema->clustering_key_size() == 0);
 }
 
 void cache_entry::on_evicted(cache_tracker& tracker) noexcept {
