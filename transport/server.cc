@@ -28,6 +28,7 @@
 #include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
 #include "service/qos/service_level_controller.hh"
+#include "db/cluster_config_registry.hh"
 #include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "db/write_type.hh"
@@ -326,7 +327,7 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
         service::memory_limiter& ml, cql_server_config config,
         qos::service_level_controller& sl_controller, gms::gossiper& g, scheduling_group_key stats_key,
         maintenance_socket_enabled used_by_maintenance_socket,
-        netw::messaging_service& ms)
+        netw::messaging_service& ms, db::cluster_config_manager& cluster_config)
     : server("CQLServer", clogger, generic_server::config{std::move(config.uninitialized_connections_semaphore_cpu_concurrency), config.request_timeout_on_shutdown_in_seconds})
     , _query_processor(qp)
     , _ms(ms)
@@ -341,6 +342,24 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
     , _used_by_maintenance_socket(used_by_maintenance_socket)
 {
     build_supported_body();
+
+    // Callbacks fire only on a later refresh, so seed from the current value.
+    const auto name = db::cluster_config_registry::option_name::cql_response_compression_threshold_in_bytes;
+    const auto* found = db::cluster_config_registry::find(name);
+    if (!found) {
+        on_internal_error(clogger, format("{} is not a registered cluster config option", name));
+    }
+    // Copy: test-only hooks can reallocate the registry.
+    const auto threshold_opt = *found;
+    auto set_threshold = [this, threshold_opt] (const std::optional<sstring>& value) {
+        _response_compression_threshold = std::max<int64_t>(0, db::cluster_config_registry::to_integer(threshold_opt, value));
+    };
+    set_threshold(cluster_config.resolve_config(threshold_opt.name, {}));
+    _response_compression_threshold_registration = cluster_config.register_config_callback(sstring(threshold_opt.name),
+            [set_threshold] (const db::cluster_config_manager::lookup_context&, std::optional<sstring> value) {
+        set_threshold(value);
+        return make_ready_future<>();
+    });
 
     namespace sm = seastar::metrics;
 
@@ -2477,12 +2496,13 @@ void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_serv
     _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response)] () mutable {
         cql_server::response& r = *response;
         auto del = make_deleter([response = std::move(response)] {});
-        return r.write_message(_write_buf, _version, compression, std::move(del));
+        return r.write_message(_write_buf, _version, compression, _server._response_compression_threshold, std::move(del));
     });
 }
 
-future<> cql_server::response::write_message(output_stream<char>& out, uint8_t version, cql_compression compression, seastar::deleter del) {
-    if (compression != cql_compression::none) {
+future<> cql_server::response::write_message(output_stream<char>& out, uint8_t version, cql_compression compression, size_t compression_threshold, seastar::deleter del) {
+    // Bodies below the threshold are too small to benefit from compression.
+    if (compression != cql_compression::none && _body.size() >= compression_threshold) {
         compress(compression);
     }
     utils::result_with_exception_ptr<temporary_buffer<char>> frame = make_frame(version, _body.size());

@@ -46,6 +46,7 @@
 #include "utils/estimated_histogram.hh"
 #include "transport/forward.hh"
 #include "service/qos/service_level_controller.hh"
+#include "db/cluster_config_manager.hh"
 
 namespace cql3 {
 
@@ -247,6 +248,9 @@ private:
     gms::gossiper& _gossiper;
     scheduling_group_key _stats_key;
     maintenance_socket_enabled _used_by_maintenance_socket;
+    // Response bodies smaller than this are sent uncompressed.
+    size_t _response_compression_threshold;
+    db::cluster_config_manager::config_callback_registration _response_compression_threshold_registration;
 public:
     cql_server(sharded<cql3::query_processor>& qp, auth::service&,
             service::memory_limiter& ml,
@@ -255,7 +259,8 @@ public:
             gms::gossiper& g,
             scheduling_group_key stats_key,
             maintenance_socket_enabled used_by_maintenance_socket,
-            netw::messaging_service& ms);
+            netw::messaging_service& ms,
+            db::cluster_config_manager& cluster_config);
     ~cql_server();
     future<> stop();
 
