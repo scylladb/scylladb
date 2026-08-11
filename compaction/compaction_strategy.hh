@@ -30,6 +30,40 @@ class compaction_backlog_tracker;
 class compaction_strategy_impl;
 struct compaction_descriptor;
 
+/// Default value of the min_sstable_size option of the size-tiered-like compaction
+/// strategies, used when the expected memtable size isn't known.
+static constexpr uint64_t default_min_sstable_size = 50L * 1024L * 1024L;
+
+/// Don't derive a min_sstable_size smaller than this, so that it stays meaningful
+/// no matter how little memtable memory a single memtable gets.
+static constexpr uint64_t min_sstable_size_lower_bound = 4 * 1024;
+
+/// Provides the default values of compaction strategy options that cannot be plain
+/// constants, since they depend on the resources available to the memtable the
+/// sstables are flushed from.
+///
+/// The defaults are used only for options that aren't set in the table's schema.
+struct strategy_options_defaults {
+    /// The expected size, in bytes, of the memtable the sstables are flushed from,
+    /// or zero when it isn't known.
+    ///
+    /// It is derived by the table from the memtable memory available to the shard
+    /// and the number of memtables sharing it, so that the compaction strategies
+    /// don't need to know how the table's data is distributed across the shard.
+    uint64_t expected_memtable_size = 0;
+
+    /// @return the default value of the min_sstable_size option, in bytes.
+    ///
+    /// SSTables smaller than min_sstable_size are all put in the same size tier, so
+    /// it is meant to capture the sstables that are too small to be tiered by size,
+    /// not the ones a full memtable is flushed into.  Half of the expected memtable
+    /// size satisfies that, and it is clamped to
+    /// [min_sstable_size_lower_bound, default_min_sstable_size].
+    ///
+    /// Returns default_min_sstable_size when the expected memtable size isn't known.
+    uint64_t min_sstable_size() const;
+};
+
 class compaction_strategy {
     ::shared_ptr<compaction_strategy_impl> _compaction_strategy_impl;
 public:
@@ -132,8 +166,13 @@ public:
 
 };
 
-// Creates a compaction_strategy object from one of the strategies available.
-compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options);
+/// Creates a compaction_strategy object from one of the strategies available.
+///
+/// @param defaults provides the values of the options that aren't set in @param options.
+/// It isn't referenced after this call returns. Defaults to the values used when
+/// the expected memtable size isn't known.
+compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options,
+        const strategy_options_defaults& defaults = {});
 
 future<reshape_config> make_reshape_config(const sstables::storage& storage, reshape_mode mode);
 

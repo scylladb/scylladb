@@ -17,11 +17,12 @@ namespace compaction {
 
 extern logging::logger clogger;
 
-static long validate_min_sstable_size(const std::map<sstring, sstring>& options) {
+static long validate_min_sstable_size(const std::map<sstring, sstring>& options,
+        uint64_t default_value = incremental_compaction_strategy_options::DEFAULT_MIN_SSTABLE_SIZE) {
     auto tmp_value = compaction_strategy_impl::get_value(options,
         incremental_compaction_strategy_options::MIN_SSTABLE_SIZE_KEY);
     auto min_sstable_size = cql3::statements::property_definitions::to_long(incremental_compaction_strategy_options::MIN_SSTABLE_SIZE_KEY,
-        tmp_value, incremental_compaction_strategy_options::DEFAULT_MIN_SSTABLE_SIZE);
+        tmp_value, default_value);
     if (min_sstable_size < 0) {
         throw exceptions::configuration_exception(fmt::format("{} value ({}) must be non negative",
             incremental_compaction_strategy_options::MIN_SSTABLE_SIZE_KEY, min_sstable_size));
@@ -126,8 +127,8 @@ static std::optional<double> validate_space_amplification_goal(const std::map<ss
     return space_amplification_goal;
 }
 
-incremental_compaction_strategy_options::incremental_compaction_strategy_options(const std::map<sstring, sstring>& options) {
-    min_sstable_size = validate_min_sstable_size(options);
+incremental_compaction_strategy_options::incremental_compaction_strategy_options(const std::map<sstring, sstring>& options, const strategy_options_defaults& defaults) {
+    min_sstable_size = validate_min_sstable_size(options, defaults.min_sstable_size());
     min_sstable_age = validate_min_sstable_age(options);
     bucket_low = validate_bucket_low(options);
     bucket_high = validate_bucket_high(options);
@@ -542,9 +543,9 @@ incremental_compaction_strategy::make_backlog_tracker() const {
     return std::make_unique<incremental_backlog_tracker>(_options);
 }
 
-incremental_compaction_strategy::incremental_compaction_strategy(const std::map<sstring, sstring>& options)
+incremental_compaction_strategy::incremental_compaction_strategy(const std::map<sstring, sstring>& options, const strategy_options_defaults& defaults)
     : compaction_strategy_impl(options)
-    , _options(options)
+    , _options(options, defaults)
 {
     auto fragment_size_in_mb = validate_fragment_size(options);
     _fragment_size = fragment_size_in_mb*1024*1024;
