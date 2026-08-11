@@ -89,7 +89,7 @@ public:
     void write(const cql3::metadata& m, const cql_metadata_id_wrapper& request_metadata_id, bool no_metadata = false);
     void write(const cql3::prepared_metadata& m, uint8_t version);
 
-    future<> write_message(output_stream<char>& out, uint8_t version, cql_compression compression, seastar::deleter);
+    future<> write_message(output_stream<char>& out, uint8_t version, cql_compression compression, size_t compression_threshold, seastar::deleter);
 
     cql_binary_opcode opcode() const {
         return _opcode;
