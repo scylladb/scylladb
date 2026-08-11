@@ -36,7 +36,6 @@ from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, 
 from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
 from functools import partial
 import aiohttp
-import aiohttp.web
 import yaml
 import signal
 import glob
@@ -1747,14 +1746,12 @@ class ScyllaClusterManager:
     """
     # pylint: disable=too-many-instance-attributes
     cluster: ScyllaCluster
-    site: aiohttp.web.UnixSite
     is_after_test_ok: bool
 
     def __init__(self,
                  test_uname: str,
                  create_cluster: ClusterFactory,
-                 base_dir: str,
-                 sock_path: str | None = None) -> None:
+                 base_dir: str) -> None:
         self.test_uname: str = test_uname
         self.base_dir: str = base_dir
         logger = logging.getLogger(self.test_uname)
@@ -1763,24 +1760,10 @@ class ScyllaClusterManager:
         # test_topology.1::test_add_server_add_column
         self.current_test_case_full_name: str = ''
         self.cluster: ScyllaCluster | None = None
-        self.site: aiohttp.web.UnixSite | None = None
         self.create_cluster: ClusterFactory = create_cluster
         self.is_running: bool = False
         self.is_before_test_ok: bool = False
         self.is_after_test_ok: bool = False
-        # API
-        # NOTE: need to make a safe temp dir as tempfile can't make a safe temp sock name
-        # Put the socket in /tmp, not base_dir, to avoid going over the length
-        # limit of UNIX-domain socket addresses (issue #12622).
-        if sock_path is None:
-            self.manager_dir: str = tempfile.mkdtemp(prefix="manager-", dir="/tmp")
-            self.sock_path: str = f"{self.manager_dir}/api"
-        else:
-            self.manager_dir = os.path.dirname(sock_path)
-            self.sock_path = sock_path
-        app = aiohttp.web.Application()
-        self._setup_routes(app)
-        self.runner = aiohttp.web.AppRunner(app)
         self.tasks_history = dict()
         self.server_broken_event = asyncio.Event()
         self.server_broken_reason = ""
@@ -1792,16 +1775,13 @@ class ScyllaClusterManager:
         return out
 
     async def start(self) -> None:
-        """Get first cluster, setup API"""
+        """Get first cluster"""
         if self.is_running:
             self.logger.warning("ScyllaClusterManager already running")
             return
         self.cluster = await self.create_cluster(self.logger)
         self.logger.info("First Scylla cluster: %s", self.cluster)
         self.cluster.setLogger(self.logger)
-        await self.runner.setup()
-        self.site = aiohttp.web.UnixSite(self.runner, path=self.sock_path)
-        await self.site.start()
         self.is_running = True
 
     @manager_op(blockable=True)
@@ -1831,18 +1811,13 @@ class ScyllaClusterManager:
         return str(self.cluster)
 
     async def stop(self) -> None:
-        """Stop the API server and dispose of the last cluster if present"""
+        """Dispose of the last cluster if present"""
         self.logger.info("ScyllaManager stopping for test %s", self.test_uname)
-        if self.site:
-            await self.site.stop()
-            self.site = None
         if self.cluster:
             self.logger.info("ScyllaManager: stopping Scylla cluster %s after %s",
                              self.cluster, self.test_uname)
             await self.cluster.recycle()
             self.cluster = None
-        if os.path.exists(self.manager_dir):
-            await async_rmtree(self.manager_dir)
         self.is_running = False
 
     @manager_op
@@ -2222,250 +2197,3 @@ class ScyllaClusterManager:
     @manager_op
     async def server_get_process_status(self, server_id: ServerNum) -> str | None:
         return self.cluster.server_get_process_status(server_id)
-
-    # ------------------------------------------------------------------
-    # HTTP API.
-    #
-    # Thin adapters translating the REST routes into the methods above.
-    # ManagerClient is the only client, and it is about to call those
-    # methods directly, at which point this whole section goes away.
-    # ------------------------------------------------------------------
-
-    def _setup_routes(self, app: aiohttp.web.Application) -> None:
-        def make_catching_handler(handler: Callable) -> Callable:
-            async def catching_handler(request) -> aiohttp.web.Response:
-                """Catch all exceptions and return them to the client.
-                   Without this, the client would get an 'Internal server error' message
-                   without any details. Thanks to this the test log shows the actual error.
-                """
-                try:
-                    ret = await handler(request)
-                    if ret is not None:
-                        return aiohttp.web.json_response(ret)
-                    return aiohttp.web.Response()
-                except Exception as e:
-                    tb = traceback.format_exc()
-                    self.logger.error(f'Exception when executing {handler.__name__}: {e}\n{tb}')
-                    return aiohttp.web.Response(status=500, text=str(e))
-            return catching_handler
-
-        def route_history_wrapper(blockable = False)-> Callable:
-            def outer_wrapper(handler: Callable)-> Callable:
-                @wraps(handler)
-                async def inner_wrapper(request):
-                    if blockable and self.server_broken_event.is_set():
-                        raise Exception(f"ScyllaClusterManager BROKEN, Previous test broke ScyllaClusterManager server, server_broken_reason: {self.server_broken_reason}")
-                    self.logger.info("[ScyllaClusterManager][%s] %s", asyncio.current_task().get_name(), request.url)
-                    self.tasks_history[asyncio.current_task()] = request
-                    return await handler(request)
-                return inner_wrapper
-            return outer_wrapper
-
-        def add_get(route: str, handler: Callable):
-            app.router.add_get(route, make_catching_handler(route_history_wrapper()(handler)))
-
-        def add_put(route: str, handler: Callable):
-            app.router.add_put(route, make_catching_handler(route_history_wrapper(True)(handler)))
-
-        add_get('/cluster/is-dirty', self._is_dirty)
-        add_get('/cluster/running-servers', self._cluster_running_servers)
-        add_get('/cluster/all-servers', self._cluster_all_servers)
-        add_get('/cluster/starting-servers', self._cluster_starting_servers)
-        add_get('/cluster/host-ip/{server_id}', self._cluster_server_ip_addr)
-        add_get('/cluster/host-id/{server_id}', self._cluster_host_id)
-        add_put('/cluster/before-test/{test_case_name}', self._before_test_req)
-        add_put('/cluster/after-test/{success}', self._after_test_req)
-        add_put('/cluster/mark-dirty', self._mark_dirty)
-        add_put('/cluster/mark-clean', self._mark_clean)
-        add_put('/cluster/server/{server_id}/stop', self._cluster_server_stop)
-        add_put('/cluster/server/{server_id}/stop_gracefully', self._cluster_server_stop_gracefully)
-        add_put('/cluster/server/{server_id}/start', self._cluster_server_start)
-        add_put('/cluster/server/{server_id}/pause', self._cluster_server_pause)
-        add_put('/cluster/server/{server_id}/unpause', self._cluster_server_unpause)
-        add_put('/cluster/addserver', self._cluster_server_add)
-        add_put('/cluster/addservers', self._cluster_servers_add)
-        add_put('/cluster/remove-node/{initiator}', self._cluster_remove_node)
-        add_put('/cluster/decommission-node/{server_id}', self._cluster_decommission_node)
-        add_put('/cluster/rebuild-node/{server_id}', self._cluster_rebuild_node)
-        add_get('/cluster/server/{server_id}/get_config', self._server_get_config)
-        add_put('/cluster/server/{server_id}/update_config', self._server_update_config)
-        add_put('/cluster/server/{server_id}/remove_config_option', self._server_remove_config_option)
-        add_put('/cluster/server/{server_id}/update_cmdline', self._server_update_cmdline)
-        add_put('/cluster/server/{server_id}/switch_executable', self._server_switch_executable)
-        add_put('/cluster/server/{server_id}/change_ip', self._server_change_ip)
-        add_put('/cluster/server/{server_id}/change_rpc_address', self._server_change_rpc_address)
-        add_get('/cluster/server/{server_id}/get_log_filename', self._server_get_log_filename)
-        add_get('/cluster/server/{server_id}/workdir', self._server_get_workdir)
-        add_get('/cluster/server/{server_id}/maintenance_socket_path', self._server_get_maintenance_socket_path)
-        add_get('/cluster/server/{server_id}/exe', self._server_get_exe)
-        add_put('/cluster/server/{server_id}/wipe_sstables', self._cluster_server_wipe_sstables)
-        add_get('/cluster/server/{server_id}/sstables_disk_usage', self._server_get_sstables_disk_usage)
-        add_get('/cluster/server/{server_id}/process_status', self._server_get_process_status)
-        add_get('/cluster/server/{server_id}/returncode', self._server_get_returncode)
-
-    async def _is_dirty(self, _request) -> bool:
-        return await self.is_dirty()
-
-    async def _cluster_running_servers(self, _request) -> list[ServerInfo]:
-        return await self.running_servers()
-
-    async def _cluster_all_servers(self, _request) -> list[ServerInfo]:
-        return await self.all_servers()
-
-    async def _cluster_starting_servers(self, _request) -> list[ServerInfo]:
-        return await self.starting_servers()
-
-    async def _cluster_server_ip_addr(self, request) -> IPAddress:
-        return await self.get_host_ip(ServerNum(int(request.match_info["server_id"])))
-
-    async def _cluster_host_id(self, request) -> HostID:
-        return await self.get_host_id(ServerNum(int(request.match_info["server_id"])))
-
-    async def _before_test_req(self, request) -> str:
-        return await self.before_test(request.match_info['test_case_name'])
-
-    async def _after_test_req(self, request) -> dict[str, Any]:
-        return await self.after_test(request.match_info["success"] == "True")
-
-    async def _mark_dirty(self, _request) -> None:
-        await self.mark_dirty()
-
-    async def _mark_clean(self, _request) -> None:
-        await self.mark_clean()
-
-    async def _cluster_server_stop(self, request) -> None:
-        await self.server_stop(ServerNum(int(request.match_info["server_id"])))
-
-    async def _cluster_server_stop_gracefully(self, request) -> None:
-        await self.server_stop_gracefully(ServerNum(int(request.match_info["server_id"])))
-
-    async def _cluster_server_start(self, request) -> None:
-        data = await request.json()
-        await self.server_start(
-            ServerNum(int(request.match_info["server_id"])),
-            expected_error=data.get("expected_error"),
-            seeds=data.get("seeds"),
-            expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "SERVING")),
-            cmdline_options_override=data.get("cmdline_options_override"),
-            append_env_override=data.get("append_env_override"),
-            auth_provider=data.get("auth_provider"),
-        )
-
-    async def _cluster_server_pause(self, request) -> None:
-        await self.server_pause(ServerNum(int(request.match_info["server_id"])))
-
-    async def _cluster_server_unpause(self, request) -> None:
-        await self.server_unpause(ServerNum(int(request.match_info["server_id"])))
-
-    async def _cluster_server_add(self, request) -> dict[str, object]:
-        data = await request.json()
-        s_info = await self.server_add(
-            replace_cfg=ReplaceConfig(**data["replace_cfg"]) if "replace_cfg" in data else None,
-            cmdline=data.get("cmdline"),
-            config=data.get("config"),
-            version=ScyllaVersionDescription(**data["version"]) if "version" in data else None,
-            property_file=data.get("property_file"),
-            start=data.get("start", True),
-            seeds=data.get("seeds"),
-            server_encryption=data.get("server_encryption", "none"),
-            expected_error=data.get("expected_error"),
-            expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "SERVING")),
-        )
-        return s_info.as_dict()
-
-    async def _cluster_servers_add(self, request) -> list[dict[str, object]]:
-        data = await request.json()
-        s_infos = await self.servers_add(
-            servers_num=data.get('servers_num'),
-            cmdline=data.get('cmdline'),
-            config=data.get('config'),
-            version=ScyllaVersionDescription(**data["version"]) if "version" in data else None,
-            property_file=data.get('property_file'),
-            start=data.get('start', True),
-            seeds=data.get('seeds', None),
-            server_encryption=data.get('server_encryption'),
-            expected_error=data.get('expected_error', None),
-        )
-        return [s_info.as_dict() for s_info in s_infos]
-
-    async def _cluster_remove_node(self, request: aiohttp.web.Request) -> None:
-        data = await request.json()
-        assert isinstance(data["ignore_dead"], list), "Invalid list of dead IP addresses"
-        await self.remove_node(
-            initiator_id=ServerNum(int(request.match_info["initiator"])),
-            server_id=ServerNum(int(data["server_id"])),
-            ignore_dead=[IPAddress(ip_addr) for ip_addr in data["ignore_dead"]],
-            expected_error=data["expected_error"],
-        )
-
-    async def _cluster_decommission_node(self, request) -> None:
-        data = await request.json()
-        await self.decommission_node(
-            server_id=ServerNum(int(request.match_info["server_id"])),
-            expected_error=data["expected_error"],
-        )
-
-    async def _cluster_rebuild_node(self, request) -> None:
-        data = await request.json()
-        await self.rebuild_node(
-            server_id=ServerNum(int(request.match_info["server_id"])),
-            expected_error=data["expected_error"],
-        )
-
-    async def _server_get_config(self, request: aiohttp.web.Request) -> dict[str, object]:
-        return await self.server_get_config(ServerNum(int(request.match_info["server_id"])))
-
-    async def _server_update_config(self, request: aiohttp.web.Request) -> None:
-        data = await request.json()
-        await self.server_update_config(ServerNum(int(request.match_info["server_id"])),
-                                        data["config_options"])
-
-    async def _server_remove_config_option(self, request: aiohttp.web.Request) -> None:
-        data = await request.json()
-        await self.server_remove_config_option(ServerNum(int(request.match_info["server_id"])),
-                                               data["key"])
-
-    async def _server_update_cmdline(self, request: aiohttp.web.Request) -> None:
-        data = await request.json()
-        await self.server_update_cmdline(ServerNum(int(request.match_info["server_id"])),
-                                         data['cmdline_options'])
-
-    async def _server_switch_executable(self, request: aiohttp.web.Request) -> None:
-        path = (await request.json())["path"]
-        await self.server_switch_executable(ServerNum(int(request.match_info["server_id"])), path)
-
-    async def _server_change_ip(self, request: aiohttp.web.Request) -> dict[str, object]:
-        ip_addr = await self.server_change_ip(ServerNum(int(request.match_info["server_id"])))
-        return {"ip_addr": ip_addr}
-
-    async def _server_change_rpc_address(self, request: aiohttp.web.Request) -> dict[str, object]:
-        rpc_address = await self.server_change_rpc_address(ServerNum(int(request.match_info["server_id"])))
-        return {"rpc_address": rpc_address}
-
-    async def _server_get_log_filename(self, request: aiohttp.web.Request) -> str:
-        return await self.server_get_log_filename(ServerNum(int(request.match_info["server_id"])))
-
-    async def _server_get_workdir(self, request: aiohttp.web.Request) -> str:
-        return await self.server_get_workdir(ServerNum(int(request.match_info["server_id"])))
-
-    async def _server_get_maintenance_socket_path(self, request: aiohttp.web.Request) -> str:
-        return await self.server_get_maintenance_socket_path(ServerNum(int(request.match_info["server_id"])))
-
-    async def _server_get_exe(self, request: aiohttp.web.Request) -> str:
-        return await self.server_get_exe(ServerNum(int(request.match_info["server_id"])))
-
-    async def _server_get_returncode(self, request: aiohttp.web.Request) -> str | int:
-        return await self.server_get_returncode(ServerNum(int(request.match_info["server_id"])))
-
-    async def _cluster_server_wipe_sstables(self, request: aiohttp.web.Request):
-        data = await request.json()
-        return await self.server_wipe_sstables(ServerNum(int(request.match_info["server_id"])),
-                                               data["keyspace"], data["table"])
-
-    async def _server_get_sstables_disk_usage(self, request: aiohttp.web.Request) -> int:
-        data = request.query
-        return await self.server_get_sstables_disk_usage(ServerNum(int(request.match_info["server_id"])),
-                                                         data["keyspace"], data["table"])
-
-    async def _server_get_process_status(self, request: aiohttp.web.Request) -> Optional[str]:
-        return await self.server_get_process_status(ServerNum(int(request.match_info["server_id"])))
