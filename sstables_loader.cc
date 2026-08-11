@@ -682,7 +682,12 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
         _loading_new_sstables = true;
     }
 
-    co_await coroutine::switch_to(_sched_group);
+    // No switch_to(_sched_group) here: that group is the backup one and belongs to
+    // restore. Refresh instead inherits the group from its caller, the API server,
+    // which listens in the streaming group. The replica on the receiving end of the
+    // load-and-stream works in the streaming group too, because it switches to the
+    // backup one only for stream_reason::restore and refresh streams carry
+    // stream_reason::repair. So both ends of a refresh are throttled as streaming.
 
     sstring load_and_stream_desc = fmt::format("{}", load_and_stream);
     const auto& rs = _db.local().find_keyspace(ks_name).get_replication_strategy();
@@ -713,7 +718,7 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
             std::tie(table_id, sstables_on_shards) = co_await replica::distributed_loader::get_sstables_from_upload_dir(_db, ks_name, cf_name, cfg);
             co_await container().invoke_on_all([&sstables_on_shards, ks_name, cf_name, table_id, primary, scope] (sstables_loader& loader) mutable -> future<> {
                 co_await loader.load_and_stream(ks_name, cf_name, table_id, std::move(sstables_on_shards[this_shard_id()]), primary_replica_only(primary), true, scope,
-                                                streaming::stream_reason::restore, {});
+                                                streaming::stream_reason::repair, {});
             });
         } else {
             co_await replica::distributed_loader::process_upload_dir(_db, _view_builder, _view_building_worker, ks_name, cf_name, skip_cleanup, skip_reshape);
