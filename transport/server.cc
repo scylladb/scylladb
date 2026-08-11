@@ -2327,12 +2327,13 @@ void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_serv
     _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response)] () mutable {
         cql_server::response& r = *response;
         auto del = make_deleter([response = std::move(response)] {});
-        return r.write_message(_write_buf, _version, compression, std::move(del));
+        return r.write_message(_write_buf, _version, compression, _server._config.response_compression_threshold(), std::move(del));
     });
 }
 
-future<> cql_server::response::write_message(output_stream<char>& out, uint8_t version, cql_compression compression, seastar::deleter del) {
-    if (compression != cql_compression::none) {
+future<> cql_server::response::write_message(output_stream<char>& out, uint8_t version, cql_compression compression, size_t compression_threshold, seastar::deleter del) {
+    // Bodies below the threshold are too small to benefit from compression.
+    if (compression != cql_compression::none && _body.size() >= compression_threshold) {
         compress(compression);
     }
     utils::result_with_exception_ptr<temporary_buffer<char>> frame = make_frame(version, _body.size());
