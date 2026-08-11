@@ -1064,8 +1064,23 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
                             .with_column("ck2", reversed_type_impl::get_instance(utf8_type), column_kind::clustering_key)
                             .with_column("r1", int32_type)
                             .build();
-                    BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: reversed order: min={{\"a\"}} max={{\"a\"}} with compact storage version={}", version));
-                    test_min_max_clustering_key(env, s, {"key1"}, {{"a", "z"}, {"a"}}, {"a"}, {"a"}, version);
+                    BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: reversed order: min={{\"a\"}} max={{\"a\", \"z\"}} with compact storage version={}", version));
+                    test_min_max_clustering_key(env, s, {"key1"}, {{"a", "z"}, {"a"}}, {"a"}, {"a", "z"}, version);
+                }
+                {
+                    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                            .with(schema_builder::compact_storage::yes)
+                            .with_column("pk", utf8_type, column_kind::partition_key)
+                            .with_column("ck1", utf8_type, column_kind::clustering_key)
+                            .with_column("ck2", utf8_type, column_kind::clustering_key)
+                            .with_column("r1", int32_type)
+                            .build();
+                    BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: prefix row alone with compact storage version={}", version));
+                    test_min_max_clustering_key(env, s, {"key1"}, {{"a"}}, {"a"}, {"a"}, version);
+                    BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: prefix row + full row sharing the prefix with compact storage version={}", version));
+                    test_min_max_clustering_key(env, s, {"key1"}, {{"a"}, {"a", "b"}}, {"a"}, {"a", "b"}, version);
+                    BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: prefix row as max with compact storage version={}", version));
+                    test_min_max_clustering_key(env, s, {"key1"}, {{"a", "z"}, {"b"}}, {"a", "z"}, {"b"}, version);
                 }
             }
         }
@@ -1233,6 +1248,34 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
                     auto sst = make_sstable_containing(sst_gen, {std::move(m)}).get();
                     BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
                     check_min_max_column_names(sst, {}, {});
+                }
+
+                // Range tombstone with prefix bounds in a compact-storage table,
+                // together with a prefix row and a full-key row.
+                {
+                    auto s2 = schema_builder(this_smp_shard_count(), "ks", "cf2")
+                            .with(schema_builder::compact_storage::yes)
+                            .with_column("pk", utf8_type, column_kind::partition_key)
+                            .with_column("ck1", utf8_type, column_kind::clustering_key)
+                            .with_column("ck2", utf8_type, column_kind::clustering_key)
+                            .with_column("r1", int32_type)
+                            .build();
+                    auto sst_gen2 = env.make_sst_factory(s2, version);
+                    const column_definition& r1_col2 = *s2->get_column_definition("r1");
+                    mutation m(s2, partition_key::from_exploded(*s2, {to_bytes("key1")}));
+                    m.set_clustered_cell(clustering_key_prefix::from_single_value(*s2, bytes("b")), r1_col2,
+                            make_atomic_cell(int32_type, int32_type->decompose(1)));
+                    m.set_clustered_cell(clustering_key_prefix::from_exploded(*s2, {to_bytes("b"), to_bytes("c")}), r1_col2,
+                            make_atomic_cell(int32_type, int32_type->decompose(1)));
+                    tombstone tomb(api::new_timestamp(), gc_clock::now());
+                    range_tombstone rt(
+                            clustering_key_prefix::from_single_value(*s2, bytes("a")),
+                            clustering_key_prefix::from_single_value(*s2, bytes("a")),
+                            tomb);
+                    m.partition().apply_delete(*s2, std::move(rt));
+                    auto sst = make_sstable_containing(sst_gen2, {std::move(m)}).get();
+                    BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
+                    check_min_max_column_names(sst, {"a"}, {"b", "c"});
                 }
             }
         }
