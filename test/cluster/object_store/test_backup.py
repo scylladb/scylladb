@@ -2348,6 +2348,7 @@ async def run_cluster_backup(object_storage, prefix: str, manager: ScyllaCluster
     manifest = json.load(manifest_obj['Body'])
 
     manifest_sstables = [sst['toc_name'] for sst in manifest['sstables']]
+    manifest_tablets = manifest['tablets']
 
     # every sstable the manifest names must have made it into the bucket
     missing = [sst for sst in manifest['sstables'] if sst['toc_name'] not in objects]
@@ -2375,6 +2376,14 @@ async def run_cluster_backup(object_storage, prefix: str, manager: ScyllaCluster
         for sstable in sstables:
             assert sstable.state < 3 or sstable.toc_name in objects
             assert sstable.state < 3 or sstable.toc_name in manifest_sstables
+            if sstable.state < 3:
+                assert sstable.repaired_at > 0
+                # tablets are in token order in manifest
+                for t in manifest_tablets:
+                    if t['last_token'] > sstable.first_token:
+                        assert t['first_token'] <= sstable.first_token
+                        assert t['repaired_at'] > 0
+                        break
 
     return manifest
 
