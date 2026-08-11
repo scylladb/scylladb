@@ -4604,15 +4604,13 @@ void incremental_compaction_data_resurrection_fn(test_env& env) {
         // expired_sst is exhausted, and new sstable is written with mut 2.
         BOOST_REQUIRE_EQUAL(old_sstables.size(), 1);
         BOOST_REQUIRE(old_sstables.front() == expired_sst);
-        BOOST_REQUIRE_EQUAL(new_sstables.size(), 2);
+        BOOST_REQUIRE_EQUAL(new_sstables.size() + desc.new_gc_sstables.size(), 2);
         for (auto& new_sstable : new_sstables) {
-            if (new_sstable->get_max_local_deletion_time() == deletion_time) { // Skipping GC SSTable.
-                continue;
-            }
             assert_that(sstable_reader(new_sstable, s, env.make_reader_permit()))
                 .produces(mut2)
                 .produces_end_of_stream();
         }
+        new_sstables.insert(new_sstables.end(), desc.new_gc_sstables.begin(), desc.new_gc_sstables.end());
         column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(), new_sstables, old_sstables).get();
         // force compaction failure after sstable containing expired tombstone is removed from set.
         throw std::runtime_error("forcing compaction failure on early replacement");
