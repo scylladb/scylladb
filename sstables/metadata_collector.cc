@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <seastar/core/on_internal_error.hh>
+
 #include "utils/log.hh"
 #include "metadata_collector.hh"
 #include "mutation/position_in_partition.hh"
@@ -25,23 +27,25 @@ void metadata_collector::convert(disk_array<uint32_t, disk_string<uint16_t>>& to
     }
 }
 
-void metadata_collector::update_min_max_components(position_in_partition_view pos) {
+void metadata_collector::update_min(position_in_partition_view pos) {
     if (pos.region() != partition_region::clustered) {
-        throw std::runtime_error(fmt::format("update_min_max_components() expects positions in the clustering region, got {}", pos));
+        on_internal_error(mdclogger, fmt::format("update_min() expects positions in the clustering region, got {}", pos));
     }
 
     const position_in_partition::tri_compare cmp(_schema);
-
-    // Positions are compared in natural order, prefix (non-full) keys included.
-    // Only the winner's key components are stored (see convert()); the reader
-    // extends them back to a range covering all prefixed keys, in
-    // sstable::set_min_max_position_range(), so prefixes need no special
-    // treatment here.
 
     if (!_min_clustering_pos || cmp(pos, *_min_clustering_pos) < 0) {
         mdclogger.trace("{}: setting min_clustering_key={}", _name, position_in_partition_view::printer(_schema, pos));
         _min_clustering_pos.emplace(pos);
     }
+}
+
+void metadata_collector::update_max(position_in_partition_view pos) {
+    if (pos.region() != partition_region::clustered) {
+        on_internal_error(mdclogger, fmt::format("update_max() expects positions in the clustering region, got {}", pos));
+    }
+
+    const position_in_partition::tri_compare cmp(_schema);
 
     if (!_max_clustering_pos || cmp(pos, *_max_clustering_pos) > 0) {
         mdclogger.trace("{}: setting max_clustering_key={}", _name, position_in_partition_view::printer(_schema, pos));
