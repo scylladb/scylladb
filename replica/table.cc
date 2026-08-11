@@ -3050,7 +3050,8 @@ void compaction_group::set_compaction_strategy_state(compaction::compaction_stra
 }
 
 uint64_t table::expected_memtable_size() const {
-    // All memtables on this shard share the same memtable memory budget.
+    // The memtable memory budget this table flushes from, shared with the other
+    // tables on this shard that were given the same dirty memory manager.
     auto budget = _config.dirty_memory_manager->flush_threshold();
     if (!budget) {
         return 0;
@@ -3068,7 +3069,14 @@ uint64_t table::expected_memtable_size() const {
         return budget / tablets_per_shard;
     }
 
-    return 0;
+    // With vnodes, the table has a single memtable per shard, covering the shard's
+    // whole token range, so the budget is shared by the tables on this shard that
+    // flush from it.
+    auto tables = _config.table_count ? _config.table_count(*_config.dirty_memory_manager) : 0;
+    if (!tables) {
+        return 0;
+    }
+    return budget / tables;
 }
 
 compaction::compaction_strategy table::create_compaction_strategy(compaction::compaction_strategy_type strategy) const {
