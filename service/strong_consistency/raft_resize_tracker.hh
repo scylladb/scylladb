@@ -98,6 +98,20 @@ public:
 
     // Returns the parent of `child_gid`, or nullopt if it is not a child of a resize.
     std::optional<raft::group_id> get_parent_group(raft::group_id child_gid) const;
+
+    // Returns true once the parent's writes are handed off to its children. False if the group
+    // is not being resized at all.
+    bool should_handoff_writes(raft::group_id parent_gid) const;
+
+    // Resolves once the parent of the given group has applied end_resize, or with
+    // abort_requested_exception if the parent is torn down first.
+    // A waiter needs no abort source of its own. A parent is always torn down together with its
+    // children or after them, so the parent's teardown ends the wait of a child being torn down.
+    // Nullopt if the group is not a child of a resize, and also if the parent's state is already
+    // gone, which means the resize is over on this replica and nothing is left to wait for.
+    // FIXME: a tablet merge has two parents per child, so this will have to return a future
+    // which resolves once *all* parents applied end_resize.
+    std::optional<shared_future<>> get_parent_finished_future(raft::group_id child_gid) const;
 };
 
 } // namespace service::strong_consistency

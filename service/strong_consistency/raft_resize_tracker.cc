@@ -99,9 +99,9 @@ void raft_resize_tracker::erase_resize_state(raft::group_id parent_gid) {
     auto& state = it->second;
 
     if (!state.end_resize.available()) {
-        // Break the promise rather than drop it silently, so that a waiter we did not think of
-        // fails instead of hanging. abort_requested_exception is what makes a state machine's
-        // applier exit cleanly.
+        // Finalization applies end_resize on every replica before the tablet map is replaced, so
+        // it leaves no waiter here. A shutdown or a table drop can, and abort_requested_exception
+        // is what makes its applier exit cleanly.
         logger.debug("group {}: resize ended before end_resize was applied", parent_gid);
         state.end_resize.set_exception(abort_requested_exception());
     }
@@ -132,6 +132,19 @@ std::optional<raft::group_id> raft_resize_tracker::get_parent_group(raft::group_
         return it->second;
     }
     return std::nullopt;
+}
+
+std::optional<shared_future<>> raft_resize_tracker::get_parent_finished_future(raft::group_id child_gid) const {
+    auto parent_gid = get_parent_group(child_gid);
+    if (!parent_gid) {
+        return std::nullopt;
+    }
+    auto it = _resize_states.find(*parent_gid);
+    if (it == _resize_states.end()) {
+        logger.debug("group {}: its parent {} has no resize state, nothing to wait for", child_gid, *parent_gid);
+        return std::nullopt;
+    }
+    return it->second.end_resize.get_shared_future();
 }
 
 } // namespace service::strong_consistency
