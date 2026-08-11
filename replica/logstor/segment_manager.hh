@@ -28,7 +28,6 @@
 namespace replica {
 
 class database;
-class table;
 
 namespace logstor {
 

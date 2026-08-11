@@ -1136,7 +1136,10 @@ future<> compaction_group::split(compaction::compaction_type_options::split opt,
     }
 
     if (_t.uses_logstor()) {
-        co_await get_logstor_compaction_manager().submit_split_compaction(_t, as_logstor_group(), opt.classifier);
+        co_await get_logstor_compaction_manager().submit_split_compaction(as_logstor_group(), opt.classifier,
+                [this] (logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token) -> logstor::logstor_group& {
+                    return _t.get_logstor_group(seg_id, first_token, last_token);
+                });
     }
 }
 

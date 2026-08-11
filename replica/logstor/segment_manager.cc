@@ -638,7 +638,7 @@ public:
     future<compaction_reenabler> disable_compaction(logstor_group&) override;
     compaction_reenabler disable_compaction_no_wait(logstor_group&) override;
     future<> submit_normal_compaction(logstor_group&);
-    future<> submit_split_compaction(replica::table&, logstor_group&, mutation_writer::classify_by_token_group) override;
+    future<> submit_split_compaction(logstor_group&, mutation_writer::classify_by_token_group, split_target_group) override;
 
     void schedule_auto_compaction();
 
@@ -668,7 +668,7 @@ private:
 
     future<> submit_group_compaction(logstor_group&, std::function<future<>(group_compaction_state&)>, scheduling_group);
     future<> do_compaction(logstor_group&, abort_source&);
-    future<> do_split_compaction(replica::table&, logstor_group&, mutation_writer::classify_by_token_group, abort_source&);
+    future<> do_split_compaction(logstor_group&, mutation_writer::classify_by_token_group, split_target_group, abort_source&);
 
     group_compaction_state& get_group_state(logstor_group&);
     group_compaction_state* find_group_state(logstor_group&) noexcept;
@@ -1749,9 +1749,9 @@ future<> compaction_manager_impl::submit_normal_compaction(logstor_group& cg) {
     }, _cfg.compaction_sg);
 }
 
-future<> compaction_manager_impl::submit_split_compaction(replica::table& t, logstor_group& src, mutation_writer::classify_by_token_group classifier) {
-    co_await submit_group_compaction(src, [this, &t, &src, classifier = std::move(classifier)] (group_compaction_state& state) mutable {
-        return do_split_compaction(t, src, std::move(classifier), state.as);
+future<> compaction_manager_impl::submit_split_compaction(logstor_group& src, mutation_writer::classify_by_token_group classifier, split_target_group target_group) {
+    co_await submit_group_compaction(src, [this, &src, classifier = std::move(classifier), target_group = std::move(target_group)] (group_compaction_state& state) mutable {
+        return do_split_compaction(src, std::move(classifier), std::move(target_group), state.as);
     }, _cfg.split_compaction_sg);
 }
 
@@ -2157,13 +2157,13 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source&
     _stats.compaction_bytes_read += nonempty_segments.size() * _sm.get_segment_size();
 }
 
-future<> compaction_manager_impl::do_split_compaction(replica::table& t, logstor_group& src, mutation_writer::classify_by_token_group classifier, abort_source& as) {
+future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutation_writer::classify_by_token_group classifier, split_target_group target_group, abort_source& as) {
     static constexpr size_t batch_size = 32;
 
     auto& src_segments = src.logstor_segments();
 
     // the src and target groups both share the table index
-    auto& index = t.logstor_index();
+    auto& index = src.logstor_index();
 
     while (!src_segments._segments.empty() && !as.abort_requested()) {
         // Collect candidate IDs without yielding to avoid iterator invalidation.
@@ -2192,9 +2192,15 @@ future<> compaction_manager_impl::do_split_compaction(replica::table& t, logstor
                 // Fast path: segment already belongs to a single group.
                 // Remove from src and add to the correct child group.
                 logstor_logger.trace("Fast path split segment {} with token range [{}, {}]", cand_seg_id, cand_seg_hdr.first_token, cand_seg_hdr.last_token);
+                auto& target = target_group(cand_seg_id, cand_seg_hdr.first_token, cand_seg_hdr.last_token);
+                // A target that is the group being split would take the segment straight back, and
+                // the loop would keep handing it the same segment forever.
+                if (&target == &src) {
+                    on_internal_error(logstor_logger, format("Split compaction of segment {} targets the group it is split out of", cand_seg_id));
+                }
                 auto& cand_desc = _sm.get_segment_descriptor(cand_seg_id);
                 src_segments.remove_segment(cand_desc);
-                t.get_logstor_group(cand_seg_id, cand_seg_hdr.first_token, cand_seg_hdr.last_token).add_logstor_segment(cand_desc);
+                target.add_logstor_segment(cand_desc);
             } else {
                 batch.push_back(cand_seg_id);
             }
