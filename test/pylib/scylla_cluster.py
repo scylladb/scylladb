@@ -9,6 +9,7 @@
 from functools import wraps
 import asyncio
 import concurrent.futures
+import copy
 from asyncio.subprocess import Process
 from collections import ChainMap
 import itertools
@@ -565,8 +566,12 @@ class ScyllaServer:
             raise
 
     def get_config(self) -> dict[str, object]:
-        """Return the contents of conf/scylla.yaml as a dict."""
-        return self.config
+        """Return the contents of conf/scylla.yaml as a dict.
+
+        Returns a copy: mutating it doesn't affect the server; use
+        update_config() for that.
+        """
+        return copy.deepcopy(self.config)
 
     def update_config(self, config_options: dict[str, Any]) -> None:
         """Update conf/scylla.yaml with `config_options` dict.
@@ -1281,7 +1286,10 @@ class ScyllaCluster:
         assert start or not expected_error, \
             f"add_server: cannot add a stopped server and expect an error"
 
-        extra_config: dict[str, Any] = config.copy() if config else {}
+        # Deep copy: the test keeps the dict (and add_servers() shares it between
+        # servers), while ScyllaServer.__init__ writes to it and the server keeps
+        # mutating nested values (e.g. change_seeds()).
+        extra_config: dict[str, Any] = copy.deepcopy(config) if config else {}
         if replace_cfg:
             replaced_id = replace_cfg.replaced_id
             assert expected_error or replaced_id in self.servers, \
