@@ -396,6 +396,28 @@ void close_and_return(owned_write_buffer buf) {
     buf->close().get();
 }
 
+size_t record_size_with_value(schema_ptr schema, const sstring& pk, size_t value_size) {
+    return log_record_writer(make_log_record(schema, pk, sstring(value_size, 'x'))).size();
+}
+
+// Builds a mutation whose log record serializes to exactly `record_size` bytes, by sizing its value
+// to whatever is left over. The serialized size grows by a byte per value byte, apart from the
+// value's length prefix, so this converges in a step or two.
+mutation make_kv_mutation_of_record_size(schema_ptr schema, const sstring& pk, size_t record_size) {
+    const auto target = static_cast<ssize_t>(record_size);
+    auto size_with_value = [&] (ssize_t value_size) {
+        return static_cast<ssize_t>(record_size_with_value(schema, pk, std::max<ssize_t>(value_size, 0)));
+    };
+
+    ssize_t value_size = target - size_with_value(0);
+    for (int i = 0; i < 4 && size_with_value(value_size) != target; ++i) {
+        value_size += target - size_with_value(value_size);
+    }
+
+    BOOST_REQUIRE_EQUAL(size_with_value(value_size), target);
+    return make_kv_mutation(schema, pk, sstring(value_size, 'x'));
+}
+
 }
 
 // Checks that sealing a full raw write buffer writes the expected header fields.
@@ -449,6 +471,62 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_accepts_record_at_max_record_
     wb.seal(segment_sequence{29}, std::nullopt, ondisk::block_alignment);
 
     BOOST_REQUIRE_EQUAL(wb.serialized_size(), ondisk::block_alignment);
+}
+
+// A record written to a mixed segment is rewritten by the separator into a full segment of its
+// compaction group, so it has to fit a buffer of either kind, which do not have the same room for
+// records. The write path used to bound a record by the mixed buffer alone, so a record that only
+// fits that one was accepted and could then never be separated, spinning in write_to_separator.
+SEASTAR_THREAD_TEST_CASE(test_logstor_largest_accepted_record_can_be_separated) {
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    ls.do_recovery_for_test().get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    test_compaction_group_handle cg(schema, ls);
+
+    const auto segment_size = ls.get_segment_manager().get_segment_size();
+    const auto max_size = raw_write_buffer::max_record_size_any_kind(segment_size);
+
+    auto expected = make_kv_mutation_of_record_size(schema, "pk0", max_size);
+    auto key = expected.decorated_key();
+
+    ls.write(expected, write_target(&cg, {}), db::no_timeout).get();
+    ls.flush_to_separator().get();
+    cg.flush_separator().get();
+
+    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 1u);
+
+    auto actual = ls.read(*schema, cg.logstor_index(), key, schema->full_slice()).get();
+    BOOST_REQUIRE(actual);
+    assert_that(*actual).is_equal_to(expected);
+}
+
+// Checks that a record that does not fit a segment of either kind is rejected by the write path,
+// rather than accepted into a mixed segment that the separator would then not be able to split.
+SEASTAR_THREAD_TEST_CASE(test_logstor_rejects_record_that_does_not_fit_a_segment_of_either_kind) {
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    ls.do_recovery_for_test().get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    test_compaction_group_handle cg(schema, ls);
+
+    const auto segment_size = ls.get_segment_manager().get_segment_size();
+    const auto max_size = raw_write_buffer::max_record_size_any_kind(segment_size);
+
+    auto too_big = make_kv_mutation_of_record_size(schema, "pk0", max_size + 1);
+    BOOST_REQUIRE_THROW(ls.write(too_big, write_target(&cg, {}), db::no_timeout).get(), std::runtime_error);
+
+    BOOST_REQUIRE(!cg.separator_has_data());
 }
 
 // Checks that a buffer holding records that were never flushed can still be closed and reused

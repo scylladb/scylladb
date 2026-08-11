@@ -2844,6 +2844,15 @@ future<> logstor_group::write_to_separator(Writer writer, segment_ref seg_ref, s
             continue;
         }
 
+        if (_active_buffer.empty()) {
+            // The record does not fit a buffer that has nothing in it, so no flush can make room
+            // for it and the loop would never end. The write path should bound a record by what a segment
+            // of either kind takes.
+            on_internal_error(logstor_logger, fmt::format(
+                    "logstor separator record of size {} does not fit a separator buffer of {} bytes",
+                    writer.size(), _active_buffer.buf->get_buffer_size()));
+        }
+
         if (!_separator_flush.available()) {
             auto f = co_await coroutine::as_future(_separator_flush.get_future());
             f.ignore_ready_future();

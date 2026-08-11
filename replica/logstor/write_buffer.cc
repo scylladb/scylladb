@@ -69,10 +69,6 @@ void raw_write_buffer::reset() {
     _sealed = false;
 }
 
-size_t raw_write_buffer::max_record_size() const noexcept {
-    return _buffer_size - (header_size() + ondisk::record_header_size);
-}
-
 bool raw_write_buffer::can_fit(size_t data_size) const noexcept {
     // Calculate total space needed including header, data, and alignment padding
     auto total_size = ondisk::record_header_size + data_size;
@@ -740,8 +736,13 @@ future<> buffered_writer::flush() {
 future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer writer, db::timeout_clock::time_point timeout, write_target target) {
     auto holder = _async_gate.hold();
 
-    if (writer.size() > head_buf().max_record_size()) {
-        co_await coroutine::return_exception(std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", writer.size(), head_buf().max_record_size())));
+    // The record has to fit the mixed buffer it goes into here and the full segment the separator
+    // later rewrites it into, so it is bounded by whichever of the two takes less: one that only
+    // fits the buffer it is written to first would be accepted here and then never fit anywhere the
+    // separator could put it.
+    const size_t max_size = raw_write_buffer::max_record_size_any_kind(head_buf().get_buffer_size());
+    if (writer.size() > max_size) {
+        co_await coroutine::return_exception(std::runtime_error(fmt::format("Write size {} exceeds the maximum record size {}", writer.size(), max_size)));
     }
 
     // fast path - if there are no queued writes and there is space in the current head buffer or the next, advance the

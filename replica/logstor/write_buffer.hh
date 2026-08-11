@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 #include <seastar/core/abort_source.hh>
@@ -204,7 +205,26 @@ public:
 
     bool has_data() const noexcept;
 
-    size_t max_record_size() const noexcept;
+    // The largest record that fits an empty buffer of this size and kind. The kinds differ in what
+    // they carry ahead of their records, so a record can fit a buffer of one kind and not of the
+    // other.
+    static constexpr size_t max_record_size(size_t buffer_size, segment_kind kind) noexcept {
+        const size_t overhead = header_size(kind) + ondisk::record_header_size;
+        return buffer_size > overhead ? buffer_size - overhead : 0;
+    }
+
+    // The largest record that fits an empty buffer of this size whatever its kind. A record is
+    // written to a segment of one kind and can be rewritten into a segment of the other - the
+    // separator rewrites the records of a mixed segment into full segments of their compaction
+    // group - so a record that logstor accepts at all has to fit both.
+    static constexpr size_t max_record_size_any_kind(size_t buffer_size) noexcept {
+        return std::min(max_record_size(buffer_size, segment_kind::mixed),
+                        max_record_size(buffer_size, segment_kind::full));
+    }
+
+    size_t max_record_size() const noexcept {
+        return max_record_size(_buffer_size, _segment_kind);
+    }
 
     size_t net_data_size() const noexcept { return _net_data_size; }
     size_t record_count() const noexcept { return _record_count; }
@@ -221,12 +241,16 @@ public:
         return _segment_kind == segment_kind::full;
     }
 
-    size_t header_size() const noexcept {
+    static constexpr size_t header_size(segment_kind kind) noexcept {
         size_t s = ondisk::buffer_header_size;
-        if (with_segment_header()) {
+        if (kind == segment_kind::full) {
             s += ondisk::segment_header_size;
         }
         return s;
+    }
+
+    size_t header_size() const noexcept {
+        return header_size(_segment_kind);
     }
 
     static bool validate_header(const ondisk::buffer_header& bh) {
