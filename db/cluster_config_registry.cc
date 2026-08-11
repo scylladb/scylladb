@@ -108,6 +108,12 @@ constexpr std::array registry_options = {
         .kind = option_kind::db_config,
         .valid_range = integer_range{.min = 1, .max = std::numeric_limits<uint32_t>::max()},
     },
+    option{
+        .name = option_name::cql_response_compression_threshold_in_bytes,
+        .description = "CQL responses with a body smaller than this are sent uncompressed, even on connections that negotiated compression; compressing small bodies costs CPU and saves few or no bytes. 0 (or a negative value) compresses all responses",
+        .scopes = scope_set::of<scope::cluster>(),
+        .default_value = int64_t(1024),
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {
