@@ -1671,6 +1671,18 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Keep SSTable index pages in the global cache after a SSTable read. Expected to improve performance for workloads with big partitions, but may degrade performance for workloads with small partitions. The amount of memory usable by index cache is limited with ``index_cache_fraction``.")
     , index_cache_fraction(this, "index_cache_fraction", liveness::LiveUpdate, value_status::Deprecated, 0.2,
         "Deprecated. Index entries now share the regular LRU with row cache entries. Hot index pages survive naturally via recency; cold pages get evicted first. No hard cap is needed. This parameter is accepted but ignored.")
+    , tinylfu_sketch_entries_per_mb(this, "tinylfu_sketch_entries_per_mb", liveness::LiveUpdate, value_status::Used, 1024.0,
+        "Number of W-TinyLFU Count-Min Sketch entries per MB of row cache per shard. "
+        "Determines the size of the frequency estimator table used by the cache admission policy. "
+        "The default value of 1024 assumes an average partition size of ~1 KB. "
+        "Increase for smaller partitions (more entries per MB), decrease for larger ones. "
+        "Valid range: [64, 1048576]. The sketch width is clamped to [2^10, 2^24] counters per row.")
+    , tinylfu_initial_window_fraction(this, "tinylfu_initial_window_fraction", liveness::LiveUpdate, value_status::Used, 0.01,
+        "Fraction of cache entries allocated to the W-TinyLFU admission window. "
+        "New entries enter the window before competing for main cache admission. "
+        "Smaller values provide stronger scan resistance. Default 0.01 (1%). "
+        "Valid range: [0.01, 1.0]. A value of 1.0 disables the admission gate "
+        "and the policy degenerates to classic LRU.")
     , consistent_cluster_management(this, "consistent_cluster_management", value_status::Deprecated, true, "Use RAFT for cluster management and DDL.")
     , force_gossip_topology_changes(this, "force_gossip_topology_changes", value_status::Deprecated, false, "Force gossip-based topology operations in a fresh cluster. Only the first node in the cluster must use it. The rest will fall back to gossip-based operations anyway. This option should be used only for testing.  Note: gossip topology changes are incompatible with tablets.")
     , recovery_leader(this, "recovery_leader", liveness::LiveUpdate, value_status::Used, utils::null_uuid(), "Host ID of the node restarted first while performing the Manual Raft-based Recovery Procedure. Warning: this option disables some guardrails for the needs of the Manual Raft-based Recovery Procedure. Make sure you unset it at the end of the procedure.")
