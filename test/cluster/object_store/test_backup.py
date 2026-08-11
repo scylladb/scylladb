@@ -1717,6 +1717,7 @@ async def run_cluster_backup(object_storage, prefix: str, manager: ManagerClient
     manifest = json.load(manifest_obj['Body'])
 
     manifest_sstables = [sst['toc_name'] for sst in manifest['sstables']]
+    manifest_tablets = manifest['tablets']
 
     for ss in servers:
         locations = list(cql.execute(f"SELECT * FROM system_distributed.snapshot_remote_locations WHERE snapshot_name = '{snapshot_name}' AND datacenter = '{s.datacenter}'"))
@@ -1739,6 +1740,14 @@ async def run_cluster_backup(object_storage, prefix: str, manager: ManagerClient
         for sstable in sstables:
             assert sstable.state < 3 or sstable.toc_name in objects
             assert sstable.state < 3 or sstable.toc_name in manifest_sstables
+            if sstable.state < 3:
+                assert sstable.repaired_at > 0
+                # tablets are in token order in manifest
+                for t in manifest_tablets:
+                    if t['last_token'] > sstable.first_token:
+                        assert t['first_token'] <= sstable.first_token
+                        assert t['repaired_at'] > 0
+                        break
 
     return manifest
 
