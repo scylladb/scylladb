@@ -8340,5 +8340,77 @@ SEASTAR_TEST_CASE(test_scrub_validates_statistics_digest) {
     return test_env::do_with_async([](test_env& env) { test_scrub_validates_component_digests(env, component_type::Statistics); });
 }
 
+BOOST_AUTO_TEST_CASE(test_min_sstable_size_default_from_expected_memtable_size) {
+    constexpr uint64_t default_min_sstable_size = compaction::default_min_sstable_size;
+
+    auto min_sstable_size = [] (uint64_t expected_memtable_size) {
+        return compaction::strategy_options_defaults{.expected_memtable_size = expected_memtable_size}.min_sstable_size();
+    };
+
+    // Half of the expected memtable size, so that the sstables a full memtable is
+    // flushed into aren't considered too small to be tiered by their size.
+    BOOST_REQUIRE_EQUAL(min_sstable_size(24 * 1024 * 1024), 12 * 1024 * 1024);
+    BOOST_REQUIRE_EQUAL(min_sstable_size(1024 * 1024), 512 * 1024);
+
+    // Never larger than the value used when the expected memtable size isn't known,
+    // and never small enough to become meaningless.
+    BOOST_REQUIRE_EQUAL(min_sstable_size(4 * default_min_sstable_size), default_min_sstable_size);
+    BOOST_REQUIRE_EQUAL(min_sstable_size(2 * default_min_sstable_size), default_min_sstable_size);
+    BOOST_REQUIRE_EQUAL(min_sstable_size(1), 4 * 1024);
+
+    // Fall back to the default when the expected memtable size isn't known.
+    BOOST_REQUIRE_EQUAL(min_sstable_size(0), default_min_sstable_size);
+    BOOST_REQUIRE_EQUAL(compaction::strategy_options_defaults{}.min_sstable_size(), default_min_sstable_size);
+}
+
+SEASTAR_TEST_CASE(test_size_tiering_with_expected_memtable_size) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = schema_builder(this_smp_shard_count(), "tests", "expected_memtable_size")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type)
+                .build();
+
+        auto make_sstable = [&] (uint64_t data_size) {
+            auto sst = env.make_sstable(s, "/nowhere/in/particular", env.new_generation(), sstable_version_types::md, big);
+            auto keys = tests::generate_partition_keys(2, s, local_shard_only::yes);
+            sstables::test(sst).set_values(keys[0].key(), keys[1].key(), stats_metadata{}, data_size);
+            // Old enough not to be considered a recently written tiny sstable.
+            sstables::test(sst).set_data_file_write_time(db_clock::now() - std::chrono::hours(24));
+            return sst;
+        };
+
+        // Both sstables are smaller than the default min_sstable_size (50M), but larger
+        // than the one derived from an expected memtable size of 1M.
+        auto small_sst = make_sstable(1 * 1024 * 1024);
+        auto large_sst = make_sstable(40 * 1024 * 1024);
+
+        std::vector<sstables::frozen_sstable_run> runs = {
+            make_lw_shared<const sstables::sstable_run>(sstables::sstable_run(small_sst)),
+            make_lw_shared<const sstables::sstable_run>(sstables::sstable_run(large_sst)),
+        };
+
+        auto expect_buckets = [&] (unsigned expected_bucket_count, const compaction::strategy_options_defaults& defaults,
+                const std::map<sstring, sstring>& options = {}) {
+            compaction::size_tiered_compaction_strategy_options stcs_options(options, defaults);
+            auto stcs_buckets = compaction::size_tiered_compaction_strategy::get_buckets({ small_sst, large_sst }, stcs_options);
+            BOOST_REQUIRE_EQUAL(stcs_buckets.size(), expected_bucket_count);
+
+            compaction::incremental_compaction_strategy_options ics_options(options, defaults);
+            auto ics_buckets = compaction::incremental_compaction_strategy::get_buckets(runs, ics_options);
+            BOOST_REQUIRE_EQUAL(ics_buckets.size(), expected_bucket_count);
+        };
+
+        // When the expected memtable size isn't known, both sstables are considered
+        // tiny, so they are put in the same tier.
+        expect_buckets(1, {});
+
+        // A memtable of 1M is flushed into sstables far smaller than either of them,
+        // so they are large enough to be tiered by their size.
+        expect_buckets(2, {.expected_memtable_size = 1024 * 1024});
+
+        // An explicitly configured min_sstable_size overrides the derived default.
+        expect_buckets(1, {.expected_memtable_size = 1024 * 1024}, {{ "min_sstable_size", "52428800" }});
+    });
+}
 
 BOOST_AUTO_TEST_SUITE_END()

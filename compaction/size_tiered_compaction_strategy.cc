@@ -14,9 +14,9 @@
 
 namespace compaction {
 
-static long validate_sstable_size(const std::map<sstring, sstring>& options) {
+static long validate_sstable_size(const std::map<sstring, sstring>& options, uint64_t default_value = size_tiered_compaction_strategy_options::DEFAULT_MIN_SSTABLE_SIZE) {
     auto tmp_value = compaction_strategy_impl::get_value(options, size_tiered_compaction_strategy_options::MIN_SSTABLE_SIZE_KEY);
-    auto min_sstables_size = cql3::statements::property_definitions::to_long(size_tiered_compaction_strategy_options::MIN_SSTABLE_SIZE_KEY, tmp_value, size_tiered_compaction_strategy_options::DEFAULT_MIN_SSTABLE_SIZE);
+    auto min_sstables_size = cql3::statements::property_definitions::to_long(size_tiered_compaction_strategy_options::MIN_SSTABLE_SIZE_KEY, tmp_value, default_value);
     if (min_sstables_size < 0) {
         throw exceptions::configuration_exception(fmt::format("{} value ({}) must be non negative", size_tiered_compaction_strategy_options::MIN_SSTABLE_SIZE_KEY, min_sstables_size));
     }
@@ -90,10 +90,10 @@ static double validate_cold_reads_to_omit(const std::map<sstring, sstring>& opti
     return cold_reads_to_omit;
 }
 
-size_tiered_compaction_strategy_options::size_tiered_compaction_strategy_options(const std::map<sstring, sstring>& options) {
+size_tiered_compaction_strategy_options::size_tiered_compaction_strategy_options(const std::map<sstring, sstring>& options, const strategy_options_defaults& defaults) {
     using namespace cql3::statements;
 
-    min_sstable_size = validate_sstable_size(options);
+    min_sstable_size = validate_sstable_size(options, defaults.min_sstable_size());
     min_sstable_age = validate_min_sstable_age(options);
     bucket_low = validate_bucket_low(options);
     bucket_high = validate_bucket_high(options);

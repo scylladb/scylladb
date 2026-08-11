@@ -606,10 +606,17 @@ public:
     }
 };
 
-leveled_compaction_strategy::leveled_compaction_strategy(const std::map<sstring, sstring>& options)
+uint64_t strategy_options_defaults::min_sstable_size() const {
+    if (!expected_memtable_size) {
+        return default_min_sstable_size;
+    }
+    return std::clamp<uint64_t>(expected_memtable_size / 2, min_sstable_size_lower_bound, default_min_sstable_size);
+}
+
+leveled_compaction_strategy::leveled_compaction_strategy(const std::map<sstring, sstring>& options, const strategy_options_defaults& defaults)
         : compaction_strategy_impl(options)
         , _max_sstable_size_in_mb(calculate_max_sstable_size_in_mb(compaction_strategy_impl::get_value(options, SSTABLE_SIZE_OPTION)))
-        , _stcs_options(options)
+        , _stcs_options(options, defaults)
 {
 }
 
@@ -646,10 +653,10 @@ leveled_compaction_strategy::calculate_max_sstable_size_in_mb(std::optional<sstr
     return max_size;
 }
 
-time_window_compaction_strategy::time_window_compaction_strategy(const std::map<sstring, sstring>& options)
+time_window_compaction_strategy::time_window_compaction_strategy(const std::map<sstring, sstring>& options, const strategy_options_defaults& defaults)
     : compaction_strategy_impl(options)
     , _options(options)
-    , _stcs_options(options)
+    , _stcs_options(options, defaults)
 {
     if (!options.contains(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.contains(TOMBSTONE_THRESHOLD_OPTION)) {
         _disable_tombstone_compaction = true;
@@ -672,9 +679,9 @@ std::unique_ptr<compaction_backlog_tracker::impl> time_window_compaction_strateg
     return std::make_unique<time_window_backlog_tracker>(_options, _stcs_options);
 }
 
-size_tiered_compaction_strategy::size_tiered_compaction_strategy(const std::map<sstring, sstring>& options)
+size_tiered_compaction_strategy::size_tiered_compaction_strategy(const std::map<sstring, sstring>& options, const strategy_options_defaults& defaults)
     : compaction_strategy_impl(options)
-    , _options(options)
+    , _options(options, defaults)
 {}
 
 size_tiered_compaction_strategy::size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options)
@@ -759,7 +766,8 @@ compaction_strategy::make_sstable_set(const compaction::compaction_group_view& t
             _compaction_strategy_impl->make_sstable_set(ts));
 }
 
-compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options) {
+compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options,
+        const strategy_options_defaults& defaults) {
     ::shared_ptr<compaction_strategy_impl> impl;
 
     switch (strategy) {
@@ -767,13 +775,13 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
         impl = ::make_shared<null_compaction_strategy>();
         break;
     case compaction_strategy_type::size_tiered:
-        impl = ::make_shared<size_tiered_compaction_strategy>(options);
+        impl = ::make_shared<size_tiered_compaction_strategy>(options, defaults);
         break;
     case compaction_strategy_type::leveled:
-        impl = ::make_shared<leveled_compaction_strategy>(options);
+        impl = ::make_shared<leveled_compaction_strategy>(options, defaults);
         break;
     case compaction_strategy_type::time_window:
-        impl = ::make_shared<time_window_compaction_strategy>(options);
+        impl = ::make_shared<time_window_compaction_strategy>(options, defaults);
         break;
     case compaction_strategy_type::in_memory:
         compaction_strategy_logger.warn(
@@ -783,7 +791,7 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
         impl = ::make_shared<null_compaction_strategy>();
         break;
     case compaction_strategy_type::incremental:
-        impl = make_shared<incremental_compaction_strategy>(incremental_compaction_strategy(options));
+        impl = make_shared<incremental_compaction_strategy>(incremental_compaction_strategy(options, defaults));
         break;
     default:
         throw std::runtime_error("strategy not supported");
