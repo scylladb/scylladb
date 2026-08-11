@@ -195,8 +195,10 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
         return i.second < j.second;
     });
 
-    auto min_sstable_size_check = [&runs, &options] (uint64_t size) {
-        return !tiny_sstables_written_recently(options.min_sstable_size, options.min_sstable_age, runs) && size < options.min_sstable_size;
+    // Loop-invariant: compute once instead of rescanning all runs per check (was O(n^2)).
+    bool recently_written = tiny_sstables_written_recently(options.min_sstable_size, options.min_sstable_age, runs);
+    auto min_sstable_size_check = [&options, recently_written] (uint64_t size) {
+        return !recently_written && size < options.min_sstable_size;
     };
 
     using bucket_type = std::vector<sstables::frozen_sstable_run>;
@@ -268,7 +270,8 @@ incremental_compaction_strategy::most_interesting_bucket(std::vector<std::vector
 
 compaction_descriptor
 incremental_compaction_strategy::find_garbage_collection_job(const compaction::compaction_group_view& t, std::vector<size_bucket_t>& buckets) {
-    auto worth_dropping_tombstones = [this, &t, now = db_clock::now()] (const sstables::sstable_run& run, gc_clock::time_point compaction_time) {
+    // min_memtable_timestamp() scans all memtables; hoist it out of the per-run loop below.
+    auto worth_dropping_tombstones = [this, &t, now = db_clock::now(), min_memtable_ts = t.min_memtable_timestamp()] (const sstables::sstable_run& run, gc_clock::time_point compaction_time) {
         if (run.all().empty()) {
             return false;
         }
@@ -289,7 +292,7 @@ incremental_compaction_strategy::find_garbage_collection_job(const compaction::c
         }));
         bool satisfy_staleness = (now - _tombstone_compaction_interval) > run_write_time;
         // Staleness condition becomes mandatory if memtable's data is possibly shadowed by tombstones.
-        if (run_max_timestamp >= t.min_memtable_timestamp() && !satisfy_staleness) {
+        if (run_max_timestamp >= min_memtable_ts && !satisfy_staleness) {
             return false;
         }
         // If interval is not satisfied, we still consider tombstone GC if the gain outweighs the increased frequency.
@@ -384,10 +387,16 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
         // SA would be calculated incorrectly, which may result in an unneeded cross-tier compaction.
 
         auto find_two_largest_tiers = [this] (std::vector<size_bucket_t>&& buckets) -> std::tuple<size_bucket_t, size_bucket_t> {
-            std::partial_sort(buckets.begin(), buckets.begin()+2, buckets.end(), [this] (size_bucket_t& i, size_bucket_t& j) {
-                return avg_size(i) > avg_size(j); // descending order
+            // avg_size() is O(bucket.size()); cache it per bucket instead of recomputing it on every comparison.
+            std::vector<std::pair<uint64_t, size_bucket_t>> sized_buckets;
+            sized_buckets.reserve(buckets.size());
+            for (auto& b : buckets) {
+                sized_buckets.emplace_back(avg_size(b), std::move(b));
+            }
+            std::partial_sort(sized_buckets.begin(), sized_buckets.begin()+2, sized_buckets.end(), [] (auto& i, auto& j) {
+                return i.first > j.first; // descending order
             });
-            return { std::move(buckets[0]), std::move(buckets[1]) };
+            return { std::move(sized_buckets[0].second), std::move(sized_buckets[1].second) };
         };
 
         auto total_size = [] (const size_bucket_t& bucket) -> uint64_t {
@@ -456,12 +465,10 @@ incremental_compaction_strategy::sstables_to_runs(std::vector<sstables::shared_s
 }
 
 void incremental_compaction_strategy::sort_run_bucket_by_first_key(size_bucket_t& bucket, size_t max_elements, const schema_ptr& schema) {
+    // sstable_run::all() is already ordered by first key, so its first entry is the minimum.
     std::partial_sort(bucket.begin(), bucket.begin() + max_elements, bucket.end(), [&schema](const sstables::frozen_sstable_run& a, const sstables::frozen_sstable_run& b) {
-        auto sst_first_key_less = [&schema] (const sstables::shared_sstable& sst_a, const sstables::shared_sstable& sst_b) {
-            return sst_a->get_first_decorated_key().tri_compare(*schema, sst_b->get_first_decorated_key()) <= 0;
-        };
-        auto& a_first = *std::ranges::min_element(a->all(), sst_first_key_less);
-        auto& b_first = *std::ranges::min_element(b->all(), sst_first_key_less);
+        auto& a_first = *a->all().begin();
+        auto& b_first = *b->all().begin();
         return a_first->get_first_decorated_key().tri_compare(*schema, b_first->get_first_decorated_key()) <= 0;
     });
 }
