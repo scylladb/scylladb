@@ -337,9 +337,8 @@ class test_compaction_group_handle final : public logstor_group {
     std::unique_ptr<primary_index>_index;
     compaction_manager& _cm;
 public:
-    test_compaction_group_handle(schema_ptr schema, logstor& ls, size_t separator_buffer_size)
-        : logstor_group(separator_buffer_size)
-        , _table_id(schema->id())
+    test_compaction_group_handle(schema_ptr schema, logstor& ls)
+        : _table_id(schema->id())
         , _index(ls.make_primary_index(schema, false))
         , _cm(ls.get_compaction_manager()) {
         _cm.add(*this);
@@ -599,7 +598,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_failed_compaction_returns_its_buffer_to_th
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
-    test_compaction_group_handle cg(schema, ls, ls.get_segment_manager().get_segment_size());
+    test_compaction_group_handle cg(schema, ls);
     auto setup_guard = std::make_optional(ls.get_compaction_manager().disable_compaction(cg).get());
 
     auto pk0_v0 = make_kv_mutation(schema, "pk0", "v0", api::timestamp_type(1));
@@ -669,7 +668,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_failing_index_update_returns_it
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
-    test_compaction_group_handle cg(schema, ls, ls.get_segment_manager().get_segment_size());
+    test_compaction_group_handle cg(schema, ls);
     auto setup_guard = std::make_optional(ls.get_compaction_manager().disable_compaction(cg).get());
 
     auto pk0_v0 = make_kv_mutation(schema, "pk0", "v0", api::timestamp_type(1));
@@ -1780,7 +1779,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_and_separator_flush) {
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
-    test_compaction_group_handle cg(schema, ls, ls.get_segment_manager().get_segment_size());
+    test_compaction_group_handle cg(schema, ls);
 
     auto expected = make_kv_mutation(schema, "pk0", "separator-value");
     auto key = expected.decorated_key();
@@ -1798,6 +1797,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_and_separator_flush) {
     cg.flush_separator().get();
 
     BOOST_REQUIRE(!cg.separator_has_data());
+    // The flush released everything the buffer was holding, which is also what gives it back to the
+    // pool: a group with nothing to separate holds no buffer.
+    BOOST_REQUIRE_EQUAL(cg.separator_held_segment_count(), 0u);
     BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 1u);
 
     auto snapshot = ls.get_segment_manager().make_snapshot(cg).get();
@@ -1807,6 +1809,106 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_and_separator_flush) {
     BOOST_REQUIRE(entry_after_flush);
     BOOST_REQUIRE(entry_after_flush->location.segment != entry_before_flush->location.segment);
     BOOST_REQUIRE_EQUAL(entry_after_flush->location.segment.value, snapshot.front().segment_id.value);
+
+    auto actual = ls.read(*schema, cg.logstor_index(), key, schema->full_slice()).get();
+    BOOST_REQUIRE(actual);
+    assert_that(*actual).is_equal_to(expected);
+}
+
+// Checks that a group discarded while the separator still holds unflushed records for it gives up
+// what it was holding: its records are left where they are, and the segments they are in are left
+// allocated. The index still points at them there, so freeing one would let it be reallocated over
+// live records - free_segment() aborts on the live data it finds rather than allow that, so the
+// reference has to be released as a failed flush rather than as a completed one.
+SEASTAR_THREAD_TEST_CASE(test_logstor_discarded_group_does_not_free_its_unflushed_source_segments) {
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    ls.do_recovery_for_test().get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    auto& sm = ls.get_segment_manager();
+    test_compaction_group_handle cg(schema, ls);
+    // Writes for this group fill the shared active segment, so that the segment holding the record
+    // below is switched away from and drops the reference it holds itself. Its own records are
+    // separated out, which gives back the reference its separator buffer takes.
+    test_compaction_group_handle filler(schema, ls);
+
+    auto expected = make_kv_mutation(schema, "pk0", "separator-value");
+    auto key = expected.decorated_key();
+    ls.write(expected, write_target(&cg, {}), db::no_timeout).get();
+    ls.flush_to_separator().get();
+    BOOST_REQUIRE_EQUAL(cg.separator_held_segment_count(), 1u);
+
+    auto entry_before_discard = cg.logstor_index().get(primary_index_key{key});
+    BOOST_REQUIRE(entry_before_discard);
+
+    // A value that takes most of a segment, so that the second record does not fit next to the first
+    // and the active segment has to be switched.
+    const auto filler_value = sstring(sm.get_segment_size() * 5 / 8, 'x');
+    write_and_flush_segment(ls, filler, make_kv_mutation(schema, "fill0", filler_value));
+    write_and_flush_segment(ls, filler, make_kv_mutation(schema, "fill1", filler_value));
+
+    // The separator buffer of the group under test now holds the last reference to the segment its
+    // record is in, and nothing has flushed it.
+    BOOST_REQUIRE(cg.separator_has_data());
+    BOOST_REQUIRE_EQUAL(cg.separator_held_segment_count(), 1u);
+
+    // Discard the group the way a compaction group stopped while the separator still has records for
+    // it does. Removing it rather than destroying it keeps its index readable below.
+    ls.get_compaction_manager().remove(cg).get();
+
+    // Nothing of the buffer is left held, which is also what gives it back to the pool.
+    BOOST_REQUIRE(!cg.separator_has_data());
+    BOOST_REQUIRE_EQUAL(cg.separator_held_segment_count(), 0u);
+
+    // The records were never written out, so the index still points at them where they were, and the
+    // segment that holds them was not freed and reused underneath it.
+    auto entry_after_discard = cg.logstor_index().get(primary_index_key{key});
+    BOOST_REQUIRE(entry_after_discard);
+    BOOST_REQUIRE(entry_after_discard->location == entry_before_discard->location);
+
+    auto actual = ls.read(*schema, cg.logstor_index(), key, schema->full_slice()).get();
+    BOOST_REQUIRE(actual);
+    assert_that(*actual).is_equal_to(expected);
+}
+
+// Checks that a group whose separator was closed takes no separator writes at all. Nothing can flush
+// what such a group buffers, so a record handed to it afterwards - which is what a write that was
+// already in flight when the group was closed amounts to - has to be refused rather than buffered.
+// The write itself still succeeds and the record stays readable where it is.
+SEASTAR_THREAD_TEST_CASE(test_logstor_closed_group_takes_no_separator_writes) {
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    ls.do_recovery_for_test().get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    test_compaction_group_handle cg(schema, ls);
+
+    // Close the group's separator the way stopping its compaction group does, and then write to it
+    // anyway.
+    ls.get_compaction_manager().remove(cg).get();
+
+    auto expected = make_kv_mutation(schema, "pk0", "separator-value");
+    auto key = expected.decorated_key();
+    ls.write(expected, write_target(&cg, {}), db::no_timeout).get();
+    ls.flush_to_separator().get();
+
+    // The separator refused the record, so the group holds nothing: no buffer of its own, no reference
+    // to the segment the record is in, and no segment of its own that it was written into.
+    BOOST_REQUIRE(!cg.separator_has_data());
+    BOOST_REQUIRE_EQUAL(cg.separator_held_segment_count(), 0u);
+    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 0u);
+
+    // The write itself succeeded and the record is readable where it was written.
+    BOOST_REQUIRE(cg.logstor_index().get(primary_index_key{key}));
 
     auto actual = ls.read(*schema, cg.logstor_index(), key, schema->full_slice()).get();
     BOOST_REQUIRE(actual);
@@ -1851,7 +1953,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_group_compaction_rewrites_live_records) {
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
-    test_compaction_group_handle cg(schema, ls, ls.get_segment_manager().get_segment_size());
+    test_compaction_group_handle cg(schema, ls);
     auto setup_guard = std::make_optional(ls.get_compaction_manager().disable_compaction(cg).get());
 
     auto pk0_v0 = make_kv_mutation(schema, "pk0", "v0", api::timestamp_type(1));
@@ -1975,7 +2077,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_disabled_group_does_not_compact_on_submit)
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
-    test_compaction_group_handle cg(schema, ls, ls.get_segment_manager().get_segment_size());
+    test_compaction_group_handle cg(schema, ls);
     auto compaction_guard = ls.get_compaction_manager().disable_compaction(cg).get();
 
     auto pk0_v0 = make_kv_mutation(schema, "pk0", "v0", api::timestamp_type(1));

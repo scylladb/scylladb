@@ -57,6 +57,13 @@ constexpr size_t split_compaction_buffers = 2;
 // derived per disk by make_compaction_limits(); this is the bound the semaphore is sized for.
 constexpr size_t max_auto_compaction_parallelism = std::min<size_t>(4, max_compaction_parallelism - split_compaction_buffers);
 
+// The separator buffer pool is sized for one buffer per compaction group - the one the group writes
+// into - plus this reserve, which covers the second buffer a group holds while its flush is writing
+// the first one out. It therefore bounds how many groups can be flushing while every other group
+// still holds the buffer it writes into; beyond that a group waits for a buffer to come back, which
+// is the same back-pressure it already takes when its own flush is in flight.
+constexpr size_t separator_flush_reserve = 16;
+
 // The smallest batch worth compacting. A batch reclaims only when its mean utilization is below
 // `1 - 1/n_in`, so a smaller batch could not reclaim anything from a disk that is even moderately
 // packed. It also anchors the free-segment target's absolute floor.
@@ -387,20 +394,20 @@ private:
 };
 
 struct separator_buffer {
-    write_buffer buf;
+    owned_write_buffer buf;
     utils::chunked_vector<future<>> pending_updates;
     utils::chunked_vector<segment_ref> held_segments;
     std::optional<segment_sequence> min_seq_num;
 
-    separator_buffer(size_t buffer_size)
-        : buf(buffer_size, segment_kind::full)
-    {}
+    separator_buffer() = default;
 
     separator_buffer(const separator_buffer&) = delete;
     separator_buffer& operator=(const separator_buffer&) = delete;
 
     separator_buffer(separator_buffer&&) noexcept = default;
     separator_buffer& operator=(separator_buffer&&) noexcept = default;
+
+    ~separator_buffer();
 
     template <log_record_writer_concept Writer>
     void write(segment_ref seg_ref, std::optional<segment_sequence> segment_seq_num, Writer writer, separator_write_completion after_written) {
@@ -414,29 +421,39 @@ struct separator_buffer {
         }
 
         pending_updates.push_back(
-            buf.write(std::move(writer)).then_unpack(std::move(after_written))
+            buf->write(std::move(writer)).then_unpack(std::move(after_written))
         );
+    }
+
+    bool allocated() const noexcept {
+        return bool(buf);
     }
 
     template <log_record_writer_concept Writer>
     bool can_fit(const Writer& writer) const noexcept {
-        return buf.can_fit(writer);
+        return buf && buf->can_fit(writer);
     }
 
     bool can_fit(size_t write_size) const noexcept {
-        return buf.can_fit(write_size);
+        return buf && buf->can_fit(write_size);
     }
 
     bool empty() const noexcept {
-        return !buf.has_data();
+        return !buf || !buf->has_data();
     }
 
-    void reset() {
-        buf.reset();
-        pending_updates.clear();
-        held_segments.clear();
-        min_seq_num.reset();
+    size_t offset_in_buffer() const noexcept {
+        return buf ? buf->offset_in_buffer() : 0;
     }
+
+    future<> close() {
+        return buf ? buf->close() : make_ready_future<>();
+    }
+
+    // Gives the write buffer back to the pool and drops what belonged to it, which releases the
+    // source segments it was holding. The buffer is expected to have been flushed, or aborted,
+    // before this.
+    future<> release();
 
     future<> abort(std::exception_ptr);
 };
@@ -460,6 +477,8 @@ public:
     virtual ~compaction_manager() = default;
 
     virtual future<> flush_separator_buffer(separator_buffer&, logstor_group&) = 0;
+
+    virtual future<owned_write_buffer> allocate_separator_buffer() = 0;
 
     virtual void add(logstor_group&) = 0;
     virtual future<> remove(logstor_group&) = 0;
@@ -485,23 +504,20 @@ public:
 // segment in the group.
 class logstor_group {
     segment_set _logstor_segments;
-    std::array<separator_buffer, 2> _separator_buffers;
-    size_t _active_separator_buffer{0};
+    separator_buffer _active_buffer;
+    separator_buffer _flushing_buffer;
     uint64_t _separator_generation{1};
     shared_future<> _separator_flush{make_ready_future<>()};
-
-    auto& active_separator_buffer(this auto& self) noexcept {
-        return self._separator_buffers[self._active_separator_buffer];
-    }
-
-    auto& inactive_separator_buffer(this auto& self) noexcept {
-        return self._separator_buffers[1 - self._active_separator_buffer];
-    }
+    // Whether the separator may write to this group. The group must be registered with the compaction
+    // manager in order for it to be enabled.
+    bool _separator_enabled{false};
 
     void switch_active_separator_buffer();
 
+    future<> allocate_active_separator_buffer();
+
 protected:
-    explicit logstor_group(size_t separator_buffer_size);
+    logstor_group() = default;
 
     virtual compaction_manager& logstor_compaction_manager() noexcept = 0;
 
@@ -533,20 +549,31 @@ public:
 
     future<> flush_separator(std::optional<segment_sequence> seq_num = std::nullopt);
 
+    // Lets the separator write to this group. Called by the compaction manager when the group is
+    // registered with it, which is what makes the group's buffers flushable.
+    void enable_separator_writes() noexcept {
+        _separator_enabled = true;
+    }
+
+    // Stops taking separator writes and gives up what the separator has already buffered for this
+    // group, handing its buffers back to the pool. What is dropped here was never written out, so the
+    // source segments the buffers hold are marked as failed rather than released: the index still
+    // points at those records there. A group is expected to have been flushed before it is closed, so
+    // anything this finds costs the segments it is holding, and it says so.
+    future<> close_separator();
+
     bool empty() const noexcept {
         return _logstor_segments.empty()
-            && std::ranges::all_of(_separator_buffers, [] (const auto& buf) { return buf.empty(); })
+            && _active_buffer.empty() && _flushing_buffer.empty()
             && _separator_flush.available();
     }
 
     bool separator_has_data() const noexcept {
-        return std::ranges::any_of(_separator_buffers, [] (const auto& buf) { return !buf.empty(); });
+        return !_active_buffer.empty() || !_flushing_buffer.empty();
     }
 
     size_t separator_held_segment_count() const noexcept {
-        return std::ranges::fold_left(_separator_buffers, size_t(0), [] (size_t count, const auto& buf) {
-            return count + buf.held_segments.size();
-        });
+        return _active_buffer.held_segments.size() + _flushing_buffer.held_segments.size();
     }
 };
 
