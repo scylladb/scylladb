@@ -232,7 +232,7 @@ future<> cluster_backup_task::do_backup() {
                 if (ti == te) {
                     throw std::runtime_error("Could not find tablet range");
                 }
-                if (e.repaired_at < ti->repaired_at) {
+                if (e.repaired_at < ti->repaired_at || e.repaired_at == 0) {
                     return true; // must include
                 }
                 auto i = repair_master.find(ti->first_token);
