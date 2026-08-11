@@ -627,6 +627,7 @@ public:
     float compaction_pressure() const noexcept;
 
     future<> flush_separator_buffer(separator_buffer&, logstor_group&) override;
+    future<owned_write_buffer> allocate_separator_buffer() override;
     future<> flush_all_separator_buffers(std::optional<segment_sequence>);
 
     void add(logstor_group&) override;
@@ -858,6 +859,8 @@ class segment_manager_impl {
     seastar::condition_variable _segment_freed_cv;
 
     write_buffer_pool _compaction_buffer_pool;
+    write_buffer_pool _separator_buffer_pool;
+    abort_source _separator_buffer_abort;
 
     static constexpr size_t separator_queue_depth = 16;
 
@@ -935,6 +938,14 @@ public:
 
     size_t get_memory_usage() const {
         return sizeof(_segment_descs);
+    }
+
+    future<owned_write_buffer> allocate_separator_buffer() {
+        return _separator_buffer_pool.allocate(_separator_buffer_abort);
+    }
+
+    void update_group_count(size_t group_count) {
+        _separator_buffer_pool.set_capacity(group_count + separator_flush_reserve);
     }
 
     future<> await_pending_writes() {
@@ -1095,6 +1106,15 @@ void compaction_manager_impl::add(logstor_group& cg) {
     if (!inserted) {
         on_internal_error(logstor_logger, format("compaction_state for logstor group {} [{}] already exists", cg.table_id(), fmt::ptr(&cg)));
     }
+    // A group that is not registered here can neither be flushed by flush_all_separator_buffers()
+    // nor accounted for in the separator buffer pool, so registering it is what makes it a group
+    // the separator may write to.
+    cg.enable_separator_writes();
+    _sm.update_group_count(_groups.size());
+}
+
+future<owned_write_buffer> compaction_manager_impl::allocate_separator_buffer() {
+    return _sm.allocate_separator_buffer();
 }
 
 segment_manager_impl::segment_manager_impl(segment_manager_config config)
@@ -1123,6 +1143,16 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
             .kind = segment_kind::full,
             .preallocate = max_compaction_parallelism,
             .max_cached = max_compaction_parallelism,
+      })
+    // One buffer per compaction group, plus a reserve for the flushes in flight - see
+    // separator_flush_reserve. The capacity follows the group count, and the buffers are built at
+    // the point of use, so a group that is not being separated into holds no memory at all.
+    , _separator_buffer_pool(write_buffer_pool::config{
+            .capacity = separator_flush_reserve,
+            .buffer_size = config.segment_size,
+            .kind = segment_kind::full,
+            .preallocate = 0,
+            .max_cached = separator_flush_reserve,
       })
     , _separator_task_queue(separator_queue_depth)
     , _trigger_threshold_observer(_cfg.trigger_compaction_threshold.observe([this] (double new_threshold) {
@@ -1223,6 +1253,16 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of logstor separator flush failures.")),
         sm::make_counter("separator_task_failures", _stats.separator_task_failures,
                        sm::description("Counts number of logstor separator task failures.")),
+        sm::make_gauge("separator_buffers_in_use", [this] { return _separator_buffer_pool.used_buffer_count(); },
+                       sm::description("Counts number of write buffers currently held by the separator, one per compaction group that has records to separate plus one per flush in flight.")),
+        sm::make_gauge("separator_buffers_allocated", [this] { return _separator_buffer_pool.allocated_buffer_count(); },
+                       sm::description("Counts number of write buffers the separator buffer pool holds the memory of, including the ones it keeps for reuse.")),
+        sm::make_gauge("separator_buffer_pool_capacity", [this] { return _separator_buffer_pool.capacity(); },
+                       sm::description("Number of write buffers the separator can hold at once, which follows the number of compaction groups.")),
+        sm::make_counter("separator_buffer_allocation_waits", _separator_buffer_pool.get_stats().allocation_waits,
+                       sm::description("Counts number of times the separator had to wait for a write buffer to become available.")),
+        sm::make_counter("separator_buffers_dropped", _separator_buffer_pool.get_stats().buffers_dropped,
+                       sm::description("Counts number of separator write buffers permanently removed from the pool after they could not be reclaimed.")),
         sm::make_counter("segment_free_failures", _stats.segment_free_failures,
                        sm::description("Counts number of logstor segment references that failed to free the segment.")),
         sm::make_gauge("separator_task_queue_size", [this]() { return _separator_task_queue.size(); },
@@ -1262,6 +1302,9 @@ future<> segment_manager_impl::stop() {
     // abort separator task queue and fiber. it should be drained at this point since all tasks hold the write phaser.
     logstor_logger.debug("Stopping separator fiber and flushing separator buffers");
     _separator_task_queue.abort(std::make_exception_ptr(seastar::abort_requested_exception()));
+    // Only the flushes below can hand a buffer back now, and they need none, so a separator write
+    // that is waiting for one would hold up the fiber until a flush it cannot trigger completes.
+    _separator_buffer_abort.request_abort();
     co_await std::move(_separator_fiber).handle_exception([] (std::exception_ptr) {});
 
     co_await _compaction_mgr.flush_all_separator_buffers(std::nullopt);
@@ -1275,9 +1318,10 @@ future<> segment_manager_impl::stop() {
         f.ignore_ready_future();
     }
 
-    logstor_logger.debug("Stopping compaction manager and buffer pool");
+    logstor_logger.debug("Stopping compaction manager and buffer pools");
     co_await _compaction_mgr.stop();
     co_await _compaction_buffer_pool.stop();
+    co_await _separator_buffer_pool.stop();
 
     logstor_logger.debug("Stopping segment pool");
     co_await _segment_pool.stop();
@@ -1729,6 +1773,14 @@ future<> compaction_manager_impl::remove(logstor_group& cg) {
 
     auto state = std::move(it->second);
     _groups.erase(it);
+
+    auto close_result = co_await coroutine::as_future(cg.close_separator());
+    if (close_result.failed()) {
+        logstor_logger.warn("Failed to close the separator of a logstor compaction group: {}",
+                close_result.get_exception());
+    }
+
+    _sm.update_group_count(_groups.size());
 
     state->as.request_abort();
     auto f = co_await coroutine::as_future(state->completion.get_future());
@@ -2253,22 +2305,24 @@ future<> segment_manager_impl::write_to_separator(std::vector<write_buffer::reco
 }
 
 future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, logstor_group& cg) {
-    logstor_logger.trace("Flushing separator buffer with {} bytes", buf.buf.offset_in_buffer());
-
-    utils::get_local_injector().inject("fail_flush_separator_buffer", []() {
-        throw std::runtime_error("flush_separator_buffer failed by injection");
-    });
+    logstor_logger.trace("Flushing separator buffer with {} bytes", buf.offset_in_buffer());
 
     auto flush_result = co_await coroutine::as_future([this, &buf, &cg] () -> future<> {
-        if (buf.buf.has_data()) {
+        utils::get_local_injector().inject("fail_flush_separator_buffer", []() {
+            throw std::runtime_error("flush_separator_buffer failed by injection");
+        });
+
+        if (!buf.empty()) {
             co_await with_scheduling_group(_cfg.separator_sg, [&] {
-                return _sm.write_full_segment(buf.buf, cg, write_source::separator);
+                return _sm.write_full_segment(*buf.buf, cg, write_source::separator);
             });
             _stats.separator_buffer_flushed++;
         }
 
-        co_await when_all_succeed(buf.pending_updates.begin(), buf.pending_updates.end());
-        co_await buf.buf.close();
+        auto updates = std::move(buf.pending_updates);
+        buf.pending_updates.clear();
+        co_await when_all_succeed(updates.begin(), updates.end());
+        co_await buf.close();
 
         // wait for read operations that use the old locations before freeing the old segments
         co_await cg.logstor_index().await_pending_reads();
@@ -2284,13 +2338,13 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, 
             logstor_logger.warn("logstor separator buffer abort failed after flush failure: {}", abort_result.get_exception());
         }
 
-        buf.reset();
+        co_await buf.release();
 
         co_await coroutine::return_exception_ptr(std::move(ep));
     }
 
-    // reset the buffer and release all held segments
-    buf.reset();
+    // give the buffer back to the pool and release all held segments
+    co_await buf.release();
 }
 
 future<> segment_manager_impl::do_recovery(replica::database& db) {
@@ -2716,37 +2770,80 @@ future<std::unique_ptr<segment_stream_sink>> segment_manager::create_segment_out
     return _impl->create_segment_output_stream(db);
 }
 
+separator_buffer::~separator_buffer() {
+    if (held_segments.empty()) {
+        return;
+    }
+    logstor_logger.error("Destroying a logstor separator buffer that still holds {} segments,"
+            " they will not be reclaimed", held_segments.size());
+    for (auto& seg_ref : held_segments) {
+        seg_ref.set_flush_failure();
+    }
+}
+
 future<> separator_buffer::abort(std::exception_ptr ep) {
     for (auto& seg_ref : held_segments) {
         seg_ref.set_flush_failure();
     }
-    if (buf.has_data()) {
-        co_await buf.abort_writes(std::move(ep));
+    if (!empty()) {
+        co_await buf->abort_writes(std::move(ep));
     }
 }
 
-// logstor_group
-
-logstor_group::logstor_group(size_t separator_buffer_size)
-    : _separator_buffers{separator_buffer(separator_buffer_size), separator_buffer(separator_buffer_size)}
-{
+future<> separator_buffer::release() {
+    if (buf && !buf->is_closed()) {
+        // The pool takes back only closed buffers, and closing waits for the writes the buffer
+        // holds, which only a flush or an abort resolves. A buffer that reaches this without either
+        // is one whose flush failed before it had anything to abort, so there is nothing to lose by
+        // failing its writes here - and a record that was never flushed is still on disk at the
+        // location the index points to.
+        co_await buf->abort_writes(std::make_exception_ptr(
+                std::runtime_error("logstor separator buffer was released before its records were flushed")));
+    }
+    buf.reset();
+    // A flush hands the updates to when_all_succeed() and leaves nothing here, so the ones still
+    // held are the ones a flush never waited for: writes that were just failed by abort(), or by the
+    // fallback above. Consume them rather than leaving them to be reported as ignored.
+    for (auto& update : pending_updates) {
+        (void)std::move(update).handle_exception([] (std::exception_ptr) {});
+    }
+    pending_updates.clear();
+    held_segments.clear();
+    min_seq_num.reset();
 }
+
+// logstor_group
 
 void logstor_group::switch_active_separator_buffer() {
     if (!_separator_flush.available()) {
         on_internal_error(logstor_logger, "Attempted to switch active separator buffer while flush is in progress");
     }
 
-    _active_separator_buffer = 1 - _active_separator_buffer;
+    std::swap(_active_buffer, _flushing_buffer);
     ++_separator_generation;
 
-    auto& buf = inactive_separator_buffer();
-    _separator_flush = shared_future(logstor_compaction_manager().flush_separator_buffer(buf, *this));
+    _separator_flush = shared_future(logstor_compaction_manager().flush_separator_buffer(_flushing_buffer, *this));
+}
+
+future<> logstor_group::allocate_active_separator_buffer() {
+    auto buf = co_await logstor_compaction_manager().allocate_separator_buffer();
+    if (_separator_enabled && !_active_buffer.allocated()) {
+        _active_buffer.buf = std::move(buf);
+    }
 }
 
 template <log_record_writer_concept Writer>
 future<> logstor_group::write_to_separator(Writer writer, segment_ref seg_ref, std::optional<segment_sequence> segment_seq_num, separator_write_completion after_written) {
-    while (!active_separator_buffer().can_fit(writer)) {
+    while (!_active_buffer.can_fit(writer)) {
+        if (!_separator_enabled) {
+            break;
+        }
+
+        if (!_active_buffer.allocated()) {
+            co_await allocate_active_separator_buffer();
+            continue;
+        }
+
         if (!_separator_flush.available()) {
             auto f = co_await coroutine::as_future(_separator_flush.get_future());
             f.ignore_ready_future();
@@ -2756,7 +2853,16 @@ future<> logstor_group::write_to_separator(Writer writer, segment_ref seg_ref, s
         switch_active_separator_buffer();
     }
 
-    active_separator_buffer().write(std::move(seg_ref), segment_seq_num, std::move(writer), std::move(after_written));
+    // Checked after the loop, so that it also covers the group being closed while this was waiting for
+    // a buffer or for a flush. Nothing flushes what a closed group buffers, so fail the write rather
+    // than take a record that would never be written out: it stays where it already is, and the caller
+    // keeps the segment holding it from being freed - see run_separator_fiber().
+    if (!_separator_enabled) {
+        throw std::runtime_error(fmt::format(
+                "logstor separator write to a closed compaction group of table {}", table_id()));
+    }
+
+    _active_buffer.write(std::move(seg_ref), segment_seq_num, std::move(writer), std::move(after_written));
 }
 
 template future<> logstor_group::write_to_separator(log_record_writer, segment_ref, std::optional<segment_sequence>, separator_write_completion);
@@ -2768,7 +2874,7 @@ future<> logstor_group::flush_separator(std::optional<segment_sequence> seq_num)
     };
 
     auto target_generation = _separator_generation;
-    if (!should_flush(active_separator_buffer())) {
+    if (!should_flush(_active_buffer)) {
         if (_separator_flush.available()) {
             co_return;
         }
@@ -2789,6 +2895,39 @@ future<> logstor_group::flush_separator(std::optional<segment_sequence> seq_num)
         auto f = co_await coroutine::as_future(_separator_flush.get_future());
         f.ignore_ready_future();
     }
+}
+
+future<> logstor_group::close_separator() {
+    // Before anything that can wait: a separator write that is parked on the pool or on the flush
+    // below resumes into write_to_separator()'s check and fails there, rather than buffering a record
+    // into a group whose buffers are on their way back to the pool.
+    _separator_enabled = false;
+
+    // A flush in progress owns the buffer it is writing out, and releases it when it is done, so let
+    // it finish rather than pulling the buffer out from under it.
+    if (!_separator_flush.available()) {
+        auto f = co_await coroutine::as_future(_separator_flush.get_future());
+        f.ignore_ready_future();
+    }
+
+    auto discard = [this] (separator_buffer& buf) -> future<> {
+        if (!buf.allocated()) {
+            co_return;
+        }
+        if (!buf.empty()) {
+            logstor_logger.warn("Discarding a logstor separator buffer of table {} with {} bytes from {} segments,"
+                    " the segments will not be reclaimed", table_id(), buf.offset_in_buffer(), buf.held_segments.size());
+        }
+        // The same teardown a failed flush takes: abort() fails the writes the buffer holds, which
+        // is what lets it be closed, and marks the segments those writes came from. Failing partway
+        // leaves the rest to the group's destruction, which is why remove() only logs what comes out
+        // of here.
+        co_await buf.abort(std::make_exception_ptr(
+                std::runtime_error("logstor separator buffer was discarded with its compaction group")));
+        co_await buf.release();
+    };
+    co_await discard(_active_buffer);
+    co_await discard(_flushing_buffer);
 }
 
 }
