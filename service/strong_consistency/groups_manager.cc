@@ -505,27 +505,33 @@ void groups_manager::update(token_metadata_ptr new_tm) {
 
                 // We want to make sure the server is ready to serve requests before
                 // we report it as started in wait_for_groups_to_start().
-                abort_on_expiry aoe(lowres_clock::now() + std::chrono::seconds(60));
-                while (true) {
-                    // Use try_hold() rather than hold(): a concurrent
-                    // schedule_raft_group_deletion() may have closed the gate
-                    // while we were waiting for a leader below. In that case the
-                    // group is being deleted, so stop trying to make it ready.
-                    auto holder = state.gate->try_hold();
-                    if (!holder) {
-                        break;
-                    }
-                    auto srv = raft_server(state, std::move(*holder));
-                    auto res = srv.begin_mutate(aoe.abort_source());
-                    if (auto w = get_if<raft_server::need_wait_for_leader>(&res)) {
-                        auto f = co_await coroutine::as_future(std::move(w->future));
-                        if (f.failed()) {
-                            logger.warn("update(): waiting for leader timed out for tablet {}, "
-                                "group id {}: {}", tablet, id, f.get_exception());
+                //
+                // A group replacing one whose resize is still under way is the exception: waiting
+                // for a leader would wait for the sealing, which this very wait prevents on the
+                // node driving it. Reporting the group as started right away costs nothing.
+                if (!parent_id) {
+                    abort_on_expiry aoe(lowres_clock::now() + std::chrono::seconds(60));
+                    while (true) {
+                        // Use try_hold() rather than hold(): a concurrent
+                        // schedule_raft_group_deletion() may have closed the gate
+                        // while we were waiting for a leader below. In that case the
+                        // group is being deleted, so stop trying to make it ready.
+                        auto holder = state.gate->try_hold();
+                        if (!holder) {
                             break;
                         }
-                    } else {
-                        break;
+                        auto srv = raft_server(state, std::move(*holder));
+                        auto res = srv.begin_mutate(aoe.abort_source());
+                        if (auto w = get_if<raft_server::need_wait_for_leader>(&res)) {
+                            auto f = co_await coroutine::as_future(std::move(w->future));
+                            if (f.failed()) {
+                                logger.warn("update(): waiting for leader timed out for tablet {}, "
+                                    "group id {}: {}", tablet, id, f.get_exception());
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
                     }
                 }
 

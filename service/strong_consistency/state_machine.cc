@@ -74,7 +74,19 @@ public:
 
     future<> apply(raft::log_entry_ptr_list command) override {
         static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(10));
+        // The wait below gets a rate limit of its own, so that unrelated messages from this
+        // function cannot swallow the one saying that an applier is parked. Nothing else says so:
+        // a parked applier makes no other sound.
+        static thread_local logging::logger::rate_limit parked_rate_limit(std::chrono::seconds(10));
         try {
+            if (auto fut = _resize_tracker.get_parent_finished_future(_group_id)) {
+                logger.log(log_level::trace, parked_rate_limit, "apply(): waiting for parent group to finish resizing before applying mutations for group {}", _group_id);
+                // Released by the parent applying end_resize, or by its teardown breaking the
+                // promise. It needs no abort source of its own; see get_parent_finished_future().
+                co_await fut->get_future();
+                logger.log(log_level::trace, parked_rate_limit, "apply(): parent group finished resizing, continuing to apply mutations for group {}", _group_id);
+            }
+
             co_await utils::get_local_injector().inject("strong_consistency_state_machine_wait_before_apply", utils::wait_for_message(20min));
             // Collect the commands from the log entry list. Only a write carries a mutation; a
             // resize marker describes a change which every replica turns into a mutation of its

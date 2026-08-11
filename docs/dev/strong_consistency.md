@@ -299,3 +299,18 @@ parked on the promise - a node shutting down or a table being dropped gets there
 is broken with an `abort_requested_exception`, which the state machine treats as a clean end of
 its fiber rather than as a background error. Each child's mapping is dropped by the child's own
 teardown, or by `update()` when it observes that the group now serves a tablet of its own.
+
+That the parent's teardown is what releases a parked applier is also why the wait needs no abort
+source of its own, which matters because it could not have one that works: `raft::server::abort()`
+joins the applier fiber *before* it aborts the state machine, the RPC and the persistence, so none
+of those aborts can reach a fiber which is already inside `apply()`. A child is never torn down
+while its parent survives - both hold their tablets only while the resize is in the tablet
+metadata, and the write which clears it takes the parent's tablet away in the same breath - so a
+child being torn down always has its wait ended by its parent's teardown, either just before or
+just after its own. Every other suspension in `apply()` completes on its own.
+
+## Reads on a child before the parent is done
+
+A child group must not apply anything until the parent has applied everything it committed;
+otherwise a read served by the child could observe a state older than a write already
+committed in the parent. The child's applier therefore blocks on `end_resize`.
