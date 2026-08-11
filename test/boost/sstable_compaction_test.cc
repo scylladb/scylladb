@@ -3959,6 +3959,240 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
 
     if key A can be read from table, data was resurrected.
  */
+<<<<<<< HEAD
+||||||| parent of 2a1f35c8c7 (replica: fix 'Unable to remove input SSTable' crash for GC sstables during tablet merge)
+
+void incremental_compaction_data_resurrection_fn(test_env& env) {
+    // In a column family with gc_grace_seconds set to 0, check that a tombstone
+    // is purged after compaction.
+    auto builder = schema_builder("tests", "incremental_compaction_data_resurrection_test")
+            .with_column("id", utf8_type, column_kind::partition_key)
+            .with_column("value", int32_type);
+    builder.set_gc_grace_seconds(0);
+    auto s = builder.build();
+
+    auto sst_gen = env.make_sst_factory(s);
+
+    auto next_timestamp = [] {
+        static thread_local api::timestamp_type next = 1;
+        return next++;
+    };
+
+    auto make_insert = [&] (const dht::decorated_key& key) {
+        mutation m(s, key);
+        m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), next_timestamp());
+        return m;
+    };
+
+    auto deletion_time = gc_clock::now();
+    auto make_delete = [&] (const dht::decorated_key& key) {
+        mutation m(s, key);
+        tombstone tomb(next_timestamp(), deletion_time);
+        m.partition().apply(tomb);
+        return m;
+    };
+
+    const auto keys = tests::generate_partition_keys(4, s);
+    const auto& alpha = keys[0];
+    const auto& beta = keys[1];
+    const auto& gamma = keys[2];
+    const auto& zetta = keys[3];
+
+    auto ttl = 5;
+
+    auto mut1 = make_insert(alpha);
+    auto mut2 = make_insert(beta);
+    auto mut3 = make_insert(gamma);
+    auto mut4 = make_insert(zetta);
+    auto mut1_deletion = make_delete(alpha);
+
+    auto non_expired_sst = make_sstable_containing(sst_gen, {mut1, mut2, mut3}).get();
+    auto non_expired_sst_2 = make_sstable_containing(sst_gen, {mut4}).get();
+    auto expired_sst = make_sstable_containing(sst_gen, {mut1_deletion}).get();
+
+    std::vector<shared_sstable> sstables = {
+            non_expired_sst,
+            non_expired_sst_2,
+            expired_sst,
+    };
+
+    // make mut1_deletion gc'able.
+    forward_jump_clocks(std::chrono::seconds(ttl));
+
+    auto cf = env.make_table_for_tests(s);
+    auto close_cf = deferred_stop(cf);
+    cf->start();
+    cf->set_compaction_strategy(compaction::compaction_strategy_type::null);
+
+    // since we use compacting_reader expired tombstones shouldn't be read from sstables
+    // so we just check there are no live (resurrected for this test) rows in partition
+    auto is_partition_dead = [&s, &cf, &env] (const dht::decorated_key& key) {
+        replica::column_family::const_mutation_partition_ptr mp = cf->find_partition(s, env.make_reader_permit(), key).get();
+        return mp && mp->live_row_count(*s, gc_clock::time_point::max()) == 0;
+    };
+
+    cf->add_sstable_and_update_cache(non_expired_sst).get();
+    BOOST_REQUIRE(!is_partition_dead(alpha));
+    cf->add_sstable_and_update_cache(expired_sst).get();
+    BOOST_REQUIRE(is_partition_dead(alpha));
+
+    auto replacer = [&] (compaction::compaction_completion_desc desc) {
+        auto old_sstables = std::move(desc.old_sstables);
+        auto new_sstables = std::move(desc.new_sstables);
+        // expired_sst is exhausted, and new sstable is written with mut 2.
+        BOOST_REQUIRE_EQUAL(old_sstables.size(), 1);
+        BOOST_REQUIRE(old_sstables.front() == expired_sst);
+        BOOST_REQUIRE_EQUAL(new_sstables.size(), 2);
+        for (auto& new_sstable : new_sstables) {
+            if (new_sstable->get_max_local_deletion_time() == deletion_time) { // Skipping GC SSTable.
+                continue;
+            }
+            assert_that(sstable_reader(new_sstable, s, env.make_reader_permit()))
+                .produces(mut2)
+                .produces_end_of_stream();
+        }
+        column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(), new_sstables, old_sstables).get();
+        // force compaction failure after sstable containing expired tombstone is removed from set.
+        throw std::runtime_error("forcing compaction failure on early replacement");
+    };
+
+    // make ssts belong to same run for compaction to enable incremental approach.
+    // That needs to happen after fragments were inserted into sstable_set, as they'll placed into different runs due to detected overlapping.
+    auto run_id = sstables::run_id::create_random_id();
+    sstables::test(non_expired_sst).set_run_identifier(run_id);
+    sstables::test(non_expired_sst_2).set_run_identifier(run_id);
+
+    bool swallowed = false;
+    try {
+        // The goal is to have one sstable generated for each mutation to trigger the issue.
+        auto max_sstable_size = 0;
+        auto result = compact_sstables(env, compaction::compaction_descriptor(sstables, 0, max_sstable_size), cf, sst_gen, replacer).get().new_sstables;
+        BOOST_REQUIRE_EQUAL(2, result.size());
+    } catch (...) {
+        // swallow exception
+        swallowed = true;
+    }
+    BOOST_REQUIRE(swallowed);
+    // check there's no data resurrection
+    BOOST_REQUIRE(is_partition_dead(alpha));
+}
+
+=======
+
+void incremental_compaction_data_resurrection_fn(test_env& env) {
+    // In a column family with gc_grace_seconds set to 0, check that a tombstone
+    // is purged after compaction.
+    auto builder = schema_builder("tests", "incremental_compaction_data_resurrection_test")
+            .with_column("id", utf8_type, column_kind::partition_key)
+            .with_column("value", int32_type);
+    builder.set_gc_grace_seconds(0);
+    auto s = builder.build();
+
+    auto sst_gen = env.make_sst_factory(s);
+
+    auto next_timestamp = [] {
+        static thread_local api::timestamp_type next = 1;
+        return next++;
+    };
+
+    auto make_insert = [&] (const dht::decorated_key& key) {
+        mutation m(s, key);
+        m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), next_timestamp());
+        return m;
+    };
+
+    auto deletion_time = gc_clock::now();
+    auto make_delete = [&] (const dht::decorated_key& key) {
+        mutation m(s, key);
+        tombstone tomb(next_timestamp(), deletion_time);
+        m.partition().apply(tomb);
+        return m;
+    };
+
+    const auto keys = tests::generate_partition_keys(4, s);
+    const auto& alpha = keys[0];
+    const auto& beta = keys[1];
+    const auto& gamma = keys[2];
+    const auto& zetta = keys[3];
+
+    auto ttl = 5;
+
+    auto mut1 = make_insert(alpha);
+    auto mut2 = make_insert(beta);
+    auto mut3 = make_insert(gamma);
+    auto mut4 = make_insert(zetta);
+    auto mut1_deletion = make_delete(alpha);
+
+    auto non_expired_sst = make_sstable_containing(sst_gen, {mut1, mut2, mut3}).get();
+    auto non_expired_sst_2 = make_sstable_containing(sst_gen, {mut4}).get();
+    auto expired_sst = make_sstable_containing(sst_gen, {mut1_deletion}).get();
+
+    std::vector<shared_sstable> sstables = {
+            non_expired_sst,
+            non_expired_sst_2,
+            expired_sst,
+    };
+
+    // make mut1_deletion gc'able.
+    forward_jump_clocks(std::chrono::seconds(ttl));
+
+    auto cf = env.make_table_for_tests(s);
+    auto close_cf = deferred_stop(cf);
+    cf->start();
+    cf->set_compaction_strategy(compaction::compaction_strategy_type::null);
+
+    // since we use compacting_reader expired tombstones shouldn't be read from sstables
+    // so we just check there are no live (resurrected for this test) rows in partition
+    auto is_partition_dead = [&s, &cf, &env] (const dht::decorated_key& key) {
+        replica::column_family::const_mutation_partition_ptr mp = cf->find_partition(s, env.make_reader_permit(), key).get();
+        return mp && mp->live_row_count(*s, gc_clock::time_point::max()) == 0;
+    };
+
+    cf->add_sstable_and_update_cache(non_expired_sst).get();
+    BOOST_REQUIRE(!is_partition_dead(alpha));
+    cf->add_sstable_and_update_cache(expired_sst).get();
+    BOOST_REQUIRE(is_partition_dead(alpha));
+
+    auto replacer = [&] (compaction::compaction_completion_desc desc) {
+        auto old_sstables = std::move(desc.old_sstables);
+        auto new_sstables = std::move(desc.new_sstables);
+        // expired_sst is exhausted, and new sstable is written with mut 2.
+        BOOST_REQUIRE_EQUAL(old_sstables.size(), 1);
+        BOOST_REQUIRE(old_sstables.front() == expired_sst);
+        BOOST_REQUIRE_EQUAL(new_sstables.size() + desc.new_gc_sstables.size(), 2);
+        for (auto& new_sstable : new_sstables) {
+            assert_that(sstable_reader(new_sstable, s, env.make_reader_permit()))
+                .produces(mut2)
+                .produces_end_of_stream();
+        }
+        new_sstables.insert(new_sstables.end(), desc.new_gc_sstables.begin(), desc.new_gc_sstables.end());
+        column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(), new_sstables, old_sstables).get();
+        // force compaction failure after sstable containing expired tombstone is removed from set.
+        throw std::runtime_error("forcing compaction failure on early replacement");
+    };
+
+    // make ssts belong to same run for compaction to enable incremental approach.
+    // That needs to happen after fragments were inserted into sstable_set, as they'll placed into different runs due to detected overlapping.
+    auto run_id = sstables::run_id::create_random_id();
+    sstables::test(non_expired_sst).set_run_identifier(run_id);
+    sstables::test(non_expired_sst_2).set_run_identifier(run_id);
+
+    bool swallowed = false;
+    try {
+        // The goal is to have one sstable generated for each mutation to trigger the issue.
+        auto max_sstable_size = 0;
+        auto result = compact_sstables(env, compaction::compaction_descriptor(sstables, 0, max_sstable_size), cf, sst_gen, replacer).get().new_sstables;
+        BOOST_REQUIRE_EQUAL(2, result.size());
+    } catch (...) {
+        // swallow exception
+        swallowed = true;
+    }
+    BOOST_REQUIRE(swallowed);
+    // check there's no data resurrection
+    BOOST_REQUIRE(is_partition_dead(alpha));
+}
+
+>>>>>>> 2a1f35c8c7 (replica: fix 'Unable to remove input SSTable' crash for GC sstables during tablet merge)
 SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
     return test_env::do_with_async([] (test_env& env) {
         // In a column family with gc_grace_seconds set to 0, check that a tombstone
