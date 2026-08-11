@@ -19,6 +19,7 @@
 #include "db/consistency_level_type.hh"
 #include "locator/tablets.hh"
 #include "service/topology_guard.hh"
+#include "streaming/stream_reason.hh"
 
 using namespace seastar;
 
@@ -107,7 +108,7 @@ private:
     future<> load_and_stream(sstring ks_name, sstring cf_name,
             table_id, std::vector<sstables::shared_sstable> sstables,
             bool_class<struct primary_replica_only_tag> primary_replica_only, bool unlink_sstables, stream_scope scope,
-            shared_ptr<stream_progress> progress);
+            streaming::stream_reason reason, shared_ptr<stream_progress> progress);
 
     future<seastar::shared_ptr<const locator::effective_replication_map>> await_topology_quiesced_and_get_erm(table_id table_id);
     future<> download_tablet_sstables(locator::global_tablet_id tid, locator::tablet_metadata_guard&);
