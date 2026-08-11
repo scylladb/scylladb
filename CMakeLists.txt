@@ -268,6 +268,10 @@ if (Scylla_USE_PRECOMPILED_HEADER)
     # Match configure.py: -fpch-validate-input-files-content tells the compiler
     # to check content of stdafx.hh if timestamps don't match (important for
     # ccache/git workflows where timestamps may not be preserved).
+    # scylla-precompiled-header needs the flag on its own: the content hashes
+    # are recorded when the PCH is written, and add_compile_options() below only
+    # applies to targets created after it.
+    target_compile_options(scylla-precompiled-header PRIVATE -fpch-validate-input-files-content)
     add_compile_options(-fpch-validate-input-files-content)
   endif()
 else()
