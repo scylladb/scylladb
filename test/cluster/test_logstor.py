@@ -10,7 +10,8 @@ import time
 from pathlib import Path
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import new_test_keyspace
-from cassandra.protocol import ConfigurationException
+from cassandra import WriteFailure, WriteTimeout
+from cassandra.protocol import ConfigurationException, ServerError
 import pytest
 import logging
 from test.pylib.tablets import get_tablet_count, get_tablet_replica
@@ -82,6 +83,73 @@ async def test_parallel_big_writes(manager: ManagerClient):
             rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
             assert rows[0].pk == i
             assert rows[0].v == f"{i}-{large_value}"
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_write_failure_retires_active_segment(manager: ManagerClient):
+    """
+    A failed segment write breaks the segment's append semaphore, so the segment must be
+    retired and the active segment switched. Otherwise every later write to that segment
+    fails and writes are stuck until restart.
+
+    This test:
+    1. Writes and verifies a few keys, establishing an active segment
+    2. Injects a failure into the segment write path and verifies the write fails
+    3. Verifies the segment was retired
+    4. Verifies that writes after the failure succeed, including to the failed key
+    5. Restarts the server and verifies all data is recovered
+    """
+    inj = 'logstor_fail_segment_write'
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {'experimental_features': ['logstor']}
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    server_log = await manager.server_open_log(servers[0].server_id)
+
+    async with new_test_keyspace(manager, "") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        expected_data = {}
+        for pk in range(5):
+            value = f"before_{pk}"
+            expected_data[pk] = value
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
+
+        log_mark = await server_log.mark()
+
+        # Fail the next segment write. The injection is not one-shot, so the write is
+        # guaranteed to fail rather than racing with background segment writes, but it
+        # is disabled again immediately to keep the failure window to a single write.
+        await manager.api.enable_injection(servers[0].ip_addr, inj, one_shot=False)
+        try:
+            with pytest.raises((WriteFailure, WriteTimeout, ServerError)):
+                await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES (100, 'failed')")
+        finally:
+            await manager.api.disable_injection(servers[0].ip_addr, inj)
+
+        await server_log.wait_for('retiring segment', from_mark=log_mark, timeout=60)
+
+        # All writes after the failure must succeed. Without retiring the failed segment
+        # they would keep failing on its broken append semaphore.
+        for pk in list(range(5, 10)) + [100]:
+            value = f"after_{pk}"
+            expected_data[pk] = value
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
+
+        for pk, expected_v in expected_data.items():
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1, f"Key {pk} not found"
+            assert rows[0].v == expected_v, f"Key {pk} has wrong value"
+
+        # The retired segment has a hole at the failed write. Verify it doesn't break recovery.
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        for pk, expected_v in expected_data.items():
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1, f"Key {pk} not found after recovery"
+            assert rows[0].v == expected_v, f"Key {pk} has wrong value after recovery"
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("fail_separator_flush", [False, True], ids=["normal", "fail_separator_flush"])
