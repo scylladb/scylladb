@@ -8,6 +8,7 @@
 #include <boost/test/unit_test.hpp>
 #include <algorithm>
 #include <chrono>
+#include <array>
 #include <cmath>
 #include <deque>
 #include <functional>
@@ -17,6 +18,7 @@
 #include <vector>
 #include <fmt/format.h>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/format.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/util/memory-data-source.hh>
 #include <seastar/util/defer.hh>
@@ -330,6 +332,7 @@ logstor_config make_test_logstor_config(const std::filesystem::path& base_dir) {
             .compaction_sg = seastar::current_scheduling_group(),
             .compaction_static_shares = utils::updateable_value<float>(0.0f),
             .separator_sg = seastar::current_scheduling_group(),
+            .split_compaction_sg = seastar::current_scheduling_group(),
         },
         .flush_sg = seastar::current_scheduling_group(),
     };
@@ -337,12 +340,23 @@ logstor_config make_test_logstor_config(const std::filesystem::path& base_dir) {
 
 class test_compaction_group_handle final : public logstor_group {
     ::table_id _table_id;
-    std::unique_ptr<primary_index>_index;
+    std::unique_ptr<primary_index> _owned_index;
+    primary_index& _index;
     compaction_manager& _cm;
 public:
     test_compaction_group_handle(schema_ptr schema, logstor& ls)
         : _table_id(schema->id())
-        , _index(ls.make_primary_index(schema, false))
+        , _owned_index(ls.make_primary_index(schema, false))
+        , _index(*_owned_index)
+        , _cm(ls.get_compaction_manager()) {
+        _cm.add(*this);
+    }
+
+    // A group of a table that already has an index: the index is per table, and all the groups of
+    // a table share it. This is what the groups of a split have.
+    test_compaction_group_handle(schema_ptr schema, logstor& ls, primary_index& index)
+        : _table_id(schema->id())
+        , _index(index)
         , _cm(ls.get_compaction_manager()) {
         _cm.add(*this);
     }
@@ -356,11 +370,11 @@ public:
     }
 
     primary_index& logstor_index() noexcept override {
-        return *_index;
+        return _index;
     }
 
     const primary_index& logstor_index() const noexcept override {
-        return *_index;
+        return _index;
     }
 
 protected:
@@ -377,10 +391,55 @@ std::set<log_segment_id> snapshot_segment_ids(const utils::chunked_vector<segmen
     return ids;
 }
 
-void write_and_flush_segment(logstor& ls, test_compaction_group_handle& cg, const mutation& m) {
-    ls.write(m, write_target(&cg, {}), db::no_timeout).get();
+// Writes all the mutations and flushes the group's separator once, so that they all end up in a
+// single segment of the group.
+void write_and_flush_segment(logstor& ls, test_compaction_group_handle& cg, std::span<const mutation> ms) {
+    for (const auto& m : ms) {
+        ls.write(m, write_target(&cg, {}), db::no_timeout).get();
+    }
     ls.flush_to_separator().get();
     cg.flush_separator().get();
+}
+
+void write_and_flush_segment(logstor& ls, test_compaction_group_handle& cg, const mutation& m) {
+    write_and_flush_segment(ls, cg, std::span(&m, 1));
+}
+
+// Which side of a split a key falls on is decided by its token, so a split test needs its keys in
+// token order. Returns `count` distinct keys, sorted by token.
+std::vector<sstring> make_token_ordered_keys(schema_ptr schema, size_t count) {
+    auto token_of = [&] (const sstring& pk) {
+        return dht::decorate_key(*schema, partition_key::from_single_value(*schema, serialized(pk))).token();
+    };
+    std::vector<sstring> keys;
+    for (size_t i = 0; i < count; ++i) {
+        keys.push_back(seastar::format("pk{}", i));
+    }
+    std::ranges::sort(keys, std::less<>{}, token_of);
+    return keys;
+}
+
+// Scans every segment of the snapshot and counts the records it holds by their timestamp, which is
+// what the tests give each record version to tell them apart.
+std::map<api::timestamp_type, size_t> count_records_by_timestamp(logstor& ls, utils::chunked_vector<segment_snapshot>& snapshot) {
+    std::map<api::timestamp_type, size_t> counts;
+    const auto segment_size = ls.get_segment_manager().get_segment_size();
+    for (auto& snap : snapshot) {
+        auto in = snap.source(seastar::file_input_stream_options{
+            .buffer_size = std::min<size_t>(segment_size, 128 * 1024),
+            .read_ahead = 1,
+        }).get();
+        scan_segment(in, snap.segment_id, segment_size,
+            [] (const segment_header&) { return make_ready_future<>(); },
+            [&counts] (log_location, const log_record_header& rh) {
+                counts[rh.timestamp]++;
+                return want_data::no;
+            },
+            [] (log_location, log_record) { return make_ready_future<>(); }
+        ).get();
+        in.close().get();
+    }
+    return counts;
 }
 
 write_buffer_pool::config make_test_write_buffer_pool_config(size_t capacity, size_t max_cached, size_t preallocate = 0) {
@@ -2343,23 +2402,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_group_compaction_rewrites_live_records) {
     // Scan all segments after compaction and verify they contain exactly the live records.
     // Live records (pk0_v1 ts=4, pk1_v1 ts=5, pk2_v0 ts=3) must appear exactly once;
     // overwritten records (pk0_v0 ts=1, pk1_v0 ts=2) must not appear at all.
-    std::map<api::timestamp_type, size_t> record_counts;
-    const auto segment_size = ls.get_segment_manager().get_segment_size();
-    for (auto& snap : new_snapshot) {
-        auto in = snap.source(seastar::file_input_stream_options{
-            .buffer_size = std::min<size_t>(segment_size, 128 * 1024),
-            .read_ahead = 1,
-        }).get();
-        scan_segment(in, snap.segment_id, segment_size,
-            [] (const segment_header&) { return make_ready_future<>(); },
-            [&record_counts] (log_location, const log_record_header& rh) {
-                record_counts[rh.timestamp]++;
-                return want_data::no;
-            },
-            [] (log_location, log_record) { return make_ready_future<>(); }
-        ).get();
-        in.close().get();
-    }
+    auto record_counts = count_records_by_timestamp(ls, new_snapshot);
 
     // Each live record appears exactly once.
     BOOST_REQUIRE_EQUAL(record_counts[api::timestamp_type(3)], 1u); // pk2_v0 - untouched
@@ -2444,4 +2487,140 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_disabled_group_does_not_compact_on_submit)
     assert_that(*actual_pk0).is_equal_to(pk0_v1);
     assert_that(*actual_pk1).is_equal_to(pk1_v1);
     assert_that(*actual_pk2).is_equal_to(pk2_v0);
+}
+
+// Split compaction hands every segment of a group to the group its records belong to after the
+// split: a segment whose records are all on one side is moved as it is, and one that straddles the
+// split is rewritten into a segment per side, skipping the records that are no longer live.
+SEASTAR_THREAD_TEST_CASE(test_logstor_split_compaction_splits_segments_between_target_groups) {
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    ls.do_recovery_for_test().get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    // The src and target groups in a split share the logstor index.
+    test_compaction_group_handle src(schema, ls);
+    test_compaction_group_handle left(schema, ls, src.logstor_index());
+    test_compaction_group_handle right(schema, ls, src.logstor_index());
+    auto& index = src.logstor_index();
+    auto setup_guard = std::make_optional(ls.get_compaction_manager().disable_compaction(src).get());
+
+    // Keys in token order, split in the middle: keys[0..2] go to the left group, keys[3..5] to the
+    // right one.
+    const auto keys = make_token_ordered_keys(schema, 6);
+    const auto boundary = dht::decorate_key(*schema, partition_key::from_single_value(*schema, serialized(keys[2]))).token();
+    auto classify = [boundary] (dht::token t) -> mutation_writer::token_group_id {
+        return t <= boundary ? 0 : 1;
+    };
+
+    auto k0 = make_kv_mutation(schema, keys[0], "v0", api::timestamp_type(1));
+    auto k1 = make_kv_mutation(schema, keys[1], "v1", api::timestamp_type(2));
+    auto k2_v0 = make_kv_mutation(schema, keys[2], "v2", api::timestamp_type(3));
+    auto k3 = make_kv_mutation(schema, keys[3], "v3", api::timestamp_type(4));
+    auto k4 = make_kv_mutation(schema, keys[4], "v4", api::timestamp_type(5));
+    auto k5 = make_kv_mutation(schema, keys[5], "v5", api::timestamp_type(6));
+    auto k2_v1 = make_kv_mutation(schema, keys[2], "v2-new", api::timestamp_type(7));
+
+    // One segment on each side of the split, one that straddles it, and one that overwrites a
+    // record of the straddling segment, so that the split also has a dead record to skip.
+    write_and_flush_segment(ls, src, k0);
+    const std::array right_only = {k4, k5};
+    write_and_flush_segment(ls, src, right_only);
+    const std::array straddling = {k1, k2_v0, k3};
+    write_and_flush_segment(ls, src, straddling);
+    write_and_flush_segment(ls, src, k2_v1);
+
+    BOOST_REQUIRE_EQUAL(src.logstor_segments().segment_count(), 4u);
+
+    std::vector<primary_index_key> index_keys;
+    for (const auto& m : {k0, k1, k2_v1, k3, k4, k5}) {
+        index_keys.push_back(primary_index_key{m.decorated_key()});
+    }
+
+    std::vector<log_location> locations_before;
+    for (const auto& key : index_keys) {
+        auto entry = index.get(key);
+        BOOST_REQUIRE(entry);
+        locations_before.push_back(entry->location);
+    }
+
+    const auto single_sided_segments = std::set<log_segment_id>{
+        locations_before[0].segment, // k0
+        locations_before[2].segment, // k2_v1
+        locations_before[4].segment, // k4, k5
+    };
+    const auto straddling_segment = locations_before[1].segment; // k1, k2_v0, k3
+    BOOST_REQUIRE(!single_sided_segments.contains(straddling_segment));
+    BOOST_REQUIRE(locations_before[4].segment == locations_before[5].segment);
+    BOOST_REQUIRE(locations_before[3].segment == straddling_segment);
+
+    setup_guard.reset();
+    ls.get_compaction_manager().submit_split_compaction(src, classify,
+            [&] (log_segment_id, dht::token first_token, dht::token last_token) -> logstor_group& {
+                // Split compaction only asks about segments it has decided are on a single side.
+                BOOST_REQUIRE_EQUAL(classify(first_token), classify(last_token));
+                return classify(first_token) == 0 ? static_cast<logstor_group&>(left) : right;
+            }).get();
+
+    // Every segment of the group being split ends up in one of the target groups.
+    BOOST_REQUIRE_EQUAL(src.logstor_segments().segment_count(), 0u);
+
+    auto left_snapshot = ls.get_segment_manager().make_snapshot(left).get();
+    auto right_snapshot = ls.get_segment_manager().make_snapshot(right).get();
+    const auto left_ids = snapshot_segment_ids(left_snapshot);
+    const auto right_ids = snapshot_segment_ids(right_snapshot);
+
+    std::vector<log_location> locations_after;
+    for (const auto& key : index_keys) {
+        auto entry = index.get(key);
+        BOOST_REQUIRE(entry);
+        locations_after.push_back(entry->location);
+    }
+
+    // The single-sided segments were moved as they are: the records they hold did not move, and
+    // their segments are now owned by the group of their side.
+    BOOST_REQUIRE(locations_after[0] == locations_before[0]);
+    BOOST_REQUIRE(locations_after[2] == locations_before[2]);
+    BOOST_REQUIRE(locations_after[4] == locations_before[4]);
+    BOOST_REQUIRE(locations_after[5] == locations_before[5]);
+    BOOST_REQUIRE(left_ids.contains(locations_after[0].segment));
+    BOOST_REQUIRE(left_ids.contains(locations_after[2].segment));
+    BOOST_REQUIRE(right_ids.contains(locations_after[4].segment));
+
+    // The straddling segment was rewritten into a new segment per side and freed.
+    BOOST_REQUIRE(locations_after[1] != locations_before[1]);
+    BOOST_REQUIRE(locations_after[3] != locations_before[3]);
+    BOOST_REQUIRE(left_ids.contains(locations_after[1].segment));
+    BOOST_REQUIRE(right_ids.contains(locations_after[3].segment));
+    BOOST_REQUIRE(!left_ids.contains(straddling_segment));
+    BOOST_REQUIRE(!right_ids.contains(straddling_segment));
+
+    // All the records are readable, from whichever group they ended up in.
+    for (const auto& expected : {k0, k1, k2_v1, k3, k4, k5}) {
+        auto actual = ls.read(*schema, index, expected.decorated_key(), schema->full_slice()).get();
+        BOOST_REQUIRE(actual);
+        assert_that(*actual).is_equal_to(expected);
+    }
+
+    // Each live record is held exactly once, by the group of its side, and the record the overwrite
+    // of k2 made dead was not rewritten.
+    auto left_records = count_records_by_timestamp(ls, left_snapshot);
+    auto right_records = count_records_by_timestamp(ls, right_snapshot);
+
+    const auto expected_left = std::map<api::timestamp_type, size_t>{
+        {api::timestamp_type(1), 1}, // k0
+        {api::timestamp_type(2), 1}, // k1
+        {api::timestamp_type(7), 1}, // k2_v1
+    };
+    const auto expected_right = std::map<api::timestamp_type, size_t>{
+        {api::timestamp_type(4), 1}, // k3
+        {api::timestamp_type(5), 1}, // k4
+        {api::timestamp_type(6), 1}, // k5
+    };
+    BOOST_REQUIRE(left_records == expected_left);
+    BOOST_REQUIRE(right_records == expected_right);
 }

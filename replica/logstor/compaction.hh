@@ -26,7 +26,6 @@
 #include <utility>
 
 namespace replica {
-class table;
 class compaction_group;
 } // namespace replica
 
@@ -42,6 +41,8 @@ class segment_ref;
 class logstor_group;
 
 using separator_write_completion = seastar::noncopyable_function<void(log_location, seastar::gate::holder)>;
+
+using split_target_group = std::function<logstor_group&(log_segment_id, dht::token first_token, dht::token last_token)>;
 
 // The number of compaction jobs that may run concurrently on a shard, counted in output buffers:
 // a normal compaction takes one, a split compaction takes two. It sizes the compaction buffer pool,
@@ -485,7 +486,7 @@ public:
 
     virtual void submit(logstor_group&) = 0;
 
-    virtual future<> submit_split_compaction(replica::table&, logstor_group&, mutation_writer::classify_by_token_group) = 0;
+    virtual future<> submit_split_compaction(logstor_group& src, mutation_writer::classify_by_token_group, split_target_group) = 0;
 
     virtual future<> stop_ongoing_compactions(logstor_group&) = 0;
 
