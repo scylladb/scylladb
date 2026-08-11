@@ -132,11 +132,13 @@ The following options only apply to SizeTieredCompactionStrategy:
    memory is ``available memory per shard * 0.5 * unspooled_dirty_soft_limit``, which is the amount of dirty memory the memtables
    are expected to use before flushing starts. A table that uses tablets has one memtable per tablet replica, and the number of
    replicas per shard varies between ``tablets_per_shard_goal`` and twice as much, so it is divided by ``tablets_per_shard_goal *
-   1.5``.
+   1.5``. A table that uses vnodes has a single memtable per shard, covering the shard's whole token range, so it is divided by
+   the number of tables on the shard, which all share the same memtable memory.
 
    For example, on a shard with 8 GiB of available memory and the default ``unspooled_dirty_soft_limit`` of 0.6, the memtable
    memory is 2.4 GiB. With the default ``tablets_per_shard_goal`` of 100, a table that uses tablets expects a memtable of 16 MiB,
-   so ``min_sstable_size`` defaults to 8 MiB.
+   so ``min_sstable_size`` defaults to 8 MiB. A node holding 24 tables that use vnodes expects a memtable of 100 MiB, so
+   ``min_sstable_size`` defaults to 50 MiB, i.e. the maximum.
 
    If the expected memtable size cannot be determined, the default is 52,428,800 bytes.
 
@@ -259,11 +261,13 @@ The following options only apply to IncrementalCompactionStrategy:
    memory is ``available memory per shard * 0.5 * unspooled_dirty_soft_limit``, which is the amount of dirty memory the memtables
    are expected to use before flushing starts. A table that uses tablets has one memtable per tablet replica, and the number of
    replicas per shard varies between ``tablets_per_shard_goal`` and twice as much, so it is divided by ``tablets_per_shard_goal *
-   1.5``.
+   1.5``. A table that uses vnodes has a single memtable per shard, covering the shard's whole token range, so it is divided by
+   the number of tables on the shard, which all share the same memtable memory.
 
    For example, on a shard with 8 GiB of available memory and the default ``unspooled_dirty_soft_limit`` of 0.6, the memtable
    memory is 2.4 GiB. With the default ``tablets_per_shard_goal`` of 100, a table that uses tablets expects a memtable of 16 MiB,
-   so ``min_sstable_size`` defaults to 8 MiB.
+   so ``min_sstable_size`` defaults to 8 MiB. A node holding 24 tables that use vnodes expects a memtable of 100 MiB, so
+   ``min_sstable_size`` defaults to 50 MiB, i.e. the maximum.
 
    If the expected memtable size cannot be determined, the default is 52,428,800 bytes.
 

@@ -2917,7 +2917,13 @@ uint64_t table::expected_memtable_size() const {
         return budget / tablets_per_shard;
     }
 
-    return 0;
+    // With vnodes, the table has a single memtable per shard, covering the shard's
+    // whole token range, so the budget is shared by the tables on this shard.
+    auto tables = _config.table_count ? _config.table_count() : 0;
+    if (!tables) {
+        return 0;
+    }
+    return budget / tables;
 }
 
 compaction::compaction_strategy table::create_compaction_strategy(compaction::compaction_strategy_type strategy) const {

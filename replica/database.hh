@@ -483,10 +483,11 @@ public:
         db::data_listeners* data_listeners = nullptr;
         uint32_t tombstone_warn_threshold{0};
         unsigned x_log2_compaction_groups{0};
-        // The goal for the number of tablet replicas per shard, used for estimating
-        // how many memtables share the shard's memtable memory.
-        // See table::expected_memtable_size().
+        // The goal for the number of tablet replicas per shard, and the number of
+        // tables on this shard. Both are used for estimating how many memtables
+        // share the shard's memtable memory. See table::expected_memtable_size().
         utils::updateable_value<unsigned> tablets_per_shard_goal{0};
+        std::function<size_t()> table_count;
         utils::updateable_value<bool> enable_compacting_data_for_streaming_and_repair;
         utils::updateable_value<bool> enable_tombstone_gc_for_streaming_and_repair;
         db::guardrail_config guardrail_config;
