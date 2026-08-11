@@ -345,6 +345,18 @@ public:
     {}
 
     virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
+        auto no_ow = compaction_backlog_tracker::ongoing_writes();
+        auto no_oc = compaction_backlog_tracker::ongoing_compactions();
+
+        // Common case: nothing in flight, skip building the per-window write/compaction maps.
+        if (ow.empty() && oc.empty()) {
+            double b = 0;
+            for (auto& windows : _windows) {
+                b += windows.second.backlog(no_ow, no_oc);
+            }
+            return b;
+        }
+
         std::unordered_map<api::timestamp_type, compaction_backlog_tracker::ongoing_writes> writes_per_window;
         std::unordered_map<api::timestamp_type, compaction_backlog_tracker::ongoing_compactions> compactions_per_window;
         double b = 0;
@@ -359,8 +371,6 @@ public:
             compactions_per_window[bound].insert(cp);
         }
 
-        auto no_ow = compaction_backlog_tracker::ongoing_writes();
-        auto no_oc = compaction_backlog_tracker::ongoing_compactions();
         // Match the in-progress backlogs to existing windows. Compactions should always match an
         // existing windows. Writes in progress can fall into an non-existent window.
         for (auto& windows : _windows) {

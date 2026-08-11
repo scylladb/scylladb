@@ -253,15 +253,15 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_
         }
     }
 
-    auto is_disjoint = [&schema, mode, max_sstables] (const std::vector<sstables::shared_sstable>& ssts) {
-        size_t tolerance = (mode == reshape_mode::relaxed) ? max_sstables : 0;
-        return sstable_set_overlapping_count(schema, ssts) <= tolerance;
+    // sstable_set_overlapping_count() is an O(n) schema-aware scan; the count is cached below and
+    // reused for both the debug log and the real disjoint check, instead of computed for each.
+    auto overlap_count = [&schema] (const std::vector<sstables::shared_sstable>& ssts) {
+        return sstable_set_overlapping_count(schema, ssts);
     };
-
-    clogger.debug("time_window_compaction_strategy::get_reshaping_job: offstrategy_threshold={} max_sstables={} multi_window={} disjoint={} single_window={} disjoint={}",
-            offstrategy_threshold, max_sstables,
-            multi_window.size(), !multi_window.empty() && sstable_set_overlapping_count(schema, multi_window) == 0,
-            single_window.size(), !single_window.empty() && sstable_set_overlapping_count(schema, single_window) == 0);
+    auto is_disjoint = [mode, max_sstables] (size_t count) {
+        size_t tolerance = (mode == reshape_mode::relaxed) ? max_sstables : 0;
+        return count <= tolerance;
+    };
 
     auto get_job_size = [] (const std::vector<sstables::shared_sstable>& ssts) {
         return std::ranges::fold_left(ssts | std::views::transform(std::mem_fn(&sstables::sstable::bytes_on_disk)), uint64_t(0), std::plus{});
@@ -286,7 +286,10 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_
     };
 
     if (!multi_window.empty()) {
-        auto disjoint = is_disjoint(multi_window);
+        auto overlap = overlap_count(multi_window);
+        auto disjoint = is_disjoint(overlap);
+        clogger.debug("time_window_compaction_strategy::get_reshaping_job: offstrategy_threshold={} max_sstables={} multi_window={} disjoint={}",
+                offstrategy_threshold, max_sstables, multi_window.size(), overlap == 0);
         auto job_size = get_job_size(multi_window);
         // Everything that spans multiple windows will need reshaping
         if (need_trimming(multi_window, job_size, disjoint)) {
@@ -305,7 +308,13 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_
     }
 
     // For things that don't span multiple windows, we compact windows that are individually too big
-    auto all_disjoint = !single_window.empty() && is_disjoint(single_window);
+    std::optional<size_t> single_window_overlap;
+    if (!single_window.empty()) {
+        single_window_overlap = overlap_count(single_window);
+    }
+    auto all_disjoint = single_window_overlap && is_disjoint(*single_window_overlap);
+    clogger.debug("time_window_compaction_strategy::get_reshaping_job: offstrategy_threshold={} max_sstables={} single_window={} disjoint={}",
+            offstrategy_threshold, max_sstables, single_window.size(), single_window_overlap == 0);
     auto all_buckets = get_buckets(single_window, _options);
     single_window.clear();
     for (auto& [bucket, ssts] : all_buckets.first) {
