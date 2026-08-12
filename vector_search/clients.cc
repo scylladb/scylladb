@@ -9,6 +9,7 @@
 #include "clients.hh"
 #include "load_balancer.hh"
 #include "utils/exceptions.hh"
+#include <algorithm>
 #include <random>
 #include <expected>
 #include <seastar/coroutine/as_future.hh>
@@ -117,18 +118,37 @@ future<clients::get_clients_result> clients::get_clients(abort_source& as) {
 }
 
 future<> clients::handle_changed(const std::vector<uri>& uris, const dns::host_address_map& addrs) {
-    clear();
-    for (const auto& uri : uris) {
-        auto it = addrs.find(uri.host);
+    // Desired endpoints: one per (configured URI, resolved address).
+    std::vector<std::pair<const uri*, net::inet_address>> desired;
+    for (const auto& u : uris) {
+        auto it = addrs.find(u.host);
         if (it != addrs.end()) {
             for (const auto& addr : it->second) {
-                _clients.push_back(co_await make_client(uri, addr));
+                desired.emplace_back(&u, addr);
             }
         }
     }
 
+    // The listener is invoked after every DNS refresh attempt, including ones
+    // that resolved to the same addresses; only rebuild the clients when the
+    // endpoint set actually changed, but always wake up waiters so that
+    // get_clients() callers do not stall for the full refresh timeout when a
+    // configured host remains unresolved.
+    auto unchanged = std::ranges::equal(desired, _clients, [](const auto& d, const auto& c) {
+        const auto& ep = c->endpoint();
+        return d.first->host == ep.host && d.first->port == ep.port && d.second == ep.ip;
+    });
+    if (!unchanged) {
+        clear();
+        for (const auto& [u, addr] : desired) {
+            _clients.push_back(co_await make_client(*u, addr));
+        }
+    }
+
     _refresh_cv.broadcast();
-    co_await close_old_clients();
+    if (!unchanged) {
+        co_await close_old_clients();
+    }
 }
 
 future<> clients::stop() {
