@@ -238,6 +238,18 @@ def test_batch(cql, sc_keyspace, batch_mode):
                         APPLY BATCH
                     """)
 
+        # A batch level USING TIMESTAMP used to be accepted and then
+        # silently ignored, because the Raft coordinator assigns the commit
+        # timestamp and reassigns it on every retry. Only the text path can
+        # express it; the native protocol path has no batch attributes.
+        if batch_mode == "text":
+            with pytest.raises(InvalidRequest, match="don't support user-provided timestamps"):
+                cql.execute(f"""
+                    BEGIN UNLOGGED BATCH USING TIMESTAMP 1234
+                    INSERT INTO {table} (pk, ck, v) VALUES (1, 1, 10);
+                    APPLY BATCH
+                """)
+
     with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, c counter") as table:
         run_counter_batch = _make_batch_runner(table, counter_table=True)
 

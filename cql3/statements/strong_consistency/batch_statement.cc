@@ -39,6 +39,12 @@ void batch_statement::validate_strongly_consistent() const {
     if (_type == type::COUNTER) {
         throw exceptions::invalid_request_exception("Counter batches are not supported with strongly consistent tables");
     }
+    // The commit timestamp is assigned by the Raft coordinator, which also
+    // reassigns it on retry, so a user-provided one cannot be honoured. The
+    // same restriction is enforced on individual statements at prepare time.
+    if (_attrs->is_timestamp_set()) {
+        throw exceptions::invalid_request_exception("Strongly consistent batches don't support user-provided timestamps");
+    }
 
     schema_ptr batch_schema;
     for (const auto& s : get_statements()) {
