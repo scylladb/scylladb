@@ -11,7 +11,7 @@
 #include "cql3/cql_statement.hh"
 #include "cql3/attributes.hh"
 #include "cql3/statements/batch_statement.hh"
-#include "cql3/statements/strong_consistency/modification_statement.hh"
+#include "cql3/statements/modification_statement.hh"
 
 namespace cql3::statements::strong_consistency {
 
@@ -21,13 +21,15 @@ public:
     using type = cql3::statements::batch_statement::type;
 
     struct single_statement {
-        shared_ptr<modification_statement> statement;
+        // A plain modification statement: the batch does not go through the
+        // statement's own write path, it builds the mutations itself.
+        shared_ptr<cql3::statements::modification_statement> statement;
         bool needs_authorization = true;
 
-        single_statement(shared_ptr<modification_statement> s)
+        single_statement(shared_ptr<cql3::statements::modification_statement> s)
             : statement(std::move(s))
         {}
-        single_statement(shared_ptr<modification_statement> s, bool na)
+        single_statement(shared_ptr<cql3::statements::modification_statement> s, bool na)
             : statement(std::move(s))
             , needs_authorization(na)
         {}

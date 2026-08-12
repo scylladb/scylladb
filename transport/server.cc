@@ -2038,7 +2038,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
         }
 
         if (sc_statement) {
-            sc_modifications.emplace_back(std::move(sc_statement), needs_authorization);
+            sc_modifications.emplace_back(std::move(modif_statement_ptr), needs_authorization);
         } else {
             modifications.emplace_back(std::move(modif_statement_ptr), needs_authorization);
         }

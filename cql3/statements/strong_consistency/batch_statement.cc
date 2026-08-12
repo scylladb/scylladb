@@ -66,7 +66,7 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
     all_keys.reserve(_statements.size());
 
     for (size_t i = 0; i < _statements.size(); ++i) {
-        const auto& stmt = _statements[i].statement->inner_statement();
+        const auto& stmt = *_statements[i].statement;
         const auto& statement_options = options.for_statement(i);
         auto json_cache = stmt.maybe_prepare_json_cache(statement_options);
         auto keys = stmt.build_partition_keys(statement_options, json_cache);
@@ -93,8 +93,18 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
         [&](api::timestamp_type ts) {
             std::optional<mutation> merged;
             for (size_t i = 0; i < _statements.size(); ++i) {
+                const auto& stmt = *_statements[i].statement;
                 const auto& statement_options = options.for_statement(i);
-                auto m = _statements[i].statement->get_mutation(statement_options, ts, all_keys[i].json_cache, all_keys[i].keys);
+                const auto prefetch_data = update_parameters::prefetch_data(stmt.s);
+                const auto ttl = stmt.get_time_to_live(statement_options);
+                const auto params = update_parameters(stmt.s, statement_options, ts, ttl, prefetch_data);
+                const auto ranges = stmt.create_clustering_ranges(statement_options, all_keys[i].json_cache);
+                auto muts = stmt.apply_updates(all_keys[i].keys, ranges, params, all_keys[i].json_cache);
+                if (muts.size() != 1) {
+                    on_internal_error(logger, ::format("statement {} on {}.{} has unexpected number of mutations {}",
+                        i, stmt.keyspace(), stmt.column_family(), muts.size()));
+                }
+                auto& m = *muts.begin();
                 if (!merged) {
                     merged = std::move(m);
                 } else {
@@ -141,7 +151,7 @@ void batch_statement::validate() const {
 
     schema_ptr batch_schema;
     for (const auto& s: _statements) {
-        const auto& stmt = s.statement->inner_statement();
+        const auto& stmt = *s.statement;
         if (!batch_schema) {
             batch_schema = stmt.s;
         } else if (batch_schema != stmt.s) {

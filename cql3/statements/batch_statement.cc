@@ -498,7 +498,7 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
     shared_ptr<cql_statement> statement;
     if (first_ks && strong_consistency::is_strongly_consistent(db, *first_ks)) {
         auto sc_statements = statements | std::views::as_rvalue | std::views::transform([] (auto&& s) {
-            return strong_consistency::batch_statement::single_statement{::make_shared<strong_consistency::modification_statement>(std::move(s.statement))};
+            return strong_consistency::batch_statement::single_statement{std::move(s.statement), s.needs_authorization};
         }) | std::ranges::to<std::vector>();
         statement = ::make_shared<strong_consistency::batch_statement>(meta.bound_variables_size(), _type, std::move(sc_statements), std::move(prep_attrs));
     } else {
