@@ -154,7 +154,7 @@ void batch_statement::validate(query_processor& qp, const service::client_state&
     }
 }
 
-const std::vector<batch_statement::single_statement>& batch_statement::get_statements()
+const std::vector<batch_statement::single_statement>& batch_statement::get_statements() const
 {
     return _statements;
 }

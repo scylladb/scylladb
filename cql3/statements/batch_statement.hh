@@ -54,7 +54,7 @@ public:
             , needs_authorization(na)
         {}
     };
-private:
+protected:
     int _bound_terms;
     type _type;
     std::vector<single_statement> _statements;
@@ -114,7 +114,7 @@ public:
     //   or in QueryProcessor.processBatch() - for native protocol batches.
     virtual void validate(query_processor& qp, const service::client_state& state) const override;
 
-    const std::vector<single_statement>& get_statements();
+    const std::vector<single_statement>& get_statements() const;
 private:
     future<utils::chunked_vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout,
             bool local, api::timestamp_type now, service::query_state& query_state) const;
@@ -133,12 +133,17 @@ public:
             query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const override;
 
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
-private:
-    friend class batch_statement_executor;
-    future<shared_ptr<cql_transport::messages::result_message>> do_execute(
+protected:
+    // Performs the write itself. Overridable so that a subclass can commit the
+    // batch differently while inheriting the rest of the statement, the way
+    // modification_statement::do_execute already works.
+    virtual future<shared_ptr<cql_transport::messages::result_message>> do_execute(
             query_processor& qp,
             service::query_state& query_state, const query_options& options,
             bool local, api::timestamp_type now) const;
+
+private:
+    friend class batch_statement_executor;
 
     future<exceptions::coordinator_result<>> execute_without_conditions(
             query_processor& qp,
