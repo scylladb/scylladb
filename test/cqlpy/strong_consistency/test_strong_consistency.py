@@ -18,7 +18,7 @@ from cassandra.query import BatchStatement, BatchType, SimpleStatement
 
 from test.pylib.skip_types import skip_env
 
-from ..util import new_test_table, unique_name
+from ..util import new_test_keyspace, new_test_table, unique_name
 
 
 # A keyspace whose tables are strongly consistent. Cassandra and the --vnodes
@@ -237,6 +237,28 @@ def test_batch(cql, sc_keyspace, batch_mode):
                         INSERT INTO {other_table} (pk, ck, v) VALUES (1, 1, 20);
                         APPLY BATCH
                     """)
+
+        # A batch which mixes strongly and eventually consistent statements
+        # is rejected. The text path used to pick the batch kind from the
+        # keyspace of the first statement alone, so with the eventually
+        # consistent one first it built an eventually consistent batch, and
+        # committed the strongly consistent write through storage_proxy
+        # instead of Raft.
+        with new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ec_ks:
+            with new_test_table(cql, ec_ks, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as ec_table:
+                with pytest.raises(InvalidRequest, match="Cannot mix strongly consistent and eventually consistent statements"):
+                    if batch_mode == "prepared":
+                        batch = BatchStatement(batch_type=BatchType.UNLOGGED)
+                        batch.add(cql.prepare(f"INSERT INTO {ec_table} (pk, ck, v) VALUES (?, ?, ?)"), (1, 1, 10))
+                        batch.add(cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)"), (1, 1, 20))
+                        cql.execute(batch)
+                    else:
+                        cql.execute(f"""
+                            BEGIN UNLOGGED BATCH
+                            INSERT INTO {ec_table} (pk, ck, v) VALUES (1, 1, 10);
+                            INSERT INTO {table} (pk, ck, v) VALUES (1, 1, 20);
+                            APPLY BATCH
+                        """)
 
         # A batch level USING TIMESTAMP used to be accepted and then
         # silently ignored, because the Raft coordinator assigns the commit

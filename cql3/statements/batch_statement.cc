@@ -21,7 +21,6 @@
 #include "db/large_data_handler.hh"
 #include "tracing/trace_state.hh"
 #include "utils/unique_view.hh"
-#include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "cql3/statements/strong_consistency/batch_statement.hh"
 
 template<typename T = void>
@@ -492,8 +491,16 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
         partition_key_bind_indices = meta.get_partition_key_bind_indexes(*statements[0].statement->s);
     }
 
+    // Asking the prepared statements rather than the keyspace of the first one,
+    // which says nothing about the keyspaces of the rest.
+    const auto sc_count = std::ranges::count_if(statements,
+            [] (auto&& s) { return s.statement->is_strongly_consistent(); });
+    if (sc_count != 0 && size_t(sc_count) != statements.size()) {
+        throw exceptions::invalid_request_exception("Cannot mix strongly consistent and eventually consistent statements in a batch");
+    }
+
     shared_ptr<cql_statement> statement;
-    if (first_ks && strong_consistency::is_strongly_consistent(db, *first_ks)) {
+    if (sc_count != 0) {
         statement = ::make_shared<strong_consistency::batch_statement>(meta.bound_variables_size(), _type, std::move(statements), std::move(prep_attrs), stats);
     } else {
         statement = ::make_shared<cql3::statements::batch_statement>(meta.bound_variables_size(), _type, std::move(statements), std::move(prep_attrs), stats);
