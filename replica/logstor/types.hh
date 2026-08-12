@@ -67,6 +67,8 @@ struct log_record_header {
     primary_index_key key;
     api::timestamp_type timestamp;
     table_id table;
+
+    bool operator==(const log_record_header& other) const noexcept = default;
 };
 
 struct log_record {
