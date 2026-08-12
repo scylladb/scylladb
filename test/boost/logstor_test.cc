@@ -490,6 +490,72 @@ mutation make_kv_mutation_of_record_size(schema_ptr schema, const sstring& pk, s
     return make_kv_mutation(schema, pk, sstring(value_size, 'x'));
 }
 
+// Verifies that the fixed serialized size declared by a serializer is the number of bytes
+// that write(), read() and skip() actually cover.
+template <typename T>
+void check_serialized_size(const char* name, const T& value) {
+    constexpr size_t expected = ser::serializer<T>::serialized_size;
+
+    BOOST_TEST_CONTEXT(name) {
+        seastar::measuring_output_stream ms;
+        ser::serialize(ms, value);
+        BOOST_REQUIRE_EQUAL(ms.size(), expected);
+
+        std::vector<char> buf(expected);
+        seastar::simple_memory_output_stream out(buf.data(), buf.size());
+        ser::serialize(out, value);
+
+        seastar::simple_memory_input_stream in(buf.data(), buf.size());
+        auto read_back = ser::deserialize(in, std::type_identity<T>{});
+        BOOST_REQUIRE_EQUAL(buf.size() - in.size(), expected);
+        BOOST_REQUIRE(read_back == value);
+
+        seastar::simple_memory_input_stream skip_in(buf.data(), buf.size());
+        ser::serializer<T>::skip(skip_in);
+        BOOST_REQUIRE_EQUAL(buf.size() - skip_in.size(), expected);
+    }
+}
+
+}
+
+// Checks that the on-disk size constants match what the serializers actually write, read and skip.
+// These sizes drive the substream sizing in write_buffer and segment_io, where a mismatch would
+// silently truncate or pad records rather than fail, so they are verified against the real encoding.
+SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_serialized_sizes) {
+    key_hash hash;
+    for (size_t i = 0; i < hash.size(); ++i) {
+        hash[i] = static_cast<uint8_t>(i + 1);
+    }
+    auto key = primary_index_key(dht::token::from_int64(0x0123456789abcdef), hash);
+    auto table = table_id(utils::UUID(int64_t(0x1122334455667788), int64_t(0x99aabbccddeeff00)));
+
+    check_serialized_size("primary_index_key", key);
+
+    check_serialized_size("log_record_header", log_record_header {
+        .key = key,
+        .timestamp = api::timestamp_type(0x0f0e0d0c0b0a0908),
+        .table = table,
+    });
+
+    check_serialized_size("buffer_header", ondisk::buffer_header {
+        .magic = ondisk::buffer_header_magic,
+        .kind = segment_kind::full,
+        .version = ondisk::current_version,
+        .reserved = 0x1234,
+        .segment_seq = segment_sequence{0x0102030405060708},
+        .data_size = 0xdeadbeef,
+        .crc = 0xfeedface,
+    });
+
+    check_serialized_size("segment_header", ondisk::segment_header {
+        .table = table,
+        .first_token = dht::token::from_int64(-0x0123456789abcdef),
+        .last_token = dht::token::from_int64(0x7fffffffffffffff),
+    });
+
+    check_serialized_size("record_header", ondisk::record_header {
+        .data_size = 0xcafebabe,
+    });
 }
 
 // Checks that sealing a full raw write buffer writes the expected header fields.
