@@ -242,7 +242,7 @@ struct test_flush_controller {
         flush_started.signal(1);
 
         if (pause_flushes) {
-            auto units = co_await get_units(flush_release, 1);
+            co_await flush_release.wait(1);
         }
 
         if (fail_flush_index && *fail_flush_index == flush_idx) {
