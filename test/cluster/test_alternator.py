@@ -23,6 +23,8 @@ import botocore
 from botocore.exceptions import ClientError, ConnectionClosedError, SSLError
 import requests
 import json
+import glob
+import shutil
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.protocol import InvalidRequest
 import threading
@@ -31,7 +33,7 @@ import re
 
 from test.cluster.util import get_replication
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for
+from test.pylib.util import wait_for, wait_for_view, unique_name
 from test.pylib.rest_client import inject_error
 from test.pylib.tablets import get_all_tablet_replicas
 from test.pylib.tablets import get_tablet_replica
@@ -2085,3 +2087,109 @@ async def test_alternator_mtls_and_plain_http(manager: ManagerClient, tmp_path):
 
 
 
+
+
+# Alternator convenience function for fetching an entire scan, of the table
+# itself or of one of its indexes.
+def full_scan(table, ConsistentRead=True, **kwargs):
+    response = table.scan(ConsistentRead=ConsistentRead, **kwargs)
+    items = response['Items']
+    while 'LastEvaluatedKey' in response:
+        response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'],
+            ConsistentRead=ConsistentRead, **kwargs)
+        items.extend(response['Items'])
+    return items
+
+async def test_alternator_lsi_load_and_stream(manager: ManagerClient):
+    """Loading sstables into an Alternator table must populate its LSI.
+
+    The Alternator counterpart of test_refresh_generates_view_updates. An LSI is
+    colocated with its base table, so it is neither backed up nor repairable on
+    its own -- the way ScyllaDB Manager restores such a table is to recreate the
+    schema and load-and-stream the base table's sstables, leaving the index to
+    be filled in by the view updates generated as that data lands. If the
+    receiving node puts the sstables straight into the table instead of staging
+    them, the base table comes back while the index stays empty.
+    """
+    n_items = 100
+    index_name = 'lsi1'
+
+    # Alternator uses RF=3 once the cluster has three nodes, and a tablet table
+    # with an index needs the rack count to be 1 or 3 for that to be rack-valid.
+    servers = await manager.servers_add(3, config=alternator_config, auto_rack_dc='dc1')
+    cql, _ = await manager.get_ready_cql(servers)
+    await manager.disable_tablet_balancing()
+
+    alternator = get_alternator(servers[0].ip_addr)
+
+    def create_table(name):
+        return alternator.create_table(
+            TableName=name,
+            BillingMode='PAY_PER_REQUEST',
+            Tags=[{'Key': 'system:initial_tablets', 'Value': '1'}],
+            KeySchema=[
+                {'AttributeName': 'p', 'KeyType': 'HASH'},
+                {'AttributeName': 'c', 'KeyType': 'RANGE'},
+            ],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'c', 'AttributeType': 'S'},
+                {'AttributeName': 'b', 'AttributeType': 'S'},
+            ],
+            LocalSecondaryIndexes=[
+                {
+                    'IndexName': index_name,
+                    'KeySchema': [
+                        {'AttributeName': 'p', 'KeyType': 'HASH'},
+                        {'AttributeName': 'b', 'KeyType': 'RANGE'},
+                    ],
+                    'Projection': {'ProjectionType': 'ALL'},
+                },
+            ])
+
+    # The items are written to a separate table and only its sstables are
+    # carried over, so the table under test never held them and nothing but the
+    # load-and-stream can account for them showing up in its index.
+    src_name = unique_table_name()
+    src_table = create_table(src_name)
+    with src_table.batch_writer() as batch:
+        for i in range(n_items):
+            batch.put_item(Item={'p': str(i), 'c': str(i), 'b': str(i)})
+
+    logger.info('Flush and snapshot the source base table')
+    src_ks = f'alternator_{src_name}'
+    snap_name = unique_name('restore_')
+    await manager.api.flush_keyspace(servers[0].ip_addr, src_ks)
+    await manager.api.take_snapshot(servers[0].ip_addr, src_ks, snap_name)
+
+    # The table under test has the same schema and is created empty, so its
+    # index is fully built and the view builder has nothing left to pick up by
+    # the time the sstables are loaded.
+    dst_name = unique_table_name()
+    dst_table = create_table(dst_name)
+    dst_ks = f'alternator_{dst_name}'
+    # An LSI is backed by a view named "<table>!:<index>", see lsi_name() in
+    # alternator/executor_util.cc.
+    dst_view = f'{dst_name}!:{index_name}'
+    await wait_for_view(cql, dst_view, len(servers), timeout=300)
+
+    async def base_table_dir(server, ks, table):
+        workdir = await manager.server_get_workdir(server.server_id)
+        return glob.glob(os.path.join(workdir, 'data', ks, f'{table}-*'))[0]
+
+    logger.info('Copy the base table sstables over and load-and-stream them')
+    # Only the base table is restored, as ScyllaDB Manager backs up only that.
+    snapshot_dir = os.path.join(await base_table_dir(servers[0], src_ks, src_name),
+                                'snapshots', snap_name)
+    upload_dir = os.path.join(await base_table_dir(servers[0], dst_ks, dst_name), 'upload')
+    os.makedirs(upload_dir, exist_ok=True)
+    for item in os.listdir(snapshot_dir):
+        if item not in ('manifest.json', 'schema.cql'):
+            shutil.copy2(os.path.join(snapshot_dir, item), os.path.join(upload_dir, item))
+    await manager.api.load_new_sstables(servers[0].ip_addr, dst_ks, dst_name,
+                                        load_and_stream=True)
+
+    # The base table is asserted first, so that a failure here is not mistaken
+    # for the data never having arrived.
+    assert len(full_scan(dst_table)) == n_items
+    assert len(full_scan(dst_table, IndexName=index_name)) == n_items
