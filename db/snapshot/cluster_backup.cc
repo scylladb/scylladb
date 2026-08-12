@@ -197,12 +197,19 @@ future<> cluster_backup_task::do_backup() {
 
         std::unordered_map<db::snapshot_dc_location, dst_data> dst_mapping;
         // redundant since we don't support per-dc tablets, but why not complicate things
-        std::unordered_map<std::string, utils::chunked_vector<db::snapshot_tablet_entry>> dc_tablets;
+        std::unordered_map<std::string, std::unordered_map<size_t, db::snapshot_tablet_entry>> dc_tablets;
         for (auto& dc : _locations | std::views::keys) {
-            dc_tablets.emplace(dc, co_await sth.get_snapshot_tablets(_snapshot, keyspace, table, dc));
+            dc_tablets.emplace(dc, 
+                (co_await sth.get_snapshot_tablets(_snapshot, keyspace, table, dc))
+                | std::views::transform([](auto& e) {
+                    return std::make_pair(e.tablet_id, e);
+                })
+                | std::ranges::to<std::unordered_map>()
+            );
         }
         std::unordered_map<db::snapshot_dc_location, std::unordered_map<dht::token, locator::host_id>> repair_masters;
         std::unordered_map<locator::host_id, std::pair<size_t, size_t>> node_sstables;
+        std::unordered_map<locator::host_id, std::pair<dht::token, dht::token>> node_to_token_range;
 
         for (const db::snapshot_node_entry& node : nodes_for_location) {
             if (auto e = _as.abort_requested_exception_ptr(); e) {
@@ -218,28 +225,33 @@ future<> cluster_backup_task::do_backup() {
             auto& repair_master = repair_masters[dst];
             auto sstables = co_await sth.get_snapshot_sstables(_snapshot, keyspace, table, node.datacenter, node.rack);
             auto& tablets = dc_tablets.at(node.datacenter);
-            auto ti = tablets.begin();
-            auto te = tablets.end();
 
             // eliminate all but one of the completed repair set.
             // for each tablet/dc, we include sstables that are either 
             // not repaired, or if they are, if we are the first node
             // to process the tablet.
             sstables = sstables | std::views::filter([&](auto& e) {
-                while (ti != te && ti->last_token < e.first_token) {
-                    ++ti;
-                }
-                if (ti == te) {
-                    throw std::runtime_error("Could not find tablet range");
-                }
-                if (e.repaired_at < ti->repaired_at) {
+                auto& ti = tablets.at(e.tablet_id);
+
+                if (e.repaired_at < ti.repaired_at || ti.repaired_at == 0) {
                     return true; // must include
                 }
-                auto i = repair_master.find(ti->first_token);
+                auto i = repair_master.find(ti.first_token);
                 if (i == repair_master.end()) {
-                    i = repair_master.emplace(ti->first_token, node.node).first;
+                    i = repair_master.emplace(ti.first_token, node.node).first;
                 }
-                return i->second == node.node; // we claimed the token range
+                auto include = i->second == node.node;
+                if (!include) {
+                    snap_log.debug("De-duplicating sstable {} from {}:{}", e.sstable_id, node.datacenter, node.rack);
+                    auto j = node_to_token_range.find(node.node);
+                    if (j != node_to_token_range.end()) {
+                        j->second.first = std::min(j->second.first, e.first_token);
+                        j->second.second = std::max(j->second.second, e.last_token);
+                    } else {
+                        node_to_token_range.emplace(node.node, std::make_pair(e.first_token, e.last_token)); 
+                    }
+                }
+                return include; // we claimed the token range
             }) | std::ranges::to<utils::chunked_vector<db::snapshot_sstable_entry>>();
 
             auto& dst_info = dst_mapping[dst];
@@ -351,7 +363,12 @@ future<> cluster_backup_task::do_backup() {
                 manifest.sstables.push(s);
             }
             for (auto& n : nodes_for_location) {
-                manifest.nodes.push(n);
+                manifest_json::node_info ni(n);
+                if (auto i = node_to_token_range.find(n.node); i != node_to_token_range.end()) {
+                    ni.first_token = dht::token::to_int64(i->second.first);
+                    ni.last_token = dht::token::to_int64(i->second.second);
+                }
+                manifest.nodes.push(std::move(ni));
             }
 
             auto client = manager.get_endpoint_client(dst.endpoint);
