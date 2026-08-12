@@ -7152,4 +7152,32 @@ SEASTAR_TEST_CASE(test_widening_value_into_wider_sink) {
     });
 }
 
+// The parser counts markers for one statement at a time, but used to hand
+// every statement of a multi-statement parse all the markers it had seen so
+// far, so a later statement inherited the markers of the ones before it.
+SEASTAR_TEST_CASE(test_a_parsed_statement_gets_only_the_markers_of_its_text) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE ks.tbl (pk int PRIMARY KEY)").get();
+
+        auto& qp = e.local_qp();
+        auto stmts = cql3::query_processor::parse_statements(
+                "INSERT INTO ks.tbl (pk) VALUES (?); SELECT * FROM ks.tbl;", cql3::internal_dialect());
+        BOOST_REQUIRE_EQUAL(stmts.size(), 2);
+        auto insert = stmts[0]->prepare(qp.db(), qp.get_cql_stats(), qp.get_cql_config());
+        BOOST_REQUIRE_EQUAL(insert->bound_names.size(), 1);
+        auto select = stmts[1]->prepare(qp.db(), qp.get_cql_stats(), qp.get_cql_config());
+        BOOST_REQUIRE_EQUAL(select->bound_names.size(), 0);
+
+        // A marker name is only a name within its own statement: reused in a
+        // later one, it is that statement's own marker, not a reference to
+        // the marker the name stood for before.
+        auto named = cql3::query_processor::parse_statements(
+                "INSERT INTO ks.tbl (pk) VALUES (:a); INSERT INTO ks.tbl (pk) VALUES (:a);", cql3::internal_dialect());
+        BOOST_REQUIRE_EQUAL(named.size(), 2);
+        for (auto& stmt : named) {
+            BOOST_REQUIRE_EQUAL(stmt->prepare(qp.db(), qp.get_cql_stats(), qp.get_cql_config())->bound_names.size(), 1);
+        }
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
