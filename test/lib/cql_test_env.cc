@@ -20,6 +20,7 @@
 #include "cql3/functions/functions.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
+#include "transport/messages/result_message.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/cql_config.hh"
@@ -237,6 +238,42 @@ private:
         }
         return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit());
     }
+
+    // LWT statements whose CAS shard isn't the executing shard return a
+    // `bounce` result instead of executing (query_processor::bounce_to_shard).
+    // The real CQL server re-executes on the target shard
+    // (transport/server.cc); without this, cql_test_env silently treated the
+    // bounce as a successful, no-op result. `retry` re-issues the same
+    // statement, called on the target shard, with the bounce's cached
+    // partition-key function call results applied.
+    static future<::shared_ptr<cql_transport::messages::result_message>> handle_shard_bounce(
+            ::shared_ptr<cql_transport::messages::result_message> msg,
+            std::function<future<::shared_ptr<cql_transport::messages::result_message>>(cql3::computed_function_values)> retry) {
+        auto bounce_msg = dynamic_pointer_cast<cql_transport::messages::result_message::bounce>(msg);
+        if (!bounce_msg) {
+            co_return msg;
+        }
+        auto shard = bounce_msg->target_shard();
+        auto cached_fn_calls = bounce_msg->take_cached_pk_function_calls();
+        // shared_ptr/captured state isn't cross-shard safe; cross via foreign_ptr.
+        auto foreign_retry = make_foreign(std::make_unique<decltype(retry)>(std::move(retry)));
+        co_return co_await smp::submit_to(shard, [foreign_retry = std::move(foreign_retry), cached_fn_calls = std::move(cached_fn_calls)] () mutable {
+            return (*foreign_retry)(std::move(cached_fn_calls));
+        });
+    }
+
+    future<::shared_ptr<cql_transport::messages::result_message>> do_execute_direct(sstring text, cql3::query_options qo,
+            cql3::computed_function_values cached_fn_calls) {
+        auto qs = make_query_state();
+        if (!cached_fn_calls.empty()) {
+            qo.set_cached_pk_function_calls(std::move(cached_fn_calls));
+        }
+        auto qo_for_retry(qo);
+        auto msg = co_await local_qp().execute_direct_without_checking_exception_message(text, *qs, test_dialect(), qo);
+        co_return co_await handle_shard_bounce(std::move(msg), [this, text, qo = std::move(qo_for_retry)] (cql3::computed_function_values fn_calls) mutable {
+            return do_execute_direct(text, std::move(qo), std::move(fn_calls));
+        });
+    }
 public:
     single_node_cql_env()
     {
@@ -245,9 +282,7 @@ public:
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(std::string_view text) override {
         testlog.trace("{}(\"{}\")", __FUNCTION__, text);
-        auto qs = make_query_state();
-        auto qo = make_shared<cql3::query_options>(cql3::query_options::DEFAULT);
-        return local_qp().execute_direct_without_checking_exception_message(text, *qs, test_dialect(), *qo).then([qs, qo] (auto msg) {
+        return do_execute_direct(sstring(text), cql3::query_options(cql3::query_options::DEFAULT), {}).then([] (auto msg) {
             return cql_transport::messages::propagate_exception_as_future(std::move(msg));
         });
     }
@@ -257,9 +292,7 @@ public:
         std::unique_ptr<cql3::query_options> qo) override
     {
         testlog.trace("{}(\"{}\")", __FUNCTION__, text);
-        auto qs = make_query_state();
-        auto& lqo = *qo;
-        return local_qp().execute_direct_without_checking_exception_message(text, *qs, test_dialect(), lqo).then([qs, qo = std::move(qo)] (auto msg) {
+        return do_execute_direct(sstring(text), std::move(*qo), {}).then([] (auto msg) {
             return cql_transport::messages::propagate_exception_as_future(std::move(msg));
         });
     }
@@ -289,10 +322,11 @@ public:
         return execute_prepared_with_qo(id, std::move(options));
     }
 
-    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared_with_qo(
-        cql3::prepared_cache_key_type id,
-        std::unique_ptr<cql3::query_options> qo) override
-    {
+    future<::shared_ptr<cql_transport::messages::result_message>> do_execute_prepared(cql3::prepared_cache_key_type id,
+            cql3::query_options qo, cql3::computed_function_values cached_fn_calls) {
+        // Keep a pristine (unprepared) copy for a possible retry: qo.prepare()
+        // below is not idempotent for named bind variables.
+        auto qo_for_retry(qo);
         auto qs = make_query_state();
         bool needs_authorization = false;
         // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
@@ -307,14 +341,25 @@ public:
         }
         auto stmt = prepared->statement;
 
-        SCYLLA_ASSERT(stmt->get_bound_terms() == qo->get_values_count());
-        qo->prepare(prepared->bound_names);
+        SCYLLA_ASSERT(stmt->get_bound_terms() == qo.get_values_count());
+        qo.prepare(prepared->bound_names);
+        if (!cached_fn_calls.empty()) {
+            qo.set_cached_pk_function_calls(std::move(cached_fn_calls));
+        }
 
-        auto& lqo = *qo;
-        return local_qp().execute_prepared_without_checking_exception_message(*qs, std::move(stmt), lqo, std::move(prepared), std::move(id), needs_authorization)
-            .then([qs, qo = std::move(qo)] (auto msg) {
-                return cql_transport::messages::propagate_exception_as_future(std::move(msg));
-            });
+        auto msg = co_await local_qp().execute_prepared_without_checking_exception_message(*qs, std::move(stmt), qo, std::move(prepared), id, needs_authorization);
+        co_return co_await handle_shard_bounce(std::move(msg), [this, id, qo = std::move(qo_for_retry)] (cql3::computed_function_values fn_calls) mutable {
+            return do_execute_prepared(id, std::move(qo), std::move(fn_calls));
+        });
+    }
+
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared_with_qo(
+        cql3::prepared_cache_key_type id,
+        std::unique_ptr<cql3::query_options> qo) override
+    {
+        return do_execute_prepared(id, std::move(*qo), {}).then([] (auto msg) {
+            return cql_transport::messages::propagate_exception_as_future(std::move(msg));
+        });
     }
 
     virtual future<utils::chunked_vector<mutation>> get_modification_mutations(const sstring& text) override {

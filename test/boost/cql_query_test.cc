@@ -26,6 +26,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
 #include "test/lib/eventually.hh"
+#include "utils/error_injection.hh"
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sleep.hh>
@@ -7230,6 +7231,40 @@ SEASTAR_THREAD_TEST_CASE(test_twcs_reversed_restricted_query_optimized) {
 
 SEASTAR_THREAD_TEST_CASE(test_twcs_reversed_restricted_query_regular) {
     test_twcs_reversed_restricted_query(false);
+}
+
+// Regression test: an LWT statement whose CAS shard isn't the executing
+// shard gets a `bounce` result from query_processor (bounce_to_shard); a real
+// CQL server re-executes on the target shard (transport/server.cc), but
+// cql_test_env used to return the bounce message as if it were a successful
+// result, so the write silently never happened. Force exactly one bounce via
+// error injection so the test is deterministic regardless of --smp / which
+// shard the fixed key happens to hash to.
+SEASTAR_TEST_CASE(test_lwt_insert_survives_forced_shard_bounce) {
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    // LWT/CAS execution needs storage_proxy's RPC verbs (paxos prepare/accept
+    // are dispatched through storage_proxy::remote() even for a single-node,
+    // single-round-trip CAS), which cql_test_env only sets up when asked.
+    cql_test_config cql_cfg;
+    cql_cfg.need_remote_proxy = true;
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (pk int PRIMARY KEY, v int)").get();
+
+        utils::error_injection_parameters params;
+        params["value"] = "1";
+        utils::get_local_injector().enable("forced_bounce_to_shard_counter", false, std::move(params));
+
+        e.execute_cql("INSERT INTO t (pk, v) VALUES (1, 1) IF NOT EXISTS").get();
+
+        auto msg = e.execute_cql("SELECT v FROM t WHERE pk = 1").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_row({int32_type->decompose(1)});
+    }, cql_cfg);
+#else
+    return make_ready_future<>();
+#endif
 }
 
 BOOST_AUTO_TEST_SUITE_END()
