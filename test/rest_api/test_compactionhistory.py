@@ -22,6 +22,35 @@ class SStablesStats:
     output: list[dict] = field(default_factory=list)
 
 
+def flushAllTablesTwice(rest_api):
+    '''
+    Flush all tables twice, so that no commitlog segment holding this test's writes
+    survives into the compaction that follows.
+
+    With tombstone_gc mode=immediate, gc_before is clamped by the commitlog:
+
+        gc_before = min(compaction_time, commitlog->min_gc_time(table))
+
+    min_gc_time() reports, for every live segment, the time of the table's *first*
+    write into that segment (see segment::min_time() in db/commitlog/commitlog.cc),
+    and it keeps reporting it after the table has been flushed: the entry is only
+    dropped once the whole segment is destroyed, which requires *every* table to be
+    clean in it. So an unrelated table still dirty in that segment pins our stale
+    entry, gc_before falls back to a time before the tombstones written here, and
+    none of them is expired - they are then neither purged nor counted as a purge
+    attempt, silently, since the stats only account for expired tombstones.
+
+    database::flush_all_tables() closes the active segment before flushing memtables,
+    so a write that has already reserved a replay position in that segment but has
+    not yet been applied to a memtable is missed by that flush and keeps the segment
+    dirty. The second flush seals and flushes the memtable it ended up in, releasing
+    the segment.
+    '''
+    for _ in range(2):
+        response = rest_api.send("POST", "storage_service/flush")
+        assert response.status_code == requests.codes.ok
+
+
 def waitAndGetCompleteCompactionHistory(rest_api, table):
     # cql-pytest/run.py::run_scylla_cmd() passes "--smp 2" to scylla, so we
     # use this value to ensure compaction results from all shards arrived
@@ -161,13 +190,11 @@ def test_compactionhistory_tombstone_purge_statistics(cql, rest_api):
             timestamp = int(time.time())
 
             populateSomeData(cql, cf, (1, 11), timestamp - 10)
-            response = rest_api.send("POST", "storage_service/flush")
-            assert response.status_code == requests.codes.ok
+            flushAllTablesTwice(rest_api)
 
             populateSomeData(cql, cf, (11, 21), timestamp - 5)
             alterSomeData(cql, cf, timestamp - 5)
-            response = rest_api.send("POST", "storage_service/flush")
-            assert response.status_code == requests.codes.ok
+            flushAllTablesTwice(rest_api)
 
             # Sleep a second to let the commitlog minimum gc time, in seconds, be greater than the tombstone deletion time
             sleep_till_whole_second(1)
@@ -190,14 +217,12 @@ def test_compactionhistory_tombstone_purge_statistics_overlapping_with_memtable(
 
             populateSomeData(cql, cf, (11, 21), timestamp - 5)
             alterSomeData(cql, cf, timestamp - 5)
-            response = rest_api.send("POST", "storage_service/flush")
-            assert response.status_code == requests.codes.ok
+            flushAllTablesTwice(rest_api)
 
             # Sleep a second to let the commitlog minimum gc time, in seconds, be greater than the tombstone deletion time
             sleep_till_whole_second(1)
             populateSomeData(cql, cf, (1, 11), timestamp - 10)
-            response = rest_api.send("POST", "storage_service/flush")
-            assert response.status_code == requests.codes.ok
+            flushAllTablesTwice(rest_api)
 
             # Do not flush to keep it in memtable
             cql.execute(f"UPDATE {cf} USING TIMESTAMP {timestamp - 7} SET v=100 WHERE pk=1 AND ck=122")
@@ -220,21 +245,18 @@ def test_compactionhistory_tombstone_purge_statistics_overlapping_with_other_sst
 
             cql.execute(f"UPDATE {cf} USING TIMESTAMP {timestamp - 7} SET v=100 WHERE pk=1 AND ck=122")
             cql.execute(f"UPDATE {cf} USING TIMESTAMP {timestamp - 7} SET v=100 WHERE pk=7 AND ck=122")
-            response = rest_api.send("POST", "storage_service/flush")
-            assert response.status_code == requests.codes.ok
+            flushAllTablesTwice(rest_api)
 
             # Now produce two additional sstable that will get into the same bucket
             # and hence be compacted together but not with the sstable from above.
             populateSomeData(cql, cf, (11, 21), timestamp - 5)
             alterSomeData(cql, cf, timestamp - 5)
-            response = rest_api.send("POST", "storage_service/flush")
-            assert response.status_code == requests.codes.ok
+            flushAllTablesTwice(rest_api)
 
             # Sleep a second to let the commitlog minimum gc time, in seconds, be greater than the tombstone deletion time
             sleep_till_whole_second(1)
             populateSomeData(cql, cf, (1, 11), timestamp - 10)
-            response = rest_api.send("POST", "storage_service/flush")
-            assert response.status_code == requests.codes.ok
+            flushAllTablesTwice(rest_api)
 
             response = waitAndGetCompleteCompactionHistory(rest_api, cf)
 
