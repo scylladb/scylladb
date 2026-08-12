@@ -20,6 +20,7 @@
 #include "index/target_parser.hh"
 #include "types/concrete_types.hh"
 #include "types/types.hh"
+#include "types/vector.hh"
 #include <ranges>
 #include <seastar/core/sstring.hh>
 #include <boost/algorithm/string.hpp>
@@ -351,14 +352,56 @@ bool vector_index::is_local(const sstring& target_string) {
     return tc && tc->IsString();
 }
 
-bool vector_index::is_vector_index_on_column(const index_metadata& im, const sstring& target_name) {
+bool vector_index::is_vector_index(const index_metadata& im) {
     auto class_it = im.options().find(db::index::secondary_index::custom_class_option_name);
-    auto target_it = im.options().find(cql3_parser::index_target::target_option_name);
-    if (class_it != im.options().end() && target_it != im.options().end()) {
-        auto custom_class = secondary_index_manager::get_custom_class_factory(class_it->second);
-        return custom_class && dynamic_cast<vector_index*>((*custom_class)().get()) && get_target_column(target_it->second) == target_name;
+    if (class_it == im.options().end()) {
+        return false;
     }
-    return false;
+    auto custom_class = secondary_index_manager::get_custom_class_factory(class_it->second);
+    return custom_class && dynamic_cast<vector_index*>((*custom_class)().get()) != nullptr;
+}
+
+bool vector_index::is_vector_index_on_column(const index_metadata& im, const sstring& target_name) {
+    auto target_it = im.options().find(cql3_parser::index_target::target_option_name);
+    return target_it != im.options().end() && is_vector_index(im) && get_target_column(target_it->second) == target_name;
+}
+
+std::optional<int32_t> vector_index::parse_dimensions_option(const index_metadata& im) {
+    auto it = im.options().find("dimensions");
+    if (it == im.options().end()) {
+        return std::nullopt;
+    }
+    try {
+        return std::stoi(it->second);
+    } catch (const std::logic_error&) {
+        return std::nullopt;
+    }
+}
+
+std::optional<int32_t> vector_index::get_dimensions(const index_metadata& im, const schema& s) {
+    if (auto dims = parse_dimensions_option(im)) {
+        return dims;
+    }
+    auto target_it = im.options().find(cql3_parser::index_target::target_option_name);
+    if (target_it == im.options().end()) {
+        return std::nullopt;
+    }
+    const auto* cdef = s.get_column_definition(to_bytes(get_target_column(target_it->second)));
+    if (!cdef) {
+        return std::nullopt;
+    }
+    if (const auto* vtype = dynamic_cast<const vector_type_impl*>(cdef->type.get())) {
+        return int32_t(vtype->get_dimension());
+    }
+    return std::nullopt;
+}
+
+std::optional<sstring> vector_index::get_similarity_function(const index_metadata& im) {
+    auto it = im.options().find("similarity_function");
+    if (it == im.options().end()) {
+        return std::nullopt;
+    }
+    return it->second;
 }
 
 std::unique_ptr<secondary_index::custom_index> vector_index_factory() {
