@@ -1659,24 +1659,6 @@ async def test_backup_after_schema_dropped(manager: ScyllaClusterManager, object
 
 # cluster backup/snapshot
 
-async def prepare_write_workload(cql, table_name, flush=True, n: int = None):
-    """write some data"""
-    keys = list(range(n if n else 100))
-    c1_values = ['value1']
-    c2_values = ['value2']
-
-    statement = cql.prepare(f"INSERT INTO {table_name} (key, c1, c2) VALUES (?, ?, ?)")
-    statement.consistency_level = ConsistencyLevel.ALL
-
-    await asyncio.gather(*[cql.run_async(statement, params) for params in
-                           list(map(lambda x, y, z: [x, y, z], keys,
-                                    itertools.cycle(c1_values),
-                                    itertools.cycle(c2_values)))]
-                                    )
-
-    if flush:
-        await nodetool.flush(cql, table_name)
-
 async def do_test_snapshot_on_all_nodes(manager: ScyllaClusterManager,
                                         handle_snapshot: Callable[[ScyllaClusterManager, str, str, str, list[ServerInfo]], Awaitable[None]],
                                         object_storage = None, 
@@ -1692,9 +1674,12 @@ async def do_test_snapshot_on_all_nodes(manager: ScyllaClusterManager,
     snapshot_name = unique_name('snap_')
 
     async with new_test_keyspace(manager, f"WITH REPLICATION = {{ 'replication_factor' : {topology.rf} }} AND tablets = {{'initial': 20 }}") as ks:
-        async with new_test_table(manager, ks, "key int, c1 text, c2 text, PRIMARY KEY (key)", "") as tbl:
+        async with new_test_table(manager, ks, "pk text primary key, value int", "") as tbl:
             cf = tbl.split('.')[1]
-            await prepare_write_workload(manager.get_cql(), tbl, flush=False)
+            cql = manager.get_cql()
+            insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+            insert_stmt.consistency_level = ConsistencyLevel.ALL
+            await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(100)))
             if do_repair:
                 await manager.api.repair(servers[0].ip_addr, ks, cf)
             if do_snapshot:
@@ -1806,3 +1791,35 @@ async def test_cluster_snapshot_repair_set_unique(manager: ScyllaClusterManager,
     Tests a cluster snapshot reduces the snapshot sstable set by the current repair set for each tablet
     """
     await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_and_check_redundancy, object_storage), object_storage, True, True)
+
+async def run_cluster_backup_clear_and_restore(object_storage, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+    """
+    Helper
+    """
+    manifest = await run_cluster_backup(object_storage, 'ninjax', manager, snapshot_name, ks, cf, servers)
+    # get current row count
+    cql = manager.get_cql()
+
+    # todo: these are "secrets" of calling helper. make them parameters.
+    topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
+    await check_mutation_replicas(cql, manager, servers, range(100), topology, logger, ks, cf)
+
+    # drop everything
+    await cql.run_async(f"TRUNCATE {ks}.{cf}")
+
+    manifests = [f'ninjax/snapshots/{snapshot_name}/manifest.json']
+    tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, cf, snapshot_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+    status = await manager.api.wait_task(servers[0].ip_addr, tid)
+    assert (status is not None) and (status['state'] == 'done'), f"Restore of {cf} via {servers[0].ip_addr} failed: {status}"
+    assert status['progress_total'] > 0
+    assert status['progress_completed'] == status['progress_total']
+
+    await check_mutation_replicas(cql, manager, servers, range(100), topology, logger, ks, cf)
+
+@pytest.mark.asyncio
+async def test_cluster_snapshot_backup_and_restore(manager: ScyllaClusterManager, object_storage):
+    """
+    Tests a cluster snapshot reducing the snapshot sstable set by the current repair set for each tablet
+    can be (fully) restored
+    """
+    await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_clear_and_restore, object_storage), object_storage, True, True)
