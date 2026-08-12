@@ -4851,6 +4851,37 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_uses_correct_desired_count_for_colo
     }, cfg).get();
 }
 
+void set_tablet_opts(cql_test_env& e, table_id table, const std::map<sstring, sstring>& opts) {
+    auto s = e.local_db().find_column_family(table).schema();
+    auto opts_string = fmt::to_string(fmt::join(opts | std::views::transform([] (auto&& e) {
+        return fmt::format("'{}': '{}'", e.first, e.second);
+    }), ", "));
+    e.execute_cql(fmt::format("alter table \"{}\".\"{}\" with tablets = {{{}}}",
+                         s->ks_name(), s->cf_name(), opts_string)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_expected_data_size_in_gb_set_post_creation_affects_desired_count) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        topo.add_node(node_state::normal, 1);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto table = add_table(e, ks_name).get();
+
+        auto& stm = e.shared_token_metadata().local();
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(table).tablet_count());
+
+        // default_target_tablet_size is 5 GiB, so expected_data_size_in_gb=15 wants 3 tablets,
+        // which rounds up to 4 with pow2_count=true.
+        set_tablet_opts(e, table, {{"expected_data_size_in_gb", "15"}});
+        topo.get_shared_load_stats().set_size(table, service::default_target_tablet_size);
+
+        rebalance_tablets(e, &topo.get_shared_load_stats());
+
+        BOOST_REQUIRE_EQUAL(4, stm.get()->tablets().get_tablet_map(table).tablet_count());
+    }).get();
+}
+
 // This test verifies that per-table tablet count is adjusted
 // in reaction to changes of relevant config and schema options.
 SEASTAR_THREAD_TEST_CASE(test_tablet_option_and_config_changes) {
