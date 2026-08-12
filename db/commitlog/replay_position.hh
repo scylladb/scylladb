@@ -70,12 +70,24 @@ using cf_id_type = table_id;
 
 class rp_handle {
 public:
+    // What ~rp_handle() does with the segment reference: mark_clean decrements the segment's
+    // dirty count so the segment can be recycled, retain_segment keeps it, which leaves the
+    // segment on disk to be replayed on the next startup. Survives moves.
+    enum class destruction_policy : uint8_t {
+        mark_clean,
+        retain_segment,
+    };
+
     rp_handle() noexcept;
     rp_handle(rp_handle&&) noexcept;
     rp_handle& operator=(rp_handle&&) noexcept;
     ~rp_handle();
 
     replay_position release();
+
+    void set_destruction_policy(destruction_policy p) noexcept {
+        _on_destruction = p;
+    }
 
     operator bool() const {
         return _h && _rp != replay_position();
@@ -94,6 +106,7 @@ private:
     ::shared_ptr<cf_holder> _h;
     cf_id_type _cf;
     replay_position _rp;
+    destruction_policy _on_destruction = destruction_policy::mark_clean;
 };
 
 }
