@@ -321,6 +321,8 @@ future<> view_update_generator::register_staging_sstable(sstables::shared_sstabl
     }
     inject_failure("view_update_generator_registering_staging_sstable");
     _progress_tracker->on_sstable_registration(sst);
+    vug_logger.debug("Registering staging sstable {} for {}.{}", sst->get_filename(),
+                     table->schema()->ks_name(), table->schema()->cf_name());
     _sstables_with_tables[table].push_back(std::move(sst));
 
     _pending_sstables.signal();
