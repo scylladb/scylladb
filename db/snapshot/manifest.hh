@@ -47,6 +47,8 @@ struct manifest_json : public json::json_base {
         json::json_element<sstring> host_id;
         json::json_element<sstring> datacenter;
         json::json_element<sstring> rack;
+        json::json_element<int64_t> first_token;
+        json::json_element<int64_t> last_token;
 
         node_info();
         node_info(const node_info& e);
