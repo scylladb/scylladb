@@ -1401,7 +1401,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_flush_failure_fails_all_wr
     BOOST_REQUIRE(scratch.can_fit(log_record_writer(record1)));
 
     test_flush_controller flush_ctl{.fail_flush_index = 0};
-    buffered_writer writer(make_buffered_writer_config(buffer_size, 3), [&flush_ctl] (write_buffer& wb) {
+    // long sync period so both writes land in the same buffer.
+    buffered_writer writer(make_buffered_writer_config(buffer_size, 3, 0, std::chrono::hours(1)), [&flush_ctl] (write_buffer& wb) {
         return flush_ctl(wb);
     });
 
@@ -1413,7 +1414,13 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_flush_failure_fails_all_wr
     auto accepted0 = writer.write_to_buffer(log_record_writer(record0), test_timeout()).get();
     auto accepted1 = writer.write_to_buffer(log_record_writer(record1), test_timeout()).get();
 
+    auto flush = writer.flush();
+
     BOOST_REQUIRE_THROW(accepted0.persisted.get(), std::runtime_error);
     BOOST_REQUIRE_THROW(accepted1.persisted.get(), std::runtime_error);
+
+    flush.get();
+
+    BOOST_REQUIRE_EQUAL(flush_ctl.started_count, 1u);
     BOOST_REQUIRE(flush_ctl.flushed_buffers.empty());
 }
