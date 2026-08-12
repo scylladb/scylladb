@@ -2092,7 +2092,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
             return make_exception_future<cql_server::process_fn_return_type>(
                 exceptions::invalid_request_exception("Cannot mix strongly consistent and eventually consistent statements in a batch"));
         }
-        statement = ::make_shared<cql3::statements::strong_consistency::batch_statement>(cql3::statements::batch_statement::type(type.assume_value()), std::move(sc_modifications), cql3::attributes::none());
+        statement = ::make_shared<cql3::statements::strong_consistency::batch_statement>(cql3::statements::batch_statement::type(type.assume_value()), std::move(sc_modifications), cql3::attributes::none(), qp.local().get_cql_stats());
     } else {
         statement = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type.assume_value()), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats());
     }

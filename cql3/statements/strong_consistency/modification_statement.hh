@@ -25,8 +25,8 @@ namespace cql3::statements::strong_consistency {
  * per statement kind (update, delete, insert-json).
  *
  * Note that only do_execute() is replaced. A statement executed as part of a
- * batch goes through get_mutations() instead, and so still takes the eventually
- * consistent path, which is what batches did before this was introduced.
+ * batch never gets there: the batch collects the mutations of its statements
+ * and commits them itself, see strong_consistency::batch_statement.
  */
 template <typename Base>
 class strongly_consistent final : public Base {
