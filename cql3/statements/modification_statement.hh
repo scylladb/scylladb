@@ -126,6 +126,13 @@ public:
 
     bool is_view() const;
 
+    // True if this statement commits its mutation through Raft instead of
+    // storage_proxy. Lets callers which only see a modification_statement -
+    // notably the batch paths - tell the two apart without downcasting.
+    virtual bool is_strongly_consistent() const {
+        return false;
+    }
+
     int64_t get_timestamp(int64_t now, const query_options& options) const;
 
     bool is_timestamp_set() const;

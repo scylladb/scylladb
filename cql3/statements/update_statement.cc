@@ -14,6 +14,7 @@
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
 #include "raw/update_statement.hh"
+#include "cql3/statements/strong_consistency/modification_statement.hh"
 
 #include "raw/insert_statement.hh"
 #include "unimplemented.hh"
@@ -287,7 +288,7 @@ insert_statement::insert_statement(cf_name name,
 insert_statement::prepare_internal(data_dictionary::database db, schema_ptr schema,
     prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const
 {
-    auto stmt = ::make_shared<cql3::statements::update_statement>(audit_info(), statement_type::INSERT, ctx.bound_variables_size(), schema, std::move(attrs), stats);
+    auto stmt = strong_consistency::make_modification<cql3::statements::update_statement>(db, schema, audit_info(), statement_type::INSERT, ctx.bound_variables_size(), schema, std::move(attrs), stats);
 
     // Created from an INSERT
     if (stmt->is_counter()) {
@@ -353,7 +354,7 @@ insert_json_statement::prepare_internal(data_dictionary::database db, schema_ptr
     auto prepared_json_value = prepare_expression(_json_value, db, "", nullptr, make_lw_shared<column_specification>("", "", json_column_placeholder, utf8_type));
     expr::verify_no_aggregate_functions(prepared_json_value, "JSON clause");
     expr::fill_prepare_context(prepared_json_value, ctx);
-    auto stmt = ::make_shared<cql3::statements::insert_prepared_json_statement>(audit_info(), ctx.bound_variables_size(), schema, std::move(attrs), stats, std::move(prepared_json_value), _default_unset);
+    auto stmt = strong_consistency::make_modification<cql3::statements::insert_prepared_json_statement>(db, schema, audit_info(), ctx.bound_variables_size(), schema, std::move(attrs), stats, std::move(prepared_json_value), _default_unset);
     prepare_conditions(db, *schema, ctx, *stmt);
     return stmt;
 }
@@ -372,7 +373,7 @@ update_statement::update_statement(cf_name name,
 update_statement::prepare_internal(data_dictionary::database db, schema_ptr schema,
     prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const
 {
-    auto stmt = ::make_shared<cql3::statements::update_statement>(audit_info(), statement_type::UPDATE, ctx.bound_variables_size(), schema, std::move(attrs), stats);
+    auto stmt = strong_consistency::make_modification<cql3::statements::update_statement>(db, schema, audit_info(), statement_type::UPDATE, ctx.bound_variables_size(), schema, std::move(attrs), stats);
 
     // FIXME: quadratic
     for (size_t i = 0; i < _updates.size(); ++i) {

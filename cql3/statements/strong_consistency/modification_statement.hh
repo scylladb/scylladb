@@ -8,51 +8,48 @@
 
 #pragma once
 
-#include "cql3/cql_statement.hh"
-#include "cql3/expr/expression.hh"
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/statements/update_statement.hh"
+#include "cql3/statements/delete_statement.hh"
+#include "cql3/statements/strong_consistency/statement_helpers.hh"
 
 namespace cql3::statements::strong_consistency {
 
-class modification_statement : public cql_statement {
-    using result_message = cql_transport::messages::result_message;
-    using base_statement = cql3::statements::modification_statement;
-
-    shared_ptr<base_statement> _statement;
+/*
+ * Turns a modification statement into a strongly consistent one, by committing
+ * its mutation through Raft instead of storage_proxy. Everything else - parsing
+ * state, mutation building, access control - is inherited unchanged.
+ *
+ * This is a mixin rather than a single class because the base modification
+ * statement is abstract: building the mutation for a given row is implemented
+ * per statement kind (update, delete, insert-json).
+ *
+ * Note that only do_execute() is replaced. A statement executed as part of a
+ * batch goes through get_mutations() instead, and so still takes the eventually
+ * consistent path, which is what batches did before this was introduced.
+ */
+template <typename Base>
+class strongly_consistent final : public Base {
 public:
-    modification_statement(shared_ptr<base_statement> statement);
+    using Base::Base;
 
-    shared_ptr<base_statement> inner() const {
-        return _statement;
+    bool is_strongly_consistent() const override {
+        return true;
     }
 
-    const base_statement& inner_statement() const {
-        return *_statement;
-    }
-
-    future<shared_ptr<result_message>> execute(query_processor& qp, service::query_state& state,
-        const query_options& options, std::optional<service::group0_guard> guard) const override;
-
-    future<shared_ptr<result_message>> execute_without_checking_exception_message(query_processor& qp,
-        service::query_state& qs, const query_options& options,
-        std::optional<service::group0_guard> guard) const override;
-
-    mutation get_mutation(const query_options& options, api::timestamp_type ts,
-            base_statement::json_cache_opt& json_cache, const std::vector<dht::partition_range>& keys) const;
-
-    future<> check_access(query_processor& qp, const service::client_state& state) const override;
-
-    void validate(query_processor& qp, const service::client_state& state) const override;
-
-    uint32_t get_bound_terms() const override;
-
-    bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
-
-    // Wraps a regular modification, so it carries user load exactly when the
-    // wrapped statement does.
-    bool should_reclassify_control_connection() const override {
-        return _statement->should_reclassify_control_connection();
-    }
+    future<::shared_ptr<cql_transport::messages::result_message>>
+    do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const override;
 };
+
+// Builds either Stmt or its strongly consistent counterpart, depending on the
+// keyspace the statement targets.
+template <typename Stmt, typename... Args>
+::shared_ptr<cql3::statements::modification_statement>
+make_modification(data_dictionary::database db, const schema_ptr& s, Args&&... args) {
+    if (is_strongly_consistent(db, s->ks_name())) {
+        return ::make_shared<strongly_consistent<Stmt>>(std::forward<Args>(args)...);
+    }
+    return ::make_shared<Stmt>(std::forward<Args>(args)...);
+}
 
 }

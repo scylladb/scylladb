@@ -2022,13 +2022,13 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
                             + std::to_string(int(kind.assume_value()))));
         }
 
-        auto sc_statement = dynamic_pointer_cast<cql3::statements::strong_consistency::modification_statement>(ps->statement);
-        is_sc |= bool(sc_statement);
-
-        auto modif_statement_ptr = sc_statement ? sc_statement->inner() : dynamic_pointer_cast<cql3::statements::modification_statement>(ps->statement);
+        auto modif_statement_ptr = dynamic_pointer_cast<cql3::statements::modification_statement>(ps->statement);
         if (!modif_statement_ptr) {
             return make_exception_future<cql_server::process_fn_return_type>(exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed."));
         }
+        const bool statement_is_sc = modif_statement_ptr->is_strongly_consistent();
+        is_sc |= statement_is_sc;
+
         if (init_trace && trace_state) {
             tracing::add_table_name(trace_state, modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
             tracing::add_prepared_statement(trace_state, ps);
@@ -2037,7 +2037,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
             batch_audit_infos.emplace_back(*inner_ai);
         }
 
-        if (sc_statement) {
+        if (statement_is_sc) {
             sc_modifications.emplace_back(std::move(modif_statement_ptr), needs_authorization);
         } else {
             modifications.emplace_back(std::move(modif_statement_ptr), needs_authorization);

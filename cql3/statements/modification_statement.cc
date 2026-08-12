@@ -29,7 +29,6 @@
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
 #include "db/large_data_handler.hh"
-#include "cql3/statements/strong_consistency/modification_statement.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 
 #include <boost/lexical_cast.hpp>
@@ -617,15 +616,7 @@ modification_statement::prepare(data_dictionary::database db, cql_stats& stats, 
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto meta = get_prepare_context();
 
-    auto statement = std::invoke([&] -> shared_ptr<cql_statement> {
-        auto result = prepare(db, meta, stats);
-
-        if (strong_consistency::is_strongly_consistent(db, schema->ks_name())) {
-            return ::make_shared<strong_consistency::modification_statement>(std::move(result));
-        }
-
-        return result;
-    });
+    auto statement = prepare(db, meta, stats);
 
     auto partition_key_bind_indices = meta.get_partition_key_bind_indexes(*schema);
     return std::make_unique<prepared_statement>(audit_info(), std::move(statement), meta, 
@@ -640,7 +631,7 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
     prepared_attributes->fill_prepare_context(ctx);
 
     auto prepared_stmt = prepare_internal(db, schema, ctx, std::move(prepared_attributes), stats);
-    if (strong_consistency::is_strongly_consistent(db, schema->ks_name())) {
+    if (prepared_stmt->is_strongly_consistent()) {
         strong_consistency::validate_modification_support(*prepared_stmt);
     }
 

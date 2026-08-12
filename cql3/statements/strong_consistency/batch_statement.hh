@@ -22,7 +22,9 @@ public:
 
     struct single_statement {
         // A plain modification statement: the batch does not go through the
-        // statement's own write path, it builds the mutations itself.
+        // statement's own write path, it builds the mutations itself. Spelled
+        // out, because unqualified name lookup from this namespace silently
+        // falls through to the enclosing one.
         shared_ptr<cql3::statements::modification_statement> statement;
         bool needs_authorization = true;
 
