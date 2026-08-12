@@ -1955,13 +1955,11 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     size_t batch_size = 0;
     std::vector<cql3::statements::batch_statement::single_statement> modifications; // used only for EC batches
     std::vector<cql3::statements::strong_consistency::batch_statement::single_statement> sc_modifications; // used only for SC batches
-    std::vector<std::reference_wrapper<const audit::audit_info>> batch_audit_infos;
     std::vector<cql3::raw_value_view_vector_with_unset> values;
     std::unordered_map<cql3::prepared_cache_key_type, cql3::authorized_prepared_statements_cache::value_type> pending_authorization_entries;
 
     modifications.reserve(n.assume_value());
     sc_modifications.reserve(n.assume_value());
-    batch_audit_infos.reserve(n.assume_value());
     values.reserve(n.assume_value());
     bool is_sc = false;
 
@@ -2033,10 +2031,6 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
             tracing::add_table_name(trace_state, modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
             tracing::add_prepared_statement(trace_state, ps);
         }
-        if (auto* inner_ai = ps->statement->get_audit_info()) {
-            batch_audit_infos.emplace_back(*inner_ai);
-        }
-
         if (statement_is_sc) {
             sc_modifications.emplace_back(std::move(modif_statement_ptr), needs_authorization);
         } else {
@@ -2083,9 +2077,6 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     }
 
     auto ai = audit::audit::create_audit_info(audit::statement_category::DML, sstring(), sstring(), true);
-    if (ai) {
-        ai->set_batch_infos(std::move(batch_audit_infos));
-    }
     ::shared_ptr<cql3::statements::batch_statement> statement;
     if (is_sc) {
         if (sc_modifications.size() != batch_size) {

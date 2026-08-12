@@ -468,8 +468,6 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
 
     std::vector<cql3::statements::batch_statement::single_statement> statements;
     statements.reserve(_parsed_statements.size());
-    std::vector<std::reference_wrapper<const audit::audit_info>> batch_audit_infos;
-    batch_audit_infos.reserve(_parsed_statements.size());
 
     for (auto&& parsed : _parsed_statements) {
         if (!first_ks) {
@@ -482,7 +480,6 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
         auto statement = parsed->prepare(db, meta, stats);
         if (auto* audit_info = statement->get_audit_info()) {
             audit_info->set_query_string(parsed->get_raw_cql());
-            batch_audit_infos.emplace_back(*audit_info);
         }
         statements.emplace_back(std::move(statement));
     }
@@ -502,12 +499,7 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
         statement = ::make_shared<cql3::statements::batch_statement>(meta.bound_variables_size(), _type, std::move(statements), std::move(prep_attrs), stats);
     }
 
-    auto ai = audit_info();
-    if (ai) {
-        ai->set_batch_infos(std::move(batch_audit_infos));
-    }
-
-    return std::make_unique<prepared_statement>(std::move(ai), std::move(statement),
+    return std::make_unique<prepared_statement>(audit_info(), std::move(statement),
                                                       meta.get_variable_specifications(),
                                                       std::move(partition_key_bind_indices));
 }
