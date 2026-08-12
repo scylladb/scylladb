@@ -176,6 +176,14 @@ SEASTAR_TEST_CASE(test_commitlog_cleanups) {
     }, cfg);
 }
 
+BOOST_AUTO_TEST_SUITE_END()
+
+// This test is in its own suite, pinned to a single shard in test_config.yaml:
+// it relies on cf1 and cf2 sharing one commitlog (so that a live mutation in
+// cf1 pins the segment holding cf2's stale cleanup records), which only holds
+// when both tables' tablets land on the same shard.
+BOOST_AUTO_TEST_SUITE(commitlog_cleanup_record_gc_test)
+
 // Test that commitlog cleanup records are deleted when they become irrelevant.
 SEASTAR_TEST_CASE(test_commitlog_cleanup_record_gc) {
     BOOST_REQUIRE_EQUAL(this_smp_shard_count(), 1);
