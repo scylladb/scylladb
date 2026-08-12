@@ -1810,4 +1810,132 @@ SEASTAR_TEST_CASE(test_raft_commitlog_load_log_one_shot) {
     });
 }
 
+// =============================================================================
+// Regression tests for SCYLLADB-3347: commitlog segments backing raft entries
+// must survive an exception between obtaining an rp_handle and applying the
+// mutation.
+//
+// The observable is commitlog::get_num_dirty_segments(): it counts sealed
+// segments that still hold a dirty reference, i.e. segments that stay on disk
+// and get replayed on the next startup. A segment whose last dirty reference is
+// dropped becomes clean and is reclaimed, taking the raft entries with it.
+// =============================================================================
+
+// Test: dropping the handles that state_machine::apply() acquired — which is what an
+// exception between acquire_replay_position_handles_for() and apply_in_memory() does —
+// keeps the commitlog segment alive, because the entries may already be committed and
+// the commitlog record is then their only durable copy.
+SEASTAR_TEST_CASE(test_raft_commitlog_retains_segment_when_apply_drops_handles) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+
+        service::strong_consistency::replayed_data_per_group replayed_data;
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
+
+        raft::log_entry_ptr_list entries = {
+                make_command_entry(raft::term_t(1), raft::index_t(1)),
+                make_command_entry(raft::term_t(1), raft::index_t(2)),
+        };
+        co_await persistence.store_log_entries(entries);
+        co_await log.force_new_active_segment();
+        co_await log.sync_all_segments();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        {
+            // apply() acquired the handles and then threw before applying anything.
+            auto handles = persistence.acquire_replay_position_handles_for(entries);
+            BOOST_REQUIRE_EQUAL(handles.size(), 2);
+        }
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+    });
+}
+
+// Test: handles for entries recovered from a previous run reach raft_commitlog through its
+// constructor rather than store_log_entries(), and must be retained the same way.
+SEASTAR_TEST_CASE(test_raft_commitlog_retains_replayed_segments) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+
+        auto handle = co_await write_raft_entry_to_commitlog(log, tid, gid, make_command_entry(raft::term_t(1), raft::index_t(1)));
+        co_await log.force_new_active_segment();
+        co_await log.sync_all_segments();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        // Replay hands over plain handles, as commitlog::add() produced them.
+        service::strong_consistency::replayed_data_per_group replayed_data;
+        replayed_data.replay_positions.push_back(service::strong_consistency::index_and_replay_position{
+                .index = raft::index_t(1), .replay_position_handle = std::move(handle)});
+        {
+            service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
+        }
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+    });
+}
+
+// Test: destroying raft_commitlog (raft group teardown, node shutdown) retains the
+// segments of the entries it still holds — they have not been applied to a memtable, so
+// they must remain available for replay after a restart.
+SEASTAR_TEST_CASE(test_raft_commitlog_destructor_retains_segments) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+
+        {
+            service::strong_consistency::replayed_data_per_group replayed_data;
+            service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
+
+            raft::log_entry_ptr_list entries = {
+                    make_command_entry(raft::term_t(1), raft::index_t(1)),
+                    make_dummy_entry(raft::term_t(1), raft::index_t(2)),
+            };
+            co_await persistence.store_log_entries(entries);
+            co_await log.force_new_active_segment();
+            co_await log.sync_all_segments();
+            BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        }
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+    });
+}
+
+// A free coroutine rather than a capturing lambda: cl_test() does not keep the callback
+// alive across suspension points, while a coroutine's parameters live in its own frame.
+static future<> check_truncate_reclaims_segment(commitlog& log, bool tail) {
+    auto gid = make_group_id();
+    auto tid = make_table_id();
+
+    service::strong_consistency::replayed_data_per_group replayed_data;
+    service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
+
+    raft::log_entry_ptr_list entries;
+    for (int i = 1; i <= 3; ++i) {
+        entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+    }
+    co_await persistence.store_log_entries(entries);
+    co_await log.force_new_active_segment();
+    co_await log.sync_all_segments();
+    BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+    if (tail) {
+        // Covered by a snapshot.
+        persistence.truncate_log_tail(raft::index_t(3));
+    } else {
+        // Replaced by a new leader before committing.
+        persistence.truncate_log(raft::index_t(1));
+    }
+    BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+}
+
+// Test: the two paths that legitimately give segments back do reclaim them. Retaining is
+// the default now, so a missing mark_clean here would leak commitlog space until restart.
+SEASTAR_TEST_CASE(test_raft_commitlog_truncate_reclaims_segments) {
+    co_await cl_test([](commitlog& log) {
+        return check_truncate_reclaims_segment(log, false);
+    });
+    co_await cl_test([](commitlog& log) {
+        return check_truncate_reclaims_segment(log, true);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()

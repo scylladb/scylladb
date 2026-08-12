@@ -84,6 +84,12 @@ public:
             replay_positions = _persistence.acquire_replay_position_handles_for(command);
             // Make sure we got replay positions for all commands.
             throwing_assert(replay_positions.size() == command.size());
+            // Simulate what an abort between acquiring the handles and applying looks like
+            // (node shutdown or raft group removal aborting the group0 barrier below):
+            // apply() throws with all the batch's pins still held.
+            utils::get_local_injector().inject("sc_state_machine_abort_after_acquiring_rp_handles", [] {
+                throw abort_requested_exception();
+            });
             // Get schemas for all mutations (also upgrades mutations to current schema if needed).
             auto barrier = [this]() -> future<> {
                 if (utils::get_local_injector().enter("disable_raft_drop_append_entries_for_specified_group")) {

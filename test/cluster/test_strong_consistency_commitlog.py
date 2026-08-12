@@ -303,3 +303,54 @@ async def test_crash_recovery_after_flush(manager: ManagerClient):
             assert rows[0].c == pk * 10, f"pk={pk}: expected c={pk * 10}, got c={rows[0].c}"
 
     await manager.server_stop_gracefully(server.server_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_committed_entry_survives_apply_abort(manager: ManagerClient):
+    """Regression test for SCYLLADB-3347. A raft entry is committed before the state
+    machine applies it, so until then the commitlog record is its only durable copy. Abort
+    apply() after it acquired the replay position handles (what node shutdown or raft group
+    removal does) and verify the entry is recovered from the commitlog after a restart.
+
+    A graceful stop is what makes this observable: it flushes the memtables and then
+    reclaims every segment without a dirty reference, so a segment whose handle was
+    dropped is deleted, taking the committed entry with it."""
+    config = {
+        'experimental_features': ['strongly-consistent-tables'],
+        # Keep data in the commitlog: no automatic flush before the stop.
+        'commitlog_total_space_in_mb': 10000,
+    }
+    cmdline = ['--logger-log-level', 'sc_state_machine=debug']
+    server = await manager.server_add(config=config, cmdline=cmdline)
+    (cql, hosts) = await manager.get_ready_cql([server])
+    log = await manager.server_open_log(server.server_id)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        applied_pks = list(range(3))
+        for pk in applied_pks:
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({pk}, {pk * 10})")
+        # Read them back, so they are known to be applied before the injection is armed.
+        for pk in applied_pks:
+            assert len(await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk = {pk};")) == 1
+
+        # This entry gets committed, then apply() is aborted with its handles held. The
+        # write itself is acknowledged on commit, so it does not report an error.
+        aborted_pk = 3
+        mark = await log.mark()
+        await manager.api.enable_injection(server.ip_addr, "sc_state_machine_abort_after_acquiring_rp_handles", one_shot=True)
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({aborted_pk}, {aborted_pk * 10})")
+        await log.wait_for("apply\\(\\): execution for tablet .* aborted due to", from_mark=mark)
+
+        await manager.server_stop_gracefully(server.server_id)
+        await manager.server_start(server.server_id)
+        await reconnect_driver(manager)
+        cql = manager.get_cql()
+
+        for pk in applied_pks + [aborted_pk]:
+            rows = await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk = {pk};")
+            assert len(rows) == 1, f"Expected 1 row for pk={pk}, got {len(rows)}"
+            assert rows[0].c == pk * 10, f"pk={pk}: expected c={pk * 10}, got c={rows[0].c}"
+
+    await manager.server_stop_gracefully(server.server_id)
