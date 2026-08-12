@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import aiohttp
+import concurrent.futures
 import ssl
-import tempfile
+import threading
 from concurrent.futures.thread import ThreadPoolExecutor
-from multiprocessing import Event
 from pathlib import Path
 from typing import TYPE_CHECKING
 from test import TOP_SRC_DIR, MODES_TIMEOUT_FACTOR, path_to
@@ -156,20 +156,27 @@ def cluster_con(hosts: list[IPAddress | EndPoint], port: int = 9042, use_ssl: bo
 
 
 @pytest.fixture(scope="module")
-async def manager_api_sock_path(suite_log_dir: Path,
-                                testpy_cluster_factory: ClusterFactory,
-                                testpy_uname: str) -> AsyncGenerator[str]:
-    sock_path = f"{tempfile.mkdtemp(prefix='manager-', dir='/tmp')}/api"
+async def manager_server(suite_log_dir: Path,
+                         testpy_cluster_factory: ClusterFactory,
+                         testpy_uname: str,
+                         ) -> AsyncGenerator[tuple[ScyllaClusterManager, asyncio.AbstractEventLoop]]:
+    """Run the cluster manager and publish it together with its event loop.
 
-    start_event = Event()
-    stop_event = Event()
+    The manager owns loop-bound state -- the Scylla subprocess transports and
+    the per-server asyncio locks -- so all of its coroutines have to run on one
+    loop, and that loop has to keep running: tests reach the manager from
+    pytest's event loops and, in dtest, from plain worker threads.  Hence a
+    dedicated thread whose loop is idle but alive until teardown.
+    """
+    ready: concurrent.futures.Future[tuple[ScyllaClusterManager, asyncio.AbstractEventLoop]] = \
+        concurrent.futures.Future()
+    stop_event = threading.Event()
 
     async def run_manager() -> None:
         mgr = ScyllaClusterManager(
             test_uname=testpy_uname,
             create_cluster=testpy_cluster_factory,
             base_dir=str(suite_log_dir),
-            sock_path=sock_path,
         )
         try:
             await mgr.start()
@@ -178,33 +185,36 @@ async def manager_api_sock_path(suite_log_dir: Path,
             # created before the API site failed to start.
             await mgr.stop()
             raise
-        start_event.set()
+        ready.set_result((mgr, asyncio.get_running_loop()))
         try:
             await asyncio.get_running_loop().run_in_executor(None, stop_event.wait)
         finally:
             await mgr.stop()
-    with ThreadPoolExecutor(max_workers=1) as executor:
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="cluster-manager") as executor:
         future = executor.submit(asyncio.run, run_manager())
-        # Wake up also when the manager dies before signaling readiness
-        # (e.g. cluster creation failed) instead of waiting forever.
-        # The callback fires only after the future is done, so a
-        # completed future here always means a startup failure.
-        future.add_done_callback(lambda _: start_event.set())
-        start_event.wait()
-        if future.done():
-            future.result()  # propagate the startup failure
-            raise RuntimeError("ScyllaClusterManager exited before signaling readiness")
-
-        yield sock_path
-
-        stop_event.set()
-        future.result()
+        # Fail instead of waiting forever when the manager dies before it
+        # signals readiness, e.g. because creating the first cluster failed.
+        # The callback fires only once the future is done, so reaching it
+        # without a result always means a startup failure.
+        future.add_done_callback(
+            lambda f: None if ready.done() else ready.set_exception(
+                f.exception() or RuntimeError("ScyllaClusterManager exited before signaling readiness")))
+        # ready.result() blocks, so hand it to a thread rather than stalling
+        # the loop this fixture runs on.
+        server = await asyncio.get_running_loop().run_in_executor(None, ready.result)
+        try:
+            yield server
+        finally:
+            stop_event.set()
+            future.result()
 
 
 @pytest.fixture(scope="module")
-async def manager_internal(request: pytest.FixtureRequest, manager_api_sock_path: str) -> Callable[[], ManagerClient]:
-    """Session fixture to prepare client object for communicating with the Cluster API.
-       Pass the Unix socket path where the Manager server API is listening.
+async def manager_internal(request: pytest.FixtureRequest,
+                           manager_server: tuple[ScyllaClusterManager, asyncio.AbstractEventLoop],
+                           ) -> Callable[[], ManagerClient]:
+    """Module fixture to prepare client object for communicating with the Cluster API.
        Pass a function to create driver connections.
        Test cases (functions) should not use this fixture.
     """
@@ -216,8 +226,9 @@ async def manager_internal(request: pytest.FixtureRequest, manager_api_sock_path
         auth_provider = PlainTextAuthProvider(username=auth_username, password=auth_password)
     else:
         auth_provider = None
+    manager, _ = manager_server
     return lambda: ManagerClient(
-        sock_path=manager_api_sock_path,
+        sock_path=manager.sock_path,
         port=port,
         use_ssl=use_ssl,
         auth_provider=auth_provider,
