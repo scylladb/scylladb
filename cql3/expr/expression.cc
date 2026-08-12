@@ -839,7 +839,17 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
                 out = fmt::format_to(out, "}}");
             },
             [&] (const temporary& t) {
-                out = fmt::format_to(out, "@temporary{}", t.index);
+                if (!t.replaced_expr) {
+                    out = fmt::format_to(out, "@temporary{}", t.index);
+                } else if (pr.for_metadata) {
+                    // The user never wrote a temporary, so metadata (i.e. the
+                    // column name) must show what it stands for instead.
+                    out = fmt::format_to(out, "{}", expression::printer{.expr_to_print = *t.replaced_expr, .debug_mode = false, .for_metadata = true});
+                } else if (pr.debug_mode) {
+                    out = fmt::format_to(out, "@temporary({}, {})", t.index, expression::printer{.expr_to_print = *t.replaced_expr, .debug_mode = true});
+                } else {
+                    out = fmt::format_to(out, "@temporary({})", to_printer(*t.replaced_expr));
+                }
             },
             [&] (const unary_operator& uo) {
                 out = fmt::format_to(out, "({}{})", uo.op, to_printer(uo.operand));

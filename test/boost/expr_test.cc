@@ -5847,4 +5847,33 @@ BOOST_AUTO_TEST_CASE(temporary_equality) {
     expression call1 = function_call{.func = functions::function_name::native_function("f"), .args = {t1}};
     BOOST_REQUIRE(call0 == call0_again);
     BOOST_REQUIRE(!(call0 == call1));
+
+    // replaced_expr participates too.
+    temporary t0_replacing{.index = 0, .type = int32_type, .replaced_expr = make_int_const(7)};
+    BOOST_REQUIRE(!(t0 == t0_replacing));
+    BOOST_REQUIRE(t0_replacing == (temporary{.index = 0, .type = int32_type, .replaced_expr = make_int_const(7)}));
+}
+
+// A temporary that stands in for an expression the user did write has to show
+// that expression in result-set metadata - otherwise an unaliased column comes
+// back named "@temporary0".
+BOOST_AUTO_TEST_CASE(temporary_printer) {
+    expression plain = temporary{.index = 3, .type = int32_type};
+    BOOST_REQUIRE_EQUAL(format("{:user}", plain), "@temporary3");
+    BOOST_REQUIRE_EQUAL(format("{:debug}", plain), "@temporary3");
+    BOOST_REQUIRE_EQUAL(format("{:result_set_metadata}", plain), "@temporary3");
+
+    expression replaced_call = make_token({make_column("p1"), make_column("p2")});
+    expression replacing = temporary{.index = 3, .type = int32_type, .replaced_expr = replaced_call};
+
+    // Metadata shows only what it stands for, with no trace of the temporary.
+    sstring metadata = format("{:result_set_metadata}", replacing);
+    BOOST_REQUIRE_EQUAL(metadata, format("{:result_set_metadata}", replaced_call));
+    BOOST_REQUIRE(metadata.find("temporary") == sstring::npos);
+
+    // Debug output keeps the slot index, since that is the point of debug output.
+    BOOST_REQUIRE(format("{:debug}", replacing).find("@temporary(3,") == 0);
+
+    // User output names the replaced expression but marks it as a temporary.
+    BOOST_REQUIRE(format("{:user}", replacing).find("@temporary(") == 0);
 }

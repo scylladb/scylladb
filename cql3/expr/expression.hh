@@ -479,6 +479,13 @@ struct temporary {
     size_t index; // within evaluation_inputs::temporaries
     data_type type;
 
+    // The expression this temporary stands in for, when it replaced one that
+    // the user wrote. Used solely for result-set metadata formatting: without
+    // it an unaliased replaced expression comes back named "@temporary0"
+    // instead of by the text the user typed. Temporaries introduced by the
+    // machinery itself, such as aggregation state, leave it empty.
+    std::optional<expression> replaced_expr;
+
     friend bool operator==(const temporary&, const temporary&) = default;
 };
 
