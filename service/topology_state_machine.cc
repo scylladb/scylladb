@@ -380,6 +380,10 @@ future<> topology_state_machine::abort_request(service::raft_group0& group0,
             break;
         }
 
+        if (muts.empty() && request_id == _topology.session.uuid()) {
+            muts.push_back(topology_mutation_builder(guard.write_timestamp()).del_session().build());
+        }
+
         if (muts.empty()) {
             // FIXME: Handle global requests.
             throw std::runtime_error(format("Don't know how to abort {}", request_id));
