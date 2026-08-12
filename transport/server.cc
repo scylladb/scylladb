@@ -2086,7 +2086,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     if (ai) {
         ai->set_batch_infos(std::move(batch_audit_infos));
     }
-    ::shared_ptr<cql3::cql_statement> statement;
+    ::shared_ptr<cql3::statements::batch_statement> statement;
     if (is_sc) {
         if (sc_modifications.size() != batch_size) {
             return make_exception_future<cql_server::process_fn_return_type>(
@@ -2100,10 +2100,10 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
 
     auto execute_fut = reclassifying_control_connection_needs_user_service_level(*statement, query_state)
             ? query_state.get_service_level_controller().with_user_service_level(query_state.get_client_state().user(),
-                    [&qp, &query_state, &options, statement = std::move(statement), pending_authorization_entries = std::move(pending_authorization_entries), batch_size] () mutable {
-                return qp.local().execute_batch_without_checking_exception_message(std::move(statement), query_state, options, batch_size, std::move(pending_authorization_entries));
+                    [&qp, &query_state, &options, statement = std::move(statement), pending_authorization_entries = std::move(pending_authorization_entries)] () mutable {
+                return qp.local().execute_batch_without_checking_exception_message(std::move(statement), query_state, options, std::move(pending_authorization_entries));
             })
-            : qp.local().execute_batch_without_checking_exception_message(std::move(statement), query_state, options, batch_size, std::move(pending_authorization_entries));
+            : qp.local().execute_batch_without_checking_exception_message(std::move(statement), query_state, options, std::move(pending_authorization_entries));
     return std::move(execute_fut).then([stream, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
         if (msg->as_bounce()) {
             return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));

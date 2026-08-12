@@ -492,10 +492,9 @@ public:
     // The result_message::exception must be explicitly handled.
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_batch_without_checking_exception_message(
-            ::shared_ptr<cql_statement>,
+            ::shared_ptr<statements::batch_statement> stmt,
             service::query_state& query_state,
             query_options& options,
-            size_t batch_size,
             std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries);
 
     // Splits given `mapreduce_request` and distributes execution of resulting subrequests across a cluster.
