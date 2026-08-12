@@ -12,7 +12,7 @@ from test.cluster.test_tablets2 import safe_rolling_restart
 from test.pylib.internal_types import ServerInfo, ServerUpState
 from test.pylib.manager_client import ManagerClient
 from test.pylib.repair import create_table_insert_data_for_repair
-from test.pylib.rest_client import HTTPError, read_barrier
+from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name, wait_for, wait_for_first_completed
@@ -95,7 +95,7 @@ async def test_tablet_cannot_decommision_below_replication_factor(manager: Manag
         logger.info("Decommission some node")
         await manager.decommission_node(servers[0].server_id)
 
-        with pytest.raises(HTTPError, match="Decommission failed"):
+        with pytest.raises(RuntimeError, match="Decommission failed"):
             logger.info("Decommission another node")
             await manager.decommission_node(servers[1].server_id)
 

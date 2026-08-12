@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import asyncio
-import aiohttp
 import concurrent.futures
 import ssl
 import threading
@@ -226,9 +225,10 @@ async def manager_internal(request: pytest.FixtureRequest,
         auth_provider = PlainTextAuthProvider(username=auth_username, password=auth_password)
     else:
         auth_provider = None
-    manager, _ = manager_server
+    manager, manager_loop = manager_server
     return lambda: ManagerClient(
-        sock_path=manager.sock_path,
+        cluster_manager=manager,
+        manager_loop=manager_loop,
         port=port,
         use_ssl=use_ssl,
         auth_provider=auth_provider,
@@ -253,12 +253,8 @@ async def manager(request: pytest.FixtureRequest,
     logger.debug("before_test for %s", test_case_name)
     if await manager_client.is_dirty():
         manager_client.driver_close()  # Close driver connection to old cluster
-    try:
-        cluster_str = await manager_client.client.put_json(f"/cluster/before-test/{test_case_name}", timeout=600,
-                                                           response_type="json")
-        logger.info(f"Using cluster: {cluster_str} for test {test_case_name}")
-    except aiohttp.ClientError as exc:
-        raise RuntimeError(f"Failed before test check {exc}") from exc
+    cluster_str = await manager_client.before_test(test_case_name)
+    logger.info(f"Using cluster: {cluster_str} for test {test_case_name}")
     servers = await manager_client.running_servers()
     if manager_client.cql is None and servers:
         await manager_client.driver_connect()  # Connect driver to new cluster
@@ -292,13 +288,10 @@ async def manager(request: pytest.FixtureRequest,
             # here we only need the dir for the manager-specific found_errors files below.
             failed_test_dir_path = make_failed_test_dir(request.config, build_mode, test_case_name)
 
-        # Tear down (after test): notify the Manager server that the test finished
-        # We grab the raw per-loop client here because the `client` property becomes inaccessible
-        # once test_finished_event is set.
-        manager_client.test_finished_event.set()
-        _client = manager_client.client_for_asyncio_loop.get(asyncio.get_running_loop())
+        # Tear down (after test): notify the manager that the test finished.
+        # This also cuts off manager access for tasks leaked by the test.
         logger.debug("after_test for %s (success: %s)", test_case_name, not failed)
-        cluster_status = await _client.put_json(f"/cluster/after-test/{not failed}", response_type="json")
+        cluster_status = await manager_client.after_test(success=not failed)
         logger.info("Cluster after test %s (success: %s): %s", test_case_name, not failed, cluster_status)
     finally:
         # Drop the stash entry before closing the client so a teardown-phase

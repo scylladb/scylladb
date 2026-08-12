@@ -326,11 +326,11 @@ and support topology operations. A standard `manager`
 fixture is available for these. Through this fixture,
 you can access individual nodes, start, stop
 and restart instances, add and remove instances from the cluster.
-The `manager` fixture connects to the cluster by sending
-`test.py` HTTP/REST commands over a unix-domain socket.
-This guarantees that `test.py` is fully aware of all topology
-operations and can clean up resources, including added
-servers, when tests end.
+The `manager` fixture drives the cluster through the cluster
+manager, an in-process Python object running on its own event
+loop; calls are bridged to that loop. This guarantees that the
+test framework is fully aware of all topology operations and can
+clean up resources, including added servers, when tests end.
 `test.py` automatically detects if a cluster can not be shared with a
 subsequent test because it was manipulated with. Today the check
 is quite simple: any cluster that has nodes added or removed,
