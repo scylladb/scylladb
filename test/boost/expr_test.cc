@@ -5811,3 +5811,40 @@ BOOST_AUTO_TEST_CASE(evaluate_neg_reversed_type) {
     raw_value result = evaluate(neg_expr, inputs);
     BOOST_REQUIRE_EQUAL(raw_to<int32_t>(result, int32_type), -5);
 }
+
+// A temporary is a slot in evaluation_inputs::temporaries; evaluating it is
+// just a lookup by index.
+BOOST_AUTO_TEST_CASE(evaluate_temporary) {
+    std::vector<raw_value> temporaries = {make_int_raw(11), make_text_raw("abc"), raw_value::make_null()};
+    auto inputs = evaluation_inputs{.temporaries = temporaries};
+
+    BOOST_REQUIRE_EQUAL(evaluate(temporary{.index = 0, .type = int32_type}, inputs), make_int_raw(11));
+    BOOST_REQUIRE_EQUAL(evaluate(temporary{.index = 1, .type = utf8_type}, inputs), make_text_raw("abc"));
+    BOOST_REQUIRE_EQUAL(evaluate(temporary{.index = 2, .type = int32_type}, inputs), raw_value::make_null());
+}
+
+// temporary used to have no operator==, so comparing two of them resolved to
+// operator==(const expression&, const expression&) through the implicit
+// converting constructor and recursed forever. These comparisons must simply
+// terminate; that they return the right answer is a bonus.
+BOOST_AUTO_TEST_CASE(temporary_equality) {
+    temporary t0{.index = 0, .type = int32_type};
+    temporary t0_again{.index = 0, .type = int32_type};
+    temporary t1{.index = 1, .type = int32_type};
+    temporary t0_other_type{.index = 0, .type = utf8_type};
+
+    BOOST_REQUIRE(t0 == t0_again);
+    BOOST_REQUIRE(!(t0 == t1));
+    BOOST_REQUIRE(!(t0 == t0_other_type));
+
+    // Also through expression, which is how it is reached in practice.
+    BOOST_REQUIRE(expression(t0) == expression(t0_again));
+    BOOST_REQUIRE(!(expression(t0) == expression(t1)));
+
+    // And nested, so the recursion goes through a non-leaf node on the way in.
+    expression call0 = function_call{.func = functions::function_name::native_function("f"), .args = {t0}};
+    expression call0_again = function_call{.func = functions::function_name::native_function("f"), .args = {t0_again}};
+    expression call1 = function_call{.func = functions::function_name::native_function("f"), .args = {t1}};
+    BOOST_REQUIRE(call0 == call0_again);
+    BOOST_REQUIRE(!(call0 == call1));
+}

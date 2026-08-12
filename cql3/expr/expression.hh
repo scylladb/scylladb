@@ -478,6 +478,8 @@ struct usertype_constructor {
 struct temporary {
     size_t index; // within evaluation_inputs::temporaries
     data_type type;
+
+    friend bool operator==(const temporary&, const temporary&) = default;
 };
 
 // now that all expression types are fully defined, we can define expression::impl
