@@ -569,9 +569,30 @@ def test_order_by_two_bm25_rejected(cql, fulltext_table):
 
 
 def test_bm25_in_select_clause_rejected(cql, fulltext_table):
-    """BM25() is not allowed in the SELECT clause and must be rejected at prepare time."""
+    """BM25() in SELECT is rejected without both a BM25 WHERE and ORDER BY clause."""
     with pytest.raises(InvalidRequest, match="not supported in the SELECT clause"):
         cql.prepare(f"SELECT BM25(content, 'hello') FROM {fulltext_table}")
+
+
+def test_bm25_in_select_clause_with_where_order_by_accepted(cql, fulltext_table):
+    """BM25() in SELECT is accepted when the query has both a BM25 WHERE and ORDER BY."""
+    cql.prepare(f"SELECT BM25(content, 'hello') FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
+
+
+def test_bm25_in_select_clause_different_term_rejected(cql, fulltext_table):
+    """BM25() in SELECT with a different literal search term than ORDER BY must be rejected at prepare time."""
+    with pytest.raises(InvalidRequest, match="same search term"):
+        cql.prepare(f"SELECT BM25(content, 'world') FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
+
+
+def test_bm25_in_select_clause_different_column_rejected(cql, test_keyspace):
+    """BM25() in SELECT on a different column than WHERE and ORDER BY must be rejected at prepare time."""
+    schema = 'p int primary key, col1 text, col2 text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match="same column"):
+            cql.prepare(f"SELECT BM25(col2, 'hello') FROM {table} WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col1, 'hello') LIMIT 10")
 
 
 def test_bm25_on_partition_key_rejected(cql, test_keyspace):

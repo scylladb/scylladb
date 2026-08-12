@@ -2115,10 +2115,16 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         prepared_selectors = selection::raw_selector::to_prepared_selectors(select_all, *schema, db, keyspace());
     }
 
-    for (auto& ps : prepared_selectors) {
-        if (expr::is_native_function_call(ps.expr, "bm25")) {
-            throw exceptions::invalid_request_exception("BM25() is not supported in the SELECT clause");
+    // Prepare BM25() calls in SELECT: reject when absent from ORDER BY, or replace
+    // with temporary nodes that an external_values_provider fills at execution time.
+    expr::temporary_allocator temporaries_allocator;
+    if (prepare_bm25_selectors(prepared_selectors, bm25_ordering_info_opt, temporaries_allocator)) {
+        for (auto& term : bm25_ordering_info_opt->selected_bm25_terms) {
+            expr::fill_prepare_context(term, ctx);
         }
+    }
+
+    for (auto& ps : prepared_selectors) {
         expr::fill_prepare_context(ps.expr, ctx);
     }
 
@@ -2148,7 +2154,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     auto selection = prepared_selectors.empty()
                      ? selection::selection::wildcard(schema)
-                     : selection::selection::from_selectors(db, schema, keyspace(), levellized_prepared_selectors);
+                     : selection::selection::from_selectors(db, schema, keyspace(), levellized_prepared_selectors,
+                                                            std::move(temporaries_allocator));
 
     if (is_ann_query && hide_last_column) {
         // Hide the similarity selector from the client by reducing column_count
