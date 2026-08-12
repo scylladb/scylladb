@@ -375,6 +375,12 @@ public:
         return _marked_for_deletion == mark_for_deletion::marked;
     }
 
+    // Undo mark_for_deletion(). Used when the intent to delete could not be
+    // recorded durably, so the sstable must be left in place.
+    void unmark_for_deletion() {
+        _marked_for_deletion = mark_for_deletion::none;
+    }
+
     const std::set<generation_type>& compaction_ancestors() const {
         return _compaction_ancestors;
     }
