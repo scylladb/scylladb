@@ -990,6 +990,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     llog.info("Downloading sstables for tablet {} from {}@{}/{}", tid, snapshot_name, snapshot_info.endpoint, snapshot_info.bucket);
     auto sst_infos = co_await sth.get_snapshot_sstables(snapshot_name, keyspace_name, table_name, datacenter, rack,
             db::consistency_level::LOCAL_QUORUM, tablet_range.start().transform([] (auto& v) { return v.value(); }), tablet_range.end().transform([] (auto& v) { return v.value(); }));
+
     llog.debug("{} SSTables found for tablet {}", sst_infos.size(), tid);
     if (sst_infos.empty()) {
         // It can happen when the restored table has more tablets than the original.
@@ -998,9 +999,11 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         co_return;
     }
 
-    // Skip sstables a previous restore attempt already fetched so a re-entered
-    // or retried restore doesn't re-download what's already in place.
-    auto pending = sst_infos | std::views::filter([] (const auto& si) { return si.downloaded == db::is_downloaded::no; });
+    // Skip sstables either not uploaded (de-duplicated by backup) or a previous restore attempt 
+    // already fetched so a re-entered or retried restore doesn't re-download what's already in place.
+    auto pending = sst_infos | std::views::filter([] (const auto& si) { 
+        return si.state >= db::snapshot_state::remote_and_local && si.downloaded == db::is_downloaded::no; 
+    });
     auto [ fully, partially ] = co_await get_sstables_for_tablet(pending, tablet_range, [] (const auto& si) { return si.first_token; }, [] (const auto& si) { return si.last_token; });
     if (!partially.empty()) {
         llog.debug("Sstable {} is partially contained", partially.front().sstable_id);
@@ -1162,9 +1165,54 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
     if (table.empty()) {
         table = rjson::get<std::string>(table_obj, "table_name");
     }
-    auto& node_obj = rjson::get(parsed, "node");
-    auto datacenter = rjson::get<std::string>(node_obj, "datacenter");
-    auto rack = rjson::get<std::string>(node_obj, "rack");
+
+    struct token_node : public db::snapshot_node_entry {
+        dht::token first_token, last_token;
+    };
+
+    std::unordered_map<std::string, token_node> nodemap;
+    std::unordered_map<uint64_t, int64_t> tablet_repair;
+
+    std::string datacenter, rack;
+
+    if (auto node_obj = rjson::find(parsed, "node")) {
+        datacenter = rjson::get<std::string>(*node_obj, "datacenter");
+        rack = rjson::get<std::string>(*node_obj, "rack");
+    } else if (auto nodes_obj = rjson::find(parsed, "nodes")) {
+        if (!nodes_obj->IsArray()) {
+            throw std::runtime_error("Malformed manifest, 'nodes' is not array");
+        }
+        for (auto& n : nodes_obj->GetArray()) {
+            if (!n.IsObject()) {
+                throw std::runtime_error("Malformed manifest, the entry in the 'nodes' array is not an object");
+            }
+            token_node sn;
+
+            auto id = rjson::get<std::string>(n, "host_id");
+
+            sn.node = locator::host_id { utils::UUID{std::string_view(id)} };
+            sn.datacenter = rjson::get<std::string>(n, "datacenter");
+            sn.rack = rjson::get<std::string>(n, "rack");
+            sn.first_token = dht::token::from_int64(rjson::get_opt<int64_t>(n, "first_token").value_or(0));
+            sn.last_token = dht::token::from_int64(rjson::get_opt<int64_t>(n, "last_token").value_or(0));
+
+            nodemap.emplace(id, std::move(sn));
+        }
+    }
+
+    if (auto tablets = rjson::find(parsed, "tablets")) {
+        if (!tablets->IsArray()) {
+            throw std::runtime_error("Malformed manifest, 'tablets' is not array");
+        }
+        for (auto& t : tablets->GetArray()) {
+            if (!t.IsObject()) {
+                throw std::runtime_error("Malformed manifest, the entry in the 'tablets' array is not an object");
+            }
+            auto id = rjson::get<uint64_t>(t, "id");
+            auto repaired_at = rjson::get<int64_t>(t, "repaired_at");
+            tablet_repair.emplace(id, repaired_at);
+        }
+    }
 
     // Process each sstable entry in the manifest
     // FIXME: cleanup of the snapshot-related rows is needed in case anything throws in here.
@@ -1178,6 +1226,8 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
 
     db::snapshot_table_helper sth(sys_dist_ks.qp());
 
+    auto legacy_prefix = sstring(std::filesystem::path(manifest_prefix).parent_path().string());
+
     for (auto& sstable_entry : sstables->GetArray()) {
         // rjson::get functions assert if the passed value is not an object
         if (!sstable_entry.IsObject()) {
@@ -1187,16 +1237,49 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
         auto first_token = rjson::to_token(rjson::get(sstable_entry, "first_token"));
         auto last_token = rjson::to_token(rjson::get(sstable_entry, "last_token"));
         auto toc_name = rjson::to_sstring(rjson::get(sstable_entry, "toc_name"));
-        auto tablet_id = rjson::get<size_t>(sstable_entry, "tablet_id");
+        auto tablet_id = rjson::get<uint64_t>(sstable_entry, "tablet_id");
         auto repaired_at = rjson::get<int64_t>(sstable_entry, "repaired_at");
         auto data_size = rjson::get<int64_t>(sstable_entry, "data_size");
         auto index_size = rjson::get<int64_t>(sstable_entry, "index_size");
-        auto prefix = sstring(std::filesystem::path(manifest_prefix).parent_path().string());
+        auto prefix = legacy_prefix;
+        auto node = rjson::get_opt<std::string>(sstable_entry, "node");
+
+        std::string_view tdc, trc;
+        auto host = locator::host_id::create_null_id();
+
+        if (node) {
+            auto& sn = nodemap.at(*node);
+            host = sn.node;
+            tdc = sn.datacenter;
+            trc = sn.rack;
+            prefix = ((std::filesystem::path(manifest_prefix).parent_path().parent_path().parent_path() / "sstables") / id.to_sstring()).string();
+        } else {
+            tdc = datacenter;
+            trc = rack;
+        }
+        if (tdc.empty() || trc.empty()) {
+            throw std::runtime_error(fmt::format("Malformed manifest: Could not resolve datacenter and rack for table {}", id));
+        }
+
         // Insert the snapshot sstable metadata into system_distributed.snapshot_sstables with a TTL of 3 days, that should be enough
         // for any snapshot restore operation to complete, and after that the metadata will be automatically cleaned up from the table
-        co_await sth.insert_snapshot_sstable(snapshot_name, keyspace, table, datacenter, rack, id, first_token, last_token,
-                                             toc_name, prefix, locator::host_id::create_null_id(), tablet_id, db::snapshot_state::remote,
+        co_await sth.insert_snapshot_sstable(snapshot_name, keyspace, table, sstring(tdc), sstring(trc), id, first_token, last_token,
+                                             toc_name, prefix, host, tablet_id, db::snapshot_state::remote,
                                              repaired_at, data_size, index_size, cl);
+
+        if (auto i = tablet_repair.find(tablet_id); i != tablet_repair.end() && i->second <= repaired_at) {
+            dht::token_range sstr(first_token, last_token);
+            // This table seems to be de-duplicated master. Fake it into the other racks.
+            for (auto& n : nodemap | std::views::values) {
+                dht::token_range nr(n.first_token, n.last_token);
+                if (nr.overlaps(sstr, dht::token_comparator{})) {
+                    llog.debug("Re-duplicating sstable {} to {}:{}", id, n.datacenter, n.rack);
+                    co_await sth.insert_snapshot_sstable(snapshot_name, keyspace, table, n.datacenter, n.rack, id, first_token, last_token,
+                                                        toc_name, prefix, n.node, tablet_id, db::snapshot_state::remote,
+                                                        repaired_at, data_size, index_size, cl);
+                }
+            }
+        }
     }
 
     co_return manifest_summary{tablet_count, sstables->Size()};

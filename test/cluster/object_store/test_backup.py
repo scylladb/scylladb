@@ -1791,3 +1791,38 @@ async def test_cluster_snapshot_repair_set_unique(manager: ManagerClient, object
     Tests a cluster snapshot reduces the snapshot sstable set by the current repair set for each tablet
     """
     await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_and_check_redundancy, object_storage), object_storage, True, True)
+
+async def run_cluster_backup_clear_and_restore(object_storage, manager: ManagerClient, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+    """
+    Helper
+    """
+    manifest = await run_cluster_backup(object_storage, 'ninjax', manager, snapshot_name, ks, cf, servers)
+    print(manifest)
+    # get current row count
+    cql = manager.get_cql()
+    rows = await cql.run_async(f"SELECT count(*) FROM {ks}.{cf}")
+    n_rows_before = rows[0].count
+    assert n_rows_before > 0
+
+    # drop everything
+    await cql.run_async(f"TRUNCATE {ks}.{cf}")
+
+    manifests = [f'ninjax/snapshots/{snapshot_name}/manifest.json']
+    tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, cf, snapshot_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+    status = await manager.api.wait_task(servers[0].ip_addr, tid)
+    assert (status is not None) and (status['state'] == 'done'), f"Restore of {cf} via {servers[0].ip_addr} failed: {status}"
+    assert status['progress_total'] > 0
+    assert status['progress_completed'] == status['progress_total']
+
+    rows = await cql.run_async(f"SELECT count(*) FROM {ks}.{cf}")
+    n_rows_after = rows[0].count
+
+    assert n_rows_after == n_rows_before, "should restore all data"
+
+@pytest.mark.asyncio
+async def test_cluster_snapshot_backup_and_restore(manager: ManagerClient, object_storage):
+    """
+    Tests a cluster snapshot reducing the snapshot sstable set by the current repair set for each tablet
+    can be (fully) restored
+    """
+    await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_clear_and_restore, object_storage), object_storage, True, True)
