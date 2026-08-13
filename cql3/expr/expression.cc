@@ -2589,9 +2589,8 @@ split_aggregation(std::span<const expression> aggregation) {
     auto allocate_temporary = [&] () -> size_t {
         return nr_temporaries++;
     };
-    std::vector<expression> inner_vec;
+    std::vector<aggregation_step> inner_vec;
     std::vector<expression> outer_vec;
-    std::vector<raw_value> initial_values_vec;
     for (auto& e : aggregation) {
         auto outer = search_and_replace(e, [&] (const expression& e) -> std::optional<expression> {
             auto fc = as_if<function_call>(&e);
@@ -2636,8 +2635,11 @@ split_aggregation(std::span<const expression> aggregation) {
                             return outer_args[0];
                         }
                     });
-                    inner_vec.push_back(std::move(inner));
-                    initial_values_vec.push_back(raw_value::make_value(agg.initial_state));
+                    inner_vec.push_back(aggregation_step{
+                        .temporary = temp,
+                        .expr = std::move(inner),
+                        .initial_value = raw_value::make_value(agg.initial_state),
+                    });
                     return outer;
                 }
             }, fc->func);
@@ -2648,7 +2650,6 @@ split_aggregation(std::span<const expression> aggregation) {
     return aggregation_split_result{
         .inner_loop = std::move(inner_vec),
         .outer_loop = std::move(outer_vec),
-        .initial_values_for_temporaries = std::move(initial_values_vec),
     };
 }
 
