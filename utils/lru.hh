@@ -469,15 +469,9 @@ public:
     }
 
     void remove(evictable& e) noexcept {
-        auto seg = e.get_segment();
-        if (seg == lru_segment::protected_ && e.is_directly_inserted()) {
-            --_protected_direct_size;
-            e.set_directly_inserted(false);
-        }
-        auto& list = segment_list(seg);
-        list.erase(list.iterator_to(e));
-        decrement_size(seg);
-        e.set_segment(lru_segment::none);
+        // Same bookkeeping as remove_from_segment(); keep it in one place so
+        // the _protected_direct_size accounting can't drift between the two.
+        remove_from_segment(e);
     }
 
     // Unlink an entry which is about to be referenced and will re-enter via
@@ -498,9 +492,21 @@ public:
             add_to_protected(e);
             return;
         }
-        // Only keyed entries belong in the window; keyless entries must route
-        // to protected (see freq_estimate()).
-        assert(e.has_sketch_key());
+        // A keyless entry that reached here (routes_to_protected was not set
+        // above) must not enter the admission window: with no sketch key
+        // freq_estimate() returns 0 for it, so the gate would evict it before
+        // it could ever be re-accessed. Index pages are keyless too, but they
+        // are routed to protected at their own release sites via add_index()
+        // (see cached_file / partition_index_cache); the keyless entries that
+        // reach add() are rows materialised off the token-keyed ingestion path
+        // -- the MVCC apply/merge fan-out through cache_tracker::insert(rows_entry&),
+        // which has no token to key with. Route them to protected via
+        // add_index() as well, recency-ordered like a plain LRU, so the
+        // invariant holds here rather than only being asserted.
+        if (!e.has_sketch_key()) {
+            add_index(e);
+            return;
+        }
         record_access(e);
         if (e.reenters_protected() && !classic_lru_mode()) {
             // The entry was accessed while resident (see unlink_touched()).

@@ -211,8 +211,11 @@ void cache_tracker::insert(rows_entry& entry) noexcept {
     ++_stats.row_insertions;
     ++_stats.rows;
     set_current_tracker();
-    // Entries with the routes_to_protected hint (multi-row partitions)
-    // are placed in the protected segment by lru::add() itself.
+    // Entries with the routes_to_protected hint (multi-row partitions) are
+    // placed in the protected segment by lru::add() itself, and lru::add()
+    // also diverts keyless entries (e.g. MVCC-materialised rows with no
+    // token-keyed sibling to inherit a sketch key from) to protected rather
+    // than admitting them into the frequency window.
     _lru.add(entry);
 }
 
