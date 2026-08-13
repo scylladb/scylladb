@@ -273,40 +273,48 @@ static size_t estimated_wire_size(const repair_row_on_wire& row) {
     return size;
 }
 
-// Splits rows into groups capped by both row_batch_max_count and row_batch_max_bytes
-// (whichever limit is hit first), preserving iteration order and consuming `rows` — kept
-// separate from send_rows_batched so the grouping math is unit-testable without an rpc::sink.
-future<std::vector<std::list<repair_row_on_wire>>> batch_rows_for_wire(repair_rows_on_wire& rows) {
-    std::vector<std::list<repair_row_on_wire>> batches;
+// Pops one row_batch_max_count/row_batch_max_bytes-capped group off the front of `rows`,
+// consuming it — the single grouping implementation shared by batch_rows_for_wire (tests)
+// and send_rows_batched (the wire path), so a boundary-condition fix can't land in one and
+// not the other.
+static future<std::list<repair_row_on_wire>> next_row_batch(repair_rows_on_wire& rows) {
     std::list<repair_row_on_wire> batch;
     size_t batch_bytes = 0;
-    for (repair_row_on_wire& row : rows) {
-        size_t row_bytes = estimated_wire_size(row);
-        // Flush before adding, not after, so a batch never grows past the caps - except a
+    while (!rows.empty()) {
+        size_t row_bytes = estimated_wire_size(rows.front());
+        // Stop before adding, not after, so a batch never grows past the caps - except a
         // single row already over row_batch_max_bytes on its own, which still gets sent.
         if (!batch.empty() && (batch.size() >= row_batch_max_count || batch_bytes + row_bytes > row_batch_max_bytes)) {
-            batches.push_back(std::move(batch));
-            batch = std::list<repair_row_on_wire>();
-            batch_bytes = 0;
+            break;
         }
         batch_bytes += row_bytes;
-        batch.push_back(std::move(row));
+        // splice: transfers the list node, no allocation and no moved-from husk left in rows.
+        batch.splice(batch.end(), rows, rows.begin());
         co_await coroutine::maybe_yield();
     }
-    if (!batch.empty()) {
-        batches.push_back(std::move(batch));
+    co_return batch;
+}
+
+// Splits rows into batches via next_row_batch, preserving iteration order and consuming
+// `rows` — kept separate from send_rows_batched so the grouping math is unit-testable
+// without an rpc::sink.
+future<std::vector<std::list<repair_row_on_wire>>> batch_rows_for_wire(repair_rows_on_wire& rows) {
+    std::vector<std::list<repair_row_on_wire>> batches;
+    while (!rows.empty()) {
+        batches.push_back(co_await next_row_batch(rows));
     }
     co_return batches;
 }
 
-// Sends rows to sink grouped into repair_stream_cmd::row_data_batch frames. Keeps `cmd` alive
+// Sends rows to sink grouped into repair_stream_cmd::row_data_batch frames, one next_row_batch
+// group at a time, to bound peak memory and get the first batch out sooner. Keeps `cmd` alive
 // across the co_await and explicitly clear_gently()s it afterwards — sink() serializes from a
 // const reference without consuming it, so letting it fall out of scope would free synchronously.
 static future<> send_rows_batched(rpc::sink<repair_row_on_wire_with_cmd_batch>& sink, repair_rows_on_wire& rows) {
-    auto batches = co_await batch_rows_for_wire(rows);
-    for (auto it = batches.begin(); it != batches.end(); ++it) {
-        rlogger.trace("send_rows_batched: batch of {} rows", it->size());
-        auto cmd = repair_row_on_wire_with_cmd_batch{repair_stream_cmd::row_data_batch, std::move(*it)};
+    while (!rows.empty()) {
+        auto batch = co_await next_row_batch(rows);
+        rlogger.trace("send_rows_batched: batch of {} rows", batch.size());
+        auto cmd = repair_row_on_wire_with_cmd_batch{repair_stream_cmd::row_data_batch, std::move(batch)};
         std::exception_ptr ep;
         try {
             co_await sink(cmd);
@@ -315,8 +323,8 @@ static future<> send_rows_batched(rpc::sink<repair_row_on_wire_with_cmd_batch>& 
         }
         co_await utils::clear_gently(cmd.rows);
         if (ep) {
-            // clear remaining unsent batches gently, not synchronously on unwind
-            co_await utils::clear_gently(batches);
+            // clear the not-yet-batched remainder gently, not synchronously on unwind
+            co_await utils::clear_gently(rows);
             std::rethrow_exception(ep);
         }
     }
@@ -2185,9 +2193,7 @@ private:
                 auto row = std::move(std::get<0>(row_opt.value()));
                 if (row.cmd == repair_stream_cmd::row_data_batch) {
                     rlogger.trace("get_row_diff: Got repair_row_on_wire_with_cmd_batch batch");
-                    for (auto& r : row.rows) {
-                        current_rows.push_back(std::move(r));
-                    }
+                    current_rows.splice(current_rows.end(), row.rows);
                 } else if (row.cmd == repair_stream_cmd::end_of_current_rows) {
                     rlogger.trace("get_row_diff: Got repair_row_on_wire_with_cmd_batch with nullopt");
                     apply_rows_on_master_in_thread(std::move(current_rows), remote_node, update_working_row_buf::yes, update_hash_set, node_idx);
@@ -2855,9 +2861,7 @@ static future<> repair_put_row_diff_with_rpc_stream_process_op_batched(
     auto row = std::move(std::get<0>(row_opt.value()));
     if (row.cmd == repair_stream_cmd::row_data_batch) {
         rlogger.trace("Got repair_rows_on_wire from peer={}, got row_data_batch", from);
-        for (auto& r : row.rows) {
-            current_rows.push_back(std::move(r));
-        }
+        current_rows.splice(current_rows.end(), row.rows);
         co_return;
     } else if (row.cmd == repair_stream_cmd::end_of_current_rows) {
         rlogger.trace("Got repair_rows_on_wire from peer={}, got end_of_current_rows", from);
