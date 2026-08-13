@@ -31,6 +31,7 @@
 #include "sstables/sstable_set.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/storage.hh"
 #include "db/schema_tables.hh"
 #include "db/snapshot/manifest.hh"
 #include "cell_locking.hh"
@@ -4287,7 +4288,8 @@ static snapshot_tablet_info collect_snapshot_tablet_info(table& t, std::vector<s
 
 // Builds the snapshot catalog rows for the collected sstables, all owned by
 // this node.
-static utils::chunked_vector<db::snapshot_sstable_entry> make_snapshot_sstable_entries(const std::vector<snapshot_sstable_set>& sstable_sets, locator::host_id me) {
+static utils::chunked_vector<db::snapshot_sstable_entry> make_snapshot_sstable_entries(
+        const std::vector<snapshot_sstable_set>& sstable_sets, locator::host_id me) {
     return sstable_sets | std::views::transform([](auto& p) -> auto& { return *p; })
         | std::views::join | std::views::transform([&me](const sstables::sstable_snapshot_metadata& ssm) {
             return db::snapshot_sstable_entry{
@@ -4303,8 +4305,127 @@ static utils::chunked_vector<db::snapshot_sstable_entry> make_snapshot_sstable_e
         }) | std::ranges::to<utils::chunked_vector<db::snapshot_sstable_entry>>();
 }
 
+// Snapshots a table whose sstables live on object storage. Nothing is
+// copied, no snapshot directory is written. The snapshot is one empty
+// reference object per sstable, pinning its components in the bucket, plus
+// rows in the system_distributed snapshot catalog. For crash safety,
+// catalog rows first, references second, the coordinator's snapshots row commits.
+// Rows without the marker are residue, cleaned up when the tag is retaken.
+static future<> snapshot_object_storage_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards,
+        sstring name, database::snapshot_callback ssc) {
+    auto s = table_shards->schema();
+    if (!ssc) {
+        // Only the cluster snapshot flow passes the catalog callback. Without
+        // it the snapshot would be recorded nowhere.
+        throw std::invalid_argument(fmt::format("Cannot snapshot {}.{}: tables on object storage are snapshotted by the cluster snapshot API",
+                s->ks_name(), s->cf_name()));
+    }
+    if (!table_shards->uses_tablets()) {
+        throw std::invalid_argument(fmt::format("Cannot snapshot {}.{}: snapshots of tables on object storage require tablets", s->ks_name(), s->cf_name()));
+    }
+    if (!sstables::is_valid_object_storage_snapshot_tag(name)) {
+        // Validated at the API layer (snapshot_ctl); a bad tag here is a bug.
+        on_internal_error(tlogger, fmt::format("Invalid snapshot tag for a table on object storage: '{}'", name));
+    }
+
+    auto orchestrator = std::hash<sstring>()(name) % this_smp_shard_count();
+    co_await smp::submit_to(orchestrator, [&] () -> future<> {
+        tlogger.debug("Taking object-storage snapshot of {}.{}: name={}", s->ks_name(), s->cf_name(), name);
+
+        std::vector<snapshot_sstable_set> sstable_sets(this_smp_shard_count());
+        using sstable_hold = foreign_ptr<std::unique_ptr<std::vector<sstables::shared_sstable>>>;
+        std::vector<sstable_hold> holds(this_smp_shard_count());
+
+        co_await smp::invoke_on_all([&] -> future<> {
+            auto& t = *table_shards;
+            auto [tables, permit] = co_await t.snapshot_sstables();
+            auto sstables_metadata = co_await t.get_sstables_manager().collect_snapshot_metadata(tables);
+            sstable_sets[this_shard_id()] = make_foreign(
+                    std::make_unique<utils::chunked_vector<sstables::sstable_snapshot_metadata>>(std::move(sstables_metadata)));
+            // The list permit is dropped here. The shared_sstable references
+            // from `holds` keep the collected sstables alive until the snapshot
+            // references are in place.
+            holds[this_shard_id()] = make_foreign(std::make_unique<std::vector<sstables::shared_sstable>>(std::move(tables)));
+        });
+
+        auto me = sharded_db.local().get_token_metadata().get_topology().my_host_id();
+        auto tinfo = collect_snapshot_tablet_info(*table_shards, sstable_sets);
+        if (tinfo.tablets.empty()) {
+            tlogger.debug("Object-storage snapshot of {}.{}: nothing to snapshot, name={}", s->ks_name(), s->cf_name(), name);
+            co_return;
+        }
+
+        // Catalog rows go first. A row without its reference is harmless
+        // residue. A reference without a row is invisible to catalog-driven
+        // cleanup and pins the sstable forever.
+        co_await ssc(db::snapshot_entries{
+            .sstables = make_snapshot_sstable_entries(sstable_sets, me),
+            .tablets = std::move(tinfo.tablets)
+        });
+
+        std::exception_ptr ex;
+        try {
+            co_await utils::get_local_injector().inject("object_storage_snapshot_after_rows", [] {
+                return std::make_exception_ptr(std::runtime_error("injected error after writing snapshot catalog rows"));
+            });
+
+            co_await smp::invoke_on_all([&] -> future<> {
+                co_await table_shards->get_sstables_manager().create_snapshot_refs(*holds[this_shard_id()], name);
+            });
+
+            co_await utils::get_local_injector().inject("object_storage_snapshot_after_refs", [] {
+                return std::make_exception_ptr(std::runtime_error("injected error after creating snapshot references"));
+            });
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        if (ex) {
+            // Roll the references back so a failed attempt doesn't leave the
+            // sstables pinned. Overlaps with the retry cleanup but also
+            // covers attempts never retried, and releases the pins now. Best
+            // effort: whatever survives is residue for that cleanup.
+            tlogger.error("Object-storage snapshot of {}.{} name={} failed, rolling back snapshot references: {}",
+                    s->ks_name(), s->cf_name(), name, ex);
+            co_await smp::invoke_on_all([&] -> future<> {
+                auto& t = *table_shards;
+                const auto& os = std::get<data_dictionary::storage_options::s3>(t.get_storage_options().value);
+                shared_ptr<sstables::object_storage_client> client;
+                try {
+                    client = t.get_sstables_manager().get_endpoint_client(os.endpoint);
+                } catch (...) {
+                    // The endpoint was removed mid-flight. Rolling back is
+                    // best effort; the references leak until the retake
+                    // cleanup or the endpoint returns.
+                    tlogger.warn("Cannot roll back snapshot references of {}.{} name={}: {}",
+                            s->ks_name(), s->cf_name(), name, std::current_exception());
+                    co_return;
+                }
+                for (const auto& sst : *holds[this_shard_id()]) {
+                    auto sid = sst->sstable_identifier();
+                    if (!sid) {
+                        continue;
+                    }
+                    try {
+                        co_await sstables::delete_object_storage_snapshot_ref(*client, os, *sid, name, sst->generation());
+                    } catch (...) {
+                        tlogger.warn("Failed to roll back snapshot reference for {} name={}: {}", sst->get_filename(), name, std::current_exception());
+                    }
+                }
+            });
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+    });
+}
+
 // Runs the orchestration code on an arbitrary shard to balance the load.
 future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name, db::snapshot_options opts, snapshot_callback ssc) {
+    if (table_shards->get_storage_options().is_object_storage_type()) {
+        if (opts.expires_at) {
+            // Rejected at the API layer, this line shouldn't get executed.
+            on_internal_error(tlogger, "snapshot expiry is not supported for tables on object storage");
+        }
+        co_return co_await snapshot_object_storage_table_on_all_shards(sharded_db, table_shards, std::move(name), std::move(ssc));
+    }
     auto writer = std::visit(overloaded_functor{
         [&name, &opts] (const data_dictionary::storage_options::local& loc) -> std::unique_ptr<snapshot_writer> {
             if (loc.dir.empty()) {
