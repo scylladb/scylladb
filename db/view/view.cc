@@ -23,6 +23,13 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+<<<<<<< HEAD
+||||||| parent of ca9ce5714d (db/view/view: coroutinize `calculate_shard_build_step()`)
+#include <flat_map>
+=======
+#include <seastar/coroutine/as_future.hh>
+#include <flat_map>
+>>>>>>> ca9ce5714d (db/view/view: coroutinize `calculate_shard_build_step()`)
 
 #include "db/view/base_info.hh"
 #include "replica/database.hh"
@@ -2336,13 +2343,13 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
         vbi.bookkeeping_ops.push_back(add_new_view(view, get_or_create_build_step(view->view_info()->base_id())));
     }
 
-    return parallel_for_each(_base_to_build_step, [this] (auto& p) {
+    co_await parallel_for_each(_base_to_build_step, [this] (auto& p) {
         return initialize_reader_at_current_token(p.second);
-    }).then([&vbi] {
-        return seastar::when_all_succeed(vbi.bookkeeping_ops.begin(), vbi.bookkeeping_ops.end()).handle_exception([] (std::exception_ptr ep) {
-            vlogger.warn("Failed to update materialized view bookkeeping while synchronizing view builds on all shards ({}), continuing anyway.", ep);
-        });
     });
+    auto bookkeeping_fut = co_await coroutine::as_future(seastar::when_all_succeed(vbi.bookkeeping_ops.begin(), vbi.bookkeeping_ops.end()));
+    if (bookkeeping_fut.failed()) {
+        vlogger.warn("Failed to update materialized view bookkeeping while synchronizing view builds on all shards ({}), continuing anyway.", bookkeeping_fut.get_exception());
+    }
 }
 
 service::query_state& view_builder_query_state() {
