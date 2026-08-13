@@ -283,8 +283,8 @@ future<std::vector<std::list<repair_row_on_wire>>> batch_rows_for_wire(repair_ro
     std::vector<std::list<repair_row_on_wire>> batches;
     std::list<repair_row_on_wire> batch;
     size_t batch_bytes = 0;
-    for (repair_row_on_wire& row : rows) {
-        size_t row_bytes = estimated_wire_size(row);
+    while (!rows.empty()) {
+        size_t row_bytes = estimated_wire_size(rows.front());
         // Flush before adding, not after, so a batch never grows past the caps - except a
         // single row already over row_batch_max_bytes on its own, which still gets sent.
         if (!batch.empty() && (batch.size() >= row_batch_max_count || batch_bytes + row_bytes > row_batch_max_bytes)) {
@@ -293,7 +293,8 @@ future<std::vector<std::list<repair_row_on_wire>>> batch_rows_for_wire(repair_ro
             batch_bytes = 0;
         }
         batch_bytes += row_bytes;
-        batch.push_back(std::move(row));
+        // splice: transfers the list node, no allocation and no moved-from husk left in rows.
+        batch.splice(batch.end(), rows, rows.begin());
         co_await coroutine::maybe_yield();
     }
     if (!batch.empty()) {
@@ -2175,9 +2176,7 @@ private:
                 auto row = std::move(std::get<0>(row_opt.value()));
                 if (row.cmd == repair_stream_cmd::row_data_batch) {
                     rlogger.trace("get_row_diff: Got repair_row_on_wire_with_cmd_batch batch");
-                    for (auto& r : row.rows) {
-                        current_rows.push_back(std::move(r));
-                    }
+                    current_rows.splice(current_rows.end(), row.rows);
                 } else if (row.cmd == repair_stream_cmd::end_of_current_rows) {
                     rlogger.trace("get_row_diff: Got repair_row_on_wire_with_cmd_batch with nullopt");
                     apply_rows_on_master_in_thread(std::move(current_rows), remote_node, update_working_row_buf::yes, update_hash_set, node_idx);
@@ -2845,9 +2844,7 @@ static future<> repair_put_row_diff_with_rpc_stream_process_op_batched(
     auto row = std::move(std::get<0>(row_opt.value()));
     if (row.cmd == repair_stream_cmd::row_data_batch) {
         rlogger.trace("Got repair_rows_on_wire from peer={}, got row_data_batch", from);
-        for (auto& r : row.rows) {
-            current_rows.push_back(std::move(r));
-        }
+        current_rows.splice(current_rows.end(), row.rows);
         co_return;
     } else if (row.cmd == repair_stream_cmd::end_of_current_rows) {
         rlogger.trace("Got repair_rows_on_wire from peer={}, got end_of_current_rows", from);
