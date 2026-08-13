@@ -1009,11 +1009,21 @@ private:
         auto local = _sp.get_token_metadata_ptr()->get_topology().get_location();
         auto me = _sp.get_token_metadata_ptr()->get_topology().my_host_id();
         co_await coroutine::parallel_for_each(ids, [&] (const table_id& id) -> future<> {
-            co_await replica::database::snapshot_table_on_all_shards(_sp._db, id, tag, opts, [&](const db::snapshot_entries& e) -> future<> {
-                auto s = _sp._db.local().find_schema(id);
-                db::snapshot_table_helper sth(_sp.system_keyspace().query_processor());
-                co_await sth.insert_snapshot_entries(tag, s->ks_name(), s->cf_name(), local.dc, local.rack, me, e);
-            });
+            if (!_sp._db.local().get_tables_metadata().get_table_if_exists(id)) {
+                // Dropped since the operation was created.
+                slogger.warn("Snapshot '{}': table {} no longer exists, skipping", tag, id);
+                co_return;
+            }
+            try {
+                co_await replica::database::snapshot_table_on_all_shards(_sp._db, id, tag, opts, [&](const db::snapshot_entries& e) -> future<> {
+                    auto s = _sp._db.local().find_schema(id);
+                    db::snapshot_table_helper sth(_sp.system_keyspace().query_processor());
+                    co_await sth.insert_snapshot_entries(tag, s->ks_name(), s->cf_name(), local.dc, local.rack, me, e);
+                });
+            } catch (const replica::no_such_column_family&) {
+                // Dropped since the operation was created.
+                slogger.warn("Snapshot '{}': table {} no longer exists, skipping", tag, id);
+            }
         });
     }
 
