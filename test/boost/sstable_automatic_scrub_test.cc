@@ -124,4 +124,45 @@ public:
     }
 };
 
+future<> wait_on_enter(std::string_view name, size_t count = 1) {
+    auto& injector = utils::get_local_injector();
+    constexpr auto sleep_duration = std::chrono::milliseconds(100);
+    while (injector.enter_count(name) < count) {
+        co_await sleep(sleep_duration);
+    }
+}
+
+void set_scrub_time(shared_sstable sst, db_clock::time_point timestamp) {
+    auto metadata_opt = sstables::test(sst)._scylla_metadata();
+    if (metadata_opt) {
+        (*metadata_opt)->set_scrub_time(timestamp);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_auto_scrub_corrupted_ssts_with_scylla_test) {
+    automatic_scrub_test_framework test(tests::random_schema_specification::compress_sstable::yes);
+
+    auto& test_env = test.env();
+    constexpr auto sst_count = 5;
+
+    test.run(sst_count, [&test_env] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+        auto& cm = test_env.test_compaction_manager();
+
+        for (sstables::shared_sstable& sst : sstables) {
+            set_scrub_time(sst, db_clock::from_time_t(0));
+            slightly_corrupt_sstable(sst);
+        }
+
+        cm.set_scrub_period(std::chrono::seconds(3600));
+        cm.trigger_auto_scrub_timer();
+
+        wait_on_enter("automatic_scrub_compaction_done", sst_count).get();
+
+        BOOST_REQUIRE_EQUAL(table->get_sstables()->size(), sstables.size());
+        for (auto& sst : *table->get_sstables()) {
+            BOOST_REQUIRE(sst->is_quarantined());
+        }
+    });
+}
+
 } // namespace
