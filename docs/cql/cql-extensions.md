@@ -491,6 +491,7 @@ statement: `DESCRIBE SCHEMA WITH INTERNALS AND PASSWORDS`, which also includes t
 
 For more details, see [the article on DESCRIBE SCHEMA](./describe-schema.rst).
 
+(cql-per-row-ttl)=
 ## Per-row TTL
 
 CQL's traditional time-to-live (TTL) feature attaches an expiration time to
