@@ -321,6 +321,7 @@ public:
     // always recoverable from the catalog.
     future<utils::chunked_vector<sstable_snapshot_metadata>> collect_snapshot_metadata(const std::vector<shared_sstable>& ssts);
     future<> create_snapshot_refs(const std::vector<shared_sstable>& ssts, sstring name);
+    future<> remove_snapshot_refs(const std::vector<shared_sstable>& ssts, const data_dictionary::storage_options::s3& os, sstring name);
     future<utils::chunked_vector<sstable_snapshot_metadata>> take_snapshot(std::vector<shared_sstable> ssts, sstring name);
     future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const schema& s, const data_dictionary::storage_options& so);
     future<> destroy_table_storage(const data_dictionary::storage_options& so);

@@ -16,6 +16,7 @@
 #include "utils/error_injection.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
+#include "sstables/storage.hh"
 #include "sstables/sstables_registry.hh"
 #include "sstables/partition_index_cache.hh"
 #include "sstables/sstables.hh"
@@ -497,6 +498,35 @@ future<> sstables_manager::create_snapshot_refs(const std::vector<shared_sstable
         return io_check([sstable = std::move(sstable), &name] {
             return sstable->snapshot(name);
         });
+    });
+}
+
+future<> sstables_manager::remove_snapshot_refs(const std::vector<shared_sstable>& ssts, const data_dictionary::storage_options::s3& os, sstring name) {
+    if (ssts.empty()) {
+        co_return;
+    }
+    shared_ptr<object_storage_client> client;
+    try {
+        client = get_endpoint_client(os.endpoint);
+    } catch (...) {
+        // The endpoint was removed mid-flight. Rolling back is
+        // best effort; the references leak until the retake
+        // cleanup or the endpoint returns.
+        auto s = ssts.front()->get_schema();
+        smlogger.warn("Cannot roll back snapshot references of {}.{} name={}: {}",
+                s->ks_name(), s->cf_name(), name, std::current_exception());
+        co_return;
+    }
+    co_await _dir_semaphore.parallel_for_each(ssts, [&client, &os, &name] (const shared_sstable& sst) -> future<> {
+        auto sid = sst->sstable_identifier();
+        if (!sid) {
+            co_return;
+        }
+        try {
+            co_await delete_object_storage_snapshot_ref(*client, os, *sid, name, sst->generation());
+        } catch (...) {
+            smlogger.warn("Failed to roll back snapshot reference for {} name={}: {}", sst->get_filename(), name, std::current_exception());
+        }
     });
 }
 
