@@ -240,9 +240,13 @@ public:
     /**
      * Add N raft log entries to the commit log as a single operation (in a single segment).
      * Always uses force_sync::yes.
+     *
+     * Each writer names the table its entry is accounted to, which need not be the same for all
+     * of them: an entry is accounted to the table which will receive what applying it writes, and
+     * a raft log can carry entries which are applied to different tables.
      */
     future<utils::chunked_vector<rp_handle>> add_raft_entries(
-            const cf_id_type& id, utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers);
+            utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers);
 
     /**
      * Modifies the per-CF dirty cursors of any commit log segments for the column family according to the position
