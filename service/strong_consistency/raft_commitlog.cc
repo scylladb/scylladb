@@ -51,10 +51,10 @@ seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_li
 
     for (const auto& log_entry_ptr : entries) {
         logger.debug("  storing log entry: idx={}, term={}", log_entry_ptr->idx, log_entry_ptr->term);
-        writers.emplace_back(raft_commitlog_entry{.group_id = _group_id, .entry = log_entry_ptr});
+        writers.emplace_back(raft_commitlog_entry{.group_id = _group_id, .entry = log_entry_ptr}, _table_id);
     }
 
-    auto replay_handles = co_await _commit_log.add_raft_entries(_table_id, std::move(writers));
+    auto replay_handles = co_await _commit_log.add_raft_entries(std::move(writers));
 
     for (size_t i = 0; i < entries.size(); ++i) {
         const auto& log_entry_ptr = entries[i];

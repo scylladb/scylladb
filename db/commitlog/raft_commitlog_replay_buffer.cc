@@ -194,7 +194,7 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
             // Rewrite uncommitted entries to the new commitlog to obtain rp_handles
             // that ensure the commitlog segments won't be deleted.
             if (entry->idx > commit_idx) {
-                commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = group_id, .entry = entry});
+                commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = group_id, .entry = entry}, table_id);
                 const auto write_fn = [&writer](auto& out) {
                     return writer.write(out);
                 };

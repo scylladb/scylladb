@@ -84,10 +84,10 @@ future<> cl_test(noncopyable_function<future<>(commitlog&)> f) {
 
 // Write a raft log entry to the commitlog and return the rp_handle.
 future<rp_handle> write_raft_entry_to_commitlog(commitlog& cl, table_id tid, raft::group_id gid, raft::log_entry_ptr entry) {
-    commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = gid, .entry = entry});
+    commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = gid, .entry = entry}, tid);
     const auto target_size = writer.size();
-    co_return co_await cl.add(tid, target_size, db::no_timeout, db::commitlog_force_sync::yes, [entry, gid](auto& out) {
-        commitlog_raft_log_entry_writer w(raft_commitlog_entry{.group_id = gid, .entry = entry});
+    co_return co_await cl.add(tid, target_size, db::no_timeout, db::commitlog_force_sync::yes, [entry, gid, tid](auto& out) {
+        commitlog_raft_log_entry_writer w(raft_commitlog_entry{.group_id = gid, .entry = entry}, tid);
         w.write(out);
     });
 }
@@ -111,7 +111,7 @@ SEASTAR_TEST_CASE(test_commitlog_raft_log_entry_writer) {
         // Verify size() and accessor for each entry type, then write to commitlog.
         std::vector<replay_position> rps;
         for (const auto& entry : entries) {
-            commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = gid, .entry = entry});
+            commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = gid, .entry = entry}, tid);
             // size() must exceed the bare raft::log_entry serialization because
             // the writer wraps it in a commitlog_entry + raft_commitlog_entry envelope.
             BOOST_REQUIRE_GT(writer.size(), 0u);
@@ -155,6 +155,39 @@ SEASTAR_TEST_CASE(test_commitlog_raft_log_entry_writer) {
                     });
         }
         BOOST_REQUIRE_EQUAL(found, entries.size());
+    });
+}
+
+// add_raft_entries() accounts each entry to the table its own writer names, so a segment holding
+// a batch is kept alive by every table which has data in it, not just by the first one.
+SEASTAR_TEST_CASE(test_commitlog_raft_entries_are_accounted_per_table) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto first = make_table_id();
+        auto second = make_table_id();
+
+        utils::chunked_vector<commitlog_raft_log_entry_writer> writers;
+        writers.emplace_back(raft_commitlog_entry{.group_id = gid, .entry = make_command_entry(raft::term_t(1), raft::index_t(1))}, first);
+        writers.emplace_back(raft_commitlog_entry{.group_id = gid, .entry = make_command_entry(raft::term_t(1), raft::index_t(2))}, second);
+
+        auto handles = co_await log.add_raft_entries(std::move(writers));
+        BOOST_REQUIRE_EQUAL(handles.size(), 2);
+
+        rp_set first_set, second_set;
+        first_set.put(std::move(handles[0]));
+        second_set.put(std::move(handles[1]));
+
+        // Only a segment which is no longer allocating can be counted as dirty.
+        co_await log.force_new_active_segment();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        // The second entry's count was taken for the second table, so releasing the first one
+        // leaves the segment dirty...
+        log.discard_completed_segments(first, first_set);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        // ... and it goes clean only once the table the second entry names releases it too.
+        log.discard_completed_segments(second, second_set);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
     });
 }
 

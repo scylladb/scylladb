@@ -183,6 +183,11 @@ class commitlog_raft_log_entry_writer {
 public:
 protected:
     raft_commitlog_entry _item;
+    // The table the entry is accounted to. Raft entries are routed at replay by the group id in
+    // the entry itself, so this never decides what an entry means. It decides which table's flush
+    // releases the segment holding the entry, and so has to name the table which will receive
+    // whatever applying the entry writes.
+    table_id _id;
     std::size_t _size = std::numeric_limits<std::size_t>::max();
 
     template<typename Output>
@@ -190,8 +195,12 @@ protected:
     void compute_size();
 
 public:
-    explicit commitlog_raft_log_entry_writer(raft_commitlog_entry item)
-        : _item(std::move(item)) { compute_size(); }
+    commitlog_raft_log_entry_writer(raft_commitlog_entry item, table_id id)
+        : _item(std::move(item)), _id(id) { compute_size(); }
+
+    const table_id& id() const {
+        return _id;
+    }
 
     size_t size() const {
         SCYLLA_ASSERT(_size != std::numeric_limits<size_t>::max());
