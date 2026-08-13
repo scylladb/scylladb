@@ -140,7 +140,13 @@ public:
     virtual future<> destroy(const sstable& sst) = 0;
     virtual std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const = 0;
     virtual bool operator==(const storage&) const noexcept = 0;
-    virtual future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) = 0;
+    // Removes this node's reference to the sstable described by the registry
+    // entry, and the component objects if no references remain. Returns true
+    // when this node's snapshot references still pin the sstable. The caller
+    // must then retain the entry as "snapshot_owned".
+    // `delete_node_ref = false` skips deleting the node reference, for callers
+    // that know it is already gone (a retained snapshot_owned entry).
+    virtual future<bool> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner, bool delete_node_ref = true) = 0;
     // Free space available in the underlying storage.
     virtual future<uint64_t> free_space() const = 0;
     virtual future<> unlink_component(const sstable& sst, component_type) noexcept = 0;
