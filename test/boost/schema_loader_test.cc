@@ -117,6 +117,25 @@ SEASTAR_THREAD_TEST_CASE(test_udts) {
     ).get().size(), 2);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_bind_markers_rejected) {
+    db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
+
+    // The loader never evaluates the USING attributes of a dropped-columns
+    // statement, so a marker there used to be swallowed silently. Nothing can
+    // ever bind a value in a schema file, so any marker must be refused.
+    BOOST_REQUIRE_THROW(tools::load_schemas(
+                dbcfg,
+                "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int); "
+                "INSERT INTO system_schema.dropped_columns (keyspace_name, table_name, column_name, dropped_time, type) VALUES ('ks', 'cf', 'v2', 1631011979170675, 'int') USING TIMESTAMP ?; "
+    ).get(), std::exception);
+    BOOST_REQUIRE_THROW(tools::load_schemas(
+                dbcfg,
+                "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int); "
+                "INSERT INTO system_schema.dropped_columns (keyspace_name, table_name, column_name, dropped_time, type) VALUES ('ks', 'cf', 'v2', 1631011979170675, 'int') USING TIMESTAMP :ts; "
+    ).get(), std::exception);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_dropped_columns) {
     db::config dbcfg;
     dbcfg.rf_rack_valid_keyspaces(true);
