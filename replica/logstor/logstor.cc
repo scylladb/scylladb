@@ -9,6 +9,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/log.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/metrics.hh>
 #include "query/query-request.hh"
 #include "readers/from_mutations.hh"
 #include "keys/keys.hh"
