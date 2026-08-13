@@ -2621,7 +2621,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_
     cfg.streaming_read_concurrency_semaphore = &_streaming_concurrency_sem;
     cfg.compaction_concurrency_semaphore = &_compaction_concurrency_sem;
     cfg.cf_stats = &_cf_stats;
-    cfg.enable_incremental_backups = _enable_incremental_backups;
+    cfg.enable_incremental_backups = _enable_incremental_backups && !ksm.get_storage_options().is_object_storage_type();
 
     cfg.memory_compaction_scheduling_group = _dbcfg.memory_compaction_scheduling_group;
     cfg.memtable_scheduling_group = _dbcfg.memtable_scheduling_group;

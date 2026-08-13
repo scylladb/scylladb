@@ -61,6 +61,10 @@ public:
 
 using object_storage_reference_names = utils::small_vector<sstring, 3>;
 
+// Prefix shared by all native object-storage tables of a bucket. Foreign
+// locations carry their own prefix.
+inline constexpr std::string_view object_storage_default_prefix = "sstables";
+
 class opened_directory final {
     std::filesystem::path _pathname;
     file _file;
@@ -94,6 +98,10 @@ public:
     }
 };
 
+// Distinguishes the two snapshot callers at the type level: a user snapshot
+// carries the tag that names it, an incremental backup carries no tag.
+using incremental_backup = bool_class<class incremental_backup_tag>;
+
 class storage {
     friend class test;
 
@@ -118,7 +126,7 @@ public:
     using sync_dir = bool_class<struct sync_dir_tag>; // meaningful only to filesystem storage
 
     virtual future<> seal(const sstable& sst) = 0;
-    virtual future<> snapshot(const sstable& sst, sstring name) const = 0;
+    virtual future<> snapshot(const sstable& sst, sstring tag, incremental_backup incremental) const = 0;
     // `may_use_reference_sharing` is a hint: storage backends may ignore it
     // and use their natural clone method.
     virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const = 0;
@@ -154,6 +162,14 @@ public:
 
 std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schema_ptr schema, const data_dictionary::storage_options& s_opts, sstable_state state);
 future<object_storage_reference_names> list_object_storage_references(object_storage_client& client, sstring bucket, std::string_view prefix, sstable_id sid);
+// Snapshot reference name, relative to "{prefix}/{sid}/refs/". Single source
+// of the format for storage::snapshot(), the helpers below,
+// has_own_snapshot_ref() and db/snapshot/cluster_backup.cc.
+sstring object_storage_snapshot_ref_name(std::string_view tag, generation_type gen);
+
+// A snapshot tag names bucket reference objects (refs/snapshot-<tag>/...), so
+// it must be non-empty and must not contain '/'.
+bool is_valid_object_storage_snapshot_tag(std::string_view tag);
 future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager&, const schema&, const data_dictionary::storage_options& so);
 future<> destroy_table_storage(const data_dictionary::storage_options& so);
 future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::storage_options& so, sstring ks_name);
