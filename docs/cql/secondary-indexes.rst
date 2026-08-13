@@ -371,11 +371,32 @@ The following options are supported for full-text indexes:
 | ``analyzer``   | Text analyzer for tokenization. Determines how text is split into terms.                  | ``standard``      |
 |                | Supported values (case-insensitive): ``standard``, ``english``, ``german``,               |                   |
 |                | ``french``, ``spanish``, ``italian``, ``portuguese``, ``russian``, ``simple``,            |                   |
-|                | ``whitespace``. CJK analyzers (``chinese``, ``japanese``, ``korean``) are not supported.  |                   |
+|                | ``whitespace``. No other values are supported.                                            |                   |
 +----------------+-------------------------------------------------------------------------------------------+-------------------+
 | ``positions``  | Whether token positions are stored. Required for phrase queries.                          | ``true``          |
 |                | Supported values: ``true``, ``false`` (case-insensitive).                                 |                   |
 +----------------+-------------------------------------------------------------------------------------------+-------------------+
+
+The analyzers differ in how they tokenize and normalize text:
+
+* ``standard`` splits text into terms on whitespace and punctuation, lowercases
+  them, and applies a generic set of English stop words. It does not apply any
+  language-specific stemming.
+* The language analyzers (``english``, ``german``, ``french``, ``spanish``,
+  ``italian``, ``portuguese``, ``russian``) tokenize and lowercase like
+  ``standard``, but additionally apply stemming and stop-word removal specific
+  to that language, so that related word forms (e.g., ``running`` and ``run``)
+  match the same term.
+* ``simple`` lowercases text and splits on any non-alphanumeric character
+  (including punctuation); digits and letters adjacent to each other stay in
+  the same term (e.g., ``abc123`` is one term), while punctuation is dropped
+  rather than kept as part of a term or as a term of its own (e.g., ``don't``
+  becomes the terms ``don`` and ``t``). It does not apply stemming or
+  stop-word removal.
+* ``whitespace`` splits only on whitespace characters; punctuation attached to
+  a word is kept as part of that term (e.g., ``Hello, World!`` becomes the terms
+  ``Hello,`` and ``World!``). It does not apply lowercasing, stemming,
+  or stop-word removal.
 
 .. _drop-index-statement:
 

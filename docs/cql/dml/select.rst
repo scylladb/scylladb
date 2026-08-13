@@ -442,14 +442,13 @@ have a :ref:`full-text index <create-fulltext-index-statement>` created with
 and scores rows using the BM25 ranking algorithm.
 
 A full-text search query must contain **both** of the following clauses,
-referencing the **same** column:
+referencing the **same** column and the **same** search term:
 
 * A ``WHERE`` filter of the exact form ``BM25(column, 'term') > 0``.
 * An ``ORDER BY BM25(column, 'term')`` clause that ranks the matching rows.
 
 Neither clause is accepted on its own. A query that has only ``WHERE BM25()`` or
-only ``ORDER BY BM25()`` is rejected, and the two clauses must reference the same
-column.
+only ``ORDER BY BM25()`` is rejected.
 
 **Syntax:**
 
@@ -468,6 +467,9 @@ not a partition-key column.
 ``ORDER BY BM25()`` must be the only ordering in the query - it cannot be combined
 with another ``ORDER BY`` column, a second ``BM25()`` ordering, or an ``ANN``
 ordering.
+
+A ``LIMIT`` clause is mandatory; queries without ``LIMIT`` are rejected. The
+specified value must not exceed 1000.
 
 **Examples:**
 
