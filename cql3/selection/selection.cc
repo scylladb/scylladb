@@ -154,6 +154,13 @@ protected:
         virtual bool is_aggregate() const override {
             return false;
         }
+
+        // Should not be reached: a selection that has no temporaries at all is
+        // never paired with a provider - see select_statement::process_results().
+        virtual bool provide_external_values(const external_values_provider&, std::span<const bytes>, std::span<const bytes>,
+                const query::result_row_view&, const query::result_row_view*) override {
+            on_internal_error(cql_logger, "simple_selectors::provide_external_values() called, but we have no temporaries");
+        }
     };
 
     std::unique_ptr<selectors> new_selectors() const override {
@@ -221,23 +228,28 @@ is_count_rows_call(const expr::function_call& fc) {
 class selection_with_processing : public selection {
 private:
     std::vector<expr::expression> _selectors;
-    std::vector<expr::expression> _inner_loop;
+    // Each step knows the slot it accumulates in and what that slot starts a group
+    // from, so nothing here has to reason about which slots are aggregation's: the
+    // ones not named by a step belong to somebody else and are left alone.
+    std::vector<expr::aggregation_step> _inner_loop;
     std::vector<expr::expression> _outer_loop;
-    std::vector<raw_value> _initial_values_for_temporaries;
+    // Hands out the temporary slots. Arrives already carrying whatever was
+    // allocated while preparing the selectors, and keeps going from there.
+    expr::temporary_allocator _temporaries_allocator;
 public:
     selection_with_processing(schema_ptr schema, std::vector<const column_definition*> columns,
             std::vector<lw_shared_ptr<column_specification>> metadata,
-            std::vector<expr::expression> selectors)
+            std::vector<expr::expression> selectors, expr::temporary_allocator temporaries_allocator)
         : selection(schema, std::move(columns), std::move(metadata),
             contains_writetime(expr::tuple_constructor{selectors}),
             contains_ttl(expr::tuple_constructor{selectors}),
             contains_collection_mutation_attribute(expr::tuple_constructor{selectors}))
         , _selectors(std::move(selectors))
+        , _temporaries_allocator(std::move(temporaries_allocator))
     {
-        auto agg_split = expr::split_aggregation(_selectors);
+        auto agg_split = expr::split_aggregation(_selectors, _temporaries_allocator);
         _outer_loop = std::move(agg_split.outer_loop);
         _inner_loop = std::move(agg_split.inner_loop);
-        _initial_values_for_temporaries = std::move(agg_split.initial_values_for_temporaries);
     }
 
     virtual uint32_t add_column_for_post_processing(const column_definition& c) override {
@@ -259,17 +271,19 @@ public:
             // Complex case: aggregation, must pass through temporary
             auto first_func = cql3::functions::aggregate_fcts::make_first_function(c.type);
             auto& agg = first_func->get_aggregate();
-            auto temp_index = _initial_values_for_temporaries.size();
+            auto temp_index = _temporaries_allocator.allocate();
             auto temp = expr::temporary{
                 .index = temp_index,
                 .type = agg.argument_types[0],
             };
-            _inner_loop.push_back(
-                expr::function_call{
+            _inner_loop.push_back(expr::aggregation_step{
+                .temporary = temp_index,
+                .expr = expr::function_call{
                     .func = agg.aggregation_function,
                     .args = {temp, expr::column_value(&c)},
-                });
-            _initial_values_for_temporaries.push_back(raw_value::make_value(agg.initial_state));
+                },
+                .initial_value = raw_value::make_value(agg.initial_state),
+            });
             _outer_loop.push_back(
                 expr::function_call{
                     .func = agg.state_to_result_function,
@@ -394,26 +408,43 @@ protected:
     public:
         explicit selectors_with_processing(const selection_with_processing& sel)
             : _sel(sel)
-            , _temporaries(_sel._initial_values_for_temporaries)
+            , _temporaries(_sel._temporaries_allocator.nr_allocated(), raw_value::make_null())
             , _requires_thread(std::ranges::any_of(sel._selectors, [] (const expr::expression& e) {
                 return expr::find_in_expression<expr::function_call>(e, [] (const expr::function_call& fc) {
                     return std::get<shared_ptr<functions::function>>(fc.func)->requires_thread();
                 });
              }))
             , _input_row_count(0)
-        { }
+        {
+            // Slots holding group state start at their initial value; the rest
+            // stay null until their owner writes them for the first row.
+            reset();
+        }
 
         virtual bool requires_thread() const override {
             return _requires_thread;
         }
 
         virtual void reset() override {
-            _temporaries = _sel._initial_values_for_temporaries;
+            // The slots the steps accumulate in, and only those. A slot written per
+            // row must survive this: reset() runs from complete_row(), which flushes
+            // the finished group before calling add_input_row() for the row whose
+            // values have already been written - clearing them here would make the
+            // first row of every group see a null.
+            for (const auto& step : _sel._inner_loop) {
+                _temporaries[step.temporary] = step.initial_value;
+            }
             _input_row_count = 0;
         }
 
         virtual bool is_aggregate() const override {
             return !_sel._inner_loop.empty();
+        }
+
+        virtual bool provide_external_values(const external_values_provider& provider, std::span<const bytes> partition_key,
+                std::span<const bytes> clustering_key, const query::result_row_view& static_row,
+                const query::result_row_view* row) override {
+            return provider.try_fill(_temporaries, partition_key, clustering_key, static_row, row);
         }
 
         virtual std::vector<managed_bytes_opt> transform_input_row(result_set_builder& rs) override {
@@ -427,7 +458,9 @@ protected:
                     .options = rs._options,
                     .static_and_regular_timestamps = rs._timestamps,
                     .static_and_regular_ttls = rs._ttls,
-                    .temporaries = {},
+                    // Non-aggregating selectors never read aggregation state, but they
+                    // do read the provider slots.
+                    .temporaries = _temporaries,
                     .collection_element_metadata = rs._collection_element_metadata,
             };
             for (auto&& e : _sel._selectors) {
@@ -469,8 +502,8 @@ protected:
                     .temporaries = _temporaries,
                     .collection_element_metadata = rs._collection_element_metadata,
             };
-            for (size_t i = 0; i != _sel._inner_loop.size(); ++i) {
-                _temporaries[i] = expr::evaluate(_sel._inner_loop[i], inputs);
+            for (const auto& step : _sel._inner_loop) {
+                _temporaries[step.temporary] = expr::evaluate(step.expr, inputs);
             }
             ++_input_row_count;
         }
@@ -535,7 +568,8 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
     return col.index;
 }
 
-::shared_ptr<selection> selection::from_selectors(data_dictionary::database db, schema_ptr schema, const sstring& ks, const std::vector<prepared_selector>& prepared_selectors) {
+::shared_ptr<selection> selection::from_selectors(data_dictionary::database db, schema_ptr schema, const sstring& ks,
+        const std::vector<prepared_selector>& prepared_selectors, expr::temporary_allocator temporaries_allocator) {
     std::vector<const column_definition*> defs;
 
     for (auto&& [sel, alias] : prepared_selectors) {
@@ -549,7 +583,8 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
     auto metadata = collect_metadata(*schema, prepared_selectors);
     if (processes_selection(prepared_selectors) || prepared_selectors.size() != defs.size()) {
         return ::make_shared<selection_with_processing>(schema, std::move(defs), std::move(metadata),
-                prepared_selectors | std::views::transform(std::mem_fn(&prepared_selector::expr)) | std::ranges::to<std::vector>());
+                prepared_selectors | std::views::transform(std::mem_fn(&prepared_selector::expr)) | std::ranges::to<std::vector>(),
+                std::move(temporaries_allocator));
     } else {
         return ::make_shared<simple_selection>(schema, std::move(defs), std::move(metadata), false);
     }

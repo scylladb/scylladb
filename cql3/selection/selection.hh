@@ -13,14 +13,17 @@
 #include "utils/assert.hh"
 #include "bytes.hh"
 #include "cql3/expr/collection_cell_metadata.hh"
+#include "cql3/expr/temporary_allocator.hh"
 #include "schema/schema_fwd.hh"
 #include "query/query-result-reader.hh"
 #include "selector.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/functions/function.hh"
+#include "cql3/values.hh"
 #include "exceptions/exceptions.hh"
 #include "unimplemented.hh"
 #include <seastar/core/thread.hh>
+#include <span>
 
 namespace cql3 {
 
@@ -36,6 +39,37 @@ namespace selection {
 
 class raw_selector;
 class result_set_builder;
+
+// Supplies external values: read-only per-row input that doesn't come from the
+// base table, such as a BM25 relevance score or an ANN similarity score returned
+// by the vector store.
+//
+// They are external only in where they come from. Once written they live in
+// temporary slots and are read like any other - the selectors that read them,
+// via temporary{} expressions, cannot tell them from aggregation state.
+class external_values_provider {
+public:
+    virtual ~external_values_provider() = default;
+
+    // Writes this provider's external values into the current row's slots.
+    // Returns true to keep the row, false to drop it.
+    //
+    // `temporaries` is the selection's whole temporaries vector; a provider must
+    // confine itself to the slots it was allocated, since writing to any other
+    // clobbers that slot's own writer.
+    //
+    // Nothing clears a slot between rows, so a provider has to write every slot
+    // it owns on every row - with an explicit null when it has no value for one,
+    // which is how a row is kept while a value is left absent. Skipping a write
+    // silently leaves the previous row's value in place.
+    virtual bool try_fill(
+        std::vector<cql3::raw_value>& temporaries,
+        std::span<const bytes> partition_key,
+        std::span<const bytes> clustering_key,
+        const query::result_row_view& static_row,
+        const query::result_row_view* row // nullptr for static-only rows
+    ) const = 0;
+};
 
 class selectors {
 public:
@@ -61,6 +95,16 @@ public:
     virtual std::vector<managed_bytes_opt> transform_input_row(result_set_builder& rs) = 0;
 
     virtual void reset() = 0;
+
+    // Runs the provider against the current row, so its external values land in
+    // the slots it was allocated. Called once per input row, before the row is
+    // offered to the CQL filter. Returns false if the provider dropped the row.
+    virtual bool provide_external_values(
+        const external_values_provider& provider,
+        std::span<const bytes> partition_key,
+        std::span<const bytes> clustering_key,
+        const query::result_row_view& static_row,
+        const query::result_row_view* row) = 0;
 };
 
 class selection {
@@ -148,7 +192,10 @@ private:
     static std::vector<lw_shared_ptr<column_specification>> collect_metadata(const schema& schema,
         const std::vector<prepared_selector>& prepared_selectors);
 public:
-    static ::shared_ptr<selection> from_selectors(data_dictionary::database db, schema_ptr schema, const sstring& ks, const std::vector<prepared_selector>& raw_selectors);
+    /// `temporaries_allocator` carries the temporary slots already handed out while
+    /// preparing the selectors; the selection keeps allocating from it.
+    static ::shared_ptr<selection> from_selectors(data_dictionary::database db, schema_ptr schema, const sstring& ks,
+            const std::vector<prepared_selector>& raw_selectors, expr::temporary_allocator temporaries_allocator = {});
 
     virtual std::unique_ptr<selectors> new_selectors() const = 0;
 
@@ -286,9 +333,11 @@ public:
         std::vector<bytes>& _partition_key;
         std::vector<bytes>& _clustering_key;
         Filter _filter;
+        const external_values_provider* _external_values_provider;
     public:
         visitor(cql3::selection::result_set_builder& builder, const schema& s,
-                const selection& selection, Filter filter = Filter())
+                const selection& selection, Filter filter = Filter(),
+                const external_values_provider* external_values_provider = nullptr)
             : _builder(builder)
             , _schema(s)
             , _selection(selection)
@@ -296,6 +345,7 @@ public:
             , _partition_key(_builder.current_partition_key)
             , _clustering_key(_builder.current_clustering_key)
             , _filter(filter)
+            , _external_values_provider(external_values_provider)
         {}
         visitor(visitor&&) = default;
 
@@ -338,9 +388,17 @@ public:
         void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
             auto static_row_iterator = static_row.iterator();
             auto row_iterator = row.iterator();
+
+            // Inject externally supplied values and optionally drop the row.
+            if (_external_values_provider && !_builder._selectors->provide_external_values(*_external_values_provider,
+                    _partition_key, _clustering_key, static_row, &row)) {
+                return;
+            }
+
             if (!_filter(_selection, _partition_key, _clustering_key, static_row, &row)) {
                 return;
             }
+
             _builder.start_new_row();
             for (auto&& def : _selection.get_columns()) {
                 switch (def->kind) {
@@ -369,9 +427,16 @@ public:
 
         uint64_t accept_partition_end(const query::result_row_view& static_row) {
             if (_row_count == 0) {
+                // Inject provider values for static-only rows.
+                if (_external_values_provider && !_builder._selectors->provide_external_values(*_external_values_provider,
+                        _partition_key, _clustering_key, static_row, nullptr)) {
+                    return 0;
+                }
+
                 if (!_filter(_selection, _partition_key, _clustering_key, static_row, nullptr)) {
                     return _filter.get_rows_dropped();
                 }
+
                 _builder.start_new_row();
                 auto static_row_iterator = static_row.iterator();
                 for (auto&& def : _selection.get_columns()) {

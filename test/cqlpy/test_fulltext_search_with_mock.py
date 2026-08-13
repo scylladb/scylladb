@@ -192,3 +192,172 @@ def test_fts_ascii_column_executes(cql, test_keyspace, vector_store_mock):
         vector_store_mock.set_next_bm25_response(200, bm25_response(RESPONSE_PK_REVERSED))
         rows = list(cql.execute(f"SELECT id FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {NUM_ROWS}"))
         assert [r.id for r in rows] == RESPONSE_PK_REVERSED
+
+
+def test_bm25_in_select_returns_scores(cql, fts_table, vector_store_mock):
+    """SELECT BM25 must return each row's own score, in vector-store order, and skip a stale id absent from the base table."""
+    table, _ = fts_table
+
+    # id=99 is a stale key not present in the table; it must be skipped without
+    # shifting or corrupting the scores of the surrounding real ids.
+    mock_data = [(4, 1.00), (3, 1.25), (99, 1.50), (2, 1.75), (1, 2.00), (0, 2.25)]
+    expected = [(id, score) for id, score in mock_data if id != 99]
+    vector_store_mock.set_next_bm25_response(200, bm25_response(
+        [id for id, _ in mock_data], scores=[s for _, s in mock_data]))
+
+    rows = list(cql.execute(
+        f"SELECT id, BM25(content, 'hello') AS score FROM {table} "
+        f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {len(mock_data)}"))
+
+    assert len(rows) == len(expected)
+    for row, (rid, score) in zip(rows, expected):
+        assert row.id == rid
+        assert row.score == pytest.approx(score)
+
+
+def test_bm25_in_select_skips_multiple_stale_keys(cql, fts_table, vector_store_mock):
+    """SELECT BM25 must cope with several stale ids in a row, and with stale ids leading and trailing the result list."""
+    table, _ = fts_table
+
+    # The vector store index can be stale and return keys of rows that are no
+    # longer in the base table. Here ids 9x are all absent, covering the three
+    # shapes the skipping loop has to handle: stale ids before the first real
+    # one, several consecutive stale ids in the middle, and a stale id last
+    # (which drives the loop off the end of the result list).
+    stale = {95, 96, 97, 98, 99}
+    mock_data = [(97, 1.00), (98, 1.25), (4, 1.50), (3, 1.75),
+                 (95, 2.00), (96, 2.25), (2, 2.50), (1, 2.75), (0, 3.00), (99, 3.25)]
+    expected = [(id, score) for id, score in mock_data if id not in stale]
+    vector_store_mock.set_next_bm25_response(200, bm25_response(
+        [id for id, _ in mock_data], scores=[s for _, s in mock_data]))
+
+    rows = list(cql.execute(
+        f"SELECT id, BM25(content, 'hello') AS score FROM {table} "
+        f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {len(mock_data)}"))
+
+    assert len(rows) == len(expected)
+    for row, (rid, score) in zip(rows, expected):
+        assert row.id == rid
+        assert row.score == pytest.approx(score)
+
+
+def test_bm25_in_select_returns_correct_scores_with_clustering_key(cql, test_keyspace, vector_store_mock):
+    """SELECT BM25 on a table with a clustering key must attach the correct score to each (pk, ck), skipping stale entries that don't exist in the table."""
+    schema = "pk int, ck int, content text, PRIMARY KEY (pk, ck)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+
+        # (99, 999) is a stale (pk,ck) not present in the table; it must be
+        # skipped without shifting or corrupting the scores of surrounding rows.
+        mock_data = [(3, 40, 1.00), (99, 999, 1.25), (1, 20, 1.37), (2, 30, 1.74), (1, 10, 2.11)]
+        expected = [(pk, ck, score) for pk, ck, score in mock_data if (pk, ck) != (99, 999)]
+        for pk, ck, _ in expected:
+            cql.execute(f"INSERT INTO {table} (pk, ck, content) VALUES ({pk}, {ck}, 'hello')")
+
+        vector_store_mock.set_next_bm25_response(200, json.dumps({
+            "primary_keys": {"pk": [pk for pk, _, _ in mock_data], "ck": [ck for _, ck, _ in mock_data]},
+            "scores": [score for _, _, score in mock_data],
+        }))
+
+        rows = list(cql.execute(
+            f"SELECT pk, ck, BM25(content, 'hello') AS score FROM {table} "
+            f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {len(mock_data)}"))
+
+        assert len(rows) == len(expected)
+        for row, (pk, ck, score) in zip(rows, expected):
+            assert row.pk == pk
+            assert row.ck == ck
+            assert row.score == pytest.approx(score)
+
+
+def test_bm25_in_select_bind_marker_mismatch_raises(cql, fts_setup_with_mock, vector_store_mock):
+    """SELECT BM25 with a bind marker that evaluates to a different term than ORDER BY must raise."""
+    table, _ = fts_setup_with_mock
+
+    stmt = cql.prepare(
+        f"SELECT id, BM25(content, ?) AS score FROM {table} "
+        f"WHERE BM25(content, ?) > 0 ORDER BY BM25(content, ?) LIMIT {NUM_ROWS}")
+    # All three markers with the same value: OK
+    vector_store_mock.set_next_bm25_response(200, bm25_response(RESPONSE_PK_REVERSED))
+    cql.execute(stmt, ["hello", "hello", "hello"])
+    # SELECT marker differs from ORDER BY marker: raises
+    with pytest.raises(InvalidRequest, match="same search term"):
+        cql.execute(stmt, ["world", "hello", "hello"])
+
+
+def test_bm25_in_select_nested_unaliased_column_name(cql, fts_setup_with_mock):
+    """SELECT CAST(BM25(...) AS double) without an alias must not leak internal @external_value in the column name."""
+    table, _ = fts_setup_with_mock
+
+    rows = list(cql.execute(
+        f"SELECT CAST(BM25(content, 'hello') AS double) FROM {table} "
+        f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {NUM_ROWS}"))
+    assert len(rows) == NUM_ROWS
+    col_names = rows[0]._fields
+    assert any("bm25" in name.lower() for name in col_names), f"Expected BM25 column name, got {col_names}"
+    assert not any("external_value" in name for name in col_names), f"Internal name leaked: {col_names}"
+
+
+def test_bm25_hidden_pk_columns_not_leaked(cql, test_keyspace, vector_store_mock):
+    """With SELECT BM25() PK/CK columns added internally to match scores to rows must never leak into the client-visible result."""
+    schema = "pk int, ck int, content text, PRIMARY KEY (pk, ck)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+
+        # (pk, ck, score) in the order the mock VS will return them.
+        items = [(3, 30, 300.0), (2, 20, 200.0), (1, 10, 100.0)]
+        for pk, ck, _ in items:
+            cql.execute(f"INSERT INTO {table} (pk, ck, content) VALUES ({pk}, {ck}, 'hello')")
+
+        vector_store_mock.set_next_bm25_response(200, json.dumps({
+            "primary_keys": {"pk": [pk for pk, _, _ in items], "ck": [ck for _, ck, _ in items]},
+            "scores": [score for _, _, score in items],
+        }))
+
+        # PK/CK are added internally to match BM25 scores to rows, regardless of column
+        # order or which other columns are selected. They must never leak into the
+        # client-visible result, and each score must stay attached to the right row.
+        bm25_col = "BM25(content, 'hello') AS score"
+        select_columns_variants = [
+            [bm25_col],
+            ["pk", bm25_col],
+            [bm25_col, "pk"],
+            ["content", bm25_col],
+            [bm25_col, "content"],
+        ]
+        for columns in select_columns_variants:
+            select_clause = ", ".join(columns)
+            print(f"Testing hidden PK/CK columns with SELECT {select_clause}")
+            rows = list(cql.execute(
+                f"SELECT {select_clause} FROM {table} "
+                f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 3"))
+            expected_fields = {col.split(" AS ")[-1] for col in columns}
+            assert set(rows[0]._fields) == expected_fields, (
+                f"SELECT {select_clause}: expected fields {expected_fields}, got {rows[0]._fields}")
+            for row, (pk, _ck, score) in zip(rows, items):
+                assert row.score == pytest.approx(score)
+                if "pk" in expected_fields:
+                    assert row.pk == pk
+                if "content" in expected_fields:
+                    assert row.content == "hello"
+
+
+def test_bm25_in_select_with_aggregate_rejected(cql, fts_table, vector_store_mock):
+    """Aggregation over a full-text search is refused.
+
+    Worth pinning, because it is what keeps the two users of the temporary slot
+    space apart: the score arrives in a slot allocated during prepare, and an
+    aggregate's running state would live in a slot of its own. They are laid out
+    to coexist, but no query can currently produce both at once. If this
+    restriction is ever lifted, that layout is what needs re-checking first -
+    in particular that a group boundary does not clear the score of the row
+    being processed.
+    """
+    table, _ = fts_table
+
+    for select in ["max(BM25(content, 'hello'))",
+                   "count(*), BM25(content, 'hello')"]:
+        with pytest.raises(InvalidRequest, match="cannot be run with aggregation"):
+            cql.execute(
+                f"SELECT {select} FROM {table} "
+                f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 5")

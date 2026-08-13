@@ -4,6 +4,7 @@
 #pragma once
 
 #include "expression.hh"
+#include "cql3/expr/temporary_allocator.hh"
 
 #include "bytes.hh"
 #include "keys/keys.hh"
@@ -287,24 +288,36 @@ unsigned aggregation_depth(const cql3::expr::expression& e);
 cql3::expr::expression levellize_aggregation_depth(const cql3::expr::expression& e, unsigned depth);
 
 
+// One step of the aggregation inner loop. Everything about it travels together:
+// evaluate `expr` for every row of a group, keep the running state in temporary
+// slot `temporary`, and start each group from `initial_value`.
+struct aggregation_step {
+    size_t temporary;
+    expression expr;
+    cql3::raw_value initial_value;
+};
+
 struct aggregation_split_result {
-    std::vector<expression> inner_loop;
+    std::vector<aggregation_step> inner_loop;
     std::vector<expression> outer_loop;
-    std::vector<cql3::raw_value> initial_values_for_temporaries; // same size as inner_loop
 };
 
 // Given a vector of aggergation expressions, split them into an inner loop that
 // calls the aggregating function on each input row, and an outer loop that calls
 // the final function on temporaries and generate the result.
 //
-// inner_loop should be evaluated with for each input row in a group, and its
-// results stored in temporaries seeded from initial_values_for_temporaries
+// Each step of inner_loop should be evaluated for each input row in a group, and its
+// result stored in the step's temporary, which the group starts from the step's
+// initial value.
 //
 // outer_loop should be evaluated once for each group, just with temporaries
 // as input.
 //
-// If the expressions don't contain aggregates, inner_loop and initial_values_for_temporaries
-// are empty, and outer_loop should be evaluated for each loop.
-aggregation_split_result split_aggregation(std::span<const expression> aggregation);
+// If the expressions don't contain aggregates, inner_loop is empty and outer_loop
+// should be evaluated for each loop.
+//
+// Slots for the aggregation state come from `allocator`, so they cannot collide with
+// temporaries anyone else introduced.
+aggregation_split_result split_aggregation(std::span<const expression> aggregation, temporary_allocator& allocator);
 
 }
