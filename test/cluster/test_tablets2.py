@@ -874,6 +874,80 @@ async def test_concurrent_table_drop_and_major(manager: ManagerClient):
             logger.info("Check that major was successfully aborted on migration")
             await s1_log.wait_for(f"ongoing compactions for table {ks}.test .* due to table removal", from_mark=s1_mark)
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_leaves_cleanup_stage_during_major_compaction(manager: ManagerClient):
+    """Reproducer for SCYLLADB-3758: tablet migration stuck in stage=cleanup.
+
+    table::parallel_foreach_compaction_group_view() holds one
+    compaction_group::_async_gate holder across a major compaction of each of
+    compaction_group::all_views() (three of them), run sequentially. Tablet cleanup goes
+    compaction_group::stop(), which aborts the tasks registered at that instant and only
+    then waits on that gate. Since perform_major_compaction() passes
+    throw_if_stopping::no, the abort surfaces as a successful return, so the iteration
+    just advances to the next view and registers a fresh major compaction that the abort
+    loop has already walked past -- the gate never drains and the tablet never leaves
+    stage=cleanup.
+
+    In production the wait is unbounded rather than infinite: each per-view major
+    acquires the shard-wide single-unit _maintenance_ops_sem before checking
+    can_proceed(), so it queues behind every other tablet's major on the shard. The
+    injection below stands in for that queue.
+
+    Unlike test_concurrent_tablet_migration_and_major above, the injection is *not*
+    one-shot: with one_shot=True only the first view parks, views two and three finish
+    immediately and the gate holder is released, which is why that test passes even
+    without the fix.
+    """
+    src = await manager.server_add()
+    await manager.disable_tablet_balancing()
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+                                          " AND tablets = {'initial': 1}") as ks:
+        # Created directly rather than with new_test_table(), whose finally-block DROPs the
+        # table unconditionally. On the failing path this test deliberately leaves a tablet
+        # stuck mid-migration, and that DROP then blocks behind it until the driver's client
+        # timeout, masking the failure with cassandra.OperationTimedOut. new_test_keyspace()
+        # is fine: it skips its DROP when the body raises.
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, t text);")
+
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, t) VALUES ({k}, '{k}');") for k in range(256)])
+        # Give the major compaction something to do, so it really reaches do_run().
+        await manager.api.flush_keyspace(src.ip_addr, ks)
+
+        dst = await manager.server_add()
+        dst_host_id = await manager.get_host_id(dst.server_id)
+
+        src_log = await manager.server_open_log(src.server_id)
+        src_mark = await src_log.mark()
+
+        await manager.api.enable_injection(src.ip_addr, "major_compaction_wait", one_shot=False)
+
+        logger.info("Starting table-wide major compaction")
+        compaction = asyncio.create_task(manager.api.keyspace_compaction(src.ip_addr, ks))
+        await manager.api.wait_for_injection_enter(src.ip_addr, "major_compaction_wait")
+
+        replicas = await get_all_tablet_replicas(manager, src, ks, 'test')
+        assert len(replicas) == 1, f"expected a single tablet, got {len(replicas)}"
+        tablet = replicas[0]
+
+        logger.info("Migrating the tablet away, which puts it into stage=cleanup")
+        migration = asyncio.create_task(manager.api.move_tablet(
+            src.ip_addr, ks, 'test',
+            *tablet.replicas[0], dst_host_id, 0, tablet.last_token))
+
+        # Confirm the source really entered tablet cleanup, so that a timeout below can
+        # only mean "stuck in cleanup" and not a stall in an earlier stage such as
+        # streaming. This line is emitted by cleanup's own abort of the parked major.
+        # Note the slash: compaction_stopped_exception formats "<ks>/<table>".
+        await src_log.wait_for(f"Compaction for {ks}/test was stopped due to: tablet cleanup",
+                               from_mark=src_mark)
+        logger.info("Tablet reached stage=cleanup on the source")
+
+        # move_tablet returns only once the migration has left stage=cleanup.
+        await asyncio.wait_for(migration, timeout=30)
+        await asyncio.wait_for(compaction, timeout=30)
+
 async def assert_tablet_count_metric_value_for_shards(manager: ManagerClient, server: ServerInfo, expected_count_per_shard: list[int]):
     tablet_count_metric_name = "scylla_tablets_count"
     metrics = await manager.metrics.query(server.ip_addr)

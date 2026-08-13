@@ -462,6 +462,10 @@ private:
 
 public:
     // Stops ongoing compaction of a given table and/or compaction_type.
+    // Never fails: any error encountered while stopping is logged and swallowed, so
+    // callers may rely on the returned future resolving successfully. In particular it
+    // is safe to co_await it while holding a future that must still be awaited
+    // afterwards (see compaction_group::stop()).
     future<> stop_ongoing_compactions(sstring reason, compaction::compaction_group_view* t = nullptr, std::optional<compaction_type> type_opt = {}) noexcept;
 
     future<> await_ongoing_compactions(compaction_group_view* t);

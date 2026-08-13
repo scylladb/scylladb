@@ -3236,9 +3236,16 @@ compaction_group::~compaction_group() {
 }
 
 future<> compaction_group::stop(sstring reason) noexcept {
-    if (_async_gate.is_closed()) {
+    if (stopped()) {
         co_return;
     }
+    // Mark the gate closed before stopping compactions, and only wait for it to drain
+    // below. Same reasoning as in storage_group::stop(): table-wide iterations hold this
+    // gate across a *sequence* of per-view operations (see
+    // table::parallel_foreach_compaction_group_view()), so unless they can observe that
+    // this group is being stopped, aborting the currently registered task merely lets
+    // them start a new one for the next view, and the gate never drains.
+    auto closed_gate_fut = _async_gate.close();
   // FIXME: indentation
   for (auto view : all_views()) {
     co_await _t._compaction_manager.stop_ongoing_compactions(reason, view);
@@ -3246,7 +3253,9 @@ future<> compaction_group::stop(sstring reason) noexcept {
     if (_t.uses_logstor()) {
         co_await get_logstor_compaction_manager().stop_ongoing_compactions(*this);
     }
-    co_await _async_gate.close();
+    // compaction_manager::stop_ongoing_compactions swallows all encountered errors. So the closed_gate_fut
+    // future will not get abandoned.
+    co_await std::move(closed_gate_fut);
     auto flush_future = co_await seastar::coroutine::as_future(flush());
 
     co_await flush_separator();
@@ -5598,6 +5607,14 @@ compaction::compaction_group_view& table::try_get_compaction_group_view_with_sta
 future<> table::parallel_foreach_compaction_group_view(std::function<future<>(compaction::compaction_group_view&)> action) {
     return parallel_foreach_compaction_group([action = std::move(action)] (compaction_group& cg) -> future<> {
        for (auto view : cg.all_views()) {
+           // The gate holder taken by parallel_foreach_compaction_group() spans every
+           // view, so re-check it between views: once this group starts being stopped
+           // (tablet cleanup, table removal), starting work for a further view would
+           // hold the gate open and block the stop. Skipping is the intended behaviour
+           // for table-wide ops racing a migration, see parallel_foreach_storage_group().
+           if (cg.stopped()) {
+               co_return;
+           }
            co_await action(*view);
        }
     });
