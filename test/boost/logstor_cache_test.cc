@@ -84,11 +84,15 @@ void populate(primary_index& index, const primary_index_key& key, const mutation
     BOOST_REQUIRE(index.populate_cache(key, entry->location, m));
 }
 
-mutation_partition lookup(primary_index& index, const primary_index_key& key, schema_ptr schema) {
+mutation lookup_mutation(primary_index& index, const primary_index_key& key, schema_ptr schema) {
     auto result = index.lookup_for_read(key, schema, true);
     BOOST_REQUIRE(result);
     BOOST_REQUIRE(result->cached_mutation);
-    return std::move(result->cached_mutation->partition());
+    return std::move(*result->cached_mutation);
+}
+
+mutation_partition lookup(primary_index& index, const primary_index_key& key, schema_ptr schema) {
+    return std::move(lookup_mutation(index, key, std::move(schema)).partition());
 }
 
 bool lookup_exists(primary_index& index, const primary_index_key& key, schema_ptr schema) {
