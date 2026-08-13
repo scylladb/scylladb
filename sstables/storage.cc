@@ -874,6 +874,10 @@ future<object_storage_reference_names> list_object_storage_references(object_sto
     co_return refs;
 }
 
+std::string_view object_storage_prefix(const data_dictionary::storage_options::object_storage& os) {
+    return os.location ? std::string_view(*os.location) : object_storage_default_prefix;
+}
+
 future<size_t> object_storage_base::num_references(sstable_id sid) const {
     auto refs = co_await list_object_storage_references(*_client, _bucket, prefix(), sid);
     co_return refs.size();
@@ -921,6 +925,20 @@ sstring object_storage_snapshot_ref_name(std::string_view tag, generation_type g
 
 bool is_valid_object_storage_snapshot_tag(std::string_view tag) {
     return !tag.empty() && tag.find('/') == std::string_view::npos;
+}
+
+future<> delete_object_storage_snapshot_ref(object_storage_client& client,
+        const data_dictionary::storage_options::object_storage& os,
+        sstable_id sid, std::string_view tag, generation_type gen) {
+    auto ref_name = object_name(sstring(os.bucket), object_storage_prefix(os), sid, object_storage_snapshot_ref_name(tag, gen));
+    try {
+        co_await client.delete_object(ref_name);
+        sstlog.debug("Deleted snapshot reference {}", ref_name.str());
+    } catch (const storage_io_error& e) {
+        if (e.code().value() != ENOENT) {
+            throw;
+        }
+    }
 }
 
 void object_storage_base::open(sstable& sst) {

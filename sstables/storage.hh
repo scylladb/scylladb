@@ -166,10 +166,22 @@ public:
 
 std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schema_ptr schema, const data_dictionary::storage_options& s_opts, sstable_state state);
 future<object_storage_reference_names> list_object_storage_references(object_storage_client& client, sstring bucket, std::string_view prefix, sstable_id sid);
+// The bucket prefix the given storage options resolve to. Must match the
+// object_storage_base constructor.
+std::string_view object_storage_prefix(const data_dictionary::storage_options::object_storage& os);
+
 // Snapshot reference name, relative to "{prefix}/{sid}/refs/". Single source
 // of the format for storage::snapshot(), the helpers below,
 // has_own_snapshot_ref() and db/snapshot/cluster_backup.cc.
 sstring object_storage_snapshot_ref_name(std::string_view tag, generation_type gen);
+
+// Deletes one snapshot reference object. A missing reference is not an error.
+// Only for references on sstables known to be alive.
+// A reference that may be the sstable's last claim must go
+// through release_object_storage_snapshot_ref() instead.
+future<> delete_object_storage_snapshot_ref(object_storage_client& client,
+        const data_dictionary::storage_options::object_storage& os,
+        sstable_id sid, std::string_view tag, generation_type gen);
 
 // A snapshot tag names bucket reference objects (refs/snapshot-<tag>/...), so
 // it must be non-empty and must not contain '/'.
