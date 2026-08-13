@@ -1154,6 +1154,21 @@ future<> snapshot_table_helper::insert_snapshot_sstables(std::string_view snapsh
     co_await do_insert_snapshot_sstables(_qp, snapshot_name, ks, table, dc, rack, sstables, cl);
 }
 
+future<> snapshot_table_helper::delete_snapshot_tablet_entry(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+        std::string_view dc, dht::token first_token, db::consistency_level cl) {
+    static const sstring query = format("DELETE FROM {}.{}"
+        " WHERE snapshot_name = ? AND keyspace_name = ? AND table_name = ? AND datacenter = ? AND first_token = ?"
+        , system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_TABLETS
+    );
+
+    co_await _qp.execute_internal(
+            query,
+            cl,
+            internal_distributed_query_state(),
+            { sstring(snapshot_name), sstring(ks), sstring(table), sstring(dc), dht::token::to_int64(first_token) },
+            cql3::query_processor::cache_internal::yes).discard_result();
+}
+
 future<utils::chunked_vector<snapshot_sstable_cleanup_entry>>
 snapshot_table_helper::get_snapshot_sstables_for_cleanup(std::string_view snapshot_name, std::string_view ks, std::string_view table,
         std::string_view dc, std::string_view rack, db::consistency_level cl) const {

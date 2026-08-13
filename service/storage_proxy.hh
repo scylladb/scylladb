@@ -18,6 +18,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/execution_stage.hh>
 #include <seastar/core/scheduling_specific.hh>
+#include <seastar/core/semaphore.hh>
 #include "db/read_repair_decision.hh"
 #include "db/write_type.hh"
 #include "db/hints/manager.hh"
