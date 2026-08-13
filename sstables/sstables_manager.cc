@@ -471,26 +471,38 @@ atomic_deletion sstables_manager::make_atomic_deletion(std::vector<shared_sstabl
     return atomic_deletion(std::move(ssts));
 }
 
-future<utils::chunked_vector<sstable_snapshot_metadata>> sstables_manager::take_snapshot(std::vector<shared_sstable> ssts, sstring name) {
+future<utils::chunked_vector<sstable_snapshot_metadata>> sstables_manager::collect_snapshot_metadata(const std::vector<shared_sstable>& ssts) {
     utils::chunked_vector<sstable_snapshot_metadata> sstables_metadata;
+    sstables_metadata.reserve(ssts.size());
 
-    co_await _dir_semaphore.parallel_for_each(ssts, [&] (sstables::shared_sstable sstable) {
+    for (const auto& sstable : ssts) {
         auto& sst_stats = sstable->get_stats_metadata();
-        sstable_snapshot_metadata md = {
+        sstables_metadata.push_back(sstable_snapshot_metadata{
             .id = sstable->sstable_identifier()->uuid(),
             .toc_name = sstable->component_basename(sstables::component_type::TOC),
             .data_size = sstable->data_size(),
             .index_size = sstable->index_size(),
             .first_token = dht::token::to_int64(sstable->get_first_decorated_key().token()),
             .last_token = dht::token::to_int64(sstable->get_last_decorated_key().token()),
-            .repaired_at = sst_stats.repaired_at, 
-        };
-        sstables_metadata.push_back(std::move(md));
-        return io_check([sstable, &name] {
+            .repaired_at = sst_stats.repaired_at,
+        });
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return sstables_metadata;
+}
+
+future<> sstables_manager::create_snapshot_refs(const std::vector<shared_sstable>& ssts, sstring name) {
+    co_await _dir_semaphore.parallel_for_each(ssts, [&name] (sstables::shared_sstable sstable) {
+        return io_check([sstable = std::move(sstable), &name] {
             return sstable->snapshot(name);
         });
     });
+}
 
+future<utils::chunked_vector<sstable_snapshot_metadata>> sstables_manager::take_snapshot(std::vector<shared_sstable> ssts, sstring name) {
+    auto sstables_metadata = co_await collect_snapshot_metadata(ssts);
+    co_await create_snapshot_refs(ssts, name);
     co_return sstables_metadata;
 }
 
