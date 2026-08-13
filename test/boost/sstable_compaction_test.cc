@@ -44,6 +44,7 @@
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/sstable_run_based_compaction_strategy_for_tests.hh"
 #include "test/lib/random_schema.hh"
+#include "test/lib/error_injection.hh"
 #include "mutation/mutation_compactor.hh"
 #include "db/config.hh"
 #include "mutation_writer/partition_based_splitting_writer.hh"
@@ -8246,5 +8247,63 @@ SEASTAR_TEST_CASE(test_compaction_output_is_not_leaked_when_attach_fails) {
         BOOST_REQUIRE_EQUAL(after, expected);
     });
 }
+
+static void test_scrub_validates_component_digests(test_env& env, sstables::component_type type) {
+    scrub_test_framework<random_schema::yes> test(compress_sstable::no);
+
+    auto schema = test.schema();
+
+    auto muts = tests::generate_random_mutations(test.random_schema()).get();
+
+    test.run(schema, muts, [type] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
+        scoped_error_injection injection{"sstable_digest_mismatch_found"};
+
+        corrupt_sstable(sst, type);
+
+        compaction::compaction_type_options::scrub opts = {
+            .operation_mode = compaction::compaction_type_options::scrub::mode::validate,
+        };
+        auto scrub = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+        BOOST_REQUIRE(scrub);
+        auto errors = scrub->validation_errors;
+        BOOST_REQUIRE_NE(errors, 0);
+        BOOST_REQUIRE_GT(utils::get_local_injector().enter_count_on_all("sstable_digest_mismatch_found").get(), 0);
+    });
+}
+
+SEASTAR_TEST_CASE(test_scrub_validates_toc_digest) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future();
+#endif
+    return test_env::do_with_async([](test_env& env) { test_scrub_validates_component_digests(env, component_type::TOC); });
+}
+
+SEASTAR_TEST_CASE(test_scrub_validates_scylla_digest) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future();
+#endif
+    return test_env::do_with_async([](test_env& env) { test_scrub_validates_component_digests(env, component_type::Scylla); });
+}
+
+SEASTAR_TEST_CASE(test_scrub_validates_index_digest) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future();
+#endif
+    return test_env::do_with_async([](test_env& env) { test_scrub_validates_component_digests(env, component_type::Index); });
+}
+
+SEASTAR_TEST_CASE(test_scrub_validates_statistics_digest) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future();
+#endif
+    return test_env::do_with_async([](test_env& env) { test_scrub_validates_component_digests(env, component_type::Statistics); });
+}
+
 
 BOOST_AUTO_TEST_SUITE_END()

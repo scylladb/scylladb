@@ -1341,6 +1341,7 @@ future<uint32_t> sstable::compute_component_file_digest(file f, size_t size) con
 void sstable::validate_component_digest(component_type type, uint32_t computed_digest) const {
     auto expected = get_component_digest(type);
     if (expected && *expected != computed_digest) {
+        utils::get_local_injector().enter("sstable_digest_mismatch_found");
         auto msg = fmt::format("{} digest mismatch in {}: expected {}, computed {}",
                                type, get_filename(), *expected, computed_digest);
         if (_ignore_component_digest_mismatch) {
@@ -1372,6 +1373,7 @@ future<> sstable::validate_scylla_digest_value() {
     if (stored_digest != disk_digest) {
         auto msg = fmt::format("{} digest value does not match the on-disk value in {}: expected {}, read {}",
             component_type::Scylla, get_filename(), stored_digest, disk_digest);
+        utils::get_local_injector().enter("sstable_digest_mismatch_found");
         if (_ignore_component_digest_mismatch) {
             sstlog.warn("{}", msg);
         } else {
