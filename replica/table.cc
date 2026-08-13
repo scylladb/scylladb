@@ -2668,8 +2668,22 @@ compaction_group::do_update_sstable_sets_on_compaction_completion(compaction::co
                 auto& cg = _t.compaction_group_for_sstable(sst);
                 _cg_desc[&cg].desc.new_sstables.push_back(sst);
             }
-            // The group that triggered compaction is the only one to have sstables removed from it.
-            _cg_desc[&_cg].desc.old_sstables = _desc.old_sstables;
+            // Remove each input sstable from the group that actually owns it.
+            // That is usually _cg, the group the compaction runs on, but it isn't
+            // guaranteed to be: an output sstable is routed to its group through
+            // the tablet map, by compaction_group_for_sstable() above, whereas the
+            // sstable is removed in a later replacer call, and a tablet merge can
+            // swap the tablet map in between. A garbage-collected sstable added to
+            // the new main group after such a swap would then be looked up in _cg,
+            // a merging group which never held it, and fail the check below.
+            // The sstable knows which group holds it, so ask it rather than
+            // recomputing the routing. Falls back to _cg for an sstable that
+            // belongs to no group, to report it below as the input we failed to
+            // remove.
+            for (auto& sst : _desc.old_sstables) {
+                auto* owner = sst->get_compaction_group();
+                _cg_desc[owner ? owner : &_cg].desc.old_sstables.push_back(sst);
+            }
             for (auto& [cg, d] : _cg_desc) {
                 size_t removed_sstables = 0;
                 d.main_sstable_set_builder_result = co_await _builder.build_new_list(*cg->main_sstables(), cg->make_main_sstable_set(),
