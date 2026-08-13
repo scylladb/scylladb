@@ -21,6 +21,7 @@
 #include "utils/s3/creds.hh"
 #include "credentials_providers/aws_credentials_provider_chain.hh"
 #include "utils/s3/client_fwd.hh"
+#include "utils/s3/throttling_controller.hh"
 
 using namespace seastar;
 class memory_data_sink_buffers;
@@ -133,6 +134,10 @@ class client : public enable_shared_from_this<client> {
         void register_metrics(std::string class_name, std::string host);
     };
     std::unordered_map<seastar::scheduling_group, group_client> _https;
+    // Send brake for this client, shared by every scheduling group on the shard.
+    std::unique_ptr<throttling_controller> _request_limiter;
+    seastar::metrics::metric_groups _client_metrics;
+    void register_client_metrics();
     semaphore _rebalance_sem{1};
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
@@ -177,9 +182,12 @@ class client : public enable_shared_from_this<client> {
     future<> get_object_header(sstring object_name, http::client::reply_handler handler, seastar::abort_source* = nullptr);
 public:
 
-    client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<seastar::http::retry_strategy> rs = nullptr);
+    client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<seastar::http::retry_strategy> rs = nullptr,
+           std::unique_ptr<throttling_controller> tc = nullptr);
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf = {});
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<seastar::http::retry_strategy> rs, global_factory gf = {});
+    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<seastar::http::retry_strategy> rs,
+                                  std::unique_ptr<throttling_controller> tc, global_factory gf = {});
     static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, global_factory gf = {}, unsigned connections_per_shard = endpoint_config::default_connections_per_shard);
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
