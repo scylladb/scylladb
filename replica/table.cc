@@ -4245,6 +4245,64 @@ public:
     }
 };
 
+struct snapshot_tablet_info {
+    std::optional<int64_t> tablet_count;
+    std::optional<locator::tablet_layout> layout;
+    std::vector<db::snapshot_tablet_entry> tablets;
+};
+
+// Maps each collected sstable to the tablet owning its first token (recording
+// the tablet id on the metadata in place) and collects the set of tablets
+// covered by the snapshot. Returns empty info for vnode tables.
+static snapshot_tablet_info collect_snapshot_tablet_info(table& t, std::vector<snapshot_sstable_set>& sstable_sets) {
+    snapshot_tablet_info info;
+    if (!t.uses_tablets()) {
+        return info;
+    }
+    auto s = t.schema();
+    auto erm = t.get_effective_replication_map();
+    auto& tm = erm->get_token_metadata().tablets().get_tablet_map(s->id());
+    info.tablet_count = tm.tablet_count();
+    info.layout = tm.get_layout();
+    std::unordered_set<size_t> tids;
+    for (auto& ssts : sstable_sets) {
+        for (auto& sst : *ssts) {
+            auto tok = sst.first_token;
+            auto tid = tm.get_tablet_id(dht::token::from_int64(tok));
+            sst.tablet_id = tid.id;
+            if (tids.emplace(tid.id).second) {
+                auto& tinfo = tm.get_tablet_info(tid);
+                info.tablets.emplace_back(db::snapshot_tablet_entry{
+                    .tablet_id = tid.id,
+                    .first_token = tm.get_first_token(tid),
+                    .last_token = tm.get_last_token(tid),
+                    .repair_time = tinfo.repair_time,
+                    .repaired_at = tinfo.sstables_repaired_at,
+                });
+            }
+        }
+    }
+    return info;
+}
+
+// Builds the snapshot catalog rows for the collected sstables, all owned by
+// this node.
+static utils::chunked_vector<db::snapshot_sstable_entry> make_snapshot_sstable_entries(const std::vector<snapshot_sstable_set>& sstable_sets, locator::host_id me) {
+    return sstable_sets | std::views::transform([](auto& p) -> auto& { return *p; })
+        | std::views::join | std::views::transform([&me](const sstables::sstable_snapshot_metadata& ssm) {
+            return db::snapshot_sstable_entry{
+                .sstable_id = sstables::sstable_id(ssm.id),
+                .first_token = dht::token::from_int64(ssm.first_token),
+                .last_token = dht::token::from_int64(ssm.last_token),
+                .toc_name = ssm.toc_name,
+                .node = me,
+                .tablet_id = ssm.tablet_id.value_or(0),
+                .state = db::snapshot_state::local,
+                .repaired_at = ssm.repaired_at,
+            };
+        }) | std::ranges::to<utils::chunked_vector<db::snapshot_sstable_entry>>();
+}
+
 // Runs the orchestration code on an arbitrary shard to balance the load.
 future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name, db::snapshot_options opts, snapshot_callback ssc) {
     auto writer = std::visit(overloaded_functor{
@@ -4294,35 +4352,9 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         tlogger.debug("snapshot {}: seal_snapshot", name);
         const auto& topology = sharded_db.local().get_token_metadata().get_topology();
         auto me = topology.my_host_id();
-        std::optional<int64_t> tablet_count;
-        std::optional<locator::tablet_layout> tablet_layout;
-        std::vector<db::snapshot_tablet_entry> tablets;
-        std::unordered_set<size_t> tids;
-        if (t.uses_tablets()) {
-            auto erm = t.get_effective_replication_map();
-            auto& tm = erm->get_token_metadata().tablets().get_tablet_map(s->id());
-            tablet_count = tm.tablet_count();
-            tablet_layout = tm.get_layout();
-            for (auto& ssts : sstable_sets) {
-                for (auto& sst : *ssts) {
-                    auto tok = sst.first_token;
-                    auto tid = tm.get_tablet_id(dht::token::from_int64(tok));
-                    sst.tablet_id = tid.id;
-                    if (tids.emplace(tid.id).second) {
-                        auto& tinfo = tm.get_tablet_info(tid);
-                        tablets.emplace_back(db::snapshot_tablet_entry{
-                            .tablet_id = tid.id,
-                            .first_token = tm.get_first_token(tid),
-                            .last_token = tm.get_last_token(tid),
-                            .repair_time = tinfo.repair_time,
-                            .repaired_at = tinfo.sstables_repaired_at,
-                        });
-                    }
-                }
-            }
-        }
-        co_await write_manifest(topology, *writer, sstable_sets, tablets, name, opts, s, 
-                                tablet_count, tablet_layout).handle_exception([&] (std::exception_ptr ptr) {
+        auto tinfo = collect_snapshot_tablet_info(t, sstable_sets);
+        co_await write_manifest(topology, *writer, sstable_sets, tinfo.tablets, name, opts, s,
+                                tinfo.tablet_count, tinfo.layout).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
         });
@@ -4330,24 +4362,10 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
 
-        if (ssc && !tablets.empty()) {
-            auto sstables = sstable_sets | std::views::transform([](auto& p) -> auto& { return *p; })
-                | std::views::join | std::views::transform([&me](const sstables::sstable_snapshot_metadata& ssm) {
-                    return db::snapshot_sstable_entry{
-                        .sstable_id = sstables::sstable_id(ssm.id),
-                        .first_token = dht::token::from_int64(ssm.first_token),
-                        .last_token = dht::token::from_int64(ssm.last_token),
-                        .toc_name = ssm.toc_name,
-                        .node = me,
-                        .tablet_id = ssm.tablet_id.value_or(0),
-                        .state = db::snapshot_state::local,
-                        .repaired_at = ssm.repaired_at,
-                    };
-                }) | std::ranges::to<utils::chunked_vector<db::snapshot_sstable_entry>>();
-
+        if (ssc && !tinfo.tablets.empty()) {
             co_await ssc(db::snapshot_entries{
-                .sstables = std::move(sstables), 
-                .tablets = std::move(tablets)
+                .sstables = make_snapshot_sstable_entries(sstable_sets, me),
+                .tablets = std::move(tinfo.tablets)
             });
         }
 
