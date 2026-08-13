@@ -688,17 +688,31 @@ async def test_reject_user_provided_timestamps(manager: ScyllaClusterManager):
                 await cql.run_async(f"UPDATE {table} USING TIMESTAMP 23 SET v = 13 WHERE pk = 0")
             with pytest.raises(InvalidRequest, match=error_msg):
                 await cql.run_async(f"DELETE FROM {table} USING TIMESTAMP 23 WHERE pk = 0")
-            # FIXME(SCYLLADB-977):
-            # Add test cases for batches with timestamps. Remember to
-            # handle both whole-batch timestamps, e.g.
-            #   BEGIN BATCH USING TIMESTAMP ts
-            #     ...
-            #   APPLY BATCH
-            # as well as timestamps for individual items, e.g.
-            #   BEGIN BATCH
-            #     INSERT INTO ... USING TIMESTAMP st;
-            #     ...
-            #   APPLY BATCH
+            # A whole-batch timestamp, rejected when the batch statement is prepared.
+            with pytest.raises(InvalidRequest, match=error_msg):
+                await cql.run_async(f"""
+                    BEGIN BATCH USING TIMESTAMP 23
+                        INSERT INTO {table} (pk, v) VALUES (0, 13);
+                        INSERT INTO {table} (pk, v) VALUES (1, 13);
+                    APPLY BATCH
+                """)
+            # Timestamps on individual batch items, rejected when the inner
+            # statements are prepared.
+            with pytest.raises(InvalidRequest, match=error_msg):
+                await cql.run_async(f"""
+                    BEGIN BATCH
+                        INSERT INTO {table} (pk, v) VALUES (0, 13) USING TIMESTAMP 23;
+                        INSERT INTO {table} (pk, v) VALUES (1, 13);
+                    APPLY BATCH
+                """)
+            # A whole-batch TTL is rejected by the same validation, like the
+            # eventually consistent batch rejects it.
+            with pytest.raises(InvalidRequest, match="Global TTL on the BATCH statement is not supported"):
+                await cql.run_async(f"""
+                    BEGIN BATCH USING TTL 100
+                        INSERT INTO {table} (pk, v) VALUES (0, 13);
+                    APPLY BATCH
+                """)
 
 async def test_forward_cql_prepared_with_bound_values(manager: ScyllaClusterManager):
     """

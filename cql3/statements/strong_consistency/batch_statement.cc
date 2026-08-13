@@ -140,6 +140,12 @@ void batch_statement::validate(type t) const {
     if (t == type::UNLOGGED) {
         throw exceptions::invalid_request_exception("Unlogged batches are not supported with strongly consistent tables");
     }
+    if (_attrs->is_time_to_live_set()) {
+        throw exceptions::invalid_request_exception("Global TTL on the BATCH statement is not supported.");
+    }
+    if (_attrs->is_timestamp_set()) {
+        throw exceptions::invalid_request_exception("Strongly consistent queries don't support user-provided timestamps");
+    }
 
     schema_ptr batch_schema;
     for (const auto& s: _statements) {
