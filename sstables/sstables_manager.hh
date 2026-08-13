@@ -313,7 +313,15 @@ public:
     }
 
     atomic_deletion make_atomic_deletion(std::vector<shared_sstable> ssts);
-    future<utils::chunked_vector<sstable_snapshot_metadata>> take_snapshot(std::vector<shared_sstable> ssts, sstring jsondir);
+    // The two halves of take_snapshot(), exposed separately so callers can
+    // interleave work between collecting the snapshot metadata and creating
+    // the on-storage snapshot links/references. The object-storage cluster
+    // snapshot flow records the metadata in the snapshot catalog before
+    // any reference object exists, so that a crashed snapshot attempt is
+    // always recoverable from the catalog.
+    future<utils::chunked_vector<sstable_snapshot_metadata>> collect_snapshot_metadata(const std::vector<shared_sstable>& ssts);
+    future<> create_snapshot_refs(const std::vector<shared_sstable>& ssts, sstring name);
+    future<utils::chunked_vector<sstable_snapshot_metadata>> take_snapshot(std::vector<shared_sstable> ssts, sstring name);
     future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const schema& s, const data_dictionary::storage_options& so);
     future<> destroy_table_storage(const data_dictionary::storage_options& so);
     future<> init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir);
