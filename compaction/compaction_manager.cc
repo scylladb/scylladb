@@ -1684,6 +1684,41 @@ public:
     virtual void abort() noexcept override {
         return compaction_task_executor::abort(_as);
     }
+private:
+    future<> maybe_validate_component_digests(std::span<sstables::shared_sstable> sstables) {
+        if (!_cm.automatic_scrub_enabled()) {
+            co_return;
+        }
+
+        co_await coroutine::parallel_for_each(sstables, [this] (sstables::shared_sstable& sst) -> future<> {
+            if (!_cm.should_be_automatically_scrubbed(sst, compaction_manager::for_regular_compaction::yes)) {
+                co_return;
+            }
+
+            std::exception_ptr ex;
+            try {
+                co_await sst->validate_digests(sstables::sstable::skip_data_digest::yes);
+            } catch (const sstables::malformed_sstable_exception&) {
+                ex = std::current_exception();
+            }
+
+            if (ex) [[unlikely]] {
+                _cm._validation_errors++;
+                try {
+                    utils::get_local_injector().inject("maybe_validate_component_digests_quarantine_fail", [] {
+                        throw std::runtime_error{"maybe_validate_component_digests_quarantine_fail"};
+                    });
+                    co_await sst->change_state(sstables::sstable_state::quarantine);
+                } catch (...) {
+                    auto s = _compacting_table->schema();
+                    throw compaction_aborted_exception(s->ks_name(), s->cf_name(),
+                        fmt::format("failed to quarantine invalid sstable {}", sst));
+                }
+                std::rethrow_exception(ex);
+            }
+        });
+    }
+
 protected:
     virtual future<> run() override {
         return perform();
@@ -1754,8 +1789,13 @@ protected:
             std::exception_ptr ex;
 
             try {
+                // The scrub time will be updated by creating new sstables.
+                co_await maybe_validate_component_digests(descriptor.sstables);
+                utils::get_local_injector().enter("compaction_regular_compaction_validation_done");
+
                 bool should_update_history = this->should_update_history(descriptor.options.type());
                 compaction_result res = co_await compact_sstables(std::move(descriptor), _compaction_data, on_replace);
+                // FIXME: if eligible for automatic scrub, digest mismatch in the Data should quarantine.
                 cmlog.debug("Finished minor compaction old_sstables={} new_sstables={} sstables_reapired_at={} range={} uuid={} compaction_uuid={}",
                         old_sstables, res.new_sstables, compacting_table()->get_sstables_repaired_at(), compacting_table()->token_range(), uuid, _compaction_data.compaction_uuid);
                 finish_compaction();
