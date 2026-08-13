@@ -5877,3 +5877,82 @@ BOOST_AUTO_TEST_CASE(temporary_printer) {
     // User output names the replaced expression but marks it as a temporary.
     BOOST_REQUIRE(format("{:user}", replacing).find("@temporary(") == 0);
 }
+
+// A slot handed out is never handed out again, whoever asks.
+BOOST_AUTO_TEST_CASE(temporary_allocator_hands_out_distinct_slots) {
+    temporary_allocator allocator;
+    BOOST_REQUIRE_EQUAL(allocator.nr_allocated(), 0);
+
+    std::vector<size_t> slots;
+    for (int i = 0; i != 4; ++i) {
+        slots.push_back(allocator.allocate());
+    }
+    BOOST_REQUIRE_EQUAL(slots, (std::vector<size_t>{0, 1, 2, 3}));
+    BOOST_REQUIRE_EQUAL(allocator.nr_allocated(), 4);
+
+    // Handing it on carries the high-water mark, which is how a selection takes
+    // over allocating. It moves rather than copies, so there is never a second
+    // allocator handing out slots the first one thinks are free.
+    static_assert(!std::copyable<temporary_allocator>);
+    temporary_allocator taken_over = std::move(allocator);
+    BOOST_REQUIRE_EQUAL(taken_over.allocate(), 4);
+    BOOST_REQUIRE_EQUAL(taken_over.nr_allocated(), 5);
+}
+
+// Aggregation takes fresh slots from the allocator, never one somebody else took.
+BOOST_AUTO_TEST_CASE(split_aggregation_allocates_fresh_temporaries) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression count_r = prepare_expression(
+        function_call{
+            .func = functions::function_name::native_function("count"),
+            .args = {column_value(table_schema->get_column_definition("r"))},
+        },
+        db, "test_ks", table_schema.get(), nullptr);
+
+    auto temporary_index_of = [] (const expression& e) {
+        // Both loops reference their state through the aggregate's first argument.
+        const auto& call = as<function_call>(e);
+        return as<temporary>(call.args[0]).index;
+    };
+    auto slots_of = [] (const auto& inner_loop) {
+        std::vector<size_t> slots;
+        for (const auto& step : inner_loop) {
+            slots.push_back(step.temporary);
+        }
+        return slots;
+    };
+
+    for (size_t already_taken : {size_t(0), size_t(1), size_t(5)}) {
+        temporary_allocator allocator;
+        for (size_t i = 0; i != already_taken; ++i) {
+            allocator.allocate();
+        }
+
+        std::vector<expression> selectors = {count_r};
+        auto split = split_aggregation(selectors, allocator);
+
+        BOOST_REQUIRE_EQUAL(split.inner_loop.size(), 1);
+        // The step's slot is the one both loops actually reference.
+        BOOST_REQUIRE_EQUAL(slots_of(split.inner_loop), std::vector<size_t>{already_taken});
+        BOOST_REQUIRE_EQUAL(temporary_index_of(split.inner_loop[0].expr), already_taken);
+        BOOST_REQUIRE_EQUAL(temporary_index_of(split.outer_loop[0]), already_taken);
+        // And the allocator knows how many slots exist afterwards, which is what
+        // sizes the temporaries vector.
+        BOOST_REQUIRE_EQUAL(allocator.nr_allocated(), already_taken + 1);
+    }
+
+    // Two aggregates take two distinct slots.
+    temporary_allocator allocator;
+    for (int i = 0; i != 4; ++i) {
+        allocator.allocate();
+    }
+    std::vector<expression> two = {count_r, count_r};
+    auto split = split_aggregation(two, allocator);
+    BOOST_REQUIRE_EQUAL(split.inner_loop.size(), 2);
+    BOOST_REQUIRE_EQUAL(slots_of(split.inner_loop), (std::vector<size_t>{4, 5}));
+    BOOST_REQUIRE_EQUAL(temporary_index_of(split.inner_loop[0].expr), 4);
+    BOOST_REQUIRE_EQUAL(temporary_index_of(split.inner_loop[1].expr), 5);
+    BOOST_REQUIRE_EQUAL(allocator.nr_allocated(), 6);
+}

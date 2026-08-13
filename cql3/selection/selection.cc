@@ -226,17 +226,21 @@ private:
     // ones not named by a step belong to somebody else and are left alone.
     std::vector<expr::aggregation_step> _inner_loop;
     std::vector<expr::expression> _outer_loop;
+    // Hands out the temporary slots. Arrives already carrying whatever was
+    // allocated while preparing the selectors, and keeps going from there.
+    expr::temporary_allocator _temporaries_allocator;
 public:
     selection_with_processing(schema_ptr schema, std::vector<const column_definition*> columns,
             std::vector<lw_shared_ptr<column_specification>> metadata,
-            std::vector<expr::expression> selectors)
+            std::vector<expr::expression> selectors, expr::temporary_allocator temporaries_allocator)
         : selection(schema, std::move(columns), std::move(metadata),
             contains_writetime(expr::tuple_constructor{selectors}),
             contains_ttl(expr::tuple_constructor{selectors}),
             contains_collection_mutation_attribute(expr::tuple_constructor{selectors}))
         , _selectors(std::move(selectors))
+        , _temporaries_allocator(std::move(temporaries_allocator))
     {
-        auto agg_split = expr::split_aggregation(_selectors);
+        auto agg_split = expr::split_aggregation(_selectors, _temporaries_allocator);
         _outer_loop = std::move(agg_split.outer_loop);
         _inner_loop = std::move(agg_split.inner_loop);
     }
@@ -260,7 +264,7 @@ public:
             // Complex case: aggregation, must pass through temporary
             auto first_func = cql3::functions::aggregate_fcts::make_first_function(c.type);
             auto& agg = first_func->get_aggregate();
-            auto temp_index = _inner_loop.size();
+            auto temp_index = _temporaries_allocator.allocate();
             auto temp = expr::temporary{
                 .index = temp_index,
                 .type = agg.argument_types[0],
@@ -397,7 +401,7 @@ protected:
     public:
         explicit selectors_with_processing(const selection_with_processing& sel)
             : _sel(sel)
-            , _temporaries(_sel._inner_loop.size(), raw_value::make_null())
+            , _temporaries(_sel._temporaries_allocator.nr_allocated(), raw_value::make_null())
             , _requires_thread(std::ranges::any_of(sel._selectors, [] (const expr::expression& e) {
                 return expr::find_in_expression<expr::function_call>(e, [] (const expr::function_call& fc) {
                     return std::get<shared_ptr<functions::function>>(fc.func)->requires_thread();
@@ -544,7 +548,8 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
     return col.index;
 }
 
-::shared_ptr<selection> selection::from_selectors(data_dictionary::database db, schema_ptr schema, const sstring& ks, const std::vector<prepared_selector>& prepared_selectors) {
+::shared_ptr<selection> selection::from_selectors(data_dictionary::database db, schema_ptr schema, const sstring& ks,
+        const std::vector<prepared_selector>& prepared_selectors, expr::temporary_allocator temporaries_allocator) {
     std::vector<const column_definition*> defs;
 
     for (auto&& [sel, alias] : prepared_selectors) {
@@ -558,7 +563,8 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
     auto metadata = collect_metadata(*schema, prepared_selectors);
     if (processes_selection(prepared_selectors) || prepared_selectors.size() != defs.size()) {
         return ::make_shared<selection_with_processing>(schema, std::move(defs), std::move(metadata),
-                prepared_selectors | std::views::transform(std::mem_fn(&prepared_selector::expr)) | std::ranges::to<std::vector>());
+                prepared_selectors | std::views::transform(std::mem_fn(&prepared_selector::expr)) | std::ranges::to<std::vector>(),
+                std::move(temporaries_allocator));
     } else {
         return ::make_shared<simple_selection>(schema, std::move(defs), std::move(metadata), false);
     }

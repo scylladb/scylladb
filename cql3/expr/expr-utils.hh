@@ -4,6 +4,7 @@
 #pragma once
 
 #include "expression.hh"
+#include "cql3/expr/temporary_allocator.hh"
 
 #include "bytes.hh"
 #include "keys/keys.hh"
@@ -314,6 +315,9 @@ struct aggregation_split_result {
 //
 // If the expressions don't contain aggregates, inner_loop is empty and outer_loop
 // should be evaluated for each loop.
-aggregation_split_result split_aggregation(std::span<const expression> aggregation);
+//
+// Slots for the aggregation state come from `allocator`, so they cannot collide with
+// temporaries anyone else introduced.
+aggregation_split_result split_aggregation(std::span<const expression> aggregation, temporary_allocator& allocator);
 
 }

@@ -13,6 +13,7 @@
 #include "utils/assert.hh"
 #include "bytes.hh"
 #include "cql3/expr/collection_cell_metadata.hh"
+#include "cql3/expr/temporary_allocator.hh"
 #include "schema/schema_fwd.hh"
 #include "query/query-result-reader.hh"
 #include "selector.hh"
@@ -148,7 +149,10 @@ private:
     static std::vector<lw_shared_ptr<column_specification>> collect_metadata(const schema& schema,
         const std::vector<prepared_selector>& prepared_selectors);
 public:
-    static ::shared_ptr<selection> from_selectors(data_dictionary::database db, schema_ptr schema, const sstring& ks, const std::vector<prepared_selector>& raw_selectors);
+    /// `temporaries_allocator` carries the temporary slots already handed out while
+    /// preparing the selectors; the selection keeps allocating from it.
+    static ::shared_ptr<selection> from_selectors(data_dictionary::database db, schema_ptr schema, const sstring& ks,
+            const std::vector<prepared_selector>& raw_selectors, expr::temporary_allocator temporaries_allocator = {});
 
     virtual std::unique_ptr<selectors> new_selectors() const = 0;
 
