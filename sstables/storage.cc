@@ -91,7 +91,7 @@ public:
     {}
 
     virtual future<> seal(const sstable& sst) override;
-    virtual future<> snapshot(const sstable& sst, sstring name) const override;
+    virtual future<> snapshot(const sstable& sst, sstring tag, incremental_backup incremental) const override;
     virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const override;
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
@@ -455,7 +455,8 @@ future<> filesystem_storage::link_with_excluded_components(const sstable& sst, g
     sstlog.trace("link_with_excluded_components: {} -> generation={}: done", sst.get_filename(), new_gen);
 }
 
-future<> filesystem_storage::snapshot(const sstable& sst, sstring name) const {
+future<> filesystem_storage::snapshot(const sstable& sst, sstring tag, incremental_backup incremental) const {
+    auto name = incremental ? sstring("backups") : seastar::format("{}/{}", sstables::snapshots_dir, tag);
     std::filesystem::path snapshot_dir = _base_dir.path() / name;
     co_await sst.sstable_touch_directory_io_check(snapshot_dir);
     co_await create_links_common(sst, snapshot_dir.native(), sst._generation, link_mode::default_mode);
@@ -716,7 +717,7 @@ public:
     }
 
     future<> seal(const sstable& sst) override;
-    future<> snapshot(const sstable& sst, sstring name) const override;
+    future<> snapshot(const sstable& sst, sstring tag, incremental_backup incremental) const override;
     future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const override;
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
@@ -1176,9 +1177,23 @@ future<> object_storage_base::unlink_component(const sstable& sst, component_typ
     }
 }
 
-future<> object_storage_base::snapshot(const sstable& sst, sstring name) const {
-    on_internal_error(sstlog, "Snapshotting S3 objects not implemented");
-    co_return;
+future<> object_storage_base::snapshot(const sstable& sst, sstring tag, incremental_backup incremental) const {
+    if (incremental) {
+        sstlog.warn("Ignoring incremental backup request for {} sstable {}: incremental backups are not supported on object storage",
+                _type, sst.get_filename());
+        co_return;
+    }
+
+    // The snapshot is just one empty reference object: {prefix}/{sid}/refs/snapshot-<tag>/<generation>
+    // Components are deleted only once the refs/ listing is empty, so this
+    // marker pins the sstable's data for as long as it exists.
+    if (tag.empty() || tag.find('/') != std::string_view::npos) {
+        throw std::invalid_argument(fmt::format("Invalid snapshot tag for an object storage table: '{}'", tag));
+    }
+    auto sid = get_sstable_identifier(sst);
+    auto ref_name = object_name(_bucket, prefix(), sid, fmt::format("refs/snapshot-{}/{}", tag, sst.generation()));
+    co_await put_object(ref_name, ::memory_data_sink_buffers{}, object_storage_attributes{});
+    sstlog.debug("Created snapshot reference {}", ref_name.str());
 }
 
 future<> object_storage_base::copy_components(const sstable& sst, sstable_id sid, const std::unordered_set<component_type>& excluded_components) const {
