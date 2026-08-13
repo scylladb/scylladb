@@ -117,6 +117,8 @@ std::string_view format_as(row_level_diff_detect_algorithm algo) {
         return "send_full_set";
     case send_full_set_rpc_stream:
         return "send_full_set_rpc_stream";
+    case send_full_set_rpc_stream_batched:
+        return "send_full_set_rpc_stream_batched";
     };
     return "unknown";
 }
