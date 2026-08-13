@@ -428,6 +428,14 @@ SEASTAR_TEST_CASE(test_benchmark_hot_index_needs_more_than_20pct) {
         uint64_t index_misses_after = get_index_misses();
         uint64_t index_miss_delta = index_misses_after - index_misses_before;
 
+        // Report the resident index working set so it is visible whether this
+        // workload's index actually approaches the former 20% cap. With small
+        // per-partition indexes (BTI/ME) it typically does not, so this case
+        // validates "hot index pages stay cached under the unified LRU", not
+        // "the index exceeds 20% of cache" -- see the note below.
+        uint64_t index_used_bytes = e.local_db().row_cache_tracker().get_partition_index_cache_stats().used_bytes;
+        testlog.info("Hot-index working set: {} KiB resident", index_used_bytes / 1024);
+
         if (index_miss_delta != 0) {
             // Allow retries if background activity caused the misses.
             BOOST_REQUIRE_GT(reads_after, reads_expected);
@@ -443,9 +451,14 @@ SEASTAR_TEST_CASE(test_benchmark_hot_index_needs_more_than_20pct) {
         }
         BOOST_REQUIRE_EQUAL(index_miss_delta, 0);
 
+        // NOTE: this asserts the hot index stays cached under the unified LRU;
+        // it does not, by itself, prove the index working set exceeds the old
+        // 20%% cap (the log line above shows the resident index bytes). The cap
+        // only mattered for formats with large per-partition index pages; the
+        // regression case for that lives in test_legacy_index_cap_would_help.
         testlog.info("Hot-index benchmark PASSED: {} CK lookups × {} partitions × 5 repeats = {} reads, "
-                     "0 partition_index_cache misses. Without the 20%% cap, hot index pages "
-                     "stayed cached because the LRU recognized their high access frequency.",
+                     "0 partition_index_cache misses -- hot index pages stayed cached under the "
+                     "unified LRU by recency/frequency.",
                      hot_ck_count, pk_number, hot_ck_count * pk_number * 5);
     }, std::move(cfg));
 }

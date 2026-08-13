@@ -25,25 +25,12 @@ the oldest index entry regardless of its access pattern:
     +-----------------------------------------+
 ```
 
-This caused two problems:
+The cap was an **upper bound** on index memory, not a reservation for it.
+Below 20%, index pages and data rows competed in the same LRU, so cold index
+pages were already reclaimable for data — the cap did nothing to protect or
+waste space in that regime. Its only active effect was the harmful one:
 
-### Problem 1: Cold index wastes cache space
-
-When index pages are cold (read once, never again), the 20% reservation
-holds them in cache at the expense of hot data rows:
-
-```
-    200 MB cache with 20% index cap
-    +------------------+----+
-    |  data rows       | idx|   idx = cold index pages
-    |  (160 MB usable) |(40)|   occupying reserved space
-    +------------------+----+
-                         ^^^
-                    wasted space — these pages are cold
-                    but can't be reclaimed for data
-```
-
-### Problem 2: Hot index starved by the cap
+### Problem: Hot index starved by the cap
 
 When index pages are genuinely hot (e.g., clustering key lookups that
 repeatedly need the same partition index pages), the 20% cap force-evicts
@@ -190,18 +177,14 @@ Hot subset: 5000 rows (~50 MB).
 
     What would happen WITH the old 20% cap:
 
-    Step 1: Warm up 5000 hot rows
-    +----------------------------------------------+
-    | hot rows (maybe 45 MB) |  idx reserve (40 MB) |
-    +----------------------------------------------+
-                               can't be reclaimed
-                               even though it's cold
-
-    Step 2: Re-read hot rows — some evicted to make room
-    Result: partition misses — rows evicted for cold index
+    The cap was an upper bound, not a reserve. While cold index stays under
+    20% of the cache it competes in the same LRU and is reclaimed for hot
+    rows exactly as it is without the cap, so this cold-index case behaves
+    identically either way. The cap only changes behaviour once index would
+    exceed 20% and gets force-evicted while still hot -- that is Case 2 below.
 ```
 
-**Measured**: 0 partition_misses after warmup across 3 full passes of 5000 rows.
+**Measured** (no cap, this patch): 0 partition_misses after warmup across 3 full passes of 5000 rows.
 
 ### Case 2: Hot index needs more than 20%
 

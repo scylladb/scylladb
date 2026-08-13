@@ -161,13 +161,19 @@ public:
         if (new_width_log2 == _width_log2) {
             return;
         }
+        // Build the replacement table first and only publish the new
+        // dimensions after the allocation succeeds. Otherwise a throwing
+        // resize() would leave _block_mask/_width addressing a table that was
+        // already cleared, so a subsequent estimate()/increment() would index
+        // out of bounds. chunked_vector allocates/frees in 128 KB chunks, so
+        // this won't stall the reactor even for multi-MB sketches.
+        const size_t new_width = size_t(1) << new_width_log2;
+        utils::chunked_vector<uint64_t> new_table;
+        new_table.resize(new_width / 4);
+        _table = std::move(new_table);
         _width_log2 = new_width_log2;
-        _width = size_t(1) << _width_log2;
+        _width = new_width;
         _block_mask = _width / 32 - 1;
-        // chunked_vector allocates/frees in 128 KB chunks, so this
-        // won't stall the reactor even for multi-MB sketches.
-        _table.clear();
-        _table.resize(_width / 4);
     }
 };
 

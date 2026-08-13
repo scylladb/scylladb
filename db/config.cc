@@ -1668,7 +1668,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , nodeops_watchdog_timeout_seconds(this, "nodeops_watchdog_timeout_seconds", liveness::LiveUpdate, value_status::Used, 120, "Time in seconds after which node operations abort when not hearing from the coordinator.")
     , nodeops_heartbeat_interval_seconds(this, "nodeops_heartbeat_interval_seconds", liveness::LiveUpdate, value_status::Used, 10, "Period of heartbeat ticks in node operations.")
     , cache_index_pages(this, "cache_index_pages", liveness::LiveUpdate, value_status::Used, true,
-        "Keep SSTable index pages in the global cache after a SSTable read. Expected to improve performance for workloads with big partitions, but may degrade performance for workloads with small partitions. The amount of memory usable by index cache is limited with ``index_cache_fraction``.")
+        "Keep SSTable index pages in the global cache after a SSTable read. Expected to improve performance for workloads with big partitions, but may degrade performance for workloads with small partitions. Index pages now share the regular row-cache LRU: hot pages survive by recency and cold pages are evicted first, so their memory is no longer bounded by a separate cap (``index_cache_fraction`` is deprecated and ignored).")
     , index_cache_fraction(this, "index_cache_fraction", liveness::LiveUpdate, value_status::Deprecated, 0.2,
         "Deprecated. Index entries now share the regular LRU with row cache entries. Hot index pages survive naturally via recency; cold pages get evicted first. No hard cap is needed. This parameter is accepted but ignored.")
     , tinylfu_sketch_entries_per_mb(this, "tinylfu_sketch_entries_per_mb", liveness::LiveUpdate, value_status::Used, 1024.0,
@@ -1682,7 +1682,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "New entries enter the window before competing for main cache admission. "
         "Smaller values provide stronger scan resistance. Default 0.01 (1%). "
         "Valid range: [0.01, 1.0]. A value of 1.0 disables the admission gate "
-        "and the policy degenerates to classic LRU.")
+        "and the policy degenerates to classic LRU. Changing this at runtime "
+        "takes effect for entries admitted after the change; entries already "
+        "resident keep their segment placement and converge to the new "
+        "behaviour as they are re-admitted through the cache.")
     , consistent_cluster_management(this, "consistent_cluster_management", value_status::Deprecated, true, "Use RAFT for cluster management and DDL.")
     , force_gossip_topology_changes(this, "force_gossip_topology_changes", value_status::Deprecated, false, "Force gossip-based topology operations in a fresh cluster. Only the first node in the cluster must use it. The rest will fall back to gossip-based operations anyway. This option should be used only for testing.  Note: gossip topology changes are incompatible with tablets.")
     , recovery_leader(this, "recovery_leader", liveness::LiveUpdate, value_status::Used, utils::null_uuid(), "Host ID of the node restarted first while performing the Manual Raft-based Recovery Procedure. Warning: this option disables some guardrails for the needs of the Manual Raft-based Recovery Procedure. Make sure you unset it at the end of the procedure.")

@@ -42,7 +42,7 @@ custom_args:
     multishard_query_test:
         - '-c2 -m3G'
     cache_algorithm_test:
-        - '-c1 -m256M'
+        - '-c1 -m200M'
     commitlog_cleanup_test:
         - '-c1 -m2G'
     bloom_filter_test:

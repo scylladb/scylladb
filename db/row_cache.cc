@@ -155,7 +155,10 @@ void cache_tracker::set_current_tracker() noexcept {
 void cache_tracker::resize_sketch() {
     size_t cache_bytes = _region.occupancy().total_space();
     if (cache_bytes == 0) {
-        cache_bytes = seastar::memory::stats().total_memory() / seastar::smp::count;
+        // total_memory() is already the shard-local budget (see main.cc, which
+        // passes it directly as available_memory); do not divide by smp::count
+        // again or the cold-cache sketch is undersized by the core count.
+        cache_bytes = seastar::memory::stats().total_memory();
     }
     double entries_per_mb = _tinylfu_sketch_entries_per_mb.get();
     auto new_width = lru::compute_sketch_width_log2(cache_bytes, entries_per_mb);

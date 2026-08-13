@@ -1261,8 +1261,16 @@ BOOST_AUTO_TEST_CASE(test_multi_row_false_rejection_amplification) {
     // partition rows in probation with freq=15.
     static constexpr int HOT_PARTITIONS = 800;
     static constexpr int CACHE_TARGET = 2000;
-    static constexpr int HOT_TOUCHES_PER_ROUND = 50;
     static constexpr int MULTI_ROW_TOTAL = 4000;
+    // Debug builds are much slower; cut the steady-state work so the case stays
+    // fast there (the qualitative result is unchanged).
+#ifdef SEASTAR_DEBUG
+    static constexpr int HOT_TOUCHES_PER_ROUND = 10;
+    static constexpr int ROUNDS = 3;
+#else
+    static constexpr int HOT_TOUCHES_PER_ROUND = 50;
+    static constexpr int ROUNDS = 10;
+#endif
 
     std::vector<config> configs = {
         {1,   MULTI_ROW_TOTAL},           // 4000 single-row
@@ -1321,8 +1329,8 @@ BOOST_AUTO_TEST_CASE(test_multi_row_false_rejection_amplification) {
                 l.evict();
             }
 
-            // Steady-state: 10 rounds
-            for (int round = 0; round < 10; ++round) {
+            // Steady-state rounds
+            for (int round = 0; round < ROUNDS; ++round) {
                 // Touch hot partitions many times (build high frequency)
                 for (int t = 0; t < HOT_TOUCHES_PER_ROUND; ++t) {
                     for (int i = 0; i < HOT_PARTITIONS; ++i) {
@@ -1390,6 +1398,24 @@ BOOST_AUTO_TEST_CASE(test_multi_row_false_rejection_amplification) {
                   << std::setw(21) << results[0][1] << "%"
                   << std::setw(21) << results[1][1] << "%"
                   << std::endl;
+
+        // This case characterises the *false-rejection amplification* of raw
+        // window admission: when many multi-row entries duel high-frequency
+        // single-row rows in the window, W-TinyLFU (results[0]) retains far
+        // fewer multi-row rows than classic LRU (results[1]). That weakness is
+        // exactly why real multi-row rows are routed direct-to-protected in the
+        // cache (bypassing the window). We assert the measurement is well-formed
+        // rather than a fixed ranking, so the case has real checks instead of
+        // only printing a table.
+        for (int mode = 0; mode < 2; ++mode) {
+            BOOST_CHECK_GE(results[mode][0], 0.0);
+            BOOST_CHECK_LE(results[mode][0], 100.0);
+            BOOST_CHECK_GE(results[mode][1], 0.0);
+            BOOST_CHECK_LE(results[mode][1], 100.0);
+        }
+        // Classic LRU (no frequency gate) must keep at least as many multi-row
+        // rows as window-gated W-TinyLFU in this adversarial mix.
+        BOOST_CHECK_GE(results[1][1], results[0][1]);
     }
     std::cout << std::endl;
 }

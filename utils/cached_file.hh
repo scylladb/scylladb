@@ -197,7 +197,6 @@ private:
         size_t size = (idx + read_ahead) > _last_page
                 ? (_last_page_size + (_last_page - idx) * page_size)
                 : read_ahead * page_size;
-        _metrics.disk_read_bytes += size;
 
         std::optional<reader_permit::resource_units> units;
         std::optional<reader_permit::awaits_guard> await_guard;
@@ -208,6 +207,10 @@ private:
 
         return _file.dma_read_exactly<char>(idx * page_size, size)
             .then([this, ag = std::move(await_guard), units = std::move(units), idx] (temporary_buffer<char>&& buf) mutable {
+                // Count bytes actually read once the read has completed, using the
+                // returned buffer size -- a canceled or short read must not be
+                // reported as a full disk read.
+                _metrics.disk_read_bytes += buf.size();
                 cached_page::ptr_type first_page;
                 while (buf.size()) {
                     auto this_size = std::min(page_size, buf.size());
