@@ -99,7 +99,32 @@ future<> raft_groups_storage::persist_commit_idx() {
         // Nothing new to persist since the last write.
         return make_ready_future<>();
     }
-    return execute_with_linearization_point([this] {
+    if (_aborted) {
+        // The group is being torn down. abort() deliberately does not persist
+        // commit_idx (shutdown may have closed the CQL / storage_proxy gates);
+        // durability is instead provided by the fake system.raft_groups mutation
+        // applied per batch and the raft_groups memtable flush. A flush hook
+        // (groups_manager::save_commit_log_index) racing teardown can still reach
+        // here with unpersisted commit_idx — that is expected and harmless, so
+        // skip quietly rather than starting a CQL write.
+        rgslog.debug("persist_commit_idx skipped after abort for group {}"
+            " (unpersisted commit_idx {}, last persisted {})",
+            _group_id, _last_known_commit_idx, _last_persisted_commit_idx);
+        return make_ready_future<>();
+    }
+    return execute_with_linearization_point([this] () -> future<> {
+        if (_aborted) {
+            // The check above only filters the common case: abort() can set
+            // _aborted while we wait for the linearization point (and then waits
+            // for this very operation via _pending_op_fut). Re-check here so a
+            // group being torn down is not raced by a CQL write against closed
+            // CQL / storage_proxy gates. Skipping is safe for the same reason as
+            // above.
+            rgslog.debug("persist_commit_idx skipped after abort for group {}"
+                " (abort raced the linearization point; unpersisted commit_idx {}, last persisted {})",
+                _group_id, _last_known_commit_idx, _last_persisted_commit_idx);
+            return make_ready_future<>();
+        }
         // Read the value and capture the write timestamp at execution time, in
         // one task: waiting for the linearization point may have overlapped a
         // fake-mutation write of a larger commit_idx (store_log_entries()), and
@@ -297,8 +322,10 @@ future<> raft_groups_storage::truncate_log(raft::index_t idx) {
 }
 
 future<> raft_groups_storage::abort() {
-    // wait for pending write requests to complete.
-    // TODO: should we wait for all kinds of requests?
+    // Mark aborted so a flush hook (save_commit_log_index -> persist_commit_idx)
+    // racing teardown becomes a no-op instead of running against a group that is
+    // being destroyed.
+    _aborted = true;
     return std::move(_pending_op_fut);
 }
 
