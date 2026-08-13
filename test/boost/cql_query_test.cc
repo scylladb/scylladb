@@ -6243,9 +6243,24 @@ SEASTAR_TEST_CASE(test_tablet_routing_info_after_cas_shard_bounce) {
         const auto lwt_id = e.prepare(format("update ks_tablet.{} set v = ? where pk = ? if v = ?;", schema->cf_name())).get();
 
         // Execute LWT on this shard (the foreign shard). Expect a bounce.
+        // Call query_processor directly instead of e.execute_prepared(), which
+        // now transparently follows shard bounces and would hide the very
+        // bounce message this test needs to observe.
         {
-            auto raw_val = [] (int32_t v) { return cql3::raw_value::make_value(int32_type->decompose(v)); };
-            const auto result = e.execute_prepared(lwt_id, {raw_val(2), raw_val(1), raw_val(1)}).get();
+            auto qs = ::make_shared<service::query_state>(e.local_client_state(), empty_service_permit());
+            const auto prepared = e.local_qp().get_prepared(lwt_id);
+            BOOST_REQUIRE(prepared);
+
+            const auto options = e.local_qp().make_internal_options(prepared,
+                {data_value(2), data_value(1), data_value(1)},
+                db::consistency_level::ONE);
+
+            auto result = e.local_qp().execute_prepared_without_checking_exception_message(
+                *qs, prepared->statement, options,
+                std::move(prepared), lwt_id, false).get();
+            result = cql_transport::messages::propagate_exception_as_future(
+                std::move(result)).get();
+
             BOOST_REQUIRE(result->as_bounce());
             BOOST_REQUIRE_EQUAL(result->as_bounce()->target_shard(), tablet_shard);
         }
