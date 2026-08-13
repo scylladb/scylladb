@@ -272,3 +272,78 @@ SEASTAR_TEST_CASE(compactions_dont_cross_group_boundary_test) {
         }
     });
 }
+
+// An sstable records the compaction group that owns it, so the group can be
+// located from the sstable side. Verifies that the back-pointer is set when the
+// sstable joins a group and cleared when it leaves, along the paths that move
+// sstables in and out of a group's sstable sets: joining the main set, joining
+// the maintenance set, off-strategy compaction (which moves sstables from the
+// maintenance set into the main set) and major compaction (which replaces the
+// whole main set).
+SEASTAR_TEST_CASE(sstable_tracks_its_compaction_group_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = schema_builder(this_smp_shard_count(), "tests", "sstable_tracks_its_compaction_group")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("cl", int32_type, column_kind::clustering_key)
+                .with_column("value", int32_type)
+                .build();
+
+        auto t = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(t);
+        t->start();
+
+        // Disable auto compaction so sstable sets only change where the test says so.
+        t->disable_auto_compaction().get();
+
+        auto* cg = t->get_any_compaction_group();
+        BOOST_REQUIRE(cg != nullptr);
+
+        // An sstable belongs to the group iff the table currently owns it, and every
+        // sstable the table owns belongs to the group. `known` are the sstables the
+        // test created itself, which may or may not still be owned by the table.
+        auto verify_group_membership = [&] (const std::vector<sstables::shared_sstable>& known) {
+            auto owned = t->get_sstables();
+            for (const auto& sst : *owned) {
+                BOOST_REQUIRE(sst->get_compaction_group() == cg);
+            }
+            for (const auto& sst : known) {
+                BOOST_REQUIRE(sst->get_compaction_group() == (owned->contains(sst) ? cg : nullptr));
+            }
+        };
+
+        auto sst_factory = env.make_sst_factory(s);
+
+        // An sstable that was never attached to a table belongs to no group.
+        auto detached = sstable_that_needs_split(s, sst_factory);
+        BOOST_REQUIRE(detached->get_compaction_group() == nullptr);
+
+        // Joining the main sstable set links the sstable to the group.
+        auto main_sst = sstable_that_needs_split(s, sst_factory);
+        t->add_sstable_and_update_cache(main_sst).get();
+        BOOST_REQUIRE(main_sst->get_compaction_group() == cg);
+
+        // So does joining the maintenance sstable set.
+        auto maintenance_sst = sstable_that_needs_split(s, sst_factory);
+        t->add_sstable_and_update_cache(maintenance_sst, sstables::offstrategy::yes).get();
+        BOOST_REQUIRE(maintenance_sst->get_compaction_group() == cg);
+        verify_group_membership({detached, main_sst, maintenance_sst});
+
+        // Off-strategy compaction moves sstables from the maintenance set into the
+        // main set. An sstable that doesn't need reshaping is moved rather than
+        // rewritten, by a completion descriptor that lists it as both an input and
+        // an output, so it is released by the group and taken over by it again
+        // within a single update. It must come out of that still linked.
+        t->perform_offstrategy_compaction(tasks::task_info{}).get();
+        BOOST_REQUIRE(t->get_sstables()->contains(maintenance_sst));
+        verify_group_membership({detached, main_sst, maintenance_sst});
+
+        // Major compaction replaces the whole main set: its input sstables leave the
+        // group, its output sstables join it.
+        auto inputs = t->get_sstables();
+        BOOST_REQUIRE(!inputs->empty());
+        t->compact_all_sstables({}).get();
+        BOOST_REQUIRE(!t->get_sstables()->empty());
+        verify_group_membership(std::vector(inputs->begin(), inputs->end()));
+        BOOST_REQUIRE(detached->get_compaction_group() == nullptr);
+    });
+}
