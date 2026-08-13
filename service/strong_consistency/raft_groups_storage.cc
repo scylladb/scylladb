@@ -78,6 +78,7 @@ future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
 }
 
 // Execute the CQL INSERT that persists commit_idx to system.raft_groups.
+// Shared by persist_commit_idx() and store_commit_idx_if_higher().
 //
 // The write timestamp is supplied by the caller: it must be captured in the
 // same task as the commit_idx value (no yield in between), so that a
@@ -134,6 +135,16 @@ future<raft::index_t> raft_groups_storage::load_commit_idx(cql3::query_processor
     }
     const auto& static_row = rs->one();
     co_return raft::index_t(static_row.get_or<int64_t>("commit_idx", raft::index_t{}.value()));
+}
+
+future<> raft_groups_storage::store_commit_idx_if_higher(cql3::query_processor& qp, raft::group_id gid, shard_id shard, raft::index_t commit_idx) {
+    // Only advance, never regress: a prior flush (or an earlier replay) may
+    // already have persisted a value at or beyond the recovered one.
+    const auto persisted = co_await load_commit_idx(qp, gid, shard);
+    if (commit_idx <= persisted) {
+        co_return;
+    }
+    co_await store_commit_idx_cql(qp, gid, shard, commit_idx, api::new_timestamp());
 }
 
 future<raft::log_entries> raft_groups_storage::load_log() {
