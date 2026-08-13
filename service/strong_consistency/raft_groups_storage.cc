@@ -73,8 +73,17 @@ future<std::pair<raft::term_t, raft::server_id>> raft_groups_storage::load_term_
 }
 
 future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
+    // Update in-memory tracking only. Persistence happens via the fake
+    // mutation in store_log_entries (durable once the raft_groups memtable
+    // flushes) and via persist_commit_idx() from the SC tablet flush hook
+    // (groups_manager::save_commit_log_index). Keeping this path IO-free
+    // avoids a per-committed-batch CQL write on the raft io_fiber.
+    //
+    // The io_fiber calls this *before* pushing entries to the applier_fiber,
+    // so _last_known_commit_idx is always >= the raft index of any entry that
+    // has been applied to a memtable.
     _last_known_commit_idx = idx;
-    return persist_commit_idx();
+    return make_ready_future<>();
 }
 
 // Execute the CQL INSERT that persists commit_idx to system.raft_groups.
@@ -127,8 +136,8 @@ future<> raft_groups_storage::persist_commit_idx() {
         }
         // Read the value and capture the write timestamp at execution time, in
         // one task: waiting for the linearization point may have overlapped a
-        // fake-mutation write of a larger commit_idx (store_log_entries()), and
-        // writing a stale snapshot taken at enqueue time with a fresher
+        // fake-mutation write of a larger commit_idx (store_log_entries()),
+        // and writing a stale snapshot taken at enqueue time with a fresher
         // timestamp would win last-write-wins and regress the row.
         const auto idx = _last_known_commit_idx;
         const auto ts = api::new_timestamp();
