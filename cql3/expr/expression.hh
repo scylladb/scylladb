@@ -472,9 +472,24 @@ struct usertype_constructor {
 // Represents a value that is external to the expression, but is not a
 // bind_variable or a column_value. If bind_variable:s are function parameters,
 // and column_value:s are globals, then temporary:s can be thought of as local
-// variables.
+// variables, introduced by the "compiler" rather than written by the user.
 //
-// Note expressions only read temporary values.
+// Note expressions only read temporary values; something outside the expression
+// writes them. Each slot has exactly one writer and any number of readers. What
+// writes a slot is not a property of the slot - the writers in use today are an
+// aggregation inner-loop step, holding state that accumulates across the rows of
+// a group (e.g. a running SUM), and an external_values_provider, supplying per-row
+// input that doesn't come from the base table (e.g. a BM25 relevance score
+// returned by the vector store). Slots are allocated in one space, in the order
+// their writers appear: prepare first, then split_aggregation().
+//
+// A slot is restored to an initial value at the start of a group if its writer
+// registered one; see selection_with_processing.
+//
+// `type` is a property of the slot rather than of an individual node: all
+// temporary:s sharing an index must declare the same type. It is not legal for
+// two nodes to disagree, and selection_with_processing rejects that with
+// on_internal_error.
 struct temporary {
     size_t index; // within evaluation_inputs::temporaries
     data_type type;

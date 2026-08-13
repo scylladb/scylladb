@@ -87,16 +87,16 @@ lw_shared_ptr<query::read_command> external_index_select_statement::prepare_comm
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>> external_index_select_statement::query_base_table(query_processor& qp,
-        service::query_state& state, const query_options& options, const std::vector<vector_search::primary_key>& pkeys,
-        lowres_clock::time_point timeout) const {
+        service::query_state& state, const query_options& options, const std::vector<vector_search::primary_key>& pkeys, lowres_clock::time_point timeout,
+        std::unique_ptr<cql3::selection::external_values_provider> provider) const {
     auto command = prepare_command_for_base_query(qp, state, options, pkeys.size());
 
     auto result = co_await query_base_table(qp, state, options, command, timeout, pkeys);
 
     command->set_row_limit(get_limit(options, _limit));
 
-    co_return co_await wrap_result_to_error_message([this, command = std::move(command), &options](auto query_result) {
-        return process_results(std::move(query_result), command, options, _query_start_time_point);
+    co_return co_await wrap_result_to_error_message([this, command = std::move(command), &options, provider_ptr = provider.get()](auto query_result) {
+        return process_results(std::move(query_result), command, options, _query_start_time_point, provider_ptr);
     })(std::move(result));
 }
 

@@ -154,6 +154,13 @@ protected:
         virtual bool is_aggregate() const override {
             return false;
         }
+
+        // Should not be reached: a selection that has no temporaries at all is
+        // never paired with a provider - see select_statement::process_results().
+        virtual bool provide_external_values(const external_values_provider&, std::span<const bytes>, std::span<const bytes>,
+                const query::result_row_view&, const query::result_row_view*) override {
+            on_internal_error(cql_logger, "simple_selectors::provide_external_values() called, but we have no temporaries");
+        }
     };
 
     std::unique_ptr<selectors> new_selectors() const override {
@@ -419,6 +426,11 @@ protected:
         }
 
         virtual void reset() override {
+            // The slots the steps accumulate in, and only those. A slot written per
+            // row must survive this: reset() runs from complete_row(), which flushes
+            // the finished group before calling add_input_row() for the row whose
+            // values have already been written - clearing them here would make the
+            // first row of every group see a null.
             for (const auto& step : _sel._inner_loop) {
                 _temporaries[step.temporary] = step.initial_value;
             }
@@ -427,6 +439,12 @@ protected:
 
         virtual bool is_aggregate() const override {
             return !_sel._inner_loop.empty();
+        }
+
+        virtual bool provide_external_values(const external_values_provider& provider, std::span<const bytes> partition_key,
+                std::span<const bytes> clustering_key, const query::result_row_view& static_row,
+                const query::result_row_view* row) override {
+            return provider.try_fill(_temporaries, partition_key, clustering_key, static_row, row);
         }
 
         virtual std::vector<managed_bytes_opt> transform_input_row(result_set_builder& rs) override {
@@ -440,7 +458,9 @@ protected:
                     .options = rs._options,
                     .static_and_regular_timestamps = rs._timestamps,
                     .static_and_regular_ttls = rs._ttls,
-                    .temporaries = {},
+                    // Non-aggregating selectors never read aggregation state, but they
+                    // do read the provider slots.
+                    .temporaries = _temporaries,
                     .collection_element_metadata = rs._collection_element_metadata,
             };
             for (auto&& e : _sel._selectors) {
