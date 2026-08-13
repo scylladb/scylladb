@@ -164,6 +164,12 @@ public:
 
 std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schema_ptr schema, const data_dictionary::storage_options& s_opts, sstable_state state);
 future<object_storage_reference_names> list_object_storage_references(object_storage_client& client, sstring bucket, std::string_view prefix, sstable_id sid);
+// Deletes the snapshot reference object created by storage::snapshot() for one
+// sstable and tag. A missing reference is not an error, so a failed or crashed
+// snapshot attempt can be rolled back or cleaned up without tracking which
+// references it got to create. Needs only an endpoint client and the table's
+// storage options, so it also works when no live sstable exists anymore.
+future<> delete_object_storage_snapshot_ref(object_storage_client& client, const data_dictionary::storage_options::object_storage& os, sstable_id sid, std::string_view tag, generation_type gen);
 future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager&, const schema&, const data_dictionary::storage_options& so);
 future<> destroy_table_storage(const data_dictionary::storage_options& so);
 future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::storage_options& so, sstring ks_name);

@@ -874,6 +874,21 @@ future<object_storage_reference_names> list_object_storage_references(object_sto
     co_return refs;
 }
 
+future<> delete_object_storage_snapshot_ref(object_storage_client& client, const data_dictionary::storage_options::object_storage& os, sstable_id sid, std::string_view tag, generation_type gen) {
+    // The prefix derivation must match the object_storage_base constructor,
+    // and the reference name must match object_storage_base::snapshot().
+    std::string_view prefix = os.location ? std::string_view(*os.location) : "sstables";
+    auto ref_name = object_name(sstring(os.bucket), prefix, sid, fmt::format("refs/snapshot-{}/{}", tag, gen));
+    try {
+        co_await client.delete_object(ref_name);
+        sstlog.debug("Deleted snapshot reference {}", ref_name.str());
+    } catch (const storage_io_error& e) {
+        if (e.code().value() != ENOENT) {
+            throw;
+        }
+    }
+}
+
 future<size_t> object_storage_base::num_references(sstable_id sid) const {
     auto refs = co_await list_object_storage_references(*_client, _bucket, prefix(), sid);
     co_return refs.size();
