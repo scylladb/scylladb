@@ -94,6 +94,10 @@ public:
     }
 };
 
+// Distinguishes the two snapshot callers at the type level: a user snapshot
+// carries the tag that names it, an incremental backup carries no tag.
+using incremental_backup = bool_class<class incremental_backup_tag>;
+
 class storage {
     friend class test;
 
@@ -118,7 +122,7 @@ public:
     using sync_dir = bool_class<struct sync_dir_tag>; // meaningful only to filesystem storage
 
     virtual future<> seal(const sstable& sst) = 0;
-    virtual future<> snapshot(const sstable& sst, sstring name) const = 0;
+    virtual future<> snapshot(const sstable& sst, sstring tag, incremental_backup incremental) const = 0;
     // `may_use_reference_sharing` is a hint: storage backends may ignore it
     // and use their natural clone method.
     virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const = 0;
