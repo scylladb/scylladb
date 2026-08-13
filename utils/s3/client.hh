@@ -21,6 +21,7 @@
 #include "utils/s3/creds.hh"
 #include "credentials_providers/aws_credentials_provider_chain.hh"
 #include "utils/s3/client_fwd.hh"
+#include "utils/s3/throttling_controller.hh"
 
 using namespace seastar;
 class memory_data_sink_buffers;
@@ -139,7 +140,16 @@ class client : public enable_shared_from_this<client> {
         void register_metrics(std::string class_name, std::string host);
     };
     std::unordered_map<seastar::scheduling_group, group_client> _https;
+<<<<<<< HEAD
     semaphore _rebalance_sem{1};
+||||||| parent of 81fd4c2073 (s3: wire the send brake into the client with metrics)
+=======
+
+    // Send brake for this client, shared by every scheduling group on the shard.
+    std::unique_ptr<throttling_controller> _request_limiter;
+    seastar::metrics::metric_groups _client_metrics;
+    void register_client_metrics();
+>>>>>>> 81fd4c2073 (s3: wire the send brake into the client with metrics)
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
     std::unique_ptr<seastar::http::experimental::retry_strategy> _retry_strategy;
@@ -184,6 +194,7 @@ class client : public enable_shared_from_this<client> {
 public:
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<seastar::http::experimental::retry_strategy> rs = nullptr);
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf = {});
     static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, global_factory gf = {}, unsigned connections_per_shard = endpoint_config::default_connections_per_shard);
@@ -193,8 +204,19 @@ public:
     static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf = {});
 =======
     client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<seastar::http::experimental::retry_strategy> rs = nullptr);
+||||||| parent of 81fd4c2073 (s3: wire the send brake into the client with metrics)
+    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<seastar::http::experimental::retry_strategy> rs = nullptr);
+=======
+    // No defaults: make() is the only caller and always passes both, so the two cannot
+    // disagree about what a null argument means.
+    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag,
+           std::unique_ptr<seastar::http::experimental::retry_strategy> rs, std::unique_ptr<throttling_controller> tc);
+>>>>>>> 81fd4c2073 (s3: wire the send brake into the client with metrics)
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, global_factory gf = {});
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, std::unique_ptr<seastar::http::experimental::retry_strategy> rs, global_factory gf = {});
+    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory,
+                                   std::unique_ptr<seastar::http::experimental::retry_strategy> rs,
+                                   std::unique_ptr<throttling_controller> tc, global_factory gf = {});
     static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf = {});
 >>>>>>> 0a9528b837 (s3: add client::make overload with custom retry strategy)
 
