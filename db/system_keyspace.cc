@@ -3527,10 +3527,11 @@ future<> system_keyspace::sstables_registry_list(table_id tid, locator::host_id 
     static const auto req = format("SELECT status, sstable_id, state, generation, version, format FROM system.{} WHERE table_id = ? AND node_owner = ?", SSTABLES_REGISTRY);
     slogger.trace("Listing {}.{} entries from {}", tid, node_owner, SSTABLES_REGISTRY);
 
-    co_await _qp.query_internal(req, db::consistency_level::ONE, { tid.id, node_owner.uuid() }, 1000, [ consumer = std::move(consumer) ] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+    co_await _qp.query_internal(req, db::consistency_level::ONE, { tid.id, node_owner.uuid() }, 1000,
+            [ consumer = std::move(consumer) ] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+        auto gen = sstables::generation_type(row.get_as<utils::UUID>("generation"));
         auto status = row.get_as<sstring>("status");
         auto state = sstables::state_from_dir(row.get_as<sstring>("state"));
-        auto gen = sstables::generation_type(row.get_as<utils::UUID>("generation"));
         optimized_optional<sstables::sstable_id> sid = std::nullopt;
         if (row.has("sstable_id")) {
             sid = sstables::sstable_id(row.get_as<utils::UUID>("sstable_id"));
