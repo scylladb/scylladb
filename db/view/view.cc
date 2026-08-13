@@ -24,6 +24,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/all.hh>
 
 #include "db/view/base_info.hh"
 #include "replica/database.hh"
@@ -2338,7 +2339,6 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
         }
     }
 
-    auto all_views = _db.get_views();
     auto is_new = [&] (const view_ptr& v) {
         // This is a safety check in case this node missed a create MV statement
         // but got a drop table for the base, and another node didn't get the
@@ -2346,7 +2346,26 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
         return _db.column_family_exists(v->view_info()->base_id()) && !loaded_views.contains(v->id())
                 && !vbi.built_views.contains(v->id());
     };
-    for (auto&& view : all_views | std::views::filter(is_new)) {
+    auto new_views = _db.get_views() | std::views::filter(is_new) | std::ranges::to<std::vector>();
+    auto base_ids = new_views | std::views::transform([] (const auto& view) {
+        return view->view_info()->base_id();
+    }) | std::ranges::to<std::set>();
+
+    // The view builder subscribes to schema change events just before this method is called,
+    // so a view created earlier gets no `on_create_view()` notification and never goes through
+    // `dispatch_create_view()`. Such a view is picked up here instead and treated as an existing,
+    // unfinished one, so we have to flush its base table here, the way `handle_create_view_local()`
+    // does for newly created views. Otherwise the view would miss some updates.
+    for (auto& base_id: base_ids) {
+        auto& step = get_or_create_build_step(base_id);
+        co_await coroutine::all(
+            [&step] -> future<> {
+                co_await step.base->await_pending_writes(); },
+            [&step] -> future<> {
+                co_await step.base->await_pending_streams(); });
+        co_await flush_base(step.base, _as);
+    }
+    for (auto&& view : new_views) {
         vbi.bookkeeping_ops.push_back(add_new_view(view, get_or_create_build_step(view->view_info()->base_id())));
     }
 
