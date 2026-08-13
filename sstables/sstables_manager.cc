@@ -16,6 +16,7 @@
 #include "utils/error_injection.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
+#include "sstables/storage.hh"
 #include "sstables/sstables_registry.hh"
 #include "sstables/partition_index_cache.hh"
 #include "sstables/sstables.hh"
