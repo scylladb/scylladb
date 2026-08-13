@@ -1154,6 +1154,52 @@ future<> snapshot_table_helper::insert_snapshot_sstables(std::string_view snapsh
     co_await do_insert_snapshot_sstables(_qp, snapshot_name, ks, table, dc, rack, sstables, cl);
 }
 
+future<utils::chunked_vector<snapshot_sstable_cleanup_entry>>
+snapshot_table_helper::get_snapshot_sstables_for_cleanup(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+        std::string_view dc, std::string_view rack, db::consistency_level cl) const {
+    utils::chunked_vector<snapshot_sstable_cleanup_entry> entries;
+
+    static const sstring query = format("SELECT sstable_id, first_token, toc_name, node, WRITETIME(toc_name) AS wt FROM {}.{}"
+        " WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ? AND datacenter = ? AND rack = ?"
+        , system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES
+    );
+
+    co_await _qp.query_internal(
+        query,
+        cl,
+        { sstring(snapshot_name), sstring(ks), sstring(table), sstring(dc), sstring(rack) },
+        1000,
+        [&] (const cql3::untyped_result_set_row& row) {
+            entries.push_back(snapshot_sstable_cleanup_entry{
+                .sstable_id = sstables::sstable_id(row.get_as<utils::UUID>("sstable_id")),
+                .first_token = dht::token::from_int64(row.get_as<int64_t>("first_token")),
+                .toc_name = row.get_or<sstring>("toc_name", ""),
+                .node = locator::host_id(row.get_or<utils::UUID>("node", utils::UUID{})),
+                .write_timestamp = row.get_or<int64_t>("wt", 0),
+            });
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        });
+
+    co_return entries;
+}
+
+future<> snapshot_table_helper::delete_snapshot_sstable_entry(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+        std::string_view dc, std::string_view rack,
+        dht::token first_token, sstables::sstable_id sstable_id, int64_t write_timestamp, db::consistency_level cl) {
+    static const sstring query = format("DELETE FROM {}.{} USING TIMESTAMP ?"
+        " WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ? AND datacenter = ? AND rack = ? AND first_token = ? AND sstable_id = ?"
+        , system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES
+    );
+
+    co_await _qp.execute_internal(
+            query,
+            cl,
+            internal_distributed_query_state(),
+            { write_timestamp, sstring(snapshot_name), sstring(ks), sstring(table), sstring(dc), sstring(rack),
+              dht::token::to_int64(first_token), sstable_id.uuid() },
+            cql3::query_processor::cache_internal::yes).discard_result();
+}
+
 /**
  * Helper to write a full snapshot_entries
  */
