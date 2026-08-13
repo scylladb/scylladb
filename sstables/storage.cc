@@ -105,7 +105,7 @@ public:
     virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
     virtual std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const override;
     virtual bool operator==(const storage&) const noexcept override;
-    virtual future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) override;
+    virtual future<bool> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner, bool delete_node_ref) override;
     virtual future<uint64_t> free_space() const override {
         return seastar::fs_avail(prefix());
     }
@@ -642,7 +642,7 @@ bool filesystem_storage::operator==(const storage& other) const noexcept {
     return other_fs && sstable_directory::compare_sstable_storage_prefix(_base_dir.native(), other_fs->_base_dir.native());
 }
 
-future<> filesystem_storage::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) {
+future<bool> filesystem_storage::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner, bool delete_node_ref) {
     on_internal_error(sstlog, "Filesystem storage doesn't keep its entries in registry");
 }
 
@@ -681,6 +681,10 @@ protected:
     static constexpr auto status_creating = "creating";
     static constexpr auto status_sealed = "sealed";
     static constexpr auto status_removing = "removing";
+    // The live sstable is gone but this node's snapshot references still pin
+    // the component objects; the entry is kept for whoever deletes the last snapshot reference.
+    // Entered exclusively from the destroy path and it's skipped by the boot loader and GC.
+    static constexpr auto status_snapshot_owned = "snapshot_owned";
 
     object_name make_object_name(const sstable& sst, component_type type) const;
     object_name make_object_name(const sstable& sst, sstring comp, generation_type gen) const;
@@ -732,7 +736,7 @@ public:
     future<> destroy(const sstable& sst) override;
     std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const override;
     bool operator==(const storage&) const noexcept override;
-    future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) override;
+    future<bool> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner, bool delete_node_ref) override;
     future<uint64_t> free_space() const override {
         // assumes infinite space on s3/gs (https://aws.amazon.com/s3/faqs/#How_much_data_can_I_store).
         return make_ready_future<uint64_t>(std::numeric_limits<uint64_t>::max());
@@ -836,6 +840,18 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
             : object_name(_bucket, prefix(), get_sstable_identifier(sst), comp);
     sstlog.trace("make_object_name: sstable_id={} generation={} comp={}: {}", sst.sstable_identifier(), gen, comp, ret.str());
     return ret;
+}
+
+// True when the refs listing contains a snapshot reference for this
+// generation. Names are relative to "{prefix}/{sid}/refs/": node references
+// are "nodes/{host}/{gen}", snapshot references "snapshot-{tag}/{gen}".
+// A match on the generation means this node owns the snapshot.
+static bool has_own_snapshot_ref(const object_storage_reference_names& refs, generation_type gen) {
+    auto suffix = fmt::format("/{}", gen);
+    return std::ranges::any_of(refs, [&] (const sstring& name) {
+        std::string_view n{name};
+        return n.starts_with("snapshot-") && n.ends_with(suffix);
+    });
 }
 
 static future<> collect_lister_entries(abstract_lister& lister, object_storage_reference_names& entries) {
@@ -1067,9 +1083,11 @@ future<> object_storage_base::destroy(const sstable& sst) {
     auto ref_name = make_ref_object_name(sid, sst.generation(), node_owner);
     co_await delete_object(ref_name);
 
-    // Only delete components if no references remain
-    auto remaining_refs = co_await sst.num_references();
-    if (!remaining_refs) {
+    // Delete components only if no references remain. Snapshot references
+    // count like any other, so a snapshotted sstable's data survives the
+    // removal of the live sstable.
+    auto refs = co_await list_object_storage_references(*_client, _bucket, prefix(), sid);
+    if (refs.empty()) {
         // Delete the S3 objects. Errors are logged but not propagated because
         // destroy() is called fire-and-forget from the shared_ptr deleter.
         // Any objects that could not be deleted here will be retried on the
@@ -1077,27 +1095,41 @@ future<> object_storage_base::destroy(const sstable& sst) {
         co_await delete_components(sst.get_version(), sid, true);
     }
 
-    // Remove the registry entry only after S3 objects are cleaned up.
+    // Resolve the registry entry only after S3 objects are cleaned up.
     // If this fails, the "removing" entry survives and garbage_collect()
     // will delete the (already gone) objects tolerantly and retry deletion.
+    //
+    // If this node's snapshot references still pin the sstable, the entry is
+    // retained as "snapshot_owned".
     //
     // This destroy() is fire-and-forget from the shared_sstable deleter and can
     // race with shutdown: unplug_system_keyspace() may have already unplugged the
     // sstables_registry by the time we get here. Accessing it then would trip the
     // SCYLLA_ASSERT in sstables_manager::sstables_registry(). Skip the entry
-    // deletion in that case — the "removing" entry survives and garbage_collect()
+    // resolution in that case: the "removing" entry survives and garbage_collect()
     // on the next startup deletes the (already gone) objects tolerantly and
-    // removes the entry.
+    // resolves the entry the same way.
     try {
         if (!sst.manager().has_sstables_registry()) {
             sstlog.warn("Skipping registry entry deletion for {}: sstables registry already unplugged (shutdown in progress)", sst.toc_filename());
             co_return;
         }
+        if (has_own_snapshot_ref(refs, sst.generation())) {
+            // Write the whole row, not only the status cell. A cell-only
+            // UPDATE racing a concurrent entry deletion resurrects the row as
+            // an unusable ghost; a full row lost to the same race comes back
+            // complete, and boot GC re-evaluates and deletes it.
+            entry_descriptor desc(sst.generation(), sid, sst.get_version(), sst.get_format(), component_type::TOC);
+            desc.state = sst.state();
+            co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_snapshot_owned, sst.state(), std::move(desc));
+            sstlog.debug("Deleted reference {}: entry retained as {} (snapshot references remain)", ref_name.str(), status_snapshot_owned);
+            co_return;
+        }
         co_await sst.manager().sstables_registry().delete_entry(owner(), node_owner, sst.generation());
     } catch (...) {
-        sstlog.warn("Failed to delete registry entry for {}: {:t}", sst.toc_filename(), std::current_exception());
+        sstlog.warn("Failed to resolve registry entry for {}: {:t}", sst.toc_filename(), std::current_exception());
     }
-    sstlog.debug("Deleted reference {} remaining_refs={}", ref_name.str(), remaining_refs);
+    sstlog.debug("Deleted reference {} remaining_refs={}", ref_name.str(), refs.size());
 }
 
 class object_storage_atomic_deletion_impl : public atomic_deletion_impl {
@@ -1143,29 +1175,38 @@ bool object_storage_base::operator==(const storage& other) const noexcept {
             && _prefix == other_object->_prefix;
 }
 
-future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) {
+future<bool> object_storage_base::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner, bool delete_node_ref) {
     if (!desc.sid) {
         on_internal_error(sstlog, fmt::format("Cannot remove SSTable on object storage with generation={} from registry: has no sstable_id", desc.generation));
     }
     auto sid = *desc.sid;
 
     auto ref_name = make_ref_object_name(sid, desc.generation, node_owner);
-    try {
-        co_await delete_object(ref_name);
-    } catch (const storage_io_error& e) {
-        if (e.code().value() != ENOENT) {
-            throw;
+    if (delete_node_ref) {
+        try {
+            co_await delete_object(ref_name);
+        } catch (const storage_io_error& e) {
+            if (e.code().value() != ENOENT) {
+                throw;
+            }
         }
     }
 
-    auto remaining_refs = co_await num_references(sid);
-    if (remaining_refs) {
-        sstlog.debug("Deleted reference {}: remaining_refs={}", ref_name.str(), remaining_refs);
-        co_return;
+    auto refs = co_await list_object_storage_references(*_client, _bucket, prefix(), sid);
+    if (has_own_snapshot_ref(refs, desc.generation)) {
+        // Still pinned by this node's snapshot references: the caller must
+        // retain the registry entry as snapshot_owned (see storage.hh).
+        sstlog.debug("Deleted reference {}: retained for snapshot, remaining_refs={}", ref_name.str(), refs.size());
+        co_return true;
+    }
+    if (!refs.empty()) {
+        sstlog.debug("Deleted reference {}: remaining_refs={}", ref_name.str(), refs.size());
+        co_return false;
     }
 
     co_await delete_components(desc.version, sid, false);
-    sstlog.debug("Deleted reference {}: remaining_refs={}", ref_name.str(), remaining_refs);
+    sstlog.debug("Deleted reference {}: remaining_refs=0", ref_name.str());
+    co_return false;
 }
 
 future<> object_storage_base::unlink_component(const sstable& sst, component_type type) noexcept {
