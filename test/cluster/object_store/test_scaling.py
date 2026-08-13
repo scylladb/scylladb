@@ -15,7 +15,7 @@ import pytest
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.object_storage import keyspace_options
 from test.cluster.util import new_test_keyspace, wait_for_no_pending_topology_transition, wait_for_no_running_compactions
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_all_tablet_replicas
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
@@ -120,6 +120,28 @@ async def test_scaling(manager: ScyllaClusterManager, object_storage):
             table_id = str(await manager.get_table_id(ks, "test"))
 
             live_hosts = await wait_for_cql_and_get_hosts(cql, live_servers, time.time() + 30)
+
+            # An sstable's registry entry is non-sealed for the whole interval in
+            # which its object-storage state may change: wipe() marks it "removing"
+            # before any object is touched, and destroy() deletes the entry only
+            # after the last one is gone (garbage_collect() uses the same order).
+            # A "creating" entry likewise covers the interval in which the objects
+            # are being written.  So once every entry is sealed, the bucket is
+            # quiescent and the checks below observe a consistent snapshot rather
+            # than an sstable caught mid-creation or mid-deletion.
+            async def all_entries_sealed():
+                per_host = await asyncio.gather(*(cql.run_async(
+                    "SELECT table_id, node_owner, generation, status FROM system.sstables", host=host)
+                    for host in live_hosts))
+                unsealed = [(str(row.node_owner), str(row.generation), row.status)
+                            for rows in per_host for row in rows
+                            if str(row.table_id) == table_id and row.status != "sealed"]
+                if unsealed:
+                    logger.info("Waiting for %d unsealed registry entries: %s", len(unsealed), unsealed)
+                    return None
+                return True
+
+            await wait_for(all_entries_sealed, time.time() + 120)
 
             async def get_object_storage_refs():
                 sstables = await manager.api.client.get_json("/storage_service/object_storage/sstables", host=server.ip_addr, params=params)
