@@ -19,7 +19,7 @@ from functools import partial
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace, new_test_table
 from test.pylib.rest_client import read_barrier, HTTPError
-from test.pylib.util import unique_name, wait_all
+from test.pylib.util import unique_name, wait_all, wait_for_view
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from cassandra.cluster import ConsistencyLevel
 from collections import defaultdict
@@ -252,12 +252,13 @@ async def test_backup_is_abortable_in_s3_client(manager: ManagerClient, object_s
     await do_test_backup_abort(manager, object_storage, breakpoint_name="backup_task_pre_upload", min_files=0, max_files=1)
 
 
-@pytest.mark.parametrize("flavor", ['plain', 'abort', 'encrypt'])
+@pytest.mark.parametrize("flavor", ['plain', 'abort', 'encrypt', 'view'])
 async def test_simple_backup_and_restore(manager: ManagerClient, object_storage, tmpdir, flavor):
     '''check that restoring from backed up snapshot for a keyspace:table works'''
 
     do_abort = flavor == 'abort'
     do_encrypt = flavor == 'encrypt'
+    with_view = flavor == 'view'
 
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
@@ -283,9 +284,22 @@ async def test_simple_backup_and_restore(manager: ManagerClient, object_storage,
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
         await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('{name}', '{value}');") for name, value in [('0', 'zero'), ('1', 'one'), ('2', 'two')]))
+
         snap_name, toc_names = await take_snapshot_on_one_server(ks, server, manager, logger)
 
         cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+
+        # A backup only ever captures the base table's sstables -- a view has no sstables
+        # of its own worth backing up, since it can always be rebuilt from the base table.
+        # So restoring the base table alone must eventually repopulate the view too.
+        # The view is created only after the snapshot/cf_dir are captured above, since
+        # otherwise it would create a second column-family directory under data/{ks} and
+        # make the os.listdir(...)[0] picks above racy/ambiguous.
+        view = 'test_cf_by_value'
+        if with_view:
+            await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.{view} AS SELECT * FROM {ks}.{cf} "
+                            "WHERE value IS NOT NULL AND name IS NOT NULL PRIMARY KEY (value, name)")
+            await wait_for_view(cql, view, 1)
 
         def list_sstables():
             return [f for f in os.scandir(f'{workdir}/data/{ks}/{cf_dir}') if f.is_file()]
@@ -363,6 +377,14 @@ async def test_simple_backup_and_restore(manager: ManagerClient, object_storage,
             res = cql.execute(f"SELECT * FROM {ks}.{cf};")
             rows = { x.name: x.value for x in res }
             assert rows == orig_rows, "Unexpected table contents after restore"
+
+            if with_view:
+                print('Check that the view eventually gets repopulated from the restored base table')
+                async def view_repopulated():
+                    res = await cql.run_async(f"SELECT * FROM {ks}.{view};")
+                    got = {x.name: x.value for x in res}
+                    return got == orig_rows or None
+                await wait_for(view_repopulated, time.time() + 60)
 
         print('Check that backup files are still there')  # regression test for #20938
         post_objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.filter(Prefix=prefix))
