@@ -698,4 +698,41 @@ SEASTAR_THREAD_TEST_CASE(test_automatic_scrub_respects_reevaluation_during_scrub
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_scrub_time_persistance) {
+    automatic_scrub_test_framework test(tests::random_schema_specification::compress_sstable::yes);
+
+    auto& test_env = test.env();
+    constexpr auto sst_count = 1;
+
+    test.run(sst_count, [&test_env] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+        auto& cm = test_env.test_compaction_manager();
+
+        auto sst = sstables.front();
+
+        auto metadata_opt = sstables::test(sst)._scylla_metadata();
+        BOOST_REQUIRE(metadata_opt);
+        auto& metadata = *metadata_opt;
+        metadata->data.data.erase(scylla_metadata_type::ScrubTime);
+
+        auto timestamp_before = db_clock::now();
+
+        cm.set_scrub_period(std::chrono::seconds(3600));
+        cm.trigger_auto_scrub_timer();
+
+        wait_on_enter("automatic_scrub_compaction_done", sst_count).get();
+
+        BOOST_REQUIRE(!table->get_sstables()->empty());
+        sst = *table->get_sstables()->begin();
+
+        auto timestamp = sst->get_scrub_time();
+        BOOST_REQUIRE(timestamp);
+        BOOST_REQUIRE(*timestamp > timestamp_before);
+
+        auto on_disk_sst = test_env.reusable_sst(sst).get();
+
+        auto on_disk_scrub_time = on_disk_sst->get_scrub_time();
+        BOOST_REQUIRE(on_disk_scrub_time == timestamp);
+    });
+}
+
 } // namespace
