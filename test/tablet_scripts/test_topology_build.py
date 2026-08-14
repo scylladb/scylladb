@@ -177,6 +177,165 @@ def test_build_makes_a_colocated_table_share_the_base_tables_tablets(build) -> N
     assert [table_id for table_id, _ in topo.all_tablets()] == [TABLE, TABLE]
 
 
+def test_a_replica_the_server_has_no_size_for_counts_as_nothing() -> None:
+    """
+    A replica which has just been migrated to has no size yet, and system.tablet_sizes says
+    so in missing_replicas. That is a snapshot of a cluster mid-migration rather than a
+    broken one, so it counts for nothing instead of stopping the whole report.
+    """
+    sizes_dump = (f"table_id;last_token;replicas;missing_replicas\n"
+                  f"{TABLE};0;{{{HOST1}: 10}};{{{HOST2}}}\n"
+                  f"{TABLE};100;{{{HOST1}: 30}};{{}}\n")
+    topo = Topology()
+    topo._build({
+        TABLETS_TABLE.name: rows_from_csv(TABLETS_CSV.splitlines(), TABLETS_COLUMNS),
+        TABLET_SIZES_TABLE.name: rows_from_csv(sizes_dump.splitlines(), TABLET_SIZES_COLUMNS),
+    })
+    tablets = topo.get_tablet_map(TABLE).tablets
+
+    assert topo.get_tablet_size(TABLE, tablets[0], (HOST1, 0)) == 10
+    assert topo.get_tablet_size(TABLE, tablets[0], (HOST2, 1)) == 0
+
+    # A replica with neither a size nor a word about it is a snapshot that does not add up.
+    with pytest.raises(Exception, match="Tablet size not available"):
+        topo.get_tablet_size(TABLE, tablets[1], (HOST2, 0))
+
+
+def test_a_node_the_cluster_left_out_is_not_reported_for_holding_no_sizes(capsys) -> None:
+    """
+    It reports no size for anything it holds, which is what being left out looks like. Saying
+    so would bury the replicas which have no size for a reason worth looking into.
+    """
+    load_dump = (f"node;dc;rack;storage_capacity;up;excluded\n"
+                 f"{HOST1};dc1;rack1;1000;True;False\n"
+                 f"{HOST2};dc1;rack2;2000;False;True\n")
+    sizes_dump = (f"table_id;last_token;replicas;missing_replicas\n"
+                  f"{TABLE};0;{{{HOST1}: 10}};{{{HOST2}}}\n")
+
+    topo = Topology()
+    topo._build({
+        LOAD_PER_NODE_TABLE.name: rows_from_csv(load_dump.splitlines(), LOAD_PER_NODE_COLUMNS),
+        TABLET_SIZES_TABLE.name: rows_from_csv(sizes_dump.splitlines(), TABLET_SIZES_COLUMNS),
+    })
+
+    topo.report_missing_tablet_sizes()
+
+    assert capsys.readouterr().err == ""
+    # It is still recorded, so a replica on it counts for nothing rather than stopping a report.
+    assert (TABLE, 0, HOST2) in topo._missing_tablet_sizes
+
+
+def test_a_replica_of_a_working_node_with_no_size_is_still_reported(capsys) -> None:
+    load_dump = (f"node;dc;rack;storage_capacity;up;excluded\n"
+                 f"{HOST1};dc1;rack1;1000;True;False\n"
+                 f"{HOST2};dc1;rack2;2000;True;False\n")
+    sizes_dump = (f"table_id;last_token;replicas;missing_replicas\n"
+                  f"{TABLE};0;{{{HOST1}: 10}};{{{HOST2}}}\n")
+
+    topo = Topology()
+    topo._build({
+        LOAD_PER_NODE_TABLE.name: rows_from_csv(load_dump.splitlines(), LOAD_PER_NODE_COLUMNS),
+        TABLET_SIZES_TABLE.name: rows_from_csv(sizes_dump.splitlines(), TABLET_SIZES_COLUMNS),
+    })
+
+    topo.report_missing_tablet_sizes()
+
+    assert "1 replicas have no size" in capsys.readouterr().err
+
+
+def test_the_missing_sizes_are_grouped_by_node_and_by_table(capsys) -> None:
+    """
+    A handful of replicas on one node reads differently from a table missing everywhere.
+    """
+    load_dump = f"node;dc;rack;ip;storage_capacity\n{HOST1};dc1;rack1;10.0.0.1;1000\n"
+    sizes_dump = (f"table_id;last_token;replicas;missing_replicas\n"
+                  f"{TABLE};0;{{}};{{{HOST1}, {HOST2}}}\n"
+                  f"{TABLE};100;{{}};{{{HOST1}}}\n")
+
+    topo = Topology()
+    topo._build({
+        TABLETS_TABLE.name: rows_from_csv(TABLETS_CSV.splitlines(), TABLETS_COLUMNS),
+        LOAD_PER_NODE_TABLE.name: rows_from_csv(load_dump.splitlines(), LOAD_PER_NODE_COLUMNS),
+        TABLET_SIZES_TABLE.name: rows_from_csv(sizes_dump.splitlines(), TABLET_SIZES_COLUMNS),
+    })
+    topo.report_missing_tablet_sizes()
+
+    err = capsys.readouterr().err.splitlines()
+    assert err[0].startswith("Note: 3 replicas have no size")
+    # The heaviest first, and a node with no ip is named by its id.
+    assert err[1] == f"  hosts: 10.0.0.1 (2), {HOST2} (1)"
+    assert err[2] == "  tables: ks.tbl (3)"
+
+
+def test_the_missing_sizes_name_only_the_heaviest_few_and_say_so(capsys) -> None:
+    """
+    Enough to say where the weight is without turning a note into a report. What is left out
+    is said, rather than inferred from a total which does not add up.
+    """
+    hosts = [UUID(f"{digit}" * 8 + "-1111-1111-1111-111111111111") for digit in range(1, 6)]
+    sizes_dump = "table_id;last_token;replicas;missing_replicas\n" + "".join(
+        f"{TABLE};{token};{{}};{{{host}}}\n" for token, host in enumerate(hosts))
+
+    topo = Topology()
+    topo._build({TABLET_SIZES_TABLE.name: rows_from_csv(sizes_dump.splitlines(), TABLET_SIZES_COLUMNS)})
+    topo.report_missing_tablet_sizes()
+
+    by_host = capsys.readouterr().err.splitlines()[1]
+    assert by_host.count("(1)") == 3 and by_host.endswith("+2")
+
+
+def test_a_node_which_no_longer_owns_tokens_is_not_reported_for_holding_no_sizes(capsys) -> None:
+    """
+    A node which has left reports no size for what it still holds, same as an excluded one.
+    """
+    topology_dump = (f"version;host_id;shard_count;node_state;num_tokens\n"
+                     f"6538;{HOST1};4;left;256\n")
+    sizes_dump = (f"table_id;last_token;replicas;missing_replicas\n"
+                  f"{TABLE};0;{{}};{{{HOST1}}}\n")
+
+    topo = Topology()
+    topo._build({
+        TOPOLOGY_TABLE.name: rows_from_csv(topology_dump.splitlines(), TOPOLOGY_COLUMNS),
+        TABLET_SIZES_TABLE.name: rows_from_csv(sizes_dump.splitlines(), TABLET_SIZES_COLUMNS),
+    })
+    topo.report_missing_tablet_sizes()
+
+    assert capsys.readouterr().err == ""
+
+
+def test_the_report_of_missing_sizes_says_it_of_what_the_report_shows(capsys) -> None:
+    """
+    A replica of a table nobody asked about is not a hole in the numbers on screen, so the
+    report passes the filters it is drawn under.
+    """
+    other_table = UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+    load_dump = (f"node;dc;rack;ip;storage_capacity\n"
+                 f"{HOST1};dc1;rack1;10.0.0.1;1000\n"
+                 f"{HOST2};dc1;rack2;10.0.0.2;2000\n")
+    sizes_dump = (f"table_id;last_token;replicas;missing_replicas\n"
+                  f"{TABLE};0;{{}};{{{HOST1}}}\n"
+                  f"{other_table};0;{{}};{{{HOST2}}}\n")
+
+    topo = Topology()
+    topo._build({
+        TABLETS_TABLE.name: rows_from_csv(TABLETS_CSV.splitlines(), TABLETS_COLUMNS),
+        LOAD_PER_NODE_TABLE.name: rows_from_csv(load_dump.splitlines(), LOAD_PER_NODE_COLUMNS),
+        TABLET_SIZES_TABLE.name: rows_from_csv(sizes_dump.splitlines(), TABLET_SIZES_COLUMNS),
+    })
+
+    topo.report_missing_tablet_sizes(accepts_table=lambda table: table == TABLE)
+    err = capsys.readouterr().err
+    assert "Note: 1 replicas" in err and "10.0.0.1 (1)" in err
+
+    topo.report_missing_tablet_sizes(accepts_host=lambda host: host.ip == "10.0.0.2")
+    err = capsys.readouterr().err
+    assert "Note: 1 replicas" in err and "10.0.0.2 (1)" in err
+
+    # Nothing the report shows is missing a size, so it has nothing to say.
+    topo.report_missing_tablet_sizes(accepts_table=lambda table: False)
+    assert capsys.readouterr().err == ""
+
+
 def test_build_infers_shard_counts_from_replicas_when_system_topology_is_absent() -> None:
     topo = Topology()
     topo._build({TABLETS_TABLE.name: rows_from_csv(TABLETS_CSV.splitlines(), TABLETS_COLUMNS)})

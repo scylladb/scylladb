@@ -27,6 +27,7 @@ if __package__ in (None, ""):
 
 from tablets.filters import add_cluster_filter_options
 from tablets.filters import add_table_filter_options
+from tablets.filters import get_host_filter
 from tablets.filters import get_table_filter
 from tablets.filters import TabletFilter
 from tablets.filters import get_tablet_filter
@@ -237,6 +238,7 @@ def main() -> int:
 
         accepts_table = get_table_filter(args, topo)
         accepts_tablet = get_tablet_filter(args, topo)
+        topo.report_missing_tablet_sizes(accepts_table, get_host_filter(args, topo))
 
         rows = []
         for table_id, table_name in topo.iter_tables():

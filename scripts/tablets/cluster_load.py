@@ -624,6 +624,7 @@ def main() -> int:
 
         table_ids = get_selected_table_ids(topo, table_id, get_table_filter(args, topo))
         levels = collect_levels(topo, table_ids, capacity_mode, accepts_tablet, accepts_host)
+        topo.report_missing_tablet_sizes(lambda table: table in table_ids, accepts_host)
 
         requested_levels = set(args.level)
         sections = []
