@@ -34,7 +34,6 @@ public:
     };
 private:
     int _bound_terms;
-    type _type;
     std::vector<single_statement> _statements;
     std::unique_ptr<attributes> _attrs;
 
@@ -56,7 +55,7 @@ public:
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
-    void validate() const;
+    void validate(type t) const;
 
     virtual void validate(query_processor& qp, const service::client_state& state) const override;
 
