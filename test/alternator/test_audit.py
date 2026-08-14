@@ -548,10 +548,10 @@ def test_audit_ddl_operations(dynamodb, cql, alternator_audit_enabled):
 
 
 # Test auditing of QUERY table-level operations: DescribeTable, ListTagsOfResource,
-# DescribeTimeToLive, DescribeContinuousBackups, ExportTableToPointInTime,
+# DescribeTimeToLive, DescribeContinuousBackups, ExportTableToPointInTime, DescribeExport,
 # ListTables, DescribeEndpoints.
 # ListTables and DescribeEndpoints have empty keyspace/table.
-# Produces 7 audit entries.
+# Produces 8 audit entries.
 def test_audit_query_table_operations(dynamodb, cql, alternator_audit_enabled):
     with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table:
         ks_name = f"alternator_{table.name}"
@@ -576,8 +576,16 @@ def test_audit_query_table_operations(dynamodb, cql, alternator_audit_enabled):
         client.describe_continuous_backups(TableName=table.name)
         expected.append(("QUERY", "", False, ks_name, table.name, ["DescribeContinuousBackups", table.name]))
         # ExportTableToPointInTime
-        client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket="my-bucket")
+        response = client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket="my-bucket")
+        export_arn = response['ExportDescription']['ExportArn']
         expected.append(("QUERY", "", False, ks_name, table.name, ["ExportTableToPointInTime", table_arn, "my-bucket"]))
+        # DescribeExport, on the ARN the request above handed back. ExportTableToPointInTime does
+        # not create the metadata entry yet, so there is nothing to look up and the call must fail.
+        # Once it actually starts creating the export, this test will start failing loudly, which is
+        # good, because that is exactly when this place needs correcting.
+        with pytest.raises(ClientError, match='ExportNotFoundException'):
+            client.describe_export(ExportArn=export_arn)
+        expected.append(("QUERY", "", True, ks_name, table.name, ["DescribeExport", export_arn]))
         # ListTables (empty keyspace)
         client.list_tables()
         expected.append(("QUERY", "", False, "", "", ["ListTables"]))
