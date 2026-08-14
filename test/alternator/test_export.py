@@ -980,22 +980,19 @@ def test_describe_export(dynamodb, test_table_s):
         assert 'BilledSizeBytes' in desc
 
 
-# Test that DescribeExport with a non-existent ARN returns ValidationException.
-@pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
-def test_describe_export_nonexistent(dynamodb, test_table_s):
+# Test that DescribeExport rejects an ARN with no `/export/<id>` suffix - a table ARN on its own
+# does not identify an export.
+def test_describe_export_arn_without_export_id(dynamodb, test_table_s):
     client = dynamodb.meta.client
-    region = dynamodb.meta.client.meta.region_name
-    table_arn = get_table_arn(test_table_s)
-    account_id = table_arn.split(':')[4]
-    fake_arn = f'arn:aws:dynamodb:{region}:{account_id}:table/nonexistent_table_xyz'
     with pytest.raises(ClientError, match='ValidationException.*Invalid Export ARN'):
-        client.describe_export(ExportArn=fake_arn)
+        client.describe_export(ExportArn=get_table_arn(test_table_s))
 
 
 
 # Test that DescribeExport with a incorrect ARN returns ValidationException.
 # Note: this one is a bit tricky - AWS probably doesn't check for `arn:` prefix and we fail
-# on the same ValidationException as `test_describe_export_nonexistent` test.
+# on the same ValidationException as `test_describe_export_arn_without_export_id` test.
+# Once this stops being xfail, `test_describe_export_empty_arn` can be folded in as another case.
 @pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
 @pytest.mark.parametrize('fake_arn_error', [
     ('qwerty:aws:dynamodb:us-east-1:000000000000:table/nonexistent_table_xyz', 'ValidationException.*Invalid Export ARN'),
@@ -1297,6 +1294,29 @@ def test_export_table_export_time_now(test_table_s_for_export_only, scylla_only)
         ExportTime=int(time.time()),
     )
     assert response['ExportDescription']['ExportStatus'] == 'FAILED'
+
+
+# Tests for DescribeExport. Nothing writes export metadata yet, so a well-formed ARN can only
+# describe an export that does not exist. What these tests do cover is the ARN validation and the
+# not-found path, which stay the same once exports are actually started.
+# They are scylla_only, as they exercise Alternator's own ARN format and error reporting.
+
+# Test that DescribeExport rejects an empty ExportArn.
+def test_describe_export_empty_arn(test_table_s_for_export_only, scylla_only):
+    client = test_table_s_for_export_only.meta.client
+
+    with pytest.raises(ClientError, match='ValidationException.*ExportArn'):
+        client.describe_export(ExportArn='')
+
+
+# Test that DescribeExport reports a well-formed ARN of an export that was never started as
+# ExportNotFoundException, rather than inventing a description for it.
+def test_describe_export_unknown(test_table_s_for_export_only, scylla_only):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+
+    with pytest.raises(ClientError, match='ExportNotFoundException'):
+        client.describe_export(ExportArn=f'{table_arn}/export/{random_string(20)}')
 
 
 # Test that the internal system-distributed tables for alternator export to S3 exist and are queryable.

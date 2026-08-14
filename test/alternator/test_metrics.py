@@ -411,6 +411,15 @@ def test_export_table_operations(test_table_s, metrics):
         with check_table_increases_operation(metrics, ['ExportTableToPointInTime'], test_table_s.name):
             test_table_s.meta.client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket')
 
+# DescribeExport counts against the table named by the export ARN, also when the export itself
+# turns out not to exist - the counter tracks the request, not its outcome.
+def test_describe_export_operations(test_table_s, metrics):
+    table_arn = test_table_s.meta.client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
+    with check_increases_operation(metrics, ['DescribeExport']):
+        with check_table_increases_operation(metrics, ['DescribeExport'], test_table_s.name):
+            with pytest.raises(ClientError, match='ExportNotFoundException'):
+                test_table_s.meta.client.describe_export(ExportArn=f'{table_arn}/export/nonexistent')
+
 # Test counter for Query with VectorSearch: both global and per-table.
 def test_query_vector_operations(vs, metrics):
     with new_test_table(vs,
