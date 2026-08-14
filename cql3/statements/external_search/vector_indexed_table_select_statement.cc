@@ -25,15 +25,12 @@
 #include "utils/assert.hh"
 
 #include <seastar/core/future.hh>
-#include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/exception.hh>
 
 
 namespace cql3 {
 
 namespace statements {
-
-static logging::logger logger("vector_indexed_table_select_statement");
 
 namespace {
 
@@ -46,6 +43,46 @@ std::vector<float> to_query_vector(const column_definition& ann_column, const cq
 
     auto values = value_cast<vector_type_impl::native_type>(ann_column.type->deserialize(value.to_managed_bytes_view()));
     return util::to_vector<float>(values);
+}
+
+/// The similarity the coordinator computes a rescored ANN ordering's score with.  It reads the
+/// fetched vector column and the query vector, so it needs no value injected per row - and it is
+/// the same expression wherever that score is wanted, not only in the ordering.
+expr::expression make_similarity_expression(const secondary_index::index& index,
+        const select_statement::prepared_ann_ordering_type& prepared_ann_ordering,
+        data_dictionary::database db, const schema_ptr& schema) {
+    auto similarity_function_name = secondary_index::vector_index::get_cql_similarity_function_name(index.metadata().options());
+    auto func_name = functions::function_name::native_function(sstring(similarity_function_name));
+
+    std::vector<expr::expression> args;
+    args.push_back(expr::column_value(prepared_ann_ordering.first));
+    args.push_back(prepared_ann_ordering.second);
+
+    std::vector<shared_ptr<assignment_testable>> provided_args;
+    provided_args.push_back(expr::as_assignment_testable(args[0], expr::type_of(args[0])));
+    provided_args.push_back(expr::as_assignment_testable(args[1], expr::type_of(args[1])));
+
+    auto func = cql3::functions::instance().get(db, schema->ks_name(), func_name, provided_args, schema->ks_name(), schema->cf_name(), nullptr);
+
+    return expr::function_call{
+        .func = func,
+        .args = std::move(args),
+    };
+}
+
+/// Orders by a score column of the result row, descending, with the rows that have no usable score
+/// last.
+select_statement::ordering_comparator_type descending_score_comparator(size_t score_column_index) {
+    return [score_column_index, type = float_type] (const raw::select_statement::result_row_type& r1, const raw::select_statement::result_row_type& r2) {
+        auto& c1 = r1[score_column_index];
+        auto& c2 = r2[score_column_index];
+        auto f1 = c1 ? value_cast<float>(type->deserialize(*c1)) : std::numeric_limits<float>::quiet_NaN();
+        auto f2 = c2 ? value_cast<float>(type->deserialize(*c2)) : std::numeric_limits<float>::quiet_NaN();
+        if (std::isfinite(f1) && std::isfinite(f2)) {
+            return f1 > f2;
+        }
+        return std::isfinite(f1);
+    };
 }
 
 } // anonymous namespace
@@ -151,56 +188,23 @@ bool prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_s
     return selects_score;
 }
 
-uint32_t add_similarity_function_to_selectors(
+select_statement::ordering_comparator_type rescored_similarity_ordering(
         std::vector<selection::prepared_selector>& prepared_selectors,
         const ann_ordering_info& ann_ordering_info,
         data_dictionary::database db,
         schema_ptr schema) {
-    auto similarity_function_name = secondary_index::vector_index::get_cql_similarity_function_name(ann_ordering_info.index.metadata().options());
-    // Create the function name
-    auto func_name = functions::function_name::native_function(sstring(similarity_function_name));
+    auto similarity = make_similarity_expression(ann_ordering_info.index, ann_ordering_info.prepared_ann_ordering, db, schema);
+    // The comparator reads the column as a float, which every similarity function returns, so this
+    // holds for whatever the index is configured with - but it is the comparator's invariant, and
+    // nothing in the types says so.
+    throwing_assert(expr::type_of(similarity) == float_type);
 
-    // Create the function arguments
-    std::vector<expr::expression> args;
-    args.push_back(expr::column_value(ann_ordering_info.prepared_ann_ordering.first));
-    args.push_back(ann_ordering_info.prepared_ann_ordering.second);
-
-    // Get the function object
-    std::vector<shared_ptr<assignment_testable>> provided_args;
-    provided_args.push_back(expr::as_assignment_testable(args[0], expr::type_of(args[0])));
-    provided_args.push_back(expr::as_assignment_testable(args[1], expr::type_of(args[1])));
-
-    auto func = cql3::functions::instance().get(db, schema->ks_name(), func_name, provided_args, schema->ks_name(), schema->cf_name(), nullptr);
-
-    // Create the function call expression
-    expr::function_call similarity_func_call{
-        .func = func,
-        .args = std::move(args),
-    };
-
-    // Add the similarity function as a prepared selector (last)
+    // Sorting reads a column of the result row, so the score has to be one of them.
     prepared_selectors.push_back(selection::prepared_selector{
-        .expr = std::move(similarity_func_call),
+        .expr = std::move(similarity),
         .alias = nullptr,
     });
-    return prepared_selectors.size() - 1;
-}
-
-select_statement::ordering_comparator_type get_similarity_ordering_comparator(std::vector<selection::prepared_selector>& prepared_selectors, uint32_t similarity_column_index) {
-    auto type = expr::type_of(prepared_selectors[similarity_column_index].expr);
-    if (type->get_kind() != abstract_type::kind::float_kind) {
-        seastar::on_internal_error(logger, "Similarity function must return float type.");
-    }
-    return [similarity_column_index, type] (const raw::select_statement::result_row_type& r1, const raw::select_statement::result_row_type& r2) {
-        auto& c1 = r1[similarity_column_index];
-        auto& c2 = r2[similarity_column_index];
-        auto f1 = c1 ? value_cast<float>(type->deserialize(*c1)) : std::numeric_limits<float>::quiet_NaN();
-        auto f2 = c2 ? value_cast<float>(type->deserialize(*c2)) : std::numeric_limits<float>::quiet_NaN();
-        if (std::isfinite(f1) && std::isfinite(f2)) {
-            return f1 > f2;
-        }
-        return std::isfinite(f1);
-    };
+    return descending_score_comparator(prepared_selectors.size() - 1);
 }
 
 ::shared_ptr<cql3::statements::select_statement> vector_indexed_table_select_statement::prepare(data_dictionary::database db, schema_ptr schema,

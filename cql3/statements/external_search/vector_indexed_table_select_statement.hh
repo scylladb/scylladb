@@ -48,18 +48,18 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
 bool prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_selectors,
         std::optional<ann_ordering_info>& ordering_info, expr::temporary_allocator& temporaries_allocator);
 
-/// Adds a similarity function call to prepared_selectors based on the ANN index.
-/// Returns the index of the appended selector within prepared_selectors.
-uint32_t add_similarity_function_to_selectors(
+/// The order the rows come back in when the index rescores.  The Vector Store returned them ordered
+/// by the score it reported, which is not the requested order then: the coordinator recomputes the
+/// similarity from the stored vectors and has to sort by that.
+///
+/// Sorting reads a column of the result row, so this appends one trailing selector holding the
+/// recomputed similarity - the column the returned comparator sorts by, and the one the caller has
+/// to hide from the client.
+select_statement::ordering_comparator_type rescored_similarity_ordering(
         std::vector<selection::prepared_selector>& prepared_selectors,
         const ann_ordering_info& ann_ordering_info,
         data_dictionary::database db,
         schema_ptr schema);
-
-/// Builds an ordering comparator that sorts by descending similarity score.
-select_statement::ordering_comparator_type get_similarity_ordering_comparator(
-        std::vector<selection::prepared_selector>& prepared_selectors,
-        uint32_t similarity_column_index);
 
 class vector_indexed_table_select_statement : public external_index_select_statement {
     ann_ordering_info _ann_ordering_info;
