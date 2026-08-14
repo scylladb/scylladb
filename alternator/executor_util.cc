@@ -283,6 +283,18 @@ future<> verify_permission(
     const schema_ptr& schema,
     auth::permission permission_to_check,
     stats& stats) {
+    return verify_permission(enforce_authorization, warn_authorization, client_state,
+            schema->ks_name(), schema->cf_name(), permission_to_check, stats);
+}
+
+future<> verify_permission(
+    bool enforce_authorization,
+    bool warn_authorization,
+    const service::client_state& client_state,
+    std::string_view ks_name,
+    std::string_view cf_name,
+    auth::permission permission_to_check,
+    stats& stats) {
     if (!enforce_authorization && !warn_authorization) {
         co_return;
     }
@@ -290,7 +302,7 @@ future<> verify_permission(
     // that we use here - check_has_permissions(). So if we want to allow
     // writes to internal tables (from try_get_internal_table()) only to a
     // superuser, we need to explicitly check it here.
-    if (permission_to_check == auth::permission::MODIFY && is_internal_keyspace(schema->ks_name())) {
+    if (permission_to_check == auth::permission::MODIFY && is_internal_keyspace(ks_name)) {
         if (!client_state.user() ||
             !client_state.user()->name ||
             !co_await client_state.get_auth_service()->underlying_role_manager().is_superuser(*client_state.user()->name)) {
@@ -300,11 +312,11 @@ future<> verify_permission(
                 }
                 authorization_error(stats, enforce_authorization, warn_authorization, fmt::format(
                     "Write access denied on internal table {}.{} to role {} because it is not a superuser",
-                    schema->ks_name(), schema->cf_name(), username));
+                    ks_name, cf_name, username));
                 co_return;
         }
     }
-    auto resource = auth::make_data_resource(schema->ks_name(), schema->cf_name());
+    auto resource = auth::make_data_resource(ks_name, cf_name);
     if (!client_state.user() || !client_state.user()->name ||
         !co_await client_state.check_has_permission(auth::command_desc(permission_to_check, resource))) {
         sstring username = "<anonymous>";
@@ -316,7 +328,7 @@ future<> verify_permission(
         authorization_error(stats, enforce_authorization, warn_authorization, fmt::format(
             "{} access on table {}.{} is denied to role {}, client address {}",
             auth::permissions::to_string(permission_to_check),
-            schema->ks_name(), schema->cf_name(), username, client_state.get_client_address()));
+            ks_name, cf_name, username, client_state.get_client_address()));
     }
 }
 

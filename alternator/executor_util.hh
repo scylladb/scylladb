@@ -187,6 +187,7 @@ void verify_all_are_used(const rjson::value* field,
 /// SELECT, DROP, etc.) on the given table. When permission is denied an
 /// appropriate user-readable api_error::access_denied is thrown.
 future<> verify_permission(bool enforce_authorization, bool warn_authorization, const service::client_state&, const schema_ptr&, auth::permission, stats& stats);
+future<> verify_permission(bool enforce_authorization, bool warn_authorization, const service::client_state&, std::string_view ks_name, std::string_view cf_name, auth::permission, stats& stats);
 
 /// Similar to verify_permission() above, but just for CREATE operations.
 /// Those do not operate on any specific table, so require permissions on

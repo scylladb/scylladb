@@ -131,6 +131,28 @@ public:
     // NOTE: currently used only by alternator
     future<db_clock::time_point> cdc_current_generation_timestamp(context);
 
+    /* The persisted state of a single Alternator "export to S3", as needed to answer DescribeExport.
+     * Everything describing a finished export is optional, because it is only filled in once the
+     * export actually runs. */
+    struct alternator_export {
+        sstring client_token;
+        /* The original ExportTableToPointInTime request, as JSON. It is the source of truth for the
+         * request-derived fields of ExportDescription (S3Bucket, ExportFormat, TableArn, ...). */
+        sstring request;
+        sstring status;
+        ::table_id table_id;  // The exported table, as resolved when the export was accepted
+        db_clock::time_point accepted_at;
+        std::optional<sstring> manifest;
+        std::optional<sstring> failure_code;
+        std::optional<sstring> failure_message;
+        std::optional<int64_t> item_count;
+        std::optional<int64_t> billed_size_bytes;
+        std::optional<db_clock::time_point> completed_at;
+    };
+
+    // Returns the export with the given ARN, or nullopt if there is no such export.
+    future<std::optional<alternator_export>> get_alternator_export(std::string_view export_arn, context);
+
 private:
     future<> create_tables(std::vector<schema_ptr> tables);
 };

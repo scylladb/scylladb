@@ -13,12 +13,14 @@
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
 #include "auth/permission.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "utils/rjson.hh"
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <boost/regex.hpp>
@@ -326,6 +328,82 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     rjson::add(export_desc, "S3Bucket", rjson::from_string(s3_bucket));
     rjson::add(export_desc, "S3Prefix", rjson::from_string(s3_prefix));
     rjson::add(export_desc, "TableArn", rjson::from_string(table_arn));
+
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ExportDescription", std::move(export_desc));
+    co_return rjson::print(std::move(response));
+}
+
+future<executor::request_return_type> executor::describe_export(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.describe_export++;
+
+    // An export ARN is the ARN of the exported table with `/export/<id>` appended, so parsing it
+    // also tells us which table the export belongs to.
+    auto export_arn = get_non_empty_string_attribute(request, "ExportArn");
+    auto parts = parse_arn(export_arn, "ExportArn", "Export", "/export/");
+
+    maybe_audit(audit_info, audit::statement_category::QUERY, parts.keyspace_name, parts.table_name, "DescribeExport", request);
+    if (auto table = _proxy.data_dictionary().try_find_table(parts.keyspace_name, parts.table_name)) {
+        // Per-table metrics live on the table object, so they only exist for as long as it does.
+        get_stats_from_schema(_proxy, *table->schema())->api_operations.describe_export++;
+    }
+    // The exported table may have been dropped after the export was accepted. Yet, DynamoDB keeps describing such exports.
+    // Permissions are attached to the table's name, so they can be checked whether or not the table is still there.
+    co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, parts.keyspace_name, parts.table_name, auth::permission::SELECT, _stats);
+
+    auto normal_token_owners = _proxy.get_token_metadata_ptr()->count_normal_token_owners();
+    auto exp = co_await _sdks.get_alternator_export(export_arn, { normal_token_owners });
+    // metadata_expires_at is set to completed_at + 90 days once an export reaches COMPLETED or
+    // FAILED, matching DynamoDB's 90-day retention of export metadata, and it stays unset while the
+    // export is still running, so a live export never expires. Removing the export row is left entirely
+    // to the per-row TTL, which deletes it on its next sweep.
+    if (!exp) {
+        co_return api_error::export_not_found(fmt::format("ExportArn: Export `{}` not found", export_arn));
+    }
+
+    rjson::value export_desc = rjson::empty_object();
+    rjson::add(export_desc, "ExportArn", rjson::from_string(export_arn));
+    rjson::add(export_desc, "ExportStatus", rjson::from_string(exp->status));
+    // DynamoDB reports the timestamps in ExportDescription as seconds since the epoch.
+    rjson::add(export_desc, "StartTime", rjson::value(int64_t(db_clock::to_time_t(exp->accepted_at))));
+
+    // The rest of the request is echoed back from the request that started the export,
+    // with the same defaults which ExportTableToPointInTime applies to a request that omits them.
+    auto exported_request = rjson::parse(exp->request);
+    rjson::add(export_desc, "TableArn", rjson::from_string(get_non_empty_string_attribute(exported_request, "TableArn")));
+    rjson::add(export_desc, "S3Bucket", rjson::from_string(get_non_empty_string_attribute(exported_request, "S3Bucket")));
+    rjson::add(export_desc, "S3Prefix", rjson::from_string(get_non_empty_string_attribute(exported_request, "S3Prefix", "")));
+    rjson::add(export_desc, "ExportFormat", rjson::from_string(get_non_empty_string_attribute(exported_request, "ExportFormat", "DYNAMODB_JSON")));
+    // ExportType is reported by DynamoDB only if ExportTableToPointInTime request had it
+    if (rjson::find(exported_request, "ExportType")) {
+        rjson::add(export_desc, "ExportType", rjson::from_string(get_non_empty_string_attribute(exported_request, "ExportType")));
+    }
+
+    // TableId identifies the table the export was taken from, not whatever table now answers to its name
+    rjson::add(export_desc, "TableId", rjson::from_string(exp->table_id.to_sstring()));
+    // Alternator has no PITR, so the only point it can export from is the moment of acceptance
+    rjson::add(export_desc, "ExportTime", rjson::value(int64_t(db_clock::to_time_t(exp->accepted_at))));
+    rjson::add(export_desc, "ClientToken", rjson::from_string(exp->client_token));
+
+    // Everything below describes a finished export, so it is only present once one has run.
+    if (exp->manifest && !exp->manifest->empty()) {
+        rjson::add(export_desc, "ExportManifest", rjson::from_string(*exp->manifest));
+    }
+    if (exp->failure_code && !exp->failure_code->empty()) {
+        rjson::add(export_desc, "FailureCode", rjson::from_string(*exp->failure_code));
+    }
+    if (exp->failure_message && !exp->failure_message->empty()) {
+        rjson::add(export_desc, "FailureMessage", rjson::from_string(*exp->failure_message));
+    }
+    if (exp->item_count) {
+        rjson::add(export_desc, "ItemCount", rjson::value(*exp->item_count));
+    }
+    if (exp->billed_size_bytes) {
+        rjson::add(export_desc, "BilledSizeBytes", rjson::value(*exp->billed_size_bytes));
+    }
+    if (exp->completed_at) {
+        rjson::add(export_desc, "EndTime", rjson::value(int64_t(db_clock::to_time_t(*exp->completed_at))));
+    }
 
     rjson::value response = rjson::empty_object();
     rjson::add(response, "ExportDescription", std::move(export_desc));
