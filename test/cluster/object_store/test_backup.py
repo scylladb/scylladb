@@ -255,9 +255,12 @@ async def test_backup_is_abortable_in_s3_client(manager: ScyllaClusterManager, o
     await do_test_backup_abort(manager, object_storage, breakpoint_name="backup_task_pre_upload", min_files=0, max_files=1)
 
 
-@pytest.mark.parametrize(("do_encrypt", "do_abort"), [(False, False), (False, True), (True, False)])
-async def test_simple_backup_and_restore(manager: ScyllaClusterManager, object_storage, tmpdir, do_encrypt, do_abort):
+@pytest.mark.parametrize("flavor", ['plain', 'abort', 'encrypt'])
+async def test_simple_backup_and_restore(manager: ScyllaClusterManager, object_storage, tmpdir, flavor):
     '''check that restoring from backed up snapshot for a keyspace:table works'''
+
+    do_abort = flavor == 'abort'
+    do_encrypt = flavor == 'encrypt'
 
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
