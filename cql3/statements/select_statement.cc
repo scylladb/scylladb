@@ -2096,8 +2096,30 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     std::optional<ann_ordering_info> ann_ordering_info_opt = get_ann_ordering_info(db, schema, _parameters, ctx);
     bool is_ann_query = ann_ordering_info_opt.has_value();
 
-    std::optional<bm25_ordering_info> bm25_ordering_info_opt = get_bm25_ordering_info(db, schema, _parameters, ctx);
+    // A scoring ORDER BY is prepared here, once, and its resolved call is then offered to the
+    // resolvers. Preparing it in a resolver instead would mean preparing it once per resolver, and
+    // so registering its bind markers more than once.
+    std::optional<expr::expression> prepared_scoring_ordering;
+    if (!_parameters->orderings().empty()) {
+        if (const auto* scoring_ord = std::get_if<raw::select_statement::scoring_function_ordering>(&_parameters->orderings().front().second)) {
+            prepared_scoring_ordering = expr::prepare_expression(scoring_ord->func_expr, db, schema->ks_name(), schema.get(), nullptr);
+            expr::fill_prepare_context(*prepared_scoring_ordering, ctx);
+        }
+    }
+    const expr::function_call* scoring_call = prepared_scoring_ordering
+            ? expr::as_if<expr::function_call>(&*prepared_scoring_ordering)
+            : nullptr;
+
+    std::optional<bm25_ordering_info> bm25_ordering_info_opt =
+            scoring_call ? get_bm25_ordering_info(db, schema, *scoring_call) : std::nullopt;
     bool has_bm25_ordering = bm25_ordering_info_opt.has_value();
+
+    if (prepared_scoring_ordering && !is_ann_query && !has_bm25_ordering) {
+        // A function call in ORDER BY that no scoring-function resolver claimed. The
+        // regular-ordering path below skips scoring orderings, so reject it explicitly
+        // instead of silently ignoring the ORDER BY clause.
+        throw exceptions::invalid_request_exception("Only ANN() and BM25() are supported as scoring functions in ORDER BY");
+    }
 
     if (prepared_selectors.empty() && (!_group_by_columns.empty() || (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled))) {
         // We have a "SELECT * GROUP BY" or "SELECT * ORDER BY ANN" with rescoring enabled. If we leave prepared_selectors

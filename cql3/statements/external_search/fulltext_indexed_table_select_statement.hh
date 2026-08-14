@@ -24,13 +24,12 @@ struct bm25_ordering_info {
     std::vector<expr::expression> selected_bm25_terms;
 };
 
-/// Resolves BM25 ordering metadata from the query's ORDER BY clause.
-/// Returns std::nullopt if the query does not have BM25 ordering.
+/// Resolves BM25 ordering metadata from the query's prepared ORDER BY call.
+/// Returns std::nullopt if the call is not a native bm25() call, i.e. this is not an FTS query.
 std::optional<bm25_ordering_info> get_bm25_ordering_info(
         data_dictionary::database db,
         schema_ptr schema,
-        lw_shared_ptr<const raw::select_statement::parameters> parameters,
-        prepare_context& ctx);
+        const expr::function_call& fc);
 
 /// Processes bm25() calls in prepared_selectors:
 /// - When ordering_info is absent, throws on the first bm25() occurrence at any nesting level.
