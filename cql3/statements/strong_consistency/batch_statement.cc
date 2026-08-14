@@ -23,11 +23,10 @@ static logging::logger logger("sc_batch_statement");
 batch_statement::batch_statement(int bound_terms, type type_, std::vector<single_statement> statements, std::unique_ptr<attributes> attrs)
     : cql_statement(&timeout_config::write_timeout)
     , _bound_terms(bound_terms)
-    , _type(type_)
     , _statements(std::move(statements))
     , _attrs(std::move(attrs))
 {
-    validate();
+    validate(type_);
 }
 
 batch_statement::batch_statement(type type_, std::vector<single_statement> statements, std::unique_ptr<attributes> attrs)
@@ -134,9 +133,12 @@ bool batch_statement::depends_on(std::string_view ks_name, std::optional<std::st
     return std::ranges::any_of(_statements, [&ks_name, &cf_name] (auto&& s) { return s.statement->depends_on(ks_name, cf_name); });
 }
 
-void batch_statement::validate() const {
-    if (_type == type::COUNTER) {
+void batch_statement::validate(type t) const {
+    if (t == type::COUNTER) {
         throw exceptions::invalid_request_exception("Counter batches are not supported with strongly consistent tables");
+    }
+    if (t == type::UNLOGGED) {
+        throw exceptions::invalid_request_exception("Unlogged batches are not supported with strongly consistent tables");
     }
 
     schema_ptr batch_schema;
