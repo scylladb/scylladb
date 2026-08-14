@@ -89,7 +89,6 @@ struct scheduling_groups {
     scheduling_group memtable_scheduling_group;
     scheduling_group memtable_to_cache_scheduling_group;
     scheduling_group gossip_scheduling_group;
-    scheduling_group backup_scheduling_group;
 };
 
 // Creating and destroying scheduling groups on each env setup and teardown
