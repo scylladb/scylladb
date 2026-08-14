@@ -3207,7 +3207,10 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
 }
 
 compaction_group_ptr compaction_group::make_empty_group(const compaction_group& base) {
-    return make_lw_shared<compaction_group>(base._t, base._group_id, base._token_range, base._repair_sstable_classifier);
+    auto cg = make_lw_shared<compaction_group>(base._t, base._group_id, base._token_range, base._repair_sstable_classifier);
+    // Inherit rather than default: the update_effective_replication_map() sweep may not run.
+    cg->set_tombstone_gc_enabled(base.tombstone_gc_enabled());
+    return cg;
 }
 
 bool compaction_group::stopped() const noexcept {
