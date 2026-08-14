@@ -468,7 +468,14 @@ BOOST_AUTO_TEST_CASE(test_lru_evict_drains_window_through_admission_gate) {
     BOOST_REQUIRE_EQUAL(l.window_size(), N);
     BOOST_REQUIRE_EQUAL(l.get_stats().window_to_probation, 0u);
 
-    BOOST_REQUIRE(l.evict() == reclaimed_something);
+    // A single evict() call drains the window, but drain_window() bails out on
+    // need_preempt() (which fires readily in debug builds), so it may take more
+    // than one call to reach the cap. Keep evicting until the window is drained;
+    // the cumulative admission-gate stats below are unaffected by how the drain
+    // is split across calls.
+    while (l.window_size() > l.current_max_window_size()) {
+        BOOST_REQUIRE(l.evict() == reclaimed_something);
+    }
 
     const auto& st = l.get_stats();
     // The window was drained down to its cap (1% of total, at least 1)...
@@ -622,10 +629,13 @@ BOOST_AUTO_TEST_CASE(test_cold_entry_evicted_before_hot_entry) {
     }
     BOOST_REQUIRE_EQUAL(l.protected_size(), 1);
 
-    // The first eviction call drains the window: row_cold (frequency 1)
-    // loses the admission duel and is evicted, while row_hot sits safely
-    // in the protected segment.
-    BOOST_REQUIRE(l.evict() == reclaimed_something);
+    // Draining the window evicts row_cold (frequency 1) -- it loses the
+    // admission duel -- while row_hot sits safely in the protected segment.
+    // drain_window() bails on need_preempt() (which fires readily in debug),
+    // so drain the whole window rather than assuming a single evict() suffices.
+    while (l.window_size() > l.current_max_window_size()) {
+        BOOST_REQUIRE(l.evict() == reclaimed_something);
+    }
     BOOST_REQUIRE_MESSAGE(row_cold->was_evicted,
         "Cold entry should be evicted before frequently-accessed entry");
     BOOST_REQUIRE(!row_hot->was_evicted);
@@ -1896,7 +1906,12 @@ BOOST_AUTO_TEST_CASE(test_pure_scan_rejected_while_hot_entries_survive) {
         l.add(*scan[i]);
     }
 
-    BOOST_REQUIRE(l.evict() == reclaimed_something);
+    // drain_window() bails on need_preempt() (which fires readily in debug),
+    // so a single evict() may not finish draining the 100-entry scan. Drain
+    // the window fully before checking the outcome.
+    while (l.window_size() > l.current_max_window_size()) {
+        BOOST_REQUIRE(l.evict() == reclaimed_something);
+    }
 
     // The scan was drained: one entry seeded probation, one remains as the
     // window residual, everything else was rejected at the gate.
