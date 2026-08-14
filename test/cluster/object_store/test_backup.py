@@ -775,7 +775,10 @@ async def do_test_streaming_scopes(build_mode: str, manager: ManagerClient, topo
     ])
 async def test_restore_tablets(build_mode: str, manager: ManagerClient, object_storage, topology, num_tables, num_restore_nodes):
     '''Check that tablet-aware restore works for multiple tables backed up from multiple nodes'''
+    await do_test_restore_tablets(build_mode, manager, object_storage, topology, num_tables, num_restore_nodes)
 
+
+async def do_test_restore_tablets(build_mode: str, manager: ManagerClient, object_storage, topology, num_tables, num_restore_nodes):
     servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
 
     cql = manager.get_cql()
