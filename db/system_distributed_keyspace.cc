@@ -282,11 +282,13 @@ schema_ptr alternator_export_to_s3_exports() {
         s.with_column("export_arn", utf8_type, column_kind::partition_key)
          .with_column("client_token", utf8_type)
          .with_column("request", utf8_type)
+         .with_column("table_id", uuid_type)
          .with_column("export_manifest", utf8_type)
          .with_column("export_status", utf8_type)
          .with_column("failure_code", utf8_type)
          .with_column("failure_message", utf8_type)
          .with_column("item_count", long_type)
+         .with_column("billed_size_bytes", long_type)
          .with_column("export_id_token", utf8_type)
          .with_column("snapshot_tag", utf8_type)
          .with_column("accepted_at", timestamp_type)
@@ -640,6 +642,34 @@ system_distributed_keyspace::cdc_current_generation_timestamp(context ctx) {
             cql3::query_processor::cache_internal::no);
 
     co_return timestamp_cql->one().get_as<db_clock::time_point>("time");
+}
+
+future<std::optional<system_distributed_keyspace::alternator_export>>
+system_distributed_keyspace::get_alternator_export(std::string_view export_arn, context ctx) {
+    auto rs = co_await _qp.execute_internal(
+            format("SELECT * FROM {}.{} WHERE export_arn = ?", NAME, ALTERNATOR_EXPORT_TO_S3_EXPORTS),
+            quorum_if_many(ctx.num_token_owners),
+            internal_distributed_query_state(),
+            { sstring(export_arn) },
+            cql3::query_processor::cache_internal::yes);
+
+    if (rs->empty()) {
+        co_return std::nullopt;
+    }
+    const auto& row = rs->one();
+    co_return alternator_export {
+        .client_token = row.get_as<sstring>("client_token"),
+        .request = row.get_as<sstring>("request"),
+        .status = row.get_as<sstring>("export_status"),
+        .table_id = ::table_id(row.get_as<utils::UUID>("table_id")),
+        .accepted_at = row.get_as<db_clock::time_point>("accepted_at"),
+        .manifest = row.get_opt<sstring>("export_manifest"),
+        .failure_code = row.get_opt<sstring>("failure_code"),
+        .failure_message = row.get_opt<sstring>("failure_message"),
+        .item_count = row.get_opt<int64_t>("item_count"),
+        .billed_size_bytes = row.get_opt<int64_t>("billed_size_bytes"),
+        .completed_at = row.get_opt<db_clock::time_point>("completed_at"),
+    };
 }
 
 // TODO: this is very hardcoded.
