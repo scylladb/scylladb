@@ -2093,9 +2093,6 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     prepared_selectors = maybe_jsonize_select_clause(std::move(prepared_selectors), db, schema);
 
-    std::optional<ann_ordering_info> ann_ordering_info_opt = get_ann_ordering_info(db, schema, _parameters, ctx);
-    bool is_ann_query = ann_ordering_info_opt.has_value();
-
     // A scoring ORDER BY is prepared here, once, and its resolved call is then offered to the
     // resolvers. Preparing it in a resolver instead would mean preparing it once per resolver, and
     // so registering its bind markers more than once.
@@ -2109,6 +2106,10 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     const expr::function_call* scoring_call = prepared_scoring_ordering
             ? expr::as_if<expr::function_call>(&*prepared_scoring_ordering)
             : nullptr;
+
+    std::optional<ann_ordering_info> ann_ordering_info_opt =
+            scoring_call ? get_ann_ordering_info(db, schema, *scoring_call) : std::nullopt;
+    bool is_ann_query = ann_ordering_info_opt.has_value();
 
     std::optional<bm25_ordering_info> bm25_ordering_info_opt =
             scoring_call ? get_bm25_ordering_info(db, schema, *scoring_call) : std::nullopt;
@@ -2217,7 +2218,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     if (!orderings.empty() && !is_ann_query && !is_fts_query) {
         std::visit([&](auto&& ordering) {
             using T = std::decay_t<decltype(ordering)>;
-            if constexpr (!std::is_same_v<T, select_statement::ann_vector> && !std::is_same_v<T, raw::select_statement::scoring_function_ordering>) {
+            if constexpr (!std::is_same_v<T, raw::select_statement::scoring_function_ordering>) {
                 throwing_assert(!for_view);
                 verify_ordering_is_allowed(*_parameters, *restrictions);
                 prepared_orderings_type prepared_orderings = prepare_orderings(*schema);
@@ -2459,6 +2460,9 @@ select_statement::prepared_orderings_type select_statement::prepare_orderings(co
     prepared_orderings.reserve(_parameters->orderings().size());
 
     for (auto&& [column_id, column_ordering] : _parameters->orderings()) {
+        // Only regular orderings reach here; scoring orderings carry a null column_id and
+        // are handled by their own resolvers.
+        throwing_assert(column_id);
         ::shared_ptr<column_identifier> column = column_id->prepare_column_identifier(schema);
 
         const column_definition* def = schema.get_column_definition(column->name());

@@ -14,7 +14,7 @@ Querying data from data is done using a ``SELECT`` statement:
                    : [ WHERE `where_clause` ]
                    : [ GROUP BY `group_by_clause` ]
                    : [ ORDER BY `ordering_clause` ]
-                   : [ ORDER BY `vector_column_name` ANN OF `vector` LIMIT `integer` ]
+                   : [ ORDER BY ( `vector_column_name` ANN OF `vector` | ANN '(' `vector_column_name` ',' `vector` ')' ) LIMIT `integer` ]
                    : [ WHERE BM25 '(' `column_name` ',' `term` ')' '>' 0 ORDER BY BM25 '(' `column_name` ',' `term` ')' LIMIT `integer` ]
                    : [ PER PARTITION LIMIT (`integer` | `bind_marker`) ]
                    : [ LIMIT (`integer` | `bind_marker`) ]
@@ -370,13 +370,18 @@ When using vector columns, the syntax is as follows:
 
 .. code-block::
 
-   order_by_vector: ORDER BY `vector_column_name` ANN OF `vector` LIMIT `integer`
+   order_by_vector: ORDER BY ( `vector_column_name` ANN OF `vector` | ANN '(' `vector_column_name` ',' `vector` ')' ) LIMIT `integer`
 
 Where ``vector_column_name`` is the name of the vector column,
 ``vector`` is the query :ref:`vector <vectors>`, and ``LIMIT`` is a limit on the number of results to return.
 Vector queries can only be performed on a vector column that has a :ref:`vector index <create-vector-index-statement>` created.
 
-The ``ANN OF`` clause orders the results by their distance to the provided query vector,
+The two forms are equivalent: ``ORDER BY embedding ANN OF [0.1, 0.2]`` and
+``ORDER BY ANN(embedding, [0.1, 0.2])`` produce the same query. The function form is a
+ScyllaDB extension, and is consistent with how the :ref:`BM25 <fulltext-queries>` scoring
+function is written; the ``ANN OF`` form is compatible with Apache Cassandra.
+
+The ANN ordering clause orders the results by their distance to the provided query vector,
 using the distance function defined for the vector column when
 :ref:`creating the vector index <create-vector-index-statement>`.
 The query vector must have the same dimension as the vector column.
@@ -391,7 +396,10 @@ For example::
       ORDER BY embedding ANN OF [0.1, 0.2, 0.3, 0.4] LIMIT 5;
 
 This query returns up to 5 rows with the closest distance of ``embedding`` vector to the provided query vector,
-in this case ``[0.1, 0.2, 0.3, 0.4]``.
+in this case ``[0.1, 0.2, 0.3, 0.4]``. Written with the function form, it is::
+
+    SELECT image_id FROM ImageEmbeddings
+      ORDER BY ANN(embedding, [0.1, 0.2, 0.3, 0.4]) LIMIT 5;
 
 There's also possibility to return the similarity score along with the results by using the :ref:`similarity functions <vector-similarity-functions>`.
 
