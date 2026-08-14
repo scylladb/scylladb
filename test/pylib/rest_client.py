@@ -8,7 +8,6 @@
 from __future__ import annotations                           # Type hints as strings
 
 import logging
-import os.path
 import time
 from urllib.parse import quote
 from abc import ABCMeta
@@ -17,7 +16,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional, AsyncIterator
 
 import universalasync
-from aiohttp import request, BaseConnector, UnixConnector, ClientTimeout
+from aiohttp import request, BaseConnector, ClientTimeout
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
 
 from test.pylib.skip_types import skip_env
@@ -128,20 +127,6 @@ class RESTClient(metaclass=ABCMeta):
                      json: Optional[Mapping] = None, timeout: Optional[float] = None) -> None:
         await self._fetch("DELETE", resource_uri, host = host, port = port, params = params,
                           json = json, timeout = timeout)
-
-
-class UnixRESTClient(RESTClient):
-    """An async helper for REST API operations using AF_UNIX socket"""
-
-    def __init__(self, sock_path: str):
-        # NOTE: using Python requests style URI for Unix domain sockets to avoid using "localhost"
-        #       host parameter is ignored but set to socket name as convention
-        self.uri_scheme: str = "http"
-        self.default_host: str = f"{os.path.basename(sock_path)}"
-        self.connector = UnixConnector(path=sock_path)
-
-    async def shutdown(self):
-        await self.connector.close()
 
 
 class TCPRESTClient(RESTClient):
