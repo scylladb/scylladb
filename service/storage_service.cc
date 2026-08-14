@@ -5247,21 +5247,14 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
             }
         }
 
-        // If new pending tablet replica needs splitting, streaming waits for it to complete.
-        // That's to provide a guarantee that once migration is over, the coordinator can finalize
-        // splitting under the promise that compaction groups of tablets are all split, ready
-        // for the subsequent topology change.
-        //
-        // FIXME:
-        //  We could do the splitting not in the streaming stage, but in a later stage, so that
-        //  from the tablet scheduler's perspective migrations blocked on compaction are not
-        //  participating in streaming anymore (which is true), so it could schedule more
-        //  migrations. This way compaction would run in parallel with streaming which can
-        //  reduce the delay.
-        co_await _db.invoke_on(pending_replica->shard, [tablet] (replica::database& db) {
-            auto& table = db.find_column_family(tablet.table);
-            return table.maybe_split_compaction_group_of(tablet.tablet);
-        });
+        // Split of the pending replica's compaction group is handled by the
+        // split monitor (process_tablet_split_candidate) and by split-on-attach
+        // (maybe_split_new_sstable in add_new_sstable_and_update_cache) which
+        // splits every incoming sstable before it is loaded into the compaction
+        // group.  There is no need to block the streaming stage on a full
+        // compaction-group split here — doing so would hold a streaming slot on
+        // the coordinator while the split compaction runs, preventing it from
+        // scheduling further migrations.
         co_await utils::get_local_injector().inject("pause_after_streaming_tablet", [] (auto& handler) {
             return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(1));
         });
