@@ -207,6 +207,40 @@ SEASTAR_TEST_CASE(test_tablet_sstable_set_copy_ctor) {
     }, std::move(cfg));
 }
 
+SEASTAR_TEST_CASE(test_split_compaction_group_inherits_tombstone_gc_enabled) {
+    // enable tablets, to get access to tablet_storage_group_manager
+    cql_test_config cfg;
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+
+    return do_with_cql_env_thread([&](cql_test_env& env) {
+        env.execute_cql("CREATE KEYSPACE test_split_compaction_group_inherits_tombstone_gc_enabled"
+                " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1};").get();
+        env.execute_cql("CREATE TABLE test_split_compaction_group_inherits_tombstone_gc_enabled.test (pk int PRIMARY KEY);").get();
+        for (int i = 0; i < 10; i++) {
+            env.execute_cql(fmt::format("INSERT INTO test_split_compaction_group_inherits_tombstone_gc_enabled.test (pk) VALUES ({})", i)).get();
+        }
+        auto& cf = env.local_db().find_column_family("test_split_compaction_group_inherits_tombstone_gc_enabled", "test");
+        auto& sgm = column_family_test::get_storage_group_manager(cf);
+
+        // SCYLLADB-3773: Simulate a pending replica mid-migration: tombstone GC must stay disabled so
+        // regular compaction on split-ready groups can't resurrect data still being streamed in.
+        sgm->for_each_storage_group([] (size_t, replica::storage_group& sg) {
+            sg.main_compaction_group()->set_tombstone_gc_enabled(false);
+        });
+
+        sgm->split_all_storage_groups(tasks::task_info{}).get();
+
+        bool checked_any = false;
+        sgm->for_each_storage_group([&checked_any] (size_t, replica::storage_group& sg) {
+            for (auto& cg : sg.split_ready_compaction_groups()) {
+                checked_any = true;
+                BOOST_REQUIRE(!cg->tombstone_gc_enabled());
+            }
+        });
+        BOOST_REQUIRE(checked_any);
+    }, std::move(cfg));
+}
+
 SEASTAR_TEST_CASE(test_sstable_set_fast_forward_by_cache_reader_simulation) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
