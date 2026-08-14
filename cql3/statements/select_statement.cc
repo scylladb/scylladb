@@ -2156,9 +2156,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     select_statement::ordering_comparator_type ordering_comparator;
     bool hide_last_column = false;
     if (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled) {
-        uint32_t similarity_column_index = add_similarity_function_to_selectors(prepared_selectors, *ann_ordering_info_opt, db, schema);
+        ordering_comparator = rescored_similarity_ordering(prepared_selectors, *ann_ordering_info_opt, db, schema);
         hide_last_column = true;
-        ordering_comparator = get_similarity_ordering_comparator(prepared_selectors, similarity_column_index);
     }
 
     for (auto& ps : prepared_selectors) {
