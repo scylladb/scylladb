@@ -138,9 +138,11 @@ inline bool has_partition_token(const expression& e, const schema& table_schema)
 }
 
 // Check whether the given function_call is a call to the native function with the given name.
-bool is_native_function_call(const function_call&, std::string_view name);
+// The name is taken as a function_name so that call sites can pass one of the exported
+// constants (e.g. functions::BM25_FUNCTION_NAME) without rebuilding it on every call.
+bool is_native_function_call(const function_call&, const functions::function_name& name);
 
-inline bool is_native_function_call(const expression& e, std::string_view name) {
+inline bool is_native_function_call(const expression& e, const functions::function_name& name) {
     const function_call* fc = as_if<function_call>(&e);
     return fc && is_native_function_call(*fc, name);
 }

@@ -2373,8 +2373,8 @@ bool is_token_function(const function_call& fun_call) {
     return is_function_call_name_equal(fun_call, token_function_name);
 }
 
-bool is_native_function_call(const function_call& fc, std::string_view name) {
-    return is_function_call_name_equal(fc, functions::function_name::native_function(sstring(name)));
+bool is_native_function_call(const function_call& fc, const functions::function_name& name) {
+    return is_function_call_name_equal(fc, name);
 }
 
 bool is_token_function(const expression& e) {

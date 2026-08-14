@@ -24,6 +24,7 @@
 #include "cql3/query_options.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/statements/request_validations.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/functions/token_fct.hh"
 #include "dht/i_partitioner.hh"
 #include "db/schema_tables.hh"
@@ -837,7 +838,7 @@ statement_restrictions::statement_restrictions(private_tag,
             // BM25 restrictions are purely declarative.
             // They signal full-text search intent but do not filter rows or select an index.
             // Intercept them so they never enter the generic restriction/index/filtering machinery.
-            if (expr::is_native_function_call(*fc, "bm25")) {
+            if (expr::is_native_function_call(*fc, functions::BM25_FUNCTION_NAME)) {
                 if (!type.is_select()) {
                     throw exceptions::invalid_request_exception("BM25() is only supported in SELECT statements");
                 }

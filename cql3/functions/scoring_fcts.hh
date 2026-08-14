@@ -9,9 +9,12 @@
 #pragma once
 
 #include "cql3/functions/function.hh"
+#include "cql3/functions/function_name.hh"
 
 namespace cql3 {
 namespace functions {
+
+static const function_name BM25_FUNCTION_NAME = function_name::native_function("bm25");
 
 shared_ptr<function> make_bm25_function();
 

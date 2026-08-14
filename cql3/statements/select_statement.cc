@@ -33,6 +33,7 @@
 #include "transport/messages/result_message.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/as_json_function.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
@@ -2175,7 +2176,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     const auto& scoring_restrictions = restrictions->get_scoring_function_restrictions();
 
     bool has_bm25_restriction = std::ranges::any_of(scoring_restrictions, [](const expr::binary_operator& binop) {
-        return expr::is_native_function_call(binop.lhs, "bm25");
+        return expr::is_native_function_call(binop.lhs, functions::BM25_FUNCTION_NAME);
     });
     bool is_fts_query = has_bm25_restriction || has_bm25_ordering;
 

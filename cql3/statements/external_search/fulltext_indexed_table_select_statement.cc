@@ -12,6 +12,7 @@
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "index/secondary_index_manager.hh"
@@ -85,7 +86,7 @@ bool prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_
     for (auto& ps : prepared_selectors) {
         ps.expr = expr::search_and_replace(ps.expr, [&](const expr::expression& candidate) -> std::optional<expr::expression> {
             const auto* fc = expr::as_if<expr::function_call>(&candidate);
-            if (!fc || !expr::is_native_function_call(*fc, "bm25")) {
+            if (!fc || !expr::is_native_function_call(*fc, functions::BM25_FUNCTION_NAME)) {
                 return std::nullopt;
             }
 
@@ -152,7 +153,7 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
 
     // Verify this is a BM25 function call
     auto* fc = expr::as_if<expr::function_call>(&prepared_expr);
-    if (!fc || !expr::is_native_function_call(*fc, "bm25")) {
+    if (!fc || !expr::is_native_function_call(*fc, functions::BM25_FUNCTION_NAME)) {
         throw exceptions::invalid_request_exception("Only BM25 scoring function is supported in ORDER BY");
     }
 
