@@ -138,9 +138,18 @@ SEASTAR_TEST_CASE(test_commitlog_cleanups) {
         e.execute_cql("insert into ks.cf (pk,ck) values (0, 0)").get();
         BOOST_REQUIRE_EQUAL(get_num_rows(), 1);
 
-        // Cleanup the tablet.
+        // Cleanup the tablet on its replica shard; other shards have no
+        // storage for it.
         e.db().invoke_on_all([&] (replica::database& db) {
-            return db.find_column_family("ks", "cf").cleanup_tablet_without_deallocation(db, e.get_system_keyspace().local(), locator::tablet_id(0));
+            auto& cf = db.find_column_family("ks", "cf");
+            auto erm = cf.get_effective_replication_map();
+            auto tablet_shard = erm->get_token_metadata().tablets()
+                    .get_tablet_map(cf.schema()->id())
+                    .get_tablet_info(locator::tablet_id(0)).replicas.front().shard;
+            if (tablet_shard != this_shard_id()) {
+                return make_ready_future<>();
+            }
+            return cf.cleanup_tablet_without_deallocation(db, e.get_system_keyspace().local(), locator::tablet_id(0));
         }).get();
         BOOST_REQUIRE_EQUAL(get_num_rows(), 0);
 
