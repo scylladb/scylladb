@@ -23,6 +23,7 @@ if __package__ in (None, ""):
 
 from tablets.filters import add_cluster_filter_options
 from tablets.filters import TabletFilter
+from tablets.filters import get_host_filter
 from tablets.filters import get_tablet_filter
 from tablets.filters import select_all
 from tablets.render_utils import Column
@@ -456,6 +457,9 @@ def main() -> int:
         table_id = resolve_table_id(topo, args.table)
         if "." not in args.table and not options.csv:
             print(f"Table: {topo.get_table_name(table_id)}")
+
+        topo.report_missing_tablet_sizes(lambda table: table == table_id,
+                                         get_host_filter(args, topo))
 
         tablet_map = topo.get_tablet_map(table_id)
         tablet_ranges = build_ranges(table_id, tablet_map, topo, get_tablet_filter(args, topo), args.per_replica)

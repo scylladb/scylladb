@@ -45,16 +45,17 @@ import argparse
 import csv
 import io
 import os
+import sys
 import re
 import tarfile
 import uuid
 from abc import ABC, abstractmethod
-from collections import defaultdict
+from collections import Counter, defaultdict
 from contextlib import AbstractContextManager, ExitStack, nullcontext
 from dataclasses import dataclass, field
 from functools import partial
 from types import SimpleNamespace
-from typing import Callable, Dict, Iterable, Iterator, List, NewType, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, Iterator, List, NewType, Optional, Sequence, Set, Tuple
 
 UUID = uuid.UUID
 TableId = NewType("TableId", UUID)
@@ -159,6 +160,8 @@ def _parse_id(text: str) -> UUID:
 
 TOKEN_RING_SIZE = 1 << 64
 
+_MISSING_SIZES_SHOWN = 3
+
 
 def iter_token_fractions(tablets: Sequence[Tablet]) -> Iterator[Tuple[Tablet, float]]:
     """
@@ -203,6 +206,7 @@ def parse_uuid(value: str | uuid.UUID | None) -> UUID | None:
 # One pattern for both. Brackets are not matched, so cqlsh COPY's [] and snapshot.py's {} both
 # read. Matching the id by width beat every other form tried by ~25%.
 _REPLICA_PAIR_RE = re.compile(r'([0-9a-fA-F-]{36})[,:]\s*(\d+)')
+_UUID_RE = re.compile(r'[0-9a-fA-F-]{36}')
 
 
 def parse_replica_list(value: str) -> ReplicaList:
@@ -221,12 +225,28 @@ def parse_replica_size_map(value: str) -> Dict[HostId, int]:
     return {_parse_id(host): int(number) for host, number in _REPLICA_PAIR_RE.findall(value)}
 
 
+def parse_host_set(value: str) -> List[HostId]:
+    """
+    Parses a set of host ids, e.g.
+    "{35d5e1a4-a3e8-4d33-84c9-2b6f1a0c9e77}" to [UUID('35d5e1a4-...')].
+    """
+    return [_parse_id(host) for host in _UUID_RE.findall(value or "")]
+
+
 def format_replica_list(replicas: ReplicaList) -> str:
     """
     Renders tablet replicas back to the form parse_replica_list() reads, e.g.
     [(UUID('35d5e1a4-...'), 2)] to "{(35d5e1a4-a3e8-4d33-84c9-2b6f1a0c9e77, 2)}".
     """
     return "{" + ", ".join(f"({host}, {shard})" for host, shard in replicas) + "}"
+
+
+def format_host_set(hosts: Iterable[HostId]) -> str:
+    """
+    Renders host ids back to the form parse_host_set() reads, e.g.
+    [UUID('35d5e1a4-...')] to "{35d5e1a4-a3e8-4d33-84c9-2b6f1a0c9e77}".
+    """
+    return "{" + ", ".join(str(host) for host in hosts) + "}"
 
 
 def format_replica_size_map(sizes: Dict[HostId, int]) -> str:
@@ -292,6 +312,9 @@ TABLET_SIZES_COLUMNS = (
     Column("table_id", parse_uuid),
     Column("last_token", int),
     Column("replicas", parse_replica_size_map, format_replica_size_map),
+    # Replicas the server has no size for yet, e.g. one which has just been migrated to.
+    # Optional, so a snapshot taken before the column existed still reads.
+    Column("missing_replicas", parse_host_set, format_host_set, required=False),
 )
 
 
@@ -407,6 +430,8 @@ class Topology:
     _tables: Dict[TableId, Tuple[KeyspaceName, TableName]] = field(default_factory=dict)
     # Per-replica tablet sizes in bytes, keyed by (table_id, last_token) -> {host_id: size}.
     _tablet_sizes: Dict[Tuple[TableId, Token], Dict[HostId, int]] = field(default_factory=dict)
+    # Replicas system.tablet_sizes reports no size for, as (table_id, last_token, host_id).
+    _missing_tablet_sizes: Set[Tuple[TableId, Token, HostId]] = field(default_factory=set)
     # Lower bound applied to every reported tablet size, in bytes.
     _min_tablet_size: int = 0
     _anonymizer: Optional[Anonymizer] = None
@@ -645,10 +670,73 @@ class Topology:
     def _build_tablet_sizes(self, rows: Iterable[Row]) -> None:
         """
         Populates per-replica tablet sizes from system.tablet_sizes.
+
+        A replica the server lists as missing has no size yet, having just been migrated to,
+        and is recorded as such: it counts for nothing rather than stopping the report.
+        See report_missing_tablet_sizes(), which a report calls to say so.
         """
         for row in rows:
             # dict() because the driver's own map type would not compare equal to a dump's.
             self._tablet_sizes[(row.table_id, row.last_token)] = dict(row.replicas or {})
+            for host_id in row.missing_replicas or ():
+                self._missing_tablet_sizes.add((row.table_id, row.last_token, host_id))
+
+    def _reports_no_sizes(self, host_id: HostId) -> bool:
+        """
+        Whether a node is expected to report no size for what it holds: the cluster excludes
+        it from load balancing, or it no longer owns tokens.
+        """
+        host = self._hosts.get(host_id)
+        if host is None:
+            return False
+        return bool(host.excluded) or not host.is_normal_token_owner()
+
+    def _name_host(self, host_id: HostId) -> str:
+        host = self._hosts.get(host_id)
+        return host.ip if host is not None and host.ip else str(host_id)
+
+    def _name_table(self, table: TableId) -> str:
+        return self.get_table_name(table) if table in self._tables else str(table)
+
+    def report_missing_tablet_sizes(self,
+                                    accepts_table: Callable[[TableId], bool] = None,
+                                    accepts_host: Callable[[Host], bool] = None) -> None:
+        """
+        Prints how many replicas the server reports no size for, grouped by host and by table.
+
+        Counts only replicas the caller's report shows, so it takes the same filters. There
+        is no shard filter: system.tablet_sizes names a missing replica by host only.
+
+        Skips replicas on nodes the cluster excludes from load balancing, and on nodes which
+        no longer own tokens. Those report no size for anything they hold, which is expected
+        rather than a problem.
+
+        The report calls this, rather than the loader, because it needs the report's filters
+        and the options which decide how a table is named and what a sizeless replica counts
+        as. Prints to stderr so that --csv output stays machine-readable.
+        """
+        def shown(table: TableId, host_id: HostId) -> bool:
+            if self._reports_no_sizes(host_id):
+                return False
+            if accepts_table is not None and not accepts_table(table):
+                return False
+            host = self._hosts.get(host_id)
+            return accepts_host is None or host is None or accepts_host(host)
+
+        unexpected = [(table, host_id) for table, _, host_id in self._missing_tablet_sizes
+                      if shown(table, host_id)]
+        if not unexpected:
+            return
+
+        print(f"Note: {len(unexpected)} replicas have no size, counted as {self._min_tablet_size}",
+              file=sys.stderr)
+        for label, counts in (("hosts", Counter(self._name_host(h) for _, h in unexpected)),
+                              ("tables", Counter(self._name_table(t) for t, _ in unexpected))):
+            ranked = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+            named = [f"{name} ({count})" for name, count in ranked[:_MISSING_SIZES_SHOWN]]
+            if len(ranked) > _MISSING_SIZES_SHOWN:
+                named.append(f"+{len(ranked) - _MISSING_SIZES_SHOWN}")
+            print(f"  {label}: {', '.join(named)}", file=sys.stderr)
 
     def get_tablet_size(self, table: TableId, tablet: Tablet, replica: TabletReplica) -> int:
         """
@@ -661,6 +749,10 @@ class Topology:
             raise Exception(f"Tablet size not available for tablet {tablet_id}. ")
         host_id = replica[0]
         if host_id not in sizes:
+            # The server says it has no size for this replica yet, so it holds nothing the
+            # report can measure. Anything else is a snapshot which does not add up.
+            if (table, tablet.last_token, host_id) in self._missing_tablet_sizes:
+                return self._min_tablet_size
             raise Exception(f"Tablet size not available for tablet {tablet_id} on host {host_id}")
         return max(sizes[host_id], self._min_tablet_size)
 
