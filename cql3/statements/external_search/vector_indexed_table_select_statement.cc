@@ -94,6 +94,18 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
     };
 }
 
+void prepare_ann_selectors(const std::vector<selection::prepared_selector>& prepared_selectors) {
+    for (const auto& ps : prepared_selectors) {
+        // Nested occurrences (e.g. ANN(...) + 1) count too: they would otherwise reach the
+        // ANN scalar function body at execution time.
+        if (expr::find_in_expression<expr::function_call>(ps.expr, [] (const expr::function_call& fc) {
+                return expr::is_native_function_call(fc, functions::ANN_FUNCTION_NAME);
+            })) {
+            throw exceptions::invalid_request_exception("ANN() is not supported in the SELECT clause");
+        }
+    }
+}
+
 uint32_t add_similarity_function_to_selectors(
         std::vector<selection::prepared_selector>& prepared_selectors,
         const ann_ordering_info& ann_ordering_info,
@@ -151,6 +163,12 @@ select_statement::ordering_comparator_type get_similarity_ordering_comparator(st
         ::shared_ptr<const restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
         ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
         std::optional<expr::expression> per_partition_limit, cql_stats& stats, const secondary_index::index& index, std::unique_ptr<attributes> attrs) {
+
+    // Threshold filtering - WHERE ANN(column, query_vector) > score - is not implemented yet,
+    // so the ann() restrictions claimed for this query have nothing to interpret them.
+    if (!restrictions->get_scoring_function_restrictions().empty()) {
+        throw exceptions::invalid_request_exception("ANN() is not supported in the WHERE clause");
+    }
 
     auto prepared_filter = external_search::prepare_filter(*restrictions, parameters->allow_filtering());
 

@@ -835,12 +835,15 @@ statement_restrictions::statement_restrictions(private_tag,
     std::vector<predicate> predicates;
     for (auto& prepared_restriction : prepared_where_clause) {
         if (const auto* fc = expr::as_if<expr::function_call>(&prepared_restriction.lhs)) {
-            // BM25 restrictions are purely declarative.
-            // They signal full-text search intent but do not filter rows or select an index.
-            // Intercept them so they never enter the generic restriction/index/filtering machinery.
-            if (expr::is_native_function_call(*fc, functions::BM25_FUNCTION_NAME)) {
+            // Scoring restrictions are purely declarative.
+            // They signal search intent but do not filter rows or select an index.
+            // Intercept them so they never enter the generic restriction/index/filtering
+            // machinery; whichever external index owns the scoring function interprets them,
+            // and select_statement::prepare() rejects any that no index claimed.
+            if (expr::is_native_function_call(*fc, functions::BM25_FUNCTION_NAME)
+                    || expr::is_native_function_call(*fc, functions::ANN_FUNCTION_NAME)) {
                 if (!type.is_select()) {
-                    throw exceptions::invalid_request_exception("BM25() is only supported in SELECT statements");
+                    throw exceptions::invalid_request_exception("Scoring functions are only supported in SELECT statements");
                 }
                 _scoring_function_restrictions.push_back(std::move(prepared_restriction));
                 continue;

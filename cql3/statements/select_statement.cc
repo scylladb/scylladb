@@ -2148,6 +2148,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         }
     }
 
+    prepare_ann_selectors(prepared_selectors);
+
     for (auto& ps : prepared_selectors) {
         expr::fill_prepare_context(ps.expr, ctx);
     }
@@ -2205,6 +2207,14 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     if (is_ann_query && is_fts_query) {
         throw exceptions::invalid_request_exception("BM25 and ANN cannot be combined in the same query");
+    }
+
+    // Scoring restrictions are held out of the filtering machinery, to be interpreted by the
+    // external index that owns the scoring function.  If no such query type was selected,
+    // nothing will interpret them and they would be silently dropped rather than applied.
+    if (!scoring_restrictions.empty() && !is_fts_query && !is_ann_query) {
+        throw exceptions::invalid_request_exception(
+                "A scoring function in the WHERE clause requires a matching ORDER BY clause");
     }
 
     if (_parameters->is_distinct()) {

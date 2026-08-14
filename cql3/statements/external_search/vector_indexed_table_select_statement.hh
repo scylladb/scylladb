@@ -29,6 +29,11 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
         schema_ptr schema,
         const expr::function_call& fc);
 
+/// Handles ANN() calls in the SELECT clause.  Returning the similarity score this way is
+/// not implemented yet - it has to agree with rescoring, which reorders and trims the rows
+/// the score would be reported for - so for now any occurrence is rejected.
+void prepare_ann_selectors(const std::vector<selection::prepared_selector>& prepared_selectors);
+
 /// Adds a similarity function call to prepared_selectors based on the ANN index.
 /// Returns the index of the appended selector within prepared_selectors.
 uint32_t add_similarity_function_to_selectors(
