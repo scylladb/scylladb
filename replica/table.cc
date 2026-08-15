@@ -6540,7 +6540,52 @@ dht::shard_replica_set table::shard_for_writes(dht::token t) const {
                 : dht::shard_replica_set{dht::static_shard_of(*_schema, t)}; // for tests.
 }
 
+// Returns an estimate of the number of keys of `index` in `tr`.
+// The estimate is exact when `tr` holds a small number of keys, because the function then counts
+// them. For a larger range, the function scales the key count of the index by the part of the ranges of
+// `storage_groups` that `tr` covers. The token of a key is a hash, so the keys of a shard are
+// uniform over the token ranges that its storage groups own.
+// The function assumes that the table uses tablets, because logstor is meant for tablets and not
+// for vnodes. The single storage group of a vnode table covers the whole ring, but the index holds
+// only the keys of the ranges that the node replicates. So with vnodes on more than one node, the
+// scaled estimate is too small by the part of the ring that the node does not replicate.
+// The scaled estimate is also wrong while the shard receives the keys of a pending tablet by
+// streaming, because the storage group of the tablet adds its range before its keys arrive. Until
+// the streaming ends, the estimates of the other ranges of the shard are too small by up to the
+// part of the pending tablet in the ranges of the shard.
+static uint64_t estimate_logstor_keys_in_range(const logstor::primary_index& index, const storage_group_map& storage_groups,
+        const dht::token_range& tr) {
+    // Counting this many keys takes tens of microseconds, so the count does not need a yield.
+    // With more keys than this in the range, the standard deviation of the scaled estimate is
+    // at most about 3% of the estimate.
+    constexpr uint64_t exact_count_limit = 1024;
+    if (auto count = index.count_keys_in_token_range(tr, exact_count_limit)) {
+        return *count;
+    }
+
+    const auto full_range = dht::token_range::make(dht::first_token(), dht::last_token());
+    double owned_width = 0;
+    double covered_width = 0;
+    for (const auto& sg : storage_groups | std::views::values) {
+        const auto& range = sg->token_range();
+        owned_width += dht::overlap_ratio(full_range, range);
+        if (auto common = range.intersection(tr, dht::token_comparator())) {
+            covered_width += dht::overlap_ratio(full_range, *common);
+        }
+    }
+    uint64_t estimate = 0;
+    if (owned_width > 0) {
+        estimate = static_cast<uint64_t>(index.get_usage().key_count * (covered_width / owned_width));
+    }
+    // The count found more than `exact_count_limit` keys in the range.
+    return std::max(estimate, exact_count_limit + 1);
+}
+
 future<uint64_t> table::estimated_partitions_in_range(dht::token_range tr) const {
+    if (_logstor) {
+        co_return estimate_logstor_keys_in_range(logstor_index(), storage_groups(), tr);
+    }
+
     // FIXME: use a better estimation for the set than a simple sum of individual estimations for each sstable.
     //
     // If sstables can be grouped by token range,

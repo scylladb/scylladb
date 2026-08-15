@@ -706,6 +706,21 @@ public:
         }
     }
 
+    // Returns the number of keys whose token is in the range, or nullopt when the range holds more
+    // than `limit` keys. The count visits at most `limit` + 1 entries and does not yield.
+    std::optional<uint64_t> count_keys_in_token_range(const dht::token_range& tr, uint64_t limit) const {
+        logalloc::reclaim_lock lock(_region);
+        auto [current, end] = range_positions(tr);
+        uint64_t count = 0;
+        for (; current != end; ++current) {
+            if (count == limit) {
+                return std::nullopt;
+            }
+            ++count;
+        }
+        return count;
+    }
+
     // Returns what the index holds now.
     primary_index_usage get_usage() const noexcept {
         return {
