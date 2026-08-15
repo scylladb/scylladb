@@ -431,7 +431,7 @@ SEASTAR_TEST_CASE(statistics_rewrite) {
         auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
         auto schema = random_schema.schema();
 
-        const auto muts = tests::generate_random_mutations(random_schema, 2).get();
+        const auto muts = tests::generate_random_mutations(random_schema, 2, this_shard_id()).get();
         auto sstp = make_sstable_containing(env.make_sstable(schema, sstable::version_types::me), muts).get();
 
         auto toc_path = fmt::to_string(sstp->toc_filename());
@@ -934,7 +934,7 @@ static future<> test_component_digest_persistence(component_type component, ssta
         auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
         auto schema = random_schema.schema();
 
-        const auto muts = tests::generate_random_mutations(random_schema, 2).get();
+        const auto muts = tests::generate_random_mutations(random_schema, 2, this_shard_id()).get();
         auto sst_original = make_sstable_containing(env.make_sstable(schema, version), muts).get();
 
         auto& components = sstables::test(sst_original).get_components();
@@ -1043,7 +1043,7 @@ static future<> test_component_digest_validation(component_type component, sstab
         auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
         auto schema = random_schema.schema();
 
-        const auto muts = tests::generate_random_mutations(random_schema, 2).get();
+        const auto muts = tests::generate_random_mutations(random_schema, 2, this_shard_id()).get();
         auto sst = make_sstable_containing(env.make_sstable(schema, version), muts).get();
 
         auto digest = sst->get_component_digest(component);
