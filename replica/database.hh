@@ -1583,7 +1583,7 @@ public:
 
     future<compaction_reenablers_and_lock_holders> get_compaction_reenablers_and_lock_holders_for_repair(replica::database& db,
             const service::frozen_topology_guard& guard, dht::token_range range);
-    future<uint64_t> estimated_partitions_in_range(dht::token_range tr) const;
+    future<uint64_t> estimated_partitions_in_range(dht::token_range tr);
 
     bool ready_for_writes() const {
         return !_readonly;
