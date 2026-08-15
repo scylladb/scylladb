@@ -1158,6 +1158,13 @@ apply_monotonically(const column_definition& def, cell_and_hash& dst,
 void
 row::apply(const column_definition& column, const atomic_cell_or_collection& value, cell_hash_opt hash,
         db::large_data_cache_tracker* tracker) {
+    if (column.is_atomic() && !column.is_counter()) {
+        const cell_and_hash* cah = find_cell_and_hash(column.id);
+        // avoid the copy when the incoming cell would just lose the merge
+        if (cah && compare_atomic_cell_for_merge(cah->cell.as_atomic_cell(column), value.as_atomic_cell(column)) >= 0) {
+            return;
+        }
+    }
     auto tmp = value.copy(*column.type);
     apply_monotonically(column, std::move(tmp), std::move(hash), tracker);
 }
