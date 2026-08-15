@@ -372,7 +372,22 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
                 create_operation_ctx(*schema, token, aoe.abort_source(), true, handoff.group()));
 
         if (op_result_future.failed()) {
-            co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
+            auto ex = std::move(op_result_future).get_exception();
+            if (try_catch<group_not_served>(ex)) {
+                // The group this token resolved to left the replica between resolving it and
+                // acquiring it. We start over: the tablet map read by the next round names the
+                // group serving the token now. We delay that round, because the map this node
+                // reads is replaced by a group0 command it has yet to apply, so an immediate retry
+                // may resolve to the group which is going away.
+                logger.debug("mutate(): the group serving the token is no longer served here, retrying");
+                auto sleep_result = co_await coroutine::as_future(
+                        seastar::sleep_abortable(10ms, aoe.abort_source()));
+                if (sleep_result.failed()) {
+                    co_await coroutine::return_exception_ptr(filter_error(std::move(sleep_result).get_exception()));
+                }
+                continue;
+            }
+            co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
         }
 
         auto op_result = std::move(op_result_future).get();
@@ -549,7 +564,17 @@ auto coordinator::query(schema_ptr schema,
             handoff.group()));
 
         if (op_result_future.failed()) {
-            co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
+            auto ex = std::move(op_result_future).get_exception();
+            if (try_catch<group_not_served>(ex)) {
+                logger.debug("query(): the group serving the token is no longer served here, retrying");
+                auto sleep_result = co_await coroutine::as_future(
+                        seastar::sleep_abortable(10ms, aoe.abort_source()));
+                if (sleep_result.failed()) {
+                    co_await coroutine::return_exception_ptr(filter_error(std::move(sleep_result).get_exception()));
+                }
+                continue;
+            }
+            co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
         }
 
         auto op_result = std::move(op_result_future).get();

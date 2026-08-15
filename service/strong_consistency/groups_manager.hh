@@ -33,6 +33,17 @@ namespace service::strong_consistency {
 class raft_server;
 class raft_resize_tracker;
 
+/// Thrown by acquire_server() when this replica does not serve the group any more. The group's
+/// tablet has left this shard: the table was dropped, the resize was finalized and replaced the
+/// tablet with the ones it was split into, or the tablet was migrated away. The request has to be
+/// resolved again against the current tablet map, which names the group serving the token now.
+/// Retryable: the caller re-enters create_operation_ctx() rather than failing.
+struct group_not_served : public std::exception {
+    const char* what() const noexcept override {
+        return "The raft group is no longer served by this replica";
+    }
+};
+
 /// A cache of leader locations for raft groups where this node is not a replica.
 /// Populated by the CQL transport layer after a redirect reveals the actual leader.
 ///

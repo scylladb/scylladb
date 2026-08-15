@@ -693,9 +693,8 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     // Check that the table still exists. The table is removed from the
     // database (via schema_applier::commit_tables_and_views) BEFORE
     // groups_manager::update() is called (which triggers gate closure via
-    // schedule_raft_group_deletion). Since there's no scheduling point
-    // between the column_family_exists check and try_hold below, the gate
-    // cannot be closed if the table exists.
+    // schedule_raft_group_deletion), so a dropped table is reported as such rather than as a
+    // group which is on its way out.
     //
     // Node shutdown also closes gates (groups_manager::stop() closes every gate
     // regardless of table existence), but it cannot race with us either: the
@@ -706,14 +705,19 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
             replica::no_such_column_family(table_id));
     }
 
+    // The group may be gone, or on its way out, although the table is still here - a normal
+    // outcome, not an invariant to assert. The deletion closes the gate first and erases the entry
+    // once the server is torn down, so both shapes mean the same thing.
     const auto it = _raft_groups.find(group_id);
     if (it == _raft_groups.end()) {
-        on_internal_error(logger, format("raft group {} not found", group_id));
+        logger.debug("acquire_server: raft group {} of table {} is not served here", group_id, table_id);
+        return make_exception_future<raft_server>(group_not_served());
     }
     auto& state = it->second;
     auto h = state.gate->try_hold();
     if (!h) {
-        on_internal_error(logger, format("acquire_server: gate closed for group {} while table {} exists", group_id, table_id));
+        logger.debug("acquire_server: raft group {} of table {} is being deleted", group_id, table_id);
+        return make_exception_future<raft_server>(group_not_served());
     }
     return state.server_control_op.get_future(as).then([&state, h = std::move(*h)] mutable {
         return raft_server(state, std::move(h));
