@@ -3017,10 +3017,10 @@ static mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s,
 
 SEASTAR_TEST_CASE(compact_deleted_row) {
   return test_env::do_with_async([] (test_env& env) {
-    BOOST_REQUIRE(this_smp_shard_count() == 1);
     sstring table_name = "compact_deleted_row";
     // CREATE TABLE test_deleted_row (pk text, ck text, rc1 text, rc2 text, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
-    schema_builder builder(this_smp_shard_count(), "sst3", table_name);
+    // Single-shard sharder: compaction runs on this shard and must own the fixed key.
+    schema_builder builder(1, "sst3", table_name);
     builder.with_column("pk", utf8_type, column_kind::partition_key);
     builder.with_column("ck", utf8_type, column_kind::clustering_key);
     builder.with_column("rc1", utf8_type);
@@ -3088,10 +3088,10 @@ SEASTAR_TEST_CASE(compact_deleted_row) {
 
 SEASTAR_TEST_CASE(compact_deleted_cell) {
   return test_env::do_with_async([] (test_env& env) {
-    BOOST_REQUIRE(this_smp_shard_count() == 1);
     sstring table_name = "compact_deleted_cell";
     //  CREATE TABLE compact_deleted_cell (pk text, ck text, rc text, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
-    schema_builder builder(this_smp_shard_count(), "sst3", table_name);
+    // Single-shard sharder: compaction runs on this shard and must own the fixed key.
+    schema_builder builder(1, "sst3", table_name);
     builder.with_column("pk", utf8_type, column_kind::partition_key);
     builder.with_column("ck", utf8_type, column_kind::clustering_key);
     builder.with_column("rc", utf8_type);
@@ -3197,10 +3197,16 @@ static sstables::shared_sstable write_sstables(test_env& env, schema_ptr s, lw_s
     auto sst = env.make_sstable(s, version);
     BOOST_TEST_MESSAGE(format("write_sstable from two memtable: {}", sst->get_filename()));
 
-    sst->write_components(make_combined_reader(s,
+    auto rd = make_combined_reader(s,
         env.make_reader_permit(),
         mt1->make_mutation_reader(s, env.make_reader_permit()),
-        mt2->make_mutation_reader(s, env.make_reader_permit())), 1, s, env.manager().configure_writer(), mt1->get_encoding_stats()).get();
+        mt2->make_mutation_reader(s, env.make_reader_permit()));
+    auto cfg = env.manager().configure_writer();
+    // Attribute the write to the shard owning the data.
+    if (auto* mf = rd.peek().get(); mf && mf->is_partition_start()) {
+        cfg.shard = s->get_sharder().shard_of(mf->as_partition_start().key().token());
+    }
+    sst->write_components(std::move(rd), 1, s, cfg, mt1->get_encoding_stats()).get();
     return sst;
 }
 
