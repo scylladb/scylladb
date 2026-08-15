@@ -31,12 +31,3 @@ large_bitset::large_bitset(size_t nr_bits) : _nr_bits(nr_bits) {
         thread::maybe_yield();
     }
 }
-
-void
-large_bitset::clear() {
-    SCYLLA_ASSERT(thread::running_in_thread());
-    for (auto&& pos: _storage) {
-        pos = 0;
-        thread::maybe_yield();
-    }
-}

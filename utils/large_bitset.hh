@@ -56,7 +56,6 @@ public:
         auto idx2 = idx;
         _storage[idx1] &= ~(int_type(1) << idx2);
     }
-    void clear();
 
     const storage_type& get_storage() const {
         return _storage;
