@@ -526,9 +526,21 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
                 auto& cf = schema->table();
                 const auto tid = cf.get_effective_replication_map()->get_token_metadata()
                         .tablets().get_tablet_map(table).get_tablet_id(token);
+                const auto last_timestamp = cf.get_max_timestamp_for_tablet(tid);
+                if (!last_timestamp) {
+                    // This shard holds no storage for the tablet, so there is no clock here to
+                    // seed the term from. The tablet is not served here any more - the storage
+                    // goes when it leaves - and the group's own teardown follows. We end the fiber
+                    // rather than hand out timestamps this replica cannot back.
+                    logger.debug("leader_info_updater({}-{}): tablet {} is not served by this shard, stopping",
+                        table, gid, tid);
+                    state.leader_info = std::nullopt;
+                    state.leader_info_cond.broadcast();
+                    co_return;
+                }
                 state.leader_info = leader_info {
                     .term = current_term,
-                    .last_timestamp = cf.get_max_timestamp_for_tablet(tid)
+                    .last_timestamp = *last_timestamp
                 };
                 logger.debug("leader_info_updater({}-{}): read_barrier() completed, "
                     "new leader term {}, tablet now served {}, last_timestamp {}",
