@@ -5810,6 +5810,10 @@ dht::shard_replica_set table::shard_for_writes(dht::token t) const {
 }
 
 future<uint64_t> table::estimated_partitions_in_range(dht::token_range tr) const {
+    if (_logstor) {
+        co_return co_await logstor_index().count_keys_in_token_range(std::move(tr));
+    }
+
     // FIXME: use a better estimation for the set than a simple sum of individual estimations for each sstable.
     //
     // If sstables can be grouped by token range,
