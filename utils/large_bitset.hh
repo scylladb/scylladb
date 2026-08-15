@@ -16,14 +16,17 @@
 
 class large_bitset {
     using int_type = uint64_t;
+public:
+    using storage_type = utils::chunked_vector<int_type>;
+private:
     static constexpr size_t bits_per_int() {
         return std::numeric_limits<int_type>::digits;
     }
     size_t _nr_bits = 0;
-    utils::chunked_vector<int_type> _storage;
+    storage_type _storage;
 public:
     explicit large_bitset(size_t nr_bits);
-    explicit large_bitset(size_t nr_bits, utils::chunked_vector<int_type> storage) : _nr_bits(nr_bits), _storage(std::move(storage)) {}
+    explicit large_bitset(size_t nr_bits, storage_type storage) : _nr_bits(nr_bits), _storage(std::move(storage)) {}
     large_bitset(large_bitset&&) = default;
     large_bitset(const large_bitset&) = delete;
     large_bitset& operator=(const large_bitset&) = delete;
@@ -55,7 +58,7 @@ public:
     }
     void clear();
 
-    const utils::chunked_vector<int_type>& get_storage() const {
+    const storage_type& get_storage() const {
         return _storage;
     }
 };
