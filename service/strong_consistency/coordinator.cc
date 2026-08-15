@@ -414,7 +414,14 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
                     create_operation_ctx(*schema, token, aoe.abort_source(), true));
 
             if (op_result_future.failed()) {
-                co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
+                auto ex = std::move(op_result_future).get_exception();
+                if (try_catch<group_not_served>(ex)) {
+                    // E.g. the tablet migrated away. The current tablet map names the new replicas.
+                    logger.debug("mutate(): the group serving the token is no longer served here, retrying");
+                    build_ctx = true;
+                    continue;
+                }
+                co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
             }
 
             auto op_result = std::move(op_result_future).get();
@@ -560,7 +567,13 @@ auto coordinator::query(schema_ptr schema,
                 auto f = co_await coroutine::as_future(create_operation_ctx(
                     *schema, ranges[0].start()->value().token(), aoe.abort_source(), true));
                 if (f.failed()) {
-                    co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
+                    auto ex = std::move(f).get_exception();
+                    if (try_catch<group_not_served>(ex)) {
+                        logger.debug("query(): the group serving the token is no longer served here, retrying");
+                        build_ctx = true;
+                        continue;
+                    }
+                    co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
                 }
                 auto result = std::move(f).get();
                 if (auto* redirect = get_if<need_redirect>(&result)) {
