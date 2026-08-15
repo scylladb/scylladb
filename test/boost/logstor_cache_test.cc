@@ -342,6 +342,30 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_keeps_oversized_same_to
     BOOST_REQUIRE(batch1->exhausted);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_count_keys_in_token_range) {
+    auto schema = make_logstor_schema();
+    primary_index index(noop_space_accounting, nullptr);
+
+    // Enough single-key tokens to span several scan batches, plus one token holding three keys.
+    constexpr int64_t token_count = 3000;
+    for (int64_t t = 1; t <= token_count; ++t) {
+        insert_same_token_keys(index, *schema, t, t * 10, t == 100 ? 3 : 1);
+    }
+    const uint64_t total = token_count + 2;
+
+    auto t = [] (int64_t v) { return dht::token::from_int64(v); };
+    auto count = [&] (dht::token_range tr) { return index.count_keys_in_token_range(std::move(tr)).get(); };
+
+    BOOST_REQUIRE_EQUAL(count(dht::token_range::make_open_ended_both_sides()), total);
+    BOOST_REQUIRE_EQUAL(count(dht::token_range::make({t(100), true}, {t(100), true})), 3u);
+    BOOST_REQUIRE_EQUAL(count(dht::token_range::make({t(99), true}, {t(101), true})), 5u);
+    BOOST_REQUIRE_EQUAL(count(dht::token_range::make({t(99), false}, {t(101), false})), 3u);
+    BOOST_REQUIRE_EQUAL(count(dht::token_range::make({t(100), false}, {t(102), true})), 2u);
+    BOOST_REQUIRE_EQUAL(count(dht::token_range::make_starting_with({t(2001), true})), 1000u);
+    BOOST_REQUIRE_EQUAL(count(dht::token_range::make_ending_with({t(1000), false})), 999u + 2);
+    BOOST_REQUIRE_EQUAL(count(dht::token_range::make({t(token_count + 1), true}, {t(token_count + 10), true})), 0u);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_exchange) {
     auto schema = make_logstor_schema();
     shared_logstor_cache cache;
