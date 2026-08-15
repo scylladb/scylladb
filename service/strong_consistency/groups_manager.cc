@@ -769,12 +769,24 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
                 auto& cf = schema->table();
                 const auto tid = cf.get_effective_replication_map()->get_token_metadata()
                         .tablets().get_tablet_map(table).get_tablet_id(token);
+                const auto last_timestamp = cf.get_max_timestamp_for_tablet(tid);
+                if (!last_timestamp) {
+                    // This shard holds no storage for the tablet, so there is no clock here to
+                    // seed the term from. The tablet is not served here any more - the storage
+                    // goes when it leaves - and the group's own teardown follows. We end the fiber
+                    // rather than hand out timestamps this replica cannot back.
+                    logger.debug("leader_info_updater({}-{}): tablet {} is not served by this shard, stopping",
+                        table, gid, tid);
+                    state.leader_info = std::nullopt;
+                    state.leader_info_cond.broadcast();
+                    co_return;
+                }
                 // The floor covers what the stored data cannot: for a group created by a resize,
                 // writes of the group it replaces which are not applied here yet, whose
                 // timestamps every write of this group has to exceed (see leader_timestamp_floor()).
                 state.leader_info = leader_info {
                     .term = current_term,
-                    .last_timestamp = std::max(cf.get_max_timestamp_for_tablet(tid), leader_timestamp_floor(gid, state, _resize_tracker))
+                    .last_timestamp = std::max(*last_timestamp, leader_timestamp_floor(gid, state, _resize_tracker))
                 };
                 logger.debug("leader_info_updater({}-{}): read_barrier() completed, "
                     "new leader term {}, tablet now served {}, last_timestamp {}",
