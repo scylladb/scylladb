@@ -2515,8 +2515,22 @@ void for_each_schema_change(std::function<void(schema_ptr, const utils::chunked_
         return utf8_type->decompose(tests::random::get_sstring());
     };
     int32_t key_id = 0;
+    // pk-only schema used solely to constrain generated keys to this shard.
+    auto pk_schema = schema_builder(this_smp_shard_count(), "ks", "cf")
+        .with_column("pk1", int32_type, column_kind::partition_key)
+        .with_column("pk2", int32_type, column_kind::partition_key)
+        .with_column("pk3", int32_type, column_kind::partition_key)
+        .build();
     auto random_partition_key = [&] () -> tests::data_model::mutation_description::key {
-        return { random_int32_value(), random_int32_value(), int32_type->decompose(key_id++), };
+        for (;;) {
+            auto key = tests::data_model::mutation_description::key{
+                random_int32_value(), random_int32_value(), int32_type->decompose(key_id++), };
+            auto pk = partition_key::from_exploded(*pk_schema, key);
+            auto token = dht::get_token(*pk_schema, pk);
+            if (dht::static_shard_of(*pk_schema, token) == this_shard_id()) {
+                return key;
+            }
+        }
     };
     auto random_clustering_key = [&] () -> tests::data_model::mutation_description::key {
         return {
