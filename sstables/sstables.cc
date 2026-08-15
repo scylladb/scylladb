@@ -2640,11 +2640,11 @@ future<> sstable::seal_sstable(bool backup)
 }
 
 sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partitions,
-        const sstable_writer_config& cfg, encoding_stats enc_stats, shard_id shard)
+        const sstable_writer_config& cfg, encoding_stats enc_stats)
 {
     // Mark sstable for implicit deletion if destructed before it is sealed.
     _marked_for_deletion = mark_for_deletion::implicit;
-    return sstable_writer(*this, s, estimated_partitions, cfg, enc_stats, shard);
+    return sstable_writer(*this, s, estimated_partitions, cfg, enc_stats);
 }
 
 future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
