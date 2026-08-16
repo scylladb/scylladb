@@ -23,11 +23,22 @@ shared_ptr<function> make_bm25_function() {
     // BM25 scores depend on document statistics, so the result is not determined by the visible arguments alone.
     // Marked as non-pure (false) to prevent the expression evaluator from constant-folding BM25(literal, literal)
     // at prepare time, which is both semantically correct and avoids a spurious crash path.
-    return make_native_scalar_function<false>("bm25", float_type, {utf8_type, utf8_type},
+    return make_native_scalar_function<false>(BM25_FUNCTION_NAME.name, float_type, {utf8_type, utf8_type},
         [] (std::span<const bytes_opt>) -> bytes_opt {
-            // BM25() is rejected at prepare time for every valid query path.
-            // Reaching the function body means the prepare-time check was bypassed - this is a bug.
-            on_internal_error(log, "BM25() reached scalar evaluation; prepare-time check should have prevented this");
+            // A BM25() call is always resolved at prepare time, so this body is never reached.
+            on_internal_error(log, "BM25() reached scalar evaluation; prepare-time handling should have prevented this");
+        });
+}
+
+shared_ptr<function> make_ann_function(const std::vector<data_type>& arg_types) {
+    // ANN vector ordering function: ann(column, query_vector) -> float
+    //
+    // Marked as non-pure (false) for the same reason as BM25(): it must not be constant-folded
+    // when both arguments happen to be literals.
+    return make_native_scalar_function<false>(ANN_FUNCTION_NAME.name, float_type, arg_types,
+        [] (std::span<const bytes_opt>) -> bytes_opt {
+            // An ANN() call is always resolved at prepare time, so this body is never reached.
+            on_internal_error(log, "ANN() reached scalar evaluation; prepare-time handling should have prevented this");
         });
 }
 

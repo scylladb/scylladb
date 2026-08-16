@@ -43,17 +43,17 @@ public:
         ascending,
         descending
     };
-    // Vector of floats with dimension the same as the vector indexed column.
-    // This vector is the target for the nearest neighbors in ANN queries.
-    using ann_vector = expr::expression;
     // Scoring function ordering stores the complete function call expression
-    // (e.g., BM25(column, query_term)).
+    // (e.g., BM25(column, query_term) or ANN(column, query_vector)).
     struct scoring_function_ordering {
         expr::expression func_expr;
     };
-    using ordering_type = std::variant<ordering, ann_vector, scoring_function_ordering>;
+    using ordering_type = std::variant<ordering, scoring_function_ordering>;
     class parameters final {
     public:
+        // The first element is the ordered column, or nullptr for a scoring_function_ordering,
+        // whose column (if any) lives inside the function-call expression instead. A scoring
+        // ordering is always the only element of the vector (enforced by the grammar).
         using orderings_type = std::vector<std::pair<shared_ptr<column_identifier::raw>, ordering_type>>;
         enum class statement_subtype { REGULAR, JSON, PRUNE_MATERIALIZED_VIEW, MUTATION_FRAGMENTS };
     private:

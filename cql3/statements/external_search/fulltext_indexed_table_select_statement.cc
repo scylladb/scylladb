@@ -12,6 +12,7 @@
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "index/secondary_index_manager.hh"
@@ -85,7 +86,7 @@ bool prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_
     for (auto& ps : prepared_selectors) {
         ps.expr = expr::search_and_replace(ps.expr, [&](const expr::expression& candidate) -> std::optional<expr::expression> {
             const auto* fc = expr::as_if<expr::function_call>(&candidate);
-            if (!fc || !expr::is_native_function_call(*fc, "bm25")) {
+            if (!fc || !expr::is_native_function_call(*fc, functions::BM25_FUNCTION_NAME)) {
                 return std::nullopt;
             }
 
@@ -133,33 +134,16 @@ bool prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_
 std::optional<bm25_ordering_info> get_bm25_ordering_info(
         data_dictionary::database db,
         schema_ptr schema,
-        lw_shared_ptr<const raw::select_statement::parameters> parameters,
-        prepare_context& ctx) {
+        const expr::function_call& fc) {
 
-    if (parameters->orderings().empty()) {
+    if (!expr::is_native_function_call(fc, functions::BM25_FUNCTION_NAME)) {
         return std::nullopt;
     }
+    // bm25() has a fixed signature, so resolution has already checked the argument count and types.
+    throwing_assert(fc.args.size() == 2);
 
-    auto [column_id, ordering] = parameters->orderings().front();
-    auto* scoring_ord = std::get_if<raw::select_statement::scoring_function_ordering>(&ordering);
-    if (!scoring_ord) {
-        return std::nullopt;
-    }
-
-    // Prepare the scoring function expression to resolve column references and function
-    auto prepared_expr = expr::prepare_expression(scoring_ord->func_expr, db, schema->ks_name(), schema.get(), nullptr);
-    expr::fill_prepare_context(prepared_expr, ctx);
-
-    // Verify this is a BM25 function call
-    auto* fc = expr::as_if<expr::function_call>(&prepared_expr);
-    if (!fc || !expr::is_native_function_call(*fc, "bm25")) {
-        throw exceptions::invalid_request_exception("Only BM25 scoring function is supported in ORDER BY");
-    }
-
-    throwing_assert(fc->args.size() == 2);
-
-    const auto* column = extract_column_from_first_argument(*fc);
-    auto search_term = extract_search_term_from_second_argument(*fc);
+    const auto* column = extract_column_from_first_argument(fc);
+    auto search_term = extract_search_term_from_second_argument(fc);
 
     auto cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();

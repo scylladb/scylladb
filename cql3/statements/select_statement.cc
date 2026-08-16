@@ -33,6 +33,7 @@
 #include "transport/messages/result_message.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/as_json_function.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
@@ -2092,11 +2093,34 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     prepared_selectors = maybe_jsonize_select_clause(std::move(prepared_selectors), db, schema);
 
-    std::optional<ann_ordering_info> ann_ordering_info_opt = get_ann_ordering_info(db, schema, _parameters, ctx);
+    // A scoring ORDER BY is prepared here, once, and its resolved call is then offered to the
+    // resolvers. Preparing it in a resolver instead would mean preparing it once per resolver, and
+    // so registering its bind markers more than once.
+    std::optional<expr::expression> prepared_scoring_ordering;
+    if (!_parameters->orderings().empty()) {
+        if (const auto* scoring_ord = std::get_if<raw::select_statement::scoring_function_ordering>(&_parameters->orderings().front().second)) {
+            prepared_scoring_ordering = expr::prepare_expression(scoring_ord->func_expr, db, schema->ks_name(), schema.get(), nullptr);
+            expr::fill_prepare_context(*prepared_scoring_ordering, ctx);
+        }
+    }
+    const expr::function_call* scoring_call = prepared_scoring_ordering
+            ? expr::as_if<expr::function_call>(&*prepared_scoring_ordering)
+            : nullptr;
+
+    std::optional<ann_ordering_info> ann_ordering_info_opt =
+            scoring_call ? get_ann_ordering_info(db, schema, *scoring_call) : std::nullopt;
     bool is_ann_query = ann_ordering_info_opt.has_value();
 
-    std::optional<bm25_ordering_info> bm25_ordering_info_opt = get_bm25_ordering_info(db, schema, _parameters, ctx);
+    std::optional<bm25_ordering_info> bm25_ordering_info_opt =
+            scoring_call ? get_bm25_ordering_info(db, schema, *scoring_call) : std::nullopt;
     bool has_bm25_ordering = bm25_ordering_info_opt.has_value();
+
+    if (prepared_scoring_ordering && !is_ann_query && !has_bm25_ordering) {
+        // A function call in ORDER BY that no scoring-function resolver claimed. The
+        // regular-ordering path below skips scoring orderings, so reject it explicitly
+        // instead of silently ignoring the ORDER BY clause.
+        throw exceptions::invalid_request_exception("Only ANN() and BM25() are supported as scoring functions in ORDER BY");
+    }
 
     if (prepared_selectors.empty() && (!_group_by_columns.empty() || (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled))) {
         // We have a "SELECT * GROUP BY" or "SELECT * ORDER BY ANN" with rescoring enabled. If we leave prepared_selectors
@@ -2123,6 +2147,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
             expr::fill_prepare_context(term, ctx);
         }
     }
+
+    prepare_ann_selectors(prepared_selectors);
 
     for (auto& ps : prepared_selectors) {
         expr::fill_prepare_context(ps.expr, ctx);
@@ -2175,12 +2201,20 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     const auto& scoring_restrictions = restrictions->get_scoring_function_restrictions();
 
     bool has_bm25_restriction = std::ranges::any_of(scoring_restrictions, [](const expr::binary_operator& binop) {
-        return expr::is_native_function_call(binop.lhs, "bm25");
+        return expr::is_native_function_call(binop.lhs, functions::BM25_FUNCTION_NAME);
     });
     bool is_fts_query = has_bm25_restriction || has_bm25_ordering;
 
     if (is_ann_query && is_fts_query) {
         throw exceptions::invalid_request_exception("BM25 and ANN cannot be combined in the same query");
+    }
+
+    // Scoring restrictions are held out of the filtering machinery, to be interpreted by the
+    // external index that owns the scoring function.  If no such query type was selected,
+    // nothing will interpret them and they would be silently dropped rather than applied.
+    if (!scoring_restrictions.empty() && !is_fts_query && !is_ann_query) {
+        throw exceptions::invalid_request_exception(
+                "A scoring function in the WHERE clause requires a matching ORDER BY clause");
     }
 
     if (_parameters->is_distinct()) {
@@ -2194,7 +2228,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     if (!orderings.empty() && !is_ann_query && !is_fts_query) {
         std::visit([&](auto&& ordering) {
             using T = std::decay_t<decltype(ordering)>;
-            if constexpr (!std::is_same_v<T, select_statement::ann_vector> && !std::is_same_v<T, raw::select_statement::scoring_function_ordering>) {
+            if constexpr (!std::is_same_v<T, raw::select_statement::scoring_function_ordering>) {
                 throwing_assert(!for_view);
                 verify_ordering_is_allowed(*_parameters, *restrictions);
                 prepared_orderings_type prepared_orderings = prepare_orderings(*schema);
@@ -2436,6 +2470,9 @@ select_statement::prepared_orderings_type select_statement::prepare_orderings(co
     prepared_orderings.reserve(_parameters->orderings().size());
 
     for (auto&& [column_id, column_ordering] : _parameters->orderings()) {
+        // Only regular orderings reach here; scoring orderings carry a null column_id and
+        // are handled by their own resolvers.
+        throwing_assert(column_id);
         ::shared_ptr<column_identifier> column = column_id->prepare_column_identifier(schema);
 
         const column_definition* def = schema.get_column_definition(column->name());
