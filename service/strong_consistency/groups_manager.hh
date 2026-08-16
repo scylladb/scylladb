@@ -123,6 +123,43 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         api::timestamp_type last_timestamp;
     };
 
+    // What a parent needs while its children's leaders are being kept co-located with its own.
+    // Held behind a pointer, and only for the duration of a resize. raft_group_state exists for
+    // every group on every shard, while a resize concerns a handful at a time. The condition
+    // variable, the fiber and the abort source below would otherwise be paid for by every group,
+    // resize or no resize.
+    struct resize_colocation_state {
+        resize_colocation_state(locator::global_tablet_id tablet, std::vector<raft::group_id> new_gids)
+            : tablet(tablet)
+            , new_gids(std::move(new_gids))
+        {}
+
+        locator::global_tablet_id tablet;
+
+        // The children whose leaders follow this group's. The colocator iterates them across
+        // preemption points, so it keeps its own copy rather than reaching into the tracker,
+        // whose vector a later token metadata change may replace.
+        std::vector<raft::group_id> new_gids;
+
+        // Signalled whenever the raft state of this group, or of one of its children, changes on
+        // this replica. Lets the colocator re-check the leaders without polling.
+        condition_variable leader_changed;
+
+        // Bumped together with every leader_changed broadcast. A waiter which samples it before
+        // checking the leaders can tell whether a change it hasn't accounted for happened in the
+        // meantime, and therefore must not go to sleep.
+        uint64_t leader_change_seq = 0;
+
+        // Runs until `as` is aborted, which detach_resize_colocation() does as soon as this
+        // replica learns that the resize is over. Parked in _draining_colocators then, and
+        // joined by stop().
+        future<> colocator = make_ready_future<>();
+
+        // The fiber spends most of its life waiting outside of a raft server, so aborting the
+        // servers taking part in the resize doesn't stop it.
+        abort_source as;
+    };
+
     // A group can be deleted and started again while its entry exists (the
     // tablet leaves the shard and returns before the deletion finishes), so
     // the fields may describe different incarnations of the raft::server:
@@ -175,6 +212,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         // it was waiting for has to hold on to the pointer it saw rather than read this
         // back later.
         lw_shared_ptr<abort_source> config_sync_as;
+
+        // Set on a parent for as long as it is being resized on this replica.
+        std::unique_ptr<resize_colocation_state> resize_colocation;
     };
 
     netw::messaging_service& _ms;
@@ -194,6 +234,12 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     tablet_group_leader_cache _leader_cache;
 
+    // Colocators detached from their groups (see detach_resize_colocation()), each keeping the
+    // state it is bound to alive until its fiber exits. The fibers are aborted when they are
+    // detached and exit on their own; the drain is only joined by stop(), so that no fiber
+    // outlives the manager.
+    future<> _draining_colocators = make_ready_future<>();
+
     // The lowest timestamp a leader of group `gid`, whose state is `state`, may hand out next on
     // this node: see raft_group_state::min_leader_timestamp and the resize tracker's end_resize
     // timestamp of the group it replaces. Used when a leader's clock is seeded and on every write
@@ -202,9 +248,12 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     // Should be called on the shard that hosts the Raft group. Returns the group's state machine,
     // owned by the raft server it started.
+    // If the group is created as a result of a resize, the parent id is the group_id
+    // of the original tablet.
     future<tablet_state_machine*> start_raft_group(locator::global_tablet_id tablet,
         raft::group_id group_id,
-        locator::token_metadata_ptr tm);
+        locator::token_metadata_ptr tm,
+        std::optional<raft::group_id> parent_gid = std::nullopt);
 
     void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
 
@@ -229,6 +278,55 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     std::optional<raft_server> try_acquire_server(raft::group_id gid, raft_group_state& state);
 
     future<> leader_info_updater(raft_group_state& state, locator::global_tablet_id tablet, raft::group_id gid);
+
+    // The outcome of a colocate_leaders() round. Tells the caller how to wait before re-checking.
+    enum class colocation_status {
+        // Every child is led by the leader of its parent.
+        colocated,
+        // Nothing to do on this replica: an election is in progress in one of the children, or a
+        // diverged child is led by another replica. That replica is the one which has to hand the
+        // leadership over.
+        awaiting_leader_change,
+        // A leadership transfer was carried out. It only makes the target start an election,
+        // which it may lose, so the outcome has to be re-checked.
+        transfer_done,
+        // A leadership transfer was needed but did not complete.
+        transfer_failed,
+    };
+
+    // Makes sure that the leader of every group in `new_gids` is `parent_leader`, the leader of
+    // their parent `parent_gid`. Writes are handed off to a child only once that holds.
+    //
+    // If this replica leads one of the children and it is not co-located, transfers that group's
+    // leadership to the parent's leader. Never throws on a failed transfer - the caller retries.
+    //
+    // Takes the parent's leader rather than the parent itself, and holds no group for longer than
+    // it operates on it. A group's deletion waits for such holders, and this function can wait out
+    // a leadership transfer; the deletion it would block is the one which ends the resize it runs
+    // for. The leader is a snapshot, which is why the caller re-checks.
+    future<colocation_status> colocate_leaders(raft::server_id parent_leader, raft::group_id parent_gid,
+        const std::vector<raft::group_id>& new_gids);
+
+    // Background fiber of a parent being replaced by its children during a tablet resize. It
+    // keeps the children's leaders co-located with the parent's, which is a precondition for
+    // requests redirected to them to be served. Runs until the resize is over on this replica.
+    future<> leader_colocator(resize_colocation_state& colocation, raft::group_id parent_gid);
+
+    // Starts the colocator of `parent_gid` unless it is already running. A still-installed
+    // colocator of an earlier resize of the same parent is detached first.
+    void start_leader_colocator(raft_group_state& state, locator::global_tablet_id tablet,
+        raft::group_id parent_gid, std::vector<raft::group_id> new_gids);
+
+    // Detaches the group's colocation state and aborts its fiber, parking both in
+    // _draining_colocators. Called as soon as this replica learns that the resize the colocator was
+    // serving is over. Never waits for the fiber. Until it exits, the raft servers it may still
+    // touch are protected by the gate holders it acquires per access, which the gate drains of
+    // their deletions wait out. state.resize_colocation must be set.
+    void detach_resize_colocation(raft_group_state& state);
+
+    // Signals that the raft state of `gid` - which may be either a parent being resized or one of
+    // its children - changed. A no-op if `gid` is not taking part in a resize.
+    void notify_leader_change(raft::group_id gid);
 
     void init_messaging_service();
     future<> uninit_messaging_service();
