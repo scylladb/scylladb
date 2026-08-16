@@ -114,6 +114,37 @@ std::strong_ordering prefix_equality_tri_compare(TypesIterator types, InputIt1 f
     return std::strong_ordering::equal;
 }
 
+// Result of prefix_equality_tri_compare_with_exhaustion().
+struct prefix_equality_tri_compare_result {
+    std::strong_ordering order;
+    // Set only when order == equal. Then exhausted1 <=> len1 <= len2 and
+    // exhausted2 <=> len2 <= len1, because the walk consumes both sequences
+    // in lockstep and stops as soon as one of them runs out.
+    bool exhausted1;
+    bool exhausted2;
+};
+
+// Same ordering as prefix_equality_tri_compare(), but also reports which of
+// the sequences the lockstep walk exhausted. Lets the caller learn the
+// relative lengths without re-walking the sequences.
+template <typename TypesIterator, typename InputIt1, typename InputIt2, typename Compare>
+requires requires (TypesIterator ti, InputIt1 i1, InputIt2 i2, Compare c) {
+    { c(*ti, *i1, *i2) } -> std::same_as<std::strong_ordering>;
+}
+prefix_equality_tri_compare_result prefix_equality_tri_compare_with_exhaustion(TypesIterator types,
+        InputIt1 first1, InputIt1 last1, InputIt2 first2, InputIt2 last2, Compare comp) {
+    while (first1 != last1 && first2 != last2) {
+        auto c = comp(*types, *first1, *first2);
+        if (c != 0) {
+            return {c, false, false};
+        }
+        ++first1;
+        ++first2;
+        ++types;
+    }
+    return {std::strong_ordering::equal, first1 == last1, first2 == last2};
+}
+
 // Returns true iff the second sequence is a prefix of the first sequence
 // Equality is an abstract_type-aware equality checker which takes the type as first argument.
 template <typename TypesIterator, typename InputIt1, typename InputIt2, typename Equality>

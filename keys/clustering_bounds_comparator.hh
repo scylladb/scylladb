@@ -54,15 +54,17 @@ public:
         { }
         std::strong_ordering operator()(const clustering_key_prefix& p1, int32_t w1, const clustering_key_prefix& p2, int32_t w2) const {
             auto type = _s.get().clustering_key_prefix_type();
-            auto res = prefix_equality_tri_compare(type->types().begin(),
+            auto res = prefix_equality_tri_compare_with_exhaustion(type->types().begin(),
                 type->begin(p1.representation()), type->end(p1.representation()),
                 type->begin(p2.representation()), type->end(p2.representation()),
                 ::tri_compare);
-            if (res != 0) {
-                return res;
+            if (res.order != 0) {
+                return res.order;
             }
-            auto d1 = p1.size(_s);
-            auto d2 = p2.size(_s);
+            // The walk above stopped as soon as one prefix ran out, so
+            // exhausted1 == (d1 <= d2) and exhausted2 == (d2 <= d1), where dN
+            // is the component count of pN. Using the flags avoids two
+            // p.size() calls, each of which re-decodes every length header.
 
             /*
              * The logic below is
@@ -79,7 +81,7 @@ public:
              * helps compiler generate jump-less assembly.
              */
 
-            return ((d1 <= d2) ? w1 << 1 : 1) <=> ((d2 <= d1) ? w2 << 1 : 1);
+            return (res.exhausted1 ? w1 << 1 : 1) <=> (res.exhausted2 ? w2 << 1 : 1);
         }
         std::strong_ordering operator()(const bound_view b, const clustering_key_prefix& p) const {
             return operator()(b._prefix, weight(b._kind), p, 0);

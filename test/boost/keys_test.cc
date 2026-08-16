@@ -360,3 +360,39 @@ BOOST_AUTO_TEST_CASE(test_bound_view_tri_compare_matches_reference_implementatio
             iterations * std::size(bound_weights) * std::size(bound_weights)));
     BOOST_REQUIRE_EQUAL(mismatches, 0u);
 }
+
+// The equivalence the optimization rests on: after an equal prefix walk, the
+// exhaustion flags are exactly the d1<=d2 / d2<=d1 predicates.
+BOOST_AUTO_TEST_CASE(test_prefix_equality_exhaustion_flags_match_component_counts) {
+    auto s_ptr = make_multi_component_ck_schema();
+    const schema& s = *s_ptr;
+    auto type = s.clustering_key_prefix_type();
+
+    std::mt19937 rnd(4236);
+    auto pool = make_ck_pool(s, rnd, 100);
+
+    size_t mismatches = 0;
+    size_t equal_cases = 0;
+    for (auto& p1 : pool) {
+        for (auto& p2 : pool) {
+            auto res = prefix_equality_tri_compare_with_exhaustion(type->types().begin(),
+                type->begin(p1.representation()), type->end(p1.representation()),
+                type->begin(p2.representation()), type->end(p2.representation()),
+                ::tri_compare);
+            auto plain = prefix_equality_tri_compare(type->types().begin(),
+                type->begin(p1.representation()), type->end(p1.representation()),
+                type->begin(p2.representation()), type->end(p2.representation()),
+                ::tri_compare);
+            mismatches += (res.order != plain);
+            if (res.order == 0) {
+                ++equal_cases;
+                auto d1 = p1.size(s);
+                auto d2 = p2.size(s);
+                mismatches += (res.exhausted1 != (d1 <= d2));
+                mismatches += (res.exhausted2 != (d2 <= d1));
+            }
+        }
+    }
+    BOOST_REQUIRE_GT(equal_cases, 0u);
+    BOOST_REQUIRE_EQUAL(mismatches, 0u);
+}
