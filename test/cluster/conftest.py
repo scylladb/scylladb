@@ -159,8 +159,8 @@ def cluster_con(hosts: list[IPAddress | EndPoint], port: int = 9042, use_ssl: bo
 async def manager_server(suite_log_dir: Path,
                          testpy_cluster_factory: ClusterFactory,
                          testpy_uname: str,
-                         ) -> AsyncGenerator[tuple[ScyllaClusterManager, asyncio.AbstractEventLoop]]:
-    """Run the cluster manager and publish it together with its event loop.
+                         ) -> AsyncGenerator[ScyllaClusterManager]:
+    """Run the cluster manager on its own thread and event loop.
 
     The manager owns loop-bound state -- the Scylla subprocess transports and
     the per-server asyncio locks -- so all of its coroutines have to run on one
@@ -168,8 +168,7 @@ async def manager_server(suite_log_dir: Path,
     pytest's event loops and, in dtest, from plain worker threads.  Hence a
     dedicated thread whose loop is idle but alive until teardown.
     """
-    ready: concurrent.futures.Future[tuple[ScyllaClusterManager, asyncio.AbstractEventLoop]] = \
-        concurrent.futures.Future()
+    ready: concurrent.futures.Future[ScyllaClusterManager] = concurrent.futures.Future()
     stop_event = threading.Event()
 
     async def run_manager() -> None:
@@ -185,7 +184,7 @@ async def manager_server(suite_log_dir: Path,
             # created before the API site failed to start.
             await mgr.stop()
             raise
-        ready.set_result((mgr, asyncio.get_running_loop()))
+        ready.set_result(mgr)
         try:
             await asyncio.get_running_loop().run_in_executor(None, stop_event.wait)
         finally:
@@ -216,7 +215,7 @@ async def manager_server(suite_log_dir: Path,
 
 @pytest.fixture(scope="module")
 async def manager_internal(request: pytest.FixtureRequest,
-                           manager_server: tuple[ScyllaClusterManager, asyncio.AbstractEventLoop],
+                           manager_server: ScyllaClusterManager,
                            ) -> Callable[[], ManagerClient]:
     """Module fixture to prepare client object for communicating with the Cluster API.
        Pass a function to create driver connections.
@@ -230,10 +229,8 @@ async def manager_internal(request: pytest.FixtureRequest,
         auth_provider = PlainTextAuthProvider(username=auth_username, password=auth_password)
     else:
         auth_provider = None
-    manager, manager_loop = manager_server
     return lambda: ManagerClient(
-        cluster_manager=manager,
-        manager_loop=manager_loop,
+        cluster_manager=manager_server,
         port=port,
         use_ssl=use_ssl,
         auth_provider=auth_provider,

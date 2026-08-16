@@ -8,7 +8,7 @@
 The manager runs on its own event loop and owns state that belongs to it: the
 Scylla subprocess transports and the per-server asyncio locks.  Its coroutines
 therefore have to run on that loop, whichever loop -- or thread -- the caller
-happens to be on.  ManagerClient._call is what guarantees that.
+happens to be on.  The manager_op decorator is what guarantees that.
 
 The exercise here uses a real ScyllaClusterManager and a real ManagerClient
 with a stub cluster, so the decorator and the bridge under test are the
@@ -92,7 +92,6 @@ def manager_client() -> Iterator[tuple[ManagerClient, StubCluster, asyncio.Abstr
         manager, loop = ready.result(timeout=TIMEOUT)
         client = ManagerClient(
             cluster_manager=manager,
-            manager_loop=loop,
             port=9042,
             use_ssl=False,
             auth_provider=None,
@@ -157,7 +156,8 @@ async def test_caller_timeout_leaves_the_operation_running(manager_client) -> No
     client, cluster, manager_loop = manager_client
 
     with pytest.raises(asyncio.TimeoutError):
-        await client._call(client._manager.server_stop(SERVER_ID), timeout=0.2)
+        async with asyncio.timeout(0.2):
+            await client._manager.server_stop(SERVER_ID)
 
     assert cluster.entered.is_set(), "operation never started"
     assert len(client._manager.tasks_history) == 1, "operation was not left for the drain"
@@ -166,7 +166,7 @@ async def test_caller_timeout_leaves_the_operation_running(manager_client) -> No
     assert descr.startswith("server_stop")
 
     # Once it completes it removes itself, which is what leaves after_test()'s
-    # drain looking only at genuinely in-flight work.  _op_finished is
+    # drain looking only at genuinely in-flight work.  op_finished is
     # registered before gather's own done callback, so by the time the wait
     # below returns the entry is already gone.
     cluster.release()

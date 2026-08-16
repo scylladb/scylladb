@@ -7,10 +7,11 @@
    Provides an async API for tests to request changes in the cluster.
 """
 import asyncio
+import inspect
 import logging
 import pathlib
 import traceback
-from functools import partial, wraps
+from functools import wraps
 from typing import Any, Awaitable, Callable
 
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
@@ -20,10 +21,34 @@ from test.pylib.scylla_server import ScyllaServer, ScyllaVersionDescription
 from test.pylib.util import LogPrefixAdapter
 
 
-def manager_op(entry_point: Callable | None = None, *, blockable: bool = False):
-    """Run a ScyllaClusterManager entry point as its own task and track it.
+# Cap on a manager operation, the same ceiling the HTTP client used to apply
+# to every request.  An op whose caller controls the timeout is decorated with
+# manager_op(timeout=None) and wrapped in asyncio.timeout() on the caller's
+# side of the bridge instead.
+DEFAULT_OP_TIMEOUT = 300
+
+
+def manager_op(entry_point: Callable | None = None,
+               *,
+               blockable: bool = False,
+               timeout: float | None = DEFAULT_OP_TIMEOUT):
+    """Run a ScyllaClusterManager entry point on the manager's loop as its own task and track it.
 
     Usable bare, as @manager_op, or with arguments, as @manager_op(blockable=True).
+
+    The manager owns loop-bound state -- the Scylla subprocess transports and
+    the per-server asyncio locks -- so its operations must run on its loop,
+    not on whichever loop the caller happens to have.  Callers get their loop
+    from pytest, or, when a synchronous dtest test calls in from a worker
+    thread, from universalasync, which creates a fresh one per thread;
+    awaiting a manager coroutine there would fail with "got Future attached
+    to a different loop".  The decorated method can be called from any loop:
+    it hands the operation over to the manager's loop and awaits the result.
+
+    The operation is capped at `timeout`; None means no cap -- for ops whose
+    callers apply their own asyncio.timeout() around the call.  The cap (and
+    any caller-side timeout) cancels only the waiting caller: the operation
+    itself is shielded and runs to completion (see below).
 
     Every entry point works on the current cluster, so the check that there is
     one lives here instead of being repeated in each of them.
@@ -38,21 +63,57 @@ def manager_op(entry_point: Callable | None = None, *, blockable: bool = False):
       disconnect used to, since the server never cancelled handlers -- and
       after_test() picks the orphan up;
     - log failures with their traceback into the per-test cluster log
-      (see _op_finished), which the server's catching handler used to do.
+      (see op_finished), which the server's catching handler used to do.
     """
     def decorator(fn: Callable) -> Callable:
-        @wraps(fn)
-        async def wrapper(self, *args, **kwargs):
+        # The bridge does not consume a timeout argument; a timeout is either
+        # this decorator's cap or the caller's own asyncio.timeout() around
+        # the call.  Fail loudly on the old pattern.
+        if "timeout" in inspect.signature(fn).parameters and timeout is not None:
+            raise TypeError(f"{fn.__name__} declares its own timeout parameter;"
+                            f" decorate it with manager_op(timeout=None) and apply"
+                            f" the timeout on the caller's side")
+
+        async def run_op(self, args, kwargs):
+            """The operation itself; always runs on the manager's loop."""
             assert self.cluster, "ScyllaClusterManager is not running"
             if blockable and self.server_broken_event.is_set():
                 raise RuntimeError(f"ScyllaClusterManager BROKEN, Previous test broke ScyllaClusterManager server,"
                                    f" server_broken_reason: {self.server_broken_reason}")
             descr = f"{fn.__name__}{args}"
             op = asyncio.ensure_future(fn(self, *args, **kwargs))
+
+            def op_finished(task: asyncio.Task) -> None:
+                """Drop the finished operation from tasks_history and log its
+                failure, if any.  Retrieving the exception here also keeps an
+                operation orphaned by a cancelled caller from warning
+                "exception was never retrieved".
+                """
+                self.tasks_history.pop(task, None)
+                if task.cancelled():
+                    return
+                exc = task.exception()
+                if exc is not None:
+                    self.logger.error("Exception when executing %s: %s\n%s",
+                                      descr, exc, "".join(traceback.format_exception(exc)))
+
             self.logger.info("[ScyllaClusterManager][%s] %s", op.get_name(), descr)
             self.tasks_history[op] = descr
-            op.add_done_callback(partial(self._op_finished, descr=descr))
+            op.add_done_callback(op_finished)
             return await asyncio.shield(op)
+
+        @wraps(fn)
+        async def wrapper(self, *args, **kwargs):
+            if asyncio.get_running_loop() is self._loop:
+                # Already on the manager's loop, i.e. one operation calling
+                # another -- which no operation does today.  There is nothing
+                # to hand over, so call in place.  The cap goes with the
+                # bridge: it bounds how long a caller waits on the far side,
+                # and here there is no far side.
+                return await run_op(self, args, kwargs)
+            future = asyncio.run_coroutine_threadsafe(run_op(self, args, kwargs), self._loop)
+            async with asyncio.timeout(timeout):    # None = no cap
+                return await asyncio.wrap_future(future)
         return wrapper
     return decorator if entry_point is None else decorator(entry_point)
 
@@ -70,6 +131,10 @@ class ScyllaClusterManager:
                  test_uname: str,
                  create_cluster: ClusterFactory,
                  base_dir: str) -> None:
+        # The manager must be constructed on its own, always-running loop:
+        # its operations run there (see manager_op), whichever loop or thread
+        # they are called from.
+        self._loop = asyncio.get_running_loop()
         self.test_uname: str = test_uname
         self.base_dir: str = base_dir
         logger = logging.getLogger(self.test_uname)
@@ -102,7 +167,7 @@ class ScyllaClusterManager:
         self.cluster.setLogger(self.logger)
         self.is_running = True
 
-    @manager_op(blockable=True)
+    @manager_op(blockable=True, timeout=600)
     async def before_test(self, test_case_name: str) -> str:
         self.current_test_case_full_name = f'{self.test_uname}::{test_case_name}'
         root_logger = logging.getLogger()
@@ -185,7 +250,7 @@ class ScyllaClusterManager:
                     break
                 except Exception:
                     # The operation failed after its caller went away.  It was
-                    # already logged by _op_finished; completing is all the
+                    # already logged by op_finished; completing is all the
                     # drain needs.
                     pass
 
@@ -216,21 +281,6 @@ class ScyllaClusterManager:
         self.logger.error(self.server_broken_reason)
         self.server_broken_event.set()
 
-    def _op_finished(self, op: asyncio.Task, descr: str) -> None:
-        """Done callback of manager_op operations.
-
-        Drops the finished operation from tasks_history and logs its
-        failure, if any.  Retrieving the exception here also keeps an
-        operation orphaned by a cancelled caller from warning "exception
-        was never retrieved".
-        """
-        self.tasks_history.pop(op, None)
-        if op.cancelled():
-            return
-        if (exc := op.exception()) is not None:
-            self.logger.error("Exception when executing %s: %s\n%s",
-                              descr, exc, "".join(traceback.format_exception(exc)))
-
     @manager_op(blockable=True)
     async def mark_dirty(self) -> None:
         """Mark current cluster dirty"""
@@ -247,12 +297,12 @@ class ScyllaClusterManager:
         """Stop a server. No-op if already stopped."""
         await self.cluster.server_stop(server_id, gracefully=False)
 
-    @manager_op(blockable=True)
+    @manager_op(blockable=True, timeout=None)
     async def server_stop_gracefully(self, server_id: ServerNum) -> None:
         """Stop a server gracefully. No-op if already stopped."""
         await self.cluster.server_stop(server_id, gracefully=True)
 
-    @manager_op(blockable=True)
+    @manager_op(blockable=True, timeout=None)
     async def server_start(self, server_id: ServerNum, *,
                            expected_error: str | None = None,
                            seeds: list[IPAddress] | None = None,
@@ -286,7 +336,7 @@ class ScyllaClusterManager:
         """Register a cleanup to run when the current cluster is recycled."""
         self.cluster.add_teardown_callback(callback, name)
 
-    @manager_op(blockable=True)
+    @manager_op(blockable=True, timeout=None)
     async def server_add(self,
                          replace_cfg: ReplaceConfig | None = None,
                          cmdline: list[str] | None = None,
@@ -312,7 +362,7 @@ class ScyllaClusterManager:
             expected_server_up_state=expected_server_up_state,
         )
 
-    @manager_op(blockable=True)
+    @manager_op(blockable=True, timeout=None)
     async def servers_add(self,
                           servers_num: int = 1,
                           cmdline: list[str] | None = None,
@@ -327,7 +377,7 @@ class ScyllaClusterManager:
         return await self.cluster.add_servers(servers_num, cmdline, config, version, property_file,
                                               start, seeds, server_encryption, expected_error)
 
-    @manager_op(blockable=True)
+    @manager_op(blockable=True, timeout=None)
     async def remove_node(self, initiator_id: ServerNum, server_id: ServerNum,
                           ignore_dead: list[IPAddress], expected_error: str | None) -> None:
         """Run remove node on Scylla REST API for a specified server"""
@@ -370,7 +420,7 @@ class ScyllaClusterManager:
                     f" check log file at {initiator.log_filename}")
             self.logger.info(f"removenode (initiator: {initiator}, to_remove: {to_remove}, ignore_dead: {ignore_dead}) succeeded")
 
-    @manager_op(blockable=True)
+    @manager_op(blockable=True, timeout=None)
     async def decommission_node(self, server_id: ServerNum, expected_error: str | None) -> None:
         """Run decommission node on Scylla REST API for a specified server"""
         self.logger.info("decommission_node %s", server_id)
@@ -401,7 +451,7 @@ class ScyllaClusterManager:
 
         await self.cluster.server_stop(server_id, gracefully=True)
 
-    @manager_op(blockable=True)
+    @manager_op(blockable=True, timeout=None)
     async def rebuild_node(self, server_id: ServerNum, expected_error: str | None) -> None:
         """Run rebuild node on Scylla REST API for a specified server"""
         self.logger.info("rebuild_node %s", server_id)

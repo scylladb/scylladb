@@ -14,7 +14,6 @@ import re
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from collections.abc import Coroutine
 from typing import List, Optional, Callable, Any, Awaitable, Dict, Union
 from time import time
 import logging
@@ -43,12 +42,11 @@ class ManagerClient:
     """Helper Manager API client
     Args:
         cluster_manager (ScyllaClusterManager): the manager to drive
-        manager_loop: the event loop the manager runs on
         con_gen (Callable): generator function for CQL driver connection to a cluster
     """
     # pylint: disable=too-many-public-methods
 
-    def __init__(self, cluster_manager: ScyllaClusterManager, manager_loop: asyncio.AbstractEventLoop,
+    def __init__(self, cluster_manager: ScyllaClusterManager,
                  port: int, use_ssl: bool, auth_provider: Any|None,
                  con_gen: Callable[[List[IPAddress], int, bool, Any, LoadBalancingPolicy], CassandraCluster]) \
                          -> None:
@@ -61,7 +59,6 @@ class ManagerClient:
         self.cql: Optional[CassandraSession] = None
         self.exclusive_clusters: List[CassandraCluster] = []
         self._cluster_manager = cluster_manager
-        self._manager_loop = manager_loop
         self._test_finished = False
         self.api = ScyllaRESTAPIClient()
         self.metrics = ScyllaMetricsClient()
@@ -76,27 +73,6 @@ class ManagerClient:
         if self._test_finished:
             raise Exception("ManagerClient is not accessible after the test finished")
         return self._cluster_manager
-
-    async def _call(self, op: Coroutine, timeout: float | None = None) -> Any:
-        """Run a manager operation on the manager's own event loop.
-
-        The manager owns loop-bound state -- the Scylla subprocess transports
-        and the per-server asyncio locks -- so its coroutines must run on its
-        loop, not on whichever loop the caller happens to have.  Callers get
-        their loop from pytest, or, when a synchronous dtest test calls in from
-        a worker thread, from universalasync, which creates a fresh one per
-        thread; awaiting a manager coroutine there would fail with "got Future
-        attached to a different loop".
-
-        The operation is capped at 300 s unless the caller passes a timeout,
-        the same ceiling the HTTP client used to apply to every request.  A
-        timed-out or cancelled caller does not abort the operation: manager_op
-        shields it, so it runs to completion and after_test() drains it, just
-        as an abandoned HTTP request used to leave its handler running.
-        """
-        future = asyncio.run_coroutine_threadsafe(op, self._manager_loop)
-        async with asyncio.timeout(300 if timeout is None else timeout):
-            return await asyncio.wrap_future(future, loop=asyncio.get_running_loop())
 
     async def stop(self):
         """Close driver"""
@@ -253,7 +229,7 @@ class ManagerClient:
 
     async def before_test(self, test_case_name: str) -> str:
         """Before-test hook of the manager fixture: lease a cluster for the test."""
-        return await self._call(self._manager.before_test(test_case_name), timeout=600)
+        return await self._manager.before_test(test_case_name)
 
     async def after_test(self, success: bool) -> dict[str, Any]:
         """After-test hook of the manager fixture.
@@ -263,19 +239,19 @@ class ManagerClient:
         the manager (bypassing that very guard).
         """
         self._test_finished = True
-        return await self._call(self._cluster_manager.after_test(success))
+        return await self._cluster_manager.after_test(success)
 
     async def is_dirty(self) -> bool:
         """Check if current cluster dirty."""
-        return await self._call(self._manager.is_dirty())
+        return await self._manager.is_dirty()
 
     async def running_servers(self) -> list[ServerInfo]:
         """Get List of server info (id and IP address) of running servers"""
-        return await self._call(self._manager.running_servers())
+        return await self._manager.running_servers()
 
     async def all_servers(self) -> list[ServerInfo]:
         """Get List of server info (id and IP address) of all servers"""
-        return await self._call(self._manager.all_servers())
+        return await self._manager.all_servers()
 
     async def all_servers_by_host_id(self) -> Dict[HostID, ServerInfo]:
         result = dict()
@@ -299,17 +275,17 @@ class ManagerClient:
            which a test started in the background but now doesn't expect to
            ever finish booting successfully.
         """
-        return await self._call(self._manager.starting_servers())
+        return await self._manager.starting_servers()
 
     async def mark_dirty(self) -> None:
         """Manually mark current cluster dirty.
            To be used when a server was modified outside of this API."""
-        await self._call(self._manager.mark_dirty())
+        await self._manager.mark_dirty()
 
     async def mark_clean(self) -> None:
         """Manually mark current cluster not dirty.
            To be used when a current cluster wants to be reused."""
-        await self._call(self._manager.mark_clean())
+        await self._manager.mark_clean()
 
     async def server_stop(self, server_id: ServerNum, convict: bool) -> None:
         """Stop specified server.
@@ -331,7 +307,7 @@ class ManagerClient:
                 # Skip conviction in this case.
                 pass
         logger.debug("ManagerClient stopping %s", server_id)
-        await self._call(self._manager.server_stop(server_id))
+        await self._manager.server_stop(server_id)
         if host_id is not None:
             try:
                 await self.convict_on_all(host_id)
@@ -343,7 +319,8 @@ class ManagerClient:
     async def server_stop_gracefully(self, server_id: ServerNum, timeout: float = 180) -> None:
         """Stop specified server gracefully"""
         logger.debug("ManagerClient stopping gracefully %s", server_id)
-        await self._call(self._manager.server_stop_gracefully(server_id), timeout=timeout)
+        async with asyncio.timeout(timeout):
+            await self._manager.server_stop_gracefully(server_id)
 
     async def disable_tablet_balancing(self):
         """
@@ -388,7 +365,7 @@ class ManagerClient:
                            wait_others: int = 0,
                            wait_interval: float = 45,
                            seeds: list[IPAddress] | None = None,
-                           timeout: float | None = None,
+                           timeout: float | None = ScyllaServer.TOPOLOGY_TIMEOUT,
                            connect_driver: bool = True,
                            expected_server_up_state: ServerUpState = ServerUpState.SERVING,
                            cmdline_options_override: list[str] | None = None,
@@ -418,15 +395,16 @@ class ManagerClient:
             expected_server_up_state = min(expected_server_up_state, ServerUpState.HOST_ID_QUERIED)
 
         logger.debug("ManagerClient starting %s", server_id)
-        await self._call(self._manager.server_start(
-            server_id,
-            expected_error=expected_error,
-            seeds=seeds,
-            expected_server_up_state=expected_server_up_state,
-            cmdline_options_override=cmdline_options_override,
-            append_env_override=append_env_override,
-            auth_provider=auth_provider,
-        ), timeout=timeout)
+        async with asyncio.timeout(timeout):
+            await self._manager.server_start(
+                server_id,
+                expected_error=expected_error,
+                seeds=seeds,
+                expected_server_up_state=expected_server_up_state,
+                cmdline_options_override=cmdline_options_override,
+                append_env_override=append_env_override,
+                auth_provider=auth_provider,
+            )
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
         if expected_error is None and connect_driver:
             if self.cql:
@@ -476,17 +454,17 @@ class ManagerClient:
     async def server_pause(self, server_id: ServerNum) -> None:
         """Pause the specified server."""
         logger.debug("ManagerClient pausing %s", server_id)
-        await self._call(self._manager.server_pause(server_id))
+        await self._manager.server_pause(server_id)
 
     async def server_unpause(self, server_id: ServerNum) -> None:
         """Unpause the specified server."""
         logger.debug("ManagerClient unpausing %s", server_id)
-        await self._call(self._manager.server_unpause(server_id))
+        await self._manager.server_unpause(server_id)
 
     async def server_switch_executable(self, server_id: ServerNum, path: str) -> None:
         """Switch the executable path of a stopped server"""
         logger.debug("ManagerClient switching executable of %s to %s", server_id, path)
-        await self._call(self._manager.server_switch_executable(server_id, path))
+        await self._manager.server_switch_executable(server_id, path)
 
     async def server_change_version(self, server_id: ServerNum, exe: str):
         """ Upgrades a running Scylla node by switching it to a new binary version 
@@ -499,11 +477,11 @@ class ManagerClient:
     async def server_wipe_sstables(self, server_id: ServerNum, keyspace: str, table: str) -> None:
         """Delete all files for the given table from the data directory"""
         logger.debug("ManagerClient wiping sstables on %s, keyspace=%s, table=%s", server_id, keyspace, table)
-        await self._call(self._manager.server_wipe_sstables(server_id, keyspace, table))
+        await self._manager.server_wipe_sstables(server_id, keyspace, table)
 
     async def server_get_sstables_disk_usage(self, server_id: ServerNum, keyspace: str, table: str) -> int:
         """Get the total size of all sstable files for the given table"""
-        return await self._call(self._manager.server_get_sstables_disk_usage(server_id, keyspace, table))
+        return await self._manager.server_get_sstables_disk_usage(server_id, keyspace, table)
 
     async def _get_ignored_ip_addresses(self, ignore_dead: List[IPAddress | HostID]) -> List[IPAddress]:
         """
@@ -587,18 +565,19 @@ class ManagerClient:
                 dead_ips = [replaced_ip] + ignored_ips
                 await gather_safely(*(self.others_not_see_server(ip) for ip in dead_ips))
 
-            s_info = await self._call(self._manager.server_add(
-                replace_cfg=replace_cfg,
-                cmdline=cmdline,
-                config=config,
-                version=version,
-                property_file=property_file,
-                start=start,
-                seeds=seeds,
-                server_encryption=server_encryption,
-                expected_error=expected_error,
-                expected_server_up_state=expected_server_up_state,
-            ), timeout=timeout)
+            async with asyncio.timeout(timeout):
+                s_info = await self._manager.server_add(
+                    replace_cfg=replace_cfg,
+                    cmdline=cmdline,
+                    config=config,
+                    version=version,
+                    property_file=property_file,
+                    start=start,
+                    seeds=seeds,
+                    server_encryption=server_encryption,
+                    expected_error=expected_error,
+                    expected_server_up_state=expected_server_up_state,
+                )
         except Exception as exc:
             raise Exception("Failed to add server") from exc
         logger.debug("ManagerClient added %s", s_info)
@@ -640,17 +619,18 @@ class ManagerClient:
             property_file = [{"dc":auto_rack_dc, "rack":f"rack{i+1}"} for i in range(servers_num)]
 
         try:
-            s_infos = await self._call(self._manager.servers_add(
-                servers_num=servers_num,
-                cmdline=cmdline,
-                config=config,
-                version=version,
-                property_file=property_file,
-                start=start,
-                seeds=seeds,
-                server_encryption=server_encryption,
-                expected_error=expected_error,
-            ), timeout=ScyllaServer.TOPOLOGY_TIMEOUT * servers_num)
+            async with asyncio.timeout(ScyllaServer.TOPOLOGY_TIMEOUT * servers_num):
+                s_infos = await self._manager.servers_add(
+                    servers_num=servers_num,
+                    cmdline=cmdline,
+                    config=config,
+                    version=version,
+                    property_file=property_file,
+                    start=start,
+                    seeds=seeds,
+                    server_encryption=server_encryption,
+                    expected_error=expected_error,
+                )
         except Exception as exc:
             raise Exception("Failed to add servers") from exc
 
@@ -685,9 +665,10 @@ class ManagerClient:
             dead_ips = [removed_ip] + ignored_ips
             await gather_safely(*(self.others_not_see_server(ip) for ip in dead_ips))
 
-        await self._call(self._manager.remove_node(
-            initiator_id, server_id, ignore_dead=ignore_dead, expected_error=expected_error,
-        ), timeout=timeout)
+        async with asyncio.timeout(timeout):
+            await self._manager.remove_node(
+                initiator_id, server_id, ignore_dead=ignore_dead, expected_error=expected_error,
+            )
         self._driver_update()
 
     async def decommission_node(self, server_id: ServerNum,
@@ -698,8 +679,8 @@ class ManagerClient:
             self.ignore_log_patterns.append(re.escape(expected_error))
 
         logger.debug("ManagerClient decommission %s", server_id)
-        await self._call(self._manager.decommission_node(server_id, expected_error=expected_error),
-                         timeout=timeout)
+        async with asyncio.timeout(timeout):
+            await self._manager.decommission_node(server_id, expected_error=expected_error)
         self._driver_update()
 
     async def rebuild_node(self, server_id: ServerNum,
@@ -707,12 +688,12 @@ class ManagerClient:
                            timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> None:
         """Tell a node to rebuild with Scylla REST API"""
         logger.debug("ManagerClient rebuild %s", server_id)
-        await self._call(self._manager.rebuild_node(server_id, expected_error=expected_error),
-                         timeout=timeout)
+        async with asyncio.timeout(timeout):
+            await self._manager.rebuild_node(server_id, expected_error=expected_error)
         self._driver_update()
 
     async def server_get_config(self, server_id: ServerNum) -> dict[str, Any]:
-        return await self._call(self._manager.server_get_config(server_id))
+        return await self._manager.server_get_config(server_id)
 
     async def server_update_config(self,
                                    server_id: ServerNum,
@@ -733,25 +714,25 @@ class ManagerClient:
             config_options = {key: value}
         elif not isinstance(config_options, dict):
             raise RuntimeError(f"`config_options` is expected to be a dict, not {type(config_options)}")
-        await self._call(self._manager.server_update_config(server_id, config_options))
+        await self._manager.server_update_config(server_id, config_options)
 
     async def server_remove_config_option(self, server_id: ServerNum, key: str) -> None:
         """Remove the provided option from the server's configuration file."""
-        await self._call(self._manager.server_remove_config_option(server_id, key))
+        await self._manager.server_remove_config_option(server_id, key)
 
     async def server_update_cmdline(self, server_id: ServerNum, cmdline_options: List[str]) -> None:
-        await self._call(self._manager.server_update_cmdline(server_id, cmdline_options))
+        await self._manager.server_update_cmdline(server_id, cmdline_options)
 
     async def server_change_ip(self, server_id: ServerNum) -> IPAddress:
         """Change server IP address. Applicable only to a stopped server"""
-        return await self._call(self._manager.server_change_ip(server_id))
+        return await self._manager.server_change_ip(server_id)
 
     async def server_change_rpc_address(self, server_id: ServerNum) -> IPAddress:
         """Change server RPC IP address.
 
         Applicable only to a stopped server.
         """
-        rpc_address = await self._call(self._manager.server_change_rpc_address(server_id))
+        rpc_address = await self._manager.server_change_rpc_address(server_id)
         logger.debug("ManagerClient has changed RPC IP for server %s to %s", server_id, rpc_address)
         return rpc_address
 
@@ -770,7 +751,7 @@ class ManagerClient:
                                              deadline: Optional[float] = None) -> str:
         """Wait for Scylla's process status for server_id will be as expected, with timeout."""
         async def process_status_is_as_expected() -> str | None:
-            current_status = await self._call(self._manager.server_get_process_status(server_id))
+            current_status = await self._manager.server_get_process_status(server_id)
             if current_status in expected_statuses:
                 return current_status
 
@@ -779,14 +760,14 @@ class ManagerClient:
     async def get_host_ip(self, server_id: ServerNum) -> IPAddress:
         """Get host IP Address"""
         try:
-            return await self._call(self._manager.get_host_ip(server_id))
+            return await self._manager.get_host_ip(server_id)
         except Exception as exc:
             raise Exception(f"Failed to get host IP address for server {server_id}") from exc
 
     async def get_host_id(self, server_id: ServerNum) -> HostID:
         """Get local host id of a server"""
         try:
-            return await self._call(self._manager.get_host_id(server_id))
+            return await self._manager.get_host_id(server_id)
         except Exception as exc:
             raise Exception(f"Failed to get local host id address for server {server_id}") from exc
 
@@ -846,17 +827,17 @@ class ManagerClient:
 
     async def server_open_log(self, server_id: ServerNum) -> ScyllaLogFile:
         logger.debug("ManagerClient getting log filename for %s", server_id)
-        log_filename = await self._call(self._manager.server_get_log_filename(server_id))
+        log_filename = await self._manager.server_get_log_filename(server_id)
         return ScyllaLogFile(self.thread_pool, log_filename)
 
     async def server_get_workdir(self, server_id: ServerNum) -> str:
-        return await self._call(self._manager.server_get_workdir(server_id))
+        return await self._manager.server_get_workdir(server_id)
 
     async def server_get_maintenance_socket_path(self, server_id: ServerNum) -> str:
-        return await self._call(self._manager.server_get_maintenance_socket_path(server_id))
+        return await self._manager.server_get_maintenance_socket_path(server_id)
 
     async def server_get_exe(self, server_id: ServerNum) -> str:
-        return await self._call(self._manager.server_get_exe(server_id))
+        return await self._manager.server_get_exe(server_id)
 
     async def server_is_alive(self, server_id: ServerNum) -> bool:
-        return await self._call(self._manager.server_is_alive(server_id))
+        return await self._manager.server_is_alive(server_id)
