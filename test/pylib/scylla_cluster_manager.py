@@ -501,13 +501,13 @@ class ScyllaClusterManager:
         return str(self._server_get_attribute(server_id, "exe"))
 
     @manager_op
-    async def server_get_returncode(self, server_id: ServerNum) -> str | int:
-        if cmd := self._server_get_attribute(server_id, "cmd"):
-            returncode = cmd.returncode
-            if returncode is None:
-                return "RUNNING"
-            return returncode
-        return "NO_SUCH_PROCESS"
+    async def server_is_alive(self, server_id: ServerNum) -> bool:
+        """Whether the server has a process which has not exited yet.
+
+        Unlike ScyllaServer.is_running, which only tells a started server from
+        a stopped one, this notices a server whose process died on its own."""
+        cmd = self._server_get_attribute(server_id, "cmd")
+        return cmd is not None and cmd.returncode is None
 
     @manager_op(blockable=True)
     async def server_wipe_sstables(self, server_id: ServerNum, keyspace: str, table: str):

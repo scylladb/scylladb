@@ -38,10 +38,6 @@ import allure
 logger = logging.getLogger(__name__)
 
 
-class NoSuchProcess(Exception):
-    ...
-
-
 @universalasync_typed_wrap
 class ManagerClient:
     """Helper Manager API client
@@ -862,11 +858,5 @@ class ManagerClient:
     async def server_get_exe(self, server_id: ServerNum) -> str:
         return await self._call(self._manager.server_get_exe(server_id))
 
-    async def server_get_returncode(self, server_id: ServerNum) -> int | None:
-        match await self._call(self._manager.server_get_returncode(server_id)):
-            case "NO_SUCH_PROCESS":
-                raise NoSuchProcess(f"No process found for {server_id=}")
-            case "RUNNING":
-                return None
-            case returncode:
-                return int(returncode)
+    async def server_is_alive(self, server_id: ServerNum) -> bool:
+        return await self._call(self._manager.server_is_alive(server_id))
