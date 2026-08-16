@@ -762,7 +762,7 @@ query_processor::prepare(utils::chunked_string query_string, const service::clie
                 "query_processor_prepare_wait_after_cache_get",
                 utils::wait_for_message(std::chrono::seconds(60)));
   
-        auto msg = ::make_shared<result_message::prepared::cql>(prepared_cache_key_type::cql_id(key), std::move(prep_entry),
+        auto msg = ::make_shared<result_message::prepared::cql>(prepared_cache_key_type::cql_id(key).to_bytes(), std::move(prep_entry),
                     client_state.is_protocol_extension_set(cql_transport::cql_protocol_extension::LWT_ADD_METADATA_MARK));
         co_return std::move(msg);
     } catch(typename prepared_statements_cache::statement_is_too_big&) {
@@ -784,7 +784,8 @@ prepared_cache_key_type query_processor::compute_id(
         utils::chunked_string_view query_string,
         std::string_view keyspace,
         dialect d) {
-    return prepared_cache_key_type(md5_hasher::calculate(hash_target(query_string, keyspace).data()), d);
+    auto hash = md5_hasher::calculate(hash_target(query_string, keyspace).data());
+    return prepared_cache_key_type(bytes_view(hash), d);
 }
 
 std::unique_ptr<prepared_statement>
