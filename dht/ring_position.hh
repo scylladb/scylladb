@@ -93,12 +93,12 @@ public:
     { }
 
     ring_position(const dht::decorated_key& dk)
-        : _token(dk._token)
+        : _token(dk.token())
         , _key(std::make_optional(dk._key))
     { }
 
     ring_position(dht::decorated_key&& dk)
-        : _token(std::move(dk._token))
+        : _token(dk.token())
         , _key(std::make_optional(std::move(dk._key)))
     { }
 
