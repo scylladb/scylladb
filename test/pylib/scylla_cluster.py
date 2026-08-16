@@ -570,6 +570,12 @@ class ScyllaCluster:
         self.logger.info("Cluster %s process status for server %s is %s", self.name, server_id, status)
         return status
 
+    def server(self, server_id: ServerNum) -> ScyllaServer:
+        """Get the given server, running or stopped.
+           Fails if the server cannot be found."""
+        assert server_id in self.servers, f"Server {server_id} unknown"
+        return self.servers[server_id]
+
     def get_config(self, server_id: ServerNum) -> dict[str, object]:
         """Get conf/scylla.yaml of the given server as a dictionary.
            Fails if the server cannot be found."""

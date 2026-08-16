@@ -21,7 +21,6 @@ from test.cluster.object_store.conftest import make_object_storage
 from test.pylib.random_tables import RandomTables
 from test.pylib.skip_types import skip_env
 from test.pylib.util import unique_name
-from test.pylib.manager_client import ManagerClient
 from test.pylib.async_cql import run_async
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.scylla_server import ScyllaVersionDescription, get_scylla_2025_1_description
@@ -43,7 +42,6 @@ from collections.abc import AsyncIterator
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
-    from typing import Callable
 
     from cassandra.connection import EndPoint
 
@@ -156,7 +154,8 @@ def cluster_con(hosts: list[IPAddress | EndPoint], port: int = 9042, use_ssl: bo
 
 
 @pytest.fixture(scope="module")
-async def manager_server(suite_log_dir: Path,
+async def manager_server(request: pytest.FixtureRequest,
+                         suite_log_dir: Path,
                          testpy_cluster_factory: ClusterFactory,
                          testpy_uname: str,
                          ) -> AsyncGenerator[ScyllaClusterManager]:
@@ -168,6 +167,13 @@ async def manager_server(suite_log_dir: Path,
     pytest's event loops and, in dtest, from plain worker threads.  Hence a
     dedicated thread whose loop is idle but alive until teardown.
     """
+    auth_username = request.config.getoption('auth_username', default=None)
+    auth_password = request.config.getoption('auth_password', default=None)
+    if auth_username is not None and auth_password is not None:
+        auth_provider = PlainTextAuthProvider(username=auth_username, password=auth_password)
+    else:
+        auth_provider = None
+
     ready: concurrent.futures.Future[ScyllaClusterManager] = concurrent.futures.Future()
     stop_event = threading.Event()
 
@@ -176,6 +182,10 @@ async def manager_server(suite_log_dir: Path,
             test_uname=testpy_uname,
             create_cluster=testpy_cluster_factory,
             base_dir=str(suite_log_dir),
+            port=int(request.config.getoption('port')),
+            use_ssl=bool(request.config.getoption('ssl')),
+            auth_provider=auth_provider,
+            con_gen=cluster_con,
         )
         try:
             await mgr.start()
@@ -213,53 +223,25 @@ async def manager_server(suite_log_dir: Path,
             await asyncio.get_running_loop().run_in_executor(None, future.result)
 
 
-@pytest.fixture(scope="module")
-async def manager_internal(request: pytest.FixtureRequest,
-                           manager_server: ScyllaClusterManager,
-                           ) -> Callable[[], ManagerClient]:
-    """Module fixture to prepare client object for communicating with the Cluster API.
-       Pass a function to create driver connections.
-       Test cases (functions) should not use this fixture.
-    """
-    port = int(request.config.getoption('port'))
-    use_ssl = bool(request.config.getoption('ssl'))
-    auth_username = request.config.getoption('auth_username', default=None)
-    auth_password = request.config.getoption('auth_password', default=None)
-    if auth_username is not None and auth_password is not None:
-        auth_provider = PlainTextAuthProvider(username=auth_username, password=auth_password)
-    else:
-        auth_provider = None
-    return lambda: ManagerClient(
-        cluster_manager=manager_server,
-        port=port,
-        use_ssl=use_ssl,
-        auth_provider=auth_provider,
-        con_gen=cluster_con,
-    )
-
-
 @pytest.fixture(scope="function")
 async def manager(request: pytest.FixtureRequest,
-                  manager_internal: Callable[[], ManagerClient],
+                  manager_server: ScyllaClusterManager,
                   suite_log_dir: Path,
                   testpy_uname: str,
-                  build_mode: str) -> AsyncGenerator[ManagerClient]:
+                  build_mode: str) -> AsyncGenerator[ScyllaClusterManager]:
     """
-    Per test fixture to notify Manager client object when tests begin so it can perform checks for cluster state.
+    Per test fixture to notify the manager when tests begin so it can perform checks for cluster state.
     """
     test_case_name = request.node.name
     # this should be consistent with scylla_cluster_manager.py ScyllaClusterManager.before_test()
     test_py_log_test = suite_log_dir / f"{Path(testpy_uname).stem}.{test_case_name}_cluster.log"
 
-    manager_client = manager_internal()  # set up client object in fixture with scope function
+    manager_client = manager_server
     logger.debug("before_test for %s", test_case_name)
-    if await manager_client.is_dirty():
-        manager_client.driver_close()  # Close driver connection to old cluster
     cluster_str = await manager_client.before_test(test_case_name)
     logger.info(f"Using cluster: {cluster_str} for test {test_case_name}")
-    servers = await manager_client.running_servers()
-    if manager_client.cql is None and servers:
-        await manager_client.driver_connect()  # Connect driver to new cluster
+    if manager_client.cql is None and await manager_client.running_servers():
+        await manager_client.driver_connect()  # Connect driver to the leased cluster
 
     # Publish what pytest_runtest_makereport needs to attach this test's logs on
     # failure (single source of truth), so it doesn't re-derive these paths.
@@ -283,7 +265,7 @@ async def manager(request: pytest.FixtureRequest,
         failed = call_report is not None and call_report.failed
 
         # Check if the test has the check_nodes_for_errors marker
-        found_errors = await manager_client.check_all_errors(check_all_errors=(request.node.get_closest_marker("check_nodes_for_errors") is not None))
+        found_errors = await manager_client.check_all_errors(all_errors=(request.node.get_closest_marker("check_nodes_for_errors") is not None))
 
         if failed or found_errors:
             # Server logs / traceback / links are attached by pytest_runtest_makereport;
@@ -296,10 +278,10 @@ async def manager(request: pytest.FixtureRequest,
         cluster_status = await manager_client.after_test(success=not failed)
         logger.info("Cluster after test %s (success: %s): %s", test_case_name, not failed, cluster_status)
     finally:
-        # Drop the stash entry before closing the client so a teardown-phase
-        # failure report doesn't gather logs through a stopped client.
+        # Drop the stash entry before closing the driver so a teardown-phase
+        # failure report doesn't gather logs through a fenced-off manager.
         request.node.stash[MANAGER_LOGS_KEY] = None
-        await manager_client.stop()  # Stop client session and close driver after each test
+        manager_client.driver_close()  # Close driver after each test
 
     if cluster_status is not None and cluster_status["server_broken"] and not failed:
         failed = True
@@ -409,7 +391,7 @@ def failure_detector_timeout(build_mode):
     return 5000 * MODES_TIMEOUT_FACTOR[build_mode]
 
 @pytest.fixture(params=[None, 's3', 'gs'], ids=['local', 's3', 'gs'])
-async def storage(request, pytestconfig, tmpdir, suite_log_dir, manager: ManagerClient):
+async def storage(request, pytestconfig, tmpdir, suite_log_dir, manager: ScyllaClusterManager):
     """Parametrize tests over local / S3 / GCS storage.
 
     When storage is None the test runs with local (filesystem) storage.
