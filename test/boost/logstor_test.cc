@@ -242,7 +242,7 @@ struct test_flush_controller {
         flush_started.signal(1);
 
         if (pause_flushes) {
-            auto units = co_await get_units(flush_release, 1);
+            co_await flush_release.wait(1);
         }
 
         if (fail_flush_index && *fail_flush_index == flush_idx) {
@@ -1208,12 +1208,13 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_writes_preserve_fif
     BOOST_REQUIRE(!queued4.available());
     BOOST_REQUIRE_EQUAL(writer.queued_write_count(), 3u);
 
-    std::vector<size_t> accepted_order;
+    // FIFO acceptance is proven by the !available() checks after each drain step below:
+    // each step frees exactly one buffer, and only the oldest queued write may be
+    // accepted into it while every later one stays pending.
 
     flush_ctl.release_one_flush();
     wait_for_persisted(persisted0);
     flush_ctl.wait_for_flush_starts(2);
-    accepted_order.push_back(2);
     auto accepted2 = queued2.get();
     auto persisted2 = std::move(accepted2.persisted);
     BOOST_REQUIRE(!queued3.available());
@@ -1222,7 +1223,6 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_writes_preserve_fif
     flush_ctl.release_one_flush();
     wait_for_persisted(persisted1);
     flush_ctl.wait_for_flush_starts(3);
-    accepted_order.push_back(3);
     auto accepted3 = queued3.get();
     auto persisted3 = std::move(accepted3.persisted);
     BOOST_REQUIRE(!queued4.available());
@@ -1230,7 +1230,6 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_writes_preserve_fif
     flush_ctl.release_one_flush();
     wait_for_persisted(persisted2);
     flush_ctl.wait_for_flush_starts(4);
-    accepted_order.push_back(4);
     auto accepted4 = queued4.get();
     auto persisted4 = std::move(accepted4.persisted);
 
@@ -1241,8 +1240,6 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_writes_preserve_fif
     flush_ctl.release_one_flush();
     wait_for_persisted(persisted4);
 
-    const std::vector<size_t> expected_acceptance_order{2, 3, 4};
-    BOOST_REQUIRE_EQUAL_COLLECTIONS(accepted_order.begin(), accepted_order.end(), expected_acceptance_order.begin(), expected_acceptance_order.end());
     assert_records_in_order(schema, flush_ctl.all_records(), expected);
 }
 
@@ -1401,7 +1398,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_flush_failure_fails_all_wr
     BOOST_REQUIRE(scratch.can_fit(log_record_writer(record1)));
 
     test_flush_controller flush_ctl{.fail_flush_index = 0};
-    buffered_writer writer(make_buffered_writer_config(buffer_size, 3), [&flush_ctl] (write_buffer& wb) {
+    // long sync period so both writes land in the same buffer.
+    buffered_writer writer(make_buffered_writer_config(buffer_size, 3, 0, std::chrono::hours(1)), [&flush_ctl] (write_buffer& wb) {
         return flush_ctl(wb);
     });
 
@@ -1413,7 +1411,13 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_flush_failure_fails_all_wr
     auto accepted0 = writer.write_to_buffer(log_record_writer(record0), test_timeout()).get();
     auto accepted1 = writer.write_to_buffer(log_record_writer(record1), test_timeout()).get();
 
+    auto flush = writer.flush();
+
     BOOST_REQUIRE_THROW(accepted0.persisted.get(), std::runtime_error);
     BOOST_REQUIRE_THROW(accepted1.persisted.get(), std::runtime_error);
+
+    flush.get();
+
+    BOOST_REQUIRE_EQUAL(flush_ctl.started_count, 1u);
     BOOST_REQUIRE(flush_ctl.flushed_buffers.empty());
 }
