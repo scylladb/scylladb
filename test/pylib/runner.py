@@ -48,7 +48,6 @@ from test.pylib.util import get_modes_to_run, scale_timeout_by_mode, get_xdist_w
 from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
 
 if TYPE_CHECKING:
-    import argparse
     from collections.abc import Generator, AsyncGenerator
 
     import _pytest.nodes
@@ -312,13 +311,62 @@ def testpy_cluster_factory(request: pytest.FixtureRequest,
                            suite_log_dir: pathlib.Path,
                            scylla_binary: str) -> ClusterFactory:
     """A factory of Scylla clusters configured for the current suite and build mode."""
-    return create_cluster_factory(
-        suite_config=get_params_stash(node=request.node)[TEST_SUITE],
-        options=request.config.option,
-        mode=build_mode,
-        log_dir=suite_log_dir,
-        scylla_exe=scylla_binary,
-    )
+    suite_config = get_params_stash(node=request.node)[TEST_SUITE]
+    options = request.config.option
+
+    # environment variables that should be the base of all processes running in this suit
+    base_env = {}
+
+    if options.coverage and (build_mode in options.coverage_modes) and bool(suite_config.cfg.get("coverage", True)):
+        # Set the coverage data from each instrumented object to use the same file (and merged into it with locking)
+        # as long as we don't need test specific coverage data, this looks sufficient. The benefit of doing this in
+        # this way is that the storage will not be bloated with coverage files (each can weigh 10s of MBs so for several
+        # thousands of tests it can easily reach 10 of GBs)
+        # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
+        base_env["LLVM_PROFILE_FILE"] = str(suite_log_dir / "coverage" / suite_config.name / "%m.profraw")
+
+    cluster_size = suite_config.cfg.get("cluster", {}).get("initial_size", 1)
+
+    async def create_cluster(logger: logging.Logger | logging.LoggerAdapter) -> ScyllaCluster:
+        cluster = ScyllaCluster(
+            logger=logger,
+            vardir=suite_log_dir,
+            replicas=cluster_size,
+            mode=build_mode,
+            cmdline_options=suite_config.cfg.get("extra_scylla_cmdline_options", []),
+            cmdline_options_override=options.extra_scylla_cmdline_options.split(),
+            config_options=suite_config.cfg.get("extra_scylla_config_options", {}),
+            append_env=base_env,
+            scylla_exe=scylla_binary,
+        )
+
+        async def stop() -> None:
+            await cluster.stop()
+
+        artifacts.add_exit_artifact(stop)
+
+        if not options.save_log_on_success:
+            # If a test fails, we might want to keep the data dirs.
+            async def uninstall() -> None:
+                await cluster.uninstall()
+
+            artifacts.add_exit_artifact(uninstall)
+
+        await cluster.install_and_start()
+        # If cluster failed to start, raise the exception immediately
+        # so a broken cluster is never handed out to tests
+        if cluster.start_exception is not None:
+            # Clean up the broken cluster before raising
+            try:
+                await cluster.recycle()
+            except Exception:
+                # Report it and raise the start failure, which is the more
+                # useful of the two.
+                logger.warning("Failed to recycle the cluster that failed to start", exc_info=True)
+            raise cluster.start_exception
+        return cluster
+
+    return create_cluster
 
 
 @pytest.fixture(scope="module")
@@ -865,62 +913,3 @@ def prepare_environment(tempdir_base: pathlib.Path,
     start_3rd_party_services(tempdir_base=tempdir_base, toxiproxy_byte_limit=toxiproxy_byte_limit)
 
 
-def create_cluster_factory(suite_config: TestSuiteConfig,
-                           options: argparse.Namespace,
-                           mode: str,
-                           log_dir: pathlib.Path,
-                           scylla_exe: str) -> ClusterFactory:
-    """Build a factory of Scylla clusters configured for the given suite and build mode."""
-    # environment variables that should be the base of all processes running in this suit
-    base_env = {}
-
-    if options.coverage and (mode in options.coverage_modes) and bool(suite_config.cfg.get("coverage", True)):
-        # Set the coverage data from each instrumented object to use the same file (and merged into it with locking)
-        # as long as we don't need test specific coverage data, this looks sufficient. The benefit of doing this in
-        # this way is that the storage will not be bloated with coverage files (each can weigh 10s of MBs so for several
-        # thousands of tests it can easily reach 10 of GBs)
-        # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
-        base_env["LLVM_PROFILE_FILE"] = str(log_dir / "coverage" / suite_config.name / "%m.profraw")
-
-    cluster_size = suite_config.cfg.get("cluster", {}).get("initial_size", 1)
-
-    async def create_cluster(logger: logging.Logger | logging.LoggerAdapter) -> ScyllaCluster:
-        cluster = ScyllaCluster(
-            logger=logger,
-            vardir=log_dir,
-            replicas=cluster_size,
-            mode=mode,
-            cmdline_options=suite_config.cfg.get("extra_scylla_cmdline_options", []),
-            cmdline_options_override=options.extra_scylla_cmdline_options.split(),
-            config_options=suite_config.cfg.get("extra_scylla_config_options", {}),
-            append_env=base_env,
-            scylla_exe=scylla_exe,
-        )
-
-        async def stop() -> None:
-            await cluster.stop()
-
-        artifacts.add_exit_artifact(stop)
-
-        if not options.save_log_on_success:
-            # If a test fails, we might want to keep the data dirs.
-            async def uninstall() -> None:
-                await cluster.uninstall()
-
-            artifacts.add_exit_artifact(uninstall)
-
-        await cluster.install_and_start()
-        # If cluster failed to start, raise the exception immediately
-        # so a broken cluster is never handed out to tests
-        if cluster.start_exception is not None:
-            # Clean up the broken cluster before raising
-            try:
-                await cluster.recycle()
-            except Exception:
-                # Report it and raise the start failure, which is the more
-                # useful of the two.
-                logger.warning("Failed to recycle the cluster that failed to start", exc_info=True)
-            raise cluster.start_exception
-        return cluster
-
-    return create_cluster
