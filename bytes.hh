@@ -35,8 +35,9 @@ inline bytes_view to_bytes_view(std::string_view view) {
 }
 
 struct fmt_hex {
-    const bytes_view& v;
-    fmt_hex(const bytes_view& v) noexcept : v(v) {}
+    std::span<const std::byte> v;
+    fmt_hex(const bytes_view& v) noexcept : v(std::as_bytes(std::span(v))) {}
+    fmt_hex(std::span<const std::byte> v) noexcept : v(v) {}
 };
 
 bytes from_hex(std::string_view s);
