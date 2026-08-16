@@ -1001,7 +1001,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     /**
     * @Group Cache and index settings
     */
-    , column_index_size_in_kb(this, "column_index_size_in_kb", value_status::Used, 64,
+    , column_index_size_in_kb(this, "column_index_size_in_kb", value_status::Used, 1,
         "Granularity of the index of rows within a partition. For huge rows, decrease this setting to improve seek time. If you use key cache, be careful not to make this setting too large because key cache will be overwhelmed. If you're unsure of the size of the rows, it's best to use the default setting.")
     , column_index_auto_scale_threshold_in_kb(this, "column_index_auto_scale_threshold_in_kb", liveness::LiveUpdate, value_status::Used, 10240,
         "Auto-reduce the promoted index granularity by half when reaching this threshold, to prevent promoted index bloating due to partitions with too many rows. Set to 0 to disable this feature.")
@@ -1488,7 +1488,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , view_building(this, "view_building", value_status::Used, true, "Enable view building; should only be set to false when the node is experience issues due to view building.")
     , enable_sstables_mc_format(this, "enable_sstables_mc_format", value_status::Unused, true, "Enable SSTables 'mc' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
     , enable_sstables_md_format(this, "enable_sstables_md_format", value_status::Unused, true, "Enable SSTables 'md' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
-    , sstable_format(this, "sstable_format", liveness::LiveUpdate, value_status::Used, "me", "Default sstable file format", {"md", "me", "ms", "mt"})
+    , sstable_format(this, "sstable_format", liveness::LiveUpdate, value_status::Used, "mt", "Default sstable file format", {"md", "me", "ms", "mt"})
     , sstable_compression_user_table_options(this, "sstable_compression_user_table_options", value_status::Used, compression_parameters{compression_parameters::algorithm::lz4_with_dicts},
         "Server-global user table compression options. If enabled, all user tables"
         "will be compressed using the provided options, unless overridden"
