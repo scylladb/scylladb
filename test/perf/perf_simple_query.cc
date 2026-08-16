@@ -12,6 +12,7 @@
 #include <boost/algorithm/string/classification.hpp>
 #include <json/json.h>
 #include <fmt/ranges.h>
+#include <limits>
 
 #include "test/lib/cql_test_env.hh"
 #include "test/perf/perf.hh"
@@ -190,6 +191,21 @@ static sstring ck_column_name(unsigned component) {
 
 static data_type ck_column_type(unsigned component) {
     return component % 2 == 0 ? utf8_type : int32_type;
+}
+
+// Rejects configurations where the largest divisor computed below
+// (fanout^(clustering_columns - 1)) would overflow uint64_t; unchecked, the
+// overflow wraps the divisor to 0 and make_ck_components() divides by it.
+static void validate_clustering_fanout(const test_config& cfg) {
+    uint64_t max_div = 1;
+    for (unsigned i = 0; i + 1 < cfg.clustering_columns; ++i) {
+        if (max_div > std::numeric_limits<uint64_t>::max() / cfg.clustering_fanout) {
+            throw std::invalid_argument(fmt::format(
+                    "--clustering-fanout {} with --clustering-columns {} overflows uint64_t "
+                    "(fanout^(columns-1))", cfg.clustering_fanout, cfg.clustering_columns));
+        }
+        max_div *= cfg.clustering_fanout;
+    }
 }
 
 static std::vector<bytes> make_ck_components(const test_config& cfg, uint64_t row) {
@@ -646,7 +662,14 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
         test_type += "_counters";
     }
     if (cfg.clustering_columns > 0) {
-        test_type += fmt::format("_clustering_{}", clustering_query_kind_name(cfg.clustering_query));
+        // clustering_query only shapes the read query; write/delete always
+        // operate on a single row by full key regardless of its value, so
+        // don't tag them with a read shape they didn't use.
+        if (cfg.mode == test_config::run_mode::read) {
+            test_type += fmt::format("_clustering_{}", clustering_query_kind_name(cfg.clustering_query));
+        } else {
+            test_type += "_clustering";
+        }
     }
 
     perf::write_json_result(result_file, agg, params, test_type);
@@ -771,6 +794,7 @@ int scylla_simple_query_main(int argc, char** argv) {
                 if (cfg.rows_per_partition == 0 || cfg.clustering_fanout == 0) {
                     throw std::invalid_argument("--rows-per-partition and --clustering-fanout must be positive");
                 }
+                validate_clustering_fanout(cfg);
                 auto q = app.configuration()["clustering-query"].as<std::string>();
                 if (q == "partition") {
                     cfg.clustering_query = test_config::clustering_query_kind::partition;
