@@ -15,7 +15,7 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.cluster.util import new_test_keyspace
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import wait_for, wait_for_view
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # The test verifies that no node crashes as a result of the topology change combined
 # with the writes.
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_mv_topology_change(manager: ManagerClient):
+async def test_mv_topology_change(manager: ScyllaClusterManager):
     cfg = {'tablets_mode_for_new_keyspaces': 'disabled',
            'error_injections_at_startup': ['delay_before_get_view_natural_endpoint']}
 
@@ -96,7 +96,7 @@ async def test_mv_topology_change(manager: ManagerClient):
 # is migrating between two shards on the same node.
 @pytest.mark.parametrize("intranode", [True, False])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_mv_update_on_pending_replica(manager: ManagerClient, intranode):
+async def test_mv_update_on_pending_replica(manager: ScyllaClusterManager, intranode):
     cfg = {'tablets_mode_for_new_keyspaces': 'enabled'}
     cmd = ['--smp', '2']
     servers = [await manager.server_add(config=cfg, cmdline=cmd)]
@@ -176,7 +176,7 @@ async def test_mv_update_on_pending_replica(manager: ManagerClient, intranode):
 # issue #19529, it remains active until it timeouts, preventing topology changes
 # during this time.
 @pytest.mark.skip_mode(mode='debug', reason='the test requires a short timeout for remove_node, but it is unpredictably slow in debug')
-async def test_mv_write_to_dead_node(manager: ManagerClient):
+async def test_mv_write_to_dead_node(manager: ScyllaClusterManager):
     servers = await manager.servers_add(4, property_file=[
         {"dc": "dc1", "rack": "r1"},
         {"dc": "dc1", "rack": "r2"},
@@ -201,7 +201,7 @@ async def test_mv_write_to_dead_node(manager: ManagerClient):
         # Otherwise, it is expected to complete in short time.
         await manager.remove_node(servers[0].server_id, servers[-1].server_id, timeout=180)
 
-async def test_mv_pairing_during_replace(manager: ManagerClient):
+async def test_mv_pairing_during_replace(manager: ScyllaClusterManager):
     servers = await manager.servers_add(3, property_file=[
         {"dc": "dc1", "rack": "r1"},
         {"dc": "dc1", "rack": "r1"},
@@ -259,7 +259,7 @@ async def test_mv_pairing_during_replace(manager: ManagerClient):
     reason="Test doesn't work with the configuration option rf_rack_valid_keyspaces",
 )
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_mv_rf_change(manager: ManagerClient, delayed_replica: str, altered_dc: str):
+async def test_mv_rf_change(manager: ScyllaClusterManager, delayed_replica: str, altered_dc: str):
     servers = []
     servers.append(await manager.server_add(config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc1', 'rack': 'myrack1'}))
     servers.append(await manager.server_add(config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc1', 'rack': 'myrack2'}))
@@ -327,7 +327,7 @@ async def test_mv_rf_change(manager: ManagerClient, delayed_replica: str, altere
 # The same scenario as in the test above, but the RF change affects the first replica in a DC
 @pytest.mark.parametrize("delayed_replica", ["base", "mv"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_mv_first_replica_in_dc(manager: ManagerClient, delayed_replica: str):
+async def test_mv_first_replica_in_dc(manager: ScyllaClusterManager, delayed_replica: str):
     servers = []
     # If we run the test with more than 1 shard and the tablet for the view table gets allocated on the same shard as the tablet of the base table,
     # we'll perform an intranode migration of one of these tablets to the other shard. This migration can be confused with the migration to the
@@ -390,7 +390,7 @@ async def test_mv_first_replica_in_dc(manager: ManagerClient, delayed_replica: s
 # Reproduces #24292
 @pytest.mark.parametrize("migration_type", ["tablets_internode", "tablets_intranode", "vnodes"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_mv_write_during_migration(manager: ManagerClient, migration_type: str):
+async def test_mv_write_during_migration(manager: ScyllaClusterManager, migration_type: str):
     # RF=1 and fast boot options with streaming don't play well together, so force RBNO for bootstrap
     cmdline = ['--smp', '2', '--logger-log-level', 'raft_topology=debug', "--allowed-repair-based-node-ops", "replace,removenode,rebuild,bootstrap,decommission"]
 
@@ -480,7 +480,7 @@ async def test_mv_write_during_migration(manager: ManagerClient, migration_type:
 # on the topology coordinator, but the joining node is delayed in applying the group0 state.
 # The joining node receives base mutations from the other nodes to apply as the new replica,
 # and it also should generate view updates for them while in a joining state.
-async def test_mv_write_during_node_join(manager: ManagerClient):
+async def test_mv_write_during_node_join(manager: ScyllaClusterManager):
     cmdline = ['--logger-log-level', 'storage_service=debug', '--logger-log-level', 'raft_topology=debug']
     servers = await manager.servers_add(1, cmdline=cmdline)
     cql = manager.get_cql()
@@ -520,7 +520,7 @@ async def test_mv_write_during_node_join(manager: ManagerClient):
 # earlier in the shutdown sequence. The test passes if the server doesn't crash during shutdown.
 # Reproduces issue SCYLLADB-2301
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
-async def test_no_crash_on_shutdown_with_pending_remote_view_update(manager: ManagerClient) -> None:
+async def test_no_crash_on_shutdown_with_pending_remote_view_update(manager: ScyllaClusterManager) -> None:
     node_count = 2
     servers = await manager.servers_add(node_count, config={'tablets_mode_for_new_keyspaces': 'enabled'})
     cql = manager.get_cql()

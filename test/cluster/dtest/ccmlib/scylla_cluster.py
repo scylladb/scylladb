@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from cassandra.auth import PlainTextAuthProvider
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.dtest.ccmlib.common import logger
 from test.cluster.dtest.ccmlib.scylla_node import ScyllaNode
 
@@ -24,7 +24,7 @@ SCYLLA_VERSION_FILE = Path(__file__).parent.parent.parent.parent / "build" / "SC
 
 
 class ScyllaCluster:
-    def __init__(self, manager: ManagerClient, scylla_mode: str, force_wait_for_cluster_start: bool = False):
+    def __init__(self, manager: ScyllaClusterManager, scylla_mode: str, force_wait_for_cluster_start: bool = False):
         self.manager = manager
         self.scylla_mode = scylla_mode
         self._config_options = {}

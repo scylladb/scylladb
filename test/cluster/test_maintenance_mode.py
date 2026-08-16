@@ -9,7 +9,7 @@ from cassandra.connection import UnixSocketEndPoint
 from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.conftest import cluster_con
@@ -24,7 +24,7 @@ from typing import TypeAlias
 
 logger = logging.getLogger(__name__)
 
-async def test_maintenance_mode(manager: ManagerClient):
+async def test_maintenance_mode(manager: ScyllaClusterManager):
     """
     The test checks that in maintenance mode server A is not available for other nodes and for clients.
     It is possible to connect by the maintenance socket to server A and perform local CQL operations.

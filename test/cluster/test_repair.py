@@ -15,7 +15,7 @@ import uuid
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import new_test_keyspace
@@ -232,7 +232,7 @@ async def test_keyspace_drop_during_data_sync_repair(manager):
 
     await manager.server_add(config=cfg)
 
-async def test_vnode_keyspace_describe_ring(manager: ManagerClient):
+async def test_vnode_keyspace_describe_ring(manager: ScyllaClusterManager):
     cfg = {
         'tablets_mode_for_new_keyspaces': 'disabled',
     }

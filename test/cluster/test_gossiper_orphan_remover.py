@@ -9,7 +9,7 @@ import time
 import pytest
 import logging
 from functools import partial
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
 from test.pylib.internal_types import ServerInfo
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_crashed_node_substitution(manager: ManagerClient):
+async def test_crashed_node_substitution(manager: ScyllaClusterManager):
     """Test that a node which crashed after starting gossip but before joining group0
     (an 'orphan' node) is eventually removed from gossip by the gossiper_orphan_remover_fiber.
 

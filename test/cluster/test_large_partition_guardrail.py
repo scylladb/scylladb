@@ -14,7 +14,7 @@ from cassandra.cluster import ConsistencyLevel
 from cassandra.protocol import ConfigurationException
 from cassandra.query import SimpleStatement
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ async def _make_oversized_partition(cql, tbl, pk, num_rows, value_size_bytes):
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_large_data_guardrails_rolling_upgrade(manager: ManagerClient):
+async def test_large_data_guardrails_rolling_upgrade(manager: ScyllaClusterManager):
     """Verify that large_data_guardrails_enabled is properly gated by the
     LARGE_DATA_GUARDRAILS cluster feature during a simulated rolling upgrade:
 
@@ -107,7 +107,7 @@ async def test_large_data_guardrails_rolling_upgrade(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_read_repair_skips_large_data_guardrails(manager: ManagerClient):
+async def test_read_repair_skips_large_data_guardrails(manager: ScyllaClusterManager):
     """Read repair must bypass large-data guardrails.
 
     The data already exists on at least one replica; rejecting the

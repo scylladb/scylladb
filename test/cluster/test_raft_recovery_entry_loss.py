@@ -12,7 +12,7 @@ from cassandra.cluster import Session
 from cassandra.pool import Host
 from uuid import UUID
 from test.pylib.internal_types import ServerInfo
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import gather_safely, wait_for_cql_and_get_hosts
 from test.cluster.util import check_system_topology_and_cdc_generations_v3_consistency, \
@@ -30,7 +30,7 @@ async def get_local_schema_version(cql: Session, h: Host) -> UUID:
     assert(rs)
     return rs[0].schema_version
 
-async def test_raft_recovery_entry_loss(manager: ManagerClient):
+async def test_raft_recovery_entry_loss(manager: ScyllaClusterManager):
     """
     Test that the Raft-based recovery procedure works correctly if some committed group 0 entry has been permanently
     lost (it has been committed only by dead nodes).

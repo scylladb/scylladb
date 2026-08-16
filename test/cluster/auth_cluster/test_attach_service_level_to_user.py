@@ -10,10 +10,10 @@ import logging
 import pytest
 from test.pylib.rest_client import read_barrier, get_host_api_address
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
-async def test_attach_service_level_to_user(request, manager: ManagerClient):
+async def test_attach_service_level_to_user(request, manager: ScyllaClusterManager):
     user = f"test_user_{unique_name()}"
 
     # Start nodes with correct topology

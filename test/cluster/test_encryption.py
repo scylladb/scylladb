@@ -16,7 +16,8 @@ import subprocess
 import json
 import uuid
 
-from test.pylib.manager_client import ManagerClient, ServerInfo
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.internal_types import ServerInfo
 from test.pylib.object_storage import format_tuples
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_all_tablet_replicas
@@ -44,7 +45,7 @@ def workdir():
     with tempfile.TemporaryDirectory() as tmp_dir:
         yield tmp_dir
 
-async def test_file_streaming_respects_encryption(manager: ManagerClient, storage, workdir):
+async def test_file_streaming_respects_encryption(manager: ScyllaClusterManager, storage, workdir):
     # pylint: disable=missing-function-docstring
     cfg = {
         'tablets_mode_for_new_keyspaces': 'enabled',
@@ -92,7 +93,7 @@ def filter_ciphers(kp: KeyProviderFactory, ciphers=dict[str, list[int]]) -> list
     return [(cipher, length) for cipher in ciphers for length in ciphers[cipher] 
             if kp.supported_cipher(cipher, length)]
 
-async def create_ks(manager: ManagerClient, replication_factor: int=1):
+async def create_ks(manager: ScyllaClusterManager, replication_factor: int=1):
     """create test keyspace"""
     return new_test_keyspace(manager,
                              opts="with replication = {'class': 'NetworkTopologyStrategy', "
@@ -100,7 +101,7 @@ async def create_ks(manager: ManagerClient, replication_factor: int=1):
                              )
 
 
-async def create_encrypted_cf(manager: ManagerClient, ks: str,
+async def create_encrypted_cf(manager: ScyllaClusterManager, ks: str,
     columns: str=None,
     cipher_algorithm=None,
     secret_key_strength=None,
@@ -155,12 +156,12 @@ async def read_verify_workload(cql: CassandraSession, table_name: str, keys: lis
     for key, result in zip(keys, rows):
         assert len(list(result)) == 1, f"Expected 1 row for key={key}, got {len(list(result))}"
 
-async def _smoke_test(manager: ManagerClient, key_provider: KeyProviderFactory,
+async def _smoke_test(manager: ScyllaClusterManager, key_provider: KeyProviderFactory,
                       ciphers: dict[str, list[int]], compression: str = None,
                       exception_handler: Callable[[Exception,str,str], None] = None,
                       options: dict = {},
                       num_servers: int = 1,
-                      restart: Callable[[ManagerClient, list[ServerInfo], list[str]], Coroutine[None, None, None]] = None):
+                      restart: Callable[[ScyllaClusterManager, list[ServerInfo], list[str]], Coroutine[None, None, None]] = None):
     """helper to create cluster, cfs, data and verify it after restart"""
     cfg = options | key_provider.configuration_parameters()
 
@@ -282,7 +283,7 @@ async def test_encryption_table_compression(manager, tmpdir, suite_log_dir, comp
 
 async def test_reboot(manager, key_provider):
     """Tests SIGKILL restart of 3-node cluster"""
-    async def restart(manager: ManagerClient, servers: list[ServerInfo], table_names: list[str]):
+    async def restart(manager: ScyllaClusterManager, servers: list[ServerInfo], table_names: list[str]):
         # pylint: disable=unused-argument
         for s in servers:
             await manager.server_stop(s.server_id, convict=False)
@@ -309,7 +310,7 @@ def get_sstables(node_workdir, ks:str, table:str, sst_type = None):
     sstables = glob.glob(base_pattern)
     return sstables
 
-async def get_sstable_metadata(manager: ManagerClient, server: ServerInfo, keyspace: str, column_family: str):
+async def get_sstable_metadata(manager: ScyllaClusterManager, server: ServerInfo, keyspace: str, column_family: str):
     """Load scylla metadata component sstables for server and cf"""
     scylla_path = await manager.server_get_exe(server.server_id)
     node_workdir = await manager.server_get_workdir(server.server_id)
@@ -322,7 +323,7 @@ async def get_sstable_metadata(manager: ManagerClient, server: ServerInfo, keysp
     scylla_metadata = json.loads(res.decode('utf-8', 'ignore'))
     return scylla_metadata
 
-async def validate_sstables_encryption(manager: ManagerClient, server: ServerInfo, table_name: str, encrypted:bool, expected_data=None):
+async def validate_sstables_encryption(manager: ScyllaClusterManager, server: ServerInfo, table_name: str, encrypted:bool, expected_data=None):
     """Verify sstables for table encrypted or not"""
     keyspace, column_family  = table_name.split(".")
     scylla_path = await manager.server_get_exe(server.server_id)
@@ -355,7 +356,7 @@ async def validate_sstables_encryption(manager: ManagerClient, server: ServerInf
 
 async def test_alter(manager, key_provider):
     """Tests altering encrypted CF:s and verify sstable data"""
-    async def restart(manager: ManagerClient, servers: list[ServerInfo], table_names: list[str]):
+    async def restart(manager: ScyllaClusterManager, servers: list[ServerInfo], table_names: list[str]):
         cql = manager.cql
         expected_data = [list(row._asdict().values()) 
                          for row in cql.execute(f"SELECT * FROM {table_names[0]}")]
@@ -391,7 +392,7 @@ async def test_alter(manager, key_provider):
                       ciphers={"AES/CBC/PKCS5Padding": [128]},
                       restart=restart)
 
-async def test_per_table_master_key(manager: ManagerClient, tmpdir, suite_log_dir):
+async def test_per_table_master_key(manager: ScyllaClusterManager, tmpdir, suite_log_dir):
     """Test per table KMS master key"""
     class MultiAliasKMSProvider (KMSKeyProviderFactory):
         """Special KMS using different master keys for each table"""
@@ -410,7 +411,7 @@ async def test_per_table_master_key(manager: ManagerClient, tmpdir, suite_log_di
             return super().additional_cf_options() | {"master_key": alias_name}
 
     async with MultiAliasKMSProvider(tmpdir, suite_log_dir) as kp:
-        async def restart(manager: ManagerClient, servers: list[ServerInfo],
+        async def restart(manager: ScyllaClusterManager, servers: list[ServerInfo],
                           table_names: list[str]):
             await manager.rolling_restart(servers)
             i = 0
@@ -435,7 +436,7 @@ async def test_per_table_master_key(manager: ManagerClient, tmpdir, suite_log_di
                           restart=restart)
 
 
-async def test_non_existant_table_master_key(manager: ManagerClient, tmpdir, suite_log_dir):
+async def test_non_existant_table_master_key(manager: ScyllaClusterManager, tmpdir, suite_log_dir):
     """Test we fail properly if using a non-existant master key"""
     class NoSuchKeyKMSProvider (KMSKeyProviderFactory):
         """Special KMS using nonexisting master key"""
@@ -446,7 +447,7 @@ async def test_non_existant_table_master_key(manager: ManagerClient, tmpdir, sui
         with pytest.raises(Exception):
             await _smoke_test(manager, kp, ciphers={"AES/CBC/PKCS5Padding": [128]})
 
-async def test_system_auth_encryption(manager: ManagerClient, tmpdir):
+async def test_system_auth_encryption(manager: ScyllaClusterManager, tmpdir):
     cfg = {"authenticator": "org.apache.cassandra.auth.PasswordAuthenticator", 
                "authorizer": "org.apache.cassandra.auth.CassandraAuthorizer",
                 "commitlog_sync": "batch" }
@@ -540,9 +541,9 @@ async def test_system_auth_encryption(manager: ManagerClient, tmpdir):
     await verify_system_info(False) # should not see stuff now
 
 
-async def test_system_encryption_reboot(manager: ManagerClient, tmpdir):
+async def test_system_encryption_reboot(manager: ScyllaClusterManager, tmpdir):
     """Tests SIGKILL restart of encrypted node"""
-    async def restart(manager: ManagerClient, servers: list[ServerInfo], table_names: list[str]):
+    async def restart(manager: ScyllaClusterManager, servers: list[ServerInfo], table_names: list[str]):
         # pylint: disable=unused-argument
         for s in servers:
             await manager.server_stop(s.server_id, convict=False)

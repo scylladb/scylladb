@@ -12,7 +12,7 @@ import random
 import time
 from test import pylib
 from test.pylib.util import gather_safely, wait_for
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.random_tables import RandomTables
 from test.cluster.util import check_token_ring_and_group0_consistency,            \
                                wait_for_token_ring_and_group0_consistency
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
-async def test_remove_node_add_column(manager: ManagerClient, random_tables: RandomTables):
+async def test_remove_node_add_column(manager: ScyllaClusterManager, random_tables: RandomTables):
     """Add a node, remove an original node, add a column"""
     servers = await manager.running_servers()
     table = await random_tables.add_table(ncolumns=5)
@@ -35,7 +35,7 @@ async def test_remove_node_add_column(manager: ManagerClient, random_tables: Ran
     await random_tables.verify_schema()
 
 
-async def test_decommission_node_add_column(manager: ManagerClient, random_tables: RandomTables):
+async def test_decommission_node_add_column(manager: ScyllaClusterManager, random_tables: RandomTables):
     """Add a node, remove an original node, add a column"""
     table = await random_tables.add_table(ncolumns=5)
     servers = await manager.running_servers()
@@ -71,7 +71,7 @@ async def test_decommission_node_add_column(manager: ManagerClient, random_table
     link="https://github.com/scylladb/scylladb/issues/11713",
     reason="Wait for @slow attribute",
 )
-async def test_remove_node_with_concurrent_ddl(manager: ManagerClient, random_tables: RandomTables):
+async def test_remove_node_with_concurrent_ddl(manager: ScyllaClusterManager, random_tables: RandomTables):
     stopped = False
     ddl_failed = False
 
@@ -131,13 +131,13 @@ async def test_remove_node_with_concurrent_ddl(manager: ManagerClient, random_ta
         await ddl_task
         logger.debug("ddl fiber done, finished")
 
-async def test_rebuild_node(manager: ManagerClient, random_tables: RandomTables):
+async def test_rebuild_node(manager: ScyllaClusterManager, random_tables: RandomTables):
     """rebuild a node"""
     servers = await manager.running_servers()
     await manager.rebuild_node(servers[0].server_id)
     await check_token_ring_and_group0_consistency(manager)
 
-async def test_concurrent_removenode_two_initiators_one_dead_node(manager: ManagerClient):
+async def test_concurrent_removenode_two_initiators_one_dead_node(manager: ScyllaClusterManager):
     servers = await manager.running_servers()
     assert len(servers) >= 3
 
@@ -151,7 +151,7 @@ async def test_concurrent_removenode_two_initiators_one_dead_node(manager: Manag
     else:
         raise Exception("concurrent removenode request should result in a failure, but unexpectedly succeeded")
 
-async def test_concurrent_removenode_one_initiator_two_dead_nodes(manager: ManagerClient):
+async def test_concurrent_removenode_one_initiator_two_dead_nodes(manager: ScyllaClusterManager):
     """
     Tests the execution flow in case of performing remove node
     operations concurrently for two distinct dead nodes.
@@ -169,7 +169,7 @@ async def test_concurrent_removenode_one_initiator_two_dead_nodes(manager: Manag
     await asyncio.gather(*[manager.remove_node(servers[0].server_id, servers[2].server_id, ignore_dead=ignore_nodes),
             manager.remove_node(servers[0].server_id, servers[1].server_id, ignore_dead=ignore_nodes)])
 
-async def test_concurrent_removenode_two_initiators_two_dead_nodes(manager: ManagerClient):
+async def test_concurrent_removenode_two_initiators_two_dead_nodes(manager: ScyllaClusterManager):
     """
     Tests the execution flow in case of performing remove node
     operations concurrently for two distinct dead nodes while
@@ -189,7 +189,7 @@ async def test_concurrent_removenode_two_initiators_two_dead_nodes(manager: Mana
             manager.remove_node(servers[3].server_id, servers[1].server_id, ignore_dead=ignore_nodes)])
 
 @pytest.mark.skip_mode(mode='release', reason='error injection is not supported in release mode')
-async def test_decommission_left_token_ring_retry(manager: ManagerClient):
+async def test_decommission_left_token_ring_retry(manager: ScyllaClusterManager):
     """
     Tests the execution flow in case of performing decommission node
     operation in left_token_ring transition state, while retrying the

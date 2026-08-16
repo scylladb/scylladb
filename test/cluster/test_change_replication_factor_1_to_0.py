@@ -10,7 +10,7 @@ import time
 
 from cassandra import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import new_test_keyspace, wait_for_token_ring_and_group0_consistency
 from test.pylib.util import wait_for
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
             link="https://github.com/scylladb/scylladb/issues/20282", reason="Coredump and error of: failed to log message: fmt='Requested location for node {} not in topology",),pytest.mark.tier2])
     ]
 )
-async def test_change_replication_factor_1_to_0(request: pytest.FixtureRequest, manager: ManagerClient, use_tablets: bool) -> None:
+async def test_change_replication_factor_1_to_0(request: pytest.FixtureRequest, manager: ScyllaClusterManager, use_tablets: bool) -> None:
     CONFIG = {"endpoint_snitch": "GossipingPropertyFileSnitch", "tablets_mode_for_new_keyspaces": "enabled" if use_tablets else "disabled"}
     logger.info("Creating a new cluster")
     for i in range(2):
@@ -77,7 +77,7 @@ async def test_change_replication_factor_1_to_0(request: pytest.FixtureRequest, 
         pytest.param(True, id="tablets"),
     ],
 )
-async def test_change_replication_factor_1_to_0_and_decommission(request: pytest.FixtureRequest, manager: ManagerClient, use_tablets: bool) -> None:
+async def test_change_replication_factor_1_to_0_and_decommission(request: pytest.FixtureRequest, manager: ScyllaClusterManager, use_tablets: bool) -> None:
     CONFIG = {"endpoint_snitch": "GossipingPropertyFileSnitch", "tablets_mode_for_new_keyspaces": "enabled" if use_tablets else "disabled"}
     logger.info("Creating a new cluster")
     for i in range(2):

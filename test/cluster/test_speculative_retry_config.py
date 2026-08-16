@@ -6,11 +6,11 @@
 
 import pytest
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
 @pytest.mark.parametrize('cfg_source', ['yaml', 'cmdline'])
-async def test_invalid_speculative_retry_config(manager: ManagerClient, cfg_source: str):
+async def test_invalid_speculative_retry_config(manager: ScyllaClusterManager, cfg_source: str):
     """
     Check that a node refuses to start when speculative_retry_user_table_default
     is set to a value that does not parse as a speculative_retry option.

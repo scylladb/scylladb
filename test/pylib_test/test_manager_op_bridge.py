@@ -65,7 +65,7 @@ class StubCluster:
 def manager() -> Iterator[tuple[ScyllaClusterManager, StubCluster, asyncio.AbstractEventLoop]]:
     """A ScyllaClusterManager running on its own thread and loop.
 
-    Mirrors the manager_server fixture in test/cluster/conftest.py: the loop
+    Mirrors the _scylla_cluster_manager fixture in test/cluster/conftest.py: the loop
     stays alive but idle until teardown, so callers on other loops and threads
     have something to hand work to.
     """

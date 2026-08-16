@@ -8,7 +8,7 @@ import re
 from datetime import datetime
 from typing import Tuple
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import gather_safely, wait_for, Host
 from test.cluster.util import new_test_keyspace, new_test_table, reconnect_driver
 from test.pylib.internal_types import HostID, ServerInfo
@@ -39,7 +39,7 @@ DEFAULT_CMDLINE = [
     ]
 
 
-async def wait_for_leader(manager: ManagerClient, s: ServerInfo, group_id: str):
+async def wait_for_leader(manager: ScyllaClusterManager, s: ServerInfo, group_id: str):
     async def get_leader_host_id():
         result = await manager.api.get_raft_leader(s.ip_addr, group_id)
         return None if uuid.UUID(result).int == 0 else result
@@ -86,7 +86,7 @@ def assert_raft_state_continuity(state_before: dict, state_after: dict, context:
 # Verify that reads and writes to raft tables for strongly consistent tablets
 # are always routed to the expected shards, according to the tablet's
 # assignment.
-async def assert_no_cross_shard_routing(manager: ManagerClient, server: ServerInfo):
+async def assert_no_cross_shard_routing(manager: ScyllaClusterManager, server: ServerInfo):
     log = await manager.server_open_log(server.server_id)
 
     # Check partitioner logs
@@ -113,12 +113,12 @@ async def assert_no_cross_shard_routing(manager: ManagerClient, server: ServerIn
             f"but partitioner computed shard {shard_from_partitioner}."
         )
 
-async def get_table_raft_group_id(manager: ManagerClient, ks: str, table: str):
+async def get_table_raft_group_id(manager: ScyllaClusterManager, ks: str, table: str):
     table_id = await manager.get_table_id(ks, table)
     rows = await manager.get_cql().run_async(f"SELECT raft_group_id FROM system.tablets where table_id = {table_id}")
     return str(rows[0].raft_group_id)
 
-async def test_basic_write_read(manager: ManagerClient, build_mode: str):
+async def test_basic_write_read(manager: ScyllaClusterManager, build_mode: str):
 
     logger.info("Bootstrapping cluster")
     cmdline = DEFAULT_CMDLINE
@@ -330,7 +330,7 @@ async def test_basic_write_read(manager: ManagerClient, build_mode: str):
     # To check that the servers can be stopped gracefully. By default the test runner just kills them.
     await gather_safely(*[manager.server_stop_gracefully(s.server_id) for s in servers])
 
-async def test_multi_shard_write_read(manager: ManagerClient):
+async def test_multi_shard_write_read(manager: ScyllaClusterManager):
     """
     Verify that strongly consistent tables work correctly on non-shard-0.
 
@@ -365,7 +365,7 @@ async def test_multi_shard_write_read(manager: ManagerClient):
 
     await gather_safely(*[manager.server_stop_gracefully(s.server_id) for s in servers])
 
-async def test_sc_multishard_metadata_reads(manager: ManagerClient):
+async def test_sc_multishard_metadata_reads(manager: ScyllaClusterManager):
     """
     Verify that multi-shard reads of raft metadata for strongly-consistent tables work correctly.
     """
@@ -451,7 +451,7 @@ async def test_sc_multishard_metadata_reads(manager: ManagerClient):
 
     await manager.server_stop_gracefully(server.server_id)
 
-async def test_sc_persistence_restart_with_smp_increase(manager: ManagerClient):
+async def test_sc_persistence_restart_with_smp_increase(manager: ScyllaClusterManager):
     """
     Verify that the metadata for strongly-consistent tables
     is preserved after increasing shard count (--smp).
@@ -502,7 +502,7 @@ async def test_sc_persistence_restart_with_smp_increase(manager: ManagerClient):
     await manager.server_stop_gracefully(server.server_id)
 
 
-async def test_sc_persistence_with_compaction(manager: ManagerClient):
+async def test_sc_persistence_with_compaction(manager: ScyllaClusterManager):
     """
     Verify that compaction of system.raft_groups works correctly.
 
@@ -548,7 +548,7 @@ async def test_sc_persistence_with_compaction(manager: ManagerClient):
     await manager.server_stop_gracefully(server.server_id)
 
 
-async def test_sc_persistence_after_crash(manager: ManagerClient):
+async def test_sc_persistence_after_crash(manager: ScyllaClusterManager):
     """
     Verify that metadata for strongly-consistent tables is recovered
     after a non-graceful stop (crash simulation).
@@ -585,7 +585,7 @@ async def test_sc_persistence_after_crash(manager: ManagerClient):
     await manager.server_stop_gracefully(server.server_id)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_no_schema_when_apply_write(manager: ManagerClient):
+async def test_no_schema_when_apply_write(manager: ScyllaClusterManager):
     servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     # We don't want `servers[2]` to be a Raft leader (for both group0 and strong consistency groups),
     # because we want `servers[2]` to receive Raft commands from others.
@@ -629,7 +629,7 @@ async def test_no_schema_when_apply_write(manager: ManagerClient):
         assert row.new_col == 30
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_old_schema_when_apply_write(manager: ManagerClient):
+async def test_old_schema_when_apply_write(manager: ScyllaClusterManager):
     servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     # We don't want `servers[2]` to be a Raft leader (for both group0 and strong consistency groups),
     # because we want `servers[2]` to receive Raft commands from others.
@@ -670,7 +670,7 @@ async def test_old_schema_when_apply_write(manager: ManagerClient):
         assert row.c == 20
         assert row.new_col is None
 
-async def test_reject_user_provided_timestamps(manager: ManagerClient):
+async def test_reject_user_provided_timestamps(manager: ScyllaClusterManager):
     """
     A simple validation test that makes sure that we don't accept
     user-provided timestamps in queries to strongly consistent tables.
@@ -700,7 +700,7 @@ async def test_reject_user_provided_timestamps(manager: ManagerClient):
             #     ...
             #   APPLY BATCH
 
-async def test_forward_cql_prepared_with_bound_values(manager: ManagerClient):
+async def test_forward_cql_prepared_with_bound_values(manager: ScyllaClusterManager):
     """
     When we prepare an statement not on the leader, we should
     still be able to forward it to the leader with bound values.
@@ -742,7 +742,7 @@ async def test_forward_cql_prepared_with_bound_values(manager: ManagerClient):
                 logger.info(f"Trace event: {event.description}")
                 assert "Prepared statement not found on target" not in event.description
 
-async def test_forward_cql_cache_invalidation(manager: ManagerClient):
+async def test_forward_cql_cache_invalidation(manager: ScyllaClusterManager):
     """
     Test that cql forwarding works after invalidation of prepared statement cache on schema changes.
     """
@@ -784,7 +784,7 @@ async def test_forward_cql_cache_invalidation(manager: ManagerClient):
             assert prepared_not_found_after > prepared_not_found_before
 
 @pytest.mark.skip_mode('release', "error injections aren't enabled in release mode")
-async def test_forward_cql_exception_passthrough(manager: ManagerClient):
+async def test_forward_cql_exception_passthrough(manager: ScyllaClusterManager):
     """
     Verify that coordinator exception returned on the target replica is correctly returned to the client.
     """
@@ -851,7 +851,7 @@ async def test_forward_cql_exception_passthrough(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode("release", "error injections aren't enabled in release mode")
-async def test_drop_table_during_insert(manager: ManagerClient):
+async def test_drop_table_during_insert(manager: ScyllaClusterManager):
     """Regression test for SCYLLADB-1450: node crashes when DROP TABLE races with
     an in-flight DML on a strongly-consistent table.
 
@@ -904,7 +904,7 @@ async def test_drop_table_during_insert(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-async def test_timed_out_queries(manager: ManagerClient):
+async def test_timed_out_queries(manager: ScyllaClusterManager):
     """
     A simple test verifying that we don't get stuck for an indefinite amount
     of time while reading from or writing to a strongly consistent table.
@@ -1013,7 +1013,7 @@ async def test_timed_out_queries(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-async def test_queries_while_dropping_table(manager: ManagerClient):
+async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
     """Verify that in-flight reads and writes are promptly aborted when
     a strongly consistent table is dropped.
 
@@ -1122,7 +1122,7 @@ async def test_queries_while_dropping_table(manager: ManagerClient):
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 @pytest.mark.parametrize("target", ["leader", "follower"])
-async def test_queries_when_shutting_down(manager: ManagerClient, target: str):
+async def test_queries_when_shutting_down(manager: ScyllaClusterManager, target: str):
     """
     Verify that Scylla has be stopped despite hanging opeartions
     to strongly consistent tables. The test drops AppendEntries
@@ -1212,7 +1212,7 @@ async def test_queries_when_shutting_down(manager: ManagerClient, target: str):
     reason="Speed up abortion of applier fiber in raft::server_impl::abort",
 )
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-async def test_abort_state_machine_apply_after_dropping_table(manager: ManagerClient):
+async def test_abort_state_machine_apply_after_dropping_table(manager: ScyllaClusterManager):
     """
     This test verifies that ongoing executions of state_machine::apply are
     aborted when their corresponding Raft group is being removed. We test
@@ -1281,7 +1281,7 @@ async def test_abort_state_machine_apply_after_dropping_table(manager: ManagerCl
     reason="Speed up abortion of applier fiber in raft::server_impl::abort",
 )
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-async def test_abort_state_machine_apply_during_shutdown(manager: ManagerClient):
+async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterManager):
     """
     This test verifies that ongoing executions of state_machine::apply are
     aborted when a node is shutting down.
@@ -1353,7 +1353,7 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ManagerClient)
         assert len(rows) == 1
         assert rows[0].v == 13
 
-async def test_leader_cache_eliminates_redirect(manager: ManagerClient):
+async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
     """
     Verify that after a non-replica node learns the leader location via a redirect,
     subsequent write requests from that node go directly to the leader without a redirect.
@@ -1452,7 +1452,7 @@ async def test_leader_cache_eliminates_redirect(manager: ManagerClient):
             assert rows[0].value == 25
 
 @pytest.mark.asyncio
-async def test_read_forwarding(manager: ManagerClient):
+async def test_read_forwarding(manager: ScyllaClusterManager):
     """
     Verify read forwarding behavior for strongly consistent tables:
     - CL=QUORUM reads (linearizable) are forwarded to the raft leader
@@ -1546,7 +1546,7 @@ async def test_read_forwarding(manager: ManagerClient):
                 assert rows[0].c == i * 10, f"Linearizability violation: pk={100 + i}, expected c={i * 10}, got c={rows[0].c}"
 
 
-async def test_write_from_non_replica_after_leader_down(manager: ManagerClient):
+async def test_write_from_non_replica_after_leader_down(manager: ScyllaClusterManager):
     """
     Verify that if a raft group leader goes down, a non-replica node can still
     successfully write by detecting the stale leader cache entry and evicting it.
@@ -1621,7 +1621,7 @@ async def test_write_from_non_replica_after_leader_down(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("batch_mode", ["text", "prepared"], ids=["text", "prepared"])
-async def test_batch(manager: ManagerClient, batch_mode):
+async def test_batch(manager: ScyllaClusterManager, batch_mode):
     """
     Verify strongly consistent BATCH behavior for both paths:
     - textual CQL BATCH,

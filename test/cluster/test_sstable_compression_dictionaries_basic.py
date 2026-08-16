@@ -9,13 +9,14 @@ import pytest
 import itertools
 import time
 import typing
-from test.pylib.manager_client import ManagerClient, ServerInfo
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import read_barrier, ScyllaMetrics
 from cassandra.cluster import ConsistencyLevel, Session as CassandraSession
 
 logger = logging.getLogger(__name__)
 
-async def get_metrics(manager: ManagerClient, servers: list[ServerInfo]) -> list[ScyllaMetrics]:
+async def get_metrics(manager: ScyllaClusterManager, servers: list[ServerInfo]) -> list[ScyllaMetrics]:
     return await asyncio.gather(*[manager.metrics.query(s.ip_addr) for s in servers])
 
 def dict_memory(metrics: list[ScyllaMetrics]) -> list[int]:
@@ -30,14 +31,14 @@ def dict_memory(metrics: list[ScyllaMetrics]) -> list[int]:
             results.append(value)
     return results
 
-async def get_shard_total_memory(manager: ManagerClient, server: ServerInfo) -> int:
+async def get_shard_total_memory(manager: ScyllaClusterManager, server: ServerInfo) -> int:
     """Return the total RAM available per shard"""
     metrics = (await get_metrics(manager, [server]))[0]
     value = metrics.get('scylla_memory_total_memory', {'shard': 0})
     assert value is not None and value > 0
     return int(value)
 
-async def live_update_config(manager: ManagerClient, servers: list[ServerInfo], key: str, value: str):
+async def live_update_config(manager: ScyllaClusterManager, servers: list[ServerInfo], key: str, value: str):
     cql, hosts = await manager.get_ready_cql(servers)
     await asyncio.gather(*[cql.run_async("UPDATE system.config SET value=%s WHERE name=%s", [value, key], host=host) for host in hosts])
 
@@ -50,12 +51,12 @@ async def populate_with_repeated_blob(ks: str, cf: str, blob: bytes, pk_range, c
             for k in pks
         ])
 
-async def get_data_size_for_server(manager: ManagerClient, server: ServerInfo, ks: str, cf: str) -> int:
+async def get_data_size_for_server(manager: ScyllaClusterManager, server: ServerInfo, ks: str, cf: str) -> int:
     sstable_info = await manager.api.get_sstable_info(server.ip_addr, ks, cf)
     sizes = [x['data_size'] for s in sstable_info for x in s['sstables']]
     return sum(sizes)
 
-async def get_total_data_size(manager: ManagerClient, servers: list[ServerInfo], ks: str, cf: str) -> int:
+async def get_total_data_size(manager: ScyllaClusterManager, servers: list[ServerInfo], ks: str, cf: str) -> int:
     return sum(await asyncio.gather(*[get_data_size_for_server(manager, s, ks, cf) for s in servers]))
 
 async def with_retries(test_once: typing.Callable[[], typing.Awaitable], timeout: float, period: float):
@@ -78,7 +79,7 @@ common_debug_cli_options = [
     '--dump-memory-diagnostics-on-alloc-failure-kind=all',
 ]
 
-async def test_retrain_dict(manager: ManagerClient):
+async def test_retrain_dict(manager: ScyllaClusterManager):
     """
     Tests basic functionality of SSTable compression with shared dictionaries.
     - Creates a table.
@@ -202,7 +203,7 @@ async def test_retrain_dict(manager: ManagerClient):
 
     logger.info("Test completed successfully")
 
-async def test_estimate_compression_ratios(manager: ManagerClient):
+async def test_estimate_compression_ratios(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
 
     ks_name = "test"
@@ -294,7 +295,7 @@ async def test_estimate_compression_ratios(manager: ManagerClient):
 
     assert sorted(expected_entries.keys()) == sorted(tuple(r.items()) for r in result)
 
-async def test_dict_memory_limit(manager: ManagerClient):
+async def test_dict_memory_limit(manager: ScyllaClusterManager):
     # Bootstrap cluster and configure server
     logger.info("Bootstrapping cluster")
 
@@ -400,7 +401,7 @@ async def test_dict_memory_limit(manager: ManagerClient):
         await cql.run_async("DROP TABLE test.test")
         await assert_eventually_dict_memory_leq_than(total_threshold=0)
 
-async def test_sstable_compression_dictionaries_enable_writing(manager: ManagerClient):
+async def test_sstable_compression_dictionaries_enable_writing(manager: ScyllaClusterManager):
     """
     Tests basic functionality of the `sstable_compression_dictionaries_enable_writing` config knob.
     When it's disabled, the node should fall back from the new

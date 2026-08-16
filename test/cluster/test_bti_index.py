@@ -12,19 +12,19 @@ import logging
 import time
 from typing import Any, Optional
 from test.pylib.internal_types import ServerInfo
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import ScyllaMetrics
 from test.pylib.util import wait_for_feature
 
 # main logger
 logger = logging.getLogger(__name__)
 
-async def get_metrics(manager: ManagerClient, servers: list[ServerInfo]) -> list[ScyllaMetrics]:
+async def get_metrics(manager: ScyllaClusterManager, servers: list[ServerInfo]) -> list[ScyllaMetrics]:
     return await asyncio.gather(*[manager.metrics.query(s.ip_addr) for s in servers])
 def get_io_read_ops(metrics: list[ScyllaMetrics]) -> int:
     return int(sum([m.get("scylla_io_queue_total_read_ops") for m in metrics]))
 
-async def live_update_config(manager: ManagerClient, servers: list[ServerInfo], key: str, value: Any):
+async def live_update_config(manager: ScyllaClusterManager, servers: list[ServerInfo], key: str, value: Any):
     cql, hosts = await manager.get_ready_cql(servers)
     await asyncio.gather(*[manager.server_update_config(s.server_id, key, value) for s in servers])
     stmt = cql.prepare("UPDATE system.config SET value=? WHERE name=?")
@@ -68,7 +68,7 @@ async def check_output_format(workdirs: list[str], ks: str, cf: str, expected_ve
             f"expected sstables of version {expected_version!r}, got {versions!r}"
         )
 
-async def set_suppressions(manager: ManagerClient, servers: list[ServerInfo],
+async def set_suppressions(manager: ScyllaClusterManager, servers: list[ServerInfo],
                            ms_unsuppressed: bool, mt_unsuppressed: bool):
     suppressed = []
     if not ms_unsuppressed:
@@ -81,7 +81,7 @@ async def set_suppressions(manager: ManagerClient, servers: list[ServerInfo],
         injections = []
     await asyncio.gather(*[manager.server_update_config(s.server_id, "error_injections_at_startup", injections) for s in servers])
 
-async def wait_for_sstable_format_features(manager: ManagerClient, servers: list[ServerInfo],
+async def wait_for_sstable_format_features(manager: ScyllaClusterManager, servers: list[ServerInfo],
                                            ms_unsuppressed: bool, mt_unsuppressed: bool):
     # A cluster feature is enabled asynchronously after the node observes that it
     # is supported (i.e. after a suppression is lifted and the node restarts).
@@ -129,7 +129,7 @@ SSTABLE_FORMAT_MATRIX: list[tuple[Optional[str], bool, bool, str]] = [
 ]
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_bti_index_output_format(manager: ManagerClient) -> None:
+async def test_bti_index_output_format(manager: ScyllaClusterManager) -> None:
     """Checks that the sstable format written by Scylla is consistent with the
     current set of enabled cluster features and the chosen `sstable_format` config.
     """
@@ -188,7 +188,7 @@ async def test_bti_index_output_format(manager: ManagerClient) -> None:
     manager.driver_close()
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_bti_index_read_path(manager: ManagerClient) -> None:
+async def test_bti_index_read_path(manager: ScyllaClusterManager) -> None:
     """Checks that the read path uses the right index components for each sstable
     format (Index.db for ME; Partitions.db/Rows.db for MS and MT), both with and
     without the cache. The output format is also checked for sanity.

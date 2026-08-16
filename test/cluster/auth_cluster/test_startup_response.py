@@ -14,10 +14,11 @@ from unittest import mock
 from cassandra.cluster import Cluster, DefaultConnection, NoHostAvailable
 from cassandra import connection
 from cassandra.auth import PlainTextAuthProvider
-from test.pylib.manager_client import ManagerClient, safe_driver_shutdown
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.driver_utils import safe_driver_shutdown
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
-async def test_startup_no_auth_response(manager: ManagerClient, build_mode):
+async def test_startup_no_auth_response(manager: ScyllaClusterManager, build_mode):
     """
     Test behavior when client hangs on startup auth response.
     This is stressing uninitialized_connections_semaphore_cpu_concurrency

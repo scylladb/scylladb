@@ -27,7 +27,7 @@ from test.cluster.random_failures.error_injections import ERROR_INJECTIONS, ERRO
 
 if TYPE_CHECKING:
     from test.pylib.random_tables import RandomTables
-    from test.pylib.manager_client import ManagerClient
+    from test.pylib.scylla_cluster_manager import ScyllaClusterManager
     from test.cluster.random_failures.cluster_events import ClusterEventType
 
 
@@ -62,7 +62,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
 
 @pytest.fixture
-async def four_nodes_cluster(manager: ManagerClient) -> None:
+async def four_nodes_cluster(manager: ScyllaClusterManager) -> None:
     LOGGER.info("Booting initial 4-node cluster.")
 
     servers = await manager.servers_add(4, property_file=[
@@ -88,7 +88,7 @@ async def four_nodes_cluster(manager: ManagerClient) -> None:
 
 @pytest.mark.usefixtures("four_nodes_cluster")
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_random_failures(manager: ManagerClient,
+async def test_random_failures(manager: ScyllaClusterManager,
                                random_tables: RandomTables,
                                error_injection: str,
                                cluster_event: ClusterEventType) -> None:

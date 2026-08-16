@@ -16,7 +16,7 @@ from test.cluster.conftest import cluster_con
 from test.cluster.util import new_test_keyspace, new_test_table
 from test.pylib.async_cql import _wrap_future
 from test.pylib.internal_types import ServerInfo
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ async def assert_binding_by_name_works_across_nodes(prepare_on: ServerInfo, exec
         cluster.shutdown()
 
 
-async def test_in_bind_variable_name_mixed_config(manager: ManagerClient):
+async def test_in_bind_variable_name_mixed_config(manager: ScyllaClusterManager):
     """
     cql_in_bind_variable_name_uses_uppercase_operator decides whether the
     synthetic bind variable of an IN restriction is reported as "IN(c)" or
@@ -87,7 +87,7 @@ async def test_in_bind_variable_name_mixed_config(manager: ManagerClient):
             await assert_binding_by_name_works_across_nodes(uppercase_server, lowercase_server, query, 'IN(c)', 1)
 
 
-async def test_in_bind_variable_name_of_a_cached_statement(manager: ManagerClient):
+async def test_in_bind_variable_name_of_a_cached_statement(manager: ScyllaClusterManager):
     """
     The name is picked when the statement is prepared, and the item is part of
     the prepared statement cache key. A statement that is already cached keeps

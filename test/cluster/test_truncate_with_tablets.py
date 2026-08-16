@@ -7,7 +7,7 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from cassandra.protocol import InvalidRequest
 from cassandra.cluster import TruncateError
 from cassandra.policies import FallthroughRetryPolicy
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import get_topology_coordinator, new_test_keyspace, FeatureConfig, feature_configs, \
     FeatureConfigurations, count_rows
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_count
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_migration(manager: ManagerClient, feature_config: FeatureConfig):
+async def test_truncate_while_migration(manager: ScyllaClusterManager, feature_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
@@ -66,7 +66,7 @@ async def test_truncate_while_migration(manager: ManagerClient, feature_config: 
                                 query_template="SELECT COUNT(*) FROM {ks}.{table}", ks=ks, table='test', keys=keys, partition_key='pk') == 0
 
 
-async def get_raft_leader_and_log(manager: ManagerClient, servers):
+async def get_raft_leader_and_log(manager: ScyllaClusterManager, servers):
     raft_leader_host_id = await get_topology_coordinator(manager)
     for s in servers:
         if raft_leader_host_id == await manager.get_host_id(s.server_id):
@@ -77,7 +77,7 @@ async def get_raft_leader_and_log(manager: ManagerClient, servers):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_with_concurrent_drop(manager: ManagerClient):
+async def test_truncate_with_concurrent_drop(manager: ScyllaClusterManager):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
@@ -131,7 +131,7 @@ async def test_truncate_with_concurrent_drop(manager: ManagerClient):
                                                            FeatureConfigurations.STRONG_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_STRONG_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_node_restart(manager: ManagerClient, feature_config: FeatureConfig):
+async def test_truncate_while_node_restart(manager: ScyllaClusterManager, feature_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled' }
@@ -181,7 +181,7 @@ async def test_truncate_while_node_restart(manager: ManagerClient, feature_confi
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_with_coordinator_crash(manager: ManagerClient):
+async def test_truncate_with_coordinator_crash(manager: ScyllaClusterManager):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled' }
@@ -228,7 +228,7 @@ async def test_truncate_with_coordinator_crash(manager: ManagerClient):
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_truncate_already_waiting(manager: ManagerClient, feature_config: FeatureConfig):
+async def test_truncate_while_truncate_already_waiting(manager: ScyllaClusterManager, feature_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
@@ -322,7 +322,7 @@ async def test_replay_position_check_during_truncate(manager, feature_config: Fe
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_parallel_truncate(manager: ManagerClient, feature_config: FeatureConfig):
+async def test_parallel_truncate(manager: ScyllaClusterManager, feature_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
     cfg = feature_config.get_cluster_cfg(
@@ -370,7 +370,7 @@ async def test_parallel_truncate(manager: ManagerClient, feature_config: Feature
                                 query_template="SELECT COUNT(*) FROM {ks}.{table}", ks=ks, table='test1', keys=keys, partition_key='pk') == 0
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_split_emitted_during_truncate(manager: ManagerClient):
+async def test_split_emitted_during_truncate(manager: ScyllaClusterManager):
     """Tests that truncation handles new compaction groups introduced by tablet
     split after compaction was already disabled on existing groups.
 

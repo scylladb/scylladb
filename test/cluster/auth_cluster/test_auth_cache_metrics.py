@@ -6,13 +6,13 @@
 import pytest
 import logging
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 from cassandra.auth import PlainTextAuthProvider
 
 logger = logging.getLogger(__name__)
 
-async def test_auth_cache_metrics(manager: ManagerClient):
+async def test_auth_cache_metrics(manager: ScyllaClusterManager):
     """
     Verify that auth cache metrics correctly track roles and permissions
     """

@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace, reconnect_driver
 from cassandra.protocol import InvalidRequest
 
@@ -16,7 +16,7 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
-async def test_add_and_drop_column_with_cdc(manager: ManagerClient):
+async def test_add_and_drop_column_with_cdc(manager: ScyllaClusterManager):
     """ Test writing to a table with CDC enabled while adding and dropping a column.
         In particular we are interested at the behavior when the schemas of the base table
         and the CDC log may not be in sync, and we write a value to a column that exists
@@ -73,7 +73,7 @@ async def test_add_and_drop_column_with_cdc(manager: ManagerClient):
         cdc_rows = await cql.run_async(f"SELECT COUNT(*) FROM {ks}.test_scylla_cdc_log")
         assert base_rows[0].count == cdc_rows[0].count, f"Base table rows: {base_rows[0].count}, CDC log rows: {cdc_rows[0].count}"
 
-async def test_cdc_compatible_schema(manager: ManagerClient):
+async def test_cdc_compatible_schema(manager: ScyllaClusterManager):
     """
     Basic test that we can write to a table with CDC enabled when the schema of
     the base table is altered, or when the schema is loaded after node restart.
@@ -108,7 +108,7 @@ async def test_cdc_compatible_schema(manager: ManagerClient):
         matches = await log.grep("has no CDC schema set")
         assert len(matches) == 0, "Found unexpected log messages indicating missing CDC schema"
 
-async def test_recreate_column_too_soon(manager: ManagerClient):
+async def test_recreate_column_too_soon(manager: ScyllaClusterManager):
     """ Test that recreating a dropped column too soon fails with an appropriate error.
 
         When dropping a column from a CDC log table, the drop timestamp is set
@@ -128,7 +128,7 @@ async def test_recreate_column_too_soon(manager: ManagerClient):
         with pytest.raises(Exception, match="a column with the same name was dropped too recently"):
             await cql.run_async(f"ALTER TABLE {ks}.test ADD dropped_col int")
 
-async def test_concurrent_writes_and_drop_column_with_cdc_preimage(manager: ManagerClient):
+async def test_concurrent_writes_and_drop_column_with_cdc_preimage(manager: ScyllaClusterManager):
     """ Test concurrent writes and column drop with CDC preimage enabled.
 
         This test reproduces an issue where writes concurrent with column drop can cause

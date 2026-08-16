@@ -131,7 +131,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 PHASE_REPORT_KEY = pytest.StashKey[dict[str, pytest.CollectReport]]()
 
 # Set by the `manager` fixture so the log collector in pytest_runtest_makereport
-# can gather manager-owned logs: {"client": ManagerClient, "logs": {name: path}}.
+# can gather manager-owned logs: {"manager": ScyllaClusterManager, "logs": {name: path}}.
 MANAGER_LOGS_KEY = pytest.StashKey[dict[str, object]]()
 
 FAILED_TEST_DIR = "failed_test"
@@ -649,9 +649,9 @@ def pytest_runtest_makereport(item, call):
                             shutil.copyfile(server_log, failed_test_dir_path / pathlib.Path(server_log).name)
 
                     if manager_logs is not None:
-                        # Manager owns the servers; gather via ManagerClient (sync-callable
-                        # since ManagerClient is universalasync-wrapped).
-                        manager_logs["client"].gather_related_logs(failed_test_dir_path, manager_logs["logs"])
+                        # Manager owns the servers; gather via ScyllaClusterManager (sync-callable
+                        # since ScyllaClusterManager is universalasync-wrapped).
+                        manager_logs["manager"].gather_related_logs(failed_test_dir_path, manager_logs["logs"])
 
                     record_failed_test_artifacts(
                         config=item.config,

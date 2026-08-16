@@ -7,7 +7,7 @@
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.scylla_server import ScyllaServer
 from test.pylib.internal_types import HostID
@@ -66,7 +66,7 @@ def select_non_coordinator_replica_pair(base_by_rack, view_by_rack, coord_serv):
 
 @pytest.mark.tier2
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient, scale_timeout: Callable[[int | float], int | float]):
+async def test_tablet_mv_replica_pairing_during_replace(manager: ScyllaClusterManager, scale_timeout: Callable[[int | float], int | float]):
     """
     Verifies that view replica pairing is stable in the case of node replace.
     After replace, the node is in left state, but still present in the replica set.

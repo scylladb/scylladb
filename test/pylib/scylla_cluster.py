@@ -101,7 +101,7 @@ class ScyllaCluster:
         self.keyspace_count = 0
         self.api = ScyllaRESTAPIClient()
         self.stop_lock = asyncio.Lock()
-        # Cleanups a test registered through ManagerClient.add_teardown_callback(),
+        # Cleanups a test registered through ScyllaClusterManager.add_teardown_callback(),
         # as (callback, name) pairs.  They are fired by run_teardown_callbacks()
         # when this cluster is recycled.
         self.teardown_callbacks: List[Tuple[Callable[[], Awaitable[None]], str]] = []

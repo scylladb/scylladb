@@ -15,7 +15,7 @@ from test.cluster.util import (
     get_topology_coordinator,
     wait_for_token_ring_and_group0_consistency,
 )
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for_first_completed
 
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_decommission_kill_then_replace(manager: ManagerClient) -> None:
+async def test_decommission_kill_then_replace(manager: ScyllaClusterManager) -> None:
     """
     Boots a 3-node cluster, pauses the topology coordinator before processing backlog,
     starts decommissioning a non-coordinator node, kills it before decommission completes,

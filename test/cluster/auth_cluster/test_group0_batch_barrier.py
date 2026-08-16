@@ -7,7 +7,7 @@
 import time
 
 import pytest
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error
 from test.pylib.scylla_server import ScyllaVersionDescription
 from test.pylib.util import unique_name, wait_for
@@ -15,7 +15,7 @@ from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injection is disabled in release mode')
-async def test_create_role_visible_on_all_nodes(manager: ManagerClient) -> None:
+async def test_create_role_visible_on_all_nodes(manager: ScyllaClusterManager) -> None:
     """After CREATE ROLE returns, the role should be immediately visible
     on every node thanks to the group0 read barrier broadcast.
 
@@ -50,8 +50,8 @@ async def test_create_role_visible_on_all_nodes(manager: ManagerClient) -> None:
         )
 
 
-async def test_create_role_mixed_cluster(manager: ManagerClient,
-                                                            scylla_2025_1: ScyllaVersionDescription) -> None:
+async def test_create_role_mixed_cluster(manager: ScyllaClusterManager,
+                                         scylla_2025_1: ScyllaVersionDescription) -> None:
     """Variant of test_create_role_visible_on_all_nodes that runs a mixed
     cluster: one new node (master) and two nodes with scylla_2025_1.
     CREATE ROLE is executed on the new node, then we poll LIST ROLES

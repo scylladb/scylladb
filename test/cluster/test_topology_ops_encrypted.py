@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import check_token_ring_and_group0_consistency, reconnect_driver, \
         wait_for_token_ring_and_group0_consistency
@@ -19,7 +19,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 @pytest.mark.parametrize("tablets_enabled", [True, False])
-async def test_topology_ops_encrypted(request, manager: ManagerClient, tablets_enabled: bool, tmp_path):
+async def test_topology_ops_encrypted(request, manager: ScyllaClusterManager, tablets_enabled: bool, tmp_path):
     """Test basic topology operations using the topology coordinator. But encrypted."""
     d = tmp_path / "keys"
     d.mkdir()

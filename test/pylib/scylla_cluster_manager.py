@@ -1172,7 +1172,7 @@ class ScyllaClusterManager:
                 )
         except Exception as exc:
             raise RuntimeError("Failed to add server") from exc
-        self.logger.debug("ManagerClient added %s", s_info)
+        self.logger.debug("ScyllaClusterManager added %s", s_info)
         if expected_error is None and connect_driver:
             if self.cql:
                 self._driver_update()
@@ -1230,7 +1230,7 @@ class ScyllaClusterManager:
 
         assert len(s_infos) == servers_num, f"servers_add requested adding {servers_num} servers but " \
                                     f"got server data about {len(s_infos)} servers: {s_infos}"
-        self.logger.debug("ManagerClient added %s", s_infos)
+        self.logger.debug("ScyllaClusterManager added %s", s_infos)
         if expected_error is None:
             if self.cql:
                 self._driver_update()

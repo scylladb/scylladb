@@ -10,14 +10,15 @@ from collections import defaultdict
 from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.protocol import ConfigurationException
 
-from test.pylib.manager_client import ManagerClient, ServerUpState
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.internal_types import ServerUpState
 from test.cluster.conftest import cluster_con
 from test.cluster.util import create_new_test_keyspace, get_replication, get_replica_count
 
 
 @pytest.mark.parametrize("tablets_enabled", [True, False])
 @pytest.mark.parametrize("rf_rack_valid_keyspaces", [False, True])
-async def test_create_keyspace_with_default_replication_factor(manager: ManagerClient, tablets_enabled: bool, rf_rack_valid_keyspaces: bool, build_mode):
+async def test_create_keyspace_with_default_replication_factor(manager: ScyllaClusterManager, tablets_enabled: bool, rf_rack_valid_keyspaces: bool, build_mode):
     def get_pf(dc: str, rack: str) -> dict:
         return {'dc': dc, 'rack': rack}
 

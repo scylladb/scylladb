@@ -5,7 +5,7 @@
 #
 from pathlib import Path
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.random_tables import RandomTables, Column, IntType, CounterType
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for
 from cassandra import WriteFailure, ConsistencyLevel
@@ -33,13 +33,13 @@ def host_by_server(hosts: list[Host], srv: ServerInfo):
     raise ValueError(f"can't find host for server {srv}")
 
 
-async def set_version(manager: ManagerClient, host: Host, new_version: int):
+async def set_version(manager: ScyllaClusterManager, host: Host, new_version: int):
     await manager.cql.run_async("update system.topology set version=%s where key = 'topology'",
                                 parameters=[new_version],
                                 host=host)
 
 
-async def set_fence_version(manager: ManagerClient, host: Host, new_version: int):
+async def set_fence_version(manager: ScyllaClusterManager, host: Host, new_version: int):
     await manager.cql.run_async("update system.topology set fence_version=%s where key = 'topology'",
                                 parameters=[new_version],
                                 host=host)
@@ -58,7 +58,7 @@ def all_hints_metrics(metrics: ScyllaMetrics) -> list[str]:
 
 
 @pytest.mark.parametrize("tablets_enabled", [True, False])
-async def test_fence_writes(request, manager: ManagerClient, tablets_enabled: bool):
+async def test_fence_writes(request, manager: ScyllaClusterManager, tablets_enabled: bool):
     cfg = {'tablets_mode_for_new_keyspaces' : 'enabled' if tablets_enabled else 'disabled'}
 
     logger.info("Bootstrapping first two nodes")
@@ -125,7 +125,7 @@ async def test_fence_writes(request, manager: ManagerClient, tablets_enabled: bo
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_fence_hints(request, manager: ManagerClient):
+async def test_fence_hints(request, manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster with three nodes")
     s0 = await manager.server_add(
         config={'error_injections_at_startup': ['decrease_hints_flush_period']},
@@ -215,7 +215,7 @@ async def test_fence_hints(request, manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_fence_lwt_during_bootstap(manager: ManagerClient):
+async def test_fence_lwt_during_bootstap(manager: ScyllaClusterManager):
     """
     Scenario:
     1. Three nodes s0, s1 and s2 in a cluster, s0 is a topology coordinator, test table with rf=3
@@ -351,7 +351,7 @@ async def test_fence_lwt_during_bootstap(manager: ManagerClient):
 
 @pytest.mark.skip_mode(mode='release', reason='dev mode is enough for this test')
 @pytest.mark.skip_mode(mode='debug', reason='dev mode is enough for this test')
-async def test_lwt_fencing_upgrade(manager: ManagerClient, scylla_2025_1: ScyllaVersionDescription, scylla_binary: Path):
+async def test_lwt_fencing_upgrade(manager: ScyllaClusterManager, scylla_2025_1: ScyllaVersionDescription, scylla_binary: Path):
     """
     The test runs some LWT workload on a vnodes-based table, rolling-restarts nodes
     with a new Scylla version and checks that LWTs complete as expected. Downgrading

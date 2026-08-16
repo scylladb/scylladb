@@ -13,7 +13,7 @@ from cassandra import Unauthorized
 
 from test.cluster.lwt.lwt_common import wait_for_tablet_count
 from test.cluster.util import new_test_keyspace, unique_name, reconnect_driver
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.internal_types import ServerInfo
 from test.pylib.tablets import get_all_tablet_replicas
@@ -44,7 +44,7 @@ async def inject_error_one_shot_on(manager, error_name, servers):
     await asyncio.gather(*errs)
 
 
-async def test_lwt(manager: ManagerClient):
+async def test_lwt(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'paxos=trace'
@@ -106,7 +106,7 @@ async def test_lwt(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_lwt_during_migration(manager: ManagerClient):
+async def test_lwt_during_migration(manager: ScyllaClusterManager):
     # Scenario:
     # 1. A cluster with three nodes, a table with one tablet and RF=2
     # 2. Run the tablet migration and suspend it during streaming
@@ -206,7 +206,7 @@ async def test_lwt_during_migration(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient):
+async def test_lwt_state_is_preserved_on_tablet_migration(manager: ScyllaClusterManager):
     # Scenario:
     # 1. Cells c1 and c2 of some partition are not set.
     # 2. An LWT on {n1, n2} writes 1 to c1, stores accepts on {n1, n2} and learn on n1.
@@ -297,7 +297,7 @@ async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_no_lwt_with_tablets_feature(manager: ManagerClient):
+async def test_no_lwt_with_tablets_feature(manager: ScyllaClusterManager):
     config = {
         'error_injections_at_startup': [
             {
@@ -327,7 +327,7 @@ async def test_no_lwt_with_tablets_feature(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ManagerClient):
+async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ScyllaClusterManager):
     # Scenario:
     # 1. A cluster with 3 nodes, rf=3.
     # 2. A successful LWT(c := 1) with cl_learn = 1 comes, stores accepts on n1 and n2, learn -- only on n1.
@@ -411,7 +411,7 @@ async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_lwt_concurrent_base_table_recreation(manager: ManagerClient):
+async def test_lwt_concurrent_base_table_recreation(manager: ScyllaClusterManager):
     # The test checks that the node doesn't crash when the base table is recreated
     # during LWT execution. A no_such_column_family exception is thrown, and the LWT
     # fails as a result.
@@ -454,7 +454,7 @@ async def test_lwt_concurrent_base_table_recreation(manager: ManagerClient):
 
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_lwt_timeout_while_creating_paxos_state_table(manager: ManagerClient, build_mode):
+async def test_lwt_timeout_while_creating_paxos_state_table(manager: ScyllaClusterManager, build_mode):
     timeout = 10000 if build_mode == 'debug' else 1000
     config = {
         'write_request_timeout_in_ms': timeout,
@@ -488,7 +488,7 @@ async def test_lwt_timeout_while_creating_paxos_state_table(manager: ManagerClie
                              manager.server_start(servers[2].server_id))
 
 
-async def test_paxos_state_table_permissions(manager: ManagerClient):
+async def test_paxos_state_table_permissions(manager: ScyllaClusterManager):
     # This test checks permission handling for paxos state tables:
     #   * Only a superuser is allowed to access a paxos state table
     #   * Even a superuser is not allowed to run ALTER or DROP on paxos state tables
@@ -581,7 +581,7 @@ async def test_paxos_state_table_permissions(manager: ManagerClient):
         cql = manager.get_cql()
 
 
-async def test_lwt_coordinator_shard(manager: ManagerClient):
+async def test_lwt_coordinator_shard(manager: ScyllaClusterManager):
     # The test checks that an LWT coordinator runs on a replica shard, and not on a 'default' (zero) shard.
     # Scenario:
     # 1. Start a cluster with one node with --smp 2
@@ -635,7 +635,7 @@ async def test_lwt_coordinator_shard(manager: ManagerClient):
 
 @pytest.mark.skip_mode(mode='debug', reason='dev is enought: the test checks non-critical functionality')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_error_message_for_timeout_due_to_write_uncertainty(manager: ManagerClient):
+async def test_error_message_for_timeout_due_to_write_uncertainty(manager: ScyllaClusterManager):
     # LWT can sometimes return WriteTimeout when it is uncertain whether the transaction
     # was applied. In this case, the user should retry the transaction.
     #
@@ -695,7 +695,7 @@ async def test_error_message_for_timeout_due_to_write_uncertainty(manager: Manag
 
 @pytest.mark.skip_mode(mode='debug', reason='dev is enought')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_no_uncertainty_for_reads(manager: ManagerClient):
+async def test_no_uncertainty_for_reads(manager: ScyllaClusterManager):
     # This test verifies that LWT reads do not produce 'uncertainty' timeouts.
     #
     # The scenario is similar to the write-uncertainty test:
@@ -755,7 +755,7 @@ async def test_no_uncertainty_for_reads(manager: ManagerClient):
         assert row.c == 2
 
 
-async def test_lwts_for_special_tables(manager: ManagerClient):
+async def test_lwts_for_special_tables(manager: ScyllaClusterManager):
     """
     SELECT commands with SERIAL consistency level are historically allowed for vnode-based views,
     even though they don't provide linearizability guarantees. We prohibit LWTs for tablet-based views,
@@ -782,7 +782,7 @@ async def test_lwts_for_special_tables(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_lwt_shutdown(manager: ManagerClient):
+async def test_lwt_shutdown(manager: ScyllaClusterManager):
     """
     This is a regression test for #26355:
     * Start a cluster with two nodes (s0, s1) and a tablet-based table.
@@ -861,7 +861,7 @@ async def test_lwt_shutdown(manager: ManagerClient):
 
 @pytest.mark.skip_mode(mode='debug', reason='dev is enough')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablets_merge_waits_for_lwt(manager: ManagerClient, scale_timeout):
+async def test_tablets_merge_waits_for_lwt(manager: ScyllaClusterManager, scale_timeout):
     """
     This is a regression test for #26437 and SCYLLADB-1524:
     1. A cluster with one node, a table with rf=1 and two tablets on the same shard.
@@ -956,7 +956,7 @@ async def test_tablets_merge_waits_for_lwt(manager: ManagerClient, scale_timeout
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_column_mapping_migrated_with_tablet(manager: ManagerClient):
+async def test_column_mapping_migrated_with_tablet(manager: ScyllaClusterManager):
     """Reproducer for CUSTOMER-509: after tablet migration, the destination node
     must hold column mappings for schema versions referenced in the migrated
     $paxos state.

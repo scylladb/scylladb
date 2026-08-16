@@ -4,12 +4,12 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 import pytest
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.scylla_cluster import ReplaceConfig
 
 
 @pytest.mark.parametrize("join_ring", [True, False])
-async def test_replace_with_encryption(manager: ManagerClient, join_ring):
+async def test_replace_with_encryption(manager: ScyllaClusterManager, join_ring):
     """Test that a node can be replaced if inter-dc encryption is enabled.
        The test creates 6 node cluster with two DCs and replaces one node in
        each DC. The test is parametrized to confirm behavior in zero token node cases as well."""

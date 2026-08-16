@@ -18,7 +18,7 @@ from test.cluster.lwt.lwt_common import (
     DEFAULT_NUM_KEYS,
 )
 from test.cluster.util import new_test_keyspace
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.tablets import get_tablet_replicas
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ PHASE_MIGRATING = 'migrating'
 
 
 async def tablet_migration_ops(stop_event: asyncio.Event,
-        manager: ManagerClient, servers, tester, num_ops: int, pause_range=(0.1, 0.5)
+        manager: ScyllaClusterManager, servers, tester, num_ops: int, pause_range=(0.1, 0.5)
         ):
 
     """
@@ -98,7 +98,7 @@ async def tablet_migration_ops(stop_event: asyncio.Event,
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='debug mode is too slow for this test')
-async def test_multi_column_lwt_during_migration(manager: ManagerClient, scale_timeout):
+async def test_multi_column_lwt_during_migration(manager: ScyllaClusterManager, scale_timeout):
     """
     Test scenario:
       1. Start N servers with tablets enabled

@@ -12,21 +12,21 @@ import pytest
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.util import get_coordinator_host, new_test_keyspace, ensure_group0_leader_on
 from test.pylib.internal_types import ServerInfo, IPAddress
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.tablets import get_replica_count_by_host
 from test.pylib.util import gather_safely, wait_for
 
 logger = logging.getLogger(__name__)
 
 
-async def count_requests_queued(manager: ManagerClient, coord_srv: ServerInfo, request_type: str) -> int:
+async def count_requests_queued(manager: ScyllaClusterManager, coord_srv: ServerInfo, request_type: str) -> int:
     tasks = await manager.api.get_tasks(coord_srv.ip_addr, 'node_ops')
     logger.info(f'tasks: {tasks}')
     return len(list(filter(lambda t: t['type'] == request_type, tasks)))
 
 
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
-async def test_tablets_are_drained_in_parallel(manager: ManagerClient):
+async def test_tablets_are_drained_in_parallel(manager: ScyllaClusterManager):
     """
     Verifies that when we start decommissioning two nodes at the same time,
     migrations draining tablets from both nodes are interleaved, indicating that
@@ -85,7 +85,7 @@ async def test_tablets_are_drained_in_parallel(manager: ManagerClient):
 
 @pytest.mark.parametrize("same_rack", [False, True])
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
-async def test_tablets_are_rebuilt_in_parallel(manager: ManagerClient, same_rack):
+async def test_tablets_are_rebuilt_in_parallel(manager: ScyllaClusterManager, same_rack):
     """
     Verifies that when we start removing two nodes at the same time,
     tablet replica rebuilds for both nodes are interleaved, indicating that
@@ -159,7 +159,7 @@ async def test_tablets_are_rebuilt_in_parallel(manager: ManagerClient, same_rack
 
 
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
-async def test_decommission_can_be_canceled(manager: ManagerClient):
+async def test_decommission_can_be_canceled(manager: ScyllaClusterManager):
     """
     Verifies that decommission can be canceled when it's still in the phase of migrating tablets.
     """
@@ -235,7 +235,7 @@ async def test_decommission_can_be_canceled(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
-async def test_decommission_is_rejected_when_another_one_is_still_pending(manager: ManagerClient):
+async def test_decommission_is_rejected_when_another_one_is_still_pending(manager: ScyllaClusterManager):
     """
     Verify that when there is pending decommission, the next one is already validated
     taking into account that the node will be removed by the first one.
@@ -279,7 +279,7 @@ async def test_decommission_is_rejected_when_another_one_is_still_pending(manage
 
 
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
-async def test_remove_is_canceled_if_there_is_node_down(manager: ManagerClient):
+async def test_remove_is_canceled_if_there_is_node_down(manager: ScyllaClusterManager):
     """
     Verifies that request is canceled if the vnode part would fail due to node being down.
     Preserves the old behavior of serial decommission, where topology coordinator
@@ -331,7 +331,7 @@ async def test_remove_is_canceled_if_there_is_node_down(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
-async def test_decommission_start_time_is_stable(manager: ManagerClient):
+async def test_decommission_start_time_is_stable(manager: ScyllaClusterManager):
     """
     Verifies that task's start time is constant across the whole operation.
     """
@@ -377,7 +377,7 @@ async def test_decommission_start_time_is_stable(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
-async def test_decommission_can_not_be_canceled_once_running(manager: ManagerClient):
+async def test_decommission_can_not_be_canceled_once_running(manager: ScyllaClusterManager):
     """
     Verifies that attempt to abort decommission is rejected if it's already in the vnode transition phase.
     """
@@ -422,7 +422,7 @@ async def test_decommission_can_not_be_canceled_once_running(manager: ManagerCli
 
 
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
-async def test_decommission_fails_if_capacity_is_gone_during_draining(manager: ManagerClient):
+async def test_decommission_fails_if_capacity_is_gone_during_draining(manager: ScyllaClusterManager):
     """
     Verifies the scenario of drain not being able to progress because there is no viable
     replica to take over the tablets being drained. Decommission should fail in this case
@@ -467,7 +467,7 @@ async def test_decommission_fails_if_capacity_is_gone_during_draining(manager: M
 
 
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
-async def test_node_lost_during_decommission_drain(manager: ManagerClient):
+async def test_node_lost_during_decommission_drain(manager: ScyllaClusterManager):
     """
     Verifies the scenario when decommissioned node is lost and marked as excluded during draining.
     In such case, drain will complete and do the rebuilds. But decommission should fail

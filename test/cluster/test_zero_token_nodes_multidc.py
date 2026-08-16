@@ -9,7 +9,7 @@ import pytest
 from cassandra import ConsistencyLevel
 from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.query import SimpleStatement
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 from test.pylib.util import unique_name
 from test.cluster.conftest import cluster_con
@@ -18,7 +18,7 @@ from test.cluster.util import create_new_test_keyspace
 
 @pytest.mark.parametrize('zero_token_nodes', [1, 2])
 @pytest.mark.parametrize('rf_rack_valid_keyspaces', [False, True])
-async def test_zero_token_nodes_multidc_basic(manager: ManagerClient, zero_token_nodes: int, rf_rack_valid_keyspaces: bool):
+async def test_zero_token_nodes_multidc_basic(manager: ScyllaClusterManager, zero_token_nodes: int, rf_rack_valid_keyspaces: bool):
     """
     Test the basic functionality of a DC with zero-token nodes:
     - adding zero-token nodes to a new DC succeeds

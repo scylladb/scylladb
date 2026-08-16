@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 import pytest
 
 from test.pylib.connect_options import add_s3_options
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.object_storage import (
     format_tuples,
     keyspace_options,
@@ -29,7 +29,7 @@ def pytest_addoption(parser):
 
 
 @asynccontextmanager
-async def make_object_storage(kind, pytestconfig, tmpdir, log_dir, test_name, manager: ManagerClient):
+async def make_object_storage(kind, pytestconfig, tmpdir, log_dir, test_name, manager: ScyllaClusterManager):
     """Start an object-storage backend for a test.
 
     `tmpdir` holds the server's scratch data (per-test, discarded by CI), while
@@ -75,18 +75,18 @@ async def make_object_storage(kind, pytestconfig, tmpdir, log_dir, test_name, ma
 
 
 @pytest.fixture(scope="function", params=['s3', 'gs'])
-async def object_storage(request, pytestconfig, tmpdir, suite_log_dir, manager: ManagerClient):
+async def object_storage(request, pytestconfig, tmpdir, suite_log_dir, manager: ScyllaClusterManager):
     async with make_object_storage(request.param, pytestconfig, tmpdir, suite_log_dir, request.node.name, manager) as server:
         yield server
 
 
 @pytest.fixture(scope="function")
-async def s3_storage(request, pytestconfig, tmpdir, suite_log_dir, manager: ManagerClient):
+async def s3_storage(request, pytestconfig, tmpdir, suite_log_dir, manager: ScyllaClusterManager):
     async with make_object_storage('s3', pytestconfig, tmpdir, suite_log_dir, request.node.name, manager) as server:
         yield server
 
 
 @pytest.fixture(scope="function")
-async def gs_storage(request, pytestconfig, tmpdir, suite_log_dir, manager: ManagerClient):
+async def gs_storage(request, pytestconfig, tmpdir, suite_log_dir, manager: ScyllaClusterManager):
     async with make_object_storage('gs', pytestconfig, tmpdir, suite_log_dir, request.node.name, manager) as server:
         yield server

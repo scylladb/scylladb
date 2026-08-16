@@ -8,13 +8,13 @@ import asyncio
 import logging
 import pytest
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 logger = logging.getLogger(__name__)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_snapshot_transfer_before_enable_sm_causes_no_such_keyspace(manager: ManagerClient) -> None:
+async def test_snapshot_transfer_before_enable_sm_causes_no_such_keyspace(manager: ScyllaClusterManager) -> None:
     """Verify that a joining node handles schema correctly when transfer_snapshot()
     runs before enable_in_memory_state_machine().
 

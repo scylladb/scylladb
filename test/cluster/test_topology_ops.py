@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import check_token_ring_and_group0_consistency, reconnect_driver, \
         check_node_log_for_failed_mutations, start_writes, wait_for_token_ring_and_group0_consistency
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.parametrize("tablets_enabled", [True, False])
-async def test_topology_ops(request, manager: ManagerClient, tablets_enabled: bool):
+async def test_topology_ops(request, manager: ScyllaClusterManager, tablets_enabled: bool):
     """Test basic topology operations using the topology coordinator."""
     rf_rack_cfg = {'rf_rack_valid_keyspaces': False}
     cfg = {'tablets_mode_for_new_keyspaces': 'enabled' if tablets_enabled else 'disabled'} | rf_rack_cfg

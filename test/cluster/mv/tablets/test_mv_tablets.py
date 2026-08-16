@@ -6,7 +6,7 @@
 
 # Tests for interaction of materialized views with *tablets*
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import read_barrier
 from test.pylib.tablets import get_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for_cql_and_get_hosts
@@ -60,7 +60,7 @@ async def assert_one_tablet(cql, keyspace_name, table_or_view_name):
     assert len(rows) == 1
 
 
-async def test_tablet_mv_create(manager: ManagerClient):
+async def test_tablet_mv_create(manager: ScyllaClusterManager):
     """A basic test for creating a materialized view on a table stored
        with tablets on a one-node cluster. We just create the view and
        delete it - that's it, we don't read or write the table.
@@ -74,7 +74,7 @@ async def test_tablet_mv_create(manager: ManagerClient):
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk)")
 
 
-async def test_tablet_mv_simple(manager: ManagerClient):
+async def test_tablet_mv_simple(manager: ScyllaClusterManager):
     """A simple test for reading and writing a materialized view on a table
        stored with tablets on a one-node cluster. Because it's a one-node
        cluster, we don't don't need any sophisticated mappings or pairings
@@ -92,7 +92,7 @@ async def test_tablet_mv_simple(manager: ManagerClient):
         # We used SYNCHRONOUS_UPDATES=TRUE, so the view should be updated:
         assert [(3,2)] == list(await cql.run_async(f"SELECT * FROM {ks}.tv WHERE c=3"))
 
-async def test_tablet_mv_simple_6node(manager: ManagerClient):
+async def test_tablet_mv_simple_6node(manager: ScyllaClusterManager):
     """A simple reproducer for a bug of forgetting that the view table has a
        different tablet mapping from the base: Using the wrong tablet mapping
        for the base table or view table can cause us to send a view update
@@ -117,7 +117,7 @@ async def inject_error_on(manager, error_name, servers):
     await asyncio.gather(*errs)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_alternator_lsi_consistency(manager: ManagerClient):
+async def test_tablet_alternator_lsi_consistency(manager: ScyllaClusterManager):
     """A reproducer for a bug where Alternator LSI was not using synchronous
        view updates when tablets are enabled, which could cause strongly-
        consistent read of the LSI to miss the data just written to the base.
@@ -193,7 +193,7 @@ async def test_tablet_alternator_lsi_consistency(manager: ManagerClient):
     )
     table.delete()
 
-async def test_tablet_si_create(manager: ManagerClient):
+async def test_tablet_si_create(manager: ScyllaClusterManager):
     """A basic test for creating a secondary index on a table stored
        with tablets on a one-node cluster. We just create the index and
        delete it - that's it, we don't read or write the table.
@@ -207,7 +207,7 @@ async def test_tablet_si_create(manager: ManagerClient):
         await cql.run_async(f"CREATE INDEX my_idx ON {ks}.test(c)")
         await cql.run_async(f"DROP INDEX {ks}.my_idx")
 
-async def test_tablet_lsi_create(manager: ManagerClient):
+async def test_tablet_lsi_create(manager: ScyllaClusterManager):
     """A basic test for creating a *local* secondary index on a table stored
        with tablets on a one-node cluster. We just create the index and
        delete it - that's it, we don't read or write the table.
@@ -222,7 +222,7 @@ async def test_tablet_lsi_create(manager: ManagerClient):
         await cql.run_async(f"DROP INDEX {ks}.my_idx")
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_cql_lsi(manager: ManagerClient):
+async def test_tablet_cql_lsi(manager: ScyllaClusterManager):
     """A simple reproducer for issue #16371 where CQL LSI (local secondary
        index) was not using synchronous view updates when tablets are enabled,
        contrary to what the documentation for local SI says. In other words,
@@ -272,7 +272,7 @@ async def test_tablet_cql_lsi(manager: ManagerClient):
         assert [(7,42)] == list(await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk=7 AND c=42"))
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_mv_tablet_split(manager: ManagerClient):
+async def test_mv_tablet_split(manager: ScyllaClusterManager):
     """A basic test for checking that tablet split works on MV tables.
        We create a table with a materialized view, starting with one tablet
        each, and prefill it with enough rows to trigger tablet splits of the

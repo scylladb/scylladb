@@ -10,13 +10,13 @@ from cassandra.cluster import ConsistencyLevel
 from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.query import SimpleStatement
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import unique_name
 from test.cluster.conftest import cluster_con
 from test.cluster.util import create_new_test_keyspace
 
 
-async def test_zero_token_nodes_no_replication(manager: ManagerClient):
+async def test_zero_token_nodes_no_replication(manager: ScyllaClusterManager):
     """
     Test that zero-token nodes aren't replicas in all non-local replication strategies with and without tablets.
     """

@@ -12,7 +12,7 @@ from cassandra.cluster import ConsistencyLevel
 from cassandra.policies import WhiteListRoundRobinPolicy
 
 from test.pylib.internal_types import ServerInfo
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
@@ -25,7 +25,7 @@ from test.cluster.util import check_system_topology_and_cdc_generations_v3_consi
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("remove_dead_nodes_with", ["remove", "replace"])
-async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes_with: str):
+async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dead_nodes_with: str):
     """
     Test that the Raft-based recovery procedure works correctly with the user data. It involves testing:
     - client requests during the procedure (mainly availability),
