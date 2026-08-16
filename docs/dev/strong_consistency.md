@@ -309,6 +309,12 @@ metadata, and the write which clears it takes the parent's tablet away in the sa
 child being torn down always has its wait ended by its parent's teardown, either just before or
 just after its own. Every other suspension in `apply()` completes on its own.
 
+The co-location fiber is detached when the parent group is deleted, which is the only ending a
+resize recorded on a replica has - the tablet map replacement takes the parent's tablet away, and
+nothing can undo a resize whose replacement ids are already recorded. It then drains in the
+background, joined only by `groups_manager::stop()`; the gates of the raft servers guard any
+access the aborted fiber still makes on its way out.
+
 ## Handing the token range over without a gap
 
 Two things have to hold for the hand-over to be seamless.
@@ -324,6 +330,18 @@ final log of the parent.
 
 A linearizable read checks the flag before *and* after its read barrier, since the barrier may
 be what applies the marker.
+
+**A handed-off write has to be ordered after everything already committed in the parent.**
+Timestamps are handed out by the leader, so the handed-off writes have to come from the same
+clock as the ones already in the parent's log: the leaders of the parent and of the children
+have to sit on the same node. They are elected together to begin with - a child derives its
+fast bootstrap seed from the current leader of its parent, which every replica knows, so they
+all pick the same node - and a fiber per resize (`groups_manager::leader_colocator()`) transfers a child's
+leadership back to the parent's leader whenever the two drift apart, using the targeted
+`raft::server::stepdown()`. Until they are co-located the child bounces the request back to the
+parent, where the request coordinator retries it, since it has nowhere else to go. On top of that, a handed-off write
+carries the timestamp it got from the parent, and the child's clock is advanced past it before
+a new one is handed out.
 
 ## Reads on a child before the parent is done
 
