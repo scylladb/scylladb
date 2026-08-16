@@ -262,6 +262,33 @@ Two different components are called a coordinator here. The **topology coordinat
 coordinator** (`service::strong_consistency::coordinator`) is the per-request, replica-side one
 which serves a read or a write. Both are named explicitly wherever the difference matters.
 
+## Outline
+
+```
+topology coordinator                        replicas
+────────────────────                        ────────
+split decision emitted ──── group0 write ───► nothing to do yet
+
+  (tablets compact; the split waits for every replica to report ready)
+
+finalization:
+  transition state
+  + child group ids  ──── group0 write ───► create the child groups, hold their
+                                            appliers back, keep their leaders
+                                            co-located with the parent's
+  global barrier
+  seal the parent    ──── process_raft_resize ──► commit start_resize:
+    on every replica                              writes go to the children
+                                                  commit end_resize:
+                                                  the parent's log is final,
+                                                  the child appliers are released
+                                                  flush the tablet's data and
+                                                  the markers
+  replace tablet map ──── group0 write ───► the child tablets take the child group
+                                            ids as their own, the resize state is
+                                            dropped
+```
+
 ## The child group ids are generated when the finalization starts
 
 The children have to exist, and every replica has to agree on which groups they are, before
@@ -344,6 +371,56 @@ before it is appended (`detail::command_target_table()`), which names `system.ra
 marker and the tablet's table for a write, and the applier moves the handle into the memtable
 receiving the row exactly as it does for a write.
 
+The topology coordinator drives every replica until it reports success. Nodes being excluded from
+the cluster are skipped. Once any replica has committed the markers the rest only have to be
+waited for, so they are driven in `wait_only` mode; the last round is always a `wait_only` one,
+because committing a marker only establishes that it is committed, not that it has been applied.
+
+Two rounds are what a healthy sealing takes, and it usually gets them: the write which enters the
+finalization reaches every replica an iteration before the sealing runs, so their children have
+had time to start and to elect the leaders they were co-located with, and a stable cluster has no
+reason to hold an election.
+
+None of that is guaranteed, though. A replica starts its children in the background, and the
+barrier the finalization opens with waits for the new tablet metadata to be applied, not for the
+groups that metadata names to be running - so a round can find a child which is not there yet.
+The coordinator does not tell that apart from a round which got nowhere because something is
+wrong, and answers both the same way: it does not retry the round under the same guard, it hands
+the guard back so that the finalization is dispatched again, re-runs the barrier and re-seals.
+That is the useful answer to a stuck sealing, for the reason below, and it costs a slow one an
+attempt.
+
+A replica which goes down during the finalization is the one failure which does not resolve on
+its own, and it blocks the finalization until it comes back or is excluded. Removing it is not an
+option: a removenode is node work, and node work is only picked up between topology transitions,
+so a removal issued to unblock the finalization would queue behind the very transition it is
+meant to unblock. Migrating the tablet off the dead replica is not an option either - a tablet
+whose replacement group ids are recorded is not migrated, see below. Excluding it is: marking a
+dead node as excluded is a plain group0 write rather than node work, so unlike a node request it
+does not queue behind the transition.
+
+It cannot land while the finalization holds its group0 guard, though. The guard holds the
+operation mutex, which blocks the write outright if it is issued against the coordinator's own
+node, and the read-apply mutex, which stops that node from applying group0 commands at all - so
+even an exclusion written elsewhere stays invisible to a sealing which is under way. Handing the
+guard back is therefore the useful answer to a round which got nowhere, and the only one: the
+finalization releases the guard and returns *without* clearing the transition state, so the
+coordinator dispatches it again, and the next attempt re-reads the topology, re-plans, re-runs
+the barrier and re-seals. A warning names the tablet which is holding everything up in the
+meantime.
+
+Before that dispatch it waits as long as the coordinator waits after any other iteration it means
+to retry, so that a sealing which cannot progress does not re-run the barrier as fast as the
+cluster will answer it. That is the only waiting in the whole path - a replica which is down fails
+the barrier rather than the sealing, so a finalization blocked on one never reaches the seal at
+all until the node is excluded.
+
+Note that this gives up on an attempt, never on the split - the seal cannot be undone, so
+abandoning it halfway would leave sealed parents behind while the tablet map still names them.
+Re-attempting is always safe: every step of the sealing is idempotent, the markers being
+monotonic, so a duplicate one changes nothing - which is also what lets a new coordinator resume
+a finalization its predecessor started.
+
 Once the replacement group ids are recorded, the split has to be finalized: a marker is never
 cleared, so the children of a sealed parent cannot be taken away from it, and revoking the
 decision at that point would do exactly that. `make_resize_plan()` therefore refuses to revoke
@@ -420,11 +497,32 @@ parent, where the request coordinator retries it, since it has nowhere else to g
 carries the timestamp it got from the parent, and the child's clock is advanced past it before
 a new one is handed out.
 
+That covers the writes handed off during the resize, but not the ones which landed in the
+parent's log before it: a child's leader seeds its clock from the applied data when it is
+elected, which typically happens as soon as the resize is decided, and a parent write accepted
+after that never touches that clock. Nothing recomputes it when the tablet map is replaced
+either - the child's term does not change - so a write arriving after the split could be
+handed a timestamp below one the parent handed out before it, whenever the parent's clock ran
+ahead of wall clock. The sealing therefore lifts every child's clock above the parent's right
+before committing `end_resize`. The parent's clock is sampled after the `start_resize` flag is
+set, so it covers every write which can still land in the parent's log, and every later write
+is handed off and advances its child by itself. The advance only reaches the child leaders
+co-located with the parent's, which the sealing re-checks at that point; a child leader
+elected elsewhere after its `no_op` went in needs no advance, because the read barrier which
+seeds its clock cannot complete before the parent is sealed and fully applied.
+
 ## Reads on a child before the parent is done
 
 A child group must not apply anything until the parent has applied everything it committed;
 otherwise a read served by the child could observe a state older than a write already
 committed in the parent. The child's applier therefore blocks on `end_resize`.
+
+This also makes linearizable reads on a child wait, which they must: sealing puts a `no_op`
+entry into each child before committing `start_resize`, so from that point a read barrier
+in a child has an unapplied entry to wait for, and is released by the same thing which releases
+the applier. Writes do not have to wait - a handed-off write is acknowledged as soon as the
+child commits it, because it already carries a timestamp above every one the parent handed out
+and cannot be applied out of order.
 
 ## Recovery
 
@@ -445,3 +543,19 @@ any - and:
   to be committed has been applied, which cannot happen until the parent is sealed, while the
   sealing itself needs the server to be up. The index is re-established from the leader, or
   recomputed by the next one from a quorum, once the group is running again.
+
+The parent is a third case, and it is the one which needs something outside the replay. Once the
+split is finalized the parent is gone from the tablet map, so the replay cannot tell its entries
+apart from those of a group whose tablet moved away, and discards both. Everything the parent
+applied is held by nothing but those entries: its writes sit in the tablet's memtable, pinned by
+the handles the applier moved into it, and the rows recording its markers sit in the memtable of
+`system.raft_groups`, pinned by the handles the applier moved into that one. Discarding the entries
+loses whichever of them has not been flushed - acknowledged writes, or the record that the parent
+was sealed at all.
+
+The last round of the sealing therefore flushes both on every replica before it reports success -
+the tablet's own storage group, and `system.raft_groups` - and the topology coordinator replaces
+the tablet map only once every replica has answered that round. From then on the entries are
+redundant and discarding them is safe. The flush happens once per resize: the parent stopped
+accepting writes when `start_resize` was committed and its log is final by then, so nothing it
+contributes can arrive afterwards.
