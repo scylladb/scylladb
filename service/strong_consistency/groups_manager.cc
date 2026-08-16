@@ -13,6 +13,7 @@
 #include "service/migration_manager.hh"
 #include "service/strong_consistency/state_machine.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
+#include "service/strong_consistency/raft_resize_tracker.hh"
 #include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "service/raft/raft_rpc.hh"
@@ -131,7 +132,7 @@ auto raft_server::begin_read(abort_source& as) -> begin_read_result {
 groups_manager::groups_manager(netw::messaging_service& ms, 
         raft_group_registry& raft_gr, cql3::query_processor& qp,
         replica::database& db, service::migration_manager& mm, db::system_keyspace& sys_ks, gms::feature_service& features,
-        gms::gossiper& gossiper, db::raft_commitlog_replay_buffer& raft_replay_buffer)
+        gms::gossiper& gossiper, db::raft_commitlog_replay_buffer& raft_replay_buffer, sharded<raft_resize_tracker>& resize_tracker)
     : _ms(ms)
     , _raft_gr(raft_gr)
     , _qp(qp)
@@ -141,6 +142,7 @@ groups_manager::groups_manager(netw::messaging_service& ms,
     , _features(features)
     , _gossiper(gossiper)
     , _raft_replay_buffer(raft_replay_buffer)
+    , _resize_tracker(resize_tracker.local())
 {
     init_messaging_service();
 }
@@ -151,13 +153,24 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
 {
     const auto my_id = to_server_id(tm->get_my_id());
 
+    // Restore the parent's persisted resize state before we create its raft server. The token
+    // metadata captured here may predate an ending whose observation already erased the state, so
+    // we consult the tracker too: a stale start must not re-create what a later observation erased.
+    {
+        const auto& tablet_map = tm->tablets().get_tablet_map(tablet.table);
+        if (tablet_map.is_resizing(tablet.tablet)
+                && tablet_map.get_tablet_raft_info(tablet.tablet).group_id == group_id
+                && _resize_tracker.is_resizing(group_id)) {
+            co_await _resize_tracker.restore_applied_markers(group_id);
+        }
+    }
 
     auto* commitlog = _db.commitlog();
     SCYLLA_ASSERT(commitlog);
     auto storage = std::make_unique<raft_groups_storage>(_qp, group_id, my_id, this_shard_id(),
         *commitlog, tablet.table, _raft_replay_buffer.take_replayed_group_entries(group_id));
 
-    auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage);
+    auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage, _resize_tracker);
 
     auto& state_machine_ref = *state_machine;
     auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id);
@@ -256,6 +269,12 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         logger.debug("schedule_raft_group_deletion(): group id {}: gate closed", id);
 
         co_await std::move(state.leader_info_updater);
+
+        // Drop the deleted group's own record: the whole state if this is the parent, and just
+        // the mapping if it is a child. Unlike the erase from _raft_groups below, we need no check
+        // for a start which superseded the deletion - a group deleted while a resize is recorded
+        // is deleted by an ending it does not come back from.
+        _resize_tracker.erase_group(id);
 
         _raft_gr.destroy_server(id);
         logger.info("schedule_raft_group_deletion(): raft server for group id {} is destroyed", id);
@@ -430,14 +449,43 @@ void groups_manager::update(token_metadata_ptr new_tm) {
         if (!tablet_map.has_raft_info()) {
             continue;
         }
+        struct tablet_group_info {
+            tablet_id tid;
+            raft::group_id id;
+            std::optional<raft::group_id> parent_id;
+        };
+        std::vector<tablet_group_info> tablet_groups;
         for (const auto& tid: tablet_map.tablet_ids()) {
             const auto id = tablet_map.get_tablet_raft_info(tid).group_id;
-            const auto tablet = global_tablet_id{table_id, tid};
-
             _leader_cache.mark_seen(id);
             if (!tablet_map.has_replica(tid, this_replica)) {
                 continue;
             }
+            tablet_groups.push_back(tablet_group_info{tid, id, std::nullopt});
+
+            // The group serves a tablet of its own, so it is nobody's child any more: the resize
+            // which created it was finalized. The group is not deleted, so we drop the mapping
+            // here. We check this on its own rather than with the case below, because a single
+            // token metadata change can carry both the finalization of one resize and the start of
+            // another in which this group is the parent.
+            if (_resize_tracker.get_parent_group(id)) {
+                logger.debug("update(): group {} is no longer a child, dropping its mapping", id);
+                _resize_tracker.erase_group(id);
+            }
+
+            // A resize this replica has observed only ever ends by the tablet map being replaced,
+            // which takes the parent's tablet away and has its teardown drop the state.
+            if (tablet_map.is_resizing(tid)) {
+                _resize_tracker.set_replacement_groups(id, tablet_map.get_raft_resize_info(tid).new_gids);
+                for (const auto new_gid : tablet_map.get_raft_resize_info(tid).new_gids) {
+                    tablet_groups.push_back(tablet_group_info{tid, new_gid, id});
+                }
+            }
+        }
+
+        for (const auto& [tid, id, parent_id]: tablet_groups) {
+            const auto tablet = global_tablet_id{table_id, tid};
+
             auto& state = _raft_groups[id];
             state.has_tablet = true;
 

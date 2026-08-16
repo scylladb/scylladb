@@ -25,6 +25,8 @@ class migration_manager;
 
 namespace service::strong_consistency {
 
+class raft_resize_tracker;
+
 // A write to the table of the tablet this Raft group serves.
 struct write_mutation {
     frozen_mutation mutation;
@@ -67,7 +69,8 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     replica::database& db,
     service::migration_manager& mm,
     db::system_keyspace& sys_ks,
-    raft_groups_storage& storage);
+    raft_groups_storage& storage,
+    raft_resize_tracker& resize_tracker);
 
 // Resolve schemas for frozen mutations and upgrade them to the current schema if needed.
 // For each mutation, looks up the schema version in the local schema registry. If the mutation
