@@ -21,6 +21,7 @@ target_sources(service
     strong_consistency/tablet_replica_sets.cc
     strong_consistency/raft_groups_storage.cc
     strong_consistency/raft_commitlog.cc
+    strong_consistency/raft_resize_tracker.cc
     raft/discovery.cc
     raft/group0_state_id_handler.cc
     raft/group0_state_machine.cc
