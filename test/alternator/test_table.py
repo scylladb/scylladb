@@ -423,6 +423,33 @@ def test_list_tables_wrong_limit(dynamodb):
     with pytest.raises(ClientError, match='ValidationException'):
         dynamodb.meta.client.list_tables(Limit=101)
 
+# Test that a malformed "Limit" parameter (i.e., a value that isn't
+# representable as a 32-bit integer) is rejected with a clean validation
+# error - not the internal, non-communicative message produced when the
+# server assumes a parameter's JSON type without checking it first (the
+# RAPIDJSON_ASSERT fallback mentioned in issue #23233, and reproduced for
+# Scan's and Query's Limit in test_scan.py and test_query.py). ListTables's
+# Limit is read directly with GetInt() with no preceding IsInt() check, so
+# a too-large Limit falls through to that fallback instead of getting a
+# proper error message.
+# Note that boto3 does impose a *minimum* of 1 on Limit client-side (so we
+# can't use a negative or zero Limit here, nor a wrong type like a string -
+# those never reach the server). The maximum of 100 mentioned in
+# test_list_tables_wrong_limit() above, on the other hand, is only enforced
+# by the server: botocore's client-side validator doesn't check declared
+# maximums for plain integers at all (same as for Scan/Query above), so a
+# sufficiently oversized value like 2**64 still sails through client-side
+# validation unmodified.
+def test_list_tables_invalid_limit_type(dynamodb):
+    with pytest.raises(ClientError) as err:
+        dynamodb.meta.client.list_tables(Limit=2**64)
+    code = err.value.response['Error']['Code']
+    message = err.value.response['Error'].get('Message', '')
+    assert code in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error code {code} for oversized Limit: {message}'
+    assert 'assert' not in message, \
+        f'Got internal RAPIDJSON_ASSERT fallback message for oversized Limit: {message}'
+
 # Even before Alternator gains support for configuring server-side encryption
 # ("encryption at rest") with CreateTable's SSESpecification option, we should
 # support the option "Enabled=false" which is the default, and means the server
