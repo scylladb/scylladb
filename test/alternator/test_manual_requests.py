@@ -715,3 +715,115 @@ def test_request_limit_exceeded_connection_reuse(dynamodb, cql):
         assert 'ResourceNotFoundException' in body, body
     finally:
         conn.close()
+
+# Check that a request with a malformed parameter is rejected with a client
+# error - and in particular, not with an InternalServerError.
+def check_rejected(dynamodb, op, request):
+    with pytest.raises(ManualRequestError) as err:
+        # boto3 validates parameter types client-side, so sending a request
+        # with a malformed parameter requires a manual request.
+        manual_request(dynamodb, op, json.dumps(request))
+    # DynamoDB reports some of these errors as a SerializationException,
+    # while Alternator always reports a ValidationException.
+    assert err.value.type in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error type {err.value.type} (message: {err.value.message})'
+
+# A BOOL value must be a JSON boolean, so {"BOOL": "dog"} must be rejected.
+@pytest.mark.parametrize("op", ['PutItem', 'UpdateItem', 'BatchWriteItem'])
+def test_write_malformed_bool_value(dynamodb, test_table_s, op):
+    p = random_string()
+    item = {'p': {'S': p}, 'x': {'BOOL': 'dog'}}
+    reqs = {
+        'PutItem': {'TableName': test_table_s.name, 'Item': item},
+        'UpdateItem': {'TableName': test_table_s.name, 'Key': {'p': {'S': p}},
+            'UpdateExpression': 'SET x = :x',
+            'ExpressionAttributeValues': {':x': {'BOOL': 'dog'}}},
+        'BatchWriteItem': {'RequestItems': {test_table_s.name: [{'PutRequest': {'Item': item}}]}},
+    }
+    check_rejected(dynamodb, op, reqs[op])
+
+# The values in the legacy Expected parameter must be well-formed, in every
+# kind of condition. For example, {"S": 123} must be rejected.
+@pytest.mark.parametrize('condition', [
+        {'Value': {'S': 123}},
+        *({'ComparisonOperator': op, 'AttributeValueList': [{'S': 123}]}
+          for op in ['EQ', 'LT', 'BEGINS_WITH', 'CONTAINS', 'NOT_CONTAINS'])],
+    ids=['Value', 'EQ', 'LT', 'BEGINS_WITH', 'CONTAINS', 'NOT_CONTAINS'])
+def test_expected_malformed_value(dynamodb, test_table_s, condition):
+    p = random_string()
+    # Write an item with a string attribute x, so that the condition will
+    # really be compared to an existing value.
+    test_table_s.put_item(Item={'p': p, 'x': 'hello'})
+    check_rejected(dynamodb, 'DeleteItem', {'TableName': test_table_s.name,
+        'Key': {'p': {'S': p}}, 'Expected': {'x': condition}})
+
+# AttributesToGet must be a list of strings.
+@pytest.mark.parametrize('attributes_to_get', [[123], 'x'])
+def test_get_item_malformed_attributes_to_get(dynamodb, test_table_s, attributes_to_get):
+    check_rejected(dynamodb, 'GetItem', {'TableName': test_table_s.name,
+        'Key': {'p': {'S': random_string()}}, 'AttributesToGet': attributes_to_get})
+
+# Each entry in AttributeUpdates must be an object, and its Action (if given)
+# must be a string.
+@pytest.mark.parametrize('update', [3, {'Action': 123, 'Value': {'S': 'z'}}])
+def test_update_item_malformed_attribute_updates(dynamodb, test_table_s, update):
+    check_rejected(dynamodb, 'UpdateItem', {'TableName': test_table_s.name,
+        'Key': {'p': {'S': random_string()}},
+        'AttributeUpdates': {'y': update}})
+
+# UntagResource's TagKeys must be a list of strings.
+def test_untag_resource_non_string_tag_key(dynamodb, test_table):
+    arn = test_table.meta.client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    check_rejected(dynamodb, 'UntagResource', {'ResourceArn': arn, 'TagKeys': [123]})
+
+# Query's IndexName must be a string.
+def test_query_non_string_index_name(dynamodb, test_table):
+    check_rejected(dynamodb, 'Query', {'TableName': test_table.name,
+        'IndexName': 123,
+        'KeyConditions': {'p': {'AttributeValueList': [{'S': 'x'}], 'ComparisonOperator': 'EQ'}}})
+
+# UpdateTable's StreamSpecification must be an object. We pair it with a
+# BillingMode that doesn't change anything (the test table is already
+# PAY_PER_REQUEST), because an UpdateTable request with nothing but a bad
+# StreamSpecification would fail anyway, for having nothing to do.
+def test_update_table_non_object_stream_specification(dynamodb, test_table_s):
+    check_rejected(dynamodb, 'UpdateTable', {'TableName': test_table_s.name,
+        'BillingMode': 'PAY_PER_REQUEST', 'StreamSpecification': 'dog'})
+
+# Query's and Scan's Limit must be a positive number. A huge or fractional
+# Limit is allowed (see test_query.py::test_query_huge_limit and
+# test_fractional_limit below), but a Limit which isn't a number, or is
+# negative, must be rejected.
+@pytest.mark.parametrize("op", ['Query', 'Scan'])
+@pytest.mark.parametrize("limit", ['dog', True, -1])
+def test_malformed_limit(dynamodb, test_table_s, op, limit):
+    req = {'TableName': test_table_s.name, 'Limit': limit}
+    if op == 'Query':
+        req['KeyConditions'] = {'p': {
+            'AttributeValueList': [{'S': random_string()}],
+            'ComparisonOperator': 'EQ'}}
+    check_rejected(dynamodb, op, req)
+
+# DynamoDB accepts a fractional Limit, and truncates it to an integer: so
+# Limit=1.5 returns one item, Limit=2.5 returns two, and Limit=0.5 becomes
+# Limit=0, which is rejected.
+@pytest.mark.parametrize("op", ['Query', 'Scan'])
+def test_fractional_limit(dynamodb, test_table_sn, op):
+    p = random_string()
+    with test_table_sn.batch_writer() as batch:
+        for c in [1, 2, 3]:
+            batch.put_item({'p': p, 'c': c})
+    def request(limit):
+        req = {'TableName': test_table_sn.name, 'Limit': limit, 'ConsistentRead': True}
+        if op == 'Query':
+            req['KeyConditions'] = {'p': {
+                'AttributeValueList': [{'S': p}],
+                'ComparisonOperator': 'EQ'}}
+        # boto3 rejects a fractional Limit client-side, so we need a manual
+        # request.
+        return manual_request(dynamodb, op, json.dumps(req))
+    assert request(1.5)['Count'] == 1
+    assert request(2.5)['Count'] == 2
+    with pytest.raises(ManualRequestError) as err:
+        request(0.5)
+    assert err.value.type == 'ValidationException'

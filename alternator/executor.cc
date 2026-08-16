@@ -1198,6 +1198,9 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
         }
     } else if (action == update_tags_action::delete_tags) {
         for (auto it = tags.Begin(); it != tags.End(); ++it) {
+            if (!it->IsString()) {
+                throw api_error::validation("TagKeys entries must be strings");
+            }
             auto tag_key = rjson::to_string_view(*it);
             if (tag_key_is_internal(tag_key)) {
                 throw api_error::validation(fmt::format("Tag key '{}' is reserved for internal use", tag_key));
@@ -2626,7 +2629,10 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                     co_return api_error::validation("You cannot create or delete index while changing stream status");
                 }
             }
-            if (stream_specification && stream_specification->IsObject()) {
+            if (stream_specification) {
+                if (!stream_specification->IsObject()) {
+                    co_return api_error::validation("StreamSpecification must be an object");
+                }
                 empty_request = false;
                 if (add_stream_options(*stream_specification, builder, p.local(), tab->cdc_options())) {
                     validate_cdc_log_name_length(builder.cf_name());
@@ -3181,7 +3187,11 @@ void validate_value(const rjson::value& v, const char* caller) {
                     caller, element.GetDouble()));
             }
         }
-    } else if (type != "L" && type != "M" && type != "BOOL" && type != "NULL") {
+    } else if (type == "BOOL") {
+        if (!it->value.IsBool()) {
+            throw api_error::validation(format("{}: improperly formatted value '{}'", caller, v));
+        }
+    } else if (type != "L" && type != "M" && type != "NULL") {
         // TODO: can do more sanity checks on the content of the above types.
         throw api_error::validation(fmt::format("{}: unknown type {} for value {}", caller, type, v));
     }
@@ -4690,6 +4700,9 @@ update_item_operation::update_item_operation(parsed::expression_cache& parsed_ex
         }
         for (auto it = std::as_const(*_attribute_updates).MemberBegin(); it != std::as_const(*_attribute_updates).MemberEnd(); ++it) {
             validate_attr_name_length("AttributeUpdates", it->name.GetStringLength(), false);
+            if (!it->value.IsObject()) {
+                throw api_error::validation("AttributeUpdates entries must be objects");
+            }
         }
     }
 
@@ -4742,7 +4755,7 @@ static bool check_needs_read_before_write_attribute_updates(rjson::value *attrib
     // that _attribute_updates, when it exists, is a map
     for (auto it = attribute_updates->MemberBegin(); it != attribute_updates->MemberEnd(); ++it) {
         rjson::value* action = rjson::find(it->value, "Action");
-        if (action) {
+        if (action && action->IsString()) {
             std::string_view action_s = rjson::to_string_view(*action);
             if (action_s == "ADD") {
                 return true;
@@ -5053,7 +5066,11 @@ inline void update_item_operation::apply_attribute_updates(const std::unique_ptr
         if (cdef && cdef->is_primary_key()) {
             throw api_error::validation(format("UpdateItem cannot update key column {}", rjson::to_string_view(it->name)));
         }
-        std::string action = rjson::to_string((it->value)["Action"]);
+        const rjson::value& action_json = (it->value)["Action"];
+        if (!action_json.IsString()) {
+            throw api_error::validation("AttributeUpdates Action must be a string");
+        }
+        std::string action = rjson::to_string(action_json);
         if (action == "DELETE") {
             // The DELETE operation can do two unrelated tasks. Without a
             // "Value" option, it is used to delete an attribute. With a
@@ -5327,9 +5344,8 @@ future<executor::request_return_type> executor::list_tables(client_state& client
     co_await utils::get_local_injector().inject("alternator_list_tables", utils::wait_for_message(5min));
 
     rjson::value* exclusive_start_json = rjson::find(request, "ExclusiveStartTableName");
-    rjson::value* limit_json = rjson::find(request, "Limit");
     std::string exclusive_start = exclusive_start_json ? rjson::to_string(*exclusive_start_json) : "";
-    int limit = limit_json ? limit_json->GetInt() : 100;
+    int limit = get_int_attribute(request, "Limit").value_or(100);
     if (limit < 1 || limit > 100) {
         co_return api_error::validation("Limit must be greater than 0 and no greater than 100");
     }

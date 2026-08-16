@@ -138,8 +138,14 @@ static std::optional<attrs_to_get> calculate_attrs_to_get(const rjson::value& re
     }
     if (has_attributes_to_get) {
         const rjson::value& attributes_to_get = req["AttributesToGet"];
+        if (!attributes_to_get.IsArray()) {
+            throw api_error::validation("AttributesToGet must be a list");
+        }
         attrs_to_get ret;
         for (auto it = attributes_to_get.Begin(); it != attributes_to_get.End(); ++it) {
+            if (!it->IsString()) {
+                throw api_error::validation("AttributesToGet entries must be strings");
+            }
             attribute_path_map_add("AttributesToGet", ret, rjson::to_string(*it));
             validate_attr_name_length("AttributesToGet", it->GetStringLength(), false);
         }
@@ -191,7 +197,7 @@ get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
             type = table_or_view_type::gsi;
         } else {
             throw api_error::validation(
-                    fmt::format("Non-string IndexName '{}'", rjson::to_string_view(*index_name)));
+                    fmt::format("Non-string IndexName '{}'", *index_name));
         }
         // If no tables for global indexes were found, the index may be local
         if (!proxy.data_dictionary().has_schema(keyspace_name, table_name)) {
@@ -755,6 +761,17 @@ static dht::partition_range get_range_for_segment(int segment, int total_segment
     }
 }
 
+// Get the "Limit" parameter of a Query or Scan request. A fractional Limit
+// is truncated, and a huge Limit is clamped to 2^31-1 - so it's effectively
+// unbounded, just like a missing Limit.
+static uint32_t get_query_limit(const rjson::value& request) {
+    int32_t limit = get_lenient_int_attribute(request, "Limit").value_or(std::numeric_limits<int32_t>::max());
+    if (limit <= 0) {
+        throw api_error::validation("Limit must be greater than 0");
+    }
+    return limit;
+}
+
 future<executor::request_return_type> executor::scan(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.scan++;
     elogger.trace("Scanning {}", request);
@@ -789,11 +806,7 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
         return make_ready_future<request_return_type>(api_error::validation(
                 "Consistent reads are not allowed on global indexes (GSI)"));
     }
-    rjson::value* limit_json = rjson::find(request, "Limit");
-    uint32_t limit = limit_json ? limit_json->GetUint64() : std::numeric_limits<uint32_t>::max();
-    if (limit <= 0) {
-        return make_ready_future<request_return_type>(api_error::validation("Limit must be greater than 0"));
-    }
+    uint32_t limit = get_query_limit(request);
 
     select_type select = parse_select(request, table_type);
 
@@ -1857,11 +1870,7 @@ future<executor::request_return_type> executor::query(client_state& client_state
         return make_ready_future<request_return_type>(api_error::validation(
                 "Consistent reads are not allowed on global indexes (GSI)"));
     }
-    rjson::value* limit_json = rjson::find(request, "Limit");
-    uint32_t limit = limit_json ? limit_json->GetUint64() : std::numeric_limits<uint32_t>::max();
-    if (limit <= 0) {
-        return make_ready_future<request_return_type>(api_error::validation("Limit must be greater than 0"));
-    }
+    uint32_t limit = get_query_limit(request);
 
     const bool forward = get_bool_attribute(request, "ScanIndexForward", true);
 
