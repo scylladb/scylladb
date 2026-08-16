@@ -73,7 +73,7 @@ async def test_tablet_scaling_option_is_respected(manager: ManagerClient):
     assert len(tablets) == 64
 
 
-async def test_tablet_cannot_decommision_below_replication_factor(manager: ManagerClient):
+async def test_tablet_cannot_decommission_below_replication_factor(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     servers = await manager.servers_add(4, config=cfg, property_file=[

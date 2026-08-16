@@ -55,7 +55,7 @@ Session.run_async = run_async     # patch Session for convenience
 
 logger = logging.getLogger(__name__)
 
-print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
+logger.info("Driver name %s, version %s", DRIVER_NAME, DRIVER_VERSION)
 
 
 async def decode_backtrace(build_mode: str, input: str):
