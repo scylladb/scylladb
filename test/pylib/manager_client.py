@@ -22,7 +22,9 @@ from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import ScyllaRESTAPIClient, ScyllaMetricsClient
 from test.pylib.util import gather_safely, wait_for, wait_for_cql_and_get_hosts, universalasync_typed_wrap, Host
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
-from test.pylib.scylla_cluster import ReplaceConfig, ScyllaClusterManager, ScyllaServer, ScyllaVersionDescription, bind_to_current_loop
+from test.pylib.scylla_cluster import ReplaceConfig, bind_to_current_loop
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.scylla_server import ScyllaServer, ScyllaVersionDescription
 from test.pylib.driver_utils import safe_driver_shutdown
 from cassandra.cluster import Session as CassandraSession, \
     ExecutionProfile, EXEC_PROFILE_DEFAULT  # type: ignore # pylint: disable=no-name-in-module

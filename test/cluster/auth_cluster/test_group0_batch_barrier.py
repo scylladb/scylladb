@@ -9,7 +9,7 @@ import time
 import pytest
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
-from test.pylib.scylla_cluster import ScyllaVersionDescription
+from test.pylib.scylla_server import ScyllaVersionDescription
 from test.pylib.util import unique_name, wait_for
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 

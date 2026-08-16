@@ -13,9 +13,8 @@ from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.util import get_coordinator_host, new_test_keyspace, ensure_group0_leader_on
 from test.pylib.internal_types import ServerInfo, IPAddress
 from test.pylib.manager_client import ManagerClient
-from test.pylib.scylla_cluster import gather_safely
 from test.pylib.tablets import get_replica_count_by_host
-from test.pylib.util import wait_for
+from test.pylib.util import gather_safely, wait_for
 
 logger = logging.getLogger(__name__)
 

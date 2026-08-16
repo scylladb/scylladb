@@ -11,10 +11,9 @@ import asyncio
 import random
 import time
 from test import pylib
-from test.pylib.util import wait_for
+from test.pylib.util import gather_safely, wait_for
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
-from test.pylib.scylla_cluster import gather_safely
 from test.cluster.util import check_token_ring_and_group0_consistency,            \
                                wait_for_token_ring_and_group0_consistency
 import pytest

@@ -8,7 +8,8 @@ from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer
+from test.pylib.scylla_cluster import ReplaceConfig
+from test.pylib.scylla_server import ScyllaServer
 from test.pylib.internal_types import HostID
 
 import pytest

@@ -103,7 +103,7 @@ async def wait_for_sstable_format_features(manager: ManagerClient, servers: list
 #
 # `chosen` is the value passed to the `sstable_format` config. `None` means
 # "don't set it"; in our test setup this is equivalent to the default `mt`,
-# since test/pylib/scylla_cluster.py sets sstable_format=mt.
+# since test/pylib/scylla_server.py sets sstable_format=mt.
 #
 # Rows are ordered so that `ms_unsuppressed` and `mt_unsuppressed` only ever go
 # from False to True as we move down the table: suppressions can be lifted but

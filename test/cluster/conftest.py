@@ -23,7 +23,8 @@ from test.pylib.skip_types import skip_env
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
 from test.pylib.async_cql import run_async
-from test.pylib.scylla_cluster import ScyllaClusterManager, ScyllaVersionDescription, get_scylla_2025_1_description
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.scylla_server import ScyllaVersionDescription, get_scylla_2025_1_description
 from test.pylib.connect_options import add_cql_connection_options, add_s3_options
 from test.pylib.encryption_provider import KeyProvider, make_key_provider_factory
 import logging
@@ -250,7 +251,7 @@ async def manager(request: pytest.FixtureRequest,
     Per test fixture to notify Manager client object when tests begin so it can perform checks for cluster state.
     """
     test_case_name = request.node.name
-    # this should be consistent with scylla_cluster.py ScyllaClusterManager.before_test()
+    # this should be consistent with scylla_cluster_manager.py ScyllaClusterManager.before_test()
     test_py_log_test = suite_log_dir / f"{Path(testpy_uname).stem}.{test_case_name}_cluster.log"
 
     manager_client = manager_internal()  # set up client object in fixture with scope function

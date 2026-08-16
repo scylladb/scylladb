@@ -25,7 +25,7 @@ import pytest
 
 from test.pylib.internal_types import ServerNum
 from test.pylib.manager_client import ManagerClient
-from test.pylib.scylla_cluster import ScyllaClusterManager
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
 SERVER_ID = ServerNum(1)

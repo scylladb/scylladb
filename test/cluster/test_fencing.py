@@ -14,7 +14,7 @@ from test.pylib.rest_client import ScyllaMetrics
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement
 from test.cluster.util import new_test_keyspace, get_topology_version
-from test.pylib.scylla_cluster import ScyllaVersionDescription
+from test.pylib.scylla_server import ScyllaVersionDescription
 import pytest
 import logging
 import time

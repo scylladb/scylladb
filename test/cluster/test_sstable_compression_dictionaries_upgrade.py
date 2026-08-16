@@ -14,7 +14,7 @@ import time
 
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.rest_client import read_barrier, HTTPError
-from test.pylib.scylla_cluster import ScyllaVersionDescription
+from test.pylib.scylla_server import ScyllaVersionDescription
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature
 from test.cluster.util import reconnect_driver
 from cassandra.cluster import ConsistencyLevel

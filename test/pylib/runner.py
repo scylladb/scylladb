@@ -41,8 +41,8 @@ from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
 from test.pylib.host_registry import HostRegistry
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
-from test.pylib.scylla_cluster import (
-    ScyllaCluster,
+from test.pylib.scylla_cluster import ScyllaCluster
+from test.pylib.scylla_server import (
     ScyllaServer,
     get_current_version_description,
     merge_cmdline_options,

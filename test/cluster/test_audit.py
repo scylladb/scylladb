@@ -46,7 +46,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
 from test.pylib.skip_types import skip_env
 from test.pylib.util import wait_for as wait_for_async
-from test.pylib.scylla_cluster import ScyllaVersionDescription
+from test.pylib.scylla_server import ScyllaVersionDescription
 
 logger = logging.getLogger(__name__)
 
