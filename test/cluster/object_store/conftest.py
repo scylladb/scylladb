@@ -21,7 +21,6 @@ from test.pylib.object_storage import (
     S3Server,
     S3_Server,
     MinioWrapper,
-    s3_server,
 )
 
 
