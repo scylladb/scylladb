@@ -198,7 +198,8 @@ make_empty_metadata() {
     return empty_metadata_cache;
 }
 
-void print_query_results_text(std::ostream& os, const cql3::result& result) {
+template <typename OStream>
+future<> print_query_results_text_collapsed(OStream os, const cql3::result& result) {
     const auto& metadata = result.get_metadata();
     const auto& column_metadata = metadata.get_names();
 
@@ -248,35 +249,126 @@ void print_query_results_text(std::ostream& os, const cql3::result& result) {
             const auto& format = r == 0 ? columns[i].header_format : columns[i].row_format;
             row.push_back(fmt::format(fmt::runtime(std::string_view(format)), columns[i].values[r]));
         }
-        fmt::print(os, "{}\n", fmt::join(row, "|"));
+        co_await os("{}\n", fmt::join(row, "|"));
         if (!r) {
-            fmt::print(os, "-{}-\n", fmt::join(separators, "-+-"));
+            co_await os("-{}-\n", fmt::join(separators, "-+-"));
         }
     }
 }
 
-void print_query_results_json(std::ostream& os, const cql3::result& result) {
+template <typename OStream>
+future<> print_query_results_text_expanded(OStream os, const cql3::result& result) {
     const auto& metadata = result.get_metadata();
     const auto& column_metadata = metadata.get_names();
 
-    rjson::streaming_writer writer(os);
+    size_t max_col_name_length = 0;
+    for (const auto& col : column_metadata) {
+        max_col_name_length = std::max(max_col_name_length, col->name->text().size());
+    }
 
-    writer.StartArray();
+    size_t max_col_value_length = 0;
     for (const auto& row : result.result_set().rows()) {
-        writer.StartObject();
         for (size_t i = 0; i < row.size(); ++i) {
-            writer.Key(column_metadata[i]->name->text());
+            if (!row[i]) {
+                continue;
+            }
+            max_col_value_length = std::max(column_metadata[i]->type->to_string(linearized(managed_bytes_view(*row[i]))).size(), max_col_value_length);
+        }
+    }
+
+    const auto row_format = fmt::format(" {{:<{}}} | {{:<{}}}\n", max_col_name_length, max_col_value_length);
+
+    size_t row_index = 0;
+    for (const auto& row : result.result_set().rows()) {
+        co_await os("\n@ Row {}\n", ++row_index);
+        co_await os("{}+{}\n", sstring(max_col_name_length + 2, '-'), sstring(max_col_value_length + 2, '-'));
+
+        for (size_t i = 0; i < row.size(); ++i) {
+            co_await os(row_format, column_metadata[i]->name->text(),
+                row[i] ? column_metadata[i]->type->to_string(linearized(managed_bytes_view(*row[i]))) : "");
+        }
+    }
+}
+
+template <typename OStream>
+future<> do_print_query_results_text(OStream os, const cql3::result& result, bool expand) {
+    if (expand) {
+        return print_query_results_text_expanded(std::move(os), result);
+    } else {
+        return print_query_results_text_collapsed(std::move(os), result);
+    }
+}
+
+template <typename OStream>
+future<> do_print_query_results_json(OStream os, const cql3::result& result) {
+    const auto& metadata = result.get_metadata();
+    const auto& column_metadata = metadata.get_names();
+
+    co_await os("[");
+    bool first = true;
+    for (const auto& row : result.result_set().rows()) {
+        if (first) {
+            first = false;
+        } else {
+            co_await os(",");
+        }
+        co_await os("{");
+        for (size_t i = 0; i < row.size(); ++i) {
+            if (i) {
+                co_await os(",");
+            }
+            co_await os("{}:", rjson::quote_json_string(column_metadata[i]->name->text()));
             if (!row[i] || row[i]->empty()) {
-                writer.Null();
+                co_await os("null");
                 continue;
             }
             const auto value = to_json_string(*column_metadata[i]->type, *row[i]);
-            const auto type = to_json_type(*column_metadata[i]->type, *row[i]);
-            writer.RawValue(value, type);
+            co_await os("{}", value);
         }
-        writer.EndObject();
+        co_await os("}");
     }
-    writer.EndArray();
+    co_await os("]");
+}
+
+struct std_ostream_wrapper {
+    std::ostream& os;
+
+    future<> operator()(auto&& raw) {
+        os << raw;
+        return make_ready_future<>();
+    }
+    future<> operator()(std::string_view fmt, auto&& arg1, auto&&... args) {
+        fmt::print(os, fmt::runtime(fmt), std::forward<decltype(arg1)>(arg1), std::forward<decltype(args)>(args)...);
+        return make_ready_future<>();
+    }
+};
+
+future<> print_query_results_text(std::ostream& os, const result& result, bool expand) {
+    return do_print_query_results_text(std_ostream_wrapper{os}, result, expand);
+}
+
+future<> print_query_results_json(std::ostream& os, const result& result) {
+    return do_print_query_results_json(std_ostream_wrapper{os}, result);
+}
+
+struct seastar_outputs_stream_wrapper {
+    seastar::output_stream<char>& os;
+
+    future<> operator()(std::string_view raw) {
+        co_await os.write(raw.data(), raw.size());
+    }
+    future<> operator()(std::string_view fmt, auto&& arg1, auto&&... args) {
+        auto str = fmt::format(fmt::runtime(fmt), std::forward<decltype(arg1)>(arg1), std::forward<decltype(args)>(args)...);
+        co_await os.write(str.data(), str.size());
+    }
+};
+
+future<> print_query_results_text(seastar::output_stream<char>& os, const result& result, bool expand) {
+    return do_print_query_results_text(seastar_outputs_stream_wrapper{os}, result, expand);
+}
+
+future<> print_query_results_json(seastar::output_stream<char>& os, const result& result) {
+    return do_print_query_results_json(seastar_outputs_stream_wrapper{os}, result);
 }
 
 }
