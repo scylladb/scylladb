@@ -262,7 +262,52 @@ Two different components are called a coordinator here. The **topology coordinat
 coordinator** (`service::strong_consistency::coordinator`) is the per-request, replica-side one
 which serves a read or a write. Both are named explicitly wherever the difference matters.
 
+## The child group ids are generated when the finalization starts
+
+The children have to exist, and every replica has to agree on which groups they are, before
+the split is carried out - otherwise there would be nowhere to send a write the parent has
+stopped accepting. The ids are therefore generated in the group0 write which enters the resize
+finalization, together with the transition state, and recorded in the tablet metadata
+(`locator::raft_resize_info`, persisted in the `transition_raft_group_ids` column of
+`system.tablets`), so that they reach every replica before the seal begins. When the split is
+finally applied, the new tablets take those ids as their own group ids rather than getting fresh
+ones, and the write which replaces the tablet map is the one which clears them.
+
+Generating them there rather than with the split decision is also what makes their presence the
+record of the finalization having begun, which the load balancer reads as *this split can no
+longer be revoked*, as *this tablet does not move*, and which the finalization itself reads as
+*this table is mine to carry out*. It has to be told, because sealing the parent cannot be undone:
+revoking a decision whose parents are already sealed would delete groups those parents are handing
+their writes to. Nothing else can serve as that record. The transition state cannot: it is a bare
+state with no payload, so it does not say which tables are being finalized. Split-readiness cannot
+either: it is held in memory by the replicas and never persisted, so a replica restart resets it,
+anything which empties the tablet load stats hides it, and it is aggregated by taking the minimum
+over the sources - a single restarting replica is enough to make a table stop looking ready. The
+work behind it is durable, so a table whose ids are recorded was ready and stays ready, and the
+finalization pins its set of tables to the recorded ids rather than to what readiness currently
+says. The cost is that a split stops being cancellable earlier than a regular one: from the moment
+its finalization starts, it will be carried out even if the table no longer wants it.
+
+The kind of the resize in progress is not recorded per tablet: it is the kind of the resize
+decision, which is already in the tablet metadata (the static `resize_type` column), so the two
+can never disagree.
+
+A replica observing the resize info starts the child groups next to the parent, which keeps
+serving reads and writes in the meantime. It starts them in the background, so a replica has
+observed the resize before its children are running; the sealing below is written so that finding
+them still coming up costs an attempt rather than the split.
+
 ## Sealing the parent
+
+The tablets being sealed do not change hands while the seal runs, and the whole section rests on
+that. The write which records the replacement group ids is only generated when no tablet of the
+table is in transition and no migration is being started in the same write, and from then until
+the tablet map is replaced a tablet which has them is not a migration candidate
+(`tablet_allocator_impl::make_plan()`, with a backstop in `generate_migration_update()`, which is
+where every planned migration becomes a mutation). So the replica set of a parent, and with it the
+membership of its Raft group and of its children, is fixed from the moment the ids are recorded:
+the list of replicas the sealing reads once can neither gain a replica which never saw the markers
+nor lose one which has them unapplied.
 
 Sealing is driven from outside the group, by the topology coordinator, over the
 `process_raft_resize` verb: the markers have to be committed in the parent's log, which only
@@ -298,6 +343,17 @@ receives what applying it writes rather than to the tablet's table. Every entry 
 before it is appended (`detail::command_target_table()`), which names `system.raft_groups` for a
 marker and the tablet's table for a write, and the applier moves the handle into the memtable
 receiving the row exactly as it does for a write.
+
+Once the replacement group ids are recorded, the split has to be finalized: a marker is never
+cleared, so the children of a sealed parent cannot be taken away from it, and revoking the
+decision at that point would do exactly that. `make_resize_plan()` therefore refuses to revoke
+the resize of a strongly consistent table which has them - see the section on when they are
+generated for why they are the record it keys on. A call left over from a finalization which has
+already ended needs no fencing of its own: it finds the parent gone from the tablet map, or, if
+it got in earlier, appends a marker to a log which is already final, in a group which is being
+destroyed and whose resize can no longer be revoked. What has to be ordered before the tablet
+map is replaced - the markers and the flush below - is ordered by the replies, since the
+coordinator replaces the map only once every replica has answered.
 
 `service::strong_consistency::raft_resize_tracker` holds the per-shard state of every
 resize a replica takes part in, tracks which markers have been applied, and owns the promise

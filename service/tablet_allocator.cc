@@ -414,6 +414,13 @@ future<rack_list_colocation_state> find_required_rack_list_colocations(
                         return make_ready_future<>();
                     }
 
+                    // Skip tablet whose resize is being finalized - see the migrating() check in
+                    // make_plan() for why it is no more movable than one already in transition.
+                    if (tmap.is_resizing(tid)) {
+                        lblogger.debug("Skipped colocation for tablet={} whose resize is being finalized", gid);
+                        return make_ready_future<>();
+                    }
+
                     for (auto src_dst : zipped) {
                         auto src = std::get<0>(src_dst);
                         auto dst_rack = std::get<1>(src_dst);
@@ -1896,6 +1903,13 @@ public:
                         return make_ready_future<>();
                     }
 
+                    // Skip tablet whose resize is being finalized - see the migrating() check in
+                    // make_plan() for why it is no more movable than one already in transition.
+                    if (tmap.is_resizing(tid)) {
+                        lblogger.debug("Skipped rf change extending for tablet={} whose resize is being finalized", gid);
+                        return make_ready_future<>();
+                    }
+
                     auto host = replica ? replica->host : ti.replicas.front().host;
                     auto rf_tablet_size = get_tablet_group_size(tmap, table_or_mv->id(), tid, host);
                     migration_tablet_set source_tablets {
@@ -2032,8 +2046,10 @@ public:
                 return ret;
             };
 
-            auto migrating = [this, table] (const tablet_desc& t) {
-                return bool(t.transition) || _scheduled_tablets.contains(global_tablet_id{table, t.tid});
+            // See the same check in make_plan() for why a tablet being resized is not a candidate.
+            auto migrating = [this, table, &tmap] (const tablet_desc& t) {
+                return bool(t.transition) || tmap.is_resizing(t.tid)
+                        || _scheduled_tablets.contains(global_tablet_id{table, t.tid});
             };
             auto rack_of = [&topo = _tm->get_topology()] (tablet_replica tr) -> const sstring& {
                 return topo.get_rack(tr.host);
@@ -2564,6 +2580,14 @@ public:
             table_plan.current_tablet_count = tablet_count;
             table_plan.pow2_count = tablet_options.pow2_count.value_or(
                     _db.features().arbitrary_tablet_boundaries ? db::tablet_options::default_pow2_count : true);
+            locator::resize_decision cur_decision;
+            bool strongly_consistent = false;
+            if (_tm->tablets().has_tablet_map(table)) {
+                const auto& tmap = _tm->tablets().get_tablet_map(table);
+                cur_decision = tmap.resize_decision();
+                strongly_consistent = tmap.has_raft_info();
+            }
+
             table_plan.tablet_merges_allowed = !s->tablet_merges_forbidden();
             if (!table_plan.tablet_merges_allowed) {
                 // Block merge decisions for Alternator tablet tables whose
@@ -2574,14 +2598,18 @@ public:
                 // revocation logic in tables_being_resized to cancel the merge.
                 lblogger.debug("Table {} ({}.{}): suppressing new merge decision because tablet merges are forbidden",
                             table, s->ks_name(), s->cf_name());
+            } else if (strongly_consistent) {
+                // FIXME: tablet merge for strongly consistent tables is not implemented yet.
+                // The merged tablet would need a Raft group which nobody creates. Suppress the
+                // decision here, where a merge already in progress is still revocable by the
+                // same path that cancels any other unwanted resize, rather than at
+                // finalization, after the replicas have already done the co-location work.
+                table_plan.tablet_merges_allowed = false;
+                lblogger.debug("Table {} ({}.{}): suppressing new merge decision because the table is strongly consistent",
+                            table, s->ks_name(), s->cf_name());
             }
 
             rs_by_table[table] = rs;
-
-            locator::resize_decision cur_decision;
-            if (_tm->tablets().has_tablet_map(table)) {
-                cur_decision = _tm->tablets().get_tablet_map(table).resize_decision();
-            }
 
             auto [target_tablet_count_and_reason, avg_tablet_size] = compute_target_tablet_count(
                     table, tables, s, tablet_options, rs, tablet_count, cur_decision, expected_size_opt);
@@ -2614,6 +2642,11 @@ public:
             }
             if (s->tablet_merges_forbidden()) {
                 lblogger.debug("Table {} ({}.{}): suppressing pow2 convergence merge decision because tablet merges are forbidden",
+                        table, s->ks_name(), s->cf_name());
+                return;
+            }
+            if (tmap.has_raft_info()) {
+                lblogger.debug("Table {} ({}.{}): suppressing pow2 convergence merge decision because the table is strongly consistent",
                         table, s->ks_name(), s->cf_name());
                 return;
             }
@@ -2950,16 +2983,30 @@ public:
         // Also communicate coordinator if any table is ready for finalizing resizing
 
         for (const auto& [table, size_desc] : resize_load.tables_being_resized) {
-            if (resize_load.table_needs_resize_cancellation(size_desc)) {
+            auto& tmap = _tm->tablets().get_tablet_map(table);
+            const auto& table_groups = _tm->tablets().all_table_groups();
+
+            // If all replicas have completed split work for the current sequence number, it means that
+            // load balancer can emit finalize decision, for split to be completed.
+            const bool split_ready = tmap.needs_split()
+                    && std::ranges::all_of(table_groups.at(table), [&, seq_num = tmap.resize_decision().sequence_number] (table_id table) {
+                        const auto* table_stats = load_stats_for_table(table);
+                        return table_stats && table_stats->split_ready_seq_number == seq_num;
+                    });
+
+            // A split of a strongly consistent table stops being revocable once the ids of the
+            // groups replacing its tablets' groups are recorded, which is what the finalization
+            // records when it starts. Revoking it afterwards would tear down child groups which a
+            // sealed parent already hands its writes off to, and a seal is never undone.
+            const bool finalization_started = tmap.has_raft_resizes();
+
+            if (!finalization_started && resize_load.table_needs_resize_cancellation(size_desc)) {
                 resize_plan.resize[table] = cluster_resize_load::revoke_resize_decision();
                 _stats.for_cluster().resizes_revoked++;
                 lblogger.info("Revoking resize decision for table {}, avg_tablet_size={} reason={}",
                               table, size_desc.avg_tablet_size, size_desc.reason);
                 continue;
             }
-
-            auto& tmap = _tm->tablets().get_tablet_map(table);
-            const auto& table_groups = _tm->tablets().all_table_groups();
 
             auto finalize_decision = [&] {
                 if (utils::get_local_injector().enter("tablet_resize_finalization_postpone")) {
@@ -2970,18 +3017,10 @@ public:
                 resize_plan.finalize_resize.insert(table);
             };
 
-            // If all replicas have completed split work for the current sequence number, it means that
-            // load balancer can emit finalize decision, for split to be completed.
-            if (tmap.needs_split()) {
-                bool all_tables_ready = std::ranges::all_of(table_groups.at(table), [&, seq_num = tmap.resize_decision().sequence_number] (table_id table) {
-                    const auto* table_stats = load_stats_for_table(table);
-                    return table_stats && table_stats->split_ready_seq_number == seq_num;
-                });
-                if (all_tables_ready) {
-                    finalize_decision();
-                    lblogger.info("Finalizing resize decision for table {} as all replicas agree on sequence number {}",
-                                  table, tmap.resize_decision().sequence_number);
-                }
+            if (split_ready) {
+                finalize_decision();
+                lblogger.info("Finalizing resize decision for table {} as all replicas agree on sequence number {}",
+                              table, tmap.resize_decision().sequence_number);
             // If all sibling tablets are co-located across all DCs, then merge can be finalized.
             } else if (tmap.needs_merge() && co_await all_sibling_tablet_replicas_colocated(table, tmap) && !bypass_merge_completion()) {
                 finalize_decision();
@@ -4583,8 +4622,14 @@ public:
             auto get_replicas = [this] (std::optional<tablet_desc> t) -> tablet_replica_set {
                 return t ? sorted_replicas_for_tablet_load(*t->info, t->transition) : tablet_replica_set{};
             };
+            // A tablet whose replacement Raft group ids are recorded is being finalized. Its
+            // children already run on the replica set it had when they were created, and its own
+            // group is about to be sealed against that same set. We must not move it: the move
+            // would leave both behind, and split_tablets() carries the tablet info over but not
+            // the transitions, so the tablet map replacement would drop the move anyway.
             auto migrating = [&] (std::optional<tablet_desc> t) {
-                return t && (bool(t->transition) || _scheduled_tablets.contains(global_tablet_id{table, t->tid}));
+                return t && (bool(t->transition) || tmap.is_resizing(t->tid)
+                        || _scheduled_tablets.contains(global_tablet_id{table, t->tid}));
             };
             auto maybe_apply_load = [&] (std::optional<tablet_desc> t) {
                 if (t && is_streaming(t->transition)) {
@@ -4962,6 +5007,21 @@ private:
 
             new_tablets.emplace_tablet(new_left_tid, tablets.get_split_token(tid), tablet_info);
             new_tablets.emplace_tablet(new_right_tid, tablets.get_last_token(tid), tablet_info);
+
+            // The children of a strongly consistent tablet take the group ids generated when the
+            // finalization started, which the replicas have already created the groups for.
+            if (tablets.has_raft_info()) {
+                if (!tablets.is_resizing(tid)) {
+                    on_internal_error(lblogger, format("Strongly consistent tablet {} of table {} "
+                            "is being resized without child Raft group ids", tid, table));
+                }
+                // The number of ids was checked against the resize decision when they were
+                // recorded, and get_split_child_gids() checks that the decision is a split, so
+                // there is nothing left to validate here.
+                const auto [left_gid, right_gid] = tablets.get_split_child_gids(tid);
+                new_tablets.set_tablet_raft_info(new_left_tid, locator::tablet_raft_info{.group_id = left_gid});
+                new_tablets.set_tablet_raft_info(new_right_tid, locator::tablet_raft_info{.group_id = right_gid});
+            }
         }
 
         lblogger.info("Split tablets for table {}, increasing tablet count from {} to {}",
@@ -4977,6 +5037,9 @@ private:
             ? div_ceil(tablets.tablet_count(), 2)
             : tablets.tablet_count() - merge_plan.selected_left_tablets.size();
 
+        // FIXME: strongly consistent tablet merge is not implemented yet, so the new tablets
+        // below would get no Raft group ids. tablets.has_raft_info() is false here: a merge
+        // decision is never emitted for a strongly consistent table, see process_table().
         tablet_map new_tablets(new_count, tablets.has_raft_info(), tablet_map::initialized_later());
 
         std::optional<tablet_id> new_tid = new_tablets.first_tablet();

@@ -8198,6 +8198,92 @@ SEASTAR_THREAD_TEST_CASE(test_sc_tablet_resize_metadata_persistence) {
     }, std::move(cfg)).get();
 }
 
+// A tablet whose replacement Raft group ids are recorded is being finalized. Its children already
+// run on the replica set it had when they were created, and its own group is about to be sealed
+// against that same set. The load balancer must not plan a migration for such a tablet, and the
+// finalization relies on that.
+//
+// The placement below is unbalanced on purpose, so that the balancer wants to move a tablet: the
+// test first checks that it does, and then that recording the ids stops it.
+SEASTAR_THREAD_TEST_CASE(test_sc_tablet_being_resized_is_not_migrated) {
+    cql_test_config cfg = tablet_cql_test_config();
+    cfg.db_config->experimental_features(
+        {db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES},
+        db::config::config_source::CommandLine
+    );
+
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo(e);
+
+        const unsigned shard_count = 1;
+        auto dc = topo.dc();
+        auto host1 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{dc, 1}});
+        auto table1 = add_table(e, ks_name).get();
+
+        // Both tablets on host1, so host2 is empty and the balancer has a move to make.
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(2, /* with_raft_info = */ true);
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set { tablet_replica{host1, 0} },
+                });
+                tmap.set_tablet_raft_info(tid, locator::tablet_raft_info {
+                    .group_id = raft::group_id(utils::UUID_gen::get_time_UUID())
+                });
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        auto& talloc = e.get_tablet_allocator().local();
+        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+        talloc.set_load_stats(topo.get_load_stats());
+
+        // Balancing is turned off cluster-wide for a cluster with strongly consistent tables (see
+        // system_keyspace's load_topology_state()), which would make every check here vacuous.
+        // The rule under test is not conditional on it, so turn it back on.
+        stm.mutate_token_metadata([] (token_metadata& tm) {
+            tm.tablets().set_balancing_enabled(true);
+            return make_ready_future<>();
+        }).get();
+
+        // Without the ids recorded the imbalance is planned away, which is what makes the check
+        // below meaningful rather than vacuous.
+        {
+            migration_plan plan = talloc.balance_tablets(stm.get(), nullptr, nullptr).get();
+            BOOST_REQUIRE(!plan.migrations().empty());
+        }
+
+        // Enter the resize finalization of both tablets, as the group0 write which starts one
+        // does: a split decision plus the ids of the groups which will replace theirs.
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            co_await tmeta.mutate_tablet_map_async(table1, [] (tablet_map& tmap) {
+                tmap.set_resize_decision(locator::resize_decision(locator::resize_decision::split(), 1));
+                for (auto tid : tmap.tablet_ids()) {
+                    tmap.set_raft_resize_info(tid, locator::raft_resize_info {
+                        .new_gids = {
+                            raft::group_id(utils::UUID_gen::get_time_UUID()),
+                            raft::group_id(utils::UUID_gen::get_time_UUID()),
+                        },
+                    });
+                }
+                return make_ready_future();
+            });
+        });
+
+        {
+            migration_plan plan = talloc.balance_tablets(stm.get(), nullptr, nullptr).get();
+            for (const auto& mig : plan.migrations()) {
+                BOOST_FAIL(format("planned a migration of tablet {} while its resize is being finalized", mig.tablet));
+            }
+        }
+    }, std::move(cfg)).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_tablet_version_changes_after_tablet_migration) {
     cql_test_config cfg = tablet_cql_test_config();
     cfg.db_config->experimental_features(
