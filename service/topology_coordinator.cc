@@ -1815,6 +1815,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             rtlogger.warn("Tablet already in transition, ignoring migration: {}", mig);
             return;
         }
+        // The rule that a tablet being resized does not move rests on two things. The replacement
+        // group ids exist only while the resize finalization transition state is set: both go into
+        // the same group0 command, and the write which clears them carries the
+        // del_transition_state(). And while that state is set, the dispatcher runs the finalization
+        // handler alone, which emits no migration.
+        //
+        // This check and the load balancer's are defence in depth on top of that, not a substitute
+        // for it: the RF change, rebuild retry and restore paths write tablet transitions directly
+        // and do not come through here.
+        if (tmap.is_resizing(mig.tablet.tablet)) {
+            rtlogger.warn("Tablet's resize is being finalized, ignoring migration: {}", mig);
+            return;
+        }
         auto migration_task_info = mig.kind == locator::tablet_transition_kind::migration ? locator::tablet_task_info::make_migration_request()
             : locator::tablet_task_info::make_intranode_migration_request();
         migration_task_info.sched_nr++;
@@ -2955,9 +2968,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         auto tm = get_token_metadata_ptr();
         auto plan = co_await _tablet_allocator.balance_tablets(tm, &_topo_sm._topology, &_sys_ks, {}, get_dead_nodes());
 
+        // A strongly consistent table is in the set iff its replacement group ids are recorded;
+        // split-readiness decides only for the rest. Readiness is reported from replica memory and
+        // aggregated by taking the minimum over the sources, so it can drop a table whose ids are
+        // already recorded, and split_tablets() cannot replace the map of one which joined without
+        // them.
+        //
+        // Note: this is also what makes the tablet_resize_finalization_postpone and
+        // tablet_split_finalization_postpone injections stop working once the ids are recorded.
+        // They keep a table out of what the balancer plans, and the loop below puts it back.
+        auto finalize_resize = plan.resize_plan().finalize_resize;
+        std::erase_if(finalize_resize, [&] (table_id t) {
+            const auto& tmap = tm->tablets().get_tablet_map(t);
+            return tmap.has_raft_info() && !tmap.has_raft_resizes();
+        });
+        for (const auto& [t, _] : tm->tablets().all_table_groups()) {
+            if (tm->tablets().get_tablet_map(t).has_raft_resizes()) {
+                finalize_resize.insert(t);
+            }
+        }
+
         group0_update_collector updates;
 
-        for (auto& table_id : plan.resize_plan().finalize_resize) {
+        for (auto& table_id : finalize_resize) {
             auto s = _db.find_schema(table_id);
             auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
             co_await replica::tablet_map_to_mutations(
@@ -3007,6 +3040,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         updates.emplace_back(
             topology_mutation_builder(guard.write_timestamp())
                 .del_transition_state()
+                .del_session()
                 .set_version(_topo_sm._topology.version + 1)
                 .build());
         co_await update_topology_state(std::move(guard), std::move(updates), format("Finished tablet resize finalization"));
@@ -3014,7 +3048,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         if (auto old_load_stats = _tablet_allocator.get_load_stats()) {
             guard = co_await start_operation();
             auto new_tm = get_token_metadata_ptr();
-            auto reconciled_stats = old_load_stats->reconcile_tablets_resize(plan.resize_plan().finalize_resize, *tm, *new_tm);
+            auto reconciled_stats = old_load_stats->reconcile_tablets_resize(finalize_resize, *tm, *new_tm);
             // Simulates reconciliation failing the way it does in production, when a
             // pre-resize replica has no recorded tablet size yet.
             if (utils::get_local_injector().enter("tablet_resize_load_stats_reconcile_failure")) {
@@ -4674,18 +4708,63 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     future<bool> generate_tablet_transition_updates(
             group0_update_collector& updates, const group0_guard& guard, migration_plan& plan);
 
-    // Generates a single resize finalization mutation (set tstate + version bump).
-    // Appends to `updates`. Does not commit.
+    // Generates the resize finalization mutations: the transition state, and for a strongly
+    // consistent table the ids of the groups which will replace the group of each of its splitting
+    // tablets. Appends to `updates`. Does not commit.
     void generate_tablet_resize_finalization_update(
-            group0_update_collector& updates, const group0_guard& guard) {
+            group0_update_collector& updates, const group0_guard& guard,
+            const std::unordered_set<table_id>& finalize_resize) {
         auto resize_finalization_transition_state = [this] {
             return _feature_service.tablet_merge ? topology::transition_state::tablet_resize_finalization : topology::transition_state::tablet_split_finalization;
         };
         updates.emplace_back(
             topology_mutation_builder(guard.write_timestamp())
                 .set_transition_state(resize_finalization_transition_state())
+                // The finalization runs under a topology session, like a node operation does:
+                // every node opens it when it applies this write and closes it with the write
+                // which leaves the state, so the verbs the finalization sends can carry it as a
+                // guard (see process_raft_resize). A re-entered attempt keeps the session, since
+                // the state is never left in between.
+                .set_session(session_id(guard.new_group0_state_id()))
                 .set_version(_topo_sm._topology.version + 1)
                 .build());
+
+        // The groups replacing a splitting strongly consistent tablet's group have to exist, and
+        // every replica has to agree on which they are, before the split is carried out. Their ids
+        // are therefore generated here, and reach the replicas with the write which starts the
+        // finalization. Recorded until the tablet map is replaced, they also tell the load balancer
+        // that this split can no longer be revoked - see make_resize_plan().
+        //
+        // FIXME: tablet merge for strongly consistent tables is not implemented yet, so no merge
+        // decision reaches this point - see the suppression in tablet_allocator_impl's
+        // process_table().
+        for (const auto table_id : finalize_resize) {
+            const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
+            if (!tmap.has_raft_info() || !tmap.needs_split()) {
+                continue;
+            }
+            replica::tablet_mutation_builder builder(guard.write_timestamp(), table_id);
+            bool generated = false;
+            for (auto tid : tmap.tablet_ids()) {
+                // An earlier attempt at this finalization may have generated them already, and the
+                // replicas may have created the groups the recorded ones name.
+                if (tmap.is_resizing(tid)) {
+                    continue;
+                }
+                builder.set_raft_resize_info(tmap.get_last_token(tid), locator::tablet_raft_resize_info {
+                    .new_gids = {
+                        raft::group_id(utils::UUID_gen::get_time_UUID()),
+                        raft::group_id(utils::UUID_gen::get_time_UUID()),
+                    },
+                });
+                generated = true;
+            }
+            if (generated) {
+                rtlogger.info("Generated the replacement Raft group ids of table {} for the resize "
+                    "finalization", table_id);
+                updates.add_large(builder.build());
+            }
+        }
     }
 
     // Returns true if the state machine was transitioned into tablet migration path.
@@ -4847,7 +4926,7 @@ future<bool> topology_coordinator::generate_tablet_transition_updates(
         if (utils::get_local_injector().enter("tablet_split_finalization_postpone")) {
             co_return false;
         }
-        generate_tablet_resize_finalization_update(updates, guard);
+        generate_tablet_resize_finalization_update(updates, guard, plan.resize_plan().finalize_resize);
         co_return true;
     }
 
