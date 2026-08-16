@@ -355,14 +355,16 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         auto disposition_result = get<raft_server::timestamp_with_term>(disposition);
         std::tie(ts, term) = {disposition_result.timestamp, disposition_result.term};
 
-        const raft_command command {
+        write_mutation write {
             .mutation{mutation_gen(ts)}
         };
-        raft::command raft_cmd;
-        ser::serialize(raft_cmd, command);
-
         logger.debug("mutate(): add_entry({}), term {}",
-            command.mutation.pretty_printer(schema), term);
+            write.mutation.pretty_printer(schema), term);
+
+        // Moved into the command rather than copied - the frozen mutation is the whole
+        // payload of the write.
+        raft::command raft_cmd;
+        ser::serialize(raft_cmd, raft_command{.change = std::move(write)});
 
         co_await utils::get_local_injector().inject("sc_coordinator_wait_before_add_entry",
             utils::wait_for_message(5min));

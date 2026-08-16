@@ -32,6 +32,11 @@
 #include "service/strong_consistency/raft_commitlog.hh"
 #include "idl/raft_storage.dist.hh"
 #include "idl/raft_storage.dist.impl.hh"
+#include "service/strong_consistency/state_machine.hh"
+#include "db/system_keyspace.hh"
+#include "serializer_impl.hh"
+#include "idl/strong_consistency/state_machine.dist.hh"
+#include "idl/strong_consistency/state_machine.dist.impl.hh"
 
 BOOST_AUTO_TEST_SUITE(commitlog_raft_replay_test)
 
@@ -1841,6 +1846,53 @@ SEASTAR_TEST_CASE(test_raft_commitlog_load_log_one_shot) {
         BOOST_REQUIRE(entries2.empty());
         co_return;
     });
+}
+
+// command_target_table() peeks at the variant tag in the serialized command rather than
+// deserializing it, so it depends on how raft_command is encoded. This test pins that dependency.
+// It fails if the encoding changes underneath - raft_command becoming final, or gaining a member
+// ahead of `change` - which would otherwise surface only as a segment accounting assert on a
+// running node, far from the cause.
+SEASTAR_TEST_CASE(test_command_target_table_classifies_every_alternative) {
+    // The schema of system.raft_groups, which the classifier names for a marker, only exists when
+    // strongly consistent tables are enabled.
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+    return do_with_cql_env([] (cql_test_env&) -> future<> {
+        using namespace service::strong_consistency;
+
+        const auto tablet_table = make_table_id();
+        const auto raft_groups = db::system_keyspace::raft_groups()->id();
+
+        auto command_entry_for = [] (raft_command cmd, raft::index_t idx) {
+            raft::command raft_cmd;
+            ser::serialize(raft_cmd, cmd);
+            return make_lw_shared<raft::log_entry>(
+                    raft::log_entry{.term = raft::term_t(1), .idx = idx, .data = std::move(raft_cmd)});
+        };
+
+        // Applying a marker writes a row to system.raft_groups, so that is the table whose flush
+        // has to release the entry's commitlog position.
+        for (const auto kind : {resize_marker_kind::start_resize, resize_marker_kind::end_resize}) {
+            BOOST_REQUIRE_EQUAL(service::strong_consistency::detail::command_target_table(
+                    command_entry_for(raft_command{.change = resize_marker{.kind = kind}}, raft::index_t(1)),
+                    tablet_table), raft_groups);
+        }
+        // A no_op writes nothing, so either table would do; the tablet's own is what it gets.
+        BOOST_REQUIRE_EQUAL(service::strong_consistency::detail::command_target_table(
+                command_entry_for(raft_command{.change = no_op{}}, raft::index_t(2)),
+                tablet_table), tablet_table);
+        // Raft's own entries carry no command at all.
+        BOOST_REQUIRE_EQUAL(service::strong_consistency::detail::command_target_table(
+                make_dummy_entry(raft::term_t(1), raft::index_t(3)), tablet_table), tablet_table);
+        BOOST_REQUIRE_EQUAL(service::strong_consistency::detail::command_target_table(
+                make_config_entry(raft::term_t(1), raft::index_t(4)), tablet_table), tablet_table);
+        // A command too short to be a raft_command, which no entry this state machine produced can be.
+        BOOST_REQUIRE_EQUAL(service::strong_consistency::detail::command_target_table(
+                make_command_entry(raft::term_t(1), raft::index_t(5)), tablet_table), tablet_table);
+
+        co_return;
+    }, std::move(db_cfg_ptr));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

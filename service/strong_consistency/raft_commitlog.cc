@@ -12,6 +12,7 @@
 #include "raft/raft.hh"
 
 #include "raft_commitlog.hh"
+#include "state_machine.hh"
 
 #include "idl/commitlog.dist.hh"
 #include "idl/commitlog.dist.impl.hh"
@@ -51,7 +52,9 @@ seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_li
 
     for (const auto& log_entry_ptr : entries) {
         logger.debug("  storing log entry: idx={}, term={}", log_entry_ptr->idx, log_entry_ptr->term);
-        writers.emplace_back(raft_commitlog_entry{.group_id = _group_id, .entry = log_entry_ptr}, _table_id);
+        // Not this tablet's table for every entry: a resize marker is recorded in system.raft_groups.
+        writers.emplace_back(raft_commitlog_entry{.group_id = _group_id, .entry = log_entry_ptr},
+                             detail::command_target_table(log_entry_ptr, _table_id));
     }
 
     auto replay_handles = co_await _commit_log.add_raft_entries(std::move(writers));

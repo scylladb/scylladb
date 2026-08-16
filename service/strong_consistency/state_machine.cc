@@ -30,6 +30,18 @@ namespace service::strong_consistency {
 
 static logging::logger logger("sc_state_machine");
 
+mutation make_resize_marker_mutation(raft::group_id gid, shard_id shard, resize_marker_kind kind) {
+    auto s = db::system_keyspace::raft_groups();
+    auto pk = partition_key::from_exploded(*s, {
+        short_type->decompose(int16_t(shard)),
+        timeuuid_type->decompose(gid.id),
+    });
+    mutation m(s, std::move(pk));
+    m.set_static_cell(kind == resize_marker_kind::start_resize ? "start_resize" : "end_resize",
+            data_value(true), api::new_timestamp());
+    return m;
+}
+
 class state_machine : public raft_state_machine {
     locator::global_tablet_id _tablet;
     raft::group_id _group_id;
@@ -60,12 +72,19 @@ public:
         static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(10));
         try {
             co_await utils::get_local_injector().inject("strong_consistency_state_machine_wait_before_apply", utils::wait_for_message(20min));
-            // Collect mutations from the command list.
+            // Collect the commands from the log entry list. Only a write carries a mutation; a
+            // resize marker describes a change which every replica turns into a mutation of its
+            // own, and a no_op carries none at all (see raft_command).
+            std::vector<raft_command> commands;
+            commands.reserve(command.size());
             utils::chunked_vector<frozen_mutation> muts;
             muts.reserve(command.size());
             for (auto& log_entry : command) {
-                auto mutation = detail::deserialize_to_frozen_mutation(log_entry);
-                muts.emplace_back(std::move(mutation));
+                auto cmd = detail::deserialize_raft_command(log_entry);
+                if (auto* write = std::get_if<write_mutation>(&cmd.change)) {
+                    muts.emplace_back(std::move(write->mutation));
+                }
+                commands.push_back(std::move(cmd));
             }
             // Get replay positions for the commands.
             auto replay_positions = _persistence.acquire_replay_position_handles_for(command);
@@ -82,12 +101,31 @@ public:
             // Apply mutations sequentially to preserve linearizability.
             // E.g., for writes A-B-C-D, a reader must observe
             // them in that order and never see A-C or A-D skipping intermediate values.
+            size_t next_mut = 0;
             for (size_t i = 0; i < command.size(); ++i) {
                 throwing_assert(replay_positions[i].index == command[i]->idx);
+                auto& change = commands[i].change;
+                if (std::holds_alternative<no_op>(change)) {
+                    // Nothing to apply, the entry only exists to make this fiber run.
+                    continue;
+                }
+                if (const auto* marker = std::get_if<resize_marker>(&change)) {
+                    logger.log(log_level::trace, rate_limit, "apply(): applying the {} marker of group {}",
+                        marker->kind == resize_marker_kind::start_resize ? "start_resize" : "end_resize", _group_id);
+                    auto m = make_resize_marker_mutation(_group_id, this_shard_id(), marker->kind);
+                    auto& cf = _db.find_column_family(m.schema());
+                    // The handle goes straight into the memtable receiving the row, which is the
+                    // table the entry was accounted to when it was appended.
+                    co_await _db.apply_in_memory(m, cf,
+                            std::move(replay_positions[i].replay_position_handle),
+                            db::no_timeout);
+                    continue;
+                }
                 // Concurrent apply_in_memory() calls can complete out of order under memory pressure
                 // (suspended at run_when_memory_available()), making mutations visible out of Raft log order.
                 // Therefore we must await each apply_in_memory() sequentially to preserve Raft log order.
-                co_await _db.apply_in_memory(muts[i], schemas[i], std::move(replay_positions[i].replay_position_handle), db::no_timeout, db::noop_large_data_guardrail::instance());
+                const auto mut_idx = next_mut++;
+                co_await _db.apply_in_memory(muts[mut_idx], schemas[mut_idx], std::move(replay_positions[i].replay_position_handle), db::no_timeout, db::noop_large_data_guardrail::instance());
             }
         } catch (replica::no_such_column_family&) {
             // If the table doesn't exist, it means it was already dropped.
@@ -265,11 +303,33 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
 
 namespace detail {
 
-frozen_mutation deserialize_to_frozen_mutation(const raft::log_entry_ptr& entry) {
+raft_command deserialize_raft_command(const raft::log_entry_ptr& entry) {
     const auto& cmd = std::get<raft::command>(entry->data);
     auto is = ser::as_input_stream(cmd);
-    auto command = ser::deserialize(is, std::type_identity<raft_command>());
-    return std::move(command.mutation);
+    return ser::deserialize(is, std::type_identity<raft_command>());
+}
+
+table_id command_target_table(const raft::log_entry_ptr& entry, table_id tablet_table) {
+    // Taken from the type rather than written out, so that reordering the alternatives cannot
+    // silently start accounting markers to the wrong table.
+    static const size_t resize_marker_index = decltype(raft_command::change){resize_marker{}}.index();
+
+    const auto* cmd = std::get_if<raft::command>(&entry->data);
+    // A dummy or a configuration change: raft's own entries, which the state machine never
+    // applies, so nothing is written for them and either table would do. Anything too short to be
+    // a raft_command is not one, and no entry this state machine produced can be that short. The
+    // fallback exists so that classifying a command can never fail on the write path, not because
+    // a command is expected to be unreadable.
+    constexpr size_t tag_end = sizeof(ser::size_type) + sizeof(uint8_t);
+    if (!cmd || cmd->size() < tag_end) {
+        return tablet_table;
+    }
+    // raft_command is serialized as its own size, then the variant's one-byte tag, then the
+    // alternative - so the tag is reachable without touching the alternative itself.
+    auto is = ser::as_input_stream(*cmd);
+    ser::deserialize(is, std::type_identity<ser::size_type>());
+    const auto tag = ser::deserialize(is, std::type_identity<uint8_t>());
+    return tag == resize_marker_index ? db::system_keyspace::raft_groups()->id() : tablet_table;
 }
 
 } // namespace detail

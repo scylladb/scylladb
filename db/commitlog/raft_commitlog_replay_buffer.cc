@@ -179,11 +179,23 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
             // only be deleted after the memtables are flushed. Therefore, the data will either
             // be persisted to SSTables or, in case of a crash, still be available in the old commitlog.
             if (entry->idx <= commit_idx && std::holds_alternative<raft::command>(entry->data)) {
-                utils::chunked_vector<frozen_mutation> muts;
-                muts.emplace_back(service::strong_consistency::detail::deserialize_to_frozen_mutation(entry));
-                // Resolve schema and upgrade mutation if needed (no barrier during replay).
-                auto schemas = co_await service::strong_consistency::resolve_and_upgrade_mutations(muts, table_id, db, sys_ks);
-                co_await db.apply_in_memory(muts[0], schemas[0], db::rp_handle(), db::no_timeout, db::noop_large_data_guardrail::instance());
+                auto cmd = service::strong_consistency::detail::deserialize_raft_command(entry);
+                if (auto* write = std::get_if<service::strong_consistency::write_mutation>(&cmd.change)) {
+                    utils::chunked_vector<frozen_mutation> muts;
+                    muts.emplace_back(std::move(write->mutation));
+                    // Resolve schema and upgrade mutation if needed (no barrier during replay).
+                    auto schemas = co_await service::strong_consistency::resolve_and_upgrade_mutations(muts, table_id, db, sys_ks);
+                    co_await db.apply_in_memory(muts[0], schemas[0], db::rp_handle(), db::no_timeout, db::noop_large_data_guardrail::instance());
+                } else if (auto* marker = std::get_if<service::strong_consistency::resize_marker>(&cmd.change)) {
+                    // Built locally by every replica rather than carried in the log, see
+                    // raft_command.
+                    logger.debug("group {}: replaying the {} marker", group_id,
+                            marker->kind == service::strong_consistency::resize_marker_kind::start_resize
+                                    ? "start_resize" : "end_resize");
+                    auto m = service::strong_consistency::make_resize_marker_mutation(group_id, this_shard_id(), marker->kind);
+                    co_await db.apply_in_memory(m, db.find_column_family(m.schema()), db::rp_handle(), db::no_timeout);
+                }
+                // A no_op entry carries no state change, there is nothing to apply.
                 ++applied;
             }
 
@@ -194,12 +206,15 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
             // Rewrite uncommitted entries to the new commitlog to obtain rp_handles
             // that ensure the commitlog segments won't be deleted.
             if (entry->idx > commit_idx) {
-                commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = group_id, .entry = entry}, table_id);
+                // Accounted like the entry it replaces, which is not this tablet's table for every entry.
+                const auto target_table = service::strong_consistency::detail::command_target_table(entry, table_id);
+                commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = group_id, .entry = entry},
+                                                       target_table);
                 const auto write_fn = [&writer](auto& out) {
                     return writer.write(out);
                 };
                 const auto target_size = writer.size();
-                auto handle = co_await new_commitlog_ptr->add(table_id, target_size, db::no_timeout, db::commitlog_force_sync::yes, write_fn);
+                auto handle = co_await new_commitlog_ptr->add(target_table, target_size, db::no_timeout, db::commitlog_force_sync::yes, write_fn);
                 group_data.replay_positions.push_back(service::strong_consistency::index_and_replay_position{.index = entry->idx, .replay_position_handle = std::move(handle)});
                 ++rewritten;
             }
