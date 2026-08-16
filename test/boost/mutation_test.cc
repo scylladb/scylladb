@@ -2729,7 +2729,7 @@ SEASTAR_THREAD_TEST_CASE(test_cell_external_memory_usage) {
             auto before = alloc.allocated_bytes();
             auto ac = atomic_cell_or_collection(atomic_cell::make_live(*dt, 1, bv));
             auto after = alloc.allocated_bytes();
-            BOOST_CHECK_EQUAL(ac.external_memory_usage(*dt), after - before);
+            BOOST_CHECK_EQUAL(ac.external_memory_usage(), after - before);
         });
     };
 
@@ -2756,8 +2756,8 @@ SEASTAR_THREAD_TEST_CASE(test_cell_external_memory_usage) {
             auto before = alloc.allocated_bytes();
             auto cell2 = cell.copy(*collection_type);
             auto after = alloc.allocated_bytes();
-            BOOST_CHECK_EQUAL(cell2.external_memory_usage(*collection_type), cell.external_memory_usage(*collection_type));
-            BOOST_CHECK_EQUAL(cell2.external_memory_usage(*collection_type), after - before);
+            BOOST_CHECK_EQUAL(cell2.external_memory_usage(), cell.external_memory_usage());
+            BOOST_CHECK_EQUAL(cell2.external_memory_usage(), after - before);
         });
     };
 

@@ -171,7 +171,7 @@ bool atomic_cell_or_collection::equals(const abstract_type& type, const atomic_c
     }
 }
 
-size_t atomic_cell_or_collection::external_memory_usage(const abstract_type& t) const
+size_t atomic_cell_or_collection::external_memory_usage() const
 {
     return _data.external_memory_usage();
 }
