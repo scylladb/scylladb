@@ -94,14 +94,25 @@ class S3Server:
         resource.Bucket(self.bucket_name).create()
 
     def destroy_test_bucket(self):
-        """Empty and delete the per-test bucket using boto3."""
+        """Empty and delete the per-test bucket using boto3.
+
+        A no-op once the bucket is gone, so a caller that cannot tell whether
+        its deferred destroy was registered may call this and let the callback
+        run too.  A failed destroy leaves the bucket on record, so whichever of
+        the two runs second retries it.
+        """
+        if not self.bucket_name:
+            return
         try:
             resource = self.get_resource()
             bucket = resource.Bucket(self.bucket_name)
             bucket.objects.all().delete()
             bucket.delete()
         except Exception as e:
+            # Keep the name so that a retry still has a bucket to delete.
             logging.warning("Failed to destroy test bucket %s: %s", self.bucket_name, e)
+            return
+        self.bucket_name = None
 
     async def start(self):
         pass
@@ -148,7 +159,11 @@ class MinioWrapper(S3Server):
 
     async def stop(self):
         try:
-            await self.server.stop()
+            if self.server is not None:
+                # Dropped only on success, so that a retry still has a
+                # server to stop.
+                await self.server.stop()
+                self.server = None
         finally:
             if self.leased_host is not None:
                 await self.host_registry.release_host(self.leased_host)
@@ -191,14 +206,25 @@ class GSFront:
         resource.Bucket(self.bucket_name).create()
 
     def destroy_test_bucket(self):
-        """Empty and delete the per-test bucket using boto3."""
+        """Empty and delete the per-test bucket using boto3.
+
+        A no-op once the bucket is gone, so a caller that cannot tell whether
+        its deferred destroy was registered may call this and let the callback
+        run too.  A failed destroy leaves the bucket on record, so whichever of
+        the two runs second retries it.
+        """
+        if not self.bucket_name:
+            return
         try:
             resource = self.get_resource()
             bucket = resource.Bucket(self.bucket_name)
             bucket.objects.all().delete()
             bucket.delete()
         except Exception as e:
+            # Keep the name so that a retry still has a bucket to delete.
             logging.warning("Failed to destroy test bucket %s: %s", self.bucket_name, e)
+            return
+        self.bucket_name = None
 
     async def start(self):
         pass
@@ -270,20 +296,32 @@ class GSServerImpl(GSFront):
             raise Exception(f'Could not create test bucket: {response}')
 
     def destroy_test_bucket(self):
-        """Empty and delete the per-test bucket using GCS HTTP API."""
+        """Empty and delete the per-test bucket using GCS HTTP API.
+
+        A no-op once the bucket is gone, see S3Server.destroy_test_bucket().
+        """
+        if not self.bucket_name:
+            return
         try:
             # List and delete all objects first using boto3 (listing works on fake GCS)
             resource = self.get_resource()
             bucket = resource.Bucket(self.bucket_name)
             bucket.objects.all().delete()
             # Delete the bucket via GCS HTTP API
-            requests.delete(f'{self.endpoint}/storage/v1/b/{self.bucket_name}', timeout=10)
+            response = requests.delete(f'{self.endpoint}/storage/v1/b/{self.bucket_name}', timeout=10)
+            response.raise_for_status()
         except Exception as e:
+            # Keep the name so that a retry still has a bucket to delete.
             logging.warning("Failed to destroy test bucket %s: %s", self.bucket_name, e)
+            return
+        self.bucket_name = None
 
     async def stop(self):
         if self.server:
+            # Dropped only on success, so that a retry still has a server to
+            # stop.
             await self.server.stop()
+            self.server = None
         self.unpublish()
 
 
