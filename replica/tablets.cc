@@ -138,6 +138,11 @@ schema_ptr make_raft_schema(sstring name, bool is_group0) {
             .build();
     } else {
         return builder
+            // Progress of the resize (split or merge) which is replacing this group, if any.
+            // Only the presence of the markers matters - the kind of the resize in progress is
+            // carried by the tablet metadata.
+            .with_column("start_resize", boolean_type, column_kind::static_column)
+            .with_column("end_resize", boolean_type, column_kind::static_column)
             .set_comment("Persisted RAFT log, votes and snapshot info for strongly consistent tablets")
             .with_partitioner(dht::fixed_shard_partitioner::classname)
             .with_sharder(dht::fixed_shard_sharder::instance())

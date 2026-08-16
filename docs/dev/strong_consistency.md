@@ -40,7 +40,8 @@ We introduce a separate set of Raft system tables for strongly consistent tablet
 - `system.raft_groups_snapshots`
 - `system.raft_groups_snapshot_config`
 
-`system.raft_groups` stores only non-log Raft metadata (term, vote, commit_idx) — unlike
+`system.raft_groups` stores only non-log Raft metadata (term, vote, commit_idx, and the resize
+markers of a parent group being replaced by a tablet split or merge) — unlike
 `system.raft`, it does not contain log entries (those are stored in the commitlog).
 `system.raft_groups_snapshots` and `system.raft_groups_snapshot_config` mirror the logical
 contents of `system.raft_snapshots` and `system.raft_snapshot_config` respectively.
@@ -238,3 +239,41 @@ survive on disk, so uncommitted entries are still available for replay on the ne
 
 This is important: if we decremented the dirty count on shutdown, the commitlog might
 delete segments containing uncommitted Raft entries that we still need.
+
+# Tablet split
+
+A strongly consistent tablet keeps its data in a Raft group of its own, so splitting one is
+not just a matter of rewriting the tablet map: the group of the tablet being split has to be
+replaced by the groups of the two tablets it is split into. Three properties have to hold
+across the replacement:
+
+- no acknowledged write may be lost,
+- no read may observe a state older than a write already acknowledged,
+- no write may be accepted by a group which the new tablet map no longer refers to.
+
+This section describes how the split achieves that. Throughout it, and in the code, the group
+being replaced is called the **parent** and the groups replacing it the **children**. The same
+machinery is meant to serve a tablet merge, where a child has several parents, hence the
+neutral name *resize* in the identifiers; merging is not implemented yet and no merge decision
+is emitted for a strongly consistent table.
+
+Two different components are called a coordinator here. The **topology coordinator**
+(`service::topology_coordinator`) is the cluster-wide one which drives the split; the **request
+coordinator** (`service::strong_consistency::coordinator`) is the per-request, replica-side one
+which serves a read or a write. Both are named explicitly wherever the difference matters.
+
+The markers are ordinary entries in the parent's log, so they are replicated and applied in
+log order like any write. They are *not* carried as mutations, though: each marker is recorded
+as a static column of the group's own row in `system.raft_groups`, whose partition key contains
+the shard hosting the group, and replicas may host the same group on different shards. A single
+mutation could therefore not serve all of them, so `raft_command` is a variant
+(`write_mutation`, `resize_marker`, `no_op`) and every replica builds its own mutation when it
+applies the entry. Only the presence of a marker is ever read back; the kind of resize in
+progress comes from the tablet metadata.
+
+Building the mutation locally also puts the row in a different table than the tablet's own, and a
+flush credits a position to the table being flushed - so an entry is accounted to the table which
+receives what applying it writes rather than to the tablet's table. Every entry is classified
+before it is appended (`detail::command_target_table()`), which names `system.raft_groups` for a
+marker and the tablet's table for a write, and the applier moves the handle into the memtable
+receiving the row exactly as it does for a write.

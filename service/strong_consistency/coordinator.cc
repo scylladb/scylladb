@@ -390,14 +390,16 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         // which cells from the second entry are visible while the first entry
         // still wins on the cells they share. Such a history is not
         // linearizable.
-        const raft_command command {
+        write_mutation write {
             .mutation{mutation_gen(ts_with_term->timestamp)}
         };
-        raft::command raft_cmd;
-        ser::serialize(raft_cmd, command);
-
         logger.debug("mutate(): add_entry({}), {}",
-            command.mutation.pretty_printer(schema), state_fmt);
+            write.mutation.pretty_printer(schema), state_fmt);
+
+        // Moved into the command rather than copied - the frozen mutation is the whole
+        // payload of the write.
+        raft::command raft_cmd;
+        ser::serialize(raft_cmd, raft_command{.change = std::move(write)});
 
         future<> add_entry_result = co_await coroutine::as_future(
             op->raft_server.server().add_entry(std::move(raft_cmd),
