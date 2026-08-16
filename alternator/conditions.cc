@@ -523,6 +523,17 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
     const rjson::value* attribute_value_list = rjson::find(condition, "AttributeValueList");
     const rjson::value* value = rjson::find(condition, "Value");
     const rjson::value* exists = rjson::find(condition, "Exists");
+    // Validate the values given in the request, as we do for the values in
+    // ConditionExpression's ExpressionAttributeValues, so the checks below
+    // can assume that these values are well-formed.
+    if (value) {
+        validate_value(*value, "Expected");
+    }
+    if (attribute_value_list && attribute_value_list->IsArray()) {
+        for (const rjson::value& v : attribute_value_list->GetArray()) {
+            validate_value(v, "AttributeValueList");
+        }
+    }
     // There are three types of conditions that Expected supports:
     // A value, not-exists, and a comparison of some kind. Each allows
     // and requires a different combinations of parameters in the request
