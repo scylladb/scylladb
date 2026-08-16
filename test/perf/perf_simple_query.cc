@@ -23,6 +23,7 @@
 #include "db/config.hh"
 #include "schema/schema_builder.hh"
 #include "types/map.hh"
+#include "types/types.hh"
 #include "service/storage_proxy.hh"
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
@@ -37,7 +38,11 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/loop.hh>
+#include <seastar/core/coroutine.hh>
+#include "utils/chunked_vector.hh"
+#include "transport/messages/result_message.hh"
 #include <ranges>
+#include <limits>
 
 static const sstring table_name = "cf";
 
@@ -133,6 +138,10 @@ template <> struct fmt::formatter<query_perf_result> : fmt::formatter<string_vie
 
 struct test_config {
     enum class run_mode { read, write, del };
+    // Shape of the read issued by the clustering-key workload.
+    //  partition: single-partition read spanning every clustering row
+    //  slice:     read restricted by clustering bounds
+    enum class clustering_query_kind { partition, slice };
     run_mode mode;
     unsigned partitions;
     unsigned concurrency;
@@ -156,6 +165,14 @@ struct test_config {
     // own. A logstor run leaves it on, since compaction is what gives free segments back and
     // without it a write test stalls once the segment pool is full of dead records.
     bool auto_compaction;
+    // 0 keeps the historical schema, which has no clustering key at all.
+    unsigned clustering_columns = 0;
+    unsigned rows_per_partition = 1;
+    unsigned clustering_fanout = 64;
+    clustering_query_kind clustering_query = clustering_query_kind::partition;
+    // Add the clustering key columns to the SELECT list, which is what makes
+    // the coordinator ask for them and the replica serialize them per row.
+    bool project_key = false;
 };
 
 // Partition sequence numbers grouped by the shard that services reads for them,
@@ -174,17 +191,34 @@ std::ostream& operator<<(std::ostream& os, const test_config::run_mode& m) {
     abort();
 }
 
+static const char* clustering_query_kind_name(test_config::clustering_query_kind q) {
+    switch (q) {
+        case test_config::clustering_query_kind::partition: return "partition";
+        case test_config::clustering_query_kind::slice: return "slice";
+    }
+    abort();
+}
+
 std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
-    return os << "{partitions=" << cfg.partitions
-           << ", concurrency=" << cfg.concurrency
-           << ", mode=" << cfg.mode
-           << ", query_single_key=" << (cfg.query_single_key ? "yes" : "no")
-           << ", counters=" << (cfg.counters ? "yes" : "no")
-           << ", collection=" << cfg.collection
-           << ", shard_aware=" << (cfg.shard_aware ? "yes" : "no")
-           << ", logstor=" << (cfg.logstor ? "yes" : "no")
-           << ", auto_compaction=" << (cfg.auto_compaction ? "yes" : "no")
-           << "}";
+    os << "{partitions=" << cfg.partitions
+       << ", concurrency=" << cfg.concurrency
+       << ", mode=" << cfg.mode
+       << ", query_single_key=" << (cfg.query_single_key ? "yes" : "no")
+       << ", counters=" << (cfg.counters ? "yes" : "no")
+       << ", collection=" << cfg.collection
+       << ", shard_aware=" << (cfg.shard_aware ? "yes" : "no")
+       << ", logstor=" << (cfg.logstor ? "yes" : "no")
+       << ", auto_compaction=" << (cfg.auto_compaction ? "yes" : "no");
+    if (cfg.clustering_columns > 0) {
+        os << ", clustering_columns=" << cfg.clustering_columns
+           << ", rows_per_partition=" << cfg.rows_per_partition
+           << ", clustering_fanout=" << cfg.clustering_fanout;
+        if (cfg.mode == test_config::run_mode::read) {
+            os << ", clustering_query=" << clustering_query_kind_name(cfg.clustering_query)
+               << ", project_key=" << (cfg.project_key ? "yes" : "no");
+        }
+    }
+    return os << "}";
 }
 
 // The statements the test measures, with the key left to be bound. Logstor holds a whole row per
@@ -240,7 +274,167 @@ static std::string make_timeout_using(const test_config& cfg) {
 
 static constexpr unsigned populate_concurrency = 100;
 
-static void create_partitions(cql_test_env& env, test_config& cfg) {
+// Clustering key workload: N components alternating utf8 and int32. Component i
+// of row r is r / fanout^(N-1-i), so nearby rows share a long equal prefix.
+
+static std::string ck_column_name(unsigned component) {
+    return fmt::format("CK{}", component);
+}
+
+static data_type ck_column_type(unsigned component) {
+    return component % 2 == 0 ? utf8_type : int32_type;
+}
+
+// Rejects configurations where the largest divisor computed below
+// (fanout^(clustering_columns - 1)) would overflow uint64_t; unchecked, the
+// overflow wraps the divisor to 0 and make_ck_components() divides by it.
+static void validate_clustering_fanout(const test_config& cfg) {
+    uint64_t max_div = 1;
+    for (unsigned i = 0; i + 1 < cfg.clustering_columns; ++i) {
+        if (max_div > std::numeric_limits<uint64_t>::max() / cfg.clustering_fanout) {
+            throw std::invalid_argument(fmt::format(
+                    "--clustering-fanout {} with --clustering-columns {} overflows uint64_t "
+                    "(fanout^(columns-1))", cfg.clustering_fanout, cfg.clustering_columns));
+        }
+        max_div *= cfg.clustering_fanout;
+    }
+}
+
+// Component i of row `row` is row / fanout^(clustering_columns - 1 - i).
+static uint64_t component_divisor(const test_config& cfg, unsigned i) {
+    uint64_t div = 1;
+    for (unsigned j = i + 1; j < cfg.clustering_columns; ++j) {
+        div *= cfg.clustering_fanout;
+    }
+    return div;
+}
+
+// Every odd-indexed clustering component is int32_type (see ck_column_type());
+// its value is (rows_per_partition - 1) / fanout^(clustering_columns - 1 - i),
+// which must fit in int32_t or the value narrows and row ordering breaks.
+static void validate_clustering_component_range(const test_config& cfg) {
+    const uint64_t max_row = cfg.rows_per_partition - 1;
+    for (unsigned i = 1; i < cfg.clustering_columns; i += 2) {
+        const uint64_t max_value = max_row / component_divisor(cfg, i);
+        if (max_value > uint64_t(std::numeric_limits<int32_t>::max())) {
+            throw std::invalid_argument(fmt::format(
+                    "--rows-per-partition {} with --clustering-columns {} and --clustering-fanout {} "
+                    "overflows int32_t in clustering component CK{} (value {} exceeds INT32_MAX)",
+                    cfg.rows_per_partition, cfg.clustering_columns, cfg.clustering_fanout, i, max_value));
+        }
+    }
+}
+
+static std::vector<bytes> make_ck_components(const test_config& cfg, uint64_t row) {
+    std::vector<bytes> components;
+    components.reserve(cfg.clustering_columns);
+    for (unsigned i = 0; i < cfg.clustering_columns; ++i) {
+        const uint64_t value = row / component_divisor(cfg, i);
+        if (i % 2 == 0) {
+            // Zero padded so that byte-wise utf8 ordering matches numeric ordering.
+            components.push_back(serialized(sstring(fmt::format("ck{}_{:010d}", i, value))));
+        } else {
+            components.push_back(serialized(int32_t(value)));
+        }
+    }
+    return components;
+}
+
+// Clustering key bind values of every row, precomputed so the measured loop does no formatting.
+using ck_bind_values = utils::chunked_vector<std::vector<cql3::raw_value>>;
+
+static ck_bind_values precompute_ck_bind_values(const test_config& cfg) {
+    ck_bind_values all;
+    all.reserve(cfg.rows_per_partition);
+    for (uint64_t row = 0; row < cfg.rows_per_partition; ++row) {
+        std::vector<cql3::raw_value> values;
+        for (auto&& c : make_ck_components(cfg, row)) {
+            values.push_back(cql3::raw_value::make_value(std::move(c)));
+        }
+        all.push_back(std::move(values));
+    }
+    return all;
+}
+
+// Without a clustering key column in the SELECT list the replica never serializes
+// clustering keys into the result, skipping the path this workload measures.
+static sstring clustering_key_projection(const test_config& cfg) {
+    sstring projection;
+    if (!cfg.project_key) {
+        return projection;
+    }
+    for (unsigned i = 0; i < cfg.clustering_columns; ++i) {
+        projection += format(", \"{}\"", ck_column_name(i));
+    }
+    return projection;
+}
+
+static std::string clustering_key_equality_restrictions(const test_config& cfg) {
+    std::string restrictions;
+    for (unsigned i = 0; i < cfg.clustering_columns; ++i) {
+        restrictions += fmt::format(" AND \"{}\" = ?", ck_column_name(i));
+    }
+    return restrictions;
+}
+
+// UPDATE touching a single row identified by its full primary key.
+static sstring clustering_update_query(const test_config& cfg, std::string_view usings = "") {
+    return format("UPDATE cf {}SET \"C0\" = {}, \"C1\" = {}, \"C2\" = {}, \"C3\" = {}, \"C4\" = {}{} WHERE \"KEY\" = ?{}",
+            usings, cell_values[0], cell_values[1], cell_values[2], cell_values[3], cell_values[4],
+            cfg.collection > 0 ? fmt::format(", \"CC\" = {}", make_collection_literal(cfg.collection)) : std::string(),
+            clustering_key_equality_restrictions(cfg));
+}
+
+static std::vector<cql3::raw_value> make_row_bind_values(const bytes& key, const std::vector<cql3::raw_value>& ck) {
+    std::vector<cql3::raw_value> values;
+    values.reserve(ck.size() + 1);
+    values.push_back(cql3::raw_value::make_value(key));
+    values.insert(values.end(), ck.begin(), ck.end());
+    return values;
+}
+
+// Populates cfg.partitions partitions of cfg.rows_per_partition rows each.
+static void create_clustering_partitions(cql_test_env& env, test_config& cfg, sharded<ck_bind_values>& ck_values) {
+    std::cout << "Creating " << cfg.partitions << " partitions of "
+              << cfg.rows_per_partition << " rows..." << std::endl;
+    auto id = env.prepare(clustering_update_query(cfg)).get();
+    const auto& ck = ck_values.local();
+    auto write_row = [&env, id, &ck] (unsigned sequence, unsigned row) {
+        return env.execute_prepared(id, make_row_bind_values(make_key(sequence), ck[row]),
+                db::consistency_level::QUORUM).discard_result();
+    };
+    if (cfg.memtable_partitions > 0) {
+        // Flushing every so many partitions needs the writes to happen in a known order.
+        unsigned next_flush = cfg.memtable_partitions;
+        auto rows = std::views::iota(0u, cfg.rows_per_partition);
+        for (unsigned sequence = 0; sequence < cfg.partitions; ++sequence) {
+            max_concurrent_for_each(rows.begin(), rows.end(), populate_concurrency, [&write_row, sequence] (unsigned row) {
+                return write_row(sequence, row);
+            }).get();
+            if (sequence + 1 >= next_flush) {
+                env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
+                next_flush += cfg.memtable_partitions;
+            }
+        }
+    } else {
+        const uint64_t rows_per_partition = cfg.rows_per_partition;
+        auto all_rows = std::views::iota(uint64_t(0), cfg.partitions * rows_per_partition);
+        max_concurrent_for_each(all_rows.begin(), all_rows.end(), populate_concurrency, [&write_row, rows_per_partition] (uint64_t i) {
+            return write_row(i / rows_per_partition, i % rows_per_partition);
+        }).get();
+        env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
+    }
+
+    if (cfg.flush_memtables) {
+        std::cout << "Flushing partitions..." << std::endl;
+        env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
+    }
+}
+
+static void create_partitions(cql_test_env& env, test_config& cfg, sharded<ck_bind_values>& ck_values) {
+    if (cfg.clustering_columns > 0) {
+        return create_clustering_partitions(env, cfg, ck_values);
+    }
     std::cout << "Creating " << cfg.partitions << " partitions..." << std::endl;
     auto id = env.prepare(cfg.counters ? make_counter_update_query() : make_write_query(cfg)).get();
     // Strongly consistent writes need QUORUM/LOCAL_QUORUM. For eventual consistency it does not
@@ -323,9 +517,27 @@ static void warm_logstor_cache(cql_test_env& env, const test_config& cfg, cql3::
     max_concurrent_for_each(sequences.begin(), sequences.end(), populate_concurrency, std::move(read)).get();
 }
 
-static std::vector<query_perf_result> test_read(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
-    create_partitions(env, cfg);
+// Paged read, so that large partitions/slices stay under the unpaged query limits.
+// Goes through execute_prepared_with_qo, unlike the unpaged reads, so per-op overhead differs across shapes.
+static future<> read_partition_paged(cql_test_env& env, const test_config& cfg, cql3::prepared_cache_key_type id, std::vector<cql3::raw_value> binds) {
+    static constexpr int32_t page_size = 5000;
+    lw_shared_ptr<const service::pager::paging_state> state;
+    do {
+        auto qo = std::make_unique<cql3::query_options>(cfg.consistency_level, binds,
+                cql3::query_options::specific_options{page_size, state, {}, api::new_timestamp()});
+        auto msg = co_await env.execute_prepared_with_qo(id, std::move(qo));
+        auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+        if (!rows) {
+            throw std::runtime_error("paged read returned a non-rows result");
+        }
+        state = rows->rs().get_metadata().paging_state();
+    } while (state);
+}
+
+static std::vector<query_perf_result> test_read(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs, sharded<ck_bind_values>& ck_values) {
+    create_partitions(env, cfg, ck_values);
     sstring query = "select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"";
+    query += clustering_key_projection(cfg);
     if (cfg.collection > 0) {
         query += ", \"CC\"";
     }
@@ -347,6 +559,9 @@ static std::vector<query_perf_result> test_read(cql_test_env& env, test_config& 
                 // one measurement window instead of issuing a cross-shard query.
                 return seastar::sleep(std::chrono::seconds(1));
             }
+            if (cfg.clustering_columns > 0) {
+                return read_partition_paged(env, cfg, id, {cql3::raw_value::make_value(std::move(*key))});
+            }
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
@@ -364,8 +579,8 @@ static std::vector<query_perf_result> test_write(cql_test_env& env, test_config&
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
-static std::vector<query_perf_result> test_delete(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
-    create_partitions(env, cfg);
+static std::vector<query_perf_result> test_delete(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs, sharded<ck_bind_values>& ck_values) {
+    create_partitions(env, cfg, ck_values);
     auto id = env.prepare(make_delete_query(cfg, make_timeout_using(cfg))).get();
     return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
             auto key = next_key(cfg, shard_seqs.local());
@@ -391,6 +606,84 @@ static std::vector<query_perf_result> test_counter_update(cql_test_env& env, tes
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
+// Pins the first N-1 components and ranges over the last one across a fanout group.
+static std::vector<query_perf_result> test_clustering_slice_read(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs, sharded<ck_bind_values>& ck_values) {
+    create_partitions(env, cfg, ck_values);
+    const unsigned last = cfg.clustering_columns - 1;
+    sstring query = "select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"";
+    query += clustering_key_projection(cfg);
+    if (cfg.collection > 0) {
+        query += ", \"CC\"";
+    }
+    query += " from cf where \"KEY\" = ?";
+    for (unsigned i = 0; i < last; ++i) {
+        query += format(" and \"{}\" = ?", ck_column_name(i));
+    }
+    query += format(" and \"{0}\" >= ? and \"{0}\" <= ?", ck_column_name(last));
+    if (cfg.bypass_cache) {
+        query += " bypass cache";
+    }
+    if (!cfg.timeout.empty()) {
+        query += " using timeout " + cfg.timeout;
+    }
+    auto id = env.prepare(query).get();
+
+    // Per-shard bind values of every slice, without the partition key.
+    sharded<ck_bind_values> slices;
+    auto stop_slices = defer([&slices] noexcept {
+        slices.stop().get();
+    });
+    slices.start().get();
+    slices.invoke_on_all([&cfg, &ck_values, last] (ck_bind_values& out) {
+        const auto& all = ck_values.local();
+        for (uint64_t first_row = 0; first_row < cfg.rows_per_partition; first_row += cfg.clustering_fanout) {
+            const uint64_t last_row = std::min<uint64_t>(first_row + cfg.clustering_fanout, cfg.rows_per_partition) - 1;
+            auto values = all[first_row];
+            values.push_back(all[last_row][last]);
+            out.push_back(std::move(values));
+        }
+    }).get();
+    std::cout << "Slice reads over " << slices.local().size() << " clustering ranges of up to "
+              << cfg.clustering_fanout << " rows" << std::endl;
+
+    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, &slices, id] {
+            auto key = next_key(cfg, shard_seqs.local());
+            if (!key) {
+                return seastar::sleep(std::chrono::seconds(1));
+            }
+            const auto& local_slices = slices.local();
+            const auto& slice = local_slices[tests::random::get_int<uint64_t>(local_slices.size() - 1)];
+            auto values = make_row_bind_values(*key, slice);
+            return read_partition_paged(env, cfg, id, std::move(values));
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
+}
+
+// Write/delete of a single clustering row picked at random.
+static std::vector<query_perf_result> test_clustering_row_op(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs, sharded<ck_bind_values>& ck_values, sstring query) {
+    auto id = env.prepare(std::move(query)).get();
+    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, &ck_values, id] {
+            auto key = next_key(cfg, shard_seqs.local());
+            if (!key) {
+                return seastar::sleep(std::chrono::seconds(1));
+            }
+            const auto& local_ck = ck_values.local();
+            const auto& ck = local_ck[tests::random::get_int<uint64_t>(local_ck.size() - 1)];
+            auto values = make_row_bind_values(*key, ck);
+            return env.execute_prepared(id, std::move(values), cfg.consistency_level).discard_result();
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
+}
+
+static std::vector<query_perf_result> test_clustering_write(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs, sharded<ck_bind_values>& ck_values) {
+    return test_clustering_row_op(env, cfg, shard_seqs, ck_values, clustering_update_query(cfg, make_timeout_using(cfg)));
+}
+
+static std::vector<query_perf_result> test_clustering_delete(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs, sharded<ck_bind_values>& ck_values) {
+    create_partitions(env, cfg, ck_values);
+    return test_clustering_row_op(env, cfg, shard_seqs, ck_values,
+            format("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"{} FROM cf {}WHERE \"KEY\" = ?{}",
+                    cfg.collection > 0 ? ", \"CC\"" : "", make_timeout_using(cfg), clustering_key_equality_restrictions(cfg)));
+}
+
 static schema_ptr make_counter_schema(std::string_view ks_name) {
     return schema_builder(this_smp_shard_count(), ks_name, "cf")
             .with_column("KEY", bytes_type, column_kind::partition_key)
@@ -409,8 +702,11 @@ static std::vector<query_perf_result> do_cql_test(cql_test_env& env, test_config
             return *make_counter_schema(ks_name);
         }
         auto sb = schema_builder(this_smp_shard_count(), ks_name, "cf")
-                .with_column("KEY", bytes_type, column_kind::partition_key)
-                .with_column("C0", bytes_type)
+                .with_column("KEY", bytes_type, column_kind::partition_key);
+        for (unsigned i = 0; i < cfg.clustering_columns; ++i) {
+            sb.with_column(to_bytes(ck_column_name(i)), ck_column_type(i), column_kind::clustering_key);
+        }
+        sb.with_column("C0", bytes_type)
                 .with_column("C1", bytes_type)
                 .with_column("C2", bytes_type)
                 .with_column("C3", bytes_type)
@@ -423,6 +719,15 @@ static std::vector<query_perf_result> do_cql_test(cql_test_env& env, test_config
         }
         return *sb.build();
     }).get();
+
+    if (cfg.clustering_columns > 0) {
+        auto s = env.local_db().find_column_family("ks", table_name).schema();
+        SCYLLA_ASSERT(s->clustering_key_size() == cfg.clustering_columns);
+        auto first = clustering_key::from_exploded(*s, make_ck_components(cfg, 0));
+        auto last = clustering_key::from_exploded(*s, make_ck_components(cfg, cfg.rows_per_partition - 1));
+        fmt::print("Clustering key has {} component(s); first row {}, last row {}\n",
+                s->clustering_key_size(), first.with_schema(*s), last.with_schema(*s));
+    }
 
     if (!cfg.auto_compaction) {
         std::cout << "Disabling auto compaction" << std::endl;
@@ -444,17 +749,37 @@ static std::vector<query_perf_result> do_cql_test(cql_test_env& env, test_config
         s = table[this_shard_id()];
     }).get();
 
+    // Per-shard clustering bind values; stays unstarted without a clustering key.
+    sharded<ck_bind_values> ck_values;
+    auto stop_ck_values = defer([&ck_values] noexcept {
+        ck_values.stop().get();
+    });
+    if (cfg.clustering_columns > 0) {
+        ck_values.start().get();
+        ck_values.invoke_on_all([&cfg] (ck_bind_values& v) {
+            v = precompute_ck_bind_values(cfg);
+        }).get();
+    }
+
     switch (cfg.mode) {
     case test_config::run_mode::read:
-        return test_read(env, cfg, shard_seqs);
+        if (cfg.clustering_columns > 0 && cfg.clustering_query == test_config::clustering_query_kind::slice) {
+            return test_clustering_slice_read(env, cfg, shard_seqs, ck_values);
+        }
+        return test_read(env, cfg, shard_seqs, ck_values);
     case test_config::run_mode::write:
         if (cfg.counters) {
             return test_counter_update(env, cfg, shard_seqs);
+        } else if (cfg.clustering_columns > 0) {
+            return test_clustering_write(env, cfg, shard_seqs, ck_values);
         } else {
             return test_write(env, cfg, shard_seqs);
         }
     case test_config::run_mode::del:
-        return test_delete(env, cfg, shard_seqs);
+        if (cfg.clustering_columns > 0) {
+            return test_clustering_delete(env, cfg, shard_seqs, ck_values);
+        }
+        return test_delete(env, cfg, shard_seqs, ck_values);
     };
     abort();
 }
@@ -474,6 +799,15 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     }
     params["logstor"] = cfg.logstor;
     params["auto_compaction"] = cfg.auto_compaction;
+    if (cfg.clustering_columns > 0) {
+        params["clustering_columns"] = cfg.clustering_columns;
+        params["rows_per_partition"] = cfg.rows_per_partition;
+        params["clustering_fanout"] = cfg.clustering_fanout;
+        if (cfg.mode == test_config::run_mode::read) {
+            params["clustering_query"] = clustering_query_kind_name(cfg.clustering_query);
+            params["project_key"] = cfg.project_key;
+        }
+    }
 
     std::string test_type;
     switch (cfg.mode) {
@@ -486,6 +820,19 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     }
     if (cfg.logstor) {
         test_type += "_logstor";
+    }
+    if (cfg.clustering_columns > 0) {
+        // clustering_query only shapes the read query; write/delete always
+        // operate on a single row by full key regardless of its value, so
+        // don't tag them with a read shape they didn't use.
+        if (cfg.mode == test_config::run_mode::read) {
+            test_type += fmt::format("_clustering_{}", clustering_query_kind_name(cfg.clustering_query));
+            if (cfg.project_key) {
+                test_type += "_projected_key";
+            }
+        } else {
+            test_type += "_clustering";
+        }
     }
 
     Json::Value extra_stats;
@@ -524,6 +871,11 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("operations-per-shard", bpo::value<unsigned>(), "run this many operations per shard (overrides duration)")
         ("counters", "test counters")
         ("collection", bpo::value<unsigned>()->default_value(0), "add map<text,text> collection column with N cells per row (excludes --counters)")
+        ("clustering-columns", bpo::value<unsigned>()->default_value(0), "number of clustering key components (0 keeps the clustering-key-less schema); components alternate utf8 and int32 (excludes --counters)")
+        ("rows-per-partition", bpo::value<unsigned>()->default_value(1024), "clustering rows per partition, with --clustering-columns")
+        ("clustering-fanout", bpo::value<unsigned>()->default_value(64), "number of consecutive rows sharing the same clustering key prefix; also the width of a slice read")
+        ("clustering-query", bpo::value<std::string>()->default_value("partition"), "clustering read shape: 'partition' (whole partition) or 'slice' (clustering bounds)")
+        ("project-key", "add the clustering key columns to the SELECT list, so reads serialize a clustering key per row (requires --clustering-columns)")
         ("tablets", "use tablets")
         ("logstor", "store the table with the logstor storage engine instead of sstables (implies --tablets)")
         ("logstor-disk-size-in-mb", bpo::value<unsigned>()->default_value(1024), "size of the logstor segment pool")
@@ -631,6 +983,48 @@ int scylla_simple_query_main(int argc, char** argv) {
             if (cfg.logstor && app.configuration().contains("strongly-consistent-tables")) {
                 throw std::invalid_argument("--strongly-consistent-tables and --logstor are mutually exclusive: logstor is not supported in strongly consistent keyspaces");
             }
+            cfg.clustering_columns = app.configuration()["clustering-columns"].as<unsigned>();
+            if (cfg.clustering_columns > 0) {
+                if (cfg.counters) {
+                    throw std::invalid_argument("--clustering-columns and --counters are mutually exclusive");
+                }
+                if (cfg.logstor) {
+                    throw std::invalid_argument("--clustering-columns and --logstor are mutually exclusive: logstor holds one row per partition");
+                }
+                // Strongly consistent selects ignore page size and may return a bounce.
+                if (app.configuration().contains("strongly-consistent-tables")) {
+                    throw std::invalid_argument("--clustering-columns and --strongly-consistent-tables are mutually exclusive: strongly consistent selects are not paged");
+                }
+                cfg.rows_per_partition = app.configuration()["rows-per-partition"].as<unsigned>();
+                cfg.clustering_fanout = app.configuration()["clustering-fanout"].as<unsigned>();
+                if (cfg.rows_per_partition == 0 || cfg.clustering_fanout == 0) {
+                    throw std::invalid_argument("--rows-per-partition and --clustering-fanout must be positive");
+                }
+                validate_clustering_fanout(cfg);
+                validate_clustering_component_range(cfg);
+                cfg.project_key = app.configuration().contains("project-key");
+                auto q = app.configuration()["clustering-query"].as<std::string>();
+                if (q == "partition") {
+                    cfg.clustering_query = test_config::clustering_query_kind::partition;
+                } else if (q == "slice") {
+                    cfg.clustering_query = test_config::clustering_query_kind::slice;
+                } else {
+                    throw std::invalid_argument(fmt::format("unknown --clustering-query: {}", q));
+                }
+                if (app.configuration()["partitions"].defaulted()) {
+                    // The default partition count assumes one row per partition;
+                    // populating it with rows_per_partition rows each would take
+                    // far too long.
+                    cfg.partitions = 100;
+                }
+            } else {
+                for (const char* opt : {"project-key", "rows-per-partition", "clustering-fanout", "clustering-query"}) {
+                    const auto& v = app.configuration();
+                    if (v.contains(opt) && !v[opt].defaulted()) {
+                        throw std::invalid_argument(fmt::format("--{} requires --clustering-columns", opt));
+                    }
+                }
+            }
             if (app.configuration().contains("tablets") || cfg.logstor) {
                 cfg.initial_tablets = app.configuration()["initial-tablets"].as<unsigned>();
             }
@@ -641,6 +1035,12 @@ int scylla_simple_query_main(int argc, char** argv) {
             } else {
                 cfg.mode = test_config::run_mode::read;
             };
+            if (cfg.mode != test_config::run_mode::read) {
+                const auto& v = app.configuration();
+                if (v.contains("project-key") || (v.contains("clustering-query") && !v["clustering-query"].defaulted())) {
+                    throw std::invalid_argument("--project-key and --clustering-query only apply to reads");
+                }
+            }
             if (app.configuration().contains("operations-per-shard")) {
                 cfg.operations_per_shard = app.configuration()["operations-per-shard"].as<unsigned>();
             }
