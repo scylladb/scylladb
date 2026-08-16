@@ -277,3 +277,25 @@ receives what applying it writes rather than to the tablet's table. Every entry 
 before it is appended (`detail::command_target_table()`), which names `system.raft_groups` for a
 marker and the tablet's table for a write, and the applier moves the handle into the memtable
 receiving the row exactly as it does for a write.
+
+`service::strong_consistency::raft_resize_tracker` holds the per-shard state of every
+resize a replica takes part in, tracks which markers have been applied, and owns the promise
+the child appliers wait on. It is reloaded from `system.raft_groups` before the parent's Raft
+server is created, because after a restart the parent's committed entries are applied by
+commitlog replay rather than by `state_machine::apply()`, so nothing would fulfil the promise
+otherwise. Only the parent's start loads it: a child's applier merely needs the state to
+exist by the time it runs, which `groups_manager::update()` guarantees on its own,
+synchronously with recording the resize. The tracker deliberately holds nothing but that
+state: it is started before `groups_manager` so that the state machines and the commitlog
+replay can use it without the Raft servers being up, which anything driving those servers
+would undo.
+
+The state is dropped by the teardown of the parent's Raft server, which every ending of a resize
+this replica has observed goes through: the resize is only ever ended by the tablet map being
+replaced, and that takes the parent's tablet away. Nothing else takes it away in the meantime -
+the resize can no longer be revoked, and the tablet is not migrated while its replacement ids are
+recorded. The teardown may find a child's applier still
+parked on the promise - a node shutting down or a table being dropped gets there - so the promise
+is broken with an `abort_requested_exception`, which the state machine treats as a clean end of
+its fiber rather than as a background error. Each child's mapping is dropped by the child's own
+teardown, or by `update()` when it observes that the group now serves a tablet of its own.

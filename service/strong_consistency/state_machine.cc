@@ -22,6 +22,7 @@
 #include "utils/error_injection.hh"
 #include "schema/schema_registry.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
+#include "service/strong_consistency/raft_resize_tracker.hh"
 
 using namespace std::chrono_literals;
 
@@ -48,6 +49,7 @@ class state_machine : public raft_state_machine {
     service::migration_manager& _mm;
     db::system_keyspace& _sys_ks;
     raft_groups_storage& _persistence;
+    raft_resize_tracker& _resize_tracker;
 
     abort_source _as;
 
@@ -57,13 +59,15 @@ public:
         replica::database& db,
         service::migration_manager& mm,
         db::system_keyspace& sys_ks,
-        raft_groups_storage& persistence)
+        raft_groups_storage& persistence,
+        raft_resize_tracker& resize_tracker)
         : _tablet(tablet)
         , _group_id(gid)
         , _db(db)
         , _mm(mm)
         , _sys_ks(sys_ks)
         , _persistence(persistence)
+        , _resize_tracker(resize_tracker)
     {
     }
 
@@ -103,6 +107,7 @@ public:
                     co_await _db.apply_in_memory(m, cf,
                             std::move(replay_positions[i].replay_position_handle),
                             db::no_timeout);
+                    _resize_tracker.mark_resize_phase(_group_id, marker->kind);
                     continue;
                 }
                 // Only a write carries a mutation; a resize marker describes a change which every
@@ -270,9 +275,10 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     replica::database& db,
     service::migration_manager& mm,
     db::system_keyspace& sys_ks,
-    raft_groups_storage& persistence)
+    raft_groups_storage& persistence,
+    raft_resize_tracker& resize_tracker)
 {
-    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence);
+    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence, resize_tracker);
 }
 
 namespace detail {
