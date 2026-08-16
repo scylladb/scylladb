@@ -14,7 +14,7 @@ from typing import NamedTuple
 import pytest
 import requests.exceptions
 
-from test import TOP_SRC_DIR, path_to
+from test import TOP_SRC_DIR, asan_options, path_to, ubsan_options
 from test.nodetool.rest_api_mock import set_expected_requests, expected_request, get_expected_requests, \
     get_unexpected_requests, expected_requests_manager
 from test.pylib.host_registry import HostRegistry
@@ -208,9 +208,8 @@ def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
                 jmx_ip, jmx_port = jmx
                 cmd = [nodetool_path, "-h", jmx_ip, "-p", str(jmx_port), method]
                 cmd += list(args)
-            suppressions_path = TOP_SRC_DIR / "ubsan-suppressions.supp"
-            env = {'UBSAN_OPTIONS': f'halt_on_error=1:abort_on_error=1:suppressions={suppressions_path}',
-                   'ASAN_OPTIONS': f'disable_coredump=0:abort_on_error=1:detect_stack_use_after_return=1'}
+            env = {'UBSAN_OPTIONS': ubsan_options(),
+                   'ASAN_OPTIONS': asan_options()}
             res = subprocess.run(cmd, capture_output=True, text=True, env=env)
             sys.stdout.write(res.stdout)
             sys.stderr.write(res.stderr)
