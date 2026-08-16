@@ -2898,7 +2898,13 @@ public:
     future<table_resize_plan> make_resize_plan(const migration_plan& plan) {
         table_resize_plan resize_plan;
 
-        if (!_tm->tablets().balancing_enabled()) {
+        if (!_tm->tablets().balancing_enabled()
+                // Resize decisions are emitted by the balancer, so a test which needs a resize
+                // without the balancer moving tablets underneath it has them planned by this
+                // injection instead. Migrations are not planned here, and the paths which do plan
+                // them stay behind balancing_enabled() - except node drain and RF change, which a
+                // test enabling this injection must therefore not perform.
+                && !utils::get_local_injector().enter("allow_tablet_resize_without_balancing")) {
             co_return std::move(resize_plan);
         }
 

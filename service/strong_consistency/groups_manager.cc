@@ -158,7 +158,14 @@ auto raft_server::begin_mutate(abort_source& as) -> begin_mutate_result {
         // so callers wait on leader_info_cond until their own deadline fires.
         return need_wait_for_leader{wait_with_abort_source(_state.leader_info_cond, as)};
     }
-    const auto new_ts = std::max(api::new_timestamp(), _state.leader_info->last_timestamp + 1);
+    auto new_ts = std::max(api::new_timestamp(), _state.leader_info->last_timestamp + 1);
+    if (utils::get_local_injector().enter("sc_inflate_write_timestamp")) {
+        // Test-only: hand out timestamps from a clock running far ahead of wall clock. A clock
+        // legitimately gets ahead whenever timestamps are handed out faster than wall clock ticks.
+        // It never gets far enough ahead for a test to catch a window in which another clock lags
+        // it, hence this injection.
+        new_ts += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::hours(1)).count();
+    }
     _state.leader_info->last_timestamp = new_ts;
     return timestamp_with_term{new_ts, term};
 }
@@ -1141,6 +1148,14 @@ future<bool> groups_manager::handle_process_raft_resize(locator::global_tablet_i
         // which observed !start_resize is appended before the end_resize marker below.
         _resize_tracker.mark_resize_phase(parent_gid, resize_marker_kind::start_resize);
     }
+
+    // Holds the resize in the window where the parent no longer accepts writes but the children
+    // have not been released yet, which is otherwise too short to aim at. Not bounded by the RPC
+    // deadline, unlike every other wait here: the framework turns anything but an
+    // abort_requested_exception into an internal error. A test holding this keeps a handler parked,
+    // and must release the injection before it expects a teardown or a shutdown.
+    co_await utils::get_local_injector().inject("sc_pause_before_end_resize",
+            utils::wait_for_message(std::chrono::minutes(5)));
 
     if (!_resize_tracker.has_applied_end_resize(parent_gid)) {
         // Before the children take over for good, we lift their clocks above the parent's. The
