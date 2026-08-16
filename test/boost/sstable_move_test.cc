@@ -15,6 +15,7 @@
 #include "test/lib/sstable_test_env.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/simple_schema.hh"
+#include "test/lib/key_utils.hh"
 #include "sstable_test.hh"
 #include "sstables/exceptions.hh"
 
@@ -158,8 +159,10 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_clone_preserves_staging_state) {
     simple_schema ss;
     auto schema = ss.schema();
 
-    // Create an sstable in normal state.
-    auto sst = make_sstable_containing(env.make_sst_factory(schema), {ss.new_mutation("key1")}).get();
+    // Create an sstable in normal state. The key must be owned by this shard, or
+    // sstable::write_scylla_metadata() fails to generate sharding metadata once smp > 1.
+    auto pkey = tests::generate_partition_key(schema);
+    auto sst = make_sstable_containing(env.make_sst_factory(schema), {mutation(schema, std::move(pkey))}).get();
 
     // Move it to staging state.
     sst->change_state(sstable_state::staging).get();
