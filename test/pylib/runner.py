@@ -42,11 +42,7 @@ from test.pylib.host_registry import HostRegistry
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.scylla_cluster import ScyllaCluster
-from test.pylib.scylla_server import (
-    ScyllaServer,
-    get_current_version_description,
-    merge_cmdline_options,
-)
+from test.pylib.scylla_server import merge_cmdline_options
 from test.pylib.skip_reason_plugin import skip_marker
 from test.pylib.util import get_modes_to_run, scale_timeout_by_mode, get_xdist_worker_id, LogPrefixAdapter
 from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
@@ -888,42 +884,18 @@ def create_cluster_factory(suite_config: TestSuiteConfig,
 
     cluster_size = suite_config.cfg.get("cluster", {}).get("initial_size", 1)
 
-    def create_server(create_cfg: ScyllaCluster.CreateServerParams):
-        cmdline_options = suite_config.cfg.get("extra_scylla_cmdline_options", [])
-        if type(cmdline_options) == str:
-            cmdline_options = [cmdline_options]
-        cmdline_options = merge_cmdline_options(cmdline_options, create_cfg.cmdline_from_test)
-        cmdline_options = merge_cmdline_options(cmdline_options, options.extra_scylla_cmdline_options.split())
-        # There are multiple sources of config options, with increasing priority
-        # (if two sources provide the same config option, the higher priority one wins):
-        # 1. the defaults
-        # 2. suite-specific config options (in "extra_scylla_config_options")
-        # 3. config options from tests (when servers are added during a test)
-        config_options = {
-            "authenticator": "PasswordAuthenticator",
-            "authorizer": "CassandraAuthorizer",
-            "tablets_initial_scale_factor": 4 if mode == "release" else 2,
-            **suite_config.cfg.get("extra_scylla_config_options", {}),
-            **create_cfg.config_from_test,
-        }
-        server = ScyllaServer(
-            mode=mode,
-            version=(create_cfg.version or get_current_version_description(scylla_exe)),
-            vardir=log_dir,
-            logger=create_cfg.logger,
-            cluster_name=create_cfg.cluster_name,
-            ip_addr=create_cfg.ip_addr,
-            seeds=create_cfg.seeds,
-            cmdline_options=cmdline_options,
-            config_options=config_options,
-            property_file=create_cfg.property_file,
-            append_env=base_env,
-            server_encryption=create_cfg.server_encryption)
-
-        return server
-
     async def create_cluster(logger: logging.Logger | logging.LoggerAdapter) -> ScyllaCluster:
-        cluster = ScyllaCluster(logger, cluster_size, create_server)
+        cluster = ScyllaCluster(
+            logger=logger,
+            vardir=log_dir,
+            replicas=cluster_size,
+            mode=mode,
+            cmdline_options=suite_config.cfg.get("extra_scylla_cmdline_options", []),
+            cmdline_options_override=options.extra_scylla_cmdline_options.split(),
+            config_options=suite_config.cfg.get("extra_scylla_config_options", {}),
+            append_env=base_env,
+            scylla_exe=scylla_exe,
+        )
 
         async def stop() -> None:
             await cluster.stop()

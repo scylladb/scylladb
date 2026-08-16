@@ -50,8 +50,8 @@ from test.pylib.util import async_rmtree, read_last_line, get_xdist_worker_id, s
 from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
 
 
-def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addrs: List[str], cluster_name: str,
-                     socket_path: str, server_encryption: str) -> dict[str, object]:
+def make_scylla_conf(mode: str, host_addr: str, seed_addrs: List[str], cluster_name: str,
+                     server_encryption: str) -> dict[str, object]:
     # We significantly increase default timeouts to allow running tests on a very slow
     # setup (but without network losses). These timeouts can impact the running time of
     # topology tests. For example, the barrier_and_drain topology command waits until
@@ -63,7 +63,6 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
 
     return {
         'cluster_name': cluster_name,
-        'workdir': str(workdir.resolve()),
         'listen_address': host_addr,
         'rpc_address': host_addr,
         'api_address': host_addr,
@@ -112,8 +111,6 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
         'reader_concurrency_semaphore_kill_limit_multiplier': 0,
         'view_update_reader_concurrency_semaphore_serialize_limit_multiplier': 0,
         'view_update_reader_concurrency_semaphore_kill_limit_multiplier': 0,
-
-        'maintenance_socket': socket_path,
 
         'auth_superuser_name': 'cassandra',
         # password is 'cassandra'
@@ -308,15 +305,14 @@ class ScyllaServer:
     _host_id: HostID                             # Host id (UUID)
     newid = itertools.count(start=1).__next__   # Sequential unique id
 
-    def __init__(self, mode: str, version: ScyllaVersionDescription, vardir: str | pathlib.Path,
+    def __init__(self,
                  logger: Union[logging.Logger, logging.LoggerAdapter],
-                 cluster_name: str, ip_addr: str, seeds: List[str],
+                 vardir: pathlib.Path,
+                 version: ScyllaVersionDescription,
                  cmdline_options: List[str],
                  config_options: Dict[str, Any],
                  property_file: Dict[str, Any],
-                 append_env: Dict[str,Any],
-                 server_encryption: str) -> None:
-        # pylint: disable=too-many-arguments
+                 append_env: Dict[str, str]) -> None:
         self.server_id = ServerNum(ScyllaServer.newid())
         xdist_worker_id = get_xdist_worker_id()
         # this variable needed to make a cleanup after server is not needed anymore
@@ -330,14 +326,9 @@ class ScyllaServer:
         self.notify_socket: Optional[socket.socket] = None
         self._received_serving = False
         self.exe = pathlib.Path(version.path).resolve()
-        self.vardir = pathlib.Path(vardir)
         self.logger = logger
         self.log_file = None
-        self.cmdline_options = merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, version.argv)
-        self.cmdline_options = merge_cmdline_options(self.cmdline_options, cmdline_options)
-        self.cluster_name = cluster_name
-        self.ip_addr = IPAddress(ip_addr)
-        self.seeds = seeds
+        self.cmdline_options = cmdline_options
         self.auth_provider: Optional[AuthProvider] = None
         self.cmd: Optional[Process] = None
         self.start_stop_lock = asyncio.Lock()
@@ -348,7 +339,7 @@ class ScyllaServer:
         self.serving_signal = None
         shortname = f"scylla-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}"
 
-        workdir = self.vardir / shortname
+        workdir = pathlib.Path(vardir) / shortname
         for opt in ("--workdir", "-W"):
             try:
                 id = self.cmdline_options.index(opt)
@@ -368,28 +359,24 @@ class ScyllaServer:
         self.resources_certificate_file = self.resourcesdir / "scylla.crt"
         self.resources_keyfile_file = self.resourcesdir / "scylla.key"
 
-        if property_file and "endpoint_snitch" not in config_options:
-            config_options["endpoint_snitch"] = "GossipingPropertyFileSnitch"
-
-        # Sum of basic server configuration and the user-provided config options.
-        self.config = make_scylla_conf(
-                mode = mode,
-                workdir = self.workdir,
-                host_addr = self.ip_addr,
-                seed_addrs = self.seeds,
-                cluster_name = self.cluster_name,
-                server_encryption = server_encryption,
-                socket_path=self.maintenance_socket_path) \
-            | version.config | config_options
+        # The basic server configuration (the workdir and the maintenance
+        # socket are the server's own) topped by the caller-assembled options.
+        self.config = {
+            'workdir': str(self.workdir.resolve()),
+            'maintenance_socket': self.maintenance_socket_path,
+        } | config_options
         self.property_file = property_file
         self.append_env = append_env
+
+    @property
+    def ip_addr(self) -> IPAddress:
+        return IPAddress(self.config["listen_address"])
 
     def change_ip(self, ip_addr: IPAddress) -> None:
         """Change IP address of the current server. Pre: the server is
         stopped"""
         if self.is_running:
             raise RuntimeError(f"Can't change IP of a running server {self.ip_addr}.")
-        self.ip_addr = ip_addr
         self.config["listen_address"] = ip_addr
         self.config["rpc_address"] = ip_addr
         self.config["api_address"] = ip_addr
@@ -397,11 +384,14 @@ class ScyllaServer:
         self.config["alternator_address"] = ip_addr
         self._write_config_file()
 
+    @property
+    def seeds(self) -> List[str]:
+        return [s.strip() for s in self.config["seed_provider"][0]["parameters"][0]["seeds"].split(",")]
+
     def change_seeds(self, seeds: List[str]):
         """Change seeds of the current server. Pre: the server is stopped"""
         if self.is_running:
             raise RuntimeError(f"Can't change seeds of a running server {self.ip_addr}.")
-        self.seeds = seeds
         self.config['seed_provider'][0]['parameters'][0]['seeds'] = ','.join(seeds)
         self._write_config_file()
 

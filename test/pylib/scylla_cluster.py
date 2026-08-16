@@ -14,6 +14,7 @@ import logging
 import pathlib
 import uuid
 from collections import ChainMap
+from functools import reduce
 from typing import Any, Awaitable, Callable, Dict, List, NamedTuple, Optional, Set, Tuple, Union
 
 import psutil
@@ -21,7 +22,14 @@ import psutil
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.rest_client import ScyllaRESTAPIClient
-from test.pylib.scylla_server import ScyllaServer, ScyllaVersionDescription
+from test.pylib.scylla_server import (
+    SCYLLA_CMDLINE_OPTIONS,
+    ScyllaServer,
+    ScyllaVersionDescription,
+    get_current_version_description,
+    make_scylla_conf,
+    merge_cmdline_options,
+)
 from test.pylib.util import gather_safely
 
 
@@ -62,27 +70,28 @@ class ScyllaCluster:
     """A cluster of Scylla servers providing an API for changes"""
     # pylint: disable=too-many-instance-attributes
 
-    class CreateServerParams(NamedTuple):
-        logger: Union[logging.Logger, logging.LoggerAdapter]
-        cluster_name: str
-        ip_addr: IPAddress
-        seeds: List[str]
-        property_file: dict[str, Any] | None
-        config_from_test: dict[str, Any]
-        cmdline_from_test: List[str]
-        version: Optional[ScyllaVersionDescription]
-        server_encryption: str
-
     def __init__(self,
                  logger: Union[logging.Logger, logging.LoggerAdapter],
+                 vardir: pathlib.Path,
                  replicas: int,
-                 create_server: Callable[[CreateServerParams], ScyllaServer]) -> None:
+                 mode: str,
+                 cmdline_options: str | list[str],
+                 cmdline_options_override: list[str],
+                 config_options: dict[str, Any],
+                 append_env: dict[str, str],
+                 scylla_exe: str) -> None:
         self.logger = logger
+        self.vardir = vardir
+        self.mode = mode
+        self.cmdline_options = [cmdline_options] if isinstance(cmdline_options, str) else cmdline_options
+        self.cmdline_options_override = cmdline_options_override
+        self.config_options = config_options
+        self.append_env = append_env
+        self.scylla_exe = scylla_exe
         self.host_registry = HostRegistry()
         self.leased_ips = set[IPAddress]()
         self.name = str(uuid.uuid1())
         self.replicas = replicas
-        self.create_server = create_server
         # Every ScyllaServer is in one of self.running, self.stopped.
         # These dicts are disjoint.
         # A server ID present in self.removed may be either in self.running or in self.stopped.
@@ -285,18 +294,6 @@ class ScyllaCluster:
             if not seeds:
                 seeds = [ip_addr]
 
-        params = ScyllaCluster.CreateServerParams(
-            logger = self.logger,
-            cluster_name = self.name,
-            ip_addr = ip_addr,
-            seeds = seeds,
-            property_file = property_file,
-            config_from_test = extra_config,
-            server_encryption = server_encryption,
-            cmdline_from_test = cmdline or [],
-            version = version,
-        )
-
         server = None
 
         async def handle_join_failure():
@@ -306,7 +303,57 @@ class ScyllaCluster:
             self.stopped[server.server_id] = server
 
         try:
-            server = self.create_server(params)
+            if version is None:
+                version = get_current_version_description(self.scylla_exe)
+
+            # The sources the caller provides are merged with each other
+            # first and then into the base options, the way they were when
+            # this ran in two places: merge_cmdline_options is not
+            # associative for the __remove__ and __missing__ markers.
+            extra_cmdline_options = reduce(merge_cmdline_options, [
+                self.cmdline_options,
+                cmdline or [],
+                self.cmdline_options_override,
+            ])
+            cmdline_options = merge_cmdline_options(
+                merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, version.argv),
+                extra_cmdline_options,
+            )
+
+            # Sum of the basic server configuration and the user-provided
+            # config options, with increasing priority (if two sources provide
+            # the same option, the higher priority one wins):
+            # 1. the defaults
+            # 2. version-specific options
+            # 3. the defaults a suite or a test may override
+            # 4. cluster-wide options (the suite's "extra_scylla_config_options")
+            # 5. options from the test (when servers are added during a test)
+            extra_config_options = {
+                "authenticator": "PasswordAuthenticator",
+                "authorizer": "CassandraAuthorizer",
+                "tablets_initial_scale_factor": 4 if self.mode == "release" else 2,
+            } | self.config_options | extra_config
+
+            if property_file and "endpoint_snitch" not in extra_config_options:
+                extra_config_options["endpoint_snitch"] = "GossipingPropertyFileSnitch"
+
+            config_options = make_scylla_conf(
+                mode=self.mode,
+                host_addr=ip_addr,
+                seed_addrs=seeds,
+                cluster_name=self.name,
+                server_encryption=server_encryption,
+            ) | version.config | extra_config_options
+
+            server = ScyllaServer(
+                logger=self.logger,
+                vardir=self.vardir,
+                version=version,
+                cmdline_options=cmdline_options,
+                config_options=config_options,
+                property_file=property_file,
+                append_env=self.append_env,
+            )
             self.starting[server.server_id] = server
             self.logger.info("Cluster %s adding server...", self)
             if start:
