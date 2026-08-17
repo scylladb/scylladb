@@ -3,11 +3,6 @@
 include /usr/share/dpkg/pkg-info.mk
 
 export PYBUILD_DISABLE=1
-ifneq ($(findstring housekeeping, $(DEB_BUILD_OPTIONS)),)
-    install_arg := --housekeeping
-else
-    install_arg :=
-endif
 
 product := $(subst -server,,$(DEB_SOURCE))
 
@@ -21,9 +16,7 @@ override_dh_auto_clean:
 
 override_dh_auto_install:
 	dh_auto_install
-	./scylla/install.sh --packaging --root "$(CURDIR)/debian/tmp" $(install_arg) --sysconfdir "/etc/default" --p11-trust-paths /etc/ssl/certs/ca-certificates.crt
-	# don't use default sysconfig file, use Debian version
-	cp scylla/dist/debian/sysconfig/scylla-housekeeping $(CURDIR)/debian/tmp/etc/default/
+	./scylla/install.sh --packaging --root "$(CURDIR)/debian/tmp" --sysconfdir "/etc/default" --p11-trust-paths /etc/ssl/certs/ca-certificates.crt
 
 override_dh_installinit:
 ifeq ($(product),scylla)
@@ -31,8 +24,6 @@ ifeq ($(product),scylla)
 else
 	dh_installinit --no-start --name scylla-server
 endif
-	dh_installinit --no-start --name scylla-housekeeping-daily
-	dh_installinit --no-start --name scylla-housekeeping-restart
 	dh_installinit --no-start --name scylla-fstrim
 	dh_installinit --no-start --name scylla-tune-sched
 

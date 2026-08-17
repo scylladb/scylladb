@@ -24,7 +24,6 @@ Options:
   --root /path/to/root     alternative install root (default /)
   --prefix /prefix         directory prefix (default /usr)
   --python3 /opt/python3   path of the python3 interpreter relative to install root (default /opt/scylladb/python3/bin/python3)
-  --housekeeping           enable housekeeping service
   --nonroot                install Scylla without required root privilege
   --sysconfdir /etc/sysconfig   specify sysconfig directory name
   --supervisor             enable supervisor to manage scylla processes
@@ -42,7 +41,6 @@ check_usermode_support() {
 }
 
 root=/
-housekeeping=false
 nonroot=false
 supervisor=false
 supervisor_log_to_stdout=false
@@ -59,10 +57,6 @@ while [ $# -gt 0 ]; do
         "--prefix")
             prefix="$2"
             shift 2
-            ;;
-        "--housekeeping")
-            housekeeping=true
-            shift 1
             ;;
         "--python3")
             python3="$2"
@@ -138,9 +132,6 @@ fi
 scylla_args=()
 args=()
 
-if $housekeeping; then
-    scylla_args+=(--housekeeping)
-fi
 if $nonroot; then
     scylla_args+=(--nonroot)
     args+=(--nonroot)

@@ -329,10 +329,6 @@ For example, to enable the User Defined Functions (UDF) feature:
 $ docker run --name some-scylla -d scylladb/scylla --experimental-feature=udf
 ```
 
-#### `--disable-version-check`
-
-The `--disable-version-check` disable the version validation check.
-
 #### `--authenticator AUTHENTICATOR`
 
 The `--authenticator` command lines option allows to provide the authenticator class ScyllaDB will use. By default ScyllaDB uses the `AllowAllAuthenticator` which performs no credentials checks. The second option is using the `PasswordAuthenticator` parameter, which relies on username/password pairs to authenticate users.

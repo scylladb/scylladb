@@ -28,7 +28,6 @@ try:
     setup.cqlshrc()
     setup.write_rackdc_properties()
     setup.arguments()
-    setup.set_housekeeping()
     supervisord = subprocess.Popen(["/usr/bin/supervisord", "-c",  "/etc/supervisord.conf"])
     supervisord.wait()
 except Exception:
