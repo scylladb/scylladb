@@ -18,7 +18,6 @@
 #include "utils/rjson.hh"
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <limits>
 #include <optional>
 #include <string>
@@ -282,7 +281,7 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
 
     // ExportTime - only "now" (or close to now) is supported
     // If not specified, use current time. If specified, must be within 5 minutes of now.
-    int64_t now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    int64_t now = db_clock::to_time_t(db_clock::now());
     int64_t export_time = now;
     const rjson::value* export_time_v = rjson::find(request, "ExportTime");
     if (export_time_v) {
@@ -308,8 +307,7 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     auto client_token = get_non_empty_string_attribute(request, "ClientToken", "");
 
     // Build the ExportDescription response
-    // The actual export functionality is not implemented yet - this just returns
-    // an IN_PROGRESS status to indicate the export has been accepted.
+    // The actual export functionality is not implemented yet, so the export is reported as FAILED.
     rjson::value export_desc = rjson::empty_object();
 
     // AWS, when export is called without client token, will return uniquely generated client token in response.
