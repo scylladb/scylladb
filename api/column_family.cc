@@ -283,6 +283,16 @@ static future<json::json_return_type> sum_disk_space_used(sharded<replica::datab
     });
 }
 
+// The load of the node, which is asked of the database rather than summed over the tables because
+// the space logstor takes is not all owned by tables.
+static future<json::json_return_type> node_disk_space_used(sharded<replica::database>& db) {
+    return db.map_reduce0([] (const replica::database& db) {
+        return db.disk_space_used();
+    }, uint64_t(0), std::plus<>()).then([] (uint64_t val) {
+        return make_ready_future<json::json_return_type>(val);
+    });
+}
+
 static future<json::json_return_type> map_reduce_cf_time_histogram(sharded<replica::database>& db, const sstring& name, std::function<utils::time_estimated_histogram(const replica::column_family&)> f) {
     return map_reduce_cf_raw(db, name, utils::time_estimated_histogram(), f, utils::time_estimated_histogram_merge).then([](const utils::time_estimated_histogram& res) {
         return make_ready_future<json::json_return_type>(time_to_json_histogram(res));
@@ -1128,10 +1138,10 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     });
 
     ss::get_load.set(r, [&db] (std::unique_ptr<http::request> req) {
-        return sum_disk_space_used(db, false);
+        return node_disk_space_used(db);
     });
     ss::get_metrics_load.set(r, [&db] (std::unique_ptr<http::request> req) {
-        return sum_disk_space_used(db, false);
+        return node_disk_space_used(db);
     });
 
     ss::get_keyspaces.set(r, [&db] (const_req req) {
