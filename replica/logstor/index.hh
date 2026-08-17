@@ -103,6 +103,8 @@ private:
     schema_ptr _schema;
     size_t _key_count = 0;
     size_t _memory_usage = 0;
+    // Bytes of the records this index points at.
+    uint64_t _live_record_bytes = 0;
 
     mutable utils::phased_barrier _reads_phaser{"logstor_primary_index"};
 
@@ -114,14 +116,28 @@ private:
     // Currently we support a single subscriber for space accounting which is the segment manager.
     space_accounting_subscriber& _space_accounting;
 
-    void on_entry_added(const primary_index_entry& e) noexcept {
+    void on_index_entry_inserted(const primary_index_entry& e) noexcept {
         _memory_usage += e.memory_usage();
         ++_key_count;
     }
 
-    void on_entry_removed(const primary_index_entry& e) noexcept {
+    void on_index_entry_erased(const primary_index_entry& e) noexcept {
         _memory_usage -= e.memory_usage();
         --_key_count;
+    }
+
+    void space_accounting_on_record_added(log_location location) noexcept {
+        _space_accounting.on_add_record(location);
+        _live_record_bytes += location.size;
+    }
+
+    void space_accounting_on_record_freed(log_location location) noexcept {
+        if (location.size > _live_record_bytes) {
+            on_fatal_internal_error(logstor_logger, format("freeing a record of {} bytes from an index holding {} live record bytes",
+                    location.size, _live_record_bytes));
+        }
+        _space_accounting.on_free_record(location);
+        _live_record_bytes -= location.size;
     }
 
     auto make_entry_disposer() noexcept {
@@ -131,8 +147,8 @@ private:
                     _cache_tracker->evict(*e);
                 } catch (...) {}
             }
-            _space_accounting.on_free_record(e->_e.location);
-            on_entry_removed(*e);
+            space_accounting_on_record_freed(e->_e.location);
+            on_index_entry_erased(*e);
         };
     }
 
@@ -237,8 +253,8 @@ public:
         if (it != _partitions.end()) {
             if (it->_e.location == old_location) {
                 it->_e.location = new_location;
-                _space_accounting.on_free_record(old_location);
-                _space_accounting.on_add_record(new_location);
+                space_accounting_on_record_freed(old_location);
+                space_accounting_on_record_added(new_location);
                 // The cached mutation is still valid (same data, new location on
                 // disk after compaction moved it) — do not evict the cache here.
                 return true;
@@ -264,16 +280,16 @@ public:
                 }
                 auto old_entry = i->_e;
                 i->_e = std::move(new_entry);
-                _space_accounting.on_free_record(old_entry.location);
-                _space_accounting.on_add_record(i->_e.location);
+                space_accounting_on_record_freed(old_entry.location);
+                space_accounting_on_record_added(i->_e.location);
                 return {true, std::make_optional(old_entry)};
             } else {
                 return {false, std::make_optional(i->_e)};
             }
         } else {
             auto it = _partitions.emplace_before(i, key.dk.token().raw(), hint, key.dk, std::move(new_entry));
-            _space_accounting.on_add_record(it->_e.location);
-            on_entry_added(*it);
+            space_accounting_on_record_added(it->_e.location);
+            on_index_entry_inserted(*it);
             return {true, std::nullopt};
         }
     }
@@ -304,8 +320,9 @@ public:
                 [this] { return _partitions.end(); }
             );
 
-        if (_key_count != 0 || _memory_usage != 0) {
-            on_internal_error(logstor_logger, format("primary_index::clear ended with key_count {} and memory_usage {}", _key_count, _memory_usage));
+        if (_key_count != 0 || _memory_usage != 0 || _live_record_bytes != 0) {
+            on_internal_error(logstor_logger, format("primary_index::clear ended with key_count {}, memory_usage {} and live_record_bytes {}",
+                    _key_count, _memory_usage, _live_record_bytes));
         }
     }
 
@@ -315,6 +332,7 @@ public:
     bool empty() const noexcept { return _partitions.empty(); }
     size_t get_key_count() const noexcept { return _key_count; }
     size_t get_memory_usage() const noexcept { return _memory_usage; }
+    uint64_t get_live_record_bytes() const noexcept { return _live_record_bytes; }
 
     partitions_type::const_iterator find(const dht::decorated_key& key) const {
         return _partitions.find(key, dht::ring_position_comparator(*_schema));
