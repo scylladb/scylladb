@@ -81,9 +81,46 @@ def test_quoted_ann_function_in_where_clause_without_ordering(cql, indexed_vecto
     with pytest.raises(InvalidRequest, match="requires a matching ORDER BY clause"):
         cql.execute(f'SELECT * FROM {indexed_vector_table} WHERE "ann"(v, [0.1, 0.2, 0.3]) > 0 LIMIT 5')
 
-def test_ann_function_in_select_clause(cql, indexed_vector_table):
-    with pytest.raises(InvalidRequest, match=re.escape("ANN() is not supported in the SELECT clause")):
-        cql.execute(f"SELECT p, ANN(v, [0.1, 0.2, 0.3]) FROM {indexed_vector_table} "
+# ANN() selected reports the score the rows are ranked by, so it needs an ANN ordering to agree
+# with, on the query vector and the column both.
+def test_ann_function_in_select_clause_without_ordering(cql, indexed_vector_table):
+    with pytest.raises(InvalidRequest,
+            match=re.escape("ANN() is not supported in the SELECT clause without a matching ANN ordering")):
+        cql.execute(f"SELECT p, ANN(v, [0.1, 0.2, 0.3]) FROM {indexed_vector_table} WHERE p = 1")
+
+def test_ann_function_in_select_with_different_query_vector(cql, indexed_vector_table):
+    with pytest.raises(InvalidRequest,
+            match=re.escape("ANN() in SELECT must use the same query vector as the ANN ordering")):
+        cql.execute(f"SELECT p, ANN(v, [0.4, 0.5, 0.6]) FROM {indexed_vector_table} "
+                    f"ORDER BY ANN(v, [0.1, 0.2, 0.3]) LIMIT 5")
+
+def test_ann_function_in_select_on_different_column(cql, test_keyspace, scylla_only):
+    schema = 'p int primary key, v vector<float, 3>, w vector<float, 3>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+        with pytest.raises(InvalidRequest,
+                match=re.escape("ANN() in SELECT must reference the same column as the ANN ordering")):
+            cql.execute(f"SELECT p, ANN(w, [0.1, 0.2, 0.3]) FROM {table} "
+                        f"ORDER BY ANN(v, [0.1, 0.2, 0.3]) LIMIT 5")
+
+# Aggregation is rejected whether or not the score is selected. Worth pinning for the selected
+# case, because it is what keeps the two users of the temporary slot space apart: the score arrives
+# in a slot allocated during prepare, and an aggregate's running state would want one of its own.
+def test_ann_query_with_aggregation_rejected(cql, indexed_vector_table):
+    with pytest.raises(InvalidRequest, match="cannot be run with aggregation"):
+        cql.execute(f"SELECT count(*) FROM {indexed_vector_table} "
+                    f"ORDER BY ANN(v, [0.1, 0.2, 0.3]) LIMIT 5")
+    with pytest.raises(InvalidRequest, match="cannot be run with aggregation"):
+        cql.execute(f"SELECT max(ANN(v, [0.1, 0.2, 0.3])) FROM {indexed_vector_table} "
+                    f"ORDER BY ANN(v, [0.1, 0.2, 0.3]) LIMIT 5")
+
+# GROUP BY is aggregation too, and is rejected whether or not the score is selected.
+def test_ann_query_with_group_by_rejected(cql, indexed_vector_table):
+    with pytest.raises(InvalidRequest, match="cannot be run with aggregation"):
+        cql.execute(f"SELECT p FROM {indexed_vector_table} GROUP BY p "
+                    f"ORDER BY ANN(v, [0.1, 0.2, 0.3]) LIMIT 5")
+    with pytest.raises(InvalidRequest, match="cannot be run with aggregation"):
+        cql.execute(f"SELECT ANN(v, [0.1, 0.2, 0.3]) FROM {indexed_vector_table} GROUP BY p "
                     f"ORDER BY ANN(v, [0.1, 0.2, 0.3]) LIMIT 5")
 
 def test_ann_function_with_too_few_arguments(cql, indexed_vector_table):
@@ -121,6 +158,13 @@ def test_ann_function_on_non_vector_column(cql, indexed_vector_table):
 def test_ann_function_with_null_vector(cql, indexed_vector_table):
     with pytest.raises(InvalidRequest, match="Unsupported null value for column v"):
         cql.execute(f"SELECT * FROM {indexed_vector_table} ORDER BY ANN(v, null) LIMIT 5")
+
+def test_ann_function_in_select_with_null_bind_marker(cql, indexed_vector_table):
+    # A null query vector is rejected before the two occurrences are compared, so the SELECT one
+    # does not report a disagreement with the ordering.
+    stmt = cql.prepare(f"SELECT p, ANN(v, ?) FROM {indexed_vector_table} ORDER BY ANN(v, ?) LIMIT 5")
+    with pytest.raises(InvalidRequest, match="Unsupported null value"):
+        cql.execute(stmt, [None, None])
 
 def test_unknown_scoring_function_in_order_by(cql, indexed_vector_table):
     with pytest.raises(InvalidRequest, match=re.escape(UNKNOWN_SCORING_FUNCTION_MESSAGE)):
