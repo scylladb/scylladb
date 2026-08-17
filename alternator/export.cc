@@ -381,8 +381,7 @@ future<executor::request_return_type> executor::describe_export(client_state& cl
 
     // TableId identifies the table the export was taken from, not whatever table now answers to its name
     rjson::add(export_desc, "TableId", rjson::from_string(exp->table_id.to_sstring()));
-    // Alternator has no PITR, so the only point it can export from is the moment of acceptance
-    rjson::add(export_desc, "ExportTime", rjson::value(int64_t(db_clock::to_time_t(exp->accepted_at))));
+    rjson::add(export_desc, "ExportTime", rjson::value(int64_t(db_clock::to_time_t(exp->export_time))));
     rjson::add(export_desc, "ClientToken", rjson::from_string(exp->client_token));
 
     // Everything below describes a finished export, so it is only present once one has run.

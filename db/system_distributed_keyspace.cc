@@ -291,6 +291,7 @@ schema_ptr alternator_export_to_s3_exports() {
          .with_column("billed_size_bytes", long_type)
          .with_column("export_id_token", utf8_type)
          .with_column("snapshot_tag", utf8_type)
+         .with_column("export_time", timestamp_type)
          .with_column("accepted_at", timestamp_type)
          .with_column("completed_at", timestamp_type)
          .with_column("node_id", utf8_type)
@@ -662,6 +663,7 @@ system_distributed_keyspace::get_alternator_export(std::string_view export_arn, 
         .request = row.get_as<sstring>("request"),
         .status = row.get_as<sstring>("export_status"),
         .table_id = ::table_id(row.get_as<utils::UUID>("table_id")),
+        .export_time = row.get_as<db_clock::time_point>("export_time"),
         .accepted_at = row.get_as<db_clock::time_point>("accepted_at"),
         .manifest = row.get_opt<sstring>("export_manifest"),
         .failure_code = row.get_opt<sstring>("failure_code"),
