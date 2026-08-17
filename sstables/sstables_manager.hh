@@ -253,6 +253,7 @@ public:
     virtual sstable_writer_config configure_writer(sstring origin) const;
     const config& get_config() const noexcept { return _config; }
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
+    const gms::feature_service& get_features() const noexcept { return _features; }
     const std::vector<sstables::file_io_extension*>& file_io_extensions() const { return _file_io_extensions; }
 
     // Get the highest supported sstable version, according to cluster features.
