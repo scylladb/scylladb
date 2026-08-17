@@ -85,12 +85,14 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
         if action == 'move':
             logger.info(f"Move tablet {old_replica[0]} -> {new_replica[0]}")
             await manager.api.move_tablet(servers[0].ip_addr, ks, "test", old_replica[0], old_replica[1], new_replica[0], new_replica[1], 0)
+        # Both actions change the number of replicas the tablet has in rack r1, which breaks
+        # the replication constraints of an RF-rack-valid keyspace, hence force=True.
         if action == 'add_replica':
             logger.info(f"Adding replica to tablet, host {new_replica[0]}")
-            await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], 0)
+            await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], 0, force=True)
         if action == 'del_replica':
             logger.info(f"Deleting replica from tablet, host {old_replica[0]}")
-            await manager.api.del_tablet_replica(servers[0].ip_addr, ks, "test", old_replica[0], old_replica[1], 0)
+            await manager.api.del_tablet_replica(servers[0].ip_addr, ks, "test", old_replica[0], old_replica[1], 0, force=True)
 
         replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
         logger.info(f"Tablet is now on [{replicas}]")

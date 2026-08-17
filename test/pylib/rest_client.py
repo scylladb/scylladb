@@ -273,22 +273,24 @@ class ScyllaRESTAPIClient:
     async def quiesce_topology(self, node_ip: str) -> None:
         await self.client.post(f"/storage_service/quiesce_topology", host=node_ip)
 
-    async def add_tablet_replica(self, node_ip: str, ks: str, table: str, dst_host: HostID, dst_shard: int, token: int) -> None:
+    async def add_tablet_replica(self, node_ip: str, ks: str, table: str, dst_host: HostID, dst_shard: int, token: int, force: bool = False) -> None:
         await self.client.post(f"/storage_service/tablets/add_replica", host=node_ip, params={
             "ks": ks,
             "table": table,
             "dst_host": str(dst_host),
             "dst_shard": str(dst_shard),
-            "token": str(token)
+            "token": str(token),
+            "force": str(force).lower()
         })
 
-    async def del_tablet_replica(self, node_ip: str, ks: str, table: str, host: HostID, shard: int, token: int) -> None:
+    async def del_tablet_replica(self, node_ip: str, ks: str, table: str, host: HostID, shard: int, token: int, force: bool = False) -> None:
         await self.client.post(f"/storage_service/tablets/del_replica", host=node_ip, params={
             "ks": ks,
             "table": table,
             "host": str(host),
             "shard": str(shard),
-            "token": str(token)
+            "token": str(token),
+            "force": str(force).lower()
         })
 
     async def tablet_repair(self, node_ip: str, ks: str, table: str, token : int | str, hosts_filter: Optional[str] = None, dcs_filter: Optional[str] = None, timeout: Optional[float] = None, await_completion: bool = True, incremental_mode: Optional[str] = None) -> None:
