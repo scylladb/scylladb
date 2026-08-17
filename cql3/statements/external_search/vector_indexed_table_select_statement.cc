@@ -8,6 +8,7 @@
 
 #include "cql3/statements/external_search/vector_indexed_table_select_statement.hh"
 #include "cql3/statements/external_search/external_function.hh"
+#include "cql3/statements/external_search/external_score_provider.hh"
 
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
@@ -37,8 +38,8 @@ static logging::logger logger("vector_indexed_table_select_statement");
 namespace {
 
 /// The query vector as the Vector Store takes it, from the value the ordering's expression was
-/// evaluated to.  Takes that value rather than evaluating the expression itself, so that whoever
-/// else has to read it reads the same one.
+/// evaluated to.  Takes that value rather than evaluating the expression itself, so that the vector
+/// searched with is the very one every ANN() in the statement was checked against.
 std::vector<float> to_query_vector(const column_definition& ann_column, const cql3::raw_value& value) {
     // Rejected as a null before anything else is said about it, by the caller.
     throwing_assert(!value.is_null());
@@ -89,16 +90,65 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
     };
 }
 
-void prepare_ann_selectors(const std::vector<selection::prepared_selector>& prepared_selectors) {
-    for (const auto& ps : prepared_selectors) {
-        // Nested occurrences (e.g. ANN(...) + 1) count too: they would otherwise reach the
-        // ANN scalar function body at execution time.
-        if (expr::find_in_expression<expr::function_call>(ps.expr, [] (const expr::function_call& fc) {
-                return expr::is_native_function_call(fc, functions::ANN_FUNCTION_NAME);
-            })) {
-            throw exceptions::invalid_request_exception("ANN() is not supported in the SELECT clause");
-        }
+bool prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_selectors,
+        std::optional<ann_ordering_info>& ordering_info, expr::temporary_allocator& temporaries_allocator) {
+    bool selects_score = false;
+
+    for (auto& ps : prepared_selectors) {
+        // search_and_replace descends into the arguments of a call, so a nested occurrence -
+        // CAST(ANN(...) AS double) - is lowered just like a top-level one.
+        ps.expr = expr::search_and_replace(ps.expr, [&] (const expr::expression& candidate) -> std::optional<expr::expression> {
+            const auto* fc = expr::as_if<expr::function_call>(&candidate);
+            if (!fc || !expr::is_native_function_call(*fc, functions::ANN_FUNCTION_NAME)) {
+                return std::nullopt;
+            }
+
+            if (!ordering_info) {
+                throw exceptions::invalid_request_exception(
+                        "ANN() is not supported in the SELECT clause without a matching ANN ordering");
+            }
+
+            // The call has been resolved, so the argument count has been checked already.
+            throwing_assert(fc->args.size() == 2);
+
+            const auto& [ordering_column, ordering_vector] = ordering_info->prepared_ann_ordering;
+
+            // Every ann() in the statement denotes the one score the rows are ranked by, so they all
+            // have to score the column and the query vector the ordering scores.
+            const auto* col = extract_scored_column(*fc, "ANN");
+            if (col != ordering_column) {
+                throw exceptions::invalid_request_exception("ANN() in SELECT must reference the same column as the ANN ordering");
+            }
+
+            auto sel_vector = extract_query_value(*fc, "ANN");
+            if (auto deferred = check_query_value(sel_vector, ordering_vector,
+                        "ANN() in SELECT must use the same query vector as the ANN ordering")) {
+                ordering_info->deferred_select_vectors.push_back(std::move(*deferred));
+            }
+
+            if (ordering_info->is_rescoring_enabled) {
+                // Rescoring recomputes the similarity on the coordinator to rank the rows, so that
+                // recomputed value is the score to report - the Vector Store's own would disagree
+                // with both the order and which rows survived.  Not implemented yet.
+                throw exceptions::invalid_request_exception(
+                        "ANN() is not supported in the SELECT clause of a query using an index with rescoring enabled");
+            }
+
+            // Every ANN() reports the same score, so one slot serves them all.
+            if (!ordering_info->temporary_index) {
+                ordering_info->temporary_index = temporaries_allocator.allocate();
+            }
+
+            selects_score = true;
+            return expr::expression(expr::temporary{
+                    .index = *ordering_info->temporary_index,
+                    .type = float_type,
+                    .replaced_expr = candidate,
+            });
+        });
     }
+
+    return selects_score;
 }
 
 uint32_t add_similarity_function_to_selectors(
@@ -165,6 +215,12 @@ select_statement::ordering_comparator_type get_similarity_ordering_comparator(st
         throw exceptions::invalid_request_exception("ANN() is not supported in the WHERE clause");
     }
 
+    // A slot was allocated, so ANN() was selected and a provider will fill that slot per row by
+    // matching each row to the Vector Store's response.
+    if (ordering_info.temporary_index) {
+        fetch_primary_key_columns(*selection, *schema);
+    }
+
     auto prepared_filter = external_search::prepare_filter(*restrictions, parameters->allow_filtering());
 
     return ::make_shared<cql3::statements::vector_indexed_table_select_statement>(schema, bound_terms, parameters, std::move(selection), std::move(restrictions),
@@ -205,10 +261,21 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
 
     const auto& prepared_ann_ordering = _ann_ordering_info.prepared_ann_ordering;
 
+    // Evaluated once: the value the rows are ranked by is the value the ANN() occurrences in SELECT
+    // have to agree with, and comparing them against a second evaluation would prove nothing.
     const auto ordering_vector = expr::evaluate(prepared_ann_ordering.second, options);
     if (ordering_vector.is_null()) {
+        // Before the agreement check below, or a null bound here would be reported as a query vector
+        // that disagrees with itself.
         co_await coroutine::return_exception(exceptions::invalid_request_exception(
                 fmt::format("Unsupported null value for column {}", prepared_ann_ordering.first->name_as_text())));
+    }
+
+    for (const auto& selected_vector : _ann_ordering_info.deferred_select_vectors) {
+        if (expr::evaluate(selected_vector, options) != ordering_vector) {
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                    "ANN() in SELECT must use the same query vector as the ANN ordering"));
+        }
     }
 
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
@@ -226,7 +293,10 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
         pkeys->erase(pkeys->begin() + limit, pkeys->end());
     }
 
-    co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout);
+    auto provider = _ann_ordering_info.temporary_index
+                            ? std::make_unique<external_score_provider>(pkeys.value(), *_ann_ordering_info.temporary_index, *_schema)
+                            : nullptr;
+    co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout, std::move(provider));
 }
 
 } // namespace statements

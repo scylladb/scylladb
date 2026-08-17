@@ -10,6 +10,7 @@
 
 #include "cql3/statements/external_search/external_index_select_statement.hh"
 #include "cql3/statements/external_search/filter.hh"
+#include "cql3/expr/temporary_allocator.hh"
 
 #include <optional>
 
@@ -20,6 +21,13 @@ struct ann_ordering_info {
     secondary_index::index index;
     raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering;
     bool is_rescoring_enabled;
+    /// Temporary slot the Vector Store's own score is delivered in, allocated on the first ann()
+    /// occurrence in SELECT and filled per row by external_score_provider.
+    std::optional<size_t> temporary_index;
+    /// The query vectors of the SELECT occurrences that prepare could not tell apart from the
+    /// ordering's - a bind marker stands where at least one of the two values will be.  Compared once
+    /// they have values; left empty where prepare has already settled it.
+    std::vector<expr::expression> deferred_select_vectors;
 };
 
 /// Resolves ANN ordering metadata from the query's prepared ORDER BY call.
@@ -29,10 +37,16 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
         schema_ptr schema,
         const expr::function_call& fc);
 
-/// Handles ANN() calls in the SELECT clause.  Returning the similarity score this way is
-/// not implemented yet - it has to agree with rescoring, which reorders and trims the rows
-/// the score would be reported for - so for now any occurrence is rejected.
-void prepare_ann_selectors(const std::vector<selection::prepared_selector>& prepared_selectors);
+/// Lowers every ANN() call in the SELECT clause, nested occurrences included, to the slot the row's
+/// score is delivered in - allocating it on the first one - and rejects an occurrence that does not
+/// agree with the ordering on the column and the query vector, or that has no ANN ordering to agree
+/// with.  A query vector whose agreement only execution can settle is recorded in ordering_info for
+/// it to check.
+///
+/// Returns whether the SELECT clause had any such call, which the caller cannot see afterwards: what
+/// replaced it says nothing about the score it stands for.
+bool prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_selectors,
+        std::optional<ann_ordering_info>& ordering_info, expr::temporary_allocator& temporaries_allocator);
 
 /// Adds a similarity function call to prepared_selectors based on the ANN index.
 /// Returns the index of the appended selector within prepared_selectors.

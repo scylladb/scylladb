@@ -2159,7 +2159,17 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         }
     }
 
-    prepare_ann_selectors(prepared_selectors);
+    // Likewise for ANN() calls in SELECT.
+    if (prepare_ann_selectors(prepared_selectors, ann_ordering_info_opt, temporaries_allocator)) {
+        // Likewise not answerable per group, and likewise invisible to the aggregation machinery.
+        if (!_group_by_columns.empty()) {
+            throw exceptions::invalid_request_exception("A scoring function cannot be selected by a query with GROUP BY");
+        }
+
+        for (auto& query_vector : ann_ordering_info_opt->deferred_select_vectors) {
+            expr::fill_prepare_context(query_vector, ctx);
+        }
+    }
 
     for (auto& ps : prepared_selectors) {
         expr::fill_prepare_context(ps.expr, ctx);
