@@ -163,6 +163,8 @@ fedora_packages=(
     jq
 
     libev-devel # for python driver
+
+    uv
 )
 
 fedora_python3_packages=(
@@ -180,7 +182,6 @@ fedora_python3_packages=(
 
 # an associative array from packages to constrains
 declare -A pip_packages=(
-    [scylla-driver]="==$(cat tools/cqlsh/requirements.txt | grep scylla-driver | cut -d= -f3)"
     [geomet]=""
     [traceback-with-variables]=""
     [scylla-api-client]=""
