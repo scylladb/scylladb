@@ -618,6 +618,158 @@ async def test_space_accounting_metrics(manager: ScyllaClusterManager):
             f"got {final_live_record_count_after_drop}"
         )
 
+async def test_table_disk_space_metrics(manager: ScyllaClusterManager):
+    """
+    Verify the disk space statistics of a logstor table: its live and total disk space follow the
+    segments it owns, its live record bytes follow the data it holds, and the load of the node covers
+    the segments holding data, rather than every file logstor has allocated to hold them. Per-table
+    metrics are enabled so that the statistics can be read for the table alone.
+    """
+    key_count = 10
+    value_size = 60 * 1024
+
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {
+        'enable_keyspace_column_family_metrics': True,
+        'experimental_features': ['logstor']
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    server = servers[0]
+    cql = manager.get_cql()
+
+    async def get_table_space(ks: str) -> tuple[int, int, int]:
+        """Returns live disk space, segments and live record bytes of ks.test.
+        Note that total_disk_space cannot be read here, since the metric name is a prefix of
+        total_disk_space_before_compression and the two would be summed together."""
+        metrics = await manager.metrics.query(server.ip_addr)
+        labels = {'ks': ks, 'cf': 'test'}
+        return (int(metrics.get("scylla_column_family_live_disk_space", labels) or 0),
+                int(metrics.get("scylla_column_family_logstor_segments", labels) or 0),
+                int(metrics.get("scylla_column_family_logstor_live_record_bytes", labels) or 0))
+
+    async def get_logstor_disk_usage() -> int:
+        """The space of the files logstor has allocated, the free segments in them included"""
+        metrics = await manager.metrics.query(server.ip_addr)
+        return int(metrics.get("scylla_logstor_sm_disk_usage") or 0)
+
+    async def get_logstor_bytes_in_use() -> int:
+        """The space of the segments holding records, which is what logstor adds to the load"""
+        metrics = await manager.metrics.query(server.ip_addr)
+        return int(metrics.get("scylla_logstor_sm_segments_in_use") or 0) * segment_size
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        insert = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+        value = 'x' * value_size
+        await asyncio.gather(*[cql.run_async(insert, [pk, value]) for pk in range(key_count)])
+
+        # the space of a table is the segments its groups own, which the separator fills
+        await manager.api.logstor_flush(server.ip_addr)
+
+        live_disk_space, segments, live_record_bytes = await get_table_space(ks)
+        logger.info(f"after writes: live_disk_space={live_disk_space} segments={segments} live_record_bytes={live_record_bytes}")
+
+        assert segments > 0, "expected the table to own segments after writing to it"
+        assert live_disk_space == segments * segment_size, (
+            f"expected live_disk_space to be {segments} segments, got {live_disk_space}"
+        )
+        # the same space is reported to nodetool, and logstor has no equivalent of sstables that were
+        # compacted but not deleted yet, so the live and the total space of the table are the same
+        live_from_api = await manager.api.get_table_disk_space_used(server.ip_addr, ks, 'test')
+        total_from_api = await manager.api.get_table_disk_space_used(server.ip_addr, ks, 'test', total=True)
+        assert live_from_api == live_disk_space, (
+            f"expected the api to report live disk space {live_disk_space}, got {live_from_api}"
+        )
+        assert total_from_api == live_disk_space, (
+            f"expected the api to report total disk space {live_disk_space}, got {total_from_api}"
+        )
+        assert live_record_bytes >= key_count * value_size, (
+            f"expected live_record_bytes to be at least {key_count * value_size}, got {live_record_bytes}"
+        )
+        # the records are held by those segments, together with their headers and the room left over
+        assert live_record_bytes < live_disk_space, (
+            f"expected live_record_bytes {live_record_bytes} to be less than the space of the "
+            f"segments holding them, {live_disk_space}"
+        )
+
+        # The load of the node covers the segments the data sits in, the ones of this table
+        # included, and not the files logstor has allocated to hold the segments it has yet to
+        # fill: space holding no data is nobody's load.
+        disk_usage = await get_logstor_disk_usage()
+        bytes_in_use = await get_logstor_bytes_in_use()
+        load = await manager.api.get_load(server.ip_addr)
+        logger.info(f"after writes: logstor disk_usage={disk_usage} bytes_in_use={bytes_in_use} load={load}")
+        assert bytes_in_use >= live_disk_space, (
+            f"expected the segments in use, {bytes_in_use} bytes, to cover the segments of the "
+            f"table, {live_disk_space}"
+        )
+        assert disk_usage > bytes_in_use, (
+            f"expected logstor to have allocated {disk_usage} bytes, more than the {bytes_in_use} "
+            f"its segments in use hold, so that the two can be told apart below"
+        )
+        assert load >= bytes_in_use, (
+            f"expected the load {load} to cover the segments in use, {bytes_in_use} bytes"
+        )
+
+        # overwriting every key leaves the same live data behind, in more segments
+        for _ in range(3):
+            await asyncio.gather(*[cql.run_async(insert, [pk, value]) for pk in range(key_count)])
+        await manager.api.logstor_flush(server.ip_addr)
+
+        _, segments_after_overwrites, live_record_bytes_after_overwrites = await get_table_space(ks)
+        logger.info(f"after overwrites: segments={segments_after_overwrites} live_record_bytes={live_record_bytes_after_overwrites}")
+        assert live_record_bytes_after_overwrites == live_record_bytes, (
+            f"expected live_record_bytes to remain {live_record_bytes} after overwrites, "
+            f"got {live_record_bytes_after_overwrites}"
+        )
+        assert segments_after_overwrites > segments, (
+            f"expected the table to own more than {segments} segments after overwrites, "
+            f"got {segments_after_overwrites}"
+        )
+
+        # compaction gives back the segments the overwrites killed, so the table ends up owning fewer
+        # of them while the data it holds is unchanged
+        async def compacted() -> bool:
+            _, segments_now, _ = await get_table_space(ks)
+            if segments_now < segments_after_overwrites:
+                return True
+            await manager.api.logstor_compaction(server.ip_addr)
+        await wait_for(compacted, time.time() + 60)
+
+        live_disk_space, segments, live_record_bytes_after_compaction = await get_table_space(ks)
+        logger.info(f"after compaction: live_disk_space={live_disk_space} segments={segments} live_record_bytes={live_record_bytes_after_compaction}")
+        assert live_record_bytes_after_compaction == live_record_bytes, (
+            f"expected live_record_bytes to remain {live_record_bytes} after compaction, "
+            f"got {live_record_bytes_after_compaction}"
+        )
+        assert live_disk_space == segments * segment_size
+
+        # truncating gives back every segment of the table
+        await cql.run_async(f"TRUNCATE {ks}.test")
+
+        assert await get_table_space(ks) == (0, 0, 0), (
+            f"expected no disk space for the table after truncating it, got {await get_table_space(ks)}"
+        )
+
+        # The segments the table gave back are free again, so the load of the node drops with them,
+        # while the files logstor allocated to hold them are still there. A load that covered those
+        # files instead would not have moved at all.
+        assert await get_logstor_disk_usage() == disk_usage, (
+            "expected logstor to keep the files it allocated after the table was truncated"
+        )
+        load_after_truncate = await manager.api.get_load(server.ip_addr)
+        bytes_in_use_after_truncate = await get_logstor_bytes_in_use()
+        logger.info(f"after truncate: bytes_in_use={bytes_in_use_after_truncate} load={load_after_truncate}")
+        assert bytes_in_use_after_truncate < bytes_in_use, (
+            f"expected the segments in use to fall below {bytes_in_use} bytes after the table was "
+            f"truncated, got {bytes_in_use_after_truncate}"
+        )
+        assert load_after_truncate < load, (
+            f"expected the load to fall below {load} after the table was truncated, "
+            f"got {load_after_truncate}"
+        )
+
 async def test_compaction(manager: ScyllaClusterManager):
     """
     Test log compaction by creating dead data and verifying space reclamation.

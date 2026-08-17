@@ -578,6 +578,15 @@ class ScyllaRESTAPIClient:
         url = "/storage_service/logstor_flush"
         await self.client.post(url, host=node_ip)
 
+    async def get_load(self, node_ip: str) -> float:
+        """Get the disk space the storage of the node takes, which is the load it reports"""
+        return await self.client.get_json("/storage_service/load", host=node_ip)
+
+    async def get_table_disk_space_used(self, node_ip: str, keyspace: str, table: str, total: bool = False) -> int:
+        """Get the live, or total, disk space the storage of the table takes on the node"""
+        metric = "total_disk_space_used" if total else "live_disk_space_used"
+        return await self.client.get_json(f"/column_family/metrics/{metric}/{keyspace}:{table}", host=node_ip)
+
     async def dump_llvm_profile(self, node_ip : str):
         """Dump llvm profile to disk that can later be used for PGO or coverage reporting.
            no-op if the scylla binary is not instrumented."""
