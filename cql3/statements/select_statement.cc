@@ -2144,7 +2144,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     expr::temporary_allocator temporaries_allocator;
     prepare_bm25_selectors(prepared_selectors, bm25_ordering_info_opt, temporaries_allocator, ctx);
 
-    prepare_ann_selectors(prepared_selectors);
+    prepare_ann_selectors(prepared_selectors, ann_ordering_info_opt, temporaries_allocator, ctx);
 
     for (auto& ps : prepared_selectors) {
         expr::fill_prepare_context(ps.expr, ctx);

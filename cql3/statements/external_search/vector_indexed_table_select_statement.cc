@@ -8,6 +8,7 @@
 
 #include "cql3/statements/external_search/vector_indexed_table_select_statement.hh"
 #include "cql3/statements/external_search/external_function.hh"
+#include "cql3/statements/external_search/external_score_provider.hh"
 
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
@@ -82,15 +83,51 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
     };
 }
 
-void prepare_ann_selectors(const std::vector<selection::prepared_selector>& prepared_selectors) {
-    for (const auto& ps : prepared_selectors) {
-        // Nested occurrences (e.g. ANN(...) + 1) count too: they would otherwise reach the
-        // ANN scalar function body at execution time.
-        if (expr::find_in_expression<expr::function_call>(ps.expr, [] (const expr::function_call& fc) {
-                return expr::is_native_function_call(fc, functions::ANN_FUNCTION_NAME);
-            })) {
-            throw exceptions::invalid_request_exception("ANN() is not supported in the SELECT clause");
-        }
+void prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_selectors,
+        std::optional<ann_ordering_info>& ordering_info, expr::temporary_allocator& temporaries_allocator,
+        prepare_context& ctx) {
+    for (auto& ps : prepared_selectors) {
+        ps.expr = expr::search_and_replace(ps.expr, [&] (const expr::expression& candidate) -> std::optional<expr::expression> {
+            const auto* fc = expr::as_if<expr::function_call>(&candidate);
+            if (!fc || !expr::is_native_function_call(*fc, functions::ANN_FUNCTION_NAME)) {
+                return std::nullopt;
+            }
+
+            if (!ordering_info) {
+                throw exceptions::invalid_request_exception(
+                        "ANN() is not supported in the SELECT clause without a matching ANN ordering");
+            }
+
+            const auto& [ordering_column, ordering_vector] = ordering_info->prepared_ann_ordering;
+
+            auto [col, sel_vector] = external_search::extract_call_arguments(*fc, "ANN");
+            if (col != ordering_column) {
+                throw exceptions::invalid_request_exception("ANN() in SELECT must reference the same column as the ANN ordering");
+            }
+
+            if (auto deferred = external_search::check_query_value(sel_vector, ordering_vector,
+                        "ANN() in SELECT must use the same query vector as the ANN ordering")) {
+                // Lifted out of the selector tree, so nothing else registers its bind marker.
+                expr::fill_prepare_context(*deferred, ctx);
+                ordering_info->deferred_select_vectors.push_back(std::move(*deferred));
+            }
+
+            if (ordering_info->is_rescoring_enabled) {
+                throw exceptions::invalid_request_exception(
+                        "ANN() is not supported in the SELECT clause of a query using an index with rescoring enabled");
+            }
+
+            // Every ANN() reports the same score, so one slot serves them all.
+            if (!ordering_info->temporary_index) {
+                ordering_info->temporary_index = temporaries_allocator.allocate();
+            }
+
+            return expr::expression(expr::temporary{
+                    .index = *ordering_info->temporary_index,
+                    .type = float_type,
+                    .replaced_expr = candidate,
+            });
+        });
     }
 }
 
@@ -158,6 +195,10 @@ select_statement::ordering_comparator_type get_similarity_ordering_comparator(st
         throw exceptions::invalid_request_exception("ANN() is not supported in the WHERE clause");
     }
 
+    if (ordering_info.temporary_index) {
+        external_search::fetch_primary_key_columns(*selection, *schema);
+    }
+
     auto prepared_filter = external_search::prepare_filter(*restrictions, parameters->allow_filtering());
 
     return ::make_shared<cql3::statements::vector_indexed_table_select_statement>(schema, bound_terms, parameters, std::move(selection), std::move(restrictions),
@@ -183,7 +224,8 @@ vector_indexed_table_select_statement::vector_indexed_table_select_statement(sch
         throw exceptions::invalid_request_exception("Vector ANN queries do not support per-partition limits");
     }
 
-    if (selection->is_aggregate()) {
+    // GROUP BY is aggregation too, and a selected score does not make the selection look aggregate.
+    if (selection->is_aggregate() || !group_by_cell_indices->empty()) {
         throw exceptions::invalid_request_exception("Vector ANN queries cannot be run with aggregation");
     }
 }
@@ -198,10 +240,19 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
 
     const auto& prepared_ann_ordering = _ann_ordering_info.prepared_ann_ordering;
 
+    // Evaluated once: the vector searched with is the one the SELECT occurrences are checked against.
     const auto ordering_vector = expr::evaluate(prepared_ann_ordering.second, options);
     if (ordering_vector.is_null()) {
+        // Before the agreement check, or a null would surface as a disagreement instead.
         co_await coroutine::return_exception(exceptions::invalid_request_exception(
                 fmt::format("Unsupported null value for column {}", prepared_ann_ordering.first->name_as_text())));
+    }
+
+    for (const auto& selected_vector : _ann_ordering_info.deferred_select_vectors) {
+        if (expr::evaluate(selected_vector, options) != ordering_vector) {
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                    "ANN() in SELECT must use the same query vector as the ANN ordering"));
+        }
     }
 
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
@@ -219,7 +270,10 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
         pkeys->erase(pkeys->begin() + limit, pkeys->end());
     }
 
-    co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout);
+    auto provider = _ann_ordering_info.temporary_index
+                            ? std::make_unique<external_score_provider>(pkeys.value(), *_ann_ordering_info.temporary_index, *_schema)
+                            : nullptr;
+    co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout, std::move(provider));
 }
 
 } // namespace statements
