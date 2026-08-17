@@ -3062,6 +3062,29 @@ size_t database::get_logstor_memory_usage() const {
     return m;
 }
 
+uint64_t database::get_logstor_disk_space_used() const {
+    return _logstor ? _logstor->get_segment_manager().get_usage().segment_bytes_in_use : 0;
+}
+
+uint64_t database::disk_space_used() const {
+    // The logstor part is the segments holding data, not every file logstor has allocated for them:
+    // space that holds nothing is nobody's load, the same as for sstables, where the room left on
+    // the filesystem is not counted either, and it lets the load follow the data down as compaction
+    // gives segments back. The space of the files is reported on its own, by the disk usage metric
+    // of the segment manager. The tables contribute only their sstables here, and their disk space
+    // sums to a little less than this, by the segments holding records no group has taken yet.
+    uint64_t sstable_bytes = 0;
+
+    get_tables_metadata().for_each_table([&sstable_bytes] (table_id, lw_shared_ptr<replica::table> table) {
+        // Clamped per table, the same as table::live_disk_space_used() does: the sums the sstable
+        // sets keep are maintained incrementally, and a table whose counter has drifted below zero
+        // must not subtract from the load of the node.
+        sstable_bytes += uint64_t(table->get_stats().sstables_live_disk_space_used.clamped_to_zero().on_disk);
+    });
+
+    return get_logstor_disk_space_used() + sstable_bytes;
+}
+
 future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, table_id uuid, sstring tag, db::snapshot_options opts, snapshot_callback ssc) {
     if (!opts.skip_flush) {
         co_await flush_table_on_all_shards(sharded_db, uuid);
