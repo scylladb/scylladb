@@ -120,7 +120,7 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
 
 void prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_selectors,
         std::optional<ann_ordering_info>& ordering_info, expr::temporary_allocator& temporaries_allocator,
-        prepare_context& ctx) {
+        data_dictionary::database db, const schema_ptr& schema, prepare_context& ctx) {
     for (auto& ps : prepared_selectors) {
         ps.expr = expr::search_and_replace(ps.expr, [&] (const expr::expression& candidate) -> std::optional<expr::expression> {
             const auto* fc = expr::as_if<expr::function_call>(&candidate);
@@ -148,11 +148,18 @@ void prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_s
             }
 
             if (ordering_info->is_rescoring_enabled) {
-                throw exceptions::invalid_request_exception(
-                        "ANN() is not supported in the SELECT clause of a query using an index with rescoring enabled");
+                // Name the selector by what the user wrote - ps.expr, untouched so far - or an
+                // unaliased ANN() would come back named similarity_cosine(...).
+                if (!ps.alias) {
+                    ps.alias = ::make_shared<column_identifier>(fmt::format("{:result_set_metadata}", ps.expr), true);
+                }
+
+                // Every occurrence computes the similarity again, the hidden ordering selector included.
+                return make_similarity_expression(ordering_info->index, std::make_pair(col, std::move(sel_vector)), db, schema);
             }
 
-            // Every ANN() reports the same score, so one slot serves them all.
+            // Every ANN() reports the same score, so one slot serves them all, and a temporary
+            // formats as the call it replaced, so the name needs nothing done to it here.
             if (!ordering_info->temporary_index) {
                 ordering_info->temporary_index = temporaries_allocator.allocate();
             }
