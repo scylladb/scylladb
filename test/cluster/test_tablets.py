@@ -17,7 +17,7 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name, wait_for, wait_for_first_completed
 from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, \
-    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count
+    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count, get_current_group0_config
 from contextlib import nullcontext as does_not_raise
 import time
 import pytest
@@ -2053,6 +2053,169 @@ async def test_replace_with_no_normal_token_owners_in_dc(manager: ManagerClient,
 
         # For dropping the keyspace
         await asyncio.gather(*[manager.server_start(node.server_id) for node in servers['dc2']])
+
+async def test_replace_after_losing_all_tablet_replicas(manager: ManagerClient):
+    """
+    Verify what happens when a node is replaced after all replicas of some
+    tablet were lost.
+
+    1. Start a 6-node cluster in one datacenter, with 3 racks, 2 nodes each,
+       and create a tablets keyspace with RF=3, so that every tablet has
+       exactly one replica in each rack. Populate it with data.
+    2. Pick one tablet and kill its replicas in all racks but the last one,
+       marking those nodes as excluded.
+    3. Kill the replica of that tablet in the last rack and replace it. The
+       replacing node has no live source to rebuild the tablet from, since all
+       of its replicas are gone.
+    4. Replace the excluded nodes as well, bringing the cluster back to its
+       original size.
+
+    The replaces are expected to complete. The tablets which lost all of their
+    replicas get an empty replica in the replaced node's rack instead of the
+    replaced one and only their data is lost - all other tablets keep their
+    data - and the emptied tablets can be written to again.
+    """
+    racks = ['rack1', 'rack2', 'rack3']
+    # The replaced node is taken from the last rack, the replicas in the other
+    # racks are killed and excluded before it.
+    replaced_rack = racks[-1]
+    logger.info(f"Bootstrapping cluster with 2 nodes in each of {len(racks)} racks")
+    # Add the nodes rack by rack rather than all at once, to keep the number of
+    # concurrently starting nodes low. Starting many nodes at the same time makes
+    # the test prone to scylladb/seastar#3583, a node startup race which is hit
+    # when the machine is under memory pressure.
+    servers = []
+    for rack in racks:
+        servers += await manager.servers_add(servers_num=2, property_file={'dc': 'dc1', 'rack': rack})
+    host_ids = {s.server_id: await manager.get_host_id(s.server_id) for s in servers}
+    server_by_host_id = {host_ids[s.server_id]: s for s in servers}
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, f"WITH replication = {{ 'class': 'NetworkTopologyStrategy', 'dc1': {len(racks)} }} "
+                                          "AND tablets = { 'enabled': true }") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) "
+                            "WITH tablets = { 'min_tablet_count': 8 };")
+
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        stmt.consistency_level = ConsistencyLevel.ALL
+        keys = range(256)
+        await asyncio.gather(*[cql.run_async(stmt, [k, k]) for k in keys])
+
+        # Freeze tablet placement, so that the replica set we pick below
+        # remains valid while we take the nodes down.
+        await manager.disable_tablet_balancing()
+
+        # Group0 keeps 5 voters out of the 6 nodes. Pick the victim tablet among
+        # those which have a replica on the node which is not a voter, so that one
+        # of the nodes taken down below is not a voter and group0 keeps its quorum
+        # regardless of when the voter set is refreshed.
+        group0_config = await get_current_group0_config(manager, servers[0])
+        non_voters = [member for member, voter in group0_config if not voter]
+        assert len(non_voters) == 1, f"Expected a single group0 non-voter, got {group0_config}"
+
+        # Pick a tablet and its replicas. With RF equal to the number of racks
+        # each tablet has exactly one replica per rack.
+        tablets = sorted(await get_all_tablet_replicas(manager, servers[0], ks, 'test'))
+        assert len(tablets) >= 8
+        victim_tablet = next((t for t in tablets if non_voters[0] in [host_id for host_id, _ in t.replicas]), None)
+        assert victim_tablet, f"No tablet of {ks}.test has a replica on the group0 non-voter {non_voters[0]}"
+        replicas = [server_by_host_id[host_id] for host_id, _ in victim_tablet.replicas]
+        assert sorted(s.rack for s in replicas) == racks, f"Unexpected replica set {replicas} for tablet {victim_tablet}"
+
+        nodes_to_exclude = [s for s in replicas if s.rack != replaced_rack]
+        node_to_replace = next(s for s in replicas if s.rack == replaced_rack)
+        live_servers = [s for s in servers if s not in replicas]
+
+        # The victim tablet is not necessarily the only one which is about to lose
+        # all of its replicas - another tablet may happen to have the same replica
+        # set. Collect the keys of all such tablets, they are the ones expected to
+        # be lost.
+        doomed_host_ids = {host_ids[s.server_id] for s in replicas}
+        doomed_tokens = [t.last_token for t in tablets
+                         if all(host_id in doomed_host_ids for host_id, _ in t.replicas)]
+        assert victim_tablet.last_token in doomed_tokens
+
+        # Tablets are sorted by last_token and their ranges are contiguous, so the
+        # first tablet whose last_token is not below the token is the owning one.
+        def owning_tablet(token: int) -> int:
+            return next(t.last_token for t in tablets if token <= t.last_token)
+
+        rows = await cql.run_async(f"SELECT pk, token(pk) AS t FROM {ks}.test")
+        doomed_keys = {r.pk for r in rows if owning_tablet(r.t) in doomed_tokens}
+        assert doomed_keys, f"No key of {ks}.test belongs to tablet {victim_tablet}"
+        logger.info(f"Tablets {doomed_tokens} own {len(doomed_keys)} of {len(keys)} keys")
+
+        for node in nodes_to_exclude:
+            logger.info(f"Killing and excluding {node}")
+            await manager.server_stop(node.server_id, convict=True)
+            await manager.others_not_see_server(node.ip_addr)
+            await manager.api.exclude_node(live_servers[0].ip_addr, hosts=[host_ids[node.server_id]])
+            # Verify that group0 still has a quorum.
+            await read_barrier(manager.api, live_servers[0].ip_addr)
+
+        logger.info(f"Killing {node_to_replace}, the last replica of tablet {victim_tablet}")
+        await manager.server_stop(node_to_replace.server_id, convict=True)
+        await manager.others_not_see_server(node_to_replace.ip_addr)
+
+        # The victim tablet must still have all of its replicas on the down nodes,
+        # otherwise the scenario under test isn't exercised.
+        tablet_now = next(t for t in await get_all_tablet_replicas(manager, live_servers[0], ks, 'test')
+                          if t.last_token == victim_tablet.last_token)
+        assert sorted(tablet_now.replicas) == sorted(victim_tablet.replicas), \
+                f"Tablet {victim_tablet} was migrated to {tablet_now.replicas}"
+
+        # Let the load balancer run again, so that the replace has to make progress
+        # while regular tablet balancing is going on, like in a real cluster. Note
+        # that the excluded nodes keep their replicas - those are only moved away by
+        # removenode - so the tablets which lost all of their replicas still have no
+        # live source to rebuild from.
+        await manager.enable_tablet_balancing()
+
+        logger.info(f"Replacing {node_to_replace} with a new node")
+        replace_cfg = ReplaceConfig(replaced_id=node_to_replace.server_id, reuse_ip_addr=False, use_host_id=True,
+                                    wait_dead=True)
+        new_server = await manager.server_add(replace_cfg=replace_cfg, property_file=node_to_replace.property_file())
+
+        # The replicas of the replaced node were rebuilt on the nodes which are
+        # still up in its rack - either on the replacing node or on the other
+        # node in that rack. The rebuild of the victim tablet had no live source,
+        # so it completed without transferring any data.
+        new_host_id = await manager.get_host_id(new_server.server_id)
+        live_host_ids = {new_host_id} | {host_ids[s.server_id] for s in live_servers if s.rack == replaced_rack}
+        tablet_now = next(t for t in await get_all_tablet_replicas(manager, live_servers[0], ks, 'test')
+                          if t.last_token == victim_tablet.last_token)
+        assert len([host_id for host_id, _ in tablet_now.replicas if host_id in live_host_ids]) == 1, \
+                f"Tablet {victim_tablet} has no live replica in {replaced_rack}: {tablet_now.replicas}"
+
+        # The tablets which lost all of their replicas lost their data, while the
+        # tablets which still had a live replica are intact.
+        query = SimpleStatement(f"SELECT pk FROM {ks}.test;", consistency_level=ConsistencyLevel.ONE)
+        surviving_keys = {r.pk for r in await cql.run_async(query)}
+        assert surviving_keys == set(keys) - doomed_keys
+
+        # Replace the excluded nodes too, bringing the cluster back to its
+        # original size.
+        for node in nodes_to_exclude:
+            logger.info(f"Replacing excluded {node} with a new node")
+            replace_cfg = ReplaceConfig(replaced_id=node.server_id, reuse_ip_addr=False, use_host_id=True,
+                                        wait_dead=True)
+            await manager.server_add(replace_cfg=replace_cfg, property_file=node.property_file())
+
+        servers = await manager.running_servers()
+        assert len(servers) == 2 * len(racks)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        # With the whole cluster up again, the data of the tablets which kept a live
+        # replica is readable at CL=ALL, while the data of the tablets which lost all
+        # of their replicas is gone for good.
+        query = SimpleStatement(f"SELECT pk FROM {ks}.test;", consistency_level=ConsistencyLevel.ALL)
+        surviving_keys = {r.pk for r in await cql.run_async(query)}
+        assert surviving_keys == set(keys) - doomed_keys
+
+        # The tablets which lost their data are otherwise functional - the lost keys
+        # can be written again.
+        await asyncio.gather(*[cql.run_async(stmt, [k, k]) for k in doomed_keys])
+        assert {r.pk for r in await cql.run_async(query)} == set(keys)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_keyspace_while_split(manager: ManagerClient):
