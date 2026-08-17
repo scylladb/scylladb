@@ -246,7 +246,7 @@ static future<> test_basic_operations(app_template& app) {
         }
 
         auto&& tablets_table = e.local_db().find_column_family(db::system_keyspace::tablets());
-        testlog.info("Disk space used by system.tablets: {:.6f} [MiB]", double(tablets_table.get_stats().live_disk_space_used.on_disk) / MiB);
+        testlog.info("Disk space used by system.tablets: {:.6f} [MiB]", double(tablets_table.get_stats().sstables_live_disk_space_used.on_disk) / MiB);
 
         locator::tablet_metadata_change_hint hint;
 

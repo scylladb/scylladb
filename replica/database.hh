@@ -407,8 +407,10 @@ struct table_stats {
     int64_t memtable_switch_count = 0;
     /** Estimated number of tasks pending for this column family */
     int64_t pending_flushes = 0;
-    utils::file_size_stats live_disk_space_used;
-    utils::file_size_stats total_disk_space_used;
+    /** Disk space used by the sstables of this table. Use table::live_disk_space_used() and
+     * table::total_disk_space_used() for all the storage of the table, logstor segments included. */
+    utils::file_size_stats sstables_live_disk_space_used;
+    utils::file_size_stats sstables_total_disk_space_used;
     int64_t live_sstable_count = 0;
     /** Estimated number of compactions pending for this column family */
     int64_t pending_compactions = 0;
@@ -1232,6 +1234,12 @@ public:
     table_stats& get_stats() const {
         return _stats;
     }
+
+    // Disk space used by the storage of this table on this shard.
+    utils::file_size_stats live_disk_space_used() const;
+    utils::file_size_stats total_disk_space_used() const;
+    // Space taken by the logstor segments this table owns. Zero for a table that doesn't use logstor.
+    uint64_t logstor_disk_space_used() const;
 
     locator::combined_load_stats table_load_stats() const;
 
