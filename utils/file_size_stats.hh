@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 
 namespace utils {
@@ -38,6 +39,14 @@ struct file_size_stats {
         result += rhs;
         return result;
     }
+    // The sizes with the negatives clamped away. The sums the sstable sets keep are maintained
+    // incrementally, and their decrements are not self healing - a bug in one of them once drove a
+    // counter below zero - so a caller that hands the number to something which cannot take a
+    // negative size, an unsigned type or the load of a node, clamps it first.
+    file_size_stats clamped_to_zero() const noexcept {
+        return {std::max<int64_t>(0, on_disk), std::max<int64_t>(0, before_compression)};
+    }
+
     bool operator==(const file_size_stats& other) const = default;
 };
 

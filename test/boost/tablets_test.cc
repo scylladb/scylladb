@@ -7211,9 +7211,9 @@ SEASTAR_TEST_CASE(test_tablet_cleanup_retries_compacted_sstable_deletion) {
 
 // Reproduces https://github.com/scylladb/scylladb/issues/24134
 // tablet cleanup used subtract_compaction_group_from_stats() which is a
-// non-self-healing decrement. It double-counts total_disk_space_used because
+// non-self-healing decrement. It double-counts sstables_total_disk_space_used because
 // prepare() pushes sstables into _sstables_compacted_but_not_deleted before
-// execute() subtracts total_disk_space_used_full_stats() which includes both
+// execute() subtracts the total sstable disk space, which includes both
 // the live and the compacted-but-not-deleted terms.
 SEASTAR_TEST_CASE(test_tablet_cleanup_stats_non_negative) {
     auto cfg = tablet_cql_test_config();
@@ -7235,17 +7235,17 @@ SEASTAR_TEST_CASE(test_tablet_cleanup_stats_non_negative) {
             auto& cf = db.find_column_family("ks", "cf");
             auto& stats = cf.get_stats();
             if (stats.live_sstable_count > 0) {
-                testlog.info("Before cleanup: live_disk_space_used={} total_disk_space_used={} live_sstable_count={}",
-                             stats.live_disk_space_used.on_disk, stats.total_disk_space_used.on_disk, stats.live_sstable_count);
-                BOOST_REQUIRE_GT(stats.live_disk_space_used.on_disk, 0);
-                BOOST_REQUIRE_GT(stats.total_disk_space_used.on_disk, 0);
+                testlog.info("Before cleanup: sstables_live_disk_space_used={} sstables_total_disk_space_used={} live_sstable_count={}",
+                             stats.sstables_live_disk_space_used.on_disk, stats.sstables_total_disk_space_used.on_disk, stats.live_sstable_count);
+                BOOST_REQUIRE_GT(stats.sstables_live_disk_space_used.on_disk, 0);
+                BOOST_REQUIRE_GT(stats.sstables_total_disk_space_used.on_disk, 0);
                 return true;
             }
             return false;
         }, false, std::logical_or<bool>()).get();
         BOOST_REQUIRE(has_data);
 
-        // Cleanup the tablet. On HEAD this causes total_disk_space_used to go
+        // Cleanup the tablet. On HEAD this causes sstables_total_disk_space_used to go
         // negative due to double-counting in subtract_compaction_group_from_stats.
         e.db().invoke_on_all([&] (replica::database& db) -> future<> {
             auto& cf = db.find_column_family("ks", "cf");
@@ -7259,10 +7259,10 @@ SEASTAR_TEST_CASE(test_tablet_cleanup_stats_non_negative) {
         e.db().invoke_on_all([] (replica::database& db) {
             auto& cf = db.find_column_family("ks", "cf");
             auto& stats = cf.get_stats();
-            testlog.info("After cleanup: live_disk_space_used={} total_disk_space_used={} live_sstable_count={}",
-                         stats.live_disk_space_used.on_disk, stats.total_disk_space_used.on_disk, stats.live_sstable_count);
-            BOOST_REQUIRE_GE(stats.live_disk_space_used.on_disk, 0);
-            BOOST_REQUIRE_GE(stats.total_disk_space_used.on_disk, 0);
+            testlog.info("After cleanup: sstables_live_disk_space_used={} sstables_total_disk_space_used={} live_sstable_count={}",
+                         stats.sstables_live_disk_space_used.on_disk, stats.sstables_total_disk_space_used.on_disk, stats.live_sstable_count);
+            BOOST_REQUIRE_GE(stats.sstables_live_disk_space_used.on_disk, 0);
+            BOOST_REQUIRE_GE(stats.sstables_total_disk_space_used.on_disk, 0);
             BOOST_REQUIRE_GE(stats.live_sstable_count, 0);
         }).get();
 
@@ -7278,8 +7278,8 @@ SEASTAR_TEST_CASE(test_tablet_cleanup_stats_non_negative) {
         e.db().invoke_on_all([] (replica::database& db) {
             auto& cf = db.find_column_family("ks", "cf");
             auto& stats = cf.get_stats();
-            BOOST_REQUIRE_GE(stats.live_disk_space_used.on_disk, 0);
-            BOOST_REQUIRE_GE(stats.total_disk_space_used.on_disk, 0);
+            BOOST_REQUIRE_GE(stats.sstables_live_disk_space_used.on_disk, 0);
+            BOOST_REQUIRE_GE(stats.sstables_total_disk_space_used.on_disk, 0);
             BOOST_REQUIRE_GE(stats.live_sstable_count, 0);
         }).get();
     }, cfg);

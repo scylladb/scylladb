@@ -739,7 +739,7 @@ future<uint64_t> local_table_on_disk_size(seastar::sharded<replica::database>& d
     return db.map_reduce0(
         [table] (const replica::database& db) -> uint64_t {
             const auto* cf = find_column_family_if_exists(db, table, false);
-            return cf ? uint64_t(cf->get_stats().live_disk_space_used.on_disk) : uint64_t(0);
+            return cf ? uint64_t(cf->get_stats().sstables_live_disk_space_used.on_disk) : uint64_t(0);
         },
         uint64_t(0),
         std::plus<uint64_t>()
