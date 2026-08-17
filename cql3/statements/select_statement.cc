@@ -2159,8 +2159,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         }
     }
 
-    // Likewise for ANN() calls in SELECT.
-    if (prepare_ann_selectors(prepared_selectors, ann_ordering_info_opt, temporaries_allocator)) {
+    // Likewise for ANN() calls in SELECT, except that an index that rescores computes the score
+    // locally instead, and so needs no slot.
+    if (prepare_ann_selectors(prepared_selectors, ann_ordering_info_opt, temporaries_allocator, db, schema)) {
         // Likewise not answerable per group, and likewise invisible to the aggregation machinery.
         if (!_group_by_columns.empty()) {
             throw exceptions::invalid_request_exception("A scoring function cannot be selected by a query with GROUP BY");

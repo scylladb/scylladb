@@ -37,16 +37,19 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
         schema_ptr schema,
         const expr::function_call& fc);
 
-/// Lowers every ANN() call in the SELECT clause, nested occurrences included, to the slot the row's
-/// score is delivered in - allocating it on the first one - and rejects an occurrence that does not
-/// agree with the ordering on the column and the query vector, or that has no ANN ordering to agree
-/// with.  A query vector whose agreement only execution can settle is recorded in ordering_info for
-/// it to check.
+/// Lowers every ANN() call in the SELECT clause, nested occurrences included, to the expression that
+/// yields the score of the row it is reported for: the slot the score the Vector Store reported is
+/// delivered in, or, when the index rescores, the similarity the coordinator recomputes - which is
+/// what it ranks the rows by, so reporting anything else would disagree with the order.  Rejects an
+/// occurrence that does not agree with the ordering on the column and the query vector, or that has
+/// no ANN ordering to agree with.  A query vector whose agreement only execution can settle is
+/// recorded in ordering_info for it to check.
 ///
 /// Returns whether the SELECT clause had any such call, which the caller cannot see afterwards: what
 /// replaced it says nothing about the score it stands for.
 bool prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_selectors,
-        std::optional<ann_ordering_info>& ordering_info, expr::temporary_allocator& temporaries_allocator);
+        std::optional<ann_ordering_info>& ordering_info, expr::temporary_allocator& temporaries_allocator,
+        data_dictionary::database db, const schema_ptr& schema);
 
 /// The order the rows come back in when the index rescores.  The Vector Store returned them ordered
 /// by the score it reported, which is not the requested order then: the coordinator recomputes the

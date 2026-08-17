@@ -128,7 +128,8 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
 }
 
 bool prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_selectors,
-        std::optional<ann_ordering_info>& ordering_info, expr::temporary_allocator& temporaries_allocator) {
+        std::optional<ann_ordering_info>& ordering_info, expr::temporary_allocator& temporaries_allocator,
+        data_dictionary::database db, const schema_ptr& schema) {
     bool selects_score = false;
 
     for (auto& ps : prepared_selectors) {
@@ -157,6 +158,8 @@ bool prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_s
                 throw exceptions::invalid_request_exception("ANN() in SELECT must reference the same column as the ANN ordering");
             }
 
+            selects_score = true;
+
             auto sel_vector = extract_query_value(*fc, "ANN");
             if (auto deferred = check_query_value(sel_vector, ordering_vector,
                         "ANN() in SELECT must use the same query vector as the ANN ordering")) {
@@ -164,19 +167,27 @@ bool prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_s
             }
 
             if (ordering_info->is_rescoring_enabled) {
-                // Rescoring recomputes the similarity on the coordinator to rank the rows, so that
-                // recomputed value is the score to report - the Vector Store's own would disagree
-                // with both the order and which rows survived.  Not implemented yet.
-                throw exceptions::invalid_request_exception(
-                        "ANN() is not supported in the SELECT clause of a query using an index with rescoring enabled");
+                // Rescoring ranks the rows by the similarity it recomputes, so that is the score to
+                // report; the Vector Store's own would disagree with the order.  TODO: every
+                // occurrence computes it again, the hidden ordering selector included.
+                //
+                // The replacement is a similarity call, so name the selector by what the user wrote
+                // - ps.expr, which the lowering has not touched yet - or an unaliased ANN() would be
+                // reported as similarity_cosine(...), a name that follows the index options.
+                if (!ps.alias) {
+                    ps.alias = ::make_shared<column_identifier>(fmt::format("{:result_set_metadata}", ps.expr), true);
+                }
+
+                return make_similarity_expression(ordering_info->index, std::make_pair(col, std::move(sel_vector)), db, schema);
             }
 
-            // Every ANN() reports the same score, so one slot serves them all.
+            // Without rescoring the score is the Vector Store's own, delivered per row in a slot -
+            // and every ANN() reports the same score, so one slot serves them all.  The name needs
+            // nothing done to it here: a temporary formats as the call it replaced.
             if (!ordering_info->temporary_index) {
                 ordering_info->temporary_index = temporaries_allocator.allocate();
             }
 
-            selects_score = true;
             return expr::expression(expr::temporary{
                     .index = *ordering_info->temporary_index,
                     .type = float_type,
