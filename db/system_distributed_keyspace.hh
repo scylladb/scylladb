@@ -141,6 +141,7 @@ public:
         sstring request;
         sstring status;
         ::table_id table_id;  // The exported table, as resolved when the export was accepted
+        db_clock::time_point export_time;  // The point in time the data was exported from
         db_clock::time_point accepted_at;
         std::optional<sstring> manifest;
         std::optional<sstring> failure_code;
