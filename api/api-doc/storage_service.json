@@ -4009,6 +4009,9 @@
             "segments":{
                "type":"long"
             },
+            "live_record_bytes":{
+               "type":"long"
+            },
             "data_size_histogram":{
                "type":"array",
                "items":{

@@ -73,11 +73,13 @@ struct table_segment_histogram_bucket {
 struct table_segment_stats {
     size_t compaction_group_count{0};
     size_t segment_count{0};
+    uint64_t live_record_bytes{0};
     std::vector<table_segment_histogram_bucket> histogram;
 
     table_segment_stats& operator+=(table_segment_stats& other) {
         compaction_group_count += other.compaction_group_count;
         segment_count += other.segment_count;
+        live_record_bytes += other.live_record_bytes;
         histogram.resize(std::max(histogram.size(), other.histogram.size()));
         for (size_t i = 0; i < other.histogram.size(); i++) {
             histogram[i] += other.histogram[i];
