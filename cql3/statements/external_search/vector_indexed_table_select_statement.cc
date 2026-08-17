@@ -7,6 +7,7 @@
  */
 
 #include "cql3/statements/external_search/vector_indexed_table_select_statement.hh"
+#include "cql3/statements/external_search/external_function.hh"
 
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
@@ -63,17 +64,10 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
     // and an argument that is not a float vector have all been rejected already.
     throwing_assert(fc.args.size() == 2);
 
-    const auto* ann_column = expr::as_if<expr::column_value>(&fc.args[0]);
-    if (!ann_column) {
-        throw exceptions::invalid_request_exception("First argument to ANN() must be a column reference");
-    }
-    const column_definition* def = ann_column->col;
+    const column_definition* def = extract_scored_column(fc, "ANN");
+    auto query_vector = extract_query_value(fc, "ANN");
 
-    if (expr::find_in_expression<expr::column_value>(fc.args[1], [] (const expr::column_value&) { return true; })) {
-        throw exceptions::invalid_request_exception("Second argument to ANN() must not be a column reference");
-    }
-
-    raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering = std::make_pair(def, fc.args[1]);
+    raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering = std::make_pair(def, std::move(query_vector));
 
     auto cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();

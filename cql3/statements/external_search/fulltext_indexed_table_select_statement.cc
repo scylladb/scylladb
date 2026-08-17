@@ -7,6 +7,7 @@
  */
 
 #include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
+#include "cql3/statements/external_search/external_function.hh"
 #include "cql3/statements/external_search/external_score_provider.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/expr/evaluate.hh"
@@ -29,31 +30,9 @@ namespace cql3::statements {
 
 namespace {
 
-const column_definition* extract_column_from_first_argument(const expr::function_call& fc) {
-    const auto* col_val = expr::as_if<expr::column_value>(&fc.args[0]);
-    if (!col_val) {
-        throw exceptions::invalid_request_exception("First argument to BM25 must be a column reference");
-    }
-    return col_val->col;
-}
-
-expr::expression extract_search_term_from_second_argument(const expr::function_call& fc) {
-    expr::expression search_term = fc.args[1];
-    if (expr::find_in_expression<expr::column_value>(search_term, [](const expr::column_value&) {
-            return true;
-        })) {
-        throw exceptions::invalid_request_exception("Second argument to BM25() must not be a column reference");
-    }
-    return search_term;
-}
-
-} // anonymous namespace
-
-namespace {
-
 void validate_bm25_where_restriction(const expr::binary_operator& binop, const bm25_ordering_info& ordering_info) {
     const auto& fc = expr::as<expr::function_call>(binop.lhs);
-    const auto& col = extract_column_from_first_argument(fc);
+    const auto& col = extract_scored_column(fc, "BM25");
     if (col->name_as_text() != ordering_info.index.target_column()) {
         throw exceptions::invalid_request_exception("Full-text search queries must reference the same column in both WHERE and ORDER BY clauses");
     }
@@ -67,7 +46,7 @@ void validate_bm25_where_restriction(const expr::binary_operator& binop, const b
         throw exceptions::invalid_request_exception("BM25 function comparison value must be the literal 0");
     }
 
-    const auto where_search_term = extract_search_term_from_second_argument(fc);
+    const auto where_search_term = extract_query_value(fc, "BM25");
 
     // If both query terms are literals, reject mismatches at prepare time.
     // Bind-marker cases are caught at execute time.
@@ -100,12 +79,12 @@ bool prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_
             }
 
             // Validate column matches the ORDER BY index.
-            const auto* col = extract_column_from_first_argument(*fc);
+            const auto* col = extract_scored_column(*fc, "BM25");
             if (col->name_as_text() != ordering_info->index.target_column()) {
                 throw exceptions::invalid_request_exception("BM25() in SELECT must reference the same column as BM25() in WHERE and ORDER BY");
             }
 
-            auto sel_term = extract_search_term_from_second_argument(*fc);
+            auto sel_term = extract_query_value(*fc, "BM25");
 
             // Eager constant-vs-constant mismatch check.
             const auto* sel_const = expr::as_if<expr::constant>(&sel_term);
@@ -142,8 +121,8 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
     // bm25() has a fixed signature, so resolution has already checked the argument count and types.
     throwing_assert(fc.args.size() == 2);
 
-    const auto* column = extract_column_from_first_argument(fc);
-    auto search_term = extract_search_term_from_second_argument(fc);
+    const auto* column = extract_scored_column(fc, "BM25");
+    auto search_term = extract_query_value(fc, "BM25");
 
     auto cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
@@ -201,16 +180,10 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
                 "Full-text search queries do not support additional WHERE restrictions");
     }
 
-    // The external score provider needs primary key columns to match each
-    // replica row against the vector-store results. Ensure they are fetched
-    // even when the user did not select them (e.g. SELECT BM25(...) ...).
+    // A slot was allocated, so BM25() was selected and a provider will fill that slot per row by
+    // matching each row to the full-text index's response.
     if (ordering_info->temporary_index) {
-        for (const auto& cdef : schema->partition_key_columns()) {
-            selection->add_column_for_post_processing(cdef);
-        }
-        for (const auto& cdef : schema->clustering_key_columns()) {
-            selection->add_column_for_post_processing(cdef);
-        }
+        fetch_primary_key_columns(*selection, *schema);
     }
 
     return ::make_shared<cql3::statements::fulltext_indexed_table_select_statement>(
