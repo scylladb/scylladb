@@ -1517,6 +1517,13 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The minimum size a table has to reach before dictionaries will be trained for it.")
     , sstable_compression_dictionaries_min_training_improvement_factor(this, "sstable_compression_dictionaries_min_training_improvement_factor", liveness::LiveUpdate, value_status::Used, 0.95,
         "New dictionaries will be only published if the estimated compression ratio is smaller than current ratio multiplied by this factor.")
+    , speculative_retry_user_table_default(this, "speculative_retry_user_table_default", liveness::LiveUpdate, value_status::Used, "99.0PERCENTILE",
+        "Default value of the speculative_retry option for user tables, i.e., tables in non-internal keyspaces. "
+        "Applied when a table is created without specifying speculative_retry explicitly; existing tables are not affected. "
+        "Materialized views and secondary indexes created without an explicit value also use this default; they do not inherit the base table's value. "
+        "The value used for a new table is taken from the configuration of the node coordinating the table creation, so the option should be set identically on all nodes. "
+        "The option can be updated at runtime; the updated value applies to tables created after the update. "
+        "Accepted values are the same as for the table option: ALWAYS, NONE, <X>PERCENTILE (e.g. 99.0PERCENTILE) and <N>ms (e.g. 200ms).")
     , uuid_sstable_identifiers_enabled(this,
             "uuid_sstable_identifiers_enabled", value_status::Unused, true, "If set to true, each newly created sstable will have a UUID "
             "based generation identifier, and such files are not readable by previous Scylla versions.")

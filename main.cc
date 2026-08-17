@@ -138,6 +138,7 @@
 #include "utils/labels.hh"
 #include "tools/utils.hh"
 #include "schema/compression_initializer.hh"
+#include "schema/speculative_retry_initializer.hh"
 
 
 namespace fs = std::filesystem;
@@ -925,6 +926,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             register_compression_initializer(*cfg, [&feature_service] {
                 return bool(feature_service.local().sstable_compression_dicts);
             });
+
+            // Register the default speculative_retry value for user tables.
+            // Registration parses the option value, so an invalid value fails
+            // startup.
+            register_speculative_retry_initializer(*cfg);
 
             cfg->setup_directories();
 

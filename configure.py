@@ -1756,6 +1756,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/secondary_index_test.cc',
     'test/boost/sessions_test.cc',
     'test/boost/simple_value_with_expiry_test.cc',
+    'test/boost/speculative_retry_config_test.cc',
     'test/boost/sstable_compaction_test.cc',
     'test/boost/sstable_compressor_factory_test.cc',
     'test/boost/sstable_compression_config_test.cc',

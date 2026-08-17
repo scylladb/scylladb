@@ -473,6 +473,7 @@ public:
     named_value<float> sstable_compression_dictionaries_autotrainer_tick_period_in_seconds;
     named_value<uint64_t> sstable_compression_dictionaries_min_training_dataset_bytes;
     named_value<float> sstable_compression_dictionaries_min_training_improvement_factor;
+    named_value<sstring> speculative_retry_user_table_default;
     named_value<bool> uuid_sstable_identifiers_enabled;
     named_value<bool> table_digest_insensitive_to_expiry;
     named_value<bool> enable_dangerous_direct_import_of_cassandra_counters;

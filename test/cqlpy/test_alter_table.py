@@ -8,7 +8,7 @@ import re
 import pytest
 
 from cassandra.protocol import ConfigurationException
-from .util import new_test_table, unique_name
+from .util import is_scylla, new_test_table, unique_name
 from .nodetool import flush
 
 # Test checks only case of preparing `ALTER TABLE ... DROP ... USING TIMESTAMP ?` statement.
@@ -71,8 +71,7 @@ def testDropColumnWithTimestampPreparedNonExistingSchema(scylla_only, cql, test_
     finally:
         cql.execute(f"DROP TABLE {table}")
 
-@pytest.mark.parametrize("percentile", ["-0", "0", "+0", "0.1", "0.01", "0.001", "99", "99.9", "99.999", "100", "+100"])
-def test_valid_percentile_speculative_retry_values(cql, test_keyspace, percentile):
+def test_valid_percentile_speculative_retry_values(cql, test_keyspace):
     """
     In test_valid_percentile_speculative_retry_values, we verify that valid values for the
     PERCENTILE option in the `speculative_retry` setting are accepted without errors. According to the
@@ -86,10 +85,10 @@ def test_valid_percentile_speculative_retry_values(cql, test_keyspace, percentil
     """
 
     with new_test_table(cql, test_keyspace, "id UUID PRIMARY KEY, value TEXT") as table:
-        cql.execute(f"ALTER TABLE {table} WITH speculative_retry = '{percentile}PERCENTILE'")
+        for percentile in ["-0", "0", "+0", "0.1", "0.01", "0.001", "99", "99.9", "99.999", "100", "+100"]:
+            cql.execute(f"ALTER TABLE {table} WITH speculative_retry = '{percentile}PERCENTILE'")
 
-@pytest.mark.parametrize("percentile", ["-1.1", "-1", "-0.1", "-0.01", "-0.001", "100.1", "100.01", "100.001", "101", "+101", "+101.1", "dog"])
-def test_invalid_percentile_speculative_retry_values(cql, test_keyspace, percentile):
+def test_invalid_percentile_speculative_retry_values(cql, test_keyspace):
     """
     In test_invalid_percentile_speculative_retry_values, we verify that invalid values for the
     PERCENTILE option in the `speculative_retry` setting are properly rejected. According to the
@@ -103,19 +102,54 @@ def test_invalid_percentile_speculative_retry_values(cql, test_keyspace, percent
     See issue #21825.
     """
 
-    percentile = percentile.upper()
-
-    # For negative values and zero, Cassandra returns a shortened error message compared to ScyllaDB.
-    # Therefore, a regular expression is used to match both formats of the error message.
-    message = (
-        f"(?:"
-        f"Invalid value {re.escape(percentile)}PERCENTILE "
-        r"for (?:PERCENTILE option|option) 'speculative_retry'"
-        r"(?:\: must be between \(0\.0 and 100\.0\))?"
-        f"|"
-        f"cannot convert {re.escape(percentile)}PERCENTILE to speculative_retry"
-        f")"
-    )
     with new_test_table(cql, test_keyspace, "id UUID PRIMARY KEY, value TEXT") as table:
-        with pytest.raises(ConfigurationException, match=message):
-            cql.execute(f"ALTER TABLE {table} WITH speculative_retry = '{percentile}PERCENTILE'")
+        for percentile in ["-1.1", "-1", "-0.1", "-0.01", "-0.001", "100.1", "100.01", "100.001", "101", "+101", "+101.1", "dog"]:
+            percentile = percentile.upper()
+
+            # For negative values and zero, Cassandra returns a shortened error message compared to ScyllaDB.
+            # Therefore, a regular expression is used to match both formats of the error message.
+            message = (
+                f"(?:"
+                f"Invalid value {re.escape(percentile)}PERCENTILE "
+                r"for (?:PERCENTILE option|option) 'speculative_retry'"
+                r"(?:\: must be between \(0\.0 and 100\.0\))?"
+                f"|"
+                f"cannot convert {re.escape(percentile)}PERCENTILE to speculative_retry"
+                f")"
+            )
+            with pytest.raises(ConfigurationException, match=message):
+                cql.execute(f"ALTER TABLE {table} WITH speculative_retry = '{percentile}PERCENTILE'")
+
+def test_invalid_speculative_retry_values(cql, test_keyspace):
+    """
+    Verify that speculative_retry values that match none of the supported
+    formats (ALWAYS, NONE, XPERCENTILE, Yms) are rejected with a proper
+    configuration error, including values shorter than the "ms" and
+    "PERCENTILE" suffixes and non-finite or negative numbers.
+    """
+
+    with new_test_table(cql, test_keyspace, "id UUID PRIMARY KEY, value TEXT") as table:
+        for value in ["", "x", "ms", "percentile", "dog",
+                      "nanPERCENTILE", "infPERCENTILE", "-infPERCENTILE",
+                      "nanms", "infms", "-1ms"]:
+            with pytest.raises(ConfigurationException):
+                cql.execute(f"ALTER TABLE {table} WITH speculative_retry = '{value}'")
+
+def test_valid_speculative_retry_values(cql, test_keyspace):
+    """
+    Verify that all supported speculative_retry formats are accepted,
+    case-insensitively. On Scylla, also verify the canonical form the value
+    is normalized to in the schema tables; Cassandra normalizes to different
+    spellings (e.g. 99p), so that part of the check is Scylla-only.
+    """
+
+    with new_test_table(cql, test_keyspace, "id UUID PRIMARY KEY, value TEXT") as table:
+        ks, cf = table.split('.')
+        for value, canonical in [('NONE', 'NONE'), ('none', 'NONE'), ('ALWAYS', 'ALWAYS'),
+                                 ('200ms', '200.00ms'), ('0ms', '0.00ms'),
+                                 ('99PERCENTILE', '99.0PERCENTILE'), ('99.0percentile', '99.0PERCENTILE')]:
+            cql.execute(f"ALTER TABLE {table} WITH speculative_retry = '{value}'")
+            if is_scylla(cql):
+                r = list(cql.execute(f"SELECT speculative_retry FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'"))
+                assert len(r) == 1
+                assert r[0].speculative_retry == canonical
