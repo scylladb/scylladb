@@ -7,6 +7,7 @@
  */
 
 #include "cql3/statements/external_search/vector_indexed_table_select_statement.hh"
+#include "cql3/statements/external_search/external_function.hh"
 
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
@@ -59,21 +60,11 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
     }
 
     // The call has been resolved, which for ann() infers the vector type and dimension of the query
-    // vector from the ordered column - so the argument count, a query vector of the wrong dimension
-    // and an argument that is not a float vector have all been rejected already.
-    throwing_assert(fc.args.size() == 2);
+    // vector from the ordered column - so a query vector of the wrong dimension and an argument
+    // that is not a float vector have both been rejected already.
+    auto [def, query_vector] = external_search::extract_call_arguments(fc, "ANN");
 
-    const auto* ann_column = expr::as_if<expr::column_value>(&fc.args[0]);
-    if (!ann_column) {
-        throw exceptions::invalid_request_exception("First argument to ANN() must be a column reference");
-    }
-    const column_definition* def = ann_column->col;
-
-    if (expr::find_in_expression<expr::column_value>(fc.args[1], [] (const expr::column_value&) { return true; })) {
-        throw exceptions::invalid_request_exception("Second argument to ANN() must not be a column reference");
-    }
-
-    raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering = std::make_pair(def, fc.args[1]);
+    raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering = std::make_pair(def, std::move(query_vector));
 
     auto cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
