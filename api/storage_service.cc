@@ -1586,6 +1586,7 @@ rest_logstor_info(http_context& ctx, std::unique_ptr<http::request> req) {
                 result.table = table;
                 result.compaction_groups = merged_stats.compaction_group_count;
                 result.segments = merged_stats.segment_count;
+                result.live_record_bytes = merged_stats.live_record_bytes;
 
                 for (const auto& bucket : merged_stats.histogram) {
                     ss::logstor_hist_bucket hist;

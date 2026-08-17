@@ -2288,6 +2288,15 @@ void table::set_metrics() {
                         [this] { return _stats.pending_sstable_deletions; })(cf)(ks)
         });
 
+        if (uses_logstor()) {
+            _metrics.add_group("column_family", {
+                    ms::make_gauge("logstor_live_record_bytes", ms::description("Bytes of the live records of this table in logstor segments"),
+                            [this] { return logstor_live_record_bytes(); })(cf)(ks),
+                    ms::make_gauge("logstor_segments", ms::description("Number of logstor segments owned by this table"),
+                            [this] { return logstor_segment_count(); })(cf)(ks)
+            });
+        }
+
         // Metrics related to row locking
         auto add_row_lock_metrics = [this, ks, cf] (row_locker::single_lock_stats& stats, sstring stat_name) {
             _metrics.add_group("column_family", {
@@ -2345,6 +2354,14 @@ void table::set_metrics() {
                 ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return to_metrics_histogram(_stats.reads.histogram());})(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                 ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return to_metrics_histogram(_stats.writes.histogram());})(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty()
             });
+            if (uses_logstor()) {
+                _metrics.add_group("column_family", {
+                        ms::make_gauge("logstor_live_record_bytes", ms::description("Bytes of the live records of this table in logstor segments"),
+                                [this] { return logstor_live_record_bytes(); })(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}),
+                        ms::make_gauge("logstor_segments", ms::description("Number of logstor segments owned by this table"),
+                                [this] { return logstor_segment_count(); })(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label})
+                });
+            }
             if (uses_tablets()) {
                 _metrics.add_group("column_family", {
                     ms::make_gauge("tablet_count", ms::description("Tablet count"), _stats.tablet_count)(cf)(ks).aggregate({seastar::metrics::shard_label})
@@ -2413,15 +2430,26 @@ void table::rebuild_statistics() {
     });
 }
 
+uint64_t table::logstor_segment_count() const {
+    if (!uses_logstor()) {
+        return 0;
+    }
+    uint64_t count = 0;
+    for_each_compaction_group([&count] (const compaction_group& cg) {
+        count += cg.logstor_segments().segment_count();
+    });
+    return count;
+}
+
 uint64_t table::logstor_disk_space_used() const {
     if (!uses_logstor()) {
         return 0;
     }
-    uint64_t bytes = 0;
-    for_each_compaction_group([&bytes] (const compaction_group& cg) {
-        bytes += cg.logstor_disk_space_used();
-    });
-    return bytes;
+    return logstor_segment_count() * get_logstor_segment_manager().get_segment_size();
+}
+
+uint64_t table::logstor_live_record_bytes() const {
+    return uses_logstor() ? logstor_index().get_live_record_bytes() : 0;
 }
 
 utils::file_size_stats table::live_disk_space_used() const {
@@ -2823,6 +2851,8 @@ future<logstor::table_segment_stats> table::get_logstor_segment_stats() const {
     if (!uses_logstor()) {
         co_return std::move(result);
     }
+
+    result.live_record_bytes = logstor_live_record_bytes();
 
     const auto segment_size = get_logstor_segment_manager().get_segment_size();
     const auto bucket_count = 32;
