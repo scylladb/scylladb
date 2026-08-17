@@ -79,11 +79,7 @@ void load_broadcaster::start_broadcasting() {
     _timer.set_callback([this] {
         llogger.debug("Disseminating load info ...");
         _done = _db.map_reduce0([](replica::database& db) {
-            int64_t res = 0;
-            db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
-                res += table->live_disk_space_used().on_disk;
-            });
-            return res;
+            return int64_t(db.disk_space_used());
         }, int64_t(0), std::plus<int64_t>()).then([this] (int64_t size) {
             return _gossiper.add_local_application_state(gms::application_state::LOAD,
                 gms::versioned_value::load(size)).then([this] {

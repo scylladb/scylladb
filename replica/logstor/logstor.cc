@@ -93,7 +93,7 @@ future<> logstor::stop() {
 }
 
 size_t logstor::get_memory_usage() const {
-    return _segment_manager.get_memory_usage();
+    return _segment_manager.get_usage().memory_usage;
 }
 
 segment_manager& logstor::get_segment_manager() noexcept {
