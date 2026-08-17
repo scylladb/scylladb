@@ -574,9 +574,11 @@ chunked_vector<T, max_contiguous_allocation>::resize(size_t n) {
         return;
     }
     reserve(n);
-    // FIXME: construct whole chunks at once
     while (_size < n) {
-        push_back(T{});
+        // Construct up to a whole chunk at once.
+        auto now = std::min(n - _size, max_chunk_capacity() - _size % max_chunk_capacity());
+        std::uninitialized_value_construct_n(addr(_size), now);
+        _size += now;
     }
 }
 
