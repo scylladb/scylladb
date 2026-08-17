@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <boost/icl/interval_map.hpp>
+#include <map>
 
 #include "dht/ring_position.hh"
 #include "sstable_set.hh"
@@ -17,48 +17,52 @@
 
 namespace sstables {
 
-// specialized when sstables are partitioned in the token range space
-// e.g. leveled compaction strategy
+// Indexes sstables by the token range they span, so that a query can select
+// only the sstables overlapping the range it asks for.
+//
+// An sstable spanning [first, last] overlaps a query range [s, e] iff
+// first <= e && last >= s. Each of the two maps below orders every sstable by
+// one of those bounds, so a bound lookup on one map narrows the candidates to
+// those satisfying one half of the test, and the other half is then checked
+// directly on each candidate. Having both maps lets a query walk whichever side
+// is shorter.
+//
+// Both maps hold every sstable exactly once, so the footprint is linear in the
+// number of sstables regardless of how deeply their ranges overlap. Keying on
+// tokens rather than on ring positions means a query can select an sstable that
+// does not in fact hold the key, which is harmless -- it costs a bloom filter
+// check -- whereas failing to select one would lose data.
 class partitioned_sstable_set : public sstable_set_impl {
-    using value_set = std::unordered_set<shared_sstable>;
-    using interval_map_type = boost::icl::interval_map<dht::compatible_ring_position_or_view, value_set>;
-    using interval_type = interval_map_type::interval_type;
-    using map_iterator = interval_map_type::const_iterator;
+    using token_map = std::multimap<dht::token, shared_sstable>;
 private:
     schema_ptr _schema;
-    std::vector<shared_sstable> _unleveled_sstables;
-    interval_map_type _leveled_sstables;
+    token_map _by_first_token;
+    token_map _by_last_token;
     lw_shared_ptr<sstable_list> _all;
     std::unordered_map<run_id, shared_sstable_run> _all_runs;
-    // Change counter on interval map for leveled sstables which is used by
-    // incremental selector to determine whether or not to invalidate iterators.
-    uint64_t _leveled_sstables_change_cnt = 0;
-    // Token range spanned by the compaction group owning this sstable set.
-    dht::token_range _token_range;
+    // Bumped on every change, so that an incremental selector can tell that the
+    // sweep state it accumulated no longer reflects the set.
+    uint64_t _change_cnt = 0;
 private:
-    static interval_type make_interval(const schema& s, const dht::partition_range& range);
-    interval_type make_interval(const dht::partition_range& range) const;
-    static interval_type make_interval(const schema_ptr& s, const sstable& sst);
-    interval_type make_interval(const sstable& sst);
-    interval_type singular(const dht::ring_position& rp) const;
-    std::pair<map_iterator, map_iterator> query(const dht::partition_range& range) const;
-    // SSTables are stored separately to avoid interval map's fragmentation issue when level 0 falls behind.
-    bool store_as_unleveled(const shared_sstable& sst) const;
+    // Token range covering `range`. Unbounded sides become the minimum and
+    // maximum token, and exclusive bounds are widened to inclusive ones, since
+    // over-approximating is safe.
+    static dht::token_range to_token_range(const dht::partition_range& range);
+    static void erase_from(token_map& map, dht::token token, const shared_sstable& sst);
 public:
-    static dht::ring_position to_ring_position(const dht::compatible_ring_position_or_view& crp);
-    static dht::partition_range to_partition_range(const interval_type& i);
-    static dht::partition_range to_partition_range(const dht::ring_position_view& pos, const interval_type& i);
-
     partitioned_sstable_set(const partitioned_sstable_set&) = delete;
+    // `token_range` is the range spanned by the owning compaction group. It is
+    // no longer needed to index the sstables and is accepted only so that the
+    // callers of make_partitioned_sstable_set() stay unchanged; removing it is
+    // left to a separate cleanup.
     explicit partitioned_sstable_set(schema_ptr schema, dht::token_range token_range);
     // For cloning the partitioned_sstable_set (makes a deep copy, including *_all)
     explicit partitioned_sstable_set(
         schema_ptr schema,
-        const std::vector<shared_sstable>& unleveled_sstables,
-        const interval_map_type& leveled_sstables,
+        const token_map& by_first_token,
+        const token_map& by_last_token,
         const lw_shared_ptr<sstable_list>& all,
         const std::unordered_map<run_id, shared_sstable_run>& all_runs,
-        dht::token_range token_range,
         file_size_stats bytes_on_disk);
 
     virtual std::unique_ptr<sstable_set_impl> clone() const override;
