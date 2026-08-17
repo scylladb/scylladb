@@ -5631,6 +5631,15 @@ static bool increases_replicas_per_rack(const locator::topology& topology, const
     return m[dst_rack] + 1 > max;
 }
 
+static bool has_fixed_replicas_per_rack(const replica::database& db, table_id table, const sstring& dc) {
+    auto& ks = db.find_keyspace(db.find_schema(table)->ks_name());
+    if (db.enforce_rf_rack_validity_for_keyspace(ks)) {
+        return true;
+    }
+    auto* rs = ks.get_replication_strategy().maybe_as_tablet_aware();
+    return rs && rs->is_rack_based(dc);
+}
+
 future<service::group0_guard> storage_service::get_guard_for_tablet_update() {
     auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
     co_return guard;
@@ -5934,6 +5943,21 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
             throw std::runtime_error(fmt::format("Tablet {} has replica on {}", gid, dst.host));
         }
 
+        auto dst_dc_rack = get_token_metadata().get_topology().get_location(dst.host);
+        if (has_fixed_replicas_per_rack(_db.local(), table, dst_dc_rack.dc)) {
+            if (force) {
+                slogger.warn("Adding replica to tablet {} in rack {} which breaks the replication constraints of the keyspace", gid, dst_dc_rack.rack);
+            } else {
+                throw std::runtime_error(fmt::format("Attempted to add replica to tablet {} in rack {} which would break the replication constraints of the keyspace", gid, dst_dc_rack.rack));
+            }
+        } else if (increases_replicas_per_rack(get_token_metadata().get_topology(), tinfo, dst_dc_rack.rack)) {
+            if (force) {
+                slogger.warn("Adding replica to tablet {} in rack {} which reduces availability", gid, dst_dc_rack.rack);
+            } else {
+                throw std::runtime_error(fmt::format("Attempted to add replica to tablet {} in rack {} which would reduce availability", gid, dst_dc_rack.rack));
+            }
+        }
+
         locator::tablet_replica_set new_replicas(tinfo.replicas);
         new_replicas.push_back(dst);
 
@@ -5975,6 +5999,15 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
 
         if (!locator::contains(tinfo.replicas, dst.host)) {
             throw std::runtime_error(fmt::format("Tablet {} doesn't have replica on {}", gid, dst.host));
+        }
+
+        auto dst_dc_rack = get_token_metadata().get_topology().get_location(dst.host);
+        if (has_fixed_replicas_per_rack(_db.local(), table, dst_dc_rack.dc)) {
+            if (force) {
+                slogger.warn("Removing replica from tablet {} in rack {} which breaks the replication constraints of the keyspace", gid, dst_dc_rack.rack);
+            } else {
+                throw std::runtime_error(fmt::format("Attempted to remove replica from tablet {} in rack {} which would break the replication constraints of the keyspace", gid, dst_dc_rack.rack));
+            }
         }
 
         locator::tablet_replica_set new_replicas;
