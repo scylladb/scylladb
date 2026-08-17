@@ -1133,12 +1133,12 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 
     ss::get_load.set(r, [&db] (std::unique_ptr<http::request> req) {
         return get_cf_stats(db, [](const replica::column_family_stats& stats) {
-            return stats.live_disk_space_used.on_disk;
+            return stats.sstables_live_disk_space_used.on_disk;
         });
     });
     ss::get_metrics_load.set(r, [&db] (std::unique_ptr<http::request> req) {
         return get_cf_stats(db, [](const replica::column_family_stats& stats) {
-            return stats.live_disk_space_used.on_disk;
+            return stats.sstables_live_disk_space_used.on_disk;
         });
     });
 

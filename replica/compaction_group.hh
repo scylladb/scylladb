@@ -279,11 +279,15 @@ public:
     void register_backlog_tracker(compaction::compaction_backlog_tracker new_backlog_tracker);
 
     size_t live_sstable_count() const noexcept;
+    // Disk space used by all the storage of this group, sstables and logstor segments alike.
     uint64_t live_disk_space_used() const noexcept;
-    size_t logstor_disk_space_used() const noexcept;
-    utils::file_size_stats live_disk_space_used_full_stats() const noexcept;
     uint64_t total_disk_space_used() const noexcept;
-    utils::file_size_stats total_disk_space_used_full_stats() const noexcept;
+    // Space taken by the logstor segments this group owns. Zero for a table that doesn't use logstor.
+    size_t logstor_disk_space_used() const noexcept;
+    // The sstable part alone, which is what table_stats caches. The logstor part is not cached,
+    // see table::live_disk_space_used().
+    utils::file_size_stats live_sstable_disk_space_used() const noexcept;
+    utils::file_size_stats total_sstable_disk_space_used() const noexcept;
 
     // With static sharding, i.e. vnodes, there will be only one active view.
     compaction::compaction_group_view& as_view_for_static_sharding() const;
