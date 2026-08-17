@@ -2160,6 +2160,15 @@ public:
     future<> flush_logstor_separator(std::optional<logstor::segment_sequence> seq_num = std::nullopt);
     future<logstor::table_segment_stats> get_logstor_table_segment_stats(table_id table) const;
     size_t get_logstor_memory_usage() const;
+    // Space the logstor segments holding data take on this shard, which is less than the space of
+    // the files logstor has allocated to hold them. Zero when logstor is unused.
+    uint64_t get_logstor_disk_space_used() const;
+
+    // Space the storage of this shard takes on disk, which is what a node reports as its load: the
+    // sstables of all its tables plus the logstor segments holding their data. Slightly more than
+    // the sum of the disk space of the tables, which cannot account for the segments holding
+    // records no compaction group has taken yet.
+    uint64_t disk_space_used() const;
 
     static future<db_clock::time_point> get_all_tables_flushed_at(sharded<database>& sharded_db);
 

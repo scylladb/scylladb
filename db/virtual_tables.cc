@@ -493,8 +493,8 @@ public:
             });
         });
         co_await add_partition(mutation_sink, "load", [this] () -> future<sstring> {
-            return map_reduce_tables<int64_t>([] (replica::table& tbl) {
-                return tbl.live_disk_space_used().on_disk;
+            return map_reduce_shards<int64_t>([&db = _db] () {
+                return int64_t(db.local().disk_space_used());
             }).then([] (int64_t load) {
                 return format("{}", load);
             });
