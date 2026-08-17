@@ -500,4 +500,93 @@ SEASTAR_THREAD_TEST_CASE(sstable_auto_validates_all_tables) {
         }
     });
 }
+
+// Sstables for which compaction fails should not be retried in the same scrub reevaluation period.
+// This could cause a deadlock, when auto-scrub is repeatedly retrying the same sstable.
+SEASTAR_THREAD_TEST_CASE(sstable_auto_scrub_skips_if_failed) {
+    automatic_scrub_test_framework test(tests::random_schema_specification::compress_sstable::yes);
+
+    auto& test_env = test.env();
+    constexpr auto table_count = 2;
+    constexpr auto sst_count = 5;
+
+    test.run_with_many_tables(table_count, sst_count, [&test_env] (std::span<table_for_tests> tables, std::span<compaction::compaction_group_view*> views, std::span<std::vector<sstables::shared_sstable>> sstable_sets) {
+        auto& cm = test_env.test_compaction_manager();
+
+        for (sstables::shared_sstable& sst : std::views::join(sstable_sets)) {
+            set_scrub_time(sst, db_clock::from_time_t(0));
+        }
+
+        for (auto& view : views) {
+            // Table for tests registers an additional compaction group view
+            // for its sstables (additional to the compaction group view
+            // ceated by the column family).
+            //
+            // Remove this compaction group view from the compaction manager
+            // for the purposes of this test. All sstables will be accessible
+            // through other compaction group views.
+            //
+            // In this way, sstables are accessible only through one compaction
+            // group view and automatic scrub will not submit them multiple times.
+            cm.get_compaction_manager().remove(*view).get();
+        }
+        auto readd = defer([&views, &cm] mutable noexcept {
+            try {
+                for (auto& view : views) {
+                    cm.get_compaction_manager().add(*view);
+                }
+            } catch (...) {
+                testlog.error("Failed to re-add views because of {}", std::current_exception());
+            }
+        });
+
+        auto timestamp_before = db_clock::now();
+
+        cm.set_scrub_period(std::chrono::seconds(3600));
+        cm.trigger_auto_scrub_timer();
+
+        utils::get_local_injector().enable_on_all("automatic_scrub_compaction", true, {{"what", "throw"}}).wait();
+
+        std::exception_ptr ex;
+        try {
+            wait_on_enter("automatic_scrub_compaction_done", sst_count * table_count).get();
+        } catch (...) {
+            ex = std::current_exception();
+        }
+
+        utils::get_local_injector().disable_on_all("automatic_scrub_compaction_fail").wait();
+        if (ex) {
+            std::rethrow_exception(ex);
+        }
+
+        size_t validated = 0;
+        for (auto [table, view, sstables] : std::views::zip(tables, views, sstable_sets)) {
+            BOOST_REQUIRE(table->get_sstables());
+            BOOST_REQUIRE_EQUAL(table->get_sstables()->size(), sstables.size());
+            for (auto& sst : *table->get_sstables()) {
+                auto timestamp = sst->get_scrub_time();
+                BOOST_REQUIRE(timestamp);
+                if (*timestamp > timestamp_before) {
+                    validated++;
+                }
+            }
+        }
+
+        BOOST_REQUIRE_EQUAL(validated, table_count * sst_count - 1);
+
+        cm.trigger_auto_scrub_timer();
+        wait_on_enter("automatic_scrub_compaction_done", sst_count * table_count + 1).get();
+
+        for (auto [table, view, sstables] : std::views::zip(tables, views, sstable_sets)) {
+            BOOST_REQUIRE(table->get_sstables());
+            BOOST_REQUIRE_EQUAL(table->get_sstables()->size(), sstables.size());
+            for (auto& sst : *table->get_sstables()) {
+                auto timestamp = sst->get_scrub_time();
+                BOOST_REQUIRE(timestamp);
+                BOOST_REQUIRE(*timestamp > timestamp_before);
+            }
+        }
+    });
+}
+
 } // namespace
