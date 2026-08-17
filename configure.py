@@ -2222,6 +2222,7 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
         '-DSeastar_SCHEDULING_GROUPS_COUNT=24',
         '-DSeastar_IO_URING=ON',
         '-DSeastar_OPENSSL=OFF',
+        '-DSeastar_LTTNG=OFF', # https://scylladb.atlassian.net/browse/SCYLLADB-3797, https://bugs.lttng.org/issues/1438
     ]
 
     if compiler_cache:
