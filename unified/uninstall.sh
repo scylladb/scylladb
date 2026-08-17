@@ -48,7 +48,6 @@ if ! $nonroot; then
     rsystemd="$rusr/lib/systemd/system"
     rdoc="$rprefix/share/doc"
     rdata="$root/var/lib/scylla"
-    rhkdata="$root/var/lib/scylla-housekeeping"
 else
     sysconfdir=/etc/sysconfig
     retc="$rprefix/etc"

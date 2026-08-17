@@ -13,7 +13,6 @@ Install ScyllaDB |CURRENT_VERSION|
    /getting-started/install-scylla/run-in-docker
    /getting-started/installation-common/unified-installer
    /getting-started/installation-common/air-gapped-install
-   /getting-started/installation-common/disable-housekeeping
    /getting-started/installation-common/dev-mod
 
 Keep your versions up-to-date. The two latest versions are supported. Also, always install the latest patches for your version.
