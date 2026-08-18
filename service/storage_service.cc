@@ -4827,10 +4827,26 @@ future<> storage_service::local_topology_barrier() {
 
         rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: waiting for stale token metadata versions to be released", version);
         {
-            seastar::timer<lowres_clock> warn_timer([&ss, version] {
+            // A user-requested repair on a vnode keyspace holds its
+            // effective_replication_map, and thus pins a stale token metadata
+            // version, for the entire duration of the repair, which is
+            // unbounded. Abort such repairs instead of stalling the topology
+            // operation behind them; the operator can re-run the repair once
+            // the topology change completes. The abort is retried from the
+            // periodic timer to catch repairs which acquired their
+            // effective_replication_map before the barrier but registered
+            // their per-shard tasks only after the initial call.
+            auto abort_stale_repairs = [&ss, current_version] {
+                if (ss._repair.local_is_initialized()) {
+                    ss._repair.local().get_repair_module().abort_repairs_pinning_stale_versions(current_version);
+                }
+            };
+            abort_stale_repairs();
+            seastar::timer<lowres_clock> warn_timer([&ss, version, abort_stale_repairs] {
                 rtlogger.warn("raft_topology_cmd::barrier_and_drain version {}: still waiting for stale versions, "
                               "stale versions (version: use_count): {}",
                               version, ss._shared_token_metadata.describe_stale_versions());
+                abort_stale_repairs();
             });
             warn_timer.arm_periodic(std::chrono::minutes(5));
             co_await ss._shared_token_metadata.stale_versions_in_use();

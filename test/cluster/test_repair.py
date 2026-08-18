@@ -446,3 +446,60 @@ async def test_repair_rejects_equal_start_and_end_token(manager):
     with pytest.raises(HTTPError, match="Start and end tokens must be different"):
         await manager.api.client.post_json(f"/storage_service/repair_async/ks",
                                            host=servers[0].ip_addr, params=params)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_topology_barrier_aborts_vnode_repair_pinning_stale_versions(manager: ManagerClient):
+    """Verify that a topology barrier is not blocked behind a long-running
+    user-requested vnode repair.
+
+    Such a repair holds its effective_replication_map, and thus pins a stale
+    token metadata version, for its entire duration. The topology barrier
+    (raft_topology_cmd::barrier_and_drain) waits for stale versions to be
+    released, so before the fix a topology operation like decommission would
+    stall until the repair finished, potentially for hours.
+
+    The test pauses a repair mid-ranges with an error injection so it keeps
+    holding the effective_replication_map, then decommissions another node.
+    The barrier must abort the repair instead of waiting for it: the repair
+    ends up FAILED and the decommission completes.
+    Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-93
+    """
+    injection = "repair_shard_repair_task_impl_do_repair_ranges"
+    servers = await manager.servers_add(3, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND TABLETS = {'enabled': false}")
+    cql.execute("CREATE TABLE ks.tbl (pk int PRIMARY KEY)")
+    for i in range(100):
+        cql.execute(f"INSERT INTO ks.tbl (pk) VALUES ({i})")
+
+    log = await manager.server_open_log(servers[0].server_id)
+    mark = await log.mark()
+
+    # Pause the repair once more than half of its ranges are done, while it
+    # still holds the effective_replication_map.
+    await manager.api.enable_injection(servers[0].ip_addr, injection, one_shot=True)
+    sequence_number = await manager.api.client.post_json("/storage_service/repair_async/ks",
+                                                         host=servers[0].ip_addr,
+                                                         params={"columnFamilies": "tbl"})
+    await log.wait_for(f"{injection}: waiting for message", from_mark=mark)
+
+    # The decommission's topology barrier must find the pinned stale version
+    # and abort the repair rather than wait for it.
+    decommission = asyncio.create_task(manager.decommission_node(servers[2].server_id))
+    await log.wait_for("Aborting repair job because it pins stale token metadata version", from_mark=mark)
+
+    # Let the paused repair resume; it observes the abort at the next range
+    # boundary and releases the effective_replication_map, unblocking the
+    # barrier.
+    await manager.api.message_injection(servers[0].ip_addr, injection)
+    await manager.api.disable_injection(servers[0].ip_addr, injection)
+
+    await decommission
+
+    status = await manager.api.client.get_json("/storage_service/repair_status",
+                                               host=servers[0].ip_addr,
+                                               params={"id": str(sequence_number)})
+    assert status == "FAILED"
