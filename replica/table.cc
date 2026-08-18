@@ -1677,6 +1677,8 @@ future<utils::chunked_vector<sstables::shared_sstable>> table::take_sstable_set_
 }
 
 future<utils::chunked_vector<logstor::segment_snapshot>> table::take_logstor_snapshot(dht::token_range tr) {
+    co_await _logstor->flush_to_separator();
+
     utils::chunked_vector<logstor::segment_snapshot> snp;
     for (auto& sg : storage_groups_for_token_range(tr)) {
         co_await sg->flush_separator();
