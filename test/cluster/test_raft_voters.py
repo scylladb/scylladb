@@ -7,6 +7,7 @@
 import asyncio
 import logging
 import random
+import time
 import pytest
 
 from cassandra.policies import WhiteListRoundRobinPolicy
@@ -14,8 +15,10 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
+from test.pylib.util import scale_timeout_by_mode, wait_for
 from test.cluster.conftest import cluster_con
-from test.cluster.util import get_coordinator_host_ids, get_current_group0_config
+from test.cluster.util import (get_coordinator_host_ids, get_current_group0_config,
+                                ensure_group0_leader_on)
 
 
 GROUP0_VOTERS_LIMIT = 5
@@ -159,3 +162,87 @@ async def test_raft_limited_voters_retain_coordinator(manager: ManagerClient):
     group0_members = await get_current_group0_config(manager, dc_servers[0][0])
     assert any(m[0] == coordinator_id and m[1] for m in group0_members), \
         f"The coordinator {coordinator_id} should be a voter (but is not)"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_raft_voters_stop_leader_keeps_quorum(manager: ManagerClient, build_mode: str):
+    """
+    Gracefully stopping the group0 leader must not leave the cluster without
+    quorum (SCYLLADB-3026).
+
+    On shutdown the leader announces STATUS=SHUTDOWN and drops out of its own
+    get_live_members() while staying group0 coordinator. A voter refresh in that
+    window runs update_nodes() with self absent, so calc_voters_max caps voters at
+    1: a healthy node is demoted and the dead leader keeps its vote, leaving
+    voters = {dead_leader, 1 alive} — permanent no-quorum.
+    """
+
+    # 3-node cluster. 1s tablet-load-stats refresh lands the periodic voter refresh inside the short shutdown window
+    # (default 60s is too coarse). It is just a convenient periodic trigger - if that subsystem changes, another way of
+    # triggering the voter refresh in the window is needed.
+    config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
+    servers = await manager.servers_add(3, config=config)
+    assert len(servers) == 3
+
+    # Pin the group0 leader so we know which node drives the refresh.
+    leader = servers[0]
+    await ensure_group0_leader_on(manager, leader)
+
+    leader_host_id = await manager.get_host_id(leader.server_id)
+    survivor = servers[1]
+    logging.info(f"Leader: {leader} (host_id={leader_host_id}), survivor: {survivor}")
+
+    leader_log = await manager.server_open_log(leader.server_id)
+
+    # Sanity: all 3 nodes are voters up front, so a demotion in the window shows up as a drop in the voter count.
+    assert await get_number_of_voters(manager, survivor) == 3
+
+    # Pause the leader right after it announces STATUS=SHUTDOWN (self excluded from
+    # its own live members) but before the topology coordinator fiber is aborted.
+    injection = 'gossiper_pause_after_shutdown_announce'
+    await manager.api.enable_injection(leader.ip_addr, injection, one_shot=True)
+
+    # Drain via REST (mirrors the field incident). Drain commits STATUS=SHUTDOWN
+    # while the node is still alive, so self is excluded from get_live_members() in
+    # the window. (A plain SIGTERM aborts gossip before the STATUS commits, so the
+    # bug does not fire.) Drain blocks in the injection, so run it as a task.
+    drain_task = asyncio.create_task(
+        manager.api.client.post("/storage_service/drain", host=leader.ip_addr))
+
+    try:
+        await manager.api.wait_for_injection_enter(leader.ip_addr, injection)
+        logging.info("Leader paused in the post-shutdown-announce window")
+
+        mark = await leader_log.mark()
+
+        # In-window the tablet-load-stats refresher (1s) wakes the voter refresher; with the bug, update_nodes() runs
+        # with self absent and demotes a healthy node while the dead leader keeps its vote. Wait for two completed
+        # refreshes rather than a fixed timeout: refreshes are serialized by the voter lock, so the second one provably
+        # started - and read the gossiper live members - after the mark, i.e. inside the window, while the first one
+        # might have already been in flight when the window opened.
+        refresh_done = 'group0_voter_handler - Voter update done'
+
+        async def two_refreshes_done() -> bool | None:
+            return len(await leader_log.grep(refresh_done, from_mark=mark)) >= 2 or None
+
+        refresh_timeout = scale_timeout_by_mode(build_mode, 60)
+        await wait_for(two_refreshes_done, deadline=time.time() + refresh_timeout)
+        logging.info("Two voter refreshes completed inside the shutdown window")
+
+        # A voter refresh provably ran inside the window, so with the bug the demotion is already committed by now.
+        assert await get_number_of_voters(manager, survivor) == 3, \
+            "Healthy node demoted during the leader shutdown window (SCYLLADB-3026 reproduced)"
+    finally:
+        # Release the pause; drain stops gossip and the peers mark the leader dead.
+        await manager.api.message_injection(leader.ip_addr, injection)
+        await drain_task
+
+    # Stop the process so the cluster sees the leader as permanently down.
+    await manager.server_stop_gracefully(leader.server_id)
+
+    # A read barrier on a survivor must succeed. With the bug the config is
+    # {dead_leader (voter), survivor (voter), 1 non-voter} — 2 voters, 1 alive —
+    # and the barrier fails with "there is no raft quorum, total voters count 2,
+    # alive voters count 1". Short timeout so a quorum loss surfaces fast.
+    barrier_timeout = scale_timeout_by_mode(build_mode, 5)
+    await read_barrier(manager.api, survivor.ip_addr, timeout=barrier_timeout)
