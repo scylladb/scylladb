@@ -3646,8 +3646,8 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_empty) {
 
     expression expected = make_bool_const(true);
 
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_empty, db, "test_ks", table_schema.get(), nullptr), expected);
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_empty, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_empty, db, "test_ks", table_schema.get(), nullptr, internal_dialect()), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_empty, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
                         expected);
 }
 
@@ -3662,7 +3662,7 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_empty_with_int_receiver) {
 
     ::lw_shared_ptr<column_specification> int_receiver = make_receiver(int32_type);
 
-    BOOST_REQUIRE_THROW(prepare_expression(conj_empty, db, "test_ks", table_schema.get(), int_receiver),
+    BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(conj_empty, db, "test_ks", table_schema.get(), int_receiver, internal_dialect()),
                         exceptions::invalid_request_exception);
 }
 
@@ -3676,8 +3676,8 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_one_untyped_const_false) {
 
     expression expected = make_bool_const(false);
 
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr), expected);
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), nullptr, internal_dialect()), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
                         expected);
 }
 
@@ -3691,8 +3691,8 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_one_untyped_const_true) {
 
     expression expected = make_bool_const(true);
 
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr), expected);
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), nullptr, internal_dialect()), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
                         expected);
 }
 
@@ -3706,8 +3706,8 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_one_untyped_const_null) {
 
     expression expected = constant::make_null(boolean_type);
 
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr), expected);
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), nullptr, internal_dialect()), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
                         expected);
 }
 
@@ -3720,9 +3720,9 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_one_int_untyped_const_0) {
     expression conj_one = conjunction{
         .children = {make_int_untyped("0")}};
 
-    BOOST_REQUIRE_THROW(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr),
+    BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), nullptr, internal_dialect()),
                         exceptions::invalid_request_exception);
-    BOOST_REQUIRE_THROW(prepare_expression(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+    BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
                         exceptions::invalid_request_exception);
 }
 
@@ -3737,9 +3737,9 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_bools_and_one_int_untyped_const_0) {
                      make_int_untyped("1"),
                      make_bool_untyped("true")}};
 
-    BOOST_REQUIRE_THROW(prepare_expression(conj, db, "test_ks", table_schema.get(), nullptr),
+    BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(conj, db, "test_ks", table_schema.get(), nullptr, internal_dialect()),
                         exceptions::invalid_request_exception);
-    BOOST_REQUIRE_THROW(prepare_expression(conj, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+    BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(conj, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
                         exceptions::invalid_request_exception);
 }
 
@@ -3752,9 +3752,9 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_and_of_ints_is_invalid) {
         .children = {make_int_untyped("0"),
                      make_int_untyped("1")}};
 
-    BOOST_REQUIRE_THROW(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr),
+    BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), nullptr, internal_dialect()),
                         exceptions::invalid_request_exception);
-    BOOST_REQUIRE_THROW(prepare_expression(conj_one, db, "test_ks", table_schema.get(), make_receiver(int32_type)),
+    BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), make_receiver(int32_type), internal_dialect()),
                         exceptions::invalid_request_exception);
 }
 
@@ -3787,12 +3787,12 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_many_elements) {
                                  conjunction{.children = {make_bool_const(false),
                                                           column_value(table_schema->get_column_definition("b2"))}}}};
 
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_many, db, "test_ks", table_schema.get(), nullptr), expected);
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_many, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_many, db, "test_ks", table_schema.get(), nullptr, internal_dialect()), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_many, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
                         expected);
 
     // Integer receiver is rejected
-    BOOST_REQUIRE_THROW(prepare_expression(conj_many, db, "test_ks", table_schema.get(), make_receiver(int32_type)),
+    BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(conj_many, db, "test_ks", table_schema.get(), make_receiver(int32_type), internal_dialect()),
                         exceptions::invalid_request_exception);
 }
 
@@ -3802,17 +3802,17 @@ void test_prepare_good_binary_operator(expression good_binop_unprepared,
                                        data_dictionary::database db,
                                        const schema_ptr& table_schema) {
     // Preparing without a receiver works as expected
-    BOOST_REQUIRE_EQUAL(prepare_expression(good_binop_unprepared, db, "test_ks", table_schema.get(), nullptr),
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(good_binop_unprepared, db, "test_ks", table_schema.get(), nullptr, internal_dialect()),
                         expected_prepared);
 
     // Preparing with boolean receiver works as expected
     BOOST_REQUIRE_EQUAL(
-        prepare_expression(good_binop_unprepared, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+        prepare_expression_allowing_relations(good_binop_unprepared, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
         expected_prepared);
 
     // reversed boolean type is also accepted
-    BOOST_REQUIRE_EQUAL(prepare_expression(good_binop_unprepared, db, "test_ks", table_schema.get(),
-                                           make_receiver(reversed_type_impl::get_instance(boolean_type))),
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(good_binop_unprepared, db, "test_ks", table_schema.get(),
+                                                              make_receiver(reversed_type_impl::get_instance(boolean_type)), internal_dialect()),
                         expected_prepared);
 
     // Receivers with non-bool type are rejected.
@@ -3860,11 +3860,11 @@ void test_prepare_good_binary_operator(expression good_binop_unprepared,
         user_type_impl::get_instance("test_ks", "test_ut", {"field1", "field2"}, {boolean_type, float_type}, true)};
 
     for (const data_type& invalid_receiver_type : invalid_receiver_types) {
-        BOOST_REQUIRE_THROW(prepare_expression(good_binop_unprepared, db, "test_ks", table_schema.get(),
-                                               make_receiver(invalid_receiver_type)),
+        BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(good_binop_unprepared, db, "test_ks", table_schema.get(),
+                                                                  make_receiver(invalid_receiver_type), internal_dialect()),
                             exceptions::invalid_request_exception);
-        BOOST_REQUIRE_THROW(prepare_expression(good_binop_unprepared, db, "test_ks", table_schema.get(),
-                                               make_receiver(reversed_type_impl::get_instance(invalid_receiver_type))),
+        BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(good_binop_unprepared, db, "test_ks", table_schema.get(),
+                                                                  make_receiver(reversed_type_impl::get_instance(invalid_receiver_type)), internal_dialect()),
                             exceptions::invalid_request_exception);
     }
 }
@@ -3998,10 +3998,10 @@ void test_prepare_binary_operator_invalid_rhs_values(const expression& good_bino
         binary_operator invalid_binop = as<binary_operator>(good_binop);
         invalid_binop.rhs = invalid_rhs;
 
-        BOOST_REQUIRE_THROW(prepare_expression(invalid_binop, db, "test_ks", table_schema.get(), nullptr),
+        BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(invalid_binop, db, "test_ks", table_schema.get(), nullptr, internal_dialect()),
                             exceptions::invalid_request_exception);
         BOOST_REQUIRE_THROW(
-            prepare_expression(invalid_binop, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+            prepare_expression_allowing_relations(invalid_binop, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
             exceptions::invalid_request_exception);
     }
 }
@@ -4864,7 +4864,7 @@ BOOST_AUTO_TEST_CASE(test_aggregation_depth) {
             },
     };
     auto compared = expression(binary_operator(avg_r, oper_t::EQ, avg_sum_r));
-    compared = prepare_expression(compared, db, "test_ks", schema.get(), nullptr);
+    compared = prepare_expression_allowing_relations(compared, db, "test_ks", schema.get(), nullptr, internal_dialect());
  
     BOOST_REQUIRE_EQUAL(aggregation_depth(compared), 2);
 }

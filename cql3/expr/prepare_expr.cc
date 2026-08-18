@@ -35,6 +35,13 @@ static const column_value resolve_column(const unresolved_identifier& col_ident,
 static assignment_testable::test_result expression_test_assignment(const data_type& expr_type,
                                                                    const column_specification& receiver);
 
+// A relation is named after the dialect it is prepared under, so the dialect travels along
+// the expressions that can contain a relation and nowhere else - what a relation is built
+// from is an ordinary expression, which cannot contain one. The dialect is null when
+// preparing an expression that is not allowed to contain a relation, which then refuses one
+// rather than naming it under a dialect nobody chose.
+static std::optional<expression> try_prepare_expression_allowing_relations(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, const dialect* d);
+static std::optional<expression> prepare_relation(const binary_operator& binop, data_dictionary::database db, const schema* schema_opt, const lw_shared_ptr<column_specification>& receiver, const dialect* d);
 
 static
 lw_shared_ptr<column_specification>
@@ -1200,7 +1207,8 @@ std::optional<expression> prepare_conjunction(const conjunction& conj,
                                               data_dictionary::database db,
                                               const sstring& keyspace,
                                               const schema* schema_opt,
-                                              lw_shared_ptr<column_specification> receiver) {
+                                              lw_shared_ptr<column_specification> receiver,
+                                              const dialect* d) {
     if (receiver.get() != nullptr && receiver->type->without_reversed().get_kind() != abstract_type::kind::boolean) {
         throw exceptions::invalid_request_exception(
             format("AND conjunction produces a boolean value, which doesn't match the type: {} of {}",
@@ -1226,7 +1234,7 @@ std::optional<expression> prepare_conjunction(const conjunction& conj,
     bool all_terminal = true;
     for (const expression& child : conj.children) {
         std::optional<expression> prepared_child =
-            try_prepare_expression(child, db, keyspace, schema_opt, child_receiver);
+            try_prepare_expression_allowing_relations(child, db, keyspace, schema_opt, child_receiver, d);
         if (!prepared_child.has_value()) {
             throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", child));
         }
@@ -1309,6 +1317,39 @@ prepare_column_mutation_attribute(
     };
 }
 
+static std::optional<expression>
+prepare_relation(const binary_operator& binop, data_dictionary::database db, const schema* schema_opt, const lw_shared_ptr<column_specification>& receiver, const dialect* d) {
+    if (receiver.get() != nullptr && &receiver->type->without_reversed() != boolean_type.get()) {
+        throw exceptions::invalid_request_exception(
+            format("binary operator produces a boolean value, which doesn't match the type: {} of {}",
+                   receiver->type->name(), receiver->name->text()));
+    }
+
+    if (!d) {
+        on_internal_error(expr_logger, "preparing a relation in an expression that is not allowed to contain one");
+    }
+    binary_operator result = prepare_binary_operator(binop, db, *schema_opt, *d);
+
+    // A binary operator where both sides of the equation are known can be evaluated to a boolean value.
+    // This only applies to operators in the CQL order, operations in the clustering order should only be
+    // of form (clustering_column1, colustering_column2) < SCYLLA_CLUSTERING_BOUND(1, 2).
+    if (is<constant>(result.lhs) && is<constant>(result.rhs) && result.order == comparison_order::cql) {
+        return constant(evaluate(result, query_options::DEFAULT), boolean_type);
+    }
+    return result;
+}
+
+static std::optional<expression>
+try_prepare_expression_allowing_relations(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, const dialect* d) {
+    if (auto* conj = as_if<conjunction>(&expr)) {
+        return prepare_conjunction(*conj, db, keyspace, schema_opt, std::move(receiver), d);
+    }
+    if (auto* binop = as_if<binary_operator>(&expr)) {
+        return prepare_relation(*binop, db, schema_opt, receiver, d);
+    }
+    return try_prepare_expression(expr, db, keyspace, schema_opt, std::move(receiver));
+}
+
 std::optional<expression>
 try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
     return expr::visit(overloaded_functor{
@@ -1328,24 +1369,10 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
             return result;
         },
         [&] (const binary_operator& binop) -> std::optional<expression> {
-            if (receiver.get() != nullptr && &receiver->type->without_reversed() != boolean_type.get()) {
-                throw exceptions::invalid_request_exception(
-                    format("binary operator produces a boolean value, which doesn't match the type: {} of {}",
-                           receiver->type->name(), receiver->name->text()));
-            }
-
-            binary_operator result = prepare_binary_operator(binop, db, *schema_opt);
-
-            // A binary operator where both sides of the equation are known can be evaluated to a boolean value.
-            // This only applies to operators in the CQL order, operations in the clustering order should only be
-            // of form (clustering_column1, colustering_column2) < SCYLLA_CLUSTERING_BOUND(1, 2).
-            if (is<constant>(result.lhs) && is<constant>(result.rhs) && result.order == comparison_order::cql) {
-                return constant(evaluate(result, query_options::DEFAULT), boolean_type);
-            }
-            return result;
+            return prepare_relation(binop, db, schema_opt, receiver, /*d=*/nullptr);
         },
         [&] (const conjunction& conj) -> std::optional<expression> {
-            return prepare_conjunction(conj, db, keyspace, schema_opt, receiver);
+            return prepare_conjunction(conj, db, keyspace, schema_opt, receiver, /*d=*/nullptr);
         },
         [] (const column_value& cv) -> std::optional<expression> {
             return cv;
@@ -1623,6 +1650,15 @@ prepare_expression(const expression& expr, data_dictionary::database db, const s
     return std::move(*e_opt);
 }
 
+expression
+prepare_expression_allowing_relations(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, dialect d) {
+    auto e_opt = try_prepare_expression_allowing_relations(expr, db, keyspace, schema_opt, std::move(receiver), &d);
+    if (!e_opt) {
+        throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", expr));
+    }
+    return std::move(*e_opt);
+}
+
 assignment_testable::test_result
 test_assignment_all(const std::vector<expression>& to_test, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) {
     using test_result = assignment_testable::test_result;
@@ -1749,12 +1785,22 @@ static lw_shared_ptr<column_specification> get_lhs_receiver(const expression& pr
 
 // Given type of LHS and the operation finds the expected type of RHS.
 // The type will be the same as LHS for simple operations like =, but it will be different for more complex ones like IN or CONTAINS.
-static lw_shared_ptr<column_specification> get_rhs_receiver(lw_shared_ptr<column_specification>& lhs_receiver, oper_t oper) {
+static lw_shared_ptr<column_specification> get_rhs_receiver(lw_shared_ptr<column_specification>& lhs_receiver, oper_t oper, const dialect& d) {
     const data_type lhs_type = lhs_receiver->type->underlying_type();
 
     if (oper == oper_t::IN || oper == oper_t::NOT_IN) {
         data_type rhs_receiver_type = list_type_impl::get_instance(std::move(lhs_type), false);
-        auto in_name = ::make_shared<column_identifier>(format("{}({})", oper, lhs_receiver->name->text()), true);
+        // Cassandra spells the operator in lowercase. Applications bind by this name,
+        // so the case cannot change under them and is part of the dialect. The dialect
+        // is also part of the prepared statement cache key, so statements prepared
+        // under different dialects get separate entries.
+        std::string_view oper_name;
+        if (d.in_bind_variable_name_uses_uppercase_operator) {
+            oper_name = (oper == oper_t::IN) ? "IN" : "NOT IN";
+        } else {
+            oper_name = (oper == oper_t::IN) ? "in" : "not in";
+        }
+        auto in_name = ::make_shared<column_identifier>(fmt::format("{}({})", oper_name, lhs_receiver->name->text()), true);
         return make_lw_shared<column_specification>(lhs_receiver->ks_name,
                                                     lhs_receiver->cf_name,
                                                     in_name,
@@ -1868,7 +1914,7 @@ optimize_like(const expression& e) {
     });
 }
 
-binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, const schema& table_schema) {
+binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, const schema& table_schema, const dialect& d) {
     std::optional<expression> prepared_lhs_opt = try_prepare_expression(binop.lhs, db, table_schema.ks_name(), &table_schema, {});
     if (!prepared_lhs_opt) {
         throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", binop.lhs));
@@ -1880,7 +1926,7 @@ binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::
         throw exceptions::invalid_request_exception(fmt::format("Duration type is unordered for {}", lhs_receiver->name));
     }
 
-    lw_shared_ptr<column_specification> rhs_receiver = get_rhs_receiver(lhs_receiver, binop.op);
+    lw_shared_ptr<column_specification> rhs_receiver = get_rhs_receiver(lhs_receiver, binop.op, d);
     expression prepared_rhs = prepare_expression(binop.rhs, db, table_schema.ks_name(), &table_schema, rhs_receiver);
 
     // IS NOT NULL requires an additional check that the RHS is NULL.

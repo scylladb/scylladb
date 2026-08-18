@@ -38,10 +38,8 @@ shared_ptr<const restrictions::statement_restrictions> make_restrictions(
         has_bind_markers = true;
         max_bind_index = std::max(max_bind_index, static_cast<size_t>(bv.bind_index));
     });
-    if (has_bind_markers) {
-        std::vector<shared_ptr<cql3::column_identifier>> bind_names(max_bind_index + 1);
-        ctx.set_bound_variables(bind_names);
-    }
+    std::vector<shared_ptr<cql3::column_identifier>> bind_names(has_bind_markers ? max_bind_index + 1 : 0);
+    ctx.set_bound_variables(bind_names, cql3::internal_dialect());
 
     return restrictions::analyze_statement_restrictions(env.data_dictionary(), env.local_db().find_schema(keyspace_name, table_name),
             statements::statement_type::SELECT, where_expr,
