@@ -266,16 +266,24 @@ async def manager(request: pytest.FixtureRequest,
             # here we only need the dir for the manager-specific found_errors files below.
             failed_test_dir_path = make_failed_test_dir(request.config, build_mode, test_case_name)
 
+    finally:
+        # Drop the stash entry before closing the driver so a teardown-phase
+        # failure report doesn't gather logs through a fenced-off manager.
+        request.node.stash[MANAGER_LOGS_KEY] = None
+
+    # Close the driver before after_test() raises the fence: the session is
+    # this test's, and nothing in after_test() needs it -- the keyspace count
+    # post-condition uses each server's own control connection.  after_test()
+    # runs even if closing fails: it is what raises the fence, detaches this
+    # test's log handler and hands the cluster back.
+    try:
+        _scylla_cluster_manager.driver_close()
+    finally:
         # Tear down (after test): notify the manager that the test finished.
         # This also cuts off manager access for tasks leaked by the test.
         logger.debug("after_test for %s (success: %s)", test_case_name, not failed)
         cluster_status = await _scylla_cluster_manager.after_test(success=not failed)
         logger.info("Cluster after test %s (success: %s): %s", test_case_name, not failed, cluster_status)
-    finally:
-        # Drop the stash entry before closing the driver so a teardown-phase
-        # failure report doesn't gather logs through a fenced-off manager.
-        request.node.stash[MANAGER_LOGS_KEY] = None
-        _scylla_cluster_manager.driver_close()  # Close driver after each test
 
     if cluster_status is not None and cluster_status["server_broken"] and not failed:
         failed = True

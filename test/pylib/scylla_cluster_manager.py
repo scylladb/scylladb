@@ -58,6 +58,28 @@ type ManagerFn[**P, R] = Callable[Concatenate[ScyllaClusterManager, P], R]
 type ManagerAsyncFn[**P, R] = ManagerFn[P, Awaitable[R]]
 
 
+def fenced[**P, R](fn: ManagerFn[P, R]) -> ManagerFn[P, R]:
+    """Refuse the call once the test that leased the manager has finished.
+
+    manager_op applies it to operations (fence=True); the driver methods carry
+    it directly, since the session lives on this module-scoped manager and a
+    leaked caller could close the one the running test is using.  The check
+    happens on the caller's side, before a coroutine is even created.
+    """
+    @wraps(fn)
+    def wrapper(self: ScyllaClusterManager, *args: P.args, **kwargs: P.kwargs) -> R:
+        if self._test_finished:
+            raise RuntimeError("ScyllaClusterManager is not accessible after the test finished")
+        return fn(self, *args, **kwargs)
+
+    if inspect.iscoroutinefunction(fn):
+        # The wrapper is a plain function returning fn's coroutine; universalasync
+        # keys off iscoroutinefunction to make operations callable from a thread.
+        inspect.markcoroutinefunction(wrapper)
+
+    return wrapper
+
+
 @overload
 def manager_op[**P, R](entry_point: ManagerAsyncFn[P, R]) -> ManagerAsyncFn[P, R]: ...
 @overload
@@ -127,8 +149,6 @@ def manager_op[**P, R](entry_point: ManagerAsyncFn[P, R] | None = None,
 
         @wraps(fn)
         async def wrapper(self: ScyllaClusterManager, *args: P.args, **kwargs: P.kwargs) -> R:
-            if fence and self._test_finished:
-                raise RuntimeError("ScyllaClusterManager is not accessible after the test finished")
             if asyncio.get_running_loop() is self._loop:
                 # Already on the manager's loop, i.e. one operation calling
                 # another -- which no operation does today.  There is nothing
@@ -141,7 +161,7 @@ def manager_op[**P, R](entry_point: ManagerAsyncFn[P, R] | None = None,
                 return await asyncio.wrap_future(future)
         # The bridge adds no parameters, so the decorated entry point keeps
         # its exact signature.
-        return wrapper
+        return fenced(wrapper) if fence else wrapper
     return decorator if entry_point is None else decorator(entry_point)
 
 
@@ -296,7 +316,7 @@ class ScyllaClusterManager:
         """Dispose of the last cluster if present."""
 
         self.logger.info("ScyllaManager stopping for test %s", self.test_uname)
-        self.driver_close()
+        self._driver_close()
         self.thread_pool.shutdown(wait=False)
         if self.cluster:
             self.logger.info("ScyllaManager: stopping Scylla cluster %s after %s",
@@ -762,13 +782,14 @@ class ScyllaClusterManager:
     async def server_get_process_status(self, server_id: ServerNum) -> str | None:
         return self.cluster.server_get_process_status(server_id)
 
+    @fenced
     async def driver_connect(self, server: ServerInfo | None = None, auth_provider: AuthProvider | None = None) -> None:
         """Connect to cluster."""
 
         targets = [server] if server else await self.running_servers()
         servers = [s_info.rpc_address for s_info in targets]
         # avoids leaking connections if driver wasn't closed before
-        self.driver_close()
+        self._driver_close()
         self.logger.debug("driver connecting to %s", servers)
         self.ccluster = self.con_gen(
             servers,
@@ -779,8 +800,14 @@ class ScyllaClusterManager:
         )
         self.cql = self.ccluster.connect()
 
+    @fenced
     def driver_close(self) -> None:
         """Disconnect from cluster."""
+
+        self._driver_close()
+
+    def _driver_close(self) -> None:
+        """Disconnect from cluster, also when no test is running (see stop())."""
 
         for cluster in self.exclusive_clusters:
             safe_driver_shutdown(cluster)
@@ -791,6 +818,7 @@ class ScyllaClusterManager:
             self.ccluster = None
         self.cql = None
 
+    @fenced
     def get_cql(self) -> CassandraSession:
         """Precondition: driver is connected."""
 
@@ -805,6 +833,7 @@ class ScyllaClusterManager:
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time() + 60)
         return cql, hosts
 
+    @fenced
     async def get_cql_exclusive(self,
                                 server: ServerInfo,
                                 auth_provider: AuthProvider | None = None) -> CassandraSession:

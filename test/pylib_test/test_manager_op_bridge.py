@@ -16,6 +16,7 @@ decorator and the bridge under test are the production ones.
 
 import asyncio
 import concurrent.futures
+import inspect
 import logging
 import threading
 from collections.abc import Iterator
@@ -24,7 +25,7 @@ import pytest
 
 from test.pylib.internal_types import ServerNum
 from test.pylib.util import LogPrefixAdapter
-from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager, fenced
 
 
 SERVER_ID = ServerNum(1)
@@ -220,3 +221,30 @@ async def test_finished_test_fences_the_manager_off(manager) -> None:
 
     mgr._test_finished = False
     assert await mgr.is_dirty() is False
+
+
+async def test_driver_methods_are_fenced_off(manager) -> None:
+    """The driver lives on the shared manager, so a leaked caller must not
+    reach it -- but teardown still has to be able to close the session."""
+    mgr, _, _ = manager
+
+    mgr._test_finished = True
+    with pytest.raises(RuntimeError, match="not accessible after the test finished"):
+        mgr.driver_close()
+    with pytest.raises(RuntimeError, match="not accessible after the test finished"):
+        mgr.get_cql()
+    with pytest.raises(RuntimeError, match="not accessible after the test finished"):
+        await mgr.driver_connect()
+
+    mgr._driver_close()   # what stop() uses at module teardown; must not raise
+
+
+def test_fenced_keeps_the_kind_of_what_it_decorates() -> None:
+    """universalasync makes a method callable from a plain thread only if
+    iscoroutinefunction says it is one, so fenced must not change that answer.
+    """
+    async def operation(self) -> None: ...
+    def plain(self) -> None: ...
+
+    assert inspect.iscoroutinefunction(fenced(operation))
+    assert not inspect.iscoroutinefunction(fenced(plain))
