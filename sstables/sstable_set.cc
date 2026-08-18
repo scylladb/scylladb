@@ -431,64 +431,125 @@ partitioned_sstable_set::size() const noexcept {
 // reached and retires those whose last token it has passed, visiting each sstable
 // at most once per sweep.
 //
-// The tiers are walked with one cursor each. A sweep does not benefit from the
-// tiers' width bounds -- it starts at the beginning and advances monotonically, so
-// nothing is ever skipped from below -- it just has to advance every cursor rather
-// than one.
+// Once under way a sweep advances monotonically and never skips from below, so its
+// per-step cost is about how many tiers it has to look at. The tiers are kept in a
+// heap ordered by the first token each will activate next, so that a step touches
+// the tiers that actually have something to activate rather than all of them, and
+// the token at which the next activation falls is read off the top. A tier drops out
+// of the heap once it is exhausted.
+//
+// Positioning a sweep is a different matter, and there the width bounds do help. A
+// sweep that starts partway around the ring -- as a range scan over a sub-range
+// does -- would otherwise walk every sstable beginning before that point, about half
+// the set for a start in the middle, so each tier's cursor begins at the tier's
+// window bound instead of at its first entry.
 class partitioned_sstable_set::incremental_selector : public incremental_selector_impl {
+    struct tier_cursor {
+        const token_map* sstables;
+        token_map::const_iterator next;
+    };
+    struct active_entry {
+        // raw() rather than the token, so that an entry is half again smaller and a
+        // comparison is an integer compare. raw() preserves the token order, with the
+        // one wrinkle that it maps both the last key token and the maximum onto
+        // INT64_MAX; the effect would be to keep an sstable active a step longer than
+        // needed, which over-approximates and so is the safe direction, and the cursor
+        // never reaches either value in practice. The one place that needs a real
+        // token reads it off the sstable instead.
+        int64_t last;
+        shared_sstable sst;
+    };
+    // Orders active_entries so that the sstable retiring soonest ends up on top of
+    // the heap; std::*_heap builds a max-heap, hence the reversed comparison.
+    struct retires_later {
+        bool operator()(const active_entry& a, const active_entry& b) const noexcept {
+            return b.last < a.last;
+        }
+    };
+    // Orders tier_cursors so that the earliest next activation ends up on top of
+    // the heap; std::*_heap builds a max-heap, hence the reversed comparison.
+    struct activates_later {
+        bool operator()(const tier_cursor& a, const tier_cursor& b) const noexcept {
+            return b.next->first < a.next->first;
+        }
+    };
+
     const tier_map& _tiers;
     const uint64_t& _change_cnt;
     uint64_t _last_known_change_cnt;
-    // sstables containing the cursor, keyed by their last token. It does not
-    // need the tier an entry came from: retiring uses the key and the caller
-    // wants the sstables.
-    token_map _active;
-    // Next sstable to activate in each tier, in first-token order.
-    std::vector<token_map::const_iterator> _next_to_activate;
+    // sstables containing the cursor, as a heap on their last token so that the one
+    // retiring soonest is on top. A heap is enough because that minimum and a full
+    // iteration are all this needs, and it buys both: entries go in without
+    // allocating a node each, and handing them to the caller walks a contiguous
+    // array rather than chasing a tree.
+    std::vector<active_entry> _active;
+    // Tiers with sstables left to activate, as a heap. Never holds an exhausted
+    // cursor, so the top can always be dereferenced.
+    std::vector<tier_cursor> _pending;
+    // Number of tiers the pending heap was built from, so that a change to the
+    // set which somehow did not bump the change counter still forces a rebuild
+    // rather than leaving the heap pointing at a tier that no longer exists.
+    size_t _tiers_at_seek = 0;
     std::optional<dht::token> _cursor;
 private:
     void advance_to(dht::token t) {
-        while (!_active.empty() && _active.begin()->first < t) {
-            _active.erase(_active.begin());
+        const auto t_raw = t.raw();
+        while (!_active.empty() && _active.front().last < t_raw) {
+            std::pop_heap(_active.begin(), _active.end(), retires_later{});
+            _active.pop_back();
         }
-        size_t i = 0;
-        for (const auto& [exponent, sstables] : _tiers) {
-            auto& next = _next_to_activate[i++];
-            for (; next != sstables.end() && next->first <= t; ++next) {
-                const auto& sst = next->second;
+        while (!_pending.empty() && _pending.front().next->first <= t) {
+            std::pop_heap(_pending.begin(), _pending.end(), activates_later{});
+            auto& cursor = _pending.back();
+            // Drain this tier of everything the cursor has reached before paying
+            // to put it back in the heap.
+            for (; cursor.next != cursor.sstables->end() && cursor.next->first <= t; ++cursor.next) {
+                const auto& sst = cursor.next->second;
                 auto last = sst->get_last_token();
                 // An sstable whose range ends before the cursor was never active
                 // at it; this happens when the cursor jumps over a whole sstable.
                 if (last >= t) {
-                    _active.emplace(last, sst);
+                    _active.push_back(active_entry{last.raw(), sst});
+                    std::push_heap(_active.begin(), _active.end(), retires_later{});
                 }
+            }
+            if (cursor.next == cursor.sstables->end()) {
+                _pending.pop_back();
+            } else {
+                std::push_heap(_pending.begin(), _pending.end(), activates_later{});
             }
         }
     }
     void seek_to(dht::token t) {
         _active.clear();
-        _next_to_activate.clear();
-        _next_to_activate.reserve(_tiers.size());
+        _pending.clear();
+        _pending.reserve(_tiers.size());
         for (const auto& [exponent, sstables] : _tiers) {
-            _next_to_activate.push_back(sstables.begin());
+            // Skip what the tier's width bound rules out. A member of this tier
+            // beginning before the bound ends before t, so it is not active at t --
+            // and since the cursor only moves forward it can never become active
+            // later either, which makes skipping it now safe rather than merely
+            // cheap.
+            auto next = sstables.lower_bound(tier_window_start(exponent, t));
+            if (next != sstables.end()) {
+                _pending.push_back(tier_cursor{&sstables, next});
+            }
         }
+        std::make_heap(_pending.begin(), _pending.end(), activates_later{});
+        _tiers_at_seek = _tiers.size();
         advance_to(t);
         _last_known_change_cnt = _change_cnt;
     }
     // The token at which the active set changes next: the earliest first token
-    // among the sstables still to be activated in any tier, or the token just
-    // after the first one to end.
+    // still to be activated in any tier, or the token just after the first one to
+    // end.
     std::optional<dht::token> next_change_token() const {
         std::optional<dht::token> change;
-        size_t i = 0;
-        for (const auto& [exponent, sstables] : _tiers) {
-            const auto& next = _next_to_activate[i++];
-            if (next != sstables.end() && (!change || next->first < *change)) {
-                change = next->first;
-            }
+        if (!_pending.empty()) {
+            change = _pending.front().next->first;
         }
         if (!_active.empty()) {
-            auto last = _active.begin()->first;
+            auto last = _active.front().sst->get_last_token();
             // A range that does not end before the end of the ring is never left
             // behind. That covers both an sstable ending at the last token and one
             // whose last key is unknown, which get_last_token() reports as the
@@ -507,9 +568,6 @@ public:
         : _tiers(tiers)
         , _change_cnt(change_cnt)
         , _last_known_change_cnt(change_cnt) {
-        for (const auto& [exponent, sstables] : _tiers) {
-            _next_to_activate.push_back(sstables.begin());
-        }
     }
     virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext> select(const selector_pos& s) override {
         auto t = s.pos.token();
@@ -517,11 +575,8 @@ public:
         // Callers are required to pass weakly monotonic positions, which is what
         // makes the sweep incremental. Rebuild the state from scratch if that
         // does not hold, or if the set changed under us.
-        // The cursors are held positionally against _tiers, which is sound because
-        // every change to _tiers bumps the counter and so forces a reseek; the size
-        // check makes that a checked invariant rather than an assumed one.
         if (_last_known_change_cnt != _change_cnt || !_cursor || t < *_cursor
-                || _next_to_activate.size() != _tiers.size()) {
+                || _tiers.size() != _tiers_at_seek) {
             seek_to(t);
         } else {
             advance_to(t);
@@ -530,8 +585,8 @@ public:
 
         std::vector<shared_sstable> ssts;
         ssts.reserve(_active.size());
-        for (const auto& [_, sst] : _active) {
-            ssts.push_back(sst);
+        for (const auto& entry : _active) {
+            ssts.push_back(entry.sst);
         }
 
         // The active set holds for every position whose token lies between the
