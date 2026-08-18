@@ -24,6 +24,8 @@ struct bm25_ordering_info {
     // The SELECT occurrences' search terms that only execution can compare, a bind marker standing
     // where at least one of the two values will be.
     std::vector<expr::expression> deferred_select_terms;
+    // The WHERE clause's term, likewise.
+    std::optional<expr::expression> deferred_where_term;
 };
 
 /// Resolves BM25 ordering metadata from the query's prepared ORDER BY call.
