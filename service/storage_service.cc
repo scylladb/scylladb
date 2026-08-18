@@ -5332,9 +5332,20 @@ future<tablet_operation_result> storage_service::do_tablet_operation(locator::gl
 
     locator::tablet_metadata_guard guard(_db.local().find_column_family(tablet.table), tablet);
     auto& as = guard.get_abort_source();
-    auto sub = _group0_as.subscribe([&as] () noexcept {
+    auto abort = [&as] () noexcept {
         as.request_abort();
-    });
+    };
+    auto sub = _group0_as.subscribe(abort);
+    // Also follow the node's abort source, so that the guard's abort source is a superset
+    // of both and operations can rely on it alone to cover shutdown as well as changes to
+    // the tablet's transition.
+    auto shutdown_sub = _abort_source.subscribe(abort);
+    if (!sub || !shutdown_sub) {
+        // subscribe() leaves the subscription unlinked and doesn't invoke the callback if
+        // the source was already aborted, so propagate the abort by hand. Must happen before
+        // the operation is registered in _tablet_ops, so that nobody joins an aborted one.
+        abort();
+    }
 
     auto async_gate_holder = _async_gate.hold();
     promise<tablet_operation_result> p;
@@ -5560,7 +5571,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                     auto& table = _db.local().find_column_family(tablet.table);
                     slogger.debug("stream_sstables[{}] Streaming for tablet {} of {} started table={}.{} range={} src={}",
                             ops_id, transition, tablet, table.schema()->ks_name(), table.schema()->cf_name(), range, src);
-                    auto resp = co_await streaming::tablet_stream_files(ops_id, table, range, src.host, dst_node, dst_shard_id, _messaging.local(), _abort_source, topo_guard);
+                    auto resp = co_await streaming::tablet_stream_files(ops_id, table, range, src.host, dst_node, dst_shard_id, _messaging.local(), guard.get_abort_source(), topo_guard);
                     stream_bytes = resp.stream_bytes;
                     slogger.debug("stream_sstables[{}] Streaming for tablet migration of {} successful", ops_id, tablet);
                     auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
