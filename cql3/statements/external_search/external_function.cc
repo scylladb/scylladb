@@ -38,6 +38,27 @@ std::pair<const column_definition*, expr::expression> extract_call_arguments(con
     return {col_val->col, query_value};
 }
 
+equality unevaluated_equality(const expr::expression& a, const expr::expression& b) {
+    if (const auto* a_const = expr::as_if<expr::constant>(&a)) {
+        const auto* b_const = expr::as_if<expr::constant>(&b);
+        if (!b_const) {
+            // e.g. 'dog' against ?, settled once the marker is bound.
+            return equality::unknown;
+        }
+        return *a_const == *b_const ? equality::always : equality::never;
+    }
+
+    if (const auto* a_bind = expr::as_if<expr::bind_variable>(&a)) {
+        const auto* b_bind = expr::as_if<expr::bind_variable>(&b);
+        // :x against :x - equal
+        // anything else - :x or ? against 'dog', :y or ? - settled once the markers are bound.
+        return b_bind && a_bind->bind_index == b_bind->bind_index ? equality::always : equality::unknown;
+    }
+
+    // Anything else is left to execution, even where trying harder here could settle it.
+    return equality::unknown;
+}
+
 void fetch_primary_key_columns(selection::selection& selection, const schema& schema) {
     for (const auto& cdef : schema.primary_key_columns()) {
         selection.add_column_for_post_processing(cdef);

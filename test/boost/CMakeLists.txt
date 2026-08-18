@@ -369,6 +369,7 @@ add_scylla_test(combined_tests
     disk_space_monitor_test.cc
     digest_checked_data_source_test.cc
     error_injection_test.cc
+    external_search_test.cc
     extensions_test.cc
     filtering_test.cc
     group0_cmd_merge_test.cc
