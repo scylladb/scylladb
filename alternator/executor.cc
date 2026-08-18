@@ -7,6 +7,7 @@
  */
 
 #include <fmt/ranges.h>
+#include <chrono>
 #include <seastar/core/on_internal_error.hh>
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
