@@ -225,15 +225,11 @@ async def _scylla_cluster_manager(request: pytest.FixtureRequest,
 @pytest.fixture(scope="function")
 async def manager(request: pytest.FixtureRequest,
                   _scylla_cluster_manager: ScyllaClusterManager,
-                  suite_log_dir: Path,
-                  testpy_uname: str,
                   build_mode: str) -> AsyncGenerator[ScyllaClusterManager]:
     """
     Per test fixture to notify the manager when tests begin so it can perform checks for cluster state.
     """
     test_case_name = request.node.name
-    # this should be consistent with scylla_cluster_manager.py ScyllaClusterManager.before_test()
-    test_py_log_test = suite_log_dir / f"{Path(testpy_uname).stem}.{test_case_name}_cluster.log"
 
     logger.debug("before_test for %s", test_case_name)
     cluster_str = await _scylla_cluster_manager.before_test(test_case_name)
@@ -248,7 +244,7 @@ async def manager(request: pytest.FixtureRequest,
     # failed test's properties by record_failed_test_artifacts().
     request.node.stash[MANAGER_LOGS_KEY] = {
         "manager": _scylla_cluster_manager,
-        "logs": {"test_py.log": test_py_log_test},
+        "logs": {"test_py.log": _scylla_cluster_manager.test_case_log_file},
     }
     yield _scylla_cluster_manager
     # `request.node.stash` contains reports stored per phase in `pytest_runtest_makereport`
