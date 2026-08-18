@@ -9,6 +9,7 @@
 #include <algorithm>
 
 #include "utils/assert.hh"
+#include "utils/on_internal_error.hh"
 #include <seastar/util/defer.hh>
 
 #include "sstables.hh"
@@ -241,14 +242,39 @@ dht::token_range partitioned_sstable_set::to_token_range(const dht::partition_ra
     return dht::token_range(std::move(start), std::move(end));
 }
 
-void partitioned_sstable_set::erase_from(token_map& map, dht::token token, const shared_sstable& sst) {
-    auto [begin, end] = map.equal_range(token);
-    for (auto it = begin; it != end; ++it) {
-        if (it->second == sst) {
-            map.erase(it);
-            return;
-        }
+uint8_t partitioned_sstable_set::tier_of(const sstable& sst) {
+    // raw() is the ordered representation of a token, and it places the minimum
+    // and the maximum at the ends of the int64 range rather than collapsing both
+    // to zero the way unbias() does. An sstable with an unknown bound therefore
+    // needs no special case here: it simply comes out spanning (almost) the whole
+    // space and lands in the widest tier, where the window covers everything.
+    const auto first = sst.get_first_token().raw();
+    const auto last = sst.get_last_token().raw();
+    // An sstable whose stored keys are misordered is rejected as malformed by
+    // set_first_and_last_keys(), which compares the whole decorated key and so is
+    // stricter than this. Anything reaching here has already passed that, so an
+    // inverted range at this point means the in-memory invariant was broken after
+    // the fact -- our bug rather than the file's, hence on_internal_error() and
+    // not throw_malformed_sstable_exception().
+    if (last < first) [[unlikely]] {
+        on_internal_error(sstlog, format("SSTable {} spans an inverted token range: first={}, last={}",
+                sst.get_filename(), first, last));
     }
+    // Subtract in uint64: the span between two tokens can exceed what int64 holds,
+    // and for last >= first two's complement makes the unsigned difference exact.
+    return uint8_t(std::bit_width(uint64_t(last) - uint64_t(first)));
+}
+
+dht::token partitioned_sstable_set::tier_window_start(uint8_t exponent, const dht::token& start) {
+    // A member of tier `exponent` spans fewer than 2^exponent tokens, so one
+    // ending at or after `start` begins after start - 2^exponent. The widest tier
+    // spans everything and cannot be bounded from below at all.
+    if (exponent >= 64 || start.is_minimum() || start.is_maximum()) {
+        return dht::minimum_token();
+    }
+    const uint64_t width_bound = uint64_t(1) << exponent;
+    const uint64_t s = start.unbias();
+    return s >= width_bound ? dht::bias(s - width_bound) : dht::minimum_token();
 }
 
 partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, dht::token_range token_range)
@@ -262,18 +288,17 @@ static std::unordered_map<run_id, shared_sstable_run> clone_runs(const std::unor
     }) | std::ranges::to<std::unordered_map<run_id, shared_sstable_run>>();
 }
 
-partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const token_map& by_first_token, const token_map& by_last_token,
+partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const tier_map& tiers,
         const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, shared_sstable_run>& all_runs, file_size_stats bytes_on_disk)
         : sstable_set_impl(bytes_on_disk)
         , _schema(schema)
-        , _by_first_token(by_first_token)
-        , _by_last_token(by_last_token)
+        , _tiers(tiers)
         , _all(make_lw_shared<sstable_list>(*all))
         , _all_runs(clone_runs(all_runs)) {
 }
 
 std::unique_ptr<sstable_set_impl> partitioned_sstable_set::clone() const {
-    return std::make_unique<partitioned_sstable_set>(_schema, _by_first_token, _by_last_token, _all, _all_runs, _file_size_stats);
+    return std::make_unique<partitioned_sstable_set>(_schema, _tiers, _all, _all_runs, _file_size_stats);
 }
 
 std::vector<shared_sstable> partitioned_sstable_set::select(const dht::partition_range& range) const {
@@ -281,52 +306,23 @@ std::vector<shared_sstable> partitioned_sstable_set::select(const dht::partition
     const auto& start = tr.start()->value();
     const auto& end = tr.end()->value();
 
-    // The answer is the intersection of the sstables whose first token is at or
-    // before the end of the query range with those whose last token is at or
-    // after its start. Either set alone is a superset of the answer, so walk one
-    // of them and test the remaining bound directly on each candidate.
-    //
-    // Only one end of each walk can be bounded. Walking by first token, the
-    // candidates end at upper_bound(end), but they cannot be made to begin any
-    // later than begin(): an overlapping sstable may start arbitrarily early, as
-    // one spanning the whole ring does, so any lower bound on the first token
-    // would drop sstables that do overlap. Walking by last token the same holds
-    // mirrored -- the candidates begin at lower_bound(start) and cannot be made
-    // to end before end(), because an overlapping sstable may end arbitrarily
-    // late. Closing the open end needs a bound on how wide an indexed sstable
-    // can be, which is not maintained here.
-    //
-    // So prefer the side that is likely to be shorter. A range lying below the
-    // middle of the span the set covers has few sstables starting before it, and
-    // one lying above the middle has few ending after it. The midpoint is only a
-    // guess about how the sstables are spread, and guessing wrong costs a longer
-    // scan, not a wrong answer.
-    bool scan_by_first = true;
-    if (!_by_first_token.empty()) {
-        auto midpoint = dht::token::midpoint(_by_first_token.begin()->first, _by_last_token.rbegin()->first);
-        scan_by_first = !(start > midpoint);
-    }
-
     // How many sstables match is not known before scanning, and counting the
-    // candidates would cost as much as the scan itself, so reserve for the common
-    // case: a set holding few sstables, all of which may match. A set larger than
-    // the cap grows from there, which is cheaper than doubling up from nothing but
-    // does not try to size for a match that large in advance.
+    // candidates would cost as much as the scan, so reserve for the common case: a
+    // set holding few sstables, all of which may match. A set larger than the cap
+    // grows from there, which is cheaper than doubling up from nothing but does not
+    // try to size for a match that large in advance.
     static constexpr size_t initial_reservation = 32;
     std::vector<shared_sstable> ret;
     ret.reserve(std::min(size(), initial_reservation));
 
-    if (scan_by_first) {
-        const auto candidates_end = _by_first_token.upper_bound(end);
-        for (auto it = _by_first_token.begin(); it != candidates_end; ++it) {
+    // Within a tier both ends of the walk are bounded: no member reaches back
+    // further than the tier's width bound, and none can start beyond the end of
+    // the query range. What is left is the other half of the overlap test, which
+    // is checked on each candidate.
+    for (const auto& [exponent, sstables] : _tiers) {
+        const auto window_end = sstables.upper_bound(end);
+        for (auto it = sstables.lower_bound(tier_window_start(exponent, start)); it != window_end; ++it) {
             if (it->second->get_last_token() >= start) {
-                ret.push_back(it->second);
-            }
-        }
-    } else {
-        const auto candidates_begin = _by_last_token.lower_bound(start);
-        for (auto it = candidates_begin; it != _by_last_token.end(); ++it) {
-            if (it->second->get_first_token() <= end) {
                 ret.push_back(it->second);
             }
         }
@@ -388,13 +384,7 @@ bool partitioned_sstable_set::insert(shared_sstable sst) {
     auto undo_all_runs_insert = defer([&] noexcept { _all_runs[sst->run_identifier()]->erase(sst); });
 
     _change_cnt++;
-    auto it = _by_first_token.emplace(sst->get_first_token(), sst);
-    try {
-        _by_last_token.emplace(sst->get_last_token(), sst);
-    } catch (...) {
-        _by_first_token.erase(it);
-        throw;
-    }
+    _tiers[tier_of(*sst)].emplace(sst->get_first_token(), sst);
     undo_all_insert.cancel();
     undo_all_runs_insert.cancel();
     return true;
@@ -412,8 +402,21 @@ bool partitioned_sstable_set::erase(shared_sstable sst) {
         sub_file_size_stats(sst->get_file_size_stats());
     }
     _change_cnt++;
-    erase_from(_by_first_token, sst->get_first_token(), sst);
-    erase_from(_by_last_token, sst->get_last_token(), sst);
+    if (auto tier = _tiers.find(tier_of(*sst)); tier != _tiers.end()) {
+        auto& sstables = tier->second;
+        auto [begin, end] = sstables.equal_range(sst->get_first_token());
+        for (auto it = begin; it != end; ++it) {
+            if (it->second == sst) {
+                sstables.erase(it);
+                break;
+            }
+        }
+        // Keep only non-empty tiers, so that a query and a sweep visit no more
+        // tiers than the set actually spreads over.
+        if (sstables.empty()) {
+            _tiers.erase(tier);
+        }
+    }
     return ret;
 }
 
@@ -422,47 +425,67 @@ partitioned_sstable_set::size() const noexcept {
     return _all->size();
 }
 
-// Sweeps the set in ring order, keeping the sstables that contain the cursor in
-// an "active" map keyed by their last token, so that the one retiring soonest is
-// at the front. Advancing the cursor activates the sstables whose first token it
-// has reached and retires those whose last token it has passed; each sstable is
-// therefore activated and retired at most once per sweep.
+// Sweeps the set in ring order, keeping the sstables that contain the cursor in an
+// "active" map keyed by their last token, so that the one retiring soonest is at
+// the front. Advancing the cursor activates the sstables whose first token it has
+// reached and retires those whose last token it has passed, visiting each sstable
+// at most once per sweep.
+//
+// The tiers are walked with one cursor each. A sweep does not benefit from the
+// tiers' width bounds -- it starts at the beginning and advances monotonically, so
+// nothing is ever skipped from below -- it just has to advance every cursor rather
+// than one.
 class partitioned_sstable_set::incremental_selector : public incremental_selector_impl {
-    const token_map& _by_first_token;
+    const tier_map& _tiers;
     const uint64_t& _change_cnt;
     uint64_t _last_known_change_cnt;
-    // sstables containing the cursor, keyed by their last token.
+    // sstables containing the cursor, keyed by their last token. It does not
+    // need the tier an entry came from: retiring uses the key and the caller
+    // wants the sstables.
     token_map _active;
-    // Next sstable to activate, in first-token order.
-    token_map::const_iterator _next_to_activate;
+    // Next sstable to activate in each tier, in first-token order.
+    std::vector<token_map::const_iterator> _next_to_activate;
     std::optional<dht::token> _cursor;
 private:
     void advance_to(dht::token t) {
         while (!_active.empty() && _active.begin()->first < t) {
             _active.erase(_active.begin());
         }
-        for (; _next_to_activate != _by_first_token.end() && _next_to_activate->first <= t; ++_next_to_activate) {
-            const auto& sst = _next_to_activate->second;
-            auto last = sst->get_last_token();
-            // An sstable whose range ends before the cursor was never active at
-            // it; this happens when the cursor jumps over a whole sstable.
-            if (last >= t) {
-                _active.emplace(last, sst);
+        size_t i = 0;
+        for (const auto& [exponent, sstables] : _tiers) {
+            auto& next = _next_to_activate[i++];
+            for (; next != sstables.end() && next->first <= t; ++next) {
+                const auto& sst = next->second;
+                auto last = sst->get_last_token();
+                // An sstable whose range ends before the cursor was never active
+                // at it; this happens when the cursor jumps over a whole sstable.
+                if (last >= t) {
+                    _active.emplace(last, sst);
+                }
             }
         }
     }
     void seek_to(dht::token t) {
         _active.clear();
-        _next_to_activate = _by_first_token.begin();
+        _next_to_activate.clear();
+        _next_to_activate.reserve(_tiers.size());
+        for (const auto& [exponent, sstables] : _tiers) {
+            _next_to_activate.push_back(sstables.begin());
+        }
         advance_to(t);
         _last_known_change_cnt = _change_cnt;
     }
-    // The token at which the active set changes next: the first token of the
-    // next sstable to start, or the token just after the first one to end.
+    // The token at which the active set changes next: the earliest first token
+    // among the sstables still to be activated in any tier, or the token just
+    // after the first one to end.
     std::optional<dht::token> next_change_token() const {
         std::optional<dht::token> change;
-        if (_next_to_activate != _by_first_token.end()) {
-            change = _next_to_activate->first;
+        size_t i = 0;
+        for (const auto& [exponent, sstables] : _tiers) {
+            const auto& next = _next_to_activate[i++];
+            if (next != sstables.end() && (!change || next->first < *change)) {
+                change = next->first;
+            }
         }
         if (!_active.empty()) {
             auto last = _active.begin()->first;
@@ -480,11 +503,13 @@ private:
         return change;
     }
 public:
-    incremental_selector(const token_map& by_first_token, const uint64_t& change_cnt)
-        : _by_first_token(by_first_token)
+    incremental_selector(const tier_map& tiers, const uint64_t& change_cnt)
+        : _tiers(tiers)
         , _change_cnt(change_cnt)
-        , _last_known_change_cnt(change_cnt)
-        , _next_to_activate(by_first_token.begin()) {
+        , _last_known_change_cnt(change_cnt) {
+        for (const auto& [exponent, sstables] : _tiers) {
+            _next_to_activate.push_back(sstables.begin());
+        }
     }
     virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext> select(const selector_pos& s) override {
         auto t = s.pos.token();
@@ -492,7 +517,11 @@ public:
         // Callers are required to pass weakly monotonic positions, which is what
         // makes the sweep incremental. Rebuild the state from scratch if that
         // does not hold, or if the set changed under us.
-        if (_last_known_change_cnt != _change_cnt || !_cursor || t < *_cursor) {
+        // The cursors are held positionally against _tiers, which is sound because
+        // every change to _tiers bumps the counter and so forces a reseek; the size
+        // check makes that a checked invariant rather than an assumed one.
+        if (_last_known_change_cnt != _change_cnt || !_cursor || t < *_cursor
+                || _next_to_activate.size() != _tiers.size()) {
             seek_to(t);
         } else {
             advance_to(t);
@@ -779,7 +808,7 @@ std::unique_ptr<position_reader_queue> time_series_sstable_set::make_position_re
 }
 
 sstable_set_impl::selector_and_schema_t partitioned_sstable_set::make_incremental_selector() const {
-    return std::make_tuple(std::make_unique<incremental_selector>(_by_first_token, _change_cnt), std::cref(*_schema));
+    return std::make_tuple(std::make_unique<incremental_selector>(_tiers, _change_cnt), std::cref(*_schema));
 }
 
 sstable_set make_partitioned_sstable_set(schema_ptr schema, dht::token_range token_range) {

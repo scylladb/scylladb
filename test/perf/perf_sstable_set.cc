@@ -70,10 +70,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <bit>
 #include <cstdlib>
 #include <limits>
 #include <optional>
 #include <random>
+#include <set>
 #include <unordered_set>
 #include <vector>
 
@@ -321,6 +323,12 @@ struct scenario_result {
     size_t wide = 0;
     size_t runs = 0;
     size_t overlap_incidences = 0;
+    // Distinct width tiers the workload spans, i.e. distinct values of
+    // bit_width() over the sstables' token widths. An index that partitions by
+    // width materializes one tier per distinct value.
+    size_t width_tiers = 0;
+    uint8_t width_tier_min = 0;
+    uint8_t width_tier_max = 0;
     // Width of the narrow sstables as a fraction of the whole token range.
     double narrow_width_min = 0;
     double narrow_width_mean = 0;
@@ -380,6 +388,17 @@ scenario_result run_scenario(test_env& env, schema_ptr s, const config& cfg, boo
     res.wide = std::ranges::count_if(specs, [] (const sst_spec& sp) { return sp.wide; });
     res.narrow = specs.size() - res.wide;
     res.overlap_incidences = count_overlap_incidences(specs);
+    {
+        std::set<uint8_t> tiers;
+        for (const auto& sp : specs) {
+            auto f = pool[sp.lo].token().unbias();
+            auto l = pool[sp.hi].token().unbias();
+            tiers.insert(uint8_t(std::bit_width(l > f ? l - f : uint64_t(0))));
+        }
+        res.width_tiers = tiers.size();
+        res.width_tier_min = tiers.empty() ? 0 : *tiers.begin();
+        res.width_tier_max = tiers.empty() ? 0 : *tiers.rbegin();
+    }
     if (res.narrow) {
         double sum = 0;
         res.narrow_width_min = 1.0;
@@ -560,6 +579,8 @@ void print_report(const scenario_result& r, const config& cfg) {
     fmt::print("  fragments per run       {}{}\n", cfg.fragments_per_run,
             cfg.fragment_width_spread > 1
                     ? format(" (varied per run, spread {}x)", cfg.fragment_width_spread) : sstring(""));
+    fmt::print("  distinct width tiers    {} (bit_width {}..{})\n",
+            r.width_tiers, r.width_tier_min, r.width_tier_max);
     fmt::print("  narrow width of range   min {:.3f}%  mean {:.3f}%  max {:.3f}%\n",
             100.0 * r.narrow_width_min, 100.0 * r.narrow_width_mean, 100.0 * r.narrow_width_max);
 
