@@ -735,4 +735,50 @@ SEASTAR_THREAD_TEST_CASE(test_scrub_time_persistance) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_automatic_scrub_submission_timer_update) {
+    automatic_scrub_test_framework test(tests::random_schema_specification::compress_sstable::yes);
+
+    auto& test_env = test.env();
+    constexpr auto sst_count = 1;
+
+    test.run(sst_count, [&test_env] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+        auto& cm = test_env.test_compaction_manager();
+
+        auto period = std::chrono::days(7);
+        std::chrono::seconds submission_period = period / 2;
+        cm.set_scrub_period(submission_period);
+
+        auto next_automatic_scrub = cm.next_automatic_scrub();
+
+        // If the new deadline would be after the old one, the automatic scrub
+        // is not postponed.
+        cm.set_scrub_period(submission_period * 2);
+        BOOST_REQUIRE(next_automatic_scrub == cm.next_automatic_scrub());
+
+        // If the new deadline is before the old one, it will be chosen.
+        cm.set_scrub_period(submission_period / 2);
+        auto new_next_automatic_scrub = cm.next_automatic_scrub();
+        BOOST_REQUIRE(next_automatic_scrub > new_next_automatic_scrub);
+
+        cm.set_scrub_time_source(submission_period.count());
+        cm.get_compaction_manager().drain().get();
+        cm.get_compaction_manager().enable();
+
+        wait_on_enter("automatic_scrub_wait_for_signal").get();
+
+        BOOST_REQUIRE(new_next_automatic_scrub == cm.next_automatic_scrub());
+
+        auto sst = sstables.front();
+        set_scrub_time(sst, db_clock::time_point::min());
+
+        cm.get_compaction_manager().drain().get();
+        cm.set_automatic_scrub_timer_expiration(lowres_clock::time_point::min());
+
+        cm.get_compaction_manager().enable();
+
+        // If reenabled and due for automatic scrub, it should happen immediately.
+        wait_on_enter("automatic_scrub_compaction_done", sst_count).get();
+    });
+}
+
 } // namespace

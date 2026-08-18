@@ -660,6 +660,18 @@ void test_env_compaction_manager::trigger_auto_scrub_timer() {
     _cm.automatic_scrub_submission_callback()();
 }
 
+std::optional<lowres_clock::time_point> test_env_compaction_manager::next_automatic_scrub() const {
+    auto& timer = _cm._automatic_scrub_submission_timer;
+    if (!timer.armed()) {
+        return std::nullopt;
+    }
+    return timer.get_timeout();
+}
+
+void test_env_compaction_manager::set_automatic_scrub_timer_expiration(lowres_clock::time_point timestamp) {
+    _cm._automatic_scrub_timer_expiration = timestamp;
+}
+
 }
 
 static std::pair<int, char**> rebuild_arg_list_without(int argc, char** argv, const char* filter_out, bool exclude_positional_arg = false) {

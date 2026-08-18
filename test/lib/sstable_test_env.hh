@@ -111,6 +111,8 @@ public:
     void set_scrub_period(std::chrono::seconds period);
 
     void trigger_auto_scrub_timer();
+    std::optional<lowres_clock::time_point> next_automatic_scrub() const;
+    void set_automatic_scrub_timer_expiration(lowres_clock::time_point timestamp);
 };
 
 struct test_env_config {
