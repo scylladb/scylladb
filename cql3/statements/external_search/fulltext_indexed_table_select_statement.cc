@@ -73,30 +73,21 @@ bool prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_
                 throw exceptions::invalid_request_exception("BM25() is not supported in the SELECT clause without matching ORDER BY and WHERE clauses");
             }
 
+            // Every bm25() in the statement denotes the one score the rows are ranked by, so they
+            // all have to score the column and the search term the other two clauses do.
+            const auto* col = extract_scored_column(*fc, "BM25");
+            if (col->name_as_text() != ordering_info->index.target_column()) {
+                throw exceptions::invalid_request_exception("BM25() in SELECT must reference the same column as the BM25 ordering");
+            }
+
+            if (auto deferred = check_query_value(extract_query_value(*fc, "BM25"), ordering_info->search_term,
+                        "BM25() in SELECT must use the same search term as the BM25 ordering")) {
+                ordering_info->deferred_select_terms.push_back(std::move(*deferred));
+            }
+
             // Every bm25() in the SELECT reports the same score, so one slot serves them all.
             if (!ordering_info->temporary_index) {
                 ordering_info->temporary_index = temporaries_allocator.allocate();
-            }
-
-            // Validate column matches the ORDER BY index.
-            const auto* col = extract_scored_column(*fc, "BM25");
-            if (col->name_as_text() != ordering_info->index.target_column()) {
-                throw exceptions::invalid_request_exception("BM25() in SELECT must reference the same column as BM25() in WHERE and ORDER BY");
-            }
-
-            auto sel_term = extract_query_value(*fc, "BM25");
-
-            // Eager constant-vs-constant mismatch check.
-            const auto* sel_const = expr::as_if<expr::constant>(&sel_term);
-            const auto* ord_const = expr::as_if<expr::constant>(&ordering_info->search_term);
-            if (sel_const && ord_const && *sel_const != *ord_const) {
-                throw exceptions::invalid_request_exception("BM25() in SELECT must use the same search term as BM25() in WHERE and ORDER BY");
-            }
-
-            // Store term for runtime validation unless both are literal constants
-            // (already validated at prepare time).
-            if (!sel_const || !ord_const) {
-                ordering_info->selected_bm25_terms.push_back(std::move(sel_term));
             }
 
             return expr::expression(expr::temporary{
@@ -239,10 +230,10 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
                 "Full-text search queries must use the same search term in both WHERE and ORDER BY clauses");
     }
 
-    for (const auto& sel_term : _bm25_ordering_info.selected_bm25_terms) {
-        const auto sel_val = expr::evaluate(sel_term, options);
-        if (sel_val != search_term_val) {
-            throw exceptions::invalid_request_exception("BM25() in SELECT must use the same search term as BM25() in ORDER BY and WHERE");
+    for (const auto& sel_term : _bm25_ordering_info.deferred_select_terms) {
+        if (expr::evaluate(sel_term, options) != search_term_val) {
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                    "BM25() in SELECT must use the same search term as the BM25 ordering"));
         }
     }
 

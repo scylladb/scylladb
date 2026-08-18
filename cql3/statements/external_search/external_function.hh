@@ -10,6 +10,7 @@
 
 #include "cql3/expr/expression.hh"
 
+#include <optional>
 #include <string_view>
 
 class schema;
@@ -29,6 +30,16 @@ namespace cql3::statements {
 // the reading of a call that makes agreement decidable, are the same for every external function and
 // for every search.  This is what they share; what one search does with a call, and how the values
 // it stands for arrive, is its own business.
+
+/// Compares the value one external-function call scores against with the value the call the rows are
+/// ranked by scores against - every call in a statement has to score against the same one - and
+/// rejects them with `disagreement_message` when prepare can tell that they differ.
+///
+/// Returns the value to compare again once it can be evaluated, when that is all that is left to
+/// tell the two apart - a bind marker in either of them, most often; std::nullopt when prepare has
+/// settled the matter.
+std::optional<expr::expression> check_query_value(const expr::expression& value, const expr::expression& ranking_value,
+        std::string_view disagreement_message);
 
 /// A scoring function scores one column of each row against a value the caller supplies, so its
 /// two arguments are checked the same way: the first names the scored column, and the second is

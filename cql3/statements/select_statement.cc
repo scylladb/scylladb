@@ -2143,7 +2143,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     // with temporary nodes that an external_values_provider fills at execution time.
     expr::temporary_allocator temporaries_allocator;
     if (prepare_bm25_selectors(prepared_selectors, bm25_ordering_info_opt, temporaries_allocator)) {
-        for (auto& term : bm25_ordering_info_opt->selected_bm25_terms) {
+        // A recorded term is all that is left of the call it was written in: that call was replaced
+        // with a temporary, a leaf nothing descends into, so nothing else registers its bind marker.
+        for (auto& term : bm25_ordering_info_opt->deferred_select_terms) {
             expr::fill_prepare_context(term, ctx);
         }
     }

@@ -15,6 +15,22 @@
 
 namespace cql3::statements {
 
+std::optional<expr::expression> check_query_value(const expr::expression& value, const expr::expression& ranking_value,
+        std::string_view disagreement_message) {
+    const auto* value_const = expr::as_if<expr::constant>(&value);
+    const auto* ranking_const = expr::as_if<expr::constant>(&ranking_value);
+    if (!value_const || !ranking_const) {
+        // One of the two is not a literal - a bind marker, or anything else only execution can
+        // evaluate - so nothing can be told about them yet.
+        return value;
+    }
+
+    if (*value_const != *ranking_const) {
+        throw exceptions::invalid_request_exception(sstring(disagreement_message));
+    }
+    return std::nullopt;
+}
+
 const column_definition* extract_scored_column(const expr::function_call& fc, std::string_view function_name) {
     const auto* col_val = expr::as_if<expr::column_value>(&fc.args[0]);
     if (!col_val) {

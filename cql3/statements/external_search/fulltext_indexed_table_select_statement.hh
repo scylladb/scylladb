@@ -21,7 +21,10 @@ struct bm25_ordering_info {
     // Temporary slot the score is delivered in, allocated on the first bm25()
     // occurrence in SELECT and filled per row by external_score_provider.
     std::optional<size_t> temporary_index;
-    std::vector<expr::expression> selected_bm25_terms;
+    // The search terms of the SELECT occurrences that prepare could not tell apart from the ORDER BY
+    // term - a bind marker stands where at least one of the two values will be. Checked once they
+    // have values; left empty where prepare has already settled it.
+    std::vector<expr::expression> deferred_select_terms;
 };
 
 /// Resolves BM25 ordering metadata from the query's prepared ORDER BY call.
@@ -31,13 +34,12 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
         schema_ptr schema,
         const expr::function_call& fc);
 
-/// Processes bm25() calls in prepared_selectors:
-/// - When ordering_info is absent, throws on the first bm25() occurrence at any nesting level.
-/// - When present, validates each against ordering_info (column name at prepare time,
-///   constant terms eagerly), replaces with temporary{index, float_type},
-///   and stores non-literal search terms for runtime validation.
-/// Stores index into ordering_info->temporary_index on first bm25() occurrence.
-/// Returns true if any bm25() call was found and processed.
+/// Lowers every bm25() call in the SELECT clause, nested occurrences included, to the slot the row's
+/// score is delivered in - allocating it on the first one - and rejects an occurrence that does not
+/// agree with the WHERE and ORDER BY clauses on the column and the search term, or that has no such
+/// clauses to agree with.  A term whose agreement only execution can settle is recorded in
+/// ordering_info for it to check.  Returns whether a slot was allocated, i.e. whether the clause had
+/// any such call.
 bool prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_selectors, std::optional<bm25_ordering_info>& ordering_info,
         expr::temporary_allocator& temporaries_allocator);
 
