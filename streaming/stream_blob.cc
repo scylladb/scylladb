@@ -287,6 +287,9 @@ future<> stream_blob_handler(replica::database& db,
 
         bool got_end_of_stream = false;
         for (;;) {
+          // Release the session promptly once the coordinator invalidates it. A stalled
+          // sender is aborted on the initiator's side, see storage_service::stream_tablet().
+          guard.check();
           try {
             auto opt = co_await source();
             if (!opt) {
@@ -575,7 +578,12 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
     stream_options.buffer_size = file_stream_buffer_size;
     stream_options.read_ahead = file_stream_read_ahead;
 
+    // Lets the coordinator abort the transfer by closing the session. Unit tests pass a null
+    // guard, which is never aborted.
+    auto guard = service::topology_guard(topo_guard);
+
     for (auto&& source_info : sources) {
+        guard.check();
         // Keep stream_blob_info alive only at duration of streaming. Allowing the file descriptor
         // of the sstable component to be released right after it has been streamed.
         auto info = std::exchange(source_info, {});
@@ -611,6 +619,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
             auto send_data_to_peer = [&] () mutable -> future<> {
                 try {
                     while (!got_error_from_peer) {
+                        guard.check();
                         may_inject_error(meta, inject_errors, "read_data");
                         auto buf = co_await fstream->read_up_to(file_stream_buffer_size);
                         if (buf.size() == 0) {
