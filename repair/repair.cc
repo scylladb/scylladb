@@ -568,6 +568,31 @@ void repair::task_manager_module::abort_all_repairs() {
     rlogger.info0("Started to abort repair jobs={}, nr_jobs={}", _pending_repairs, _pending_repairs.size());
 }
 
+void repair::task_manager_module::abort_repairs_pinning_stale_versions(locator::token_metadata::version_t current_version) {
+    for (auto& [id, task_id] : _repairs) {
+        auto it = get_local_tasks().find(task_id);
+        if (it == get_local_tasks().end()) {
+            continue;
+        }
+        auto* impl = dynamic_cast<repair::shard_repair_task_impl*>(it->second->_impl.get());
+        if (!impl) {
+            // Cannot happen: _repairs is populated only by shard_repair_task_impl::run().
+            // This runs from a timer callback, so log instead of throwing.
+            on_internal_error_noexcept(rlogger, format("repair task {} in _repairs is not a shard_repair_task_impl", task_id));
+            continue;
+        }
+        if (impl->reason() != streaming::stream_reason::repair) {
+            continue;
+        }
+        auto pinned_version = impl->pinned_token_metadata_version();
+        if (pinned_version && *pinned_version < current_version) {
+            rlogger.warn("repair[{}]: Aborting repair job because it pins stale token metadata version {} which blocks a topology barrier for version {}, keyspace={}, tables={}",
+                    impl->global_repair_id.uuid(), *pinned_version, current_version, impl->get_keyspace(), impl->table_names());
+            it->second->abort();
+        }
+    }
+}
+
 float repair::task_manager_module::report_progress() {
     uint64_t nr_ranges_finished = 0;
     uint64_t nr_ranges_total = 0;
