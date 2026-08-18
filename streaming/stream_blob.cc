@@ -286,6 +286,13 @@ future<> stream_blob_handler(replica::database& db,
 
         bool got_end_of_stream = false;
         for (;;) {
+          // Stop receiving as soon as the coordinator invalidates the session, so that the
+          // session is released and the token metadata barrier which follows the abort doesn't
+          // have to wait for the whole transfer. Only reached between messages - if the sender
+          // stalls we park in source() instead, and the abort then arrives by the initiator's
+          // streaming RPC being aborted on the tablet metadata guard's abort source, see
+          // storage_service::stream_tablet().
+          guard.check();
           try {
             auto opt = co_await source();
             if (!opt) {
@@ -574,7 +581,24 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
     stream_options.buffer_size = file_stream_buffer_size;
     stream_options.read_ahead = file_stream_read_ahead;
 
+    // Makes this transfer abortable. The topology coordinator closes the session when it
+    // invalidates the guard, e.g. when it puts the tablet transition on the roll-back
+    // track. Checking the guard in the loops below stops the transfer promptly instead of
+    // running it to completion.
+    //
+    // In production the only caller is the streaming stage of a tablet transition, which always
+    // has a session. The unit tests call this directly with a null guard, which is always valid
+    // and never aborted.
+    //
+    // Entering the session throws if it is already gone, which a cancellation makes likely but
+    // does not make certain. That is left to propagate as it is: the coordinator knows from the
+    // transition's cancel flag whether a failure here was expected, and translating it into an
+    // abort would hide a real error - a transfer initiated before the session was created, say -
+    // behind an ordinary cancellation.
+    auto guard = service::topology_guard(topo_guard);
+
     for (auto&& source_info : sources) {
+        guard.check();
         // Keep stream_blob_info alive only at duration of streaming. Allowing the file descriptor
         // of the sstable component to be released right after it has been streamed.
         auto info = std::exchange(source_info, {});
@@ -610,6 +634,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
             auto send_data_to_peer = [&] () mutable -> future<> {
                 try {
                     while (!got_error_from_peer) {
+                        guard.check();
                         may_inject_error(meta, inject_errors, "read_data");
                         auto buf = co_await fstream->read_up_to(file_stream_buffer_size);
                         if (buf.size() == 0) {
@@ -774,6 +799,10 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
 
 future<stream_files_response> tablet_stream_files_handler(replica::database& db, db::view::view_building_worker& vbw, netw::messaging_service& ms, streaming::stream_files_request req) {
     stream_files_response resp;
+    // Deliberately does not enter the session here. The snapshot and the sstable enumeration
+    // below are not abortable, and the session is what the coordinator's token metadata barrier
+    // waits for, so holding it across that phase would make a cancellation slower rather than
+    // faster. tablet_stream_files() enters it for the transfer, which is abortable.
     auto& table = db.find_column_family(req.table);
     auto table_stream_op = table.stream_in_progress();
     auto files = std::list<stream_blob_info>();
@@ -929,6 +958,11 @@ future<stream_files_response> clone_sstable_handler(replica::database& db, db::v
         }
         blogger.info("stream_mutation_fragments: released (clone)");
     });
+
+    // Don't start copying an sstable for a transition which was already cancelled. Only checked
+    // here: neither clone() nor load_sstable_for_tablet() below takes an abort source, so on
+    // object storage a cancellation still waits out the copy of the sstable already in flight.
+    guard.check();
 
     auto& meta = req.sstable_meta;
     auto state = meta.state;
