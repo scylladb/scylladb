@@ -2384,10 +2384,10 @@ uint64_t compaction_group::live_disk_space_used() const noexcept {
     return _main_sstables->bytes_on_disk() + _maintenance_sstables->bytes_on_disk() + logstor_disk_space_used();
 }
 
-sstables::file_size_stats compaction_group::live_disk_space_used_full_stats() const noexcept {
+utils::file_size_stats compaction_group::live_disk_space_used_full_stats() const noexcept {
     auto logstor_size = logstor_disk_space_used();
     return _main_sstables->get_file_size_stats() + _maintenance_sstables->get_file_size_stats()
-        + sstables::file_size_stats{logstor_size, logstor_size};
+        + utils::file_size_stats{logstor_size, logstor_size};
 }
 
 uint64_t storage_group::live_disk_space_used() const {
@@ -2399,8 +2399,8 @@ uint64_t compaction_group::total_disk_space_used() const noexcept {
     return live_disk_space_used() + std::ranges::fold_left(_sstables_compacted_but_not_deleted | std::views::transform(std::mem_fn(&sstables::sstable::bytes_on_disk)), uint64_t(0), std::plus{});
 }
 
-sstables::file_size_stats compaction_group::total_disk_space_used_full_stats() const noexcept {
-    return live_disk_space_used_full_stats() + std::ranges::fold_left(_sstables_compacted_but_not_deleted | std::views::transform(std::mem_fn(&sstables::sstable::get_file_size_stats)), sstables::file_size_stats{}, std::plus{});
+utils::file_size_stats compaction_group::total_disk_space_used_full_stats() const noexcept {
+    return live_disk_space_used_full_stats() + std::ranges::fold_left(_sstables_compacted_but_not_deleted | std::views::transform(std::mem_fn(&sstables::sstable::get_file_size_stats)), utils::file_size_stats{}, std::plus{});
 }
 
 void table::rebuild_statistics() {

@@ -79,6 +79,7 @@
 #include "replica/tables_metadata_lock.hh"
 #include "service/topology_guard.hh"
 #include "utils/disk_space_monitor.hh"
+#include "utils/file_size_stats.hh"
 #include "db/large_data_handler.hh"
 
 class cell_locker;
@@ -419,8 +420,8 @@ struct table_stats {
     int64_t memtable_switch_count = 0;
     /** Estimated number of tasks pending for this column family */
     int64_t pending_flushes = 0;
-    sstables::file_size_stats live_disk_space_used;
-    sstables::file_size_stats total_disk_space_used;
+    utils::file_size_stats live_disk_space_used;
+    utils::file_size_stats total_disk_space_used;
     int64_t live_sstable_count = 0;
     /** Estimated number of compactions pending for this column family */
     int64_t pending_compactions = 0;
