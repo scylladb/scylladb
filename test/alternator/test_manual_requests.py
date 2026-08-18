@@ -643,3 +643,172 @@ def test_write_malformed_value(dynamodb, test_table_s, op):
         # will return this broken map and boto3's attempt to parse the
         # returned map will fail, causing the following call to fail.
         test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+
+# Test that a "BOOL" value is validated to actually contain a JSON boolean,
+# not just any JSON value under a "BOOL" key. validate_value() (which is
+# supposed to check that a DynamoDB value has a sane shape before it is
+# used) checks the shape of every other type it recognizes - S and B must
+# be strings, N must be a string holding a valid number, SS/BS/NS must be
+# non-empty arrays, FLOAT32VECTOR must be an array of numbers - but it
+# accepts "BOOL" unconditionally, without checking that its value is really
+# a JSON boolean. So a value like {"BOOL": "dog"} passes validate_value(),
+# and only fails later, deep inside serialization, when code assumes the
+# value is a boolean and reads it as one. Because RAPIDJSON_ASSERT is
+# overridden to throw instead of crash (see assert_validation_exception()
+# above, and issue #23233 for the same class of bug elsewhere), this does
+# not crash the server, but it does leak a non-communicative, internal
+# error message (containing the word "assert") instead of a clean
+# ValidationException/SerializationException like DynamoDB returns.
+# We must use a manual request because boto3 already validates that a
+# "BOOL" AttributeValue member is a real Python bool before even sending
+# the request - and this happens regardless of client_no_transform(),
+# because that trick only disables DynamoDB-specific *event* hooks (like
+# server-side-driven Number-string checks), not the generic, type-based
+# parameter validation that botocore always performs when serializing a
+# request (a mismatched "str where bool expected" is caught there).
+@pytest.mark.parametrize("op", ['PutItem', 'UpdateItem', 'BatchWriteItem'])
+def test_write_malformed_bool_value(dynamodb, test_table_s, op):
+    p = random_string()
+    payloads = {
+        'PutItem': '''{
+            "TableName": "''' + test_table_s.name + '''",
+            "Item": {"p": {"S": "''' + p + '''"}, "x": {"BOOL": "dog"}}}''',
+        'UpdateItem': '''{
+            "TableName": "''' + test_table_s.name + '''",
+            "Key": {"p": {"S": "''' + p + '''"}},
+            "UpdateExpression": "SET x = :x",
+            "ExpressionAttributeValues": {":x": {"BOOL": "dog"} }}''',
+        'BatchWriteItem': '''{
+            "RequestItems": {
+            "''' + test_table_s.name + '''": [
+                {"PutRequest":
+                    {"Item": {"p": {"S": "''' + p + '''"}, "x": {"BOOL": "dog"}}}}
+            ]}}'''
+    }
+    with pytest.raises(ManualRequestError) as err:
+        manual_request(dynamodb, op, payloads[op])
+    assert err.value.type in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error type {err.value.type} for {op} with malformed {{"BOOL": "dog"}}'
+    assert 'assert' not in err.value.message, \
+        f'Got internal RAPIDJSON_ASSERT fallback message for {op} with malformed {{"BOOL": "dog"}}: {err.value.message}'
+
+# Test that Expected's (legacy, pre-ConditionExpression) ComparisonOperator
+# checks reject an AttributeValueList entry whose declared type doesn't
+# match the actual JSON type of its value - e.g. {"S": 123}, typed as a
+# string ("S") but holding a JSON number. check_comparable_type() in
+# conditions.cc only checks the *type tag* of such an entry (that its single
+# member is named "S", "N" or "B"), not that the corresponding value really
+# has that JSON type. So a malformed entry like {"S": 123} passes that
+# check, and execution reaches rjson::to_string_view(), which - unlike the
+# RAPIDJSON_ASSERT-based checks elsewhere (see test_write_malformed_bool_value()
+# above, and issue #23233) - is Scylla's own hand-written helper that throws
+# a plain std::runtime_error (not an api_error or rjson::error) for a
+# non-string value. Since that exception type isn't specially handled by
+# the top-level error converter (server.cc's convert_exception_ptr_to_api_error,
+# which only special-cases api_error and rjson::error), it turns into a
+# genuine InternalServerError (500) instead of a clean ValidationException/
+# SerializationException like DynamoDB returns.
+# This affects every comparison operator that ends up calling
+# rjson::to_string_view() on an AttributeValueList entry: LT, LE, GT, GE,
+# BETWEEN, BEGINS_WITH and CONTAINS - we only test LT here as a
+# representative case.
+# We must use manual requests because boto3 already validates that an "S"
+# AttributeValue member is a string before even sending the request (the
+# same generic, non-bypassable validation discussed in
+# test_write_malformed_bool_value() above).
+def test_expected_comparison_operator_type_mismatch(dynamodb, test_table_s):
+    p = random_string()
+    # Seed the item with a normal, validly-typed string attribute "x", so
+    # the *existing* value also passes check_comparable_type() - an Expected
+    # check against a *missing* attribute short-circuits before ever
+    # reaching the buggy code.
+    manual_request(dynamodb, 'PutItem', '''{
+        "TableName": "''' + test_table_s.name + '''",
+        "Item": {"p": {"S": "''' + p + '''"}, "x": {"S": "hello"}}}''')
+    body = '''{
+        "TableName": "''' + test_table_s.name + '''",
+        "Key": {"p": {"S": "''' + p + '''"}},
+        "Expected": {"x": {"ComparisonOperator": "LT", "AttributeValueList": [{"S": 123}]}}}'''
+    with pytest.raises(ManualRequestError) as err:
+        manual_request(dynamodb, 'DeleteItem', body)
+    assert err.value.type in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error type {err.value.type} (message: {err.value.message})'
+
+# Test that GetItem's legacy "AttributesToGet" parameter is validated to
+# actually contain strings. calculate_attrs_to_get() in executor_read.cc
+# converts each AttributesToGet entry with rjson::to_string() - the same
+# Scylla helper discussed in test_expected_comparison_operator_type_mismatch()
+# above, which throws a plain std::runtime_error (not an api_error or
+# rjson::error) when given a non-string value, with no IsString() check
+# beforehand. Because that exception type isn't specially handled by the
+# top-level error converter, a non-string entry like 123 in AttributesToGet
+# becomes a genuine InternalServerError (500) instead of a clean
+# ValidationException.
+# We must use manual requests because boto3 already validates that
+# AttributesToGet entries are strings before even sending the request.
+def test_get_item_attributes_to_get_non_string(dynamodb, test_table_s):
+    p = random_string()
+    body = '''{
+        "TableName": "''' + test_table_s.name + '''",
+        "Key": {"p": {"S": "''' + p + '''"}},
+        "AttributesToGet": [123]}'''
+    with pytest.raises(ManualRequestError) as err:
+        manual_request(dynamodb, 'GetItem', body)
+    assert err.value.type in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error type {err.value.type} (message: {err.value.message})'
+
+# Test that AttributeUpdates's (legacy, pre-UpdateExpression) "Action" field
+# is validated to actually be a string. update_item_operation reads it with
+# rjson::to_string((it->value)["Action"]) with no IsString() check
+# beforehand (see test_expected_comparison_operator_type_mismatch() above for
+# the same class of bug), so a non-string Action like 123 becomes a genuine
+# InternalServerError (500) instead of a clean ValidationException.
+# We must use manual requests because boto3 already validates that Action is
+# a string before even sending the request.
+def test_update_item_attribute_updates_non_string_action(dynamodb, test_table_s):
+    p = random_string()
+    body = '''{
+        "TableName": "''' + test_table_s.name + '''",
+        "Key": {"p": {"S": "''' + p + '''"}},
+        "AttributeUpdates": {"y": {"Action": 123, "Value": {"S": "z"}}}}'''
+    with pytest.raises(ManualRequestError) as err:
+        manual_request(dynamodb, 'UpdateItem', body)
+    assert err.value.type in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error type {err.value.type} (message: {err.value.message})'
+
+# Test that UntagResource's "TagKeys" list is validated to actually contain
+# strings. update_tags_map() in executor.cc converts each TagKeys entry with
+# rjson::to_string_view() with no IsString() check beforehand (see
+# test_get_item_attributes_to_get_non_string() above for the same class of
+# bug), so a non-string entry like 123 becomes a genuine InternalServerError
+# (500) instead of a clean ValidationException.
+# We must use manual requests because boto3 already validates that TagKeys
+# entries are strings before even sending the request.
+def test_untag_resource_non_string_tag_key(dynamodb, test_table):
+    arn = test_table.meta.client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    body = '{"ResourceArn": "' + arn + '", "TagKeys": [123]}'
+    with pytest.raises(ManualRequestError) as err:
+        manual_request(dynamodb, 'UntagResource', body)
+    assert err.value.type in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error type {err.value.type} (message: {err.value.message})'
+
+# Test that Query's "IndexName" is validated to actually be a string.
+# get_table_or_view() in executor_read.cc does check IndexName->IsString()
+# - but the *error message* it constructs for the non-string case itself
+# calls rjson::to_string_view() on that very non-string value (instead of,
+# say, rjson::print()). So the code whose entire purpose is to report
+# "Non-string IndexName" throws its own uncaught std::runtime_error (see
+# test_expected_comparison_operator_type_mismatch() above for the same class
+# of bug), turning into a genuine InternalServerError (500) instead of the
+# clean ValidationException it was trying to produce.
+# We must use manual requests because boto3 already validates that
+# IndexName is a string before even sending the request.
+def test_query_non_string_index_name(dynamodb, test_table):
+    body = '''{
+        "TableName": "''' + test_table.name + '''",
+        "IndexName": 123,
+        "KeyConditions": {"p": {"AttributeValueList": [{"S": "x"}], "ComparisonOperator": "EQ"}}}'''
+    with pytest.raises(ManualRequestError) as err:
+        manual_request(dynamodb, 'Query', body)
+    assert err.value.type in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error type {err.value.type} (message: {err.value.message})'

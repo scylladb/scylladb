@@ -300,6 +300,28 @@ def test_scan_parallel_with_exclusive_start_key(filled_test_table):
     with pytest.raises(ClientError, match='ValidationException.*Exclusive'):
         full_scan(test_table, TotalSegments=1000000, Segment=0, ExclusiveStartKey={'p': '0', 'c': '0'})
 
+# Test that a malformed "Limit" parameter (i.e., a value that doesn't fit in
+# a 64-bit unsigned integer) is rejected with a clean validation error - not
+# the internal, non-communicative message produced when the server assumes
+# a parameter's JSON type without checking it first (the RAPIDJSON_ASSERT
+# fallback mentioned in issue #23233). Unlike Segment/TotalSegments above,
+# Scan's Limit is read directly with GetUint64() with no preceding
+# IsUint64() check, so an out-of-range Limit falls through to that fallback
+# instead of getting a proper error message.
+# Note that boto3 does impose a *minimum* of 1 on Limit client-side (so we
+# can't use a negative or zero Limit here, nor a wrong type like a string -
+# those never reach the server), but it does not impose a maximum, so an
+# oversized value like 2**64 passes client-side validation unmodified.
+def test_scan_invalid_limit_type(test_table):
+    with pytest.raises(ClientError) as err:
+        test_table.scan(Limit=2**64)
+    code = err.value.response['Error']['Code']
+    message = err.value.response['Error'].get('Message', '')
+    assert code in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error code {code} for oversized Limit: {message}'
+    assert 'assert' not in message, \
+        f'Got internal RAPIDJSON_ASSERT fallback message for oversized Limit: {message}'
+
 # We used to have a bug with formatting of LastEvaluatedKey in the response
 # of Query and Scan with bytes keys (issue #7768). In test_query_paging_byte()
 # (test_query.py) we tested the case of bytes *sort* keys. In the following
