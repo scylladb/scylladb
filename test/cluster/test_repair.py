@@ -18,6 +18,7 @@ from cassandra.query import SimpleStatement
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError
+from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import new_test_keyspace
 
@@ -726,3 +727,130 @@ async def test_data_resurrection_from_repair_range_spanning_replica_sets(manager
         rows = list(cql.execute(SimpleStatement(f"SELECT * FROM {table} WHERE pk = {pk}",
                                                 consistency_level=ConsistencyLevel.ALL)))
         assert rows == [], f"deleted row was resurrected: {rows}"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_topology_barrier_aborts_vnode_repair_pinning_stale_versions(manager: ManagerClient):
+    """Verify that a topology barrier is not blocked behind a long-running
+    user-requested vnode repair.
+
+    Such a repair holds its effective_replication_map, and thus pins a stale
+    token metadata version, for its entire duration. The topology barrier
+    (raft_topology_cmd::barrier_and_drain) waits for stale versions to be
+    released, so before the fix a topology operation like decommission would
+    stall until the repair finished, potentially for hours.
+
+    The test pauses a repair mid-ranges with an error injection so it keeps
+    holding the effective_replication_map, then decommissions another node.
+    The barrier must abort the repair instead of waiting for it: the repair
+    ends up FAILED and the decommission completes.
+    Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-93
+    """
+    injection = "repair_shard_repair_task_impl_do_repair_ranges"
+    servers = await manager.servers_add(3, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND TABLETS = {'enabled': false}")
+    cql.execute("CREATE TABLE ks.tbl (pk int PRIMARY KEY)")
+    for i in range(100):
+        cql.execute(f"INSERT INTO ks.tbl (pk) VALUES ({i})")
+
+    log = await manager.server_open_log(servers[0].server_id)
+    mark = await log.mark()
+
+    # Pause the repair once more than half of its ranges are done, while it
+    # still holds the effective_replication_map.
+    await manager.api.enable_injection(servers[0].ip_addr, injection, one_shot=True)
+    sequence_number = await manager.api.client.post_json("/storage_service/repair_async/ks",
+                                                         host=servers[0].ip_addr,
+                                                         params={"columnFamilies": "tbl"})
+    await log.wait_for(f"{injection}: waiting for message", from_mark=mark)
+
+    # The decommission's topology barrier must find the pinned stale version
+    # and abort the repair rather than wait for it.
+    decommission = asyncio.create_task(manager.decommission_node(servers[2].server_id))
+    await log.wait_for("Aborting repair job because it pins stale token metadata version", from_mark=mark)
+
+    # Let the paused repair resume; it observes the abort at the next range
+    # boundary and releases the effective_replication_map, unblocking the
+    # barrier.
+    await manager.api.message_injection(servers[0].ip_addr, injection)
+    await manager.api.disable_injection(servers[0].ip_addr, injection)
+
+    await decommission
+
+    status = await manager.api.client.get_json("/storage_service/repair_status",
+                                               host=servers[0].ip_addr,
+                                               params={"id": str(sequence_number)})
+    assert status == "FAILED"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_migration_barrier_does_not_abort_vnode_repair(manager: ManagerClient):
+    """Verify that a tablet migration barrier does not abort a running
+    user-requested vnode repair.
+
+    Tablet load balancing runs the same barrier_and_drain as node operations,
+    and every migration stage bumps the topology version, so a running vnode
+    repair always pins a stale version from the barrier's point of view. Only
+    node operations may evict the repair; a balancing-only barrier must wait
+    for it instead. Otherwise continuous balancing, e.g. during a
+    vnodes-to-tablets migration, would keep killing vnode repairs until the
+    operator disables balancing via the API.
+
+    The test pauses a vnode repair mid-ranges so it keeps holding its
+    effective_replication_map, starts a tablet migration, waits until the
+    migration's barrier is waiting for the pinned stale version, then resumes
+    the repair. The repair must complete successfully, without being aborted,
+    and the migration must finish after it.
+    """
+    injection = "repair_shard_repair_task_impl_do_repair_ranges"
+    servers = await manager.servers_add(2, auto_rack_dc="dc1")
+    await manager.disable_tablet_balancing()
+
+    cql = manager.get_cql()
+
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND TABLETS = {'enabled': false}")
+    cql.execute("CREATE TABLE ks.tbl (pk int PRIMARY KEY)")
+    for i in range(100):
+        cql.execute(f"INSERT INTO ks.tbl (pk) VALUES ({i})")
+
+    cql.execute("CREATE KEYSPACE tablet_ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND TABLETS = {'initial': 1}")
+    cql.execute("CREATE TABLE tablet_ks.tbl (pk int PRIMARY KEY)")
+    cql.execute("INSERT INTO tablet_ks.tbl (pk) VALUES (0)")
+
+    tablet_token = 0  # Doesn't matter since there is one tablet
+    replica = await get_tablet_replica(manager, servers[0], "tablet_ks", "tbl", tablet_token)
+    host_ids = [await manager.get_host_id(s.server_id) for s in servers]
+    dst_host = host_ids[1] if replica[0] == host_ids[0] else host_ids[0]
+
+    log = await manager.server_open_log(servers[0].server_id)
+    mark = await log.mark()
+
+    # Pause the repair once more than half of its ranges are done, while it
+    # still holds the effective_replication_map.
+    await manager.api.enable_injection(servers[0].ip_addr, injection, one_shot=True)
+    sequence_number = await manager.api.client.post_json("/storage_service/repair_async/ks",
+                                                         host=servers[0].ip_addr,
+                                                         params={"columnFamilies": "tbl"})
+    await log.wait_for(f"{injection}: waiting for message", from_mark=mark)
+
+    # Start a tablet migration. Its barrier waits behind the token metadata
+    # version pinned by the paused repair, but must not abort the repair.
+    migration = asyncio.create_task(
+        manager.api.move_tablet(servers[0].ip_addr, "tablet_ks", "tbl",
+                                replica[0], replica[1], dst_host, 0, tablet_token))
+    await log.wait_for("waiting for stale token metadata versions to be released", from_mark=mark)
+
+    # Resume the repair; it releases the effective_replication_map when it
+    # completes, which unblocks the migration's barrier.
+    await manager.api.message_injection(servers[0].ip_addr, injection)
+    await manager.api.disable_injection(servers[0].ip_addr, injection)
+
+    await migration
+
+    status = await manager.api.client.get_json("/storage_service/repair_status",
+                                               host=servers[0].ip_addr,
+                                               params={"id": str(sequence_number)})
+    assert status == "SUCCESSFUL"
