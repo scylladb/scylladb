@@ -4704,15 +4704,15 @@ void incremental_compaction_data_resurrection_fn(test_env& env) {
     auto replacer = [&] (compaction::compaction_completion_desc desc) {
         auto old_sstables = std::move(desc.old_sstables);
         auto new_sstables = std::move(desc.new_sstables);
-        // expired_sst is exhausted, and new sstable is written with mut 2.
+        // expired_sst is exhausted, and a new sstable is written with mut 2.
+        // The expired tombstone is routed to a GC-only sstable.
         BOOST_REQUIRE_EQUAL(old_sstables.size(), 1);
         BOOST_REQUIRE(old_sstables.front() == expired_sst);
-        BOOST_REQUIRE_EQUAL(new_sstables.size() + desc.new_gc_sstables.size(), 2);
-        for (auto& new_sstable : new_sstables) {
-            assert_that(sstable_reader(new_sstable, s, env.make_reader_permit()))
-                .produces(mut2)
-                .produces_end_of_stream();
-        }
+        BOOST_REQUIRE_EQUAL(new_sstables.size(), 1);
+        BOOST_REQUIRE_EQUAL(desc.new_gc_sstables.size(), 1);
+        assert_that(sstable_reader(new_sstables.front(), s, env.make_reader_permit()))
+            .produces(mut2)
+            .produces_end_of_stream();
         new_sstables.insert(new_sstables.end(), desc.new_gc_sstables.begin(), desc.new_gc_sstables.end());
         column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(), new_sstables, old_sstables).get();
         // force compaction failure after sstable containing expired tombstone is removed from set.
