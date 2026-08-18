@@ -38,7 +38,14 @@ class logstor_group;
 
 struct write_target {
     logstor_group* cg = nullptr;
-    seastar::gate::holder cg_holder;
+    // Keeps the group from being reported as empty while the write is in flight: until the record
+    // is in a segment and in the index, the group's own state does not account for it, and a tablet
+    // split ACKs a pre-split group once it looks empty.
+    seastar::gate::holder non_empty_holder;
+    // Keeps the group from finishing its stop() while the write is in flight. It is released only
+    // when the write target is dropped, which for a separator-eligible record is after the record
+    // was handed to the group's separator buffer, so a group that stopped has nothing left to come.
+    seastar::gate::holder alive_holder;
 };
 
 // Writer for log records that handles serialization and size computation
