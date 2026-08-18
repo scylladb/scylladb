@@ -10,8 +10,9 @@
 
 #include <cstdint>
 
-namespace sstables {
+namespace utils {
 
+// Sizes of a set of files, e.g. the sstables or the logstor segments of a table.
 struct file_size_stats {
     // Actual size of files on disk.
     // In particular, for compressed sstables, this includes the post-compression size of data files.
@@ -40,4 +41,4 @@ struct file_size_stats {
     bool operator==(const file_size_stats& other) const = default;
 };
 
-} // namespace sstables
+} // namespace utils
