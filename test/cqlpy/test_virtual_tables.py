@@ -141,6 +141,41 @@ def test_protocol_servers(scylla_only, cql):
 def test_runtime_info(scylla_only, cql):
     _check_exists(cql, "runtime_info", ("group", "item", "value"))
 
+def _runtime_info(cql):
+    info = defaultdict(dict)
+    for row in cql.execute("SELECT group, item, value FROM system.runtime_info"):
+        info[row.group][row.item] = row.value
+    return info
+
+# Checks the two values of system.runtime_info that are summed over the tables
+# of every shard: the "memtable" group and the "generic.load" item. Both are
+# node wide, so the test pins them down with rows whose whereabouts it knows -
+# they are accounted for by the memtable group while they are in the memtable,
+# and by the load once they have been flushed into an sstable.
+def test_runtime_info_reduced_over_tables(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)")
+        # A handful of partitions is plenty. The size of a row doesn't matter to
+        # any of the assertions below, only that the count of them is more than
+        # one, so that the sum has to reach the partitions of every shard.
+        rows = 10
+        for pk in range(rows):
+            cql.execute(insert, [pk, pk])
+
+        # The writes are acknowledged only once applied to a memtable, and no
+        # amount of data this small can trigger a flush, so all of the rows are
+        # still there. The memory is reported in whole logalloc segments, hence
+        # non-zero for any amount of data, while the entry count has to account
+        # for every partition written.
+        memtable = _runtime_info(cql)["memtable"]
+        assert int(memtable["entries"]) >= rows
+        assert int(memtable["memory_total"]) > 0
+        assert int(memtable["memory_used"]) > 0
+
+        # Flushing moves them into an sstable, whose size the load accounts for.
+        nodetool.flush(cql, table)
+        assert int(_runtime_info(cql)["generic"]["load"]) > 0
+
 def test_versions(scylla_only, cql):
     _check_exists(cql, "versions", ("key", "build_id", "build_mode", "version"))
 

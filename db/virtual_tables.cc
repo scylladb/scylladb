@@ -439,7 +439,7 @@ private:
         public:
             shard_reducer(std::function<T(T, T)> reduce) : _reduce(std::move(reduce)) { }
             future<> operator()(T v) {
-                v = _reduce(_v, v);
+                _v = _reduce(_v, v);
                 return make_ready_future<>();
             }
             T get() && { return std::move(_v); }
