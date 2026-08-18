@@ -1201,7 +1201,15 @@ async def test_restore_tablets_with_different_tablet_hints(build_mode: str, mana
 # by accident, which requires the live table to stay untouched.
 # Refs https://scylladb.atlassian.net/browse/SCYLLADB-3739
 
-async def test_restore_into_renamed_keyspace_and_table(manager: ManagerClient, object_storage):
+# A column the destination has on top of the backed up ones is not represented in the sstables
+# and stays null after the restore
+DST_EXTRA_COLUMNS = [
+    pytest.param('', [], id='same_schema'),
+    pytest.param(', extra int', ['extra'], id='extra_column'),
+]
+
+@pytest.mark.parametrize("extra_schema, extra_columns", DST_EXTRA_COLUMNS)
+async def test_restore_into_renamed_keyspace_and_table(manager: ManagerClient, object_storage, extra_schema, extra_columns):
     '''Check that a backup of one keyspace:table can be restored into another one'''
 
     objconf = object_storage.create_endpoint_conf()
@@ -1211,11 +1219,11 @@ async def test_restore_into_renamed_keyspace_and_table(manager: ManagerClient, o
 
     cql = manager.get_cql()
 
-    schema = '( name text primary key, value text )'
+    cols = 'name text primary key, value text'
     rows = {'0': 'zero', '1': 'one', '2': 'two'}
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as src_ks:
-        await cql.run_async(f"CREATE TABLE {src_ks}.cf1 {schema};")
+        await cql.run_async(f"CREATE TABLE {src_ks}.cf1 ( {cols} );")
         await asyncio.gather(*(cql.run_async(f"INSERT INTO {src_ks}.cf1 ( name, value ) VALUES ('{name}', '{value}');") for name, value in rows.items()))
 
         snap_name, toc_names = await take_snapshot_on_one_server(src_ks, server, manager, logger)
@@ -1224,7 +1232,7 @@ async def test_restore_into_renamed_keyspace_and_table(manager: ManagerClient, o
 
         # The destination differs from the source in both the keyspace and the table name
         async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as dst_ks:
-            await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 {schema};")
+            await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 ( {cols}{extra_schema} );")
             assert not await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;"), f'{dst_ks}.cf2 is not empty before the restore'
 
             logger.info(f'Restore {src_ks}.cf1 into {dst_ks}.cf2')
@@ -1232,14 +1240,18 @@ async def test_restore_into_renamed_keyspace_and_table(manager: ManagerClient, o
             status = await manager.api.wait_task(server.ip_addr, tid)
             assert (status is not None) and (status['state'] == 'done'), f'Restore into {dst_ks}.cf2 failed: {status}'
 
-            restored = {x.name: x.value for x in await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;")}
+            res = await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;")
+            restored = {x.name: x.value for x in res}
             assert restored == rows, f'Unexpected contents of {dst_ks}.cf2 after restore: {restored}'
+            for col in extra_columns:
+                assert all(getattr(x, col) is None for x in res), f'{dst_ks}.cf2 has a non-null {col} after restore'
 
             kept = {x.name: x.value for x in await cql.run_async(f"SELECT * FROM {src_ks}.cf1;")}
             assert kept == rows, f'Restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {kept}'
 
 
-async def test_restore_tablets_into_renamed_keyspace_and_table(manager: ManagerClient, object_storage):
+@pytest.mark.parametrize("extra_schema, extra_columns", DST_EXTRA_COLUMNS)
+async def test_restore_tablets_into_renamed_keyspace_and_table(manager: ManagerClient, object_storage, extra_schema, extra_columns):
     '''Check that tablet-aware restore of one keyspace:table works into another one'''
 
     topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 1)
@@ -1263,7 +1275,7 @@ async def test_restore_tablets_into_renamed_keyspace_and_table(manager: ManagerC
 
         # The destination differs from the source in both the keyspace and the table name
         async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as dst_ks:
-            await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}}};")
+            await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 ( pk text primary key, value int{extra_schema} ) WITH tablets = {{'min_tablet_count': {tablet_count}}};")
             assert not await cql.run_async(f"SELECT pk FROM {dst_ks}.cf2;"), f'{dst_ks}.cf2 is not empty before the restore'
 
             manifests = [ f'{s.server_id}/{snap_name}/manifest.json' for s in servers ]
@@ -1274,8 +1286,11 @@ async def test_restore_tablets_into_renamed_keyspace_and_table(manager: ManagerC
             assert status['progress_total'] > 0
             assert status['progress_completed'] == status['progress_total']
 
-            restored = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {dst_ks}.cf2;")}
+            res = await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;")
+            restored = {x.pk: x.value for x in res}
             assert restored == expected, f'Unexpected contents of {dst_ks}.cf2 after restore: {len(restored)} rows'
+            for col in extra_columns:
+                assert all(getattr(x, col) is None for x in res), f'{dst_ks}.cf2 has a non-null {col} after restore'
 
             kept = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {src_ks}.cf1;")}
             assert kept == expected, f'Restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {len(kept)} rows'
