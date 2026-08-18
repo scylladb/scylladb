@@ -1663,8 +1663,9 @@ table::clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed) {
     // otherwise components of sstables in the set might be unlinked from the filesystem
     // by compaction while we are waiting for the lock.
     auto deletion_guard = co_await get_sstable_list_permit();
+    const bool may_use_reference_sharing = _sstables_manager.get_features().sstable_reference_sharing;
     co_await sg.make_sstable_set()->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) -> future<> {
-        ret.push_back(co_await sst->clone(calculate_generation_for_new_table(), leave_unsealed));
+        ret.push_back(co_await sst->clone(calculate_generation_for_new_table(), leave_unsealed, may_use_reference_sharing));
     });
     co_return ret;
 }
