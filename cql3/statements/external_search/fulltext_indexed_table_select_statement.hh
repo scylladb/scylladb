@@ -21,10 +21,11 @@ struct bm25_ordering_info {
     // Temporary slot the score is delivered in, allocated on the first bm25()
     // occurrence in SELECT and filled per row by external_score_provider.
     std::optional<size_t> temporary_index;
-    // The search terms of the SELECT occurrences that prepare could not tell apart from the ORDER BY
-    // term - a bind marker stands where at least one of the two values will be. Checked once they
-    // have values; left empty where prepare has already settled it.
+    // The search terms of the SELECT occurrences, and of the WHERE one, that prepare could not tell
+    // apart from the ORDER BY term - a bind marker stands where at least one of the two values will
+    // be. Checked once they have values; left empty where prepare has already settled it.
     std::vector<expr::expression> deferred_select_terms;
+    std::optional<expr::expression> deferred_where_term;
 };
 
 /// Resolves BM25 ordering metadata from the query's prepared ORDER BY call.
