@@ -10,6 +10,7 @@
 
 #include "cql3/expr/expression.hh"
 
+#include <optional>
 #include <string_view>
 
 class schema;
@@ -25,6 +26,11 @@ namespace cql3::statements::external_search {
 
 // An external function marks a query as an external search, one only the system serving it can
 // answer. Every such call is written and read the same way, so that handling lives here.
+
+/// Compares `value` and `ranking_value` if both are constants, throwing `disagreement_message` when
+/// they differ; otherwise defers the check, returning `value` for execution to compare.
+std::optional<expr::expression> check_query_value(const expr::expression& value, const expr::expression& ranking_value,
+        std::string_view disagreement_message);
 
 /// Reads FN(column, query_value) - the scored column and the value scored against, which must not
 /// read from the row.  `function_name` spells FN in the rejections.

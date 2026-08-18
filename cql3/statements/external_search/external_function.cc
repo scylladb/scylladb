@@ -16,6 +16,20 @@
 
 namespace cql3::statements::external_search {
 
+std::optional<expr::expression> check_query_value(const expr::expression& value, const expr::expression& ranking_value,
+        std::string_view disagreement_message) {
+    const auto* value_const = expr::as_if<expr::constant>(&value);
+    const auto* ranking_const = expr::as_if<expr::constant>(&ranking_value);
+    if (!value_const || !ranking_const) {
+        return value;
+    }
+
+    if (*value_const != *ranking_const) {
+        throw exceptions::invalid_request_exception(sstring(disagreement_message));
+    }
+    return std::nullopt;
+}
+
 std::pair<const column_definition*, expr::expression> extract_call_arguments(const expr::function_call& fc,
         std::string_view function_name) {
     // Resolution rejects a call of the wrong arity, so a shorter one is an internal error.
