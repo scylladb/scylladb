@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <bit>
 #include <map>
 
 #include "dht/ring_position.hh"
@@ -17,27 +18,42 @@
 
 namespace sstables {
 
-// Indexes sstables by the token range they span, so that a query can select
-// only the sstables overlapping the range it asks for.
+// Indexes sstables by the token range they span, so that a query can select only
+// the sstables overlapping the range it asks for.
 //
 // An sstable spanning [first, last] overlaps a query range [s, e] iff
-// first <= e && last >= s. Each of the two maps below orders every sstable by
-// one of those bounds, so a bound lookup on one map narrows the candidates to
-// those satisfying one half of the test, and the other half is then checked
-// directly on each candidate. Having both maps lets a query walk whichever side
-// is shorter.
+// first <= e && last >= s. Ordering the sstables by first token turns the first
+// half of that test into a bound lookup, and the second half is checked on each
+// candidate. On its own that leaves the walk unbounded from below, because an
+// sstable overlapping the query may begin arbitrarily early, so a query near the
+// middle of the range walks about half the index.
 //
-// Both maps hold every sstable exactly once, so the footprint is linear in the
+// To bound it from below as well, the sstables are partitioned into tiers by the
+// width of their token range: tier k holds those whose width has bit_width() == k,
+// so every member is narrower than 2^k. A member of tier k reaching s must
+// therefore begin at or after s - 2^k, which closes the open end and makes the
+// walk proportional to the number of sstables the tier actually contributes to
+// the answer, up to the factor of two by which widths vary inside a tier.
+//
+// The bound comes from the tier's own definition rather than from a measured
+// maximum or from the range the owning compaction group spans, so nothing outside
+// the tier can make it too small -- and a bound that was too small would silently
+// drop sstables that do overlap. Only non-empty tiers are materialized, and an
+// sstable's tier never changes, since its bounds are fixed once its keys are known.
+//
+// Every sstable appears in exactly one tier, so the footprint is linear in the
 // number of sstables regardless of how deeply their ranges overlap. Keying on
 // tokens rather than on ring positions means a query can select an sstable that
 // does not in fact hold the key, which is harmless -- it costs a bloom filter
 // check -- whereas failing to select one would lose data.
 class partitioned_sstable_set : public sstable_set_impl {
     using token_map = std::multimap<dht::token, shared_sstable>;
+    // Keyed by width exponent, so iteration visits the tiers in width order and
+    // an empty tier costs nothing.
+    using tier_map = std::map<uint8_t, token_map>;
 private:
     schema_ptr _schema;
-    token_map _by_first_token;
-    token_map _by_last_token;
+    tier_map _tiers;
     lw_shared_ptr<sstable_list> _all;
     std::unordered_map<run_id, shared_sstable_run> _all_runs;
     // Bumped on every change, so that an incremental selector can tell that the
@@ -48,7 +64,14 @@ private:
     // maximum token, and exclusive bounds are widened to inclusive ones, since
     // over-approximating is safe.
     static dht::token_range to_token_range(const dht::partition_range& range);
-    static void erase_from(token_map& map, dht::token token, const shared_sstable& sst);
+    // The tier an sstable belongs to: bit_width() of the number of tokens it
+    // spans, so a member of tier k spans fewer than 2^k of them. An sstable whose
+    // first or last key is unknown reports a non-key sentinel, which spans
+    // everything, and lands in the widest tier.
+    static uint8_t tier_of(const sstable& sst);
+    // The earliest first token from which a member of tier `exponent` can still
+    // reach `start`.
+    static dht::token tier_window_start(uint8_t exponent, const dht::token& start);
 public:
     partitioned_sstable_set(const partitioned_sstable_set&) = delete;
     // `token_range` is the range spanned by the owning compaction group. It is
@@ -59,8 +82,7 @@ public:
     // For cloning the partitioned_sstable_set (makes a deep copy, including *_all)
     explicit partitioned_sstable_set(
         schema_ptr schema,
-        const token_map& by_first_token,
-        const token_map& by_last_token,
+        const tier_map& tiers,
         const lw_shared_ptr<sstable_list>& all,
         const std::unordered_map<run_id, shared_sstable_run>& all_runs,
         file_size_stats bytes_on_disk);

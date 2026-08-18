@@ -196,7 +196,7 @@ SEASTAR_TEST_CASE(test_partitioned_sstable_set_select_range) {
         simple_schema ss;
         auto s = ss.schema();
 
-        constexpr size_t nr_keys = 8;
+        constexpr size_t nr_keys = 48;
         auto pks = tests::generate_partition_keys(nr_keys, s);
         std::vector<mutation> muts;
         for (const auto& pk : pks) {
@@ -216,17 +216,24 @@ SEASTAR_TEST_CASE(test_partitioned_sstable_set_select_range) {
             return make_sstable_easy(env, std::move(mr), cfg);
         };
 
-        // Every way an sstable can sit relative to a query range: entirely
-        // before it, overlapping only its start, contained in it, overlapping
-        // only its end, entirely after it, and spanning everything.
-        auto all = make_lw_shared<sstable_list>({
-            make_sst(0, 1),
-            make_sst(1, 3),
-            make_sst(3, 4),
-            make_sst(4, 6),
-            make_sst(6, 7),
-            make_sst(0, 7),
-        });
+        // Every way an sstable can sit relative to a query range -- entirely
+        // before it, overlapping only its start, contained in it, overlapping only
+        // its end, entirely after it, and spanning everything -- across a ladder of
+        // widths, so that an index which partitions by width has to get the bound
+        // right for several partitions rather than one. A width bound that is too
+        // small drops sstables that do overlap, which is why this is checked
+        // against the definition of overlap rather than against a fixture.
+        std::vector<sstables::shared_sstable> ssts;
+        for (size_t width : {size_t(1), size_t(2), size_t(3), size_t(5), size_t(9),
+                             size_t(17), size_t(33), nr_keys - 1}) {
+            for (size_t lo : {size_t(0), nr_keys / 3, nr_keys - 1 - width}) {
+                if (lo + width >= nr_keys) {
+                    continue;
+                }
+                ssts.push_back(make_sst(lo, lo + width));
+            }
+        }
+        auto all = make_lw_shared<sstable_list>(ssts.begin(), ssts.end());
         auto set = make_sstable_set(s, all);
 
         auto generations = [] (const auto& ssts) {
