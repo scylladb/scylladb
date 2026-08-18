@@ -99,15 +99,31 @@ private:
 };
 
 template <FragmentedView View>
+uint64_t read_unsigned_vint(View& v, const char* what) {
+    const auto prefix = v.prefix(std::min<size_t>(v.size_bytes(), max_vint_length));
+    const auto [value, size] = with_linearized(prefix, [what] (bytes_view bv) {
+        if (bv.empty()) {
+            throw exceptions::invalid_request_exception(format("Not enough bytes to read {}", what));
+        }
+        const auto size = unsigned_vint::serialized_size_from_first_byte(bv.front());
+        if (size > bv.size()) {
+            throw exceptions::invalid_request_exception(format("Not enough bytes to read {}", what));
+        }
+        return std::make_pair(unsigned_vint::deserialize(bv), size);
+    });
+    v.remove_prefix(size);
+    return value;
+}
+
+template <FragmentedView View>
 View read_vector_element(View& v, std::optional<size_t> value_length_if_fixed) {
     uint64_t element_size;
     if (value_length_if_fixed) {
         element_size = value_length_if_fixed.value();
     } else {
-        element_size = with_linearized(v, unsigned_vint::deserialize);
-        v.remove_prefix(unsigned_vint::serialized_size(element_size));
+        element_size = read_unsigned_vint(v, "a vector element length");
     }
-    
+
     if (element_size == 0) {
         throw exceptions::invalid_request_exception("null/unset is not supported inside vectors");
     }
