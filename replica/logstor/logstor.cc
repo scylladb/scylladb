@@ -341,6 +341,7 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
 
 future<> logstor::flush_to_separator() {
     auto gate_holder = _async_gate.hold();
+    co_await _write_buffer.flush();
     co_await _segment_manager.await_pending_writes();
 }
 
