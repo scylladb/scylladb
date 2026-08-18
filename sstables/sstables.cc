@@ -2891,7 +2891,7 @@ uint64_t sstable::ondisk_data_size() const {
     return _data_file_size;
 }
 
-file_size_stats sstable::get_file_size_stats() const {
+utils::file_size_stats sstable::get_file_size_stats() const {
     if (!_metadata_size_on_disk) {
         on_internal_error(sstlog, "On-disk size of sstable metadata was not set");
     }
@@ -2903,7 +2903,7 @@ file_size_stats sstable::get_file_size_stats() const {
     }
     uint64_t size_without_data = _metadata_size_on_disk + _index_file_size + _partitions_file_size + _rows_file_size;
 
-    file_size_stats stats;
+    utils::file_size_stats stats;
     stats.on_disk = size_without_data + _data_file_size;
     stats.before_compression = size_without_data + data_size();
     return stats;
