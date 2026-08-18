@@ -7,7 +7,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
 from cassandra.query import SimpleStatement # type: ignore
 from cassandra.cluster import ConsistencyLevel # type: ignore
-from cassandra.protocol import ReadTimeout # type: ignore
+from cassandra.protocol import ReadFailure, ReadTimeout # type: ignore
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import new_test_keyspace, reconnect_driver
 
@@ -49,23 +49,18 @@ async def test_node_shutdown_waits_for_pending_requests(manager: ManagerClient) 
         logger.info(f'trigger shutdown of the node {servers[1]}')
         stop_future = asyncio.create_task(manager.server_stop_gracefully(servers[1].server_id))
 
-        logger.info(f'wait until node shutdown process reaches the storage proxy verbs')
-        await log_file2.wait_for("Shutting down storage proxy RPC verbs", timeout=60)
+        logger.info('wait until node shutdown stops accepting client requests')
+        await log_file2.wait_for('Stop transport: shutdown rpc and cql server done', timeout=60)
 
         logger.info(f'release the read request')
         await injection_handler.message()
 
-        # We get a timeout instead of the actual response here.
-        # This seems to be a flaw in the current Scylla code — when a node
-        # is shutting down, the drain_on_shutdown method if storage_service is called before
-        # storage_proxy::stop_remote. The drain_on_shutdown calls messaging_service::shutdown,
-        # which means that although storage_proxy::stop_remote waits for current requests to complete,
-        # client sockets are already closed so the responses can't be delivered to the clients.
-        # We get a timeout and not a failure because digest_read_resolver::on_error has
-        # a magic special case for error_kind::DISCONNECT:
-        # "wait for timeout in hope that the client will issue speculative read"
+        # This range read can still fail while the replica is shutting down.
+        # The fix below targets an already in-flight single-partition replica read
+        # whose RPC reply must be drained before messaging shutdown; it does not
+        # require a shutting-down replica to keep serving range-read follow-up work.
         logger.info(f'wait for read request')
-        with pytest.raises(ReadTimeout):
+        with pytest.raises((ReadFailure, ReadTimeout)):
             await read_future
 
         logger.info(f'wait for successful node {servers[1]} shutdown')
@@ -76,3 +71,60 @@ async def test_node_shutdown_waits_for_pending_requests(manager: ManagerClient) 
         # For dropping the keyspace
         await manager.server_start(servers[1].server_id)
         await reconnect_driver(manager)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_quorum_read_survives_replica_shutdown(manager: ManagerClient) -> None:
+    """Reproducer for SCYLLADB-2956.
+
+    A QUORUM read with RF=3 should survive one replica shutting down while handling
+    the read. Current code closes internode RPC before the in-flight replica read
+    can answer, so this test fails with a read error/timeout instead of returning
+    the row.
+    """
+
+    logger.info('start three nodes')
+    servers = await manager.servers_add(servers_num=3, auto_rack_dc="dc")
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    injection = 'storage_proxy::handle_read'
+    async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        await cql.run_async(f"create table {ks}.test_table (pk int primary key) with speculative_retry = 'NONE'")
+        await cql.run_async(SimpleStatement(f'insert into {ks}.test_table(pk) values (42)', consistency_level=ConsistencyLevel.ALL), host=hosts[0])
+
+        for server in servers[1:]:
+            await manager.api.enable_injection(server.ip_addr, injection, one_shot=True, parameters={'cf_name': 'test_table'})
+
+        logger.info(f'start ConsistencyLevel.QUORUM read request on {servers[0]} as coordinator')
+        read_future = cql.run_async(SimpleStatement(f'select pk from {ks}.test_table where pk = 42 using timeout 10s',
+                                                    consistency_level=ConsistencyLevel.QUORUM), host=hosts[0])
+
+        async def wait_for_replica_read(server):
+            await manager.api.wait_for_injection_enter(server.ip_addr, injection)
+            return server
+
+        wait_tasks = [asyncio.create_task(wait_for_replica_read(server)) for server in servers[1:]]
+        done, pending = await asyncio.wait(wait_tasks, timeout=60, return_when=asyncio.FIRST_COMPLETED)
+        assert done, 'read did not reach any remote replica'
+        target = next(iter(done)).result()
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+
+        for server in servers[1:]:
+            if server.server_id == target.server_id:
+                continue
+            await manager.api.disable_injection(server.ip_addr, injection)
+
+        logger.info(f'trigger shutdown of the replica handling the read: {target}')
+        log_file = await manager.server_open_log(target.server_id)
+        stop_task = asyncio.create_task(manager.server_stop_gracefully(target.server_id))
+
+        logger.info('wait until node shutdown stops accepting client requests')
+        await log_file.wait_for('Stop transport: shutdown rpc and cql server done', timeout=60)
+
+        logger.info('release the blocked read request')
+        await manager.api.message_injection(target.ip_addr, injection)
+        rows = await read_future
+        assert [row.pk for row in rows] == [42]
+        await stop_task
