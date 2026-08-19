@@ -2143,6 +2143,15 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     // with temporary nodes that an external_values_provider fills at execution time.
     expr::temporary_allocator temporaries_allocator;
     if (prepare_bm25_selectors(prepared_selectors, bm25_ordering_info_opt, temporaries_allocator)) {
+        // GROUP BY condenses the rows of a group into one, which says nothing about which row's score
+        // to report.  Rejected here rather than by the aggregation machinery below, which a lowered
+        // score is invisible to: levellize_aggregation_depth() wraps a column in first() but leaves a
+        // temporary alone, so a selection made only of scores never becomes an aggregate one and the
+        // search's own refusal to aggregate does not fire.
+        if (!_group_by_columns.empty()) {
+            throw exceptions::invalid_request_exception("A scoring function cannot be selected by a query with GROUP BY");
+        }
+
         // A recorded term is all that is left of the call it was written in: that call was replaced
         // with a temporary, a leaf nothing descends into, so nothing else registers its bind marker.
         for (auto& term : bm25_ordering_info_opt->deferred_select_terms) {

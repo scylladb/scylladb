@@ -718,3 +718,20 @@ def test_bm25_rejected_in_non_select_statements(cql, fulltext_table):
         cql.execute(f"UPDATE {fulltext_table} SET content = 'x' WHERE p = 1 AND BM25(content, 'hello') > 0")
     with pytest.raises(InvalidRequest, match="only supported in SELECT statements"):
         cql.execute(f"DELETE FROM {fulltext_table} WHERE p = 1 AND BM25(content, 'hello') > 0")
+
+
+# GROUP BY condenses the rows of a group into one, which says nothing about which row's relevance
+# score to report, so a query that selects BM25() cannot have one. The refusal cannot come from the
+# aggregation machinery the plain case relies on: it wraps a column in first() but leaves a lowered
+# score alone, so a selection made only of scores never looks like an aggregate one.
+@pytest.mark.parametrize("select_clause,message", [
+    ("p", "cannot be run with aggregation"),
+    ("BM25(content, 'hello')", "cannot be selected by a query with GROUP BY"),
+])
+def test_bm25_query_with_group_by_rejected(cql, test_keyspace, select_clause, message):
+    schema = "p int, c int, content text, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match=message):
+            cql.prepare(f"SELECT {select_clause} FROM {table} WHERE BM25(content, 'hello') > 0 "
+                        f"GROUP BY p ORDER BY BM25(content, 'hello') LIMIT 5")
