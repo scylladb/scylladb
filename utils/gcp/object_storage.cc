@@ -299,6 +299,7 @@ class utils::gcp::storage::client::impl {
     seastar::semaphore& _limits;
     seastar::http::experimental::client _client;
     shared_ptr<seastar::tls::certificate_credentials> _certs;
+    seastar::gate _gate;
     future<> authorize(request_wrapper& req, const std::string& scope);
 public:
     impl(const utils::http::url_info&, std::optional<google_credentials>, seastar::semaphore*, shared_ptr<seastar::tls::certificate_credentials> creds);
@@ -376,6 +377,9 @@ using namespace std::chrono_literals;
  */
 future<>
 utils::gcp::storage::client::impl::send_with_retry(const std::string& path, const std::string& scope, body_variant body, std::string_view content_type, handler_func_ex handler, httpclient::method_type op, key_values headers, seastar::abort_source* as) {
+    // Held for the whole request. close() waits for the gate before closing
+    // _client, so no http connection can outlive it.
+    auto holder = _gate.hold();
     rest::request_wrapper req(_endpoint);
     req.target(path);
     req.method(op);
@@ -486,6 +490,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
 }
 
 future<> utils::gcp::storage::client::impl::close() {
+    co_await _gate.close();
     co_await _client.close();
 }
 
