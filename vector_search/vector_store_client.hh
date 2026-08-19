@@ -16,6 +16,7 @@
 #include <chrono>
 #include <expected>
 #include <functional>
+#include <optional>
 #include <variant>
 #include <vector>
 #include <seastar/core/abort_source.hh>
@@ -54,6 +55,11 @@ public:
     using config = db::config;
     using vs_vector = std::vector<float>;
     using query_string = std::string;
+    using document = sstring;
+    using documents = std::vector<document>;
+    /// One entry per document sent, in the same order; std::nullopt where the index found no
+    /// usable fragment in that document.
+    using highlights = std::vector<std::optional<sstring>>;
     using host_name = sstring;
     using index_name = sstring;
     using keyspace_name = sstring;
@@ -117,6 +123,19 @@ public:
     /// more relevant).
     auto bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, abort_source& as)
             -> future<std::expected<primary_keys, fts_error>>;
+
+    /// Request a fragment of each of the given documents, with the terms of `fts_query` marked.
+    ///
+    /// The index is asked because choosing which of a document's terms matter needs the corpus
+    /// statistics and the analyzer that only it has - not because it can look the documents up.  It
+    /// stores none of their text, which is why the caller sends it: the documents are the ones it
+    /// has just read from the base table, so a fragment is generated from the row as read.
+    ///
+    /// The answer is positional: entry i belongs to documents[i].  Unlike ann() and bm25() this
+    /// takes no schema, because there are no primary keys in the reply to rebuild - the caller
+    /// supplied the documents and correlates by position.
+    auto highlight(keyspace_name keyspace, index_name name, query_string fts_query, documents documents, abort_source& as)
+            -> future<std::expected<highlights, fts_error>>;
 
 private:
     friend struct vector_store_client_tester;
