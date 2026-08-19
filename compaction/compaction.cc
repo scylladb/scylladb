@@ -1619,10 +1619,14 @@ private:
         compaction_type_options::scrub::drop_unfixable_sstables _drop_unfixable_sstables;
 
     private:
+        [[noreturn]] void throw_invalid_sstable_compaction_aborted_exception(sstring ks, sstring cf, sstring reason) {
+            throw scrub_abort_invalid_sstable_compaction_aborted_exception{std::move(ks), std::move(cf), std::move(reason)};
+        }
+
         void maybe_abort_scrub(std::function<void()> report_error) {
             if (_scrub_mode == compaction_type_options::scrub::mode::abort) {
                 report_error();
-                throw compaction_aborted_exception(_schema->ks_name(), _schema->cf_name(), "scrub compaction found invalid data");
+                throw_invalid_sstable_compaction_aborted_exception(_schema->ks_name(), _schema->cf_name(), "scrub compaction found invalid data");
             }
             ++_validation_errors;
         }
@@ -1734,7 +1738,7 @@ private:
             bool should_abort = _scrub_mode == compaction_type_options::scrub::mode::abort ||
                     (_scrub_mode == compaction_type_options::scrub::mode::segregate && !_drop_unfixable_sstables);
             if (should_abort) {
-                throw compaction_aborted_exception(
+                throw_invalid_sstable_compaction_aborted_exception(
                         _schema->ks_name(),
                         _schema->cf_name(),
                         format("scrub compaction failed due to unrecoverable error: {}", e));
