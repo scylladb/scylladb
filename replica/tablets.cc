@@ -127,8 +127,15 @@ schema_ptr make_raft_schema(sstring name, bool is_group0) {
         .with_column("vote", uuid_type, column_kind::static_column)
         // id of the most recent persisted snapshot
         .with_column("snapshot_id", uuid_type, column_kind::static_column)
-        .with_column("commit_idx", long_type, column_kind::static_column)
-
+        .with_column("commit_idx", long_type, column_kind::static_column);
+    if (!is_group0) {
+        // Term of the log entry at commit_idx. Written together with commit_idx
+        // so the post-replay snapshot bump can use the exact term of the
+        // snapshot point (SCYLLADB-3357). Not needed for group0, which never
+        // snapshots via a commit_idx catch-up on restart.
+        builder.with_column("commit_idx_term", long_type, column_kind::static_column);
+    }
+    builder
         .with_hash_version()
         .set_caching_options(caching_options::get_disabled_caching_options());
 

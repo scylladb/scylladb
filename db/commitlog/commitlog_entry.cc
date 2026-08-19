@@ -44,7 +44,16 @@ void commitlog_mutation_entry_writer::compute_size() {
 
 template<typename Output>
 inline void commitlog_raft_log_entry_writer::serialize(Output& out) const {
-    ser::writer_of_commitlog_entry<Output>(out).write_item_raft_commitlog_entry(_item).end_commitlog_entry();
+    auto writer = ser::writer_of_commitlog_entry<Output>(out);
+    std::visit([&] (const auto& item) {
+        using item_type = std::decay_t<decltype(item)>;
+        if constexpr (std::is_same_v<item_type, raft_commitlog_entry>) {
+            std::move(writer).write_item_raft_commitlog_entry(item).end_commitlog_entry();
+        } else {
+            static_assert(std::is_same_v<item_type, raft_commit_idx_entry>);
+            std::move(writer).write_item_raft_commit_idx_entry(item).end_commitlog_entry();
+        }
+    }, _item);
 }
 
 void commitlog_raft_log_entry_writer::write(ostream& out) const {
@@ -80,6 +89,9 @@ auto read_variant_commitlog_entry(const fragmented_temporary_buffer& buffer) {
             },
             [](const ser::mutation_entry_view& entry_view) {
                 return commitlog_entry{.item = mutation_entry(entry_view.mapping(), entry_view.mutation())};
+            },
+            [](raft_commit_idx_entry entry) {
+                return commitlog_entry{.item = std::move(entry)};
             },
             [](ser::unknown_variant_type) -> commitlog_entry {
                 throw std::runtime_error("Unknown variant type in commitlog entry");
