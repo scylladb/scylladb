@@ -1025,6 +1025,24 @@ bool storage_group::split_unready_groups_are_empty() const {
     return std::ranges::all_of(split_unready_groups(), std::mem_fn(&compaction_group::empty));
 }
 
+std::optional<std::pair<dht::token_range, dht::token_range>>
+split_token_range(const dht::token_range& range) {
+    if (!range.start() || !range.end()) {
+        return std::nullopt;
+    }
+    auto split_point = dht::token::midpoint(range.start()->value(), range.end()->value());
+    // A range with fewer than two tokens in it has nothing to split between. The
+    // midpoint of two adjacent tokens is the lower of them, so the left side would come
+    // out empty and the right side would be the whole range. That cannot happen for a
+    // tablet range today, but it would for a tablet holding a single token, which is
+    // how a hot partition would be isolated.
+    if (split_point.raw() <= range.start()->value().raw()) {
+        return std::nullopt;
+    }
+    return std::pair(dht::token_range::make(*range.start_copy(), {split_point, true}),
+                     dht::token_range::make({split_point, false}, *range.end_copy()));
+}
+
 bool storage_group::set_split_mode() {
     // A group being stopped (e.g. during migration cleanup) cannot satisfy split mode.
     // Also, a race can happen if new groups are added while old ones are being stopped,
@@ -1038,15 +1056,33 @@ bool storage_group::set_split_mode() {
             tlogger.debug("storage_group::set_split_mode: split ready groups not created due to compaction disabled on the main group");
             return false;
         }
-        auto create_cg = [this] () -> compaction_group_ptr {
-            // TODO: use the actual sub-ranges instead, to help incremental selection on the read path.
-            return compaction_group::make_empty_group(*_main_cg);
+        // Each split-ready group is given the sub-range it will own once the split
+        // completes, rather than the whole range of the group being split. Their
+        // sstable sets index by token range, and a set which is told it spans twice
+        // the range its sstables can cover misjudges every one of them: an sstable
+        // flushed by a split-ready group spans at most its own side, so it comes out
+        // at about half the range the set thinks it has, and
+        // partitioned_sstable_set::store_as_unleveled() then keeps it out of the
+        // vector which exists to hold range-spanning sstables (SCYLLADB-3790). The
+        // narrower range also lets the read path skip a group a query does not reach.
+        auto sub_ranges = split_token_range(_main_cg->token_range());
+        if (!sub_ranges) {
+            tlogger.warn("storage_group::set_split_mode: range {} of group {} cannot be split, either because an "
+                    "end of it is unbounded or because it holds fewer than two tokens; split ready groups will "
+                    "inherit it", _main_cg->token_range(), _main_cg->group_id());
+        }
+        auto create_cg = [this, &sub_ranges] (locator::tablet_range_side side) -> compaction_group_ptr {
+            if (!sub_ranges) {
+                return compaction_group::make_empty_group(*_main_cg);
+            }
+            return compaction_group::make_empty_group(*_main_cg,
+                    side == locator::tablet_range_side::left ? sub_ranges->first : sub_ranges->second);
         };
         tlogger.debug("storage_group::set_split_mode: Set sstables_repaired_at={} for split old_group={} old_range={}",
                 _main_cg->get_sstables_repaired_at(), _main_cg->group_id(), _main_cg->token_range());
         std::vector<compaction_group_ptr> split_ready_groups(2);
-        split_ready_groups[to_idx(locator::tablet_range_side::left)] = create_cg();
-        split_ready_groups[to_idx(locator::tablet_range_side::right)] = create_cg();
+        split_ready_groups[to_idx(locator::tablet_range_side::left)] = create_cg(locator::tablet_range_side::left);
+        split_ready_groups[to_idx(locator::tablet_range_side::right)] = create_cg(locator::tablet_range_side::right);
         _split_ready_groups = std::move(split_ready_groups);
     }
 
@@ -2865,7 +2901,11 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
 }
 
 compaction_group_ptr compaction_group::make_empty_group(const compaction_group& base) {
-    auto cg = make_lw_shared<compaction_group>(base._t, base._group_id, base._token_range, base._repair_sstable_classifier);
+    return make_empty_group(base, base._token_range);
+}
+
+compaction_group_ptr compaction_group::make_empty_group(const compaction_group& base, dht::token_range token_range) {
+    auto cg = make_lw_shared<compaction_group>(base._t, base._group_id, std::move(token_range), base._repair_sstable_classifier);
     // Inherit rather than default: the update_effective_replication_map() sweep may not run.
     cg->set_tombstone_gc_enabled(base.tombstone_gc_enabled());
     return cg;
