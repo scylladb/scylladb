@@ -32,6 +32,8 @@
 #include "db/schema_tables.hh"
 #include "schema/schema_builder.hh"
 
+#include "replica/compaction_group.hh"
+#include "test/boost/sstable_test.hh"
 #include "replica/tablets.hh"
 #include "compaction/compaction_manager.hh"
 #include "replica/tablet_mutation_builder.hh"
@@ -5846,6 +5848,119 @@ SEASTAR_THREAD_TEST_CASE(test_get_split_token_is_compatible_with_old_behavior) {
 
         thread::maybe_yield();
     }
+}
+
+// The sub-ranges storage_group::set_split_mode() hands to its split-ready compaction
+// groups are derived from the group's own token range, without consulting the tablet
+// map. Check that the derivation agrees with the map, which is what routes writes to
+// those groups: the same split point, the same ranges the post-split tablets will
+// have, and each side's range holding exactly the tokens the map sends to that side.
+// A disagreement would give a group a range its own sstables fall outside of.
+SEASTAR_THREAD_TEST_CASE(test_split_token_range_agrees_with_tablet_map) {
+    for (auto tablet_count : {1ul, 2ul, 8ul, 128ul}) {
+        locator::tablet_map tmap(tablet_count);
+        locator::tablet_map tmap_after_splitting(tablet_count * 2);
+
+        for (size_t id = 0; id < tablet_count; id++) {
+            auto tid = tablet_id(id);
+            auto range = tmap.get_token_range(tid);
+            auto sub_ranges = replica::split_token_range(range);
+            BOOST_REQUIRE(sub_ranges.has_value());
+            const auto& [left, right] = *sub_ranges;
+            testlog.debug("tablet_count {}, id {}, range {}, left {}, right {}", tablet_count, id, range, left, right);
+
+            // Split at the same token the map splits at.
+            BOOST_REQUIRE(left.end()->value() == tmap.get_split_token(tid));
+            // The two halves are the ranges of the tablets the split will produce,
+            // which handle_tablet_split_completion() installs once it completes.
+            BOOST_REQUIRE(left == tmap_after_splitting.get_token_range(tablet_id(id * 2)));
+            BOOST_REQUIRE(right == tmap_after_splitting.get_token_range(tablet_id(id * 2 + 1)));
+            // Between them they cover the range being split, and no more.
+            BOOST_REQUIRE(*left.start_copy() == *range.start_copy());
+            BOOST_REQUIRE(*right.end_copy() == *range.end_copy());
+
+            // A token the map routes to one side lies in that side's range, so a
+            // split-ready group's range covers everything written to it.
+            auto check = [&] (dht::token t, tablet_range_side expected_side, const dht::token_range& expected_range) {
+                BOOST_REQUIRE_EQUAL(tmap.get_tablet_range_side(t), expected_side);
+                BOOST_REQUIRE(expected_range.contains(t, dht::token_comparator()));
+            };
+            auto lower_token = range.start()->value() == dht::minimum_token() ? dht::first_token() : range.start()->value();
+            check(next_token(lower_token), tablet_range_side::left, left);
+            check(left.end()->value(), tablet_range_side::left, left);
+            check(next_token(left.end()->value()), tablet_range_side::right, right);
+            check(range.end()->value(), tablet_range_side::right, right);
+
+            thread::maybe_yield();
+        }
+    }
+
+    // A range which cannot be split reports so rather than returning a pair with an
+    // empty side. Splitting a range holding a single token does not arise for a tablet
+    // today, but it will for a tablet isolating a hot partition.
+    auto t = dht::token::bias(uint64_t(1) << 63);   // an ordinary key token, mid-ring
+    BOOST_REQUIRE(!replica::split_token_range(dht::token_range::make({t, false}, {next_token(t), true})));
+    BOOST_REQUIRE(!replica::split_token_range(dht::token_range::make_singular(t)));
+    BOOST_REQUIRE(!replica::split_token_range(dht::token_range::make_open_ended_both_sides()));
+    BOOST_REQUIRE(!replica::split_token_range(dht::token_range::make_starting_with({t, false})));
+    BOOST_REQUIRE(!replica::split_token_range(dht::token_range::make_ending_with({t, true})));
+}
+
+// Once a table is in split mode, each of a storage group's split-ready compaction
+// groups should own the range of the tablet it will become, not the whole range of the
+// tablet being split. Checked against the tablet map rather than against the way
+// set_split_mode() derives the ranges, so that the two have to agree.
+SEASTAR_THREAD_TEST_CASE(test_split_ready_groups_own_their_post_split_range) {
+    auto cfg = tablet_cql_test_config();
+    cfg.initial_tablets = std::bit_floor(this_smp_shard_count());
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql(
+                "CREATE TABLE cf (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
+
+        for (unsigned i = 0; i < this_smp_shard_count() * 20; i++) {
+            e.execute_cql(format("INSERT INTO cf (pk, ck, v) VALUES ({}, 0, 0)", i)).get();
+        }
+
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& table = db.find_column_family("ks", "cf");
+            return table.flush();
+        }).get();
+
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& table = db.find_column_family("ks", "cf");
+            return table.split_all_storage_groups(tasks::task_info{});
+        }).get();
+
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& t = db.find_column_family("ks", "cf");
+            auto& sgm = column_family_test::get_storage_group_manager(t);
+            sgm->for_each_storage_group([&] (size_t id, replica::storage_group& sg) {
+                const auto& groups = sg.split_ready_compaction_groups();
+                THREADSAFE_BOOST_REQUIRE_EQUAL(groups.size(), 2);
+
+                // A token on each side of the split point, taken from the bounds of
+                // the range being split: its start is exclusive and belongs to the
+                // preceding tablet, its end is inclusive and is the last token of
+                // this one.
+                auto range = sg.token_range();
+                auto lower_token = range.start()->value() == dht::minimum_token()
+                        ? dht::first_token() : next_token(range.start()->value());
+                auto upper_token = range.end()->value();
+
+                for (auto [side, token] : {std::pair(tablet_range_side::left, lower_token),
+                                           std::pair(tablet_range_side::right, upper_token)}) {
+                    const auto& cg = groups[size_t(side)];
+                    auto expected = t.get_token_range_after_split(token);
+                    testlog.debug("group {} side {} range {} expected {}", id, int(side), cg->token_range(), expected);
+                    THREADSAFE_BOOST_REQUIRE(cg->token_range() == expected);
+                    // The point of the narrower range: it is the range the group's
+                    // own sstables can span, not twice it.
+                    THREADSAFE_BOOST_REQUIRE(cg->token_range() != range);
+                    THREADSAFE_BOOST_REQUIRE(cg->token_range().contains(token, dht::token_comparator()));
+                }
+            });
+        }).get();
+    }, std::move(cfg)).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(basic_tablet_storage_splitting_test) {
