@@ -3200,10 +3200,14 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _main_sstables(make_lw_shared<sstables::sstable_set>(make_main_sstable_set()))
     , _maintenance_sstables(make_maintenance_sstable_set())
     , _async_gate(format("[compaction_group {}.{} {}]", t.schema()->ks_name(), t.schema()->cf_name(), group_id))
-    , _backlog_tracker(t.get_compaction_strategy().make_backlog_tracker())
     , _repair_sstable_classifier(std::move(repair_classifier))
     , _logstor_segments(make_lw_shared<logstor::segment_set>())
 {
+    // Must go through register_backlog_tracker(), otherwise this group's backlog would
+    // be tracked but never accounted by the compaction backlog manager. Groups created
+    // after the table was started (tablet split, migration or merge) are not covered by
+    // the registration done by table::set_compaction_strategy().
+    register_backlog_tracker(t.get_compaction_strategy().make_backlog_tracker());
 }
 
 compaction_group_ptr compaction_group::make_empty_group(const compaction_group& base) {
