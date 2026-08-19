@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 
 UUID_REGEX = re.compile(r"([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})")
 
+# A node that is rolled back out of a join may terminate on the ban notification instead of
+# on its own failed request, so tests that expect a join to fail must accept either message.
+BANNED_NOTIFICATION = "received notification of being banned from the cluster from"
+
 
 @dataclass(frozen=True)
 class FeatureConfig:
