@@ -300,7 +300,10 @@ class ScyllaCluster:
             if not replace_cfg or not replace_cfg.reuse_ip_addr:
                 self.leased_ips.remove(ip_addr)
                 await self.host_registry.release_host(Host(ip_addr))
-            self.stopped[server.server_id] = server
+            # Assembling the configuration below can fail before there is a
+            # server to remember; releasing the host is all that is left to do.
+            if server is not None:
+                self.stopped[server.server_id] = server
 
         try:
             if version is None:
@@ -369,7 +372,8 @@ class ScyllaCluster:
         finally:
             # server_stop() may have already removed the starting server
             # if it interrupted this add_server() operation.
-            self.starting.pop(server.server_id, None)
+            if server is not None:
+                self.starting.pop(server.server_id, None)
 
         if expected_error:
             await handle_join_failure()

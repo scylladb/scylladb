@@ -916,8 +916,10 @@ def create_cluster_factory(suite_config: TestSuiteConfig,
             # Clean up the broken cluster before raising
             try:
                 await cluster.recycle()
-            except:
-                pass  # Ignore cleanup errors
+            except Exception:
+                # Report it and raise the start failure, which is the more
+                # useful of the two.
+                logger.warning("Failed to recycle the cluster that failed to start", exc_info=True)
             raise cluster.start_exception
         return cluster
 
