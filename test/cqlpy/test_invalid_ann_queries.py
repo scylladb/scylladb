@@ -123,6 +123,19 @@ def test_ann_query_with_group_by_rejected(cql, indexed_vector_table):
         cql.execute(f"SELECT ANN(v, [0.1, 0.2, 0.3]) FROM {indexed_vector_table} GROUP BY p "
                     f"ORDER BY ANN(v, [0.1, 0.2, 0.3]) LIMIT 5")
 
+# DISTINCT asks for one row per partition, but an external search reads the base table one primary
+# key at a time, so nothing collapses a partition on the way back. Nothing rejects it either -
+# DISTINCT is checked against the selection's columns, and a selected score has none - so these
+# prepare rather than execute, to stop at the check they pin.
+@pytest.mark.parametrize("selection", ["p", "p, ANN(v, [0.1, 0.2, 0.3])"], ids=["key", "key_and_score"])
+@pytest.mark.xfail(reason="DISTINCT is accepted and answered with duplicate partition keys")
+def test_ann_query_with_distinct_rejected(cql, test_keyspace, scylla_only, selection):
+    schema = "p int, c int, v vector<float, 3>, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+        with pytest.raises(InvalidRequest):
+            cql.prepare(f"SELECT DISTINCT {selection} FROM {table} ORDER BY ANN(v, [0.1, 0.2, 0.3]) LIMIT 5")
+
 def test_ann_function_with_too_few_arguments(cql, indexed_vector_table):
     with pytest.raises(InvalidRequest, match=re.escape(ANN_ARGUMENT_COUNT_MESSAGE)):
         cql.execute(f"SELECT * FROM {indexed_vector_table} ORDER BY ANN(v) LIMIT 5")
