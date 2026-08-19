@@ -55,6 +55,10 @@ class HostSpec:
     shard_count: int = 2
     storage_capacity: int | None = None
     effective_capacity: int | None = None
+    # What system.load_per_node says about the node beyond its load: whether the cluster can
+    # reach it, and whether it takes part in balancing. Left out when a test measures neither.
+    up: bool | None = None
+    excluded: bool | None = None
 
 
 def build_topology(hosts: dict[HostId, HostSpec],
@@ -71,7 +75,8 @@ def build_topology(hosts: dict[HostId, HostSpec],
         topo._hosts[host_id] = Host(id=host_id, shard_count=host.shard_count, ip=host.ip,
                                     dc=host.dc, rack=host.rack,
                                     storage_capacity=host.storage_capacity,
-                                    effective_capacity=host.effective_capacity)
+                                    effective_capacity=host.effective_capacity,
+                                    up=host.up, excluded=host.excluded)
     for table_id, name in (tables or {}).items():
         topo._tables[table_id] = name
         topo._tablet_maps[table_id] = TabletMap(table_id)

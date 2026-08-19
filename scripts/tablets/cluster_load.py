@@ -42,6 +42,7 @@ from tablets.render_utils import PresentationOptions
 from tablets.render_utils import SEPARATING_LINE
 from tablets.render_utils import add_presentation_options
 from tablets.render_utils import format_ovc_pct
+from tablets.render_utils import format_host_status
 from tablets.render_utils import format_pct
 from tablets.render_utils import format_rack_id
 from tablets.render_utils import format_shard_location
@@ -51,6 +52,7 @@ from tablets.render_utils import format_util_pct
 from tablets.render_utils import format_host
 from tablets.render_utils import get_presentation_options_from_args
 from tablets.render_utils import print_table
+from tablets.render_utils import red
 from tablets.render_utils import render_hbar
 from tablets.stats import StatsAggregator
 from tablets.stats import overcommit
@@ -83,10 +85,14 @@ def get_columns(capacity_mode: CapacityMode, options: PresentationOptions = DEFA
     The capacity mode only rewords the capacity and utilization columns. CSV adds the
     leading columns which keep a flat table's rows self-describing, and names the label
     column, which the rendered table leaves blank because its section says what it is.
+
+    A node's status is a column of its own in CSV, which is read by column, and part of the
+    location label otherwise.
     """
     effective = capacity_mode == CapacityMode.EFFECTIVE
     columns = [
         Column("location" if options.csv else ""),
+        *([Column("status")] if options.csv else []),
         Column("tablets\n/ shard", "right"),
         Column("shard\ncount", "right"),
         Column("tokens\n[%]", "right"),
@@ -418,6 +424,18 @@ def format_location(load: LevelLoad, options: PresentationOptions) -> str:
     return load.dc if options.csv else "DC total"
 
 
+def build_location_cells(load: LevelLoad, options: PresentationOptions) -> list:
+    """
+    What the row is of, and what is worth knowing about the host it is on. See
+    format_host_status().
+    """
+    location = format_location(load, options)
+    status = format_host_status(load.host)
+    if options.csv:
+        return [location, status or None]
+    return [red(f"{location} ({status})", options) if status else location]
+
+
 def format_tablets_cell(load: LevelLoad, options: PresentationOptions):
     if load.level == "shard":
         # A shard's own count is its tablets per shard, so it takes the same coloring.
@@ -439,7 +457,7 @@ def build_row(load: LevelLoad, levels: Levels, scales: SectionScales,
     token_frac = share(load.token_fraction, levels.total_token_space)
     size_frac = share(load.size, levels.total_size)
     return [
-        format_location(load, options),
+        *build_location_cells(load, options),
         format_tablets_cell(load, options),
         None if load.level == "shard" else load.shard_count,
         format_pct(token_frac, options=options),
@@ -529,6 +547,8 @@ def main() -> int:
         epilog=(
             "Columns:\n"
             "                 Location label. Depending on section, this is a rack id, node, or shard (node:shard).\n"
+            "                 A node which is down is marked '(D)', excluded as '(DX).\n"
+            "  status         Shown only in CSV output. Contains 'D' for down nodes, 'DX' for excluded nodes.\n"
             "  tablets/shard  Number of tablet replicas per shard for the row.\n"
             "  shard count    Number of shards aggregated by the row. Blank where not applicable.\n"
             "  tokens [%]     Token-space share owned by the row, counting every replica copy. Because replication is counted, totals across peers can exceed 100.\n"
@@ -568,6 +588,8 @@ def main() -> int:
             "  rack header rows that group nodes within them do not survive a CSV reader. Two columns lead:\n"
             "    level     Section the row came from: dc, rack, node, or shard.\n"
             "    rack      Rack the row belongs to, repeated on every row. Empty on dc rows.\n"
+            "  A 'status' column follows the location, holding D, X or DX for a node which is down, excluded, or\n"
+            "  both, and empty otherwise.\n"
             "  The label column is named 'location', and a DC summary is labelled with the DC name rather\n"
             "  than 'DC total'.\n"
         ),

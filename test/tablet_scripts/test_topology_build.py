@@ -286,6 +286,33 @@ def test_system_load_per_node_has_the_last_word_on_where_a_node_is() -> None:
     assert topo.require_host(HOST1).rack == "rack1"
 
 
+def test_build_reads_whether_a_node_is_up_and_whether_it_is_excluded() -> None:
+    """
+    A node the cluster cannot reach reports no sizes and no capacity, which on its own reads
+    as a node holding nothing. These say which it is.
+    """
+    dump = (f"node;dc;rack;ip;storage_capacity;up;excluded\n"
+            f"{HOST1};dc1;rack1;10.0.0.1;1000;False;True\n"
+            f"{HOST2};dc1;rack2;10.0.0.2;2000;True;False\n")
+
+    topo = Topology()
+    topo._build({LOAD_PER_NODE_TABLE.name: rows_from_csv(dump.splitlines(), LOAD_PER_NODE_COLUMNS)})
+
+    assert (topo.require_host(HOST1).up, topo.require_host(HOST1).excluded) == (False, True)
+    assert (topo.require_host(HOST2).up, topo.require_host(HOST2).excluded) == (True, False)
+
+
+def test_a_snapshot_taken_before_the_status_columns_says_nothing_either_way() -> None:
+    """
+    Neither up nor down, so a report can tell "not reported" from "down".
+    """
+    topo = Topology()
+    topo._build({LOAD_PER_NODE_TABLE.name: rows_from_csv(LOAD_PER_NODE_CSV.splitlines(),
+                                                         LOAD_PER_NODE_COLUMNS)})
+
+    assert (topo.require_host(HOST1).up, topo.require_host(HOST1).excluded) == (None, None)
+
+
 def test_optional_columns_read_as_none_whichever_source_lacks_them() -> None:
     """
     A snapshot or a cluster which predates an optional column is read without it, rather

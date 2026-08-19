@@ -16,7 +16,7 @@ import csv
 import io
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from tablets.stats import overcommit
 from tablets.topology import Host
@@ -85,6 +85,29 @@ def format_host(host: Host, options: PresentationOptions = DEFAULT_PRESENTATION)
     if options.host_id or not host.ip:
         return str(host.id)
     return host.ip
+
+
+def format_host_status(host: Host | None) -> str:
+    """
+    What a report has to say about a node beyond its load: D when the cluster cannot reach
+    it, X when it is left out of load balancing, DX when both.
+
+    Empty for a working node, for a row which is of no one node, such as a rack, and for a
+    snapshot taken before system.load_per_node carried the columns, which leaves both
+    unknown rather than false.
+
+    Examples:
+        >>> host = Host(id="e1a4", shard_count=1)
+        >>> format_host_status(replace(host, up=False, excluded=True))
+        'DX'
+        >>> format_host_status(replace(host, up=True, excluded=False))
+        ''
+        >>> format_host_status(host), format_host_status(None)
+        ('', '')
+    """
+    if host is None:
+        return ""
+    return ("D" if host.up is False else "") + ("X" if host.excluded else "")
 
 
 def positive_int(value: str) -> int:
@@ -345,6 +368,17 @@ def color_replica_histogram(bar: str, replica_idx: int | None,
     if replica_idx == 1:
         return f"{ANSI_BLUE}{bar}{ANSI_RESET}"
     return f"{ANSI_GREEN}{bar}{ANSI_RESET}"
+
+
+def red(text: str, options: PresentationOptions = DEFAULT_PRESENTATION) -> str:
+    """
+    Marks text as something wrong, such as a node the cluster cannot reach.
+
+    Returns the text unchanged when color is off, so CSV and pipes stay clean.
+    """
+    if not options.colors:
+        return text
+    return f"{ANSI_RED}{text}{ANSI_RESET}"
 
 
 def color_zero_glyph(glyph: str, options: PresentationOptions = DEFAULT_PRESENTATION) -> str:

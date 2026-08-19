@@ -304,6 +304,58 @@ def test_cluster_load_headers_follow_capacity_mode() -> None:
     assert eff_headers[10:12] == ["eff capacity\n[B]", "eff util\n[%]"]
 
 
+@pytest.mark.parametrize("host,expected", [
+    (replace(HOST1, up=False, excluded=True), "10.0.0.1 (DX)"),
+    (replace(HOST1, up=False), "10.0.0.1 (D)"),
+    (replace(HOST1, excluded=True), "10.0.0.1 (X)"),
+    (replace(HOST1, up=True), "10.0.0.1"),
+    (HOST1, "10.0.0.1"),
+])
+def test_a_node_says_when_it_is_down_or_out_of_balancing(host, expected) -> None:
+    """
+    A row of a node the cluster cannot reach, or one it is not balancing onto, reads as one:
+    its zeros are what the node is not reporting rather than load it does not hold. A
+    snapshot taken before the columns existed says nothing either way.
+    """
+    topology = build_topology(hosts={**HOSTS, HOST1_ID: host}, tables=TABLES, tablets=TABLETS)
+
+    levels = collect_levels(topology)
+    row = cluster_load.build_row(levels.nodes[0], levels, cluster_load.get_section_scales(levels.nodes),
+                                 PresentationOptions())
+
+    assert row[0] == expected
+
+
+def test_a_marked_node_is_colored_so_it_is_found_without_reading_the_mark() -> None:
+    topology = build_topology(hosts={**HOSTS, HOST1_ID: replace(HOST1, up=False)},
+                             tables=TABLES, tablets=TABLETS)
+
+    levels = collect_levels(topology)
+    scales = cluster_load.get_section_scales(levels.nodes)
+    colored = cluster_load.build_row(levels.nodes[0], levels, scales, PresentationOptions(colors=True))
+    working = cluster_load.build_row(levels.nodes[1], levels, scales, PresentationOptions(colors=True))
+
+    assert strip_ansi(colored[0]) == "10.0.0.1 (D)" and colored[0] != strip_ansi(colored[0])
+    assert working[0] == "10.0.0.2"
+
+
+def test_csv_names_the_status_in_a_column_of_its_own() -> None:
+    """
+    A flat table is read by column, so a note appended to the location would have to be
+    parsed back out of it.
+    """
+    topology = build_topology(hosts={**HOSTS, HOST1_ID: replace(HOST1, up=False, excluded=True)},
+                             tables=TABLES, tablets=TABLETS)
+    options = PresentationOptions(csv=True)
+
+    levels = collect_levels(topology)
+    columns = [column.header for column in cluster_load.get_columns(CapacityMode.EFFECTIVE, options)]
+    rows = cluster_load.build_section_rows(levels, levels.nodes, options)
+
+    assert columns[:4] == ["level", "rack", "location", "status"]
+    assert [row[2:4] for row in rows] == [["10.0.0.1", "DX"], ["10.0.0.2", None]]
+
+
 def test_csv_rows_name_their_level_and_rack() -> None:
     """
     Every CSV row names its section and rack, so the sections concatenate into one table.
