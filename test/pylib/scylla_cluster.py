@@ -309,44 +309,35 @@ class ScyllaCluster:
             if version is None:
                 version = get_current_version_description(self.scylla_exe)
 
-            # The sources the caller provides are merged with each other
-            # first and then into the base options, the way they were when
-            # this ran in two places: merge_cmdline_options is not
-            # associative for the __remove__ and __missing__ markers.
-            extra_cmdline_options = reduce(merge_cmdline_options, [
+            # Every source of cmdline options in one chain, in increasing
+            # order of priority.
+            cmdline_options = reduce(merge_cmdline_options, [
+                SCYLLA_CMDLINE_OPTIONS,
+                version.argv,
                 self.cmdline_options,
                 cmdline or [],
                 self.cmdline_options_override,
             ])
-            cmdline_options = merge_cmdline_options(
-                merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, version.argv),
-                extra_cmdline_options,
-            )
 
             # Sum of the basic server configuration and the user-provided
             # config options, with increasing priority (if two sources provide
             # the same option, the higher priority one wins):
             # 1. the defaults
             # 2. version-specific options
-            # 3. the defaults a suite or a test may override
-            # 4. cluster-wide options (the suite's "extra_scylla_config_options")
-            # 5. options from the test (when servers are added during a test)
-            extra_config_options = {
-                "authenticator": "PasswordAuthenticator",
-                "authorizer": "CassandraAuthorizer",
-                "tablets_initial_scale_factor": 4 if self.mode == "release" else 2,
-            } | self.config_options | extra_config
-
-            if property_file and "endpoint_snitch" not in extra_config_options:
-                extra_config_options["endpoint_snitch"] = "GossipingPropertyFileSnitch"
-
+            # 3. cluster-wide options (the suite's "extra_scylla_config_options")
+            # 4. options from the test (when servers are added during a test)
             config_options = make_scylla_conf(
                 mode=self.mode,
                 host_addr=ip_addr,
                 seed_addrs=seeds,
                 cluster_name=self.name,
                 server_encryption=server_encryption,
-            ) | version.config | extra_config_options
+            ) | version.config | self.config_options | extra_config
+
+            # make_scylla_conf() names no snitch of its own, so a snitch here
+            # is one the version, the suite or the test asked for.
+            if property_file and "endpoint_snitch" not in config_options:
+                config_options["endpoint_snitch"] = "GossipingPropertyFileSnitch"
 
             server = ScyllaServer(
                 logger=self.logger,

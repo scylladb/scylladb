@@ -112,6 +112,10 @@ def make_scylla_conf(mode: str, host_addr: str, seed_addrs: List[str], cluster_n
         'view_update_reader_concurrency_semaphore_serialize_limit_multiplier': 0,
         'view_update_reader_concurrency_semaphore_kill_limit_multiplier': 0,
 
+        'authenticator': 'PasswordAuthenticator',
+        'authorizer': 'CassandraAuthorizer',
+        'tablets_initial_scale_factor': 4 if mode == 'release' else 2,
+
         'auth_superuser_name': 'cassandra',
         # password is 'cassandra'
         'auth_superuser_salted_password': '$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/',
