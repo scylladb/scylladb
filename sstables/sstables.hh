@@ -1123,6 +1123,7 @@ public:
     std::optional<uint32_t> get_component_digest(component_type c) const;
 
     std::optional<db_clock::time_point> get_scrub_time() const;
+    void set_scrub_time(db_clock::time_point scrub_time);
 
     // Gets ratio of droppable tombstone. A tombstone is considered droppable here
     // for cells and tombstones expired before the time point "GC before", which

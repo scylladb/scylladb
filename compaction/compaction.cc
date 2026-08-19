@@ -2191,6 +2191,56 @@ static std::unique_ptr<compaction> make_compaction(compaction_group_view& table_
     return descriptor.options.visit(visitor_factory);
 }
 
+static future<std::vector<sstables::shared_sstable>> maybe_rewrite_with_timestamp(compaction_descriptor descriptor, compaction_group_view& table_s) {
+    auto creator = [&table_s] (sstables::shared_sstable sst) {
+        return table_s.make_sstable(sst->state(), sst->get_version());
+    };
+    auto modifier = [] (sstables::sstable& sst) {
+        sst.set_scrub_time(db_clock::now());
+    };
+
+    std::vector<sstables::shared_sstable> new_sstables;
+    std::exception_ptr ex;
+
+    try {
+        for (auto& sst : descriptor.sstables) {
+            // Automatic scrub only uses scrub in validate mode for sstables with
+            // a Scylla component.
+            // Nothing else currently may update the scrub time when using
+            // scrub in validate mode.
+            if (!sst->has_scylla_component()) {
+                on_internal_error(clogger, fmt::format("Cannot rewrite {} with updated scrub time, missing scylla-metadata component", sst));
+            }
+
+            auto rewritten = co_await sst->link_with_rewritten_component(creator, component_type::Scylla, modifier, sstables::update_sstable_id::yes);
+            new_sstables.push_back(rewritten);
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+
+    if (ex) {
+        for (auto& sst : descriptor.sstables) {
+            try {
+                co_await sst->recover_from_component_rewrite();
+            } catch (...) {
+                clogger.warn("Failed to recover from component rewrite: {}", std::current_exception());
+            }
+        }
+        for (auto& sst : new_sstables) {
+            co_await sst->unlink();
+        }
+        std::rethrow_exception(std::move(ex));
+    }
+
+    co_await seastar::async( [descriptor = std::move(descriptor), &new_sstables] mutable {
+        descriptor.replacer({std::move(descriptor.sstables), new_sstables});
+    });
+
+    co_return new_sstables;
+}
+
 static future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, sstables::read_monitor_generator& monitor_generator) {
     auto schema = table_s.schema();
     auto permit = table_s.make_compaction_reader_permit();
@@ -2213,8 +2263,12 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
         clogger.info("Finished scrubbing in validate mode {} - sstable is {}", sst->get_filename(), validation_errors == 0 ? "valid" : "invalid");
     }
 
-    using scrub = compaction_type_options::scrub;
-    if (validation_errors != 0 && descriptor.options.as<scrub>().quarantine_sstables == scrub::quarantine_invalid_sstables::yes) {
+    const auto& options = descriptor.options.as<compaction_type_options::scrub>();
+
+    std::vector<sstables::shared_sstable> new_sstables;
+    if (validation_errors == 0 && options.update_timestamp) {
+        new_sstables = co_await maybe_rewrite_with_timestamp(std::move(descriptor), table_s);
+    } else if (validation_errors != 0 && options.quarantine_sstables) {
         for (auto& sst : descriptor.sstables) {
             try {
                 co_await sst->change_state(sstables::sstable_state::quarantine);
@@ -2225,7 +2279,7 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
     }
 
     co_return compaction_result {
-        .new_sstables = {},
+        .new_sstables = std::move(new_sstables),
         .stats = {
             .ended_at = db_clock::now(),
             .validation_errors = validation_errors,
@@ -2236,7 +2290,7 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
 future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, compaction_progress_monitor& progress_monitor) {
     progress_monitor.set_generator(std::make_unique<compaction_read_monitor_generator>(table_s, use_backlog_tracker::no));
     auto d = defer([&] noexcept { progress_monitor.reset_generator(); });
-    auto res = co_await scrub_sstables_validate_mode(descriptor, cdata, table_s, *progress_monitor._generator);
+    auto res = co_await scrub_sstables_validate_mode(std::move(descriptor), cdata, table_s, *progress_monitor._generator);
     co_return res;
 }
 

@@ -1624,6 +1624,14 @@ std::optional<db_clock::time_point> sstable::get_scrub_time() const {
     return metadata ? metadata->get_scrub_time() : std::nullopt;
 }
 
+void sstable::set_scrub_time(db_clock::time_point scrub_time) {
+    if (!has_scylla_component()) {
+        on_internal_error(sstlog, fmt::format("Cannot set scrub time for sstable {}, missing scylla-metadata component", shared_from_this()));
+    }
+    auto& metadata = _components->scylla_metadata;
+    metadata->set_scrub_time(scrub_time);
+}
+
 int64_t sstable::update_repaired_at(int64_t repaired_at) {
     const stats_metadata& old_stats = get_stats_metadata();
     auto old_repaired_at = old_stats.repaired_at;
