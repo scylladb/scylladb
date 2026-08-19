@@ -31,10 +31,10 @@ import threading
 import random
 import re
 
-from test.cluster.util import get_replication
+from test.cluster.util import get_replication, get_topology_coordinator, release_tablets_and_await_alter, raise_if_alter_ended
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
-from test.pylib.rest_client import inject_error
+from test.pylib.rest_client import inject_error, read_barrier
 from test.pylib.tablets import get_all_tablet_replicas
 from test.pylib.tablets import get_tablet_replica
 
@@ -257,6 +257,69 @@ async def test_alternator_ttl_multinode_expiration(manager: ScyllaClusterManager
             break
         time.sleep(0.1)
     assert items == 0
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_alternator_ttl_tablet_behind_rf_increase(manager: ScyllaClusterManager):
+    """A numeric RF increase switches the schema RF first and rebuilds the tablets after,
+       so until its rebuild ends a tablet has one replica while the schema RF is 2.
+       get_secondary_replica() throws for such a tablet. The TTL scan of a shard asked for
+       it at the first tablet owned by another shard, aborted, and never reached the
+       tablets after it, so their items did not expire.
+    """
+    # Numeric replication factors are only kept, and changed, when rack lists are not enforced.
+    config = {**alternator_config, 'rf_rack_valid_keyspaces': False}
+    servers = await manager.servers_add(2, config=config, auto_rack_dc='dc1')
+    alternator = get_alternator(servers[0].ip_addr)
+    table = alternator.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'N'}],
+        Tags=[{'Key': 'system:initial_tablets', 'Value': '8'}])
+    table.meta.client.update_time_to_live(TableName=table.name, TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})
+    ks = 'alternator_' + table.name
+    cql = manager.get_cql()
+    assert get_replication(cql, ks)['dc1'] == '1'
+
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await manager.find_server_by_host_id(servers, coord)
+    await manager.api.enable_injection(coord_serv.ip_addr, "write_both_read_new_tablet_wait", one_shot=False)
+    alter = cql.run_async(f"ALTER KEYSPACE \"{ks}\" WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 2}}")
+    body_failed = True
+    try:
+        table_id = await manager.get_table_or_view_id(ks, table.name)
+        # Asked of every server: the read barrier makes each TTL scanner see the stage.
+        async def tablets_held():
+            raise_if_alter_ended(alter)
+            for server in servers:
+                await read_barrier(manager.api, server.ip_addr)
+                host = cql.cluster.metadata.get_host(server.ip_addr)
+                rows = await cql.run_async(f"SELECT stage, replicas FROM system.tablets WHERE table_id = {table_id}", host=host)
+                if any(row.stage != 'write_both_read_new' for row in rows):
+                    return None
+            return rows
+        rows = await wait_for(tablets_held, time.time() + 60)
+        assert get_replication(cql, ks)['dc1'] == '2'
+        # A shard's scan aborted at its first tablet owned by another shard, so with more
+        # than one owner some tablet was never reached by its owner.
+        assert all(len(row.replicas) == 1 for row in rows)
+        assert len({tuple(row.replicas[0]) for row in rows}) > 1
+
+        # 100 partitions leave no tablet empty with high probability.
+        expiration = int(time.time()) - 10
+        with table.batch_writer() as batch:
+            for p in range(100):
+                batch.put_item({'p': p, 'expiration': expiration})
+        async def all_expired():
+            response = table.scan(ConsistentRead=True)
+            items = len(response['Items'])
+            while items == 0 and 'LastEvaluatedKey' in response:
+                response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'], ConsistentRead=True)
+                items += len(response['Items'])
+            return True if items == 0 else None
+        await wait_for(all_expired, time.time() + 60)
+        body_failed = False
+    finally:
+        await release_tablets_and_await_alter(manager, coord_serv, "write_both_read_new_tablet_wait", alter, body_failed)
 
 async def test_localnodes_broadcast_rpc_address(manager: ScyllaClusterManager):
     """Test that if the "broadcast_rpc_address" of a node is set, the
