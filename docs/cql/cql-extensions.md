@@ -331,6 +331,40 @@ is referenced twice), ScyllaDB and Cassandra treat it differently:
 ScyllaDB can revert to the Cassandra treatment by setting the configuration item
 `cql_duplicate_bind_variable_names_refer_to_same_variable` to `false`.
 
+### Name of the bind variable of an IN restriction
+
+The right-hand side of an `IN` restriction (example: `WHERE c IN ?`) is a synthetic bind
+variable whose name is reported to drivers in the prepared statement metadata. Cassandra
+names it `in(column)`, while ScyllaDB names it `IN(column)`.
+
+Applications that bind this variable by name, and want the Cassandra spelling, can get it
+by setting the configuration item `cql_in_bind_variable_name_uses_uppercase_operator` to
+`false`.
+
+The name is chosen when a statement is prepared, and the item is part of the prepared
+statement cache key. Statements prepared after a change on a running node therefore get
+fresh cache entries and report the new name. Executing a statement prepared under the
+previous setting makes the node report it as unknown, upon which drivers prepare it
+again transparently.
+
+To change the item on a live cluster, set it on every node and have applications pick up
+the new name from the refreshed prepared statement metadata. Until every node has been
+switched, different coordinators can report different names for the same query, so
+applications should be able to bind either spelling while the change is being rolled out.
+
+Leaving nodes with different values for longer than that is not supported. Most drivers
+resolve the name to a position when the values are bound, using the metadata of the node the
+statement was prepared against, and then send the values positionally; those are unaffected
+by a coordinator that would have spelled the name differently. A driver that instead sends
+the names together with the values leaves the matching to the coordinator, which compares
+them against its own copy of the prepared statement. A request reaching a node that prepared
+the statement under the other spelling then fails with
+`Missing value for bind marker with name: ...` instead of falling back to the other spelling.
+
+The `NOT IN` restriction is a ScyllaDB extension with no Cassandra counterpart, and its
+bind variable follows the same convention: `NOT IN(column)`, or `not in(column)` when the
+operator is spelled in lowercase.
+
 ### Lists elements for filtering
 
 Subscripting a list in a WHERE clause is supported as are maps.
