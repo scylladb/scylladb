@@ -1270,15 +1270,17 @@ future<utils::chunked_vector<logstor::segment_snapshot>> storage_group::take_log
         co_return co_await _main_cg->take_logstor_snapshot();
     }
     utils::chunked_vector<logstor::segment_snapshot> snp;
+    auto append = [&snp] (utils::chunked_vector<logstor::segment_snapshot> cg_snp) {
+        snp.insert(snp.end(), std::make_move_iterator(cg_snp.begin()), std::make_move_iterator(cg_snp.end()));
+    };
+    append(co_await _main_cg->take_logstor_snapshot());
     for (const auto& cg : _merging_groups) {
         if (!cg->empty()) {
-            auto cg_snp = co_await cg->take_logstor_snapshot();
-            snp.insert(snp.end(), std::make_move_iterator(cg_snp.begin()), std::make_move_iterator(cg_snp.end()));
+            append(co_await cg->take_logstor_snapshot());
         }
     }
     for (const auto& cg : _split_ready_groups) {
-        auto cg_snp = co_await cg->take_logstor_snapshot();
-        snp.insert(snp.end(), std::make_move_iterator(cg_snp.begin()), std::make_move_iterator(cg_snp.end()));
+        append(co_await cg->take_logstor_snapshot());
     }
     co_return std::move(snp);
 }
