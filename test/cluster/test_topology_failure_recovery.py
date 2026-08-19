@@ -7,7 +7,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import BANNED_NOTIFICATION, new_test_keyspace
 import pytest
 import logging
 import asyncio
@@ -95,7 +95,7 @@ async def test_topology_streaming_failure(request, manager: ScyllaClusterManager
     s = await manager.server_add(start=False, config={
         'error_injections_at_startup': ['stream_ranges_fail']
     })
-    await manager.server_start(s.server_id, expected_error="Bootstrap failed. See earlier errors")
+    await manager.server_start(s.server_id, expected_error=f"Bootstrap failed. See earlier errors|{BANNED_NOTIFICATION}")
     servers = await get_running_servers(manager)
     assert s not in servers
     matches = [await log.grep("raft_topology - rollback.*after bootstrapping failure, moving transition state to left token ring",
@@ -107,7 +107,7 @@ async def test_topology_streaming_failure(request, manager: ScyllaClusterManager
     s = await manager.server_add(start=False)
     await inject_error_on(manager, "raft_topology_barrier_fail", servers)
     try:
-        await manager.server_start(s.server_id, expected_error="Bootstrap failed. See earlier errors")
+        await manager.server_start(s.server_id, expected_error=f"Bootstrap failed. See earlier errors|{BANNED_NOTIFICATION}")
         servers = await get_running_servers(manager)
         assert s not in servers
         matches = [await log.grep("raft_topology - rollback.*after bootstrapping failure, moving transition state to left token ring",
@@ -131,7 +131,7 @@ async def test_topology_streaming_failure(request, manager: ScyllaClusterManager
     s = await manager.server_add(start=False, replace_cfg=replace_cfg, config={
         'error_injections_at_startup': ['stream_ranges_fail']
     })
-    await manager.server_start(s.server_id, expected_error="Replace failed. See earlier errors")
+    await manager.server_start(s.server_id, expected_error=f"Replace failed. See earlier errors|{BANNED_NOTIFICATION}")
     servers = await get_running_servers(manager)
     assert s not in servers
     matches = [await log.grep("raft_topology - rollback.*after replacing failure, moving transition state to left token ring",
