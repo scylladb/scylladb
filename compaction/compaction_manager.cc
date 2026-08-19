@@ -1822,6 +1822,7 @@ future<bool> compaction_manager::perform_offstrategy(compaction_group_view& t, t
 class rewrite_sstables_compaction_task_executor : public sstables_task_executor {
     compaction_type_options _options;
     owned_ranges_ptr _owned_ranges_ptr;
+protected:
     compacting_sstable_registration _compacting;
     compaction_manager::can_purge_tombstones _can_purge;
 
@@ -1898,6 +1899,76 @@ protected:
             // retry current sstable or rethrows exception
             if ((co_await maybe_retry(std::move(ex), true)) == stop_iteration::yes) {
                 co_return compaction_result{};
+            }
+        }
+    }
+};
+
+class automatic_rewrite_sstables_compaction_task_executor : public rewrite_sstables_compaction_task_executor {
+    static compaction_type_options make_scrub_options() {
+        return compaction_type_options::make_scrub(
+            compaction_type_options::scrub::mode::abort,
+            compaction_type_options::scrub::quarantine_invalid_sstables::yes,
+            compaction_type_options::scrub::drop_unfixable_sstables::no,
+            compaction_type_options::scrub::update_scrub_time::yes
+        );
+    }
+
+public:
+    automatic_rewrite_sstables_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view* t, tasks::task_id parent_id, owned_ranges_ptr owned_ranges_ptr,
+                                     sstables::shared_sstable sst, compacting_sstable_registration compacting,
+                                     compaction_manager::can_purge_tombstones can_purge)
+        : rewrite_sstables_compaction_task_executor(mgr, do_throw_if_stopping, t, parent_id, make_scrub_options(), std::move(owned_ranges_ptr), {sst}, std::move(compacting), can_purge)
+    {}
+
+    virtual tasks::is_internal is_internal() const noexcept override {
+        return tasks::is_internal::yes;
+    }
+protected:
+    virtual future<compaction_result> rewrite_sstable(const sstables::shared_sstable sst) override {
+        co_await coroutine::switch_to(_cm.maintenance_sg());
+
+        for (;;) {
+            switch_state(state::active);
+
+            auto descriptor = make_descriptor(sst);
+
+            // Releases reference to cleaned sstable such that respective used disk space can be freed.
+            auto on_replace = _compacting.update_on_sstable_replacement();
+
+            setup_new_compaction(descriptor.run_identifier);
+
+            std::exception_ptr ex;
+            try {
+                compaction_result res = co_await compact_sstables_and_update_history(std::move(descriptor), _compaction_data, on_replace, _can_purge);
+                _cm.reevaluate_postponed_compactions();
+                finish_compaction();
+                co_return res;  // done with current sstable
+            } catch (scrub_abort_invalid_sstable_compaction_aborted_exception& e) {
+                cmlog.debug("Automatic scrub in abort mode found sstable {} invalid due to: {}", sst, e);
+            } catch (...) {
+                ex = std::current_exception();
+            }
+
+            compaction_result res;
+
+            if (!ex) {
+                // Scrub found an error and aborted due to that.
+                res.stats.validation_errors++;
+
+                try {
+                    co_await sst->change_state(sstables::sstable_state::quarantine);
+                    finish_compaction();
+                    co_return res;
+                } catch (...) {
+                    ex = std::current_exception();
+                    cmlog.error("Failed to quarantine {} due to: {}", sst, ex);
+                }
+            }
+
+            finish_compaction(state::failed);
+            if ((co_await maybe_retry(std::move(ex), true)) == stop_iteration::yes) {
+                co_return res;
             }
         }
     }
