@@ -10,8 +10,9 @@ import pytest
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.cluster.util import (check_token_ring_and_group0_consistency, wait_for_token_ring_and_group0_consistency,
-                               get_coordinator_host, get_coordinator_host_ids, wait_new_coordinator_elected,
+from test.cluster.util import (BANNED_NOTIFICATION, check_token_ring_and_group0_consistency,
+                               wait_for_token_ring_and_group0_consistency, get_coordinator_host,
+                               get_coordinator_host_ids, wait_new_coordinator_elected,
                                wait_for_no_pending_topology_transition)
 
 
@@ -105,8 +106,7 @@ async def test_kill_coordinator_during_op(manager: ManagerClient, failure_detect
     new_node = await manager.server_add(start=False, config=config, cmdline=cmdline)
     num_elections = len(await get_coordinator_host_ids(manager))
     await manager.api.enable_injection(coordinator_host.ip_addr, "crash_coordinator_before_stream", one_shot=True)
-    await manager.server_start(new_node.server_id,
-                               expected_error="Startup failed: std::runtime_error")
+    await manager.server_start(new_node.server_id, expected_error=f"Startup failed: std::runtime_error|{BANNED_NOTIFICATION}")
     await wait_new_coordinator_elected(manager, num_elections + 1, time.time() + scale_timeout(60))
     await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
     await manager.server_restart(coordinator_host.server_id, wait_others=1)
@@ -124,7 +124,7 @@ async def test_kill_coordinator_during_op(manager: ManagerClient, failure_detect
     await manager.api.enable_injection(coordinator_host.ip_addr, "crash_coordinator_before_stream", one_shot=True)
     replace_cfg = ReplaceConfig(replaced_id = node_to_replace_srv_id, reuse_ip_addr = False, use_host_id = True)
     new_node = await manager.server_add(start=False, config=config, replace_cfg=replace_cfg, cmdline=cmdline)
-    await manager.server_start(new_node.server_id, expected_error="Replace failed. See earlier errors")
+    await manager.server_start(new_node.server_id, expected_error=f"Replace failed. See earlier errors|{BANNED_NOTIFICATION}")
     await wait_new_coordinator_elected(manager, num_elections + 1, time.time() + scale_timeout(60))
     await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
     logger.debug("Start old coordinator node")
