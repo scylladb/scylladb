@@ -17,8 +17,8 @@ namespace cql3::statements {
 
 /// ANN ordering metadata resolved during prepare.
 struct ann_ordering_info {
-    secondary_index::index _index;
-    raw::select_statement::prepared_ann_ordering_type _prepared_ann_ordering;
+    secondary_index::index index;
+    raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering;
     bool is_rescoring_enabled;
 };
 
@@ -48,7 +48,7 @@ select_statement::ordering_comparator_type get_similarity_ordering_comparator(
         uint32_t similarity_column_index);
 
 class vector_indexed_table_select_statement : public external_index_select_statement {
-    prepared_ann_ordering_type _prepared_ann_ordering;
+    ann_ordering_info _ann_ordering_info;
     external_search::prepared_filter _prepared_filter;
 
 public:
@@ -57,14 +57,14 @@ public:
     static ::shared_ptr<cql3::statements::select_statement> prepare(data_dictionary::database db, schema_ptr schema, uint32_t bound_terms,
             lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
             ::shared_ptr<const restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
-            ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
-            std::optional<expr::expression> per_partition_limit, cql_stats& stats, const secondary_index::index& index, std::unique_ptr<cql3::attributes> attrs);
+            ordering_comparator_type ordering_comparator, std::optional<expr::expression> limit,
+            std::optional<expr::expression> per_partition_limit, cql_stats& stats, ann_ordering_info ordering_info, std::unique_ptr<cql3::attributes> attrs);
 
     vector_indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
             ::shared_ptr<selection::selection> selection, ::shared_ptr<const restrictions::statement_restrictions> restrictions,
             ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed, ordering_comparator_type ordering_comparator,
-            prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit, std::optional<expr::expression> per_partition_limit,
-            cql_stats& stats, const secondary_index::index& index, external_search::prepared_filter prepared_filter, std::unique_ptr<cql3::attributes> attrs);
+            std::optional<expr::expression> limit, std::optional<expr::expression> per_partition_limit,
+            cql_stats& stats, ann_ordering_info ordering_info, external_search::prepared_filter prepared_filter, std::unique_ptr<cql3::attributes> attrs);
 
 private:
     std::string_view index_search_type_name() const override {
