@@ -1715,14 +1715,12 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla}, *sid).get();
         new_sst->copy_components(*this).get();
 
-        modifier(*new_sst);
-
         // FIXME: Optimize by re-reading metadata only if _components->scylla_metadata was modified after loading.
         // If unchanged, reuse the existing _components->scylla_metadata instead.
         scylla_metadata metadata;
         read_simple<component_type::Scylla>(metadata).get();
 
-        new_sst->write_component_with_metadata(component, std::move(metadata));
+        new_sst->write_component_with_metadata_and_modifier(component, std::move(metadata), std::move(modifier));
 
         new_sst->_shards = this->_shards;
         new_sst->seal_sstable(false).get();
@@ -1735,20 +1733,19 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 
 // Rewrites a single SSTable component along with updated Scylla metadata.
 // This is used when modifying components (e.g., Statistics) without rewriting the entire SSTable.
-// 1. Write the component file (e.g., Statistics-*.db)
+// 1. Update Scylla metadata sstable identifier.
+// 2. Set the in-memory Scylla metadata to the new metadata
+// 3. Apply the modifier.
+// 4. Write the component file (e.g., Statistics-*.db)
 //    - This calculates and stores the component's digest in _components_digests.map[type]
-// 2. Update the Scylla metadata's ComponentsDigests map with the new component digest
-// 3. Calculate the Scylla metadata's own digest based on its updated data
-// 4. Write the Scylla metadata component file
-// 5. Set the in-memory Scylla metadata to the new metadata
-void sstable::write_component_with_metadata(component_type type, scylla_metadata metadata) {
+// 5. Update the Scylla metadata's ComponentsDigests map with the new component digest
+// 6. Calculate the Scylla metadata's own digest based on its updated data
+// 7. Write the Scylla metadata component file
+void sstable::write_component_with_metadata_and_modifier(component_type type, scylla_metadata metadata, std::function<void(sstable&)> modifier) {
     if (!is_component_rewrite_supported(type)) {
-        on_internal_error(sstlog, "Only Statistics component can be rewritten.");
+        on_internal_error(sstlog, "Only Statistics and Scylla components can be rewritten.");
     }
 
-    write_component(type);
-
-    metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
     // The sstable's identifier is authoritative: make sure the sstable_identifier
     // we store in scylla_metadata is the one the sstable is known by.  This must
     // happen before the digest below is computed over metadata.data.
@@ -1758,15 +1755,26 @@ void sstable::write_component_with_metadata(component_type type, scylla_metadata
                 get_filename(), component_name(*this, type)));
     }
     metadata.set_sstable_identifier(*sid);
-    metadata.digest = serialized_checksum(_version, metadata.data);
-
-    write_simple<component_type::Scylla>(metadata);
+    metadata.digest = std::nullopt;
 
     _components->scylla_metadata = std::move(metadata);
+    auto& stored_metadata = *_components->scylla_metadata;
+
+    modifier(*this);
+
+    if (type != component_type::Scylla) {
+        write_component(type);
+        stored_metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
+    }
+
+    stored_metadata.digest = serialized_checksum(_version, stored_metadata.data);
+
+    write_simple<component_type::Scylla>(stored_metadata);
+
     // Keep the cached _features in sync with the metadata we just wrote,
     // mirroring read_scylla_metadata(). Otherwise a rewritten sstable would
     // report zeroed features (e.g. losing ShadowableTombstones).
-    _features = _components->scylla_metadata->get_features();
+    _features = stored_metadata.get_features();
 }
 
 future<> sstable::read_summary() noexcept {
@@ -2150,6 +2158,7 @@ void sstable::disable_component_memory_reload() {
 bool sstable::is_component_rewrite_supported(component_type type) {
     switch (type) {
     case component_type::Statistics:
+    case component_type::Scylla:
         return true;
     default:
         return false;
