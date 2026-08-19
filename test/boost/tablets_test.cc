@@ -33,6 +33,7 @@
 #include "schema/schema_builder.hh"
 
 #include "replica/tablets.hh"
+#include "compaction/compaction_manager.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include "locator/tablets.hh"
 #include "service/tablet_allocator.hh"
@@ -5051,6 +5052,114 @@ SEASTAR_THREAD_TEST_CASE(basic_tablet_storage_splitting_test) {
             auto& table = db.find_column_family("ks", "cf");
             return make_ready_future<bool>(table.all_storage_groups_split());
         }, bool(false), std::logical_or<bool>()).get(), true);
+    }, std::move(cfg)).get();
+}
+
+// Compaction groups created after the table was started must contribute to the
+// compaction backlog.
+//
+// replica::compaction_group's constructor builds a backlog tracker but never
+// registers it with compaction_backlog_manager. The only registration path is
+// table::set_compaction_strategy(), which runs at table start and on schema
+// change, so it only ever covers the compaction groups that exist at that
+// moment. The groups a tablet split creates keep a live, correctly charged
+// tracker that nothing ever reads, and the shard reports no compaction backlog
+// at all while sstables pile up in them.
+//
+// The split here is driven the same way a user would drive it: ALTER TABLE
+// raising min_tablet_count, then the tablet scheduler.
+SEASTAR_THREAD_TEST_CASE(test_compaction_backlog_of_compaction_groups_created_by_tablet_split) {
+    auto cfg = tablet_cql_test_config();
+    cfg.initial_tablets = std::bit_floor(smp::count);
+    cfg.db_config->tablets_per_shard_goal.set(10000); // Inhibit scaling-down of the count.
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        // Pin the strategy: the default, ICS, only refreshes its backlog contribution
+        // when a compaction exhausts an input run, so a table that merely accumulates
+        // flushed sstables reports no backlog at all on this branch. Fixed by
+        // 817c3fb0659 ("compaction: refresh ICS backlog on flush, not only on
+        // compaction completion"), which is not here.
+        e.execute_cql("CREATE TABLE cf (pk int, ck int, v text, PRIMARY KEY (pk, ck))"
+                      " WITH compaction = {'class': 'SizeTieredCompactionStrategy'}").get();
+        auto table = e.local_db().find_column_family("ks", "cf").schema()->id();
+
+        // Auto compaction would consume the very backlog this test observes.
+        e.db().invoke_on_all([] (replica::database& db) {
+            return db.find_column_family("ks", "cf").disable_auto_compaction();
+        }).get();
+
+        auto total_backlog = [&e] {
+            return e.db().map_reduce0([] (replica::database& db) {
+                return make_ready_future<double>(db.get_compaction_manager().backlog());
+            }, double(0), std::plus<double>()).get();
+        };
+        auto total_sstables = [&e] {
+            return e.db().map_reduce0([] (replica::database& db) {
+                return make_ready_future<int64_t>(db.find_column_family("ks", "cf").sstables_count());
+            }, int64_t(0), std::plus<int64_t>()).get();
+        };
+
+        // Each round produces one sstable per compaction group holding data. More than
+        // min_compaction_threshold sstables of similar size, so the size-tiered backlog
+        // tracker finds an interesting bucket.
+        auto write_sstables = [&e] (int rounds, int key_base) {
+            for (int round = 0; round < rounds; round++) {
+                for (int i = 0; i < 256; i++) {
+                    e.execute_cql(format("INSERT INTO cf (pk, ck, v) VALUES ({}, {}, 'payload to give the sstable some size')",
+                                         key_base + round * 256 + i, round)).get();
+                }
+                e.db().invoke_on_all([] (replica::database& db) {
+                    return db.find_column_family("ks", "cf").flush();
+                }).get();
+            }
+        };
+
+        write_sstables(8, 0);
+
+        testlog.info("before split: sstables={} backlog={}", total_sstables(), total_backlog());
+        // Sanity check: the compaction group that existed when the table was started is
+        // registered, so the backlog does account for accumulated work.
+        BOOST_REQUIRE_GT(total_backlog(), 0.0);
+
+        testlog.info("Requesting a tablet split...");
+        auto new_tablet_count = 2 * std::bit_floor(smp::count);
+        e.execute_cql(format("ALTER TABLE ks.cf WITH tablets = {{'min_tablet_count': '{}'}}", new_tablet_count)).get();
+
+        auto& stm = e.shared_token_metadata().local();
+        shared_load_stats load_stats;
+        stm.get()->get_topology().for_each_node([&] (const locator::node& node) {
+            load_stats.set_capacity(node.host_id(), service::default_target_tablet_size * node.get_shard_count());
+        });
+        // Sized at exactly the target, so that the split is driven by min_tablet_count
+        // alone. The allocator skips any table it has no size for.
+        load_stats.set_size(table, service::default_target_tablet_size * stm.get()->tablets().get_tablet_map(table).tablet_count());
+
+        // Emit the split resize decision. The replica's own split monitor notices it
+        // and splits the storage groups in the background.
+        apply_resize_decisions(e, load_stats);
+
+        // Wait for the replica to finish splitting, like the topology coordinator does.
+        auto deadline = lowres_clock::now() + std::chrono::minutes(1);
+        while (!e.db().map_reduce0([] (replica::database& db) {
+                    return make_ready_future<bool>(db.find_column_family("ks", "cf").all_storage_groups_split());
+                }, true, std::logical_and<bool>()).get()) {
+            BOOST_REQUIRE(lowres_clock::now() < deadline);
+            seastar::sleep(std::chrono::milliseconds(100)).get();
+        }
+
+        // Finalize the resize: the tablet count doubles and the groups created for the
+        // split become the storage groups of the new tablets.
+        load_stats.set_split_ready_seq_number(table, stm.get()->tablets().get_tablet_map(table).resize_decision().sequence_number);
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(stm.get()->tablets().get_tablet_map(table).tablet_count(), new_tablet_count);
+
+        // Fill the compaction groups that the split created.
+        write_sstables(8, 1000000);
+
+        auto sstables_after = total_sstables();
+        auto backlog_after = total_backlog();
+        testlog.info("after split: sstables={} backlog={}", sstables_after, backlog_after);
+        BOOST_REQUIRE_GT(sstables_after, 0);
+        BOOST_REQUIRE_GT(backlog_after, 0.0);
     }, std::move(cfg)).get();
 }
 

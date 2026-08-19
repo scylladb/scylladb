@@ -81,11 +81,18 @@ public:
     void copy_ongoing_charges(compaction_backlog_tracker& new_bt, bool move_read_charges = true) const;
     void revert_charges(sstables::shared_sstable sst);
 
+    // Stops tracking. A disabled tracker reports the "backlog unknown" sentinel, which
+    // makes the controller fall back to maximum shares. Used when the tracker failed
+    // and its state can no longer be trusted.
     void disable() {
         _impl = {};
         _ongoing_writes = {};
         _ongoing_compactions = {};
     }
+
+    // The tracked compaction group is gone. Stops tracking and stops contributing to
+    // the manager's backlog altogether, as there is no work left to account for.
+    void retire();
 private:
     // Returns true if this SSTable can be added or removed from the tracker.
     bool sstable_belongs_to_tracker(const sstables::shared_sstable& sst);
