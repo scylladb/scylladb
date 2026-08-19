@@ -137,6 +137,12 @@ constexpr auto CORRECT_BM25_RESPONSE_FOR_TEST_TABLE = R"({
     "scores": [0.1, 0.2]
 })";
 
+// A sample correct highlight response for two documents: one with a fragment, one without.
+// The reply is aligned with the documents that were sent and carries no primary keys.
+constexpr auto CORRECT_HIGHLIGHT_RESPONSE_FOR_TWO_DOCUMENTS = R"({
+    "highlights": ["a <b>fox</b> jumped", null]
+})";
+
 inline schema_ptr make_test_schema(const seastar::sstring& ks = "ks", const seastar::sstring& cf = "idx") {
     return schema_builder(this_smp_shard_count(), ks, cf)
             .with_column("pk1", byte_type, column_kind::partition_key)
