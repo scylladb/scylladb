@@ -22,6 +22,7 @@
 #include <charconv>
 #include <exception>
 #include <fmt/ranges.h>
+#include <ranges>
 #include <regex>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/metrics.hh>
@@ -55,6 +56,8 @@ using operation_type = httpd::operation_type;
 using port_number = vector_search::vector_store_client::port_number;
 using primary_key = vector_search::primary_key;
 using primary_keys = vector_search::vector_store_client::primary_keys;
+using documents = vector_search::vector_store_client::documents;
+using highlights = vector_search::vector_store_client::highlights;
 using service_reply_format_error = vector_search::vector_store_client::service_reply_format_error;
 using uri = vector_search::uri;
 
@@ -220,6 +223,49 @@ auto write_bm25_json(query_string query, limit limit) -> json_content {
 
 auto read_bm25_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, fts_error> {
     return read_scored_primary_keys_json(json, schema, "scores");
+}
+
+auto write_highlight_json(query_string query, documents const& docs) -> json_content {
+    auto quoted_docs = docs | std::views::transform([](auto const& doc) {
+        return rjson::from_string(doc);
+    });
+    return seastar::format(R"({{"query":{},"documents":[{}]}})", rjson::from_string(query), fmt::join(quoted_docs, ","));
+}
+
+auto read_highlight_json(rjson::value const& json, std::size_t documents_sent) -> std::expected<highlights, fts_error> {
+    auto const* fragments_json = rjson::find(json, "highlights");
+    if (fragments_json == nullptr) {
+        vslogger.error("Vector Store returned invalid JSON: missing 'highlights'");
+        return std::unexpected{service_reply_format_error{}};
+    }
+    if (!fragments_json->IsArray()) {
+        vslogger.error("Vector Store returned invalid JSON: 'highlights' is not an array");
+        return std::unexpected{service_reply_format_error{}};
+    }
+    auto const& fragments_arr = fragments_json->GetArray();
+
+    // The fragments are matched to the documents by position and by nothing else, so a reply of a
+    // different length says nothing about which document each one came from.
+    if (fragments_arr.Size() != documents_sent) {
+        vslogger.error("Vector Store returned invalid JSON: 'highlights' has {} entries for {} documents", fragments_arr.Size(), documents_sent);
+        return std::unexpected{service_reply_format_error{}};
+    }
+
+    auto fragments = highlights{};
+    fragments.reserve(fragments_arr.Size());
+    for (auto const& fragment : fragments_arr) {
+        if (fragment.IsNull()) {
+            // The index found nothing worth marking in that document. A distinct answer from
+            // the empty string, and the caller must keep it distinct.
+            fragments.emplace_back(std::nullopt);
+        } else if (fragment.IsString()) {
+            fragments.emplace_back(sstring(rjson::to_string_view(fragment)));
+        } else {
+            vslogger.error("Vector Store returned invalid JSON: 'highlights[{}]'={} is neither a string nor null", fragments.size(), rjson::print(fragment));
+            return std::unexpected{service_reply_format_error{}};
+        }
+    }
+    return std::move(fragments);
 }
 
 bool should_vector_store_service_be_disabled(std::vector<sstring> const& uris) {
@@ -436,6 +482,38 @@ struct vector_store_client::impl {
         }
     }
 
+    auto highlight(keyspace_name keyspace, index_name name, query_string fts_query, documents docs, abort_source& as)
+            -> future<std::expected<highlights, fts_error>> {
+        if (is_disabled()) {
+            vslogger.error("Disabled Vector Store while calling highlight");
+            co_return std::unexpected{disabled{}};
+        }
+
+        auto path = format("/api/v1/indexes/{}/{}/highlight", keyspace, name);
+        auto content = write_highlight_json(std::move(fts_query), docs);
+
+        auto resp = co_await request(operation_type::POST, std::move(path), std::move(content), as);
+        if (!resp) {
+            co_return std::unexpected{std::visit(
+                    [](auto&& err) {
+                        return fts_error{err};
+                    },
+                    resp.error())};
+        }
+
+        if (resp->status != status_type::ok) {
+            auto error_content = decode_error_message(resp->content);
+            vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status, error_content);
+            co_return std::unexpected{service_error{resp->status, std::move(error_content)}};
+        }
+
+        try {
+            co_return read_highlight_json(rjson::parse(std::move(resp->content)), docs.size());
+        } catch (const rjson::error& e) {
+            vslogger.error("Vector Store returned invalid JSON: {}", e.what());
+            co_return std::unexpected{service_reply_format_error{}};
+        }
+    }
 
     future<clients::request_result> request(
             seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content, seastar::abort_source& as) {
@@ -495,6 +573,11 @@ auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_pt
 auto vector_store_client::bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, abort_source& as)
         -> future<std::expected<primary_keys, fts_error>> {
     return _impl->bm25(std::move(keyspace), std::move(name), schema, std::move(fts_query), limit, as);
+}
+
+auto vector_store_client::highlight(keyspace_name keyspace, index_name name, query_string fts_query, documents documents, abort_source& as)
+        -> future<std::expected<highlights, fts_error>> {
+    return _impl->highlight(std::move(keyspace), std::move(name), std::move(fts_query), std::move(documents), as);
 }
 
 void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval) {

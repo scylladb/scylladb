@@ -1249,3 +1249,111 @@ SEASTAR_TEST_CASE(vector_store_client_test_bm25_request) {
     co_await vs.stop();
     co_await server->stop();
 }
+
+SEASTAR_TEST_CASE(vector_store_client_test_highlight_aborted) {
+    auto server = co_await make_unavailable_server();
+    auto cfg = config();
+    cfg.vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
+    auto vs = vector_store_client{cfg};
+    auto as = abort_source_timeout();
+    configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&server](auto const& host) -> future<std::optional<inet_address>> {
+        BOOST_CHECK_EQUAL(host, "good.authority.here");
+        co_await sleep(milliseconds(100));
+        co_return inet_address(server->host());
+    });
+
+    vs.start_background_tasks();
+
+    auto fragments = co_await vs.highlight("ks", "idx", "hello world", {"hello there", "world at large"}, as.reset(milliseconds(10)));
+    BOOST_REQUIRE(!fragments);
+    BOOST_CHECK(std::holds_alternative<vector_store_client::aborted>(fragments.error()));
+
+    co_await vs.stop();
+    co_await server->stop();
+}
+
+SEASTAR_TEST_CASE(vector_store_client_test_highlight_request) {
+    auto server = co_await make_vs_mock_server(vs_mock_server::mode::highlight);
+    auto cfg = config();
+    cfg.vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
+    auto vs = vector_store_client{cfg};
+    auto as = abort_source_timeout();
+    configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"good.authority.here", "127.0.0.1"}});
+
+    vs.start_background_tasks();
+
+    // the query and every document must reach the request JSON-escaped - the C++ literals below
+    // hold real quote, backslash and newline characters
+    auto fragments = co_await vs.highlight("ks", "idx", "quote\"back\\slash\nnewline", {"a \"quoted\" doc", "second"}, as.reset());
+    BOOST_REQUIRE(!server->search_requests().empty());
+    BOOST_REQUIRE_EQUAL(server->search_requests().back().body,
+            R"({"query":"quote\"back\\slash\nnewline","documents":["a \"quoted\" doc","second"]})");
+    BOOST_REQUIRE(fragments);
+
+    // server responds with 404 - client should return service_error
+    server->next_search_response({status_type::not_found, "idx2 not found"});
+    fragments = co_await vs.highlight("ks", "idx2", "fox", {"a fox jumped", "second"}, as.reset());
+    BOOST_REQUIRE_EQUAL(server->search_requests().back().path, "/api/v1/indexes/ks/idx2/highlight");
+    BOOST_REQUIRE(!fragments);
+    auto* err = std::get_if<vector_store_client::service_error>(&fragments.error());
+    BOOST_CHECK(err != nullptr);
+    BOOST_CHECK_EQUAL(err->status, status_type::not_found);
+    BOOST_CHECK_EQUAL(err->message, "idx2 not found");
+
+    // a reply that is not JSON at all - service should return format error
+    server->next_search_response({status_type::ok, "not json"});
+    fragments = co_await vs.highlight("ks", "idx", "fox", {"a fox jumped", "second"}, as.reset());
+    BOOST_REQUIRE(!fragments);
+    BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(fragments.error()));
+
+    // no 'highlights' member in the reply - service should return format error
+    server->next_search_response({status_type::ok, R"({"highlights1":["a <b>fox</b> jumped",null]})"});
+    fragments = co_await vs.highlight("ks", "idx", "fox", {"a fox jumped", "second"}, as.reset());
+    BOOST_REQUIRE(!fragments);
+    BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(fragments.error()));
+
+    // highlights is not an array - service should return format error
+    server->next_search_response({status_type::ok, R"({"highlights":"a <b>fox</b> jumped"})"});
+    fragments = co_await vs.highlight("ks", "idx", "fox", {"a fox jumped", "second"}, as.reset());
+    BOOST_REQUIRE(!fragments);
+    BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(fragments.error()));
+
+    // fewer fragments than documents sent - the two are matched by position and by nothing else,
+    // so a reply of a different length says nothing about which document each one came from
+    server->next_search_response({status_type::ok, R"({"highlights":["a <b>fox</b> jumped"]})"});
+    fragments = co_await vs.highlight("ks", "idx", "fox", {"a fox jumped", "second"}, as.reset());
+    BOOST_REQUIRE(!fragments);
+    BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(fragments.error()));
+
+    // more fragments than documents sent - likewise
+    server->next_search_response({status_type::ok, R"({"highlights":["a <b>fox</b> jumped",null,null]})"});
+    fragments = co_await vs.highlight("ks", "idx", "fox", {"a fox jumped", "second"}, as.reset());
+    BOOST_REQUIRE(!fragments);
+    BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(fragments.error()));
+
+    // a fragment that is neither a string nor null - service should return format error
+    server->next_search_response({status_type::ok, R"({"highlights":["a <b>fox</b> jumped",7]})"});
+    fragments = co_await vs.highlight("ks", "idx", "fox", {"a fox jumped", "second"}, as.reset());
+    BOOST_REQUIRE(!fragments);
+    BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(fragments.error()));
+
+    // correct reply - a fragment for the document that matched, and an absent one for the document
+    // the index found nothing worth marking in
+    server->next_search_response({status_type::ok, CORRECT_HIGHLIGHT_RESPONSE});
+    fragments = co_await vs.highlight("ks", "idx", "fox", {"a fox jumped", "second"}, as.reset());
+    BOOST_REQUIRE(fragments);
+    BOOST_REQUIRE_EQUAL(fragments->size(), 2);
+    BOOST_REQUIRE(fragments->at(0).has_value());
+    BOOST_CHECK_EQUAL(*fragments->at(0), "a <b>fox</b> jumped");
+    BOOST_CHECK(!fragments->at(1).has_value());
+
+    // an empty document list is still a well-formed request, answered with no fragments
+    server->next_search_response({status_type::ok, R"({"highlights":[]})"});
+    fragments = co_await vs.highlight("ks", "idx", "fox", {}, as.reset());
+    BOOST_REQUIRE(fragments);
+    BOOST_CHECK(fragments->empty());
+    BOOST_CHECK_EQUAL(server->search_requests().back().body, R"({"query":"fox","documents":[]})");
+
+    co_await vs.stop();
+    co_await server->stop();
+}

@@ -27,7 +27,7 @@ namespace test::vector_search {
 
 class vs_mock_server {
 public:
-    enum class mode { ann, bm25 };
+    enum class mode { ann, bm25, highlight };
 
     struct request {
         seastar::sstring path;
@@ -127,11 +127,20 @@ private:
         if (m == mode::bm25) {
             return {seastar::http::reply::status_type::ok, CORRECT_BM25_RESPONSE_FOR_TEST_TABLE};
         }
+        if (m == mode::highlight) {
+            return {seastar::http::reply::status_type::ok, CORRECT_HIGHLIGHT_RESPONSE};
+        }
         return {seastar::http::reply::status_type::ok, CORRECT_RESPONSE_FOR_TEST_TABLE};
     }
 
-    static seastar::sstring mode_suffix(mode m) {
-        return m == mode::bm25 ? "/bm25" : "/ann";
+    static seastar::sstring endpoint_suffix(mode m) {
+        if (m == mode::bm25) {
+            return "/bm25";
+        }
+        if (m == mode::highlight) {
+            return "/highlight";
+        }
+        return "/ann";
     }
 
     seastar::future<> listen() {
@@ -151,7 +160,7 @@ private:
             std::unique_ptr<seastar::http::request> req, std::unique_ptr<seastar::http::reply> rep) {
         auto full_path = req->get_path_param("path");
         // Only handle requests matching our configured mode suffix; return 404 for others.
-        if (!full_path.ends_with(mode_suffix(_mode))) {
+        if (!full_path.ends_with(endpoint_suffix(_mode))) {
             rep->set_status(seastar::http::reply::status_type::not_found);
             rep->write_body("json", R"("not found")");
             co_return rep;
