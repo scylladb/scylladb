@@ -4,8 +4,9 @@
 
 """Shared vector store mock for CQL Python tests.
 
-Provides VectorStoreMock - a minimal HTTP server for handling both ANN
-(`/ann`) and BM25 (`/bm25`) POST requests from a local Scylla process.
+Provides VectorStoreMock - a minimal HTTP server for handling the ANN (`/ann`),
+BM25 (`/bm25`) and highlight (`/highlight`) POST requests from a local Scylla
+process.
 """
 
 from collections.abc import Callable
@@ -32,14 +33,27 @@ class BM25Response:
     body: str = '{"primary_keys":{},"scores":[]}'
 
 
+@dataclass
+class HighlightResponse:
+    """The reply is aligned with the documents that were sent, so the default answers no documents.
+
+    A test that lets a highlight request happen has to set a reply of the right length.
+    """
+
+    status: int = 200
+    body: str = '{"highlights":[]}'
+
+
 class VectorStoreMock:
     def __init__(self):
         self._ann_requests: list[Request] = []
         self._bm25_requests: list[Request] = []
+        self._highlight_requests: list[Request] = []
         self._status_requests: list[Request] = []
         self._lock = threading.Lock()
         self._next_ann_response = Response()
         self._next_bm25_response = BM25Response()
+        self._next_highlight_response = HighlightResponse()
         self._next_status_response = Response(status=200, body='"SERVING"')
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -59,6 +73,11 @@ class VectorStoreMock:
             return self._bm25_requests.copy()
 
     @property
+    def highlight_requests(self) -> list[Request]:
+        with self._lock:
+            return self._highlight_requests.copy()
+
+    @property
     def status_requests(self) -> list[Request]:
         with self._lock:
             return self._status_requests.copy()
@@ -71,6 +90,10 @@ class VectorStoreMock:
         with self._lock:
             self._next_bm25_response = BM25Response(status=status, body=body)
 
+    def set_next_highlight_response(self, status: int, body: str) -> None:
+        with self._lock:
+            self._next_highlight_response = HighlightResponse(status=status, body=body)
+
     def set_next_status_response(self, status: int, body: str) -> None:
         with self._lock:
             self._next_status_response = Response(status=status, body=body)
@@ -79,9 +102,11 @@ class VectorStoreMock:
         with self._lock:
             self._ann_requests.clear()
             self._bm25_requests.clear()
+            self._highlight_requests.clear()
             self._status_requests.clear()
             self._next_ann_response = Response()
             self._next_bm25_response = BM25Response()
+            self._next_highlight_response = HighlightResponse()
             self._next_status_response = Response(status=200, body='"SERVING"')
 
     def _handle_ann(self, request: Request, send_response: Callable[[Response], None]) -> None:
@@ -94,6 +119,12 @@ class VectorStoreMock:
         with self._lock:
             self._bm25_requests.append(request)
             response = self._next_bm25_response
+        send_response(response)
+
+    def _handle_highlight(self, request: Request, send_response: Callable[[HighlightResponse], None]) -> None:
+        with self._lock:
+            self._highlight_requests.append(request)
+            response = self._next_highlight_response
         send_response(response)
 
     def _handle_status(self, request: Request, send_response: Callable[[Response], None]) -> None:
@@ -117,6 +148,8 @@ class VectorStoreMock:
                     mock._handle_ann(req, self._send_response)
                 elif self.path.endswith("/bm25"):
                     mock._handle_bm25(req, self._send_response)
+                elif self.path.endswith("/highlight"):
+                    mock._handle_highlight(req, self._send_response)
                 else:
                     self.send_response(404)
                     self.end_headers()
