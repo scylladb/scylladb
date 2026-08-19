@@ -98,6 +98,8 @@ class Host:
     ip: Optional[str] = None
     node_state: Optional[str] = None # system.topology#node_state
     num_tokens: Optional[int] = None # system.topology#num_tokens
+    up: Optional[bool] = None # system.load_per_node#up
+    excluded: Optional[bool] = None # system.load_per_node#excluded, left out of balancing
 
     def is_normal_token_owner(self) -> bool:
         if self.node_state is None or self.num_tokens is None:
@@ -176,6 +178,13 @@ def iter_token_fractions(tablets: Sequence[Tablet]) -> Iterator[Tuple[Tablet, fl
     for tablet in tablets:
         yield tablet, ((tablet.last_token - prev_last_token) % TOKEN_RING_SIZE) / TOKEN_RING_SIZE
         prev_last_token = tablet.last_token
+
+
+def parse_bool(value: str | bool) -> bool:
+    """
+    Parses a boolean column, which the CQL driver yields as a bool and a dump as its text.
+    """
+    return value if isinstance(value, bool) else str(value).strip().lower() == "true"
 
 
 def parse_uuid(value: str | uuid.UUID | None) -> UUID | None:
@@ -273,6 +282,10 @@ LOAD_PER_NODE_COLUMNS = (
     Column("dc", str, required=False),
     Column("rack", str, required=False),
     Column("ip", str, required=False),
+    # Whether the cluster can reach the node, and whether it takes part in balancing.
+    # Optional, so a snapshot taken before the columns existed still reads.
+    Column("up", parse_bool, required=False),
+    Column("excluded", parse_bool, required=False),
 )
 
 TABLET_SIZES_COLUMNS = (
@@ -603,6 +616,10 @@ class Topology:
                 host.storage_capacity = row.storage_capacity
             if row.effective_capacity is not None:
                 host.effective_capacity = row.effective_capacity
+            if row.up is not None:
+                host.up = row.up
+            if row.excluded is not None:
+                host.excluded = row.excluded
 
     def _build_topology(self, rows: Iterable[Row]) -> None:
         """
