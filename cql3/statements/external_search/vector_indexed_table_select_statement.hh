@@ -22,7 +22,7 @@ struct ann_ordering_info {
     raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering;
     bool is_rescoring_enabled;
     /// Temporary slot the Vector Store's own score is delivered in, allocated on the first ann()
-    /// occurrence in SELECT and filled per row by external_score_provider.
+    /// occurrence in SELECT and filled per row by external_search_provider.
     std::optional<size_t> temporary_index;
     /// The query vectors of the SELECT occurrences that prepare could not tell apart from the
     /// ordering's - a bind marker stands where at least one of the two values will be.  Compared once

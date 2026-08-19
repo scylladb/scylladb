@@ -8,7 +8,7 @@
 
 #include "cql3/statements/external_search/vector_indexed_table_select_statement.hh"
 #include "cql3/statements/external_search/external_function.hh"
-#include "cql3/statements/external_search/external_score_provider.hh"
+#include "cql3/statements/external_search/external_search_provider.hh"
 
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
@@ -309,7 +309,7 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
     }
 
     auto provider = _ann_ordering_info.temporary_index
-                            ? std::make_unique<external_score_provider>(pkeys.value(), *_ann_ordering_info.temporary_index, *_schema)
+                            ? std::make_unique<external_search_provider>(pkeys.value(), _ann_ordering_info.temporary_index, std::nullopt, *_schema)
                             : nullptr;
     co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout, std::move(provider));
 }

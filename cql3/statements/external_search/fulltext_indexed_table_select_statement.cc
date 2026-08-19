@@ -8,7 +8,7 @@
 
 #include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
 #include "cql3/statements/external_search/external_function.hh"
-#include "cql3/statements/external_search/external_score_provider.hh"
+#include "cql3/statements/external_search/external_search_provider.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expression.hh"
@@ -205,9 +205,11 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
                 "Full-text search queries do not support additional WHERE restrictions");
     }
 
-    // A score slot was allocated, so BM25() was selected and a provider will fill that slot per row
-    // by matching each row to the full-text index's response.
-    if (ordering_info->score_temporary_index) {
+    // A slot was allocated, so a value will be injected per row, and the provider doing it has to be
+    // able to tell the rows apart: the score is matched to a row by primary key, and the fragment,
+    // matched by position, is checked against it.  So those columns have to be read even when the
+    // query does not select them, as in `SELECT BM25(...)`.
+    if (ordering_info->score_temporary_index || ordering_info->highlight_temporary_index) {
         fetch_primary_key_columns(*selection, *schema);
     }
 
@@ -287,8 +289,18 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
 
     throwing_assert(pkeys->size() <= limit);
 
-    auto provider = _bm25_ordering_info.score_temporary_index
-                            ? std::make_unique<external_score_provider>(pkeys.value(), *_bm25_ordering_info.score_temporary_index, *_schema)
+    auto highlight = _bm25_ordering_info.highlight_temporary_index
+                             ? std::optional<highlight_source>({.client = qp.vector_store_client(),
+                                       .keyspace = _schema->ks_name(),
+                                       .index = _index.metadata().name(),
+                                       .query = search_term_text,
+                                       .as = aoe.abort_source(),
+                                       .selection = *_selection,
+                                       .column = *_bm25_ordering_info.highlighted_column})
+                             : std::nullopt;
+    auto provider = _bm25_ordering_info.score_temporary_index || _bm25_ordering_info.highlight_temporary_index
+                            ? std::make_unique<external_search_provider>(pkeys.value(), _bm25_ordering_info.score_temporary_index,
+                                      _bm25_ordering_info.highlight_temporary_index, *_schema, std::move(highlight))
                             : nullptr;
     co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout, std::move(provider));
 }

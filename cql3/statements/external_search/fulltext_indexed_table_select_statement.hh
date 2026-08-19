@@ -42,7 +42,7 @@ struct bm25_ordering_info {
     secondary_index::index index;
     expr::expression search_term;
     // Temporary slot the score is delivered in, allocated on the first bm25()
-    // occurrence in SELECT and filled per row by external_score_provider.
+    // occurrence in SELECT and filled per row by external_search_provider.
     std::optional<size_t> score_temporary_index;
     // Temporary slot the fragment is delivered in, allocated on the first bm25_highlight()
     // occurrence in SELECT and filled per row from the second request's answer.
