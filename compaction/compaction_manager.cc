@@ -2542,7 +2542,7 @@ compaction_reenabler compaction_manager::add_with_compaction_disabled(compaction
 future<> compaction_manager::remove(compaction_group_view& t, sstring reason) noexcept {
     auto& c_state = get_compaction_state(&t);
     auto erase_state = defer([&t, this] () noexcept {
-       t.get_backlog_tracker().disable();
+       t.get_backlog_tracker().retire();
        _compaction_state.erase(&t);
     });
 
@@ -2651,6 +2651,14 @@ void compaction_manager::plug_system_keyspace(db::system_keyspace& sys_ks) noexc
 
 future<> compaction_manager::unplug_system_keyspace() noexcept {
     co_await _sys_ks.unplug();
+}
+
+void compaction_backlog_tracker::retire() {
+    if (_manager) {
+        _manager->remove_backlog_tracker(this);
+        _manager = nullptr;
+    }
+    disable();
 }
 
 double compaction_backlog_tracker::backlog() const {
