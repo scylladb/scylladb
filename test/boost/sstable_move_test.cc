@@ -162,7 +162,9 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_clone_preserves_staging_state) {
     // Create an sstable in normal state. The key must be owned by this shard, or
     // sstable::write_scylla_metadata() fails to generate sharding metadata once smp > 1.
     auto pkey = tests::generate_partition_key(schema);
-    auto sst = make_sstable_containing(env.make_sst_factory(schema), {mutation(schema, std::move(pkey))}).get();
+    mutation mut(schema, std::move(pkey));
+    ss.add_row(mut, ss.make_ckey(0), "value");
+    auto sst = make_sstable_containing(env.make_sst_factory(schema), {std::move(mut)}).get();
 
     // Move it to staging state.
     sst->change_state(sstable_state::staging).get();
