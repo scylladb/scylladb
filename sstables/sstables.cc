@@ -1624,6 +1624,11 @@ std::optional<db_clock::time_point> sstable::get_scrub_time() const {
     return metadata ? metadata->get_scrub_time() : std::nullopt;
 }
 
+void sstable::set_scrub_time(db_clock::time_point scrub_time) {
+    auto& metadata = _components->scylla_metadata;
+    metadata->set_scrub_time(scrub_time);
+}
+
 int64_t sstable::update_repaired_at(int64_t repaired_at) {
     const stats_metadata& old_stats = get_stats_metadata();
     auto old_repaired_at = old_stats.repaired_at;
@@ -1728,6 +1733,20 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 
         _cloned_to_sstable_filename = new_sst->component_basename(component_type::Data);
         return new_sst;
+    });
+}
+
+future<> sstable::generate_missing_component_digests() {
+    if (!has_scylla_component()) {
+        sstlog.info("Cannot generate missing component digests, Scylla-metadata component missing");
+        co_return;
+    }
+    auto& metadata = *_components->scylla_metadata;
+    auto& digests = metadata.get_or_create_components_digests();
+    co_await coroutine::parallel_for_each(_recognized_components, [this, &digests] (component_type type) -> future<> {
+        if (type != component_type::Scylla && !digests.map.contains(type)) {
+            digests.map[type] = co_await compute_component_file_digest(type);
+        }
     });
 }
 

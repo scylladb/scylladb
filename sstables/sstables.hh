@@ -1120,8 +1120,10 @@ public:
     }
 
     std::optional<uint32_t> get_component_digest(component_type c) const;
+    future<> generate_missing_component_digests();
 
     std::optional<db_clock::time_point> get_scrub_time() const;
+    void set_scrub_time(db_clock::time_point scrub_time);
 
     // Gets ratio of droppable tombstone. A tombstone is considered droppable here
     // for cells and tombstones expired before the time point "GC before", which
@@ -1266,6 +1268,7 @@ public:
             component_type component,
             std::function<void(sstable&)> modifier,
             update_sstable_id);
+
     // Must be called in a seastar thread
     void write_component_with_metadata_and_modifier(component_type type, scylla_metadata metadata, std::function<void(sstable&)> modifier);
 };
