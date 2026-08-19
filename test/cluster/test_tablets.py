@@ -9,7 +9,7 @@ from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxExc
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.test_tablets2 import safe_rolling_restart
-from test.pylib.internal_types import ServerInfo
+from test.pylib.internal_types import ServerInfo, ServerUpState
 from test.pylib.manager_client import ManagerClient
 from test.pylib.repair import create_table_insert_data_for_repair
 from test.pylib.rest_client import HTTPError, read_barrier
@@ -144,6 +144,101 @@ async def test_reshape_with_tablets(manager: ManagerClient):
         await log.wait_for(f"Reshape {ks}.test .* Reshaped 32 sstables to .*", from_mark=mark, timeout=30)
         sstable_info = await manager.api.get_sstable_info(server.ip_addr, ks, "test")
         assert len(sstable_info[0]['sstables']) == number_of_tablets
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_stop_reshape_aborts_all_compaction_groups(manager: ManagerClient):
+    """Verify that stop RESHAPE aborts reshape across all tables and compaction groups.
+
+    The bug: stop_compaction("RESHAPE") only stops the currently-running reshape task,
+    but the parent task iterates over compaction groups in a for-loop and starts a new
+    reshape for the next compaction group after the current one is aborted.
+
+    This test uses two tables in separate keyspaces to verify that stop RESHAPE is
+    effective globally, not just for the table whose reshape was active at the time.
+    """
+    logger.info("Bootstrapping single-shard node")
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
+    server = (await manager.servers_add(1, config=cfg, cmdline=['--smp', '1']))[0]
+
+    cql = manager.get_cql()
+    number_of_tablets = 2
+    loop_count = 32
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {number_of_tablets}}}") as ks1:
+        async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {number_of_tablets}}}") as ks2:
+            for ks in [ks1, ks2]:
+                await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+                await manager.api.disable_autocompaction(server.ip_addr, ks, "test")
+
+            logger.info("Populating both tables")
+            for _ in range(loop_count):
+                for ks in [ks1, ks2]:
+                    await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in range(64)])
+                    await manager.api.keyspace_flush(server.ip_addr, ks, "test")
+
+            for ks in [ks1, ks2]:
+                sstable_info = await manager.api.get_sstable_info(server.ip_addr, ks, "test")
+                assert len(sstable_info[0]['sstables']) == number_of_tablets * loop_count
+
+            injection = "reshape_compaction_group_before_compact"
+
+            logger.info("Configuring injection for next startup")
+            await manager.server_update_config(server.server_id,
+                "error_injections_at_startup", [injection])
+
+            logger.info("Restarting server (reshape happens on boot)")
+            await manager.server_stop_gracefully(server.server_id)
+            await manager.server_start(server.server_id,
+                                       expected_server_up_state=ServerUpState.HOST_ID_QUERIED)
+
+            logger.info("Waiting for reshape to hit the injection point")
+            await manager.api.wait_for_injection_enter(server.ip_addr, injection,
+                                                       threshold=1, deadline=time.time() + 60)
+
+            logger.info("Stopping RESHAPE globally and releasing injection")
+            stop_task = asyncio.create_task(manager.api.stop_compaction(server.ip_addr, "RESHAPE"))
+            await asyncio.sleep(0.5)
+            await manager.api.message_injection(server.ip_addr, injection)
+            await stop_task
+
+            logger.info("Stop RESHAPE completed. Recording enters and verifying no new reshape starts.")
+            enters_after_stop = await manager.api.client.get_json(
+                f"/v2/error_injection/injection/{injection}/enters",
+                host=server.ip_addr)
+            logger.info(f"Injection entered {enters_after_stop} times by the time stop completed")
+
+            # Wait and verify no additional enters happen after stop completed
+            await asyncio.sleep(5)
+
+            enters_final = await manager.api.client.get_json(
+                f"/v2/error_injection/injection/{injection}/enters",
+                host=server.ip_addr)
+            logger.info(f"Injection entered {enters_final} times total (after waiting)")
+
+            # The key invariant: after stop RESHAPE completes, no new reshape work
+            # should start. The enters count must not increase after stop returns.
+            # Total CGs across both tables = number_of_tablets * 2 = 4. If reshape
+            # was NOT stopped, all 4 would eventually be entered.
+            total_cgs = number_of_tablets * 2
+            assert enters_final == enters_after_stop, (
+                f"Reshape continued after stop: enters went from {enters_after_stop} to {enters_final}"
+            )
+            assert enters_final < total_cgs, (
+                f"All {total_cgs} compaction groups were reshaped ({enters_final} enters), "
+                f"stop RESHAPE had no effect."
+            )
+
+            # Disable the injection and let the node finish booting so cleanup can proceed
+            await manager.api.disable_injection(server.ip_addr, injection)
+            await reconnect_driver(manager)
+
+            # Verify the node is fully online and serving reads on both keyspaces
+            cql = manager.get_cql()
+            for ks in [ks1, ks2]:
+                rows = await cql.run_async(f"SELECT count(*) FROM {ks}.test")
+                logger.info(f"Read from {ks}.test returned {rows[0].count} rows")
+                assert rows[0].count > 0
 
 
 @pytest.mark.parametrize("direction", ["up", "down", "none"])

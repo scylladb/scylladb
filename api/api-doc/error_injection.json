@@ -113,6 +113,30 @@
          ]
       },
       {
+         "path":"/v2/error_injection/injection/{injection}/enters",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the total enter count for the injection across all shards",
+               "type":"long",
+               "nickname":"get_enter_count",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"injection",
+                     "description":"injection name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/v2/error_injection/disconnect/{ip}",
          "operations":[
             {
