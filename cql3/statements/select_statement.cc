@@ -2336,8 +2336,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 std::move(prepared_attrs));
     } else if (is_ann_query) {
         stmt = vector_indexed_table_select_statement::prepare(db, schema, ctx.bound_variables_size(), _parameters, std::move(selection), std::move(restrictions),
-                std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator), std::move(ann_ordering_info_opt->_prepared_ann_ordering),
-                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, ann_ordering_info_opt->_index, std::move(prepared_attrs));
+                std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator),
+                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, std::move(*ann_ordering_info_opt),
+                std::move(prepared_attrs));
     } else if (is_fts_query) {
         stmt = fulltext_indexed_table_select_statement::prepare(
             db,
