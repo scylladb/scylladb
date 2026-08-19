@@ -12,7 +12,6 @@ from cassandra import ConsistencyLevel
 from cassandra.cluster import ExecutionProfile
 from cassandra.policies import WhiteListRoundRobinPolicy
 
-from test.cluster.conftest import cluster_con
 from test.cluster.util import new_test_keyspace, new_test_table
 from test.pylib.async_cql import _wrap_future
 from test.pylib.internal_types import ServerInfo
@@ -21,7 +20,8 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 logger = logging.getLogger(__name__)
 
 
-async def assert_binding_by_name_works_across_nodes(prepare_on: ServerInfo, execute_on: ServerInfo,
+async def assert_binding_by_name_works_across_nodes(manager: ScyllaClusterManager,
+                                                    prepare_on: ServerInfo, execute_on: ServerInfo,
                                                     query: str, expected_name: str, key: int):
     """
     Prepare on one node and let the other node coordinate the request. The
@@ -29,7 +29,7 @@ async def assert_binding_by_name_works_across_nodes(prepare_on: ServerInfo, exec
     the coordinator is a node that would have named the variable the other way.
     """
     other = 'other_node'
-    cluster = cluster_con([prepare_on.ip_addr],
+    cluster = manager.con_gen([prepare_on.ip_addr],
                           load_balancing_policy=WhiteListRoundRobinPolicy([prepare_on.ip_addr]))
     try:
         cql = cluster.connect()
@@ -83,8 +83,8 @@ async def test_in_bind_variable_name_mixed_config(manager: ScyllaClusterManager)
             for p in range(2):
                 await manager.get_cql().run_async(f"INSERT INTO {table} (p,c) VALUES ({p},{p})")
 
-            await assert_binding_by_name_works_across_nodes(lowercase_server, uppercase_server, query, 'in(c)', 0)
-            await assert_binding_by_name_works_across_nodes(uppercase_server, lowercase_server, query, 'IN(c)', 1)
+            await assert_binding_by_name_works_across_nodes(manager, lowercase_server, uppercase_server, query, 'in(c)', 0)
+            await assert_binding_by_name_works_across_nodes(manager, uppercase_server, lowercase_server, query, 'IN(c)', 1)
 
 
 async def test_in_bind_variable_name_of_a_cached_statement(manager: ScyllaClusterManager):

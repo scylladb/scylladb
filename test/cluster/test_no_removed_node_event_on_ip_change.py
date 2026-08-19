@@ -13,7 +13,6 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo, IPAddress
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.cluster.conftest import cluster_con
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +39,7 @@ async def test_no_removed_node_event_on_ip_change(manager: ScyllaClusterManager,
     # is goes to the first node, so that we get the TOPOLOGY_CHANGE notifications
     # about the second.
     test_cluster: Cluster
-    with cluster_con([servers[0].ip_addr, s1_old_ip, s1_new_ip],
+    with manager.con_gen([servers[0].ip_addr, s1_old_ip, s1_new_ip],
                      load_balancing_policy=WhiteListRoundRobinPolicy([servers[0].ip_addr])) as test_cluster:
         logger.info("connecting driver")
         test_cql: Session

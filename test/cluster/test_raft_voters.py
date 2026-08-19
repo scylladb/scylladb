@@ -16,7 +16,6 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import scale_timeout_by_mode, wait_for
-from test.cluster.conftest import cluster_con
 from test.cluster.util import (get_coordinator_host_ids, get_current_group0_config,
                                 ensure_group0_leader_on)
 
@@ -89,8 +88,8 @@ async def test_raft_voters_multidc_kill_dc(
     logging.info('Creating connections to all DCs')
     dc_cqls = []
     for servers in dc_servers:
-        dc_cqls.append(cluster_con([servers[0].ip_addr],
-                                   load_balancing_policy=WhiteListRoundRobinPolicy([servers[0].ip_addr])).connect())
+        dc_cqls.append(manager.con_gen([servers[0].ip_addr],
+                                       load_balancing_policy=WhiteListRoundRobinPolicy([servers[0].ip_addr])).connect())
 
     assert len(dc_cqls) == len(dc_servers)
 

@@ -22,7 +22,6 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.random_tables import RandomTables, TextType, Column
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name
-from test.cluster.conftest import cluster_con
 
 logger = logging.getLogger(__name__)
 CONFIG = {"endpoint_snitch": "GossipingPropertyFileSnitch"}
@@ -133,9 +132,9 @@ async def test_read_or_write_to_dc_with_rf_0_fails(request: pytest.FixtureReques
             property_file={"dc": f"dc{i}", "rack": "myrack"},
         ))
 
-    dc1_connection = cluster_con([servers[0].ip_addr],
+    dc1_connection = manager.con_gen([servers[0].ip_addr],
                                  load_balancing_policy=WhiteListRoundRobinPolicy([servers[0].ip_addr])).connect()
-    dc2_connection = cluster_con([servers[1].ip_addr],
+    dc2_connection = manager.con_gen([servers[1].ip_addr],
                                  load_balancing_policy=WhiteListRoundRobinPolicy([servers[1].ip_addr])).connect()
 
     random_tables = RandomTables(request.node.name, manager, ks, 1, dc_replication)

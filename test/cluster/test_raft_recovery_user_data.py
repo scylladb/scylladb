@@ -17,7 +17,6 @@ from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import gather_safely, unique_name, wait_for_cql_and_get_hosts
-from test.cluster.conftest import cluster_con
 from test.cluster.util import check_system_topology_and_cdc_generations_v3_consistency, \
         check_token_ring_and_group0_consistency, delete_discovery_state_and_group0_id, delete_raft_group_data, \
         reconnect_driver, start_writes, wait_for_cdc_generations_publishing
@@ -76,7 +75,7 @@ async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dea
     ks_name = unique_name()
     # Use a separate CQL connection for the write workload as `cql` must be reconnected below to prevent hitting
     # https://github.com/scylladb/python-driver/issues/295.
-    ccluster_all_nodes = cluster_con([srv.ip_addr for srv in live_servers + dead_servers])
+    ccluster_all_nodes = manager.con_gen([srv.ip_addr for srv in live_servers + dead_servers])
     cql_all_nodes = ccluster_all_nodes.connect()
     await wait_for_cql_and_get_hosts(cql_all_nodes, live_servers + dead_servers, time.time() + 60)
     finish_writes = await start_writes(cql_all_nodes, rf, ConsistencyLevel.LOCAL_QUORUM, concurrency=5,
@@ -126,7 +125,7 @@ async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dea
     # only after increasing RF to 3, which we do - see finish_writes_dc2.
     await finish_writes()
     safe_driver_shutdown(ccluster_all_nodes)
-    ccluster_dc1 = cluster_con(
+    ccluster_dc1 = manager.con_gen(
             [srv.ip_addr for srv in live_servers],
             load_balancing_policy=WhiteListRoundRobinPolicy([srv.ip_addr for srv in live_servers]))
     dc1_cql = ccluster_dc1.connect()
@@ -211,7 +210,7 @@ async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dea
                             {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {rf}}}""")
 
     # After increasing RF back to 3 in dc2 (if remove_dead_nodes_with == "remove"), we can start sending writes to dc2.
-    ccluster_dc2 = cluster_con(
+    ccluster_dc2 = manager.con_gen(
             [srv.ip_addr for srv in new_servers],
             load_balancing_policy=WhiteListRoundRobinPolicy([srv.ip_addr for srv in new_servers]))
     dc2_cql = ccluster_dc2.connect()

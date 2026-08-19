@@ -9,7 +9,6 @@ from cassandra.cluster import Cluster, NoHostAvailable
 from cassandra import Unauthorized, InvalidRequest
 from cassandra.connection import UnixSocketEndPoint
 from cassandra.policies import WhiteListRoundRobinPolicy
-from test.cluster.conftest import cluster_con
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
@@ -33,7 +32,7 @@ def cql_clusters() -> Generator[CqlClusters, None, None]:
         safe_driver_shutdown(c)
 
 
-async def get_ready_maintenance_session(socket_path: str, timeout: int = 60):
+async def get_ready_maintenance_session(manager: ScyllaClusterManager, socket_path: str, timeout: int = 60):
     """Connect to maintenance socket, retrying until the role manager is ready.
 
     Uses a two-phase approach:
@@ -49,7 +48,7 @@ async def get_ready_maintenance_session(socket_path: str, timeout: int = 60):
 
     # Phase 1: establish a live session to the maintenance socket.
     async def try_connect():
-        c = cluster_con([UnixSocketEndPoint(socket_path)],
+        c = manager.con_gen([UnixSocketEndPoint(socket_path)],
                         load_balancing_policy=WhiteListRoundRobinPolicy([UnixSocketEndPoint(socket_path)]))
         try:
             session = c.connect()
@@ -77,14 +76,15 @@ async def get_ready_maintenance_session(socket_path: str, timeout: int = 60):
     return session
 
 
-async def connect_with_credentials(ip: str, username: str, password: str, timeout: int = 60):
+async def connect_with_credentials(manager: ScyllaClusterManager, ip: str, username: str, password: str,
+                                   timeout: int = 60):
     """Connect with auth credentials, retrying until accepted.
 
     Uses WhiteListRoundRobinPolicy to prevent the driver from discovering
     other cluster nodes via topology refresh and routing queries there.
     """
     async def try_connect():
-        c = cluster_con([ip],
+        c = manager.con_gen([ip],
                         auth_provider=PlainTextAuthProvider(username=username, password=password),
                         load_balancing_policy=WhiteListRoundRobinPolicy([ip]))
         try:
@@ -114,7 +114,7 @@ async def test_maintenance_socket(manager: ScyllaClusterManager, cql_clusters: C
         pass
 
     logger.info("Connecting as superuser to set up roles and keyspaces")
-    superuser_cluster = cluster_con([server.ip_addr],
+    superuser_cluster = manager.con_gen([server.ip_addr],
                                     auth_provider=PlainTextAuthProvider(username="cassandra", password="cassandra"))
     cql_clusters.append(superuser_cluster)
     session = superuser_cluster.connect()
@@ -127,7 +127,7 @@ async def test_maintenance_socket(manager: ScyllaClusterManager, cql_clusters: C
     session.execute("GRANT SELECT ON ks1.t1 TO john;")
 
     logger.info("Verifying user 'john' cannot access ks2.t1")
-    john_cluster = cluster_con([server.ip_addr], auth_provider=PlainTextAuthProvider(username="john", password="password"))
+    john_cluster = manager.con_gen([server.ip_addr], auth_provider=PlainTextAuthProvider(username="john", password="password"))
     cql_clusters.append(john_cluster)
     john_session = john_cluster.connect()
     try:
@@ -138,7 +138,7 @@ async def test_maintenance_socket(manager: ScyllaClusterManager, cql_clusters: C
         pytest.fail("User 'john' has no permissions to access ks2.t1")
 
     logger.info("Connecting via maintenance socket")
-    maintenance_cluster = cluster_con([UnixSocketEndPoint(socket)], load_balancing_policy=WhiteListRoundRobinPolicy([UnixSocketEndPoint(socket)]))
+    maintenance_cluster = manager.con_gen([UnixSocketEndPoint(socket)], load_balancing_policy=WhiteListRoundRobinPolicy([UnixSocketEndPoint(socket)]))
     cql_clusters.append(maintenance_cluster)
     maintenance_session = maintenance_cluster.connect()
 
@@ -188,7 +188,7 @@ async def test_no_default_superuser_maintenance_socket_ops(manager: ScyllaCluste
 
     logger.info("Connecting via maintenance socket")
     socket_path = await manager.server_get_maintenance_socket_path(server.server_id)
-    session = await get_ready_maintenance_session(socket_path)
+    session = await get_ready_maintenance_session(manager, socket_path)
     cql_clusters.append(session.cluster)
 
     logger.info("Verifying system.roles is empty before operations")
@@ -211,7 +211,7 @@ async def test_no_default_superuser_maintenance_socket_ops(manager: ScyllaCluste
     assert len(rows[0].salted_hash.split('$')) == 4
 
     logger.info("Verifying the new role can log in via the normal CQL port")
-    admin_session = await connect_with_credentials(server.ip_addr, new_role, new_role_password)
+    admin_session = await connect_with_credentials(manager, server.ip_addr, new_role, new_role_password)
     cql_clusters.append(admin_session.cluster)
 
     logger.info("Verifying superuser can create a keyspace")
@@ -228,7 +228,7 @@ async def test_no_default_superuser_maintenance_socket_ops(manager: ScyllaCluste
     logger.info("Verifying superuser privileges were revoked")
     # The server caches superuser status, so we need to retry until the cache refreshes.
     async def check_superuser_revoked():
-        c = cluster_con([server.ip_addr],
+        c = manager.con_gen([server.ip_addr],
                         auth_provider=PlainTextAuthProvider(username=new_role, password=new_role_password))
         try:
             s = c.connect()
@@ -250,7 +250,7 @@ async def test_no_default_superuser_maintenance_socket_ops(manager: ScyllaCluste
     logger.info("Verifying dropped role can no longer log in")
     # The server caches credentials, so we need to retry until the cache refreshes.
     async def check_role_dropped():
-        c = cluster_con([server.ip_addr],
+        c = manager.con_gen([server.ip_addr],
                         auth_provider=PlainTextAuthProvider(username=new_role, password=new_role_password))
         try:
             c.connect()
@@ -282,7 +282,7 @@ async def test_maintenance_socket_grant_revoke(manager: ScyllaClusterManager, cq
 
     logger.info("Connecting via maintenance socket")
     socket_path = await manager.server_get_maintenance_socket_path(server.server_id)
-    session = await get_ready_maintenance_session(socket_path)
+    session = await get_ready_maintenance_session(manager, socket_path)
     cql_clusters.append(session.cluster)
 
     session.execute("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
@@ -297,7 +297,7 @@ async def test_maintenance_socket_grant_revoke(manager: ScyllaClusterManager, cq
     assert len(rows) == 1
     assert rows[0].permission == "SELECT"
 
-    role1_session = await connect_with_credentials(server.ip_addr, "role1", "pass")
+    role1_session = await connect_with_credentials(manager, server.ip_addr, "role1", "pass")
     cql_clusters.append(role1_session.cluster)
     role1_session.execute("SELECT * FROM ks.t")
 

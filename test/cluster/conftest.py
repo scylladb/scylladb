@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-import ssl
 import threading
 from concurrent.futures.thread import ThreadPoolExecutor
 from pathlib import Path
@@ -30,12 +29,6 @@ import logging
 import pytest
 from cassandra.auth import PlainTextAuthProvider                         # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Session                                    # type: ignore # pylint: disable=no-name-in-module
-from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore # pylint: disable=no-name-in-module
-from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore # pylint: disable=no-name-in-module
-from cassandra.policies import ExponentialReconnectionPolicy             # type: ignore
-from cassandra.policies import RoundRobinPolicy                          # type: ignore
-from cassandra.policies import TokenAwarePolicy                          # type: ignore
-from cassandra.policies import WhiteListRoundRobinPolicy                 # type: ignore
 from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
 from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
 from collections.abc import AsyncIterator
@@ -43,9 +36,7 @@ from collections.abc import AsyncIterator
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-    from cassandra.connection import EndPoint
 
-    from test.pylib.internal_types import IPAddress
     from test.pylib.scylla_cluster import ClusterFactory
 
 
@@ -76,81 +67,6 @@ def pytest_addoption(parser):
     add_s3_options(parser)
     parser.addoption('--skip-internet-dependent-tests', action='store_true', default=False,
                      help='Skip tests which depend on artifacts from the internet')
-
-
-conn_logger = logging.getLogger("conn_messages")
-conn_logger.setLevel(logging.INFO)
-
-class CustomConnection(Cluster.connection_class):
-    def send_msg(self, *args, **argv):
-        conn_logger.debug(f"send_msg: ({id(self)}): {args} {argv}")
-        return super(CustomConnection, self).send_msg(*args, **argv)
-
-    def process_msg(self, msg, protocol_version):
-        conn_logger.debug(f"process_msg: ({id(self)}): {msg}")
-        return super(CustomConnection, self).process_msg(msg, protocol_version)
-
-
-# cluster_con helper: set up client object for communicating with the CQL API.
-def cluster_con(hosts: list[IPAddress | EndPoint], port: int = 9042, use_ssl: bool = False, auth_provider=None,
-                load_balancing_policy=RoundRobinPolicy()):
-    """Create a CQL Cluster connection object according to configuration.
-       It does not .connect() yet."""
-    assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
-    profile = ExecutionProfile(
-        load_balancing_policy=load_balancing_policy,
-        consistency_level=ConsistencyLevel.LOCAL_QUORUM,
-        serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
-        # The default timeouts should have been more than enough, but in some
-        # extreme cases with a very slow debug build running on a slow or very busy
-        # machine, they may not be. Observed tests reach 160 seconds. So it's
-        # incremented to 200 seconds.
-        # See issue #11289.
-        # NOTE: request_timeout is the main cause of timeouts, even if logs say heartbeat
-        request_timeout=200)
-    whitelist_profile = ExecutionProfile(
-        load_balancing_policy=TokenAwarePolicy(WhiteListRoundRobinPolicy(hosts)),
-        consistency_level=ConsistencyLevel.LOCAL_QUORUM,
-        serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
-        request_timeout=200)
-    if use_ssl:
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    else:
-        ssl_context = None
-
-    return Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile, 'whitelist': whitelist_profile},
-                   contact_points=hosts,
-                   port=port,
-                   # TODO: make the protocol version an option, to allow testing with
-                   # different versions. If we drop this setting completely, it will
-                   # mean pick the latest version supported by the client and the server.
-                   protocol_version=4,
-                   # NOTE: No auth provider as auth keysppace has RF=1 and topology will take
-                   # down nodes, causing errors. If auth is needed in the future for topology
-                   # tests, they should bump up auth RF and run repair.
-                   ssl_context=ssl_context,
-                   # The default timeouts should have been more than enough, but in some
-                   # extreme cases with a very slow debug build running on a slow or very busy
-                   # machine, they may not be. Observed tests reach 160 seconds. So it's
-                   # incremented to 200 seconds.
-                   # See issue #11289.
-                   connect_timeout = 200,
-                   control_connection_timeout = 200,
-                   # NOTE: max_schema_agreement_wait must be 2x or 3x smaller than request_timeout
-                   # else the driver can't handle a server being down
-                   max_schema_agreement_wait=20,
-                   idle_heartbeat_timeout=200,
-                   # The default reconnection policy has a large maximum interval
-                   # between retries (600 seconds). In tests that restart/replace nodes,
-                   # where a node can be unavailable for an extended period of time,
-                   # this can cause the reconnection retry interval to get very large,
-                   # longer than a test timeout.
-                   reconnection_policy = ExponentialReconnectionPolicy(1.0, 4.0),
-
-                   auth_provider=auth_provider,
-                   # Capture messages for debugging purposes.
-                   connection_class=CustomConnection
-                   )
 
 
 @pytest.fixture(scope="module")
@@ -184,7 +100,6 @@ async def _scylla_cluster_manager(request: pytest.FixtureRequest,
             port=int(request.config.getoption('port')),
             use_ssl=bool(request.config.getoption('ssl')),
             auth_provider=auth_provider,
-            con_gen=cluster_con,
         )
         try:
             await mgr.start()

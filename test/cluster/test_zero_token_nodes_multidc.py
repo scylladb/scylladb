@@ -12,7 +12,6 @@ from cassandra.query import SimpleStatement
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 from test.pylib.util import unique_name
-from test.cluster.conftest import cluster_con
 from test.cluster.util import create_new_test_keyspace
 
 
@@ -38,9 +37,9 @@ async def test_zero_token_nodes_multidc_basic(manager: ScyllaClusterManager, zer
         servers.append(await manager.server_add(config=normal_cfg, property_file={'dc': 'dc2', 'rack': 'rack2'}))
 
     logging.info('Creating connections to dc1 and dc2')
-    dc1_cql = cluster_con([servers[0].ip_addr],
+    dc1_cql = manager.con_gen([servers[0].ip_addr],
                           load_balancing_policy=WhiteListRoundRobinPolicy([servers[0].ip_addr])).connect()
-    dc2_cql = cluster_con([servers[2].ip_addr],
+    dc2_cql = manager.con_gen([servers[2].ip_addr],
                           load_balancing_policy=WhiteListRoundRobinPolicy([servers[2].ip_addr])).connect()
 
     ks_names = list[str]()

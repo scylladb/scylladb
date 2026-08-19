@@ -81,7 +81,6 @@ def manager() -> Iterator[tuple[ScyllaClusterManager, StubCluster, asyncio.Abstr
             port=9042,
             use_ssl=False,
             auth_provider=None,
-            con_gen=lambda *args, **kwargs: None,
         )
         mgr.logger = LogPrefixAdapter(logging.getLogger("test_manager_op_bridge"), {"prefix": "test"})
         mgr.cluster = StubCluster(asyncio.get_running_loop())

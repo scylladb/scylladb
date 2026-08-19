@@ -12,7 +12,6 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.tablets import get_all_tablet_replicas
-from test.cluster.conftest import cluster_con
 from test.pylib.util import gather_safely, wait_for_cql_and_get_hosts
 from test.cluster.util import create_new_test_keyspace
 
@@ -44,7 +43,7 @@ async def test_maintenance_mode(manager: ScyllaClusterManager):
     await manager.disable_tablet_balancing()
 
     # An exclusive connection to server A is needed for requests with LocalStrategy.
-    cluster = cluster_con([server_a.ip_addr], load_balancing_policy=WhiteListRoundRobinPolicy([server_a.ip_addr]))
+    cluster = manager.con_gen([server_a.ip_addr], load_balancing_policy=WhiteListRoundRobinPolicy([server_a.ip_addr]))
     cql = cluster.connect()
 
     # (replication strategy, Optional[replication factor], tablets enabled)
@@ -142,7 +141,7 @@ async def test_maintenance_mode(manager: ScyllaClusterManager):
     # Check that the regular CQL port is not available
     assert socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect_ex((server_a.ip_addr, 9042)) != 0
 
-    maintenance_cluster = cluster_con([socket_endpoint],
+    maintenance_cluster = manager.con_gen([socket_endpoint],
                                       load_balancing_policy=WhiteListRoundRobinPolicy([socket_endpoint]))
     maintenance_cql = maintenance_cluster.connect()
 

@@ -35,7 +35,6 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.query import BatchStatement, BatchType, SimpleStatement, named_tuple_factory
 from botocore.exceptions import ClientError
 
-from test.cluster.conftest import cluster_con
 from test.cluster.dtest.dtest_class import create_ks, wait_for
 from test.cluster.dtest.tools.assertions import assert_invalid
 from test.cluster.dtest.tools.data import rows_to_list, run_in_parallel
@@ -2024,7 +2023,7 @@ class CQLAuditTester(AuditTester):
 
             logger.info("Connecting to maintenance socket")
             endpoint = UnixSocketEndPoint(socket_path)
-            maint_cluster = cluster_con([endpoint],
+            maint_cluster = manager.con_gen([endpoint],
                                         load_balancing_policy=WhiteListRoundRobinPolicy([endpoint]))
             maint_session = maint_cluster.connect()
 

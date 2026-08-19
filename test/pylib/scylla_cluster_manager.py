@@ -14,6 +14,7 @@ import logging
 import pathlib
 import re
 import shutil
+import ssl
 import traceback
 import uuid
 from collections import defaultdict
@@ -24,12 +25,22 @@ from time import time
 from typing import Any, Awaitable, Callable, Concatenate, cast, overload
 
 import allure
+from cassandra import ConsistencyLevel
 from cassandra.auth import AuthProvider
 from cassandra.cluster import (
+    EXEC_PROFILE_DEFAULT,
     Cluster as CassandraCluster,
+    ExecutionProfile,
     Session as CassandraSession,
 )
-from cassandra.policies import LoadBalancingPolicy, RoundRobinPolicy, WhiteListRoundRobinPolicy
+from cassandra.connection import EndPoint
+from cassandra.policies import (
+    ExponentialReconnectionPolicy,
+    LoadBalancingPolicy,
+    RoundRobinPolicy,
+    TokenAwarePolicy,
+    WhiteListRoundRobinPolicy,
+)
 
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
@@ -45,6 +56,22 @@ from test.pylib.util import (
     wait_for,
     wait_for_cql_and_get_hosts,
 )
+
+
+conn_logger = logging.getLogger("conn_messages")
+conn_logger.setLevel(logging.INFO)
+
+
+class CustomConnection(CassandraCluster.connection_class):
+    """Driver connection which logs every message, for debugging."""
+
+    def send_msg(self, *args, **argv):
+        conn_logger.debug("send_msg: (%s): %s %s", id(self), args, argv)
+        return super().send_msg(*args, **argv)
+
+    def process_msg(self, msg, protocol_version):
+        conn_logger.debug("process_msg: (%s): %s", id(self), msg)
+        return super().process_msg(msg, protocol_version)
 
 
 # Cap on a manager operation, the same ceiling the HTTP client used to apply
@@ -194,7 +221,6 @@ class ScyllaClusterManager:
         port: CQL port for driver connections
         use_ssl: use SSL for driver connections
         auth_provider: authentication provider for driver connections
-        con_gen (Callable): generator function for CQL driver connection to a cluster
     """
     # Per test, created by before_test() and removed by after_test().
     test_case_log_file: pathlib.Path
@@ -206,8 +232,7 @@ class ScyllaClusterManager:
                  base_dir: str,
                  port: int,
                  use_ssl: bool,
-                 auth_provider: Any | None,
-                 con_gen: Callable[[list[IPAddress], int, bool, Any, LoadBalancingPolicy], CassandraCluster]) -> None:
+                 auth_provider: Any | None) -> None:
         # The manager must be constructed on its own, always-running loop:
         # its operations run there (see manager_op), whichever loop or thread
         # they are called from.
@@ -232,7 +257,6 @@ class ScyllaClusterManager:
         # The suite's provider, restored per test: tests override
         # self.auth_provider to connect as someone else.
         self._suite_auth_provider = auth_provider
-        self.con_gen = con_gen
         self.api = ScyllaRESTAPIClient()
         self.metrics = ScyllaMetricsClient()
         self.thread_pool = ThreadPoolExecutor()
@@ -781,6 +805,72 @@ class ScyllaClusterManager:
     @manager_op
     async def server_get_process_status(self, server_id: ServerNum) -> str | None:
         return self.cluster.server_get_process_status(server_id)
+
+    def con_gen(self,
+                hosts: list[IPAddress | EndPoint],
+                port: int = 9042,
+                use_ssl: bool = False,
+                auth_provider: AuthProvider | None = None,
+                load_balancing_policy: LoadBalancingPolicy = RoundRobinPolicy()) -> CassandraCluster:
+        """Create a CQL Cluster connection object according to configuration.
+
+        It does not .connect() yet.
+        """
+        assert hosts, "python driver connection needs at least one host to connect to"
+        profile = ExecutionProfile(
+            load_balancing_policy=load_balancing_policy,
+            consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+            serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
+            # The default timeouts should have been more than enough, but in some
+            # extreme cases with a very slow debug build running on a slow or very busy
+            # machine, they may not be. Observed tests reach 160 seconds. So it's
+            # incremented to 200 seconds.
+            # See issue #11289.
+            # NOTE: request_timeout is the main cause of timeouts, even if logs say heartbeat
+            request_timeout=200,
+        )
+        whitelist_profile = ExecutionProfile(
+            load_balancing_policy=TokenAwarePolicy(WhiteListRoundRobinPolicy(hosts)),
+            consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+            serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
+            request_timeout=200,
+        )
+        return CassandraCluster(
+            execution_profiles={
+                EXEC_PROFILE_DEFAULT: profile,
+                "whitelist": whitelist_profile,
+            },
+            contact_points=hosts,
+            port=port,
+            # TODO: make the protocol version an option, to allow testing with
+            # different versions. If we drop this setting completely, it will
+            # mean pick the latest version supported by the client and the server.
+            protocol_version=4,
+            # NOTE: No auth provider as auth keysppace has RF=1 and topology will take
+            # down nodes, causing errors. If auth is needed in the future for topology
+            # tests, they should bump up auth RF and run repair.
+            ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT) if use_ssl else None,
+            # The default timeouts should have been more than enough, but in some
+            # extreme cases with a very slow debug build running on a slow or very busy
+            # machine, they may not be. Observed tests reach 160 seconds. So it's
+            # incremented to 200 seconds.
+            # See issue #11289.
+            connect_timeout=200,
+            control_connection_timeout=200,
+            # NOTE: max_schema_agreement_wait must be 2x or 3x smaller than request_timeout
+            # else the driver can't handle a server being down
+            max_schema_agreement_wait=20,
+            idle_heartbeat_timeout=200,
+            # The default reconnection policy has a large maximum interval
+            # between retries (600 seconds). In tests that restart/replace nodes,
+            # where a node can be unavailable for an extended period of time,
+            # this can cause the reconnection retry interval to get very large,
+            # longer than a test timeout.
+            reconnection_policy=ExponentialReconnectionPolicy(1.0, 4.0),
+            auth_provider=auth_provider,
+            # Capture messages for debugging purposes.
+            connection_class=CustomConnection,
+        )
 
     @fenced
     async def driver_connect(self, server: ServerInfo | None = None, auth_provider: AuthProvider | None = None) -> None:

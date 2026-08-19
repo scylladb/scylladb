@@ -12,7 +12,6 @@ from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.util import wait_for
 from cassandra.connection import UnixSocketEndPoint
 from cassandra.policies import WhiteListRoundRobinPolicy
-from test.cluster.conftest import cluster_con
 from time import time
 import os
 
@@ -75,7 +74,7 @@ async def test_describe_cluster_sanity(manager: ScyllaClusterManager, mode: str)
             return True if os.path.exists(maintenance_socket_path) else None
         await wait_for(socket_exists, time() + 30)
         socket_endpoint = UnixSocketEndPoint(maintenance_socket_path)
-        cluster = cluster_con([socket_endpoint], load_balancing_policy=WhiteListRoundRobinPolicy([socket_endpoint]))
+        cluster = manager.con_gen([socket_endpoint], load_balancing_policy=WhiteListRoundRobinPolicy([socket_endpoint]))
         cql = cluster.connect()
 
     try:
