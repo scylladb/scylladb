@@ -147,6 +147,12 @@ inline bool is_native_function_call(const expression& e, const functions::functi
     return fc && is_native_function_call(*fc, name);
 }
 
+// Check whether the given function_call resolved to a function that declared itself external,
+// i.e. one whose value comes from an external search system (see functions::function::is_external).
+// Only meaningful after resolution: an unresolved call still holds a name rather than a function,
+// and is reported as not external.
+bool is_external_function_call(const function_call&);
+
 inline bool is_clustering_order(const binary_operator& op) {
     return op.order == comparison_order::clustering;
 }
