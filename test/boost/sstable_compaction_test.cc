@@ -11,6 +11,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/align.hh>
+#include <seastar/core/condition-variable.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
@@ -7112,20 +7113,23 @@ void cleanup_during_offstrategy_incremental_compaction_fn(test_env& env) {
     {
         auto t = env.make_table_for_tests(s);
         auto& cm = t->get_compaction_manager();
-        auto stop = deferred_stop(t);
-        // Declared after `stop` so the handlers below, which capture `t` by reference,
-        // are disconnected before t->stop() runs and before ~t. Nothing outside this
-        // scope reads the observers -- only the counters they update, which outlive it.
         std::vector<utils::observer<sstable&>> observers;
+        // Signaled from the _on_closed handler below once every sstable has closed.
+        // Neither this nor `observers` capture `t`, so both can safely stay connected
+        // through t->stop()/~t below -- which is exactly where a straggling transient
+        // sstable reference (held by compaction/table bookkeeping outside this
+        // function's control) is expected to be dropped, firing a delayed _on_closed.
+        seastar::condition_variable sstables_closed_cv;
         t->disable_auto_compaction().get();
         const dht::token_range_vector empty_owned_ranges;
         for (auto&& sst : ssts) {
             testlog.info("run id {}", sst->run_identifier());
             column_family_test(t).add_sstable(sst, sstables::offstrategy::yes).get();
             observers.push_back(sst->add_on_closed_handler([&] (sstable& sst) mutable {
-                auto sstables = t->get_sstables();
-                testlog.info("Closing sstable of generation {}, table set size: {}", sst.generation(), sstables->size());
-                sstables_closed++;
+                testlog.info("Closing sstable of generation {}", sst.generation());
+                if (++sstables_closed == sstables_nr) {
+                    sstables_closed_cv.signal();
+                }
             }));
             observers.push_back(sst->add_on_delete_handler([&] (sstable& sst) mutable {
                 // The _on_delete callback runs on the reactor (not in a seastar::thread),
@@ -7140,13 +7144,27 @@ void cleanup_during_offstrategy_incremental_compaction_fn(test_env& env) {
         BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->try_get_compaction_group_view_with_static_sharding()).empty());
         testlog.info("Cleanup has finished");
         ssts = {}; // release test-side references; remaining refs are dropped
-                   // when the table/compaction manager tear down at block exit.
+                   // below, when the table/compaction manager tear down.
         // _on_delete is raised by sstable::unlink(), which every path to it awaits:
         // atomic_deletion::execute() during the compaction above, or close_files()
         // when the last reference goes away just now. Either way the callbacks have
         // already fired, so there is nothing to wait for -- and a deletion that never
         // happened must fail the test rather than spin here forever.
         BOOST_REQUIRE_EQUAL(sstables_deleted, sstables_nr);
+
+        t->stop().get();
+
+        // Unlike _on_delete, _on_closed is raised from sstable::close_files(), which only
+        // runs once every shared_sstable reference has been dropped -- possibly only just
+        // now, by the stop() above. Wait for it, event-driven and bounded, rather than
+        // asserting immediately; a genuine regression still fails deterministically once
+        // the timeout below elapses.
+        using namespace std::chrono_literals;
+        try {
+            sstables_closed_cv.wait(10s, [&] { return sstables_closed == sstables_nr; }).get();
+        } catch (const seastar::condition_variable_timed_out&) {
+            // fall through to the assertion below for a clearer failure message
+        }
     }
 
     testlog.info("Closed sstables {}, deleted {}", sstables_closed, sstables_deleted);
