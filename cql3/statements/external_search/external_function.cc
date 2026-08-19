@@ -57,4 +57,8 @@ void fetch_primary_key_columns(selection::selection& selection, const schema& sc
     }
 }
 
+void fetch_column(selection::selection& selection, const column_definition& cdef) {
+    selection.add_column_for_post_processing(cdef);
+}
+
 } // namespace cql3::statements

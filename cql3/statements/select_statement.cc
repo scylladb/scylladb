@@ -2155,7 +2155,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         // A recorded term is all that is left of the call it was written in: that call was replaced
         // with a temporary, a leaf nothing descends into, so nothing else registers its bind marker.
         for (auto& term : bm25_ordering_info_opt->deferred_select_terms) {
-            expr::fill_prepare_context(term, ctx);
+            expr::fill_prepare_context(term.term, ctx);
         }
     }
 

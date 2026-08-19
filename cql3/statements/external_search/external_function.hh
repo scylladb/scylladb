@@ -54,4 +54,9 @@ expr::expression extract_query_value(const expr::function_call& fc, std::string_
 /// not select them, as in `SELECT BM25(...)`.
 void fetch_primary_key_columns(selection::selection& selection, const schema& schema);
 
+/// Asks for one more column of every fetched row.  Needed when a value injected per row is computed
+/// from the row's own contents, as a highlight is from the row's text - so that column has to be read
+/// even when the query does not select it.  It stays hidden from the client.
+void fetch_column(selection::selection& selection, const column_definition& cdef);
+
 } // namespace cql3::statements
