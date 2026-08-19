@@ -510,6 +510,27 @@ the built-in operator as ``system.bm25(...)`` to disambiguate it.
    only accepted there in a query that already has the required ``WHERE`` and ``ORDER BY``
    clauses, and every occurrence must reference the same column and the same search term.
 
+Selecting an excerpt
+^^^^^^^^^^^^^^^^^^^^
+
+``BM25_HIGHLIGHT(column, term)`` returns an excerpt of the searched text with the
+matched terms wrapped in ``<b>`` and ``</b>``::
+
+    SELECT id, BM25_HIGHLIGHT(body, 'distributed database') AS excerpt FROM articles
+        WHERE BM25(body, 'distributed database') > 0
+        ORDER BY BM25(body, 'distributed database')
+        LIMIT 10;
+
+It describes the same search as ``BM25()``, so it is accepted only as a selector
+in a query that already has the required ``WHERE`` and ``ORDER BY`` clauses, and
+must reference the same column and the same search term they do. It is rejected
+in every other clause.
+
+The result is of type ``text`` and is ``null`` for a row in which no useful
+fragment could be found; the row itself is still returned. The markers are
+emitted as they are - escaping the excerpt for the surrounding document is the
+client application's responsibility.
+
 For the full list of query constraints and requirements, see
 :doc:`Full-Text Search </features/fulltext-search>`.
 

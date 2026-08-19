@@ -86,6 +86,36 @@ and ``!=`` are rejected, as is any non-zero threshold.
 It is the score the rows are ranked by, so it needs the two clauses above and has to reference the
 same column and the same search term they do.
 
+Highlighting
+~~~~~~~~~~~~
+
+``BM25_HIGHLIGHT()`` returns an excerpt of the searched text with the matched
+terms marked, for showing the reader why a row was returned::
+
+    SELECT id, BM25_HIGHLIGHT(v, 'search term') AS excerpt FROM ks.t
+        WHERE BM25(v, 'search term') > 0
+        ORDER BY BM25(v, 'search term')
+        LIMIT 10;
+
+It describes the same search as ``BM25()``, so it is accepted in the same place
+and under the same rules: only in the ``SELECT`` clause of a query that already
+has the required ``WHERE`` and ``ORDER BY`` clauses, and referencing the same
+column and the same search term they do.
+
+The result is a single fragment of type ``text``, with the matched terms wrapped
+in ``<b>`` and ``</b>``. The markers are returned as they are - escaping the
+excerpt for the surrounding document is the client application's responsibility.
+
+The value is ``null`` for a row the search matched but in which no useful
+fragment could be found, as happens when the query consists only of stop words.
+Such a row is still returned; only its excerpt is absent. A ``null`` excerpt
+therefore means "no fragment for this row", and is never an empty string.
+
+Answering a query that asks for an excerpt costs one additional round trip to
+the full-text index, made after the matching rows have been read, and sends the
+text of the highlighted column of those rows to it. Queries that do not ask for
+an excerpt are unaffected.
+
 Filtering support
 ~~~~~~~~~~~~~~~~~
 
@@ -160,6 +190,12 @@ FTS queries enforce the following rules:
        score, but only in a query that already has the required ``WHERE`` and
        ``ORDER BY`` clauses. Every occurrence must reference the same column
        and the same search term.
+   * - ``BM25_HIGHLIGHT()`` is a selector only
+     - ``BM25_HIGHLIGHT()`` returns an excerpt of the matched text. Like
+       ``BM25()`` in ``SELECT`` it requires the ``WHERE`` and ``ORDER BY``
+       clauses and the same column and search term, and it is rejected in every
+       other clause. A row with no usable fragment is returned with a ``null``
+       excerpt.
    * - Partition key columns excluded
      - A ``fulltext_index`` cannot be created on a partition key column, so
        ``BM25()`` cannot target one. Regular and clustering-key text columns
