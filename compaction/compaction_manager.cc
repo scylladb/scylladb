@@ -2208,16 +2208,21 @@ compaction::compaction_state::compaction_state(table_state& t)
 }
 
 void compaction_manager::add(table_state& t) {
-    auto [_, inserted] = _compaction_state.try_emplace(&t, t);
+    auto [it, inserted] = _compaction_state.try_emplace(&t, t);
     if (!inserted) {
         on_internal_error(cmlog, format("compaction_state for table {} [{}] already exists", t, fmt::ptr(&t)));
     }
+    // Must be registered here, otherwise this state's backlog would be tracked but never
+    // accounted by the compaction backlog manager. Compaction groups created after the
+    // table was started (tablet split, migration or merge) are not covered by the
+    // registration done by table::set_compaction_strategy().
+    register_backlog_tracker(*it->second.backlog_tracker);
 }
 
 future<> compaction_manager::remove(table_state& t, sstring reason) noexcept {
     auto& c_state = get_compaction_state(&t);
     auto erase_state = defer([&t, &c_state, this] () noexcept {
-       c_state.backlog_tracker->disable();
+       c_state.backlog_tracker->retire();
        _compaction_state.erase(&t);
     });
 
@@ -2324,6 +2329,14 @@ void compaction_manager::plug_system_keyspace(db::system_keyspace& sys_ks) noexc
 
 void compaction_manager::unplug_system_keyspace() noexcept {
     _sys_ks = nullptr;
+}
+
+void compaction_backlog_tracker::retire() {
+    if (_manager) {
+        _manager->remove_backlog_tracker(this);
+        _manager = nullptr;
+    }
+    disable();
 }
 
 double compaction_backlog_tracker::backlog() const {
