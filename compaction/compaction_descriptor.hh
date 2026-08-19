@@ -92,6 +92,10 @@ public:
         // will not be updated.
         // Only applies to validate-mode.
         update_scrub_time update_timestamp = update_scrub_time::no;
+
+
+        using report_fn = std::function<void()>;
+        report_fn report_corruption;
     };
     struct reshard {
         // If set, resharding compaction will apply the owned_ranges to segregate sstables in vnode boundaries.
@@ -143,8 +147,8 @@ public:
         return compaction_type_options(upgrade{});
     }
 
-    static compaction_type_options make_scrub(scrub::mode mode, scrub::quarantine_invalid_sstables quarantine_sstables = scrub::quarantine_invalid_sstables::yes, scrub::drop_unfixable_sstables drop_unfixable_sstables = scrub::drop_unfixable_sstables::no, scrub::update_scrub_time update_timestamp = scrub::update_scrub_time::no) {
-        return compaction_type_options(scrub{.operation_mode = mode, .quarantine_sstables = quarantine_sstables, .drop_unfixable = drop_unfixable_sstables, .update_timestamp = update_timestamp});
+    static compaction_type_options make_scrub(scrub::mode mode, scrub::quarantine_invalid_sstables quarantine_sstables = scrub::quarantine_invalid_sstables::yes, scrub::drop_unfixable_sstables drop_unfixable_sstables = scrub::drop_unfixable_sstables::no, scrub::update_scrub_time update_timestamp = scrub::update_scrub_time::no, scrub::report_fn handler = nullptr) {
+        return compaction_type_options(scrub{.operation_mode = mode, .quarantine_sstables = quarantine_sstables, .drop_unfixable = drop_unfixable_sstables, .update_timestamp = update_timestamp, .report_corruption = std::move(handler)});
     }
 
     static compaction_type_options make_component_rewrite(component_type component, std::function<void(sstables::sstable&)> modifier, sstables::update_sstable_id update_id = sstables::update_sstable_id::yes) {
