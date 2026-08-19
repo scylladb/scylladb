@@ -22,8 +22,14 @@
 #include "cql3/values.hh"
 #include "exceptions/exceptions.hh"
 #include "unimplemented.hh"
+#include <seastar/core/future.hh>
 #include <seastar/core/thread.hh>
 #include <span>
+
+namespace query {
+class result;
+class partition_slice;
+}
 
 namespace cql3 {
 
@@ -50,6 +56,18 @@ class result_set_builder;
 class external_values_provider {
 public:
     virtual ~external_values_provider() = default;
+
+    // Called once, with the whole result of the base-table query, before any try_fill().  A value
+    // that does not exist until the fetched rows are known - a highlight, generated from a row's
+    // own text - is asked for here, in one call for the whole result, and handed out per row
+    // afterwards.  This is the only place a provider can do I/O: try_fill() is reached from a
+    // synchronous walk over the serialized result.
+    //
+    // Non-const, unlike try_fill(): this is where a provider fills what it will then hand out.
+    // Default: nothing to prepare.
+    virtual future<> prepare(const query::result& result, const query::partition_slice& slice) {
+        return make_ready_future<>();
+    }
 
     // Writes this provider's external values into the current row's slots.
     // Returns true to keep the row, false to drop it.

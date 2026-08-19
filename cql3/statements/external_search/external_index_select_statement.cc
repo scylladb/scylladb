@@ -93,6 +93,13 @@ future<::shared_ptr<cql_transport::messages::result_message>> external_index_sel
 
     auto result = co_await query_base_table(qp, state, options, command, timeout, pkeys);
 
+    // The rows are known now, so a value that only exists once they are - a highlight, generated
+    // from a row's own text - can be asked for, once for the whole result.  Skipped on the failure
+    // branch, which wrap_result_to_error_message reports below.
+    if (provider && result) {
+        co_await provider->prepare(*result.value(), command->slice);
+    }
+
     command->set_row_limit(get_limit(options, _limit));
 
     co_return co_await wrap_result_to_error_message([this, command = std::move(command), &options, provider_ptr = provider.get()](auto query_result) {
