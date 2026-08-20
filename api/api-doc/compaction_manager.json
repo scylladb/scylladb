@@ -102,7 +102,7 @@
                "parameters":[
                   {
                      "name":"type",
-                     "description":"The type of compaction to stop. Can be one of: COMPACTION | CLEANUP | SCRUB | UPGRADE | RESHAPE",
+                     "description":"The type of compaction to stop. Can be one of: COMPACTION | REGULAR | MAJOR | CLEANUP | SCRUB | UPGRADE | RESHAPE | SPLIT. COMPACTION stops both regular and major compactions",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",
@@ -142,7 +142,7 @@
                   },
                   {
                      "name":"type",
-                     "description":"The type of compaction to stop. Can be one of: COMPACTION | CLEANUP | SCRUB | UPGRADE | RESHAPE",
+                     "description":"The type of compaction to stop. Can be one of: COMPACTION | REGULAR | MAJOR | CLEANUP | SCRUB | UPGRADE | RESHAPE | SPLIT. COMPACTION stops both regular and major compactions",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",
