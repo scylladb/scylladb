@@ -356,7 +356,7 @@ future<> cluster_backup_task::do_backup() {
 
             auto client = manager.get_endpoint_client(dst.endpoint);
             auto prefix = db::snapshot::snapshot_meta_location(dst.prefix, t, _snapshot);
-            output_stream<char> out(client->make_upload_sink(sstables::object_name(dst.bucket, prefix, "manifest.json"), &_as));
+            output_stream<char> out(client->make_upload_sink(sstables::object_name(dst.bucket, prefix, "manifest.json"), {}, &_as));
             auto streamer = json::stream_object(std::move(manifest));
             co_await streamer(std::move(out));
             _total_progress.completed += 1;
