@@ -671,7 +671,9 @@ protected:
     schema_ptr _schema;
     shared_ptr<sstables::object_storage_client> _client;
     sstring _bucket;
-    bool _uses_foreign_location;
+    // Fixed at construction: the layout decides how component objects are
+    // named, so it cannot change once anything has been written under it.
+    const data_dictionary::storage_options::object_storage_layout _layout;
     sstring _prefix;
     seastar::abort_source* _as;
 
@@ -687,8 +689,12 @@ protected:
         return object_name(_bucket, prefix(), sid, fmt::format("refs/nodes/{}/{}", host_id, gen));
     }
 
+    bool uses_foreign_layout() const noexcept {
+        return _layout == data_dictionary::storage_options::object_storage_layout::foreign;
+    }
+
     table_id owner() const {
-        if (_uses_foreign_location) {
+        if (uses_foreign_layout()) {
             on_internal_error(sstlog, format("Storage holds '{}' prefix, but registry owner is expected", prefix()));
         }
         return _schema->id();
@@ -697,16 +703,16 @@ protected:
         return _as;
     }
 public:
-    object_storage_base(sstring type, schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, seastar::abort_source* as)
+    object_storage_base(sstring type, schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, data_dictionary::storage_options::object_storage_layout layout, seastar::abort_source* as)
         : _type(type) 
         , _schema(std::move(schema))
         , _client(std::move(client))
         , _bucket(std::move(bucket))
-        , _uses_foreign_location(loc.has_value())
+        , _layout(layout)
         , _prefix(loc ? std::move(*loc) : "sstables")
         , _as(as)
     {
-        sstlog.debug("Object storage type={} keyspace={} table={} table_id={} bucket={} prefix={} uses_foreign_location={}", _type, _schema->ks_name(), _schema->cf_name(), _schema->id(), _bucket, _prefix, _uses_foreign_location);
+        sstlog.debug("Object storage type={} keyspace={} table={} table_id={} bucket={} prefix={} layout={}", _type, _schema->ks_name(), _schema->cf_name(), _schema->id(), _bucket, _prefix, uses_foreign_layout() ? "foreign" : "live");
     }
 
     future<> seal(const sstable& sst) override;
@@ -794,8 +800,8 @@ public:
 
 class s3_storage : public object_storage_base {
 public:
-    s3_storage(schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, seastar::abort_source* as)
-        : object_storage_base("S3", std::move(schema), std::move(client), std::move(bucket), std::move(loc), as)
+    s3_storage(schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, data_dictionary::storage_options::object_storage_layout layout, seastar::abort_source* as)
+        : object_storage_base("S3", std::move(schema), std::move(client), std::move(bucket), std::move(loc), layout, as)
     {}
 
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
@@ -812,7 +818,7 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
         throw std::runtime_error(fmt::format("'{}' STORAGE only works with uuid_sstable_identifier enabled", _type));
     }
 
-    auto ret = _uses_foreign_location
+    auto ret = uses_foreign_layout()
             ? object_name(_bucket, prefix(), sstable::component_basename(sst.get_schema()->ks_name(), sst.get_schema()->cf_name(), sst.get_version(), gen, sst.get_format(), comp))
             : object_name(_bucket, prefix(), get_sstable_identifier(sst), comp);
     sstlog.trace("make_object_name: sstable_id={} generation={} comp={}: {}", sst.sstable_identifier(), gen, comp, ret.str());
@@ -1112,7 +1118,7 @@ bool object_storage_base::operator==(const storage& other) const noexcept {
             && _type == other_object->_type
             && _schema->id() == other_object->_schema->id()
             && _client.get() == other_object->_client.get()
-            && _uses_foreign_location == other_object->_uses_foreign_location
+            && _layout == other_object->_layout
             && _prefix == other_object->_prefix;
 }
 
@@ -1223,10 +1229,10 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schem
         },
         [&] (const data_dictionary::storage_options::object_storage& os) mutable -> std::unique_ptr<sstables::storage> {
             if (s_opts.is_s3_type()) {
-                return std::make_unique<sstables::s3_storage>(schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
+                return std::make_unique<sstables::s3_storage>(schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.layout, os.abort_source);
             }
             if (s_opts.is_gs_type()) {
-                return std::make_unique<sstables::object_storage_base>("GS", schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
+                return std::make_unique<sstables::object_storage_base>("GS", schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.layout, os.abort_source);
             }
             throw std::runtime_error(fmt::format("Not implemented: '{}'", os.type));
         }
