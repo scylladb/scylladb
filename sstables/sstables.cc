@@ -4498,6 +4498,7 @@ future<std::vector<std::unique_ptr<sstable_stream_source>>> create_stream_source
 class sstable_stream_sink_impl : public sstable_stream_sink {
     shared_sstable _sst;
     component_type _type;
+    bool _first_component;
     bool _last_component;
     bool _leave_unsealed;
     checksum _checksum;
@@ -4506,6 +4507,7 @@ public:
     sstable_stream_sink_impl(shared_sstable sst, component_type type, sstable_stream_sink_cfg cfg)
         : _sst(std::move(sst))
         , _type(type)
+        , _first_component(cfg.first_component)
         , _last_component(cfg.last_component)
         , _leave_unsealed(cfg.leave_unsealed)
         , _checksum(DEFAULT_CHUNK_SIZE, {})
@@ -4514,7 +4516,7 @@ public:
         // create_stream_sink() replaces component_type::TOC with TemporaryTOC for
         // filesystem storage, so TOC reaches the sink only for object storage.
         SCYLLA_ASSERT(_type != component_type::TOC || _sst->_storage->is_object_storage());
-        sstlog.debug("Creating stream sink for SSTable gen={} sid={} type={} last={} leave_unsealed={}", _sst->generation(), _sst->sstable_identifier(), _type, _last_component, _leave_unsealed);
+        sstlog.debug("Creating stream sink for SSTable gen={} sid={} type={} first={} last={} leave_unsealed={}", _sst->generation(), _sst->sstable_identifier(), _type, _first_component, _last_component, _leave_unsealed);
     }
 private:
     // TOC and scylla components are guaranteed not to depend on metadata. Ignore these (chicken, egg)
@@ -4596,6 +4598,9 @@ private:
     }
 public:
     future<output_stream<char>> output(const file_open_options& foptions, const file_output_stream_options& stream_options) override {
+        if (_first_component) {
+            co_await _sst->_storage->open_for_stream(*_sst);
+        }
         bool load_save_meta = depends_on_metadata(_type);
 
         // otherwise, first load scylla metadata from disk as written so far.

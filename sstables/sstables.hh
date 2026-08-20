@@ -1414,6 +1414,10 @@ public:
 };
 
 struct sstable_stream_sink_cfg {
+    // Set on the sink of the component which is written first. That sink calls
+    // storage::open_for_stream(), which registers the sstable in the sstables
+    // registry for object storage and does nothing for filesystem storage.
+    bool first_component = false;
     bool last_component = false;
     bool leave_unsealed = false;
 };
