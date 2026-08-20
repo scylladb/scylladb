@@ -7,6 +7,7 @@
 import string
 import random
 import collections
+import ssl
 import time
 import requests
 import json
@@ -389,6 +390,20 @@ def get_cert(dynamodb):
     session = dynamodb.meta.client._endpoint.http_session
     cert_file = getattr(session, '_cert_file', None)
     return (cert_file, session._key_file) if cert_file else None
+
+# An ssl.SSLContext for connecting to the given server as a client, for
+# tests which bypass boto3 and establish TLS connections themselves.
+# check_hostname and verify_mode are needed because we use self-signed
+# certificates in tests. Under mTLS, the server requires a client
+# certificate at the TLS handshake level, so load it if there is one.
+def client_ssl_context(dynamodb):
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    cert = get_cert(dynamodb)
+    if cert:
+        context.load_cert_chain(certfile=cert[0], keyfile=cert[1])
+    return context
 
 # manual_request() can be used to send a DynamoDB API request without any
 # boto3 involvement in preparing the request - the operation name and
