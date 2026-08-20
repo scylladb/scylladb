@@ -2159,7 +2159,7 @@ public:
     }
 
 public:
-    bool update_column_family(schema_ptr s);
+    void update_column_family(const schema_ptr& s);
 private:
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_system);
     struct table_truncate_state;

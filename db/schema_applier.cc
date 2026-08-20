@@ -720,8 +720,15 @@ future<schema_diff_per_shard> schema_diff_per_shard::copy_from(replica::database
     co_return result;
 }
 
+// The column set is the property that decides whether cached client state
+// (prepared statements, driver-side table metadata) is still valid. It must be
+// computed from old_schema: by the time notifications are sent, the live column
+// family already carries the new schema.
+static bool columns_changed(const schema_ptr& old_schema, const schema_ptr& new_schema) {
+    return !old_schema->equal_columns(*new_schema);
+}
+
 static future<> notify_tables_and_views(service::migration_notifier& notifier, const affected_tables_and_views& diff) {
-    auto it = diff.tables_and_views.local().columns_changed.cbegin();
     auto notify = [&] (auto& r, auto&& f) -> future<> {
         co_await max_concurrent_for_each(r, max_concurrent, std::move(f));
     };
@@ -739,9 +746,15 @@ static future<> notify_tables_and_views(service::migration_notifier& notifier, c
     co_await notify(cdc.created, [&] (auto&& gs) { return notifier.create_column_family(gs); });
     co_await notify(views.created, [&] (auto&& gs) { return notifier.create_view(view_ptr(gs)); });
     // Table altering is notified first, in case new base columns appear
-    co_await notify(tables.altered, [&] (auto&& altered) { return notifier.update_column_family(altered.new_schema, *it++); });
-    co_await notify(cdc.altered, [&] (auto&& altered) { return notifier.update_column_family(altered.new_schema, *it++); });
-    co_await notify(views.altered, [&] (auto&& altered) { return notifier.update_view(view_ptr(altered.new_schema), *it++); });
+    co_await notify(tables.altered, [&] (auto&& altered) {
+        return notifier.update_column_family(altered.new_schema, columns_changed(altered.old_schema, altered.new_schema));
+    });
+    co_await notify(cdc.altered, [&] (auto&& altered) {
+        return notifier.update_column_family(altered.new_schema, columns_changed(altered.old_schema, altered.new_schema));
+    });
+    co_await notify(views.altered, [&] (auto&& altered) {
+        return notifier.update_view(view_ptr(altered.new_schema), columns_changed(altered.old_schema, altered.new_schema));
+    });
 }
 
 static void drop_cached_func(replica::database& db, const query::result_set_row& row) {
@@ -1002,14 +1015,11 @@ void schema_applier::commit_tables_and_views() {
         db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
     }
 
-    diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + cdc.altered.size() + views.altered.size());
     for (auto&& altered : cdc.altered) {
-        bool changed = db.update_column_family(altered.new_schema);
-        diff.tables_and_views.local().columns_changed.push_back(changed);
+        db.update_column_family(altered.new_schema);
     }
     for (auto&& altered : boost::range::join(tables.altered, views.altered)) {
-        bool changed = db.update_column_family(altered.new_schema);
-        diff.tables_and_views.local().columns_changed.push_back(changed);
+        db.update_column_family(altered.new_schema);
     }
 }
 
