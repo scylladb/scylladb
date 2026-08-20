@@ -131,7 +131,8 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
         throw exceptions::invalid_request_exception("Full-text search queries do not support per-partition limits");
     }
 
-    if (selection->is_aggregate()) {
+    // GROUP BY is aggregation too, and a selected score does not make the selection look aggregate.
+    if (selection->is_aggregate() || !group_by_cell_indices->empty()) {
         throw exceptions::invalid_request_exception("Full-text search queries cannot be run with aggregation");
     }
 
