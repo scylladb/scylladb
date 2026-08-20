@@ -11,6 +11,7 @@
 #include <string>
 #include <optional>
 #include <filesystem>
+#include <unordered_map>
 
 #include <seastar/core/future.hh>
 #include <seastar/core/semaphore.hh>
@@ -44,6 +45,8 @@ class abstract_lister;
 
 namespace sstables {
 
+using object_storage_attributes = std::unordered_map<sstring, sstring>;
+
 class object_name {
     std::string _name;
 public:
@@ -73,14 +76,19 @@ class object_storage_client {
 public:
     virtual ~object_storage_client() = default;
 
-    virtual future<> put_object(object_name, ::memory_data_sink_buffers bufs, abort_source* = nullptr) = 0;
-    virtual future<> copy_object(object_name src, object_name dst, abort_source* = nullptr) = 0;
+    // The attributes are not defaulted: an object written without them cannot
+    // describe itself later, so every caller states whether it has any.  They
+    // come directly after the object being written, ahead of the remaining
+    // parameters, matching the order the backend clients use.
+    virtual future<> put_object(object_name, ::memory_data_sink_buffers bufs, object_storage_attributes, abort_source* = nullptr) = 0;
+    virtual future<> copy_object(object_name src, object_name dst, object_storage_attributes, abort_source* = nullptr) = 0;
     virtual future<> delete_object(object_name, abort_source* = nullptr) = 0;
     virtual file make_readable_file(object_name, abort_source* = nullptr) = 0;
-    virtual data_sink make_data_upload_sink(object_name, std::optional<unsigned> max_parts_per_piece, abort_source* = nullptr) = 0;
-    virtual data_sink make_upload_sink(object_name, abort_source* = nullptr) = 0;
+    virtual data_sink make_data_upload_sink(object_name, object_storage_attributes, std::optional<unsigned> max_parts_per_piece, abort_source* = nullptr) = 0;
+    virtual data_sink make_upload_sink(object_name, object_storage_attributes, abort_source* = nullptr) = 0;
     virtual data_source make_download_source(object_name, abort_source* = nullptr) = 0;
     virtual future<bool> object_exists(object_name name, abort_source* as = nullptr) = 0;
+    virtual future<object_storage_attributes> get_object_metadata(object_name name, abort_source* as = nullptr) = 0;
 
     virtual abstract_lister make_object_lister(std::string bucket, std::string prefix, lister::filter_type) = 0;
 

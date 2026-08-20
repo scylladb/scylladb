@@ -385,7 +385,7 @@ future<> upload_object(cql_test_env& env, sstring endpoint, sstring bucket, sstr
     auto client = env.get_sstorage_manager().local().get_endpoint_client(endpoint);
     memory_data_sink_buffers bufs;
     bufs.push_back(temporary_buffer<char>(content.data(), content.size()));
-    return client->put_object(object_name(bucket, path), std::move(bufs));
+    return client->put_object(object_name(bucket, path), std::move(bufs), sstables::object_storage_attributes{});
 }
 
 // Manifests written by older Scylla versions lack the optional per-sstable metadata
