@@ -317,6 +317,22 @@ def _save_hashes(path: Path, hashes: dict) -> None:
     path.write_text(json.dumps(hashes, indent=2, sort_keys=True) + "\n")
 
 
+def _copy_pregenerated(header_out: Path, source_out: Path) -> bool:
+    """Install the committed copies as this build's generated files.
+
+    They are copied verbatim, not regenerated: without models there is
+    nothing to expand the templates from, and this path exists to keep an
+    offline build going rather than to produce a current table. Returns
+    False when the copies are missing."""
+    header_src = PREGENERATED_DIR / GENERATED_HEADER_NAME
+    source_src = PREGENERATED_DIR / GENERATED_SOURCE_NAME
+    if not header_src.is_file() or not source_src.is_file():
+        return False
+    _write_if_changed(header_out, header_src.read_text())
+    _write_if_changed(source_out, source_src.read_text())
+    return True
+
+
 def _update_pregenerated() -> int:
     """Regenerate the committed copies from the current upstream models.
 
@@ -350,6 +366,12 @@ def main() -> int:
     parser.add_argument("--force", action="store_true",
                         help="regenerate even if the cached sidefile shows "
                              "all model/template/output hashes still match")
+    parser.add_argument("--offline-fallback", action="store_true",
+                        help="when the models cannot be fetched, compile the "
+                             "copies committed under utils/s3/pregenerated/ "
+                             "instead of failing. Off by default: a build "
+                             "that silently uses a stale error table ships a "
+                             "stale error table.")
     parser.add_argument("--update-pregenerated", action="store_true",
                         help="fetch the models, regenerate, and rewrite the "
                              "committed copies under utils/s3/pregenerated/, "
@@ -406,34 +428,26 @@ def main() -> int:
     cached_gen = cached.get("generated", {})
 
     if fetch_error is not None:
-        # No network. If cached outputs are present at all we let the build
-        # proceed with them — leaving a developer stranded without a
-        # buildable tree is worse than shipping a possibly-stale registry.
-        # If the recorded hashes don't match (someone hand-edited the
-        # generated files, or the sidefile is stale) we surface a second
-        # warning so it's not silent.
-        outputs_present = (
-            not args.dry_run
-            and header_out.exists() and source_out.exists()
-        )
-        if outputs_present and not args.force:
-            print(f"warning: {fetch_error}", file=sys.stderr)
-            hashes_match = (
-                cached_gen.get(header_out.name) == _sha256_file(header_out)
-                and cached_gen.get(source_out.name) == _sha256_file(source_out)
-            )
-            if not hashes_match:
-                print(f"warning: cached generated files at {out_dir} do not "
-                      f"match the sidefile hashes (manual edits or stale "
-                      f"sidefile); using them anyway to keep the build "
-                      f"working", file=sys.stderr)
-            else:
-                print(f"warning: keeping existing generated files at "
-                      f"{out_dir} (offline build)", file=sys.stderr)
-            return 0
-        # No cached outputs to fall back to, or --force was requested.
-        sys.exit(f"error: {fetch_error} and no cached outputs at "
-                 f"{out_dir}; cannot regenerate offline")
+        # Failing the build is the default on purpose. The point of generating
+        # this table from the c2j models is to pick up a new AWS error as soon
+        # as upstream describes it, and a build that quietly carried on with an
+        # old table would defeat that without anyone noticing.
+        if not args.offline_fallback:
+            sys.exit(f"error: {fetch_error}; configure with "
+                     f"--allow-stale-aws-models (CMake: "
+                     f"-DScylla_ALLOW_STALE_AWS_MODELS=ON) to compile the "
+                     f"committed copies instead")
+        print(f"warning: {fetch_error}", file=sys.stderr)
+        if not _copy_pregenerated(header_out, source_out):
+            sys.exit(f"error: no committed copies in {PREGENERATED_DIR} to "
+                     f"fall back on")
+        print(f"warning: compiling the copies committed in "
+              f"{PREGENERATED_DIR}; the AWS error table may be out of date",
+              file=sys.stderr)
+        # The sidefile describes files generated from fetched models, so it is
+        # deliberately left alone: the next build that reaches GitHub finds no
+        # match and regenerates.
+        return 0
 
     # Short-circuit only if every input matches AND the outputs on disk
     # still match what we last wrote (guards against manual edits).
