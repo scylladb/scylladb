@@ -12,6 +12,7 @@
 #include "api/validate.hh"
 #include "api/api-doc/column_family.json.hh"
 #include "api/api-doc/storage_service.json.hh"
+#include "api/api-doc/system.json.hh"
 #include <vector>
 #include <seastar/http/exception.hh>
 #include "sstables/sstables.hh"
@@ -34,6 +35,7 @@ using namespace httpd;
 using namespace json;
 namespace cf = httpd::column_family_json;
 namespace ss = httpd::storage_service_json;
+namespace hs = httpd::system_json;
 
 std::tuple<sstring, sstring> parse_fully_qualified_cf_name(sstring name) {
     auto pos = name.find("%3A");
@@ -1159,6 +1161,16 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
             return db.local().find_keyspace(ks).get_replication_strategy().uses_tablets() == want_tablets;
         }) | std::ranges::to<std::vector>();
     });
+
+    hs::drop_sstable_caches.set(r, [&db] (std::unique_ptr<http::request> req) {
+        apilog.info("Dropping sstable caches");
+        return db.invoke_on_all([] (replica::database& db) {
+            return db.drop_caches();
+        }).then([] {
+            apilog.info("Caches dropped");
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
 }
 
 void unset_column_family(http_context& ctx, routes& r) {
@@ -1275,5 +1287,6 @@ void unset_column_family(http_context& ctx, routes& r) {
     ss::get_load.unset(r);
     ss::get_metrics_load.unset(r);
     ss::get_keyspaces.unset(r);
+    hs::drop_sstable_caches.unset(r);
 }
 }
