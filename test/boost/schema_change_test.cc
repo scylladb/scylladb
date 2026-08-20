@@ -476,6 +476,44 @@ SEASTAR_TEST_CASE(test_nested_type_mutation_in_update) {
     });
 }
 
+// A merge can carry an update of a user type together with an update of a table
+// using it, e.g. when a restarted node catches up on several schema changes at
+// once. The table's before and after schemas are then both built with the new
+// type, so equal_columns() alone cannot see the column change - the update
+// notification must still report the columns as changed.
+SEASTAR_TEST_CASE(test_batched_type_and_table_update_reports_column_change) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        counting_migration_listener listener;
+        e.local_mnotifier().register_listener(&listener);
+        auto listener_lease = defer([&e, &listener] noexcept {
+            e.local_mnotifier().unregister_listener(&listener).get();
+        });
+
+        e.execute_cql("CREATE TYPE tp (a int);").get();
+        e.execute_cql("CREATE TABLE t (pk int primary key, v tp);").get();
+
+        service::migration_manager& mm = e.migration_manager().local();
+        auto group0_guard = mm.start_group0_operation().get();
+        auto ts = group0_guard.write_timestamp();
+        auto&& keyspace = e.db().local().find_keyspace("ks").metadata();
+
+        auto new_type = user_type_impl::get_instance("ks", to_bytes("tp"), {"a", "b"}, {int32_type, int32_type}, true);
+        auto muts = db::schema_tables::make_create_type_mutations(keyspace, new_type, ts);
+
+        auto old_schema = e.db().local().find_schema("ks", "t");
+        auto new_schema = schema_builder(old_schema).set_comment("batched with a type change").build();
+        auto table_muts = db::schema_tables::make_update_table_mutations(mm.get_storage_proxy(), keyspace, old_schema, new_schema, ts);
+        muts.insert(muts.end(), table_muts.begin(), table_muts.end());
+
+        mm.announce(std::move(muts), std::move(group0_guard), "").get();
+
+        BOOST_REQUIRE_EQUAL(listener.update_user_type_count, 1);
+        BOOST_REQUIRE_EQUAL(listener.update_column_family_count, 1);
+        BOOST_REQUIRE_EQUAL(listener.columns_changed_count, 1);
+        BOOST_REQUIRE_EQUAL(listener.indexes_changed_count, 0);
+    });
+}
+
 SEASTAR_TEST_CASE(test_notifications) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {

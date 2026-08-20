@@ -735,14 +735,28 @@ struct client_visible_changes {
     bool indexes;
 };
 
-static client_visible_changes get_client_visible_changes(const schema_ptr& old_schema, const schema_ptr& new_schema) {
+// Both sides of an altered table's diff are built with the same in-progress
+// types storage, so a column whose type changed through a user type altered in
+// the same merge compares equal in equal_columns(). Detect such columns by the
+// types they reference.
+static bool references_altered_type(const schema& s, const std::vector<user_type>& altered_types) {
+    return std::ranges::any_of(altered_types, [&] (const user_type& t) {
+        return t->_keyspace == s.ks_name() && std::ranges::any_of(s.all_columns(), [&] (const column_definition& def) {
+            return def.type->references_user_type(t->_keyspace, t->_name);
+        });
+    });
+}
+
+static client_visible_changes get_client_visible_changes(const schema_ptr& old_schema, const schema_ptr& new_schema,
+        const std::vector<user_type>& altered_types) {
     return {
-        .columns = !old_schema->equal_columns(*new_schema),
+        .columns = !old_schema->equal_columns(*new_schema) || references_altered_type(*new_schema, altered_types),
         .indexes = old_schema->all_indices() != new_schema->all_indices(),
     };
 }
 
-static future<> notify_tables_and_views(service::migration_notifier& notifier, const affected_tables_and_views& diff) {
+static future<> notify_tables_and_views(service::migration_notifier& notifier, const affected_tables_and_views& diff,
+        const std::vector<user_type>& altered_types) {
     auto notify = [&] (auto& r, auto&& f) -> future<> {
         co_await max_concurrent_for_each(r, max_concurrent, std::move(f));
     };
@@ -761,15 +775,15 @@ static future<> notify_tables_and_views(service::migration_notifier& notifier, c
     co_await notify(views.created, [&] (auto&& gs) { return notifier.create_view(view_ptr(gs)); });
     // Table altering is notified first, in case new base columns appear
     co_await notify(tables.altered, [&] (auto&& altered) {
-        auto changed = get_client_visible_changes(altered.old_schema, altered.new_schema);
+        auto changed = get_client_visible_changes(altered.old_schema, altered.new_schema, altered_types);
         return notifier.update_column_family(altered.new_schema, changed.columns, changed.indexes);
     });
     co_await notify(cdc.altered, [&] (auto&& altered) {
-        auto changed = get_client_visible_changes(altered.old_schema, altered.new_schema);
+        auto changed = get_client_visible_changes(altered.old_schema, altered.new_schema, altered_types);
         return notifier.update_column_family(altered.new_schema, changed.columns, changed.indexes);
     });
     co_await notify(views.altered, [&] (auto&& altered) {
-        auto changed = get_client_visible_changes(altered.old_schema, altered.new_schema);
+        auto changed = get_client_visible_changes(altered.old_schema, altered.new_schema, altered_types);
         return notifier.update_view(view_ptr(altered.new_schema), changed.columns, changed.indexes);
     });
 }
@@ -1200,7 +1214,7 @@ future<> schema_applier::post_commit() {
             co_await notifier.drop_user_type(type);
         }
 
-        co_await notify_tables_and_views(notifier, _affected_tables_and_views);
+        co_await notify_tables_and_views(notifier, _affected_tables_and_views, types.altered);
 
         // notify about user functions and aggregates
         for (const auto& func : _functions_batch.local().removed_functions) {
