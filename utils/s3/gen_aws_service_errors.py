@@ -13,10 +13,11 @@
 #   * ServiceErrorsSource.vm GetErrorForName() body  → mapping snippet
 #
 # Usage:
-#   python3 utils/s3/gen_aws_service_errors.py           # writes generated files next to templates
 #   python3 utils/s3/gen_aws_service_errors.py --output-dir DIR
 #                                                        # build-system mode
 #   python3 utils/s3/gen_aws_service_errors.py --dry-run # prints to stdout instead
+#   python3 utils/s3/gen_aws_service_errors.py --update-pregenerated
+#                                                        # refresh the committed copies
 
 from __future__ import annotations
 
@@ -378,24 +379,30 @@ def main() -> int:
                              "then exit. Maintenance action, never run by a "
                              "build.")
     parser.add_argument("--output-dir", type=Path, default=None,
-                        help="build-system mode: read the source templates "
+                        help="read the source templates "
                              "utils/s3/aws_error_definitions.{hh,cc}.in and "
                              "write the fully-expanded copies (plus the "
                              "hashes sidefile) to <output-dir>/utils/s3/. "
-                             "When omitted, the generated files land next to "
-                             "the templates.")
+                             "Required unless --dry-run.")
     args = parser.parse_args()
 
     if args.update_pregenerated:
         return _update_pregenerated()
 
-    # Where do generated files (and the sidefile) live? In `--output-dir`
-    # mode: under the build tree. Otherwise: alongside the source templates
-    # (developer in-place workflow).
-    if args.output_dir is not None:
-        out_dir = args.output_dir / "utils" / "s3"
-    else:
-        out_dir = HERE
+    # A dry run prints and writes nothing, so it has nowhere to put a
+    # fallback copy -- and without --output-dir it would put one next to the
+    # templates, at the very path that shadows the build's own header.
+    if args.dry_run and args.offline_fallback:
+        parser.error("--offline-fallback cannot be used with --dry-run")
+
+    # Generated files (and the sidefile) always live under the build tree.
+    # Writing them next to the templates would put a header at
+    # utils/s3/aws_error_definitions_generated.hh, which precedes the
+    # generated directory on the include path and would shadow the one the
+    # build produces.
+    if args.output_dir is None and not args.dry_run:
+        parser.error("--output-dir is required")
+    out_dir = args.output_dir / "utils" / "s3" if args.output_dir else HERE
     header_out = out_dir / GENERATED_HEADER_NAME
     source_out = out_dir / GENERATED_SOURCE_NAME
     hashes_file = out_dir / HASHES_NAME
