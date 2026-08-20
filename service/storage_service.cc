@@ -2156,10 +2156,13 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(
             }
         };
 
-        if (tablet_hint) {
+        if (tablet_hint && *tablet_hint) {
             // Tables not in the hint have an unchanged tablet_map (same pointer,
             // per replica::update_tablet_metadata), so their transitions() can't
-            // have gained anything new since the last call.
+            // have gained anything new since the last call. An empty hint (as
+            // opposed to an absent one) means prepare_tablet_metadata() took the
+            // full, non-hinted read_tablet_metadata() path, which rebuilds every
+            // table's tablet_map from scratch, so no table can be skipped then.
             for (auto&& [table, table_hint] : tablet_hint->tables) {
                 collect_open_sessions_for_table(table);
             }
