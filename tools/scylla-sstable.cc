@@ -44,6 +44,7 @@
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/open_info.hh"
+#include "sstables/object_storage_client.hh"
 #include "release.hh"
 #include "replica/database.hh"
 #include "replica/schema_describe_helper.hh"
@@ -348,16 +349,13 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
         }
 
 
-        data_dictionary::storage_options options;
-        auto ed_result = sstables::parse_path(sst_path, schema->ks_name(), schema->cf_name());
-        if (!ed_result) {
-            sstables::throw_malformed_sstable_exception(ed_result.error());
-        }
-        auto ed = std::move(*ed_result);
-
         using osp = db::object_storage_endpoint_param;
         static const auto os_types = { osp::s3_type, osp::gs_type };
         auto is_fqn = os_types | std::views::filter(std::bind_front(&data_dictionary::is_object_storage_fqn, sst_path));
+
+        data_dictionary::storage_options options;
+        std::optional<sstables::entry_descriptor> ed;
+        bool use_live_object_storage_layout = false;
 
         if (!is_fqn.empty()) {
             auto type = is_fqn.front();
@@ -370,13 +368,78 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
                 ));
             }
             auto endpoint = endpoints.front();
-            options = data_dictionary::make_object_storage_options(endpoint, sst_path);
+
+            auto ed_result = sstables::parse_path(sst_path, schema->ks_name(), schema->cf_name());
+            if (ed_result) {
+                options = data_dictionary::make_object_storage_options(endpoint, sst_path);
+                ed = std::move(*ed_result);
+            } else {
+                // Not the standard layout, so try the live one,
+                // {prefix}/{sstable_id}/{component}.  Its object names carry no
+                // version, generation or format for parse_path() to work with, so
+                // the descriptor comes from the TOC object attributes below.
+                // ed_result.error() describes the standard layout and would be a
+                // misleading diagnosis here, so say what specifically does not
+                // look like a live-layout path instead.
+                std::string bucket;
+                std::string object;
+                if (!data_dictionary::object_storage_fqn_to_parts(sst_path, type, bucket, object)) {
+                    sstables::throw_malformed_sstable_exception(fmt::format("Cannot parse {} object storage path {}", type, sst_name));
+                }
+                auto object_path = std::filesystem::path(object).lexically_normal();
+                auto component = object_path.filename().string();
+                auto parent = object_path.parent_path();
+                auto sid_str = parent.filename().string();
+                auto prefix = parent.parent_path();
+                if (prefix.empty()) {
+                    sstables::throw_malformed_sstable_exception(fmt::format(
+                            "Expected a live object storage SSTable component path {{prefix}}/{{sstable_id}}/{{component}}, but {} has no prefix", sst_name));
+                }
+                // Parse the sstable id before going to the network: a path that does
+                // not name one is not a live-layout path at all, and the TOC lookup
+                // below would then fail with an unrelated error.
+                auto sid_uuid = [&sid_str, &sst_name] {
+                    try {
+                        return utils::UUID(std::string_view(sid_str));
+                    } catch (...) {
+                        sstables::throw_malformed_sstable_exception(fmt::format(
+                                "Expected an SSTable id in the live object storage path {}, but '{}' is not one: {}",
+                                sst_name, sid_str, std::current_exception()));
+                    }
+                }();
+                options = data_dictionary::make_object_storage_options(endpoint, type, bucket, prefix.string());
+                use_live_object_storage_layout = true;
+
+                auto toc_object = parent / "TOC.txt";
+                auto metadata = co_await sstm.get_endpoint_client(endpoint)->get_object_metadata(sstables::object_name(bucket, toc_object.string()));
+                auto version_it = metadata.attributes.find(sstring(sstables::object_storage_sstable_version_attribute));
+                auto format_it = metadata.attributes.find(sstring(sstables::object_storage_sstable_format_attribute));
+                if (version_it == metadata.attributes.end() || format_it == metadata.attributes.end()) {
+                    throw std::invalid_argument(fmt::format(
+                        "Unable to open live object-storage SSTable component {}: missing {} or {} object attribute on TOC.txt",
+                        sst_name,
+                        sstables::object_storage_sstable_version_attribute,
+                        sstables::object_storage_sstable_format_attribute));
+                }
+                auto version = sstables::version_from_string(version_it->second);
+                auto format = sstables::format_from_string(format_it->second);
+                ed = sstables::entry_descriptor(sstables::generation_type(sid_uuid), sstables::sstable_id(sid_uuid),
+                        version, format, sstables::sstable::component_from_sstring(version, component));
+            }
         } else {
+            auto ed_result = sstables::parse_path(sst_path, schema->ks_name(), schema->cf_name());
+            if (!ed_result) {
+                sstables::throw_malformed_sstable_exception(ed_result.error());
+            }
+            ed = std::move(*ed_result);
             sst_path = std::filesystem::canonical(std::filesystem::path(sst_name));
             const auto dir_path = sst_path.parent_path();
             options = data_dictionary::make_local_options(dir_path);
         }
-        auto sst = sst_man.make_sstable(schema, options, ed.generation, ed.sid, sstables::sstable_state::normal, ed.version, ed.format);
+        auto sst = sst_man.make_sstable(schema, options, ed->generation, ed->sid, sstables::sstable_state::normal, ed->version, ed->format);
+        if (use_live_object_storage_layout) {
+            sst->use_live_object_storage_layout();
+        }
 
         try {
             auto open_cfg = sstables::sstable_open_config{
