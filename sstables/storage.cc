@@ -763,6 +763,7 @@ public:
 
     future<size_t> num_references(sstable_id sid) const;
     future<> delete_components(sstable_version_types version, sstable_id sid, bool log_errors) const;
+    future<> create_reference(sstable_id sid, generation_type gen, locator::host_id node_owner) const;
 
     bool is_object_storage() const override { return true; }
 
@@ -843,6 +844,11 @@ future<size_t> object_storage_base::num_references(sstable_id sid) const {
     co_return refs.size();
 }
 
+future<> object_storage_base::create_reference(sstable_id sid, generation_type gen, locator::host_id node_owner) const {
+    auto ref_name = make_ref_object_name(sid, gen, node_owner);
+    co_await put_object(ref_name, memory_data_sink_buffers(), object_storage_attributes{});
+}
+
 future<size_t> object_storage_base::num_references(const sstable& sst) const {
     return num_references(get_sstable_identifier(sst));
 }
@@ -880,8 +886,7 @@ void object_storage_base::open(sstable& sst) {
     auto host_id = sst.manager().get_local_host_id();
     sst.manager().sstables_registry().create_entry(owner(), host_id, status_creating, sst._state, std::move(desc)).get();
 
-    auto ref_name = make_ref_object_name(sid, sst.generation(), host_id);
-    put_object(ref_name, memory_data_sink_buffers(), object_storage_attributes{}).get();
+    create_reference(sid, sst.generation(), host_id).get();
 
     memory_data_sink_buffers bufs;
     auto out = data_sink(std::make_unique<memory_data_sink>(bufs));
@@ -889,7 +894,7 @@ void object_storage_base::open(sstable& sst) {
 
     sst.write_toc(std::move(w));
     put_object(make_object_name(sst, component_type::TOC), std::move(bufs), object_storage_attributes{}).get();
-    sstlog.debug("Created reference {}: {}", sst.get_filename(), ref_name);
+    sstlog.debug("Created reference {}: sstable_id={}", sst.get_filename(), sid);
 }
 
 future<file> object_storage_base::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
@@ -1171,8 +1176,7 @@ future<> object_storage_base::link_with_excluded_components(const sstable& sst, 
     auto node_owner = sst.manager().get_local_host_id();
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
 
-    auto ref_name = make_ref_object_name(sid, new_gen, node_owner);
-    co_await put_object(ref_name, memory_data_sink_buffers(), object_storage_attributes{});
+    co_await create_reference(sid, new_gen, node_owner);
 
     co_await copy_components(sst, sid, excluded_components);
 }
@@ -1188,8 +1192,7 @@ future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_typ
     auto node_owner = sst.manager().get_local_host_id();
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
 
-    auto ref_name = make_ref_object_name(sid, gen, node_owner);
-    co_await put_object(ref_name, memory_data_sink_buffers(), object_storage_attributes{});
+    co_await create_reference(sid, gen, node_owner);
     auto refs = co_await num_references(sid);
     sstlog.debug("Cloned {} sstable_id={} num_references={}", sst.get_filename(), sid, refs);
 
