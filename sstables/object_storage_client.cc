@@ -175,7 +175,7 @@ public:
         co_await sink.close();
     }
     future<> copy_object(object_name src, object_name dst, abort_source* as) override {
-        return _client->copy_object(src.bucket(), src.object(), dst.bucket(), dst.object(), as);
+        return _client->copy_object(src.bucket(), src.object(), dst.bucket(), dst.object(), {}, as);
     }
     future<> delete_object(object_name name, abort_source* as) override {
         return _client->delete_object(name.bucket(), name.object(), as);
