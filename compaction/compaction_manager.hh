@@ -452,8 +452,8 @@ public:
 
     bool compaction_disabled(compaction::compaction_group_view& t) const;
 
-    // Stops ongoing compaction of a given type.
-    future<> stop_compaction(sstring type, std::function<bool(const compaction_group_view*)> filter = [] (auto) { return true; });
+    // Stops ongoing compactions of the given types, on user request.
+    future<> stop_compaction(compaction_type_set types, std::function<bool(const compaction_group_view*)> filter = [] (auto) { return true; });
 
 private:
     std::vector<shared_ptr<compaction_task_executor>>
