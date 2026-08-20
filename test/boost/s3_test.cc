@@ -233,7 +233,7 @@ void do_test_client_multipart_upload(const client_maker_function& client_maker, 
     auto out = output_stream<char>(
         // Make it 3 parts per piece, so that 128Mb buffer below
         // would be split into several 15Mb pieces
-        with_copy_upload ? cln->make_upload_jumbo_sink(name, 3) : cln->make_upload_sink(name)
+        with_copy_upload ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 3) : cln->make_upload_sink(name)
     );
     auto close = seastar::deferred_close(out);
 
@@ -312,7 +312,7 @@ void do_test_client_upload_empty_object(const client_maker_function& client_make
 
     testlog.info("Upload an empty object (with copy = {})\n", with_copy_upload);
     auto out = output_stream<char>(
-        with_copy_upload ? cln->make_upload_jumbo_sink(name, 3) : cln->make_upload_sink(name)
+        with_copy_upload ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 3) : cln->make_upload_sink(name)
     );
     auto close = seastar::deferred_close(out);
 
@@ -688,7 +688,7 @@ SEASTAR_THREAD_TEST_CASE(test_object_reupload) {
             auto out = output_stream<char>(
                 // Make it 3 parts per piece, so that 128Mb buffer below
                 // would be split into several 15Mb pieces
-                jumbo ? cln->make_upload_jumbo_sink(name, 3) : cln->make_upload_sink(name));
+                jumbo ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 3) : cln->make_upload_sink(name));
 
             constexpr unsigned chunk_size = 1000;
             constexpr unsigned writes = 128 * 1024;
@@ -837,7 +837,7 @@ void test_object_copy(const client_maker_function& client_maker, size_t chunk_si
 
     out.flush().get();
     out.close().get();
-    cln->copy_object(name, name_copy, 5_MiB).get();
+    cln->copy_object(name, name_copy, s3::object_metadata{}, 5_MiB).get();
 
     auto sz = cln->get_object_size(name_copy).get();
     BOOST_REQUIRE_EQUAL(sz, chunk_size * chunks);

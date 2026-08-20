@@ -91,10 +91,10 @@ public:
     }
 
     future<> put_object(object_name name, ::memory_data_sink_buffers bufs, abort_source* as) override {
-        return _client->put_object(name.str(), std::move(bufs), as);
+        return _client->put_object(name.str(), std::move(bufs), {}, as);
     }
     future<> copy_object(object_name src, object_name dst, abort_source* as) override {
-        return _client->copy_object(src.str(), dst.str(), std::nullopt, std::nullopt, as);
+        return _client->copy_object(src.str(), dst.str(), s3::object_metadata{}, std::nullopt, std::nullopt, as);
     }
     future<> delete_object(object_name name, abort_source* as) override {
         return _client->delete_object(name.str(), as);
@@ -103,10 +103,10 @@ public:
         return _client->make_readable_file(name.str(), as);
     }
     data_sink make_data_upload_sink(object_name name, std::optional<unsigned> max_parts_per_piece, abort_source* as) override {
-        return _client->make_upload_jumbo_sink(name.str(), max_parts_per_piece, as);
+        return _client->make_upload_jumbo_sink(name.str(), s3::object_metadata{}, max_parts_per_piece, as);
     }
     data_sink make_upload_sink(object_name name, abort_source* as) override {
-        return _client->make_upload_sink(name.str(), as);
+        return _client->make_upload_sink(name.str(), {}, as);
     }
     data_source make_download_source(object_name name, abort_source* as) override {
         return _client->make_chunked_download_source(name.str(), s3::full_range, as);
