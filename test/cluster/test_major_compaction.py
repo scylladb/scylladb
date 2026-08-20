@@ -284,3 +284,141 @@ async def test_disable_autocompaction_during_major_compaction(manager: ManagerCl
         await compaction_task
         await log.wait_for(f"Major {ks}.{cf} .* Compacted .*", from_mark=mark, timeout=30)
 
+
+@pytest.mark.parametrize("stop_type", ["COMPACTION", "MAJOR"])
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_stop_compaction_stops_major_compaction(manager: ManagerClient, stop_type):
+    """
+    Test that `nodetool stop COMPACTION` (and `nodetool stop MAJOR`) stops an ongoing
+    major compaction.
+
+    Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-3761: major compaction
+    tasks were retagged from compaction_type::Compaction to compaction_type::Major so
+    that disabling auto-compaction wouldn't stop them, which also made them invisible
+    to the exact type match done on behalf of `nodetool stop COMPACTION`.
+
+    1. Create a single node cluster.
+    2. Create a table and populate it.
+    3. Inject an error to make major compaction wait.
+    4. Start major compaction, wait for it to reach the injection point.
+    5. Stop compactions of the given type and expect the major compaction to be stopped.
+    """
+    logger.info("Starting a single node cluster")
+    server = await manager.server_add()
+    # disable autocompaction on system and system_schema keyspaces to avoid interference with testing
+    await disable_autocompaction_across_keyspaces(manager, server.ip_addr, "system", "system_schema")
+
+    cf = "cf"
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        logger.info("Creating table")
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY)")
+
+        logger.info("Populating table")
+        for i in range(2):
+            await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.{cf} (pk) VALUES ({k});") for k in range(i * 100, (i + 1) * 100)])
+            await manager.api.keyspace_flush(server.ip_addr, ks, cf)
+
+        logger.info("Inject error to make major compaction wait")
+        injection = "major_compaction_wait"
+        await manager.api.enable_injection(server.ip_addr, injection, False)
+
+        logger.info("Start compaction and wait for it to pause at the injection point")
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        compaction_task = asyncio.create_task(manager.api.keyspace_compaction(server.ip_addr, ks, cf))
+        await manager.api.wait_for_injection_enter(server.ip_addr, injection)
+
+        try:
+            logger.info(f"Stopping compactions of type {stop_type}")
+            await manager.api.stop_compaction(server.ip_addr, stop_type)
+
+            # The injection releases itself once a stop was requested, so the major
+            # compaction has to abort rather than complete.
+            await log.wait_for(f"Major compaction task .*: stopped, reason: Compaction for {ks}/{cf} was stopped due to: user request",
+                               from_mark=mark, timeout=60)
+        finally:
+            # Release the injection point, in case the compaction wasn't stopped after all.
+            await manager.api.message_injection(server.ip_addr, injection)
+            await manager.api.disable_injection(server.ip_addr, injection)
+
+        await compaction_task
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_stop_regular_compaction_does_not_stop_major_compaction(manager: ManagerClient):
+    """
+    Test that `nodetool stop REGULAR` leaves an ongoing major compaction alone.
+
+    REGULAR is the counterpart of MAJOR: COMPACTION stops both regular and major
+    compactions, while REGULAR stops regular compactions only.
+
+    1. Create a single node cluster.
+    2. Create a table and populate it.
+    3. Inject an error to make major compaction wait.
+    4. Start major compaction, wait for it to reach the injection point.
+    5. Stop compactions of type REGULAR.
+    6. Resume the major compaction and expect it to complete successfully.
+    """
+    logger.info("Starting a single node cluster")
+    # the "Compacted" message this test waits for is logged at debug level
+    server = await manager.server_add(cmdline=["--logger-log-level", "compaction=debug"])
+    # disable autocompaction on system and system_schema keyspaces to avoid interference with testing
+    await disable_autocompaction_across_keyspaces(manager, server.ip_addr, "system", "system_schema")
+
+    cf = "cf"
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        logger.info("Creating table")
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY)")
+
+        logger.info("Populating table")
+        for i in range(2):
+            await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.{cf} (pk) VALUES ({k});") for k in range(i * 100, (i + 1) * 100)])
+            await manager.api.keyspace_flush(server.ip_addr, ks, cf)
+
+        logger.info("Inject error to make major compaction wait")
+        injection = "major_compaction_wait"
+        await manager.api.enable_injection(server.ip_addr, injection, False)
+
+        logger.info("Start compaction and wait for it to pause at the injection point")
+        log = await manager.server_open_log(server.server_id)
+        compaction_task = asyncio.create_task(manager.api.keyspace_compaction(server.ip_addr, ks, cf))
+        await manager.api.wait_for_injection_enter(server.ip_addr, injection)
+
+        logger.info("Stopping compactions of type REGULAR")
+        await manager.api.stop_compaction(server.ip_addr, "REGULAR")
+
+        logger.info("Resuming major compaction")
+        mark = await log.mark()
+        await manager.api.message_injection(server.ip_addr, injection)
+        await manager.api.disable_injection(server.ip_addr, injection)
+        await compaction_task
+        await log.wait_for(f"Major {ks}.{cf} .* Compacted .*", from_mark=mark, timeout=60)
+
+
+# The compaction type names accepted by stop_compaction are translated into the set of
+# internal compaction types to stop. COMPACTION covers both regular and major compaction,
+# see https://scylladb.atlassian.net/browse/SCYLLADB-3761.
+@pytest.mark.parametrize("stop_type,expected_types", [
+    ("COMPACTION", "Compact,Major"),
+    ("REGULAR", "Compact"),
+    ("MAJOR", "Major"),
+    ("CLEANUP", "Cleanup"),
+])
+async def test_stop_compaction_type_translation(manager: ManagerClient, stop_type, expected_types):
+    """
+    Test that each compaction type name accepted by stop_compaction reaches the compaction
+    manager as the expected set of internal compaction types.
+    """
+    logger.info("Starting a single node cluster")
+    server = await manager.server_add(cmdline=["--logger-log-level", "compaction_manager=debug"])
+
+    log = await manager.server_open_log(server.server_id)
+    mark = await log.mark()
+
+    logger.info(f"Stopping compactions of type {stop_type}")
+    await manager.api.stop_compaction(server.ip_addr, stop_type)
+
+    await log.wait_for(f"Stopping .* ongoing compactions.*types={expected_types} due to user request",
+                       from_mark=mark, timeout=60)

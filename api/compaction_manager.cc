@@ -9,6 +9,8 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/exception.hh>
 
+#include <ranges>
+
 #include "compaction_manager.hh"
 #include "compaction/compaction_manager.hh"
 #include "api/api.hh"
@@ -28,6 +30,62 @@ namespace cm = httpd::compaction_manager_json;
 namespace ss = httpd::storage_service_json;
 using namespace json;
 using namespace seastar::httpd;
+
+std::vector<sstring> valid_compaction_types_for_stop() {
+    auto filter = [] (compaction::compaction_type type) {
+        switch (type) {
+        case compaction::compaction_type::Validation:
+        case compaction::compaction_type::Index_build:
+        case compaction::compaction_type::Reshard:
+            return false;
+        default:
+            return true;
+        }
+    };
+    auto transform = [] (compaction::compaction_type type) {
+        return compaction::compaction_name(type);
+    };
+    return compaction::compaction_type_set::full()
+        | std::ranges::views::filter(filter)
+        | std::ranges::views::transform(transform)
+        | std::ranges::to<std::vector<sstring>>();
+}
+
+// Translate a compaction type name, as accepted by the stop_compaction REST API
+// (and by `nodetool stop`), into the set of compaction types to stop.
+//
+// Regular and major compaction are distinct compaction types internally, but
+// "COMPACTION" has stopped both ever since major compaction had a type of its
+// own, so keep it that way. "REGULAR" names regular compaction alone.
+std::expected<compaction::compaction_type_set, sstring> parse_compaction_types_to_stop(const sstring& type_name) {
+    using compaction::compaction_type;
+
+    if (type_name == "COMPACTION") {
+        return compaction::compaction_type_set::of<compaction_type::Compaction, compaction_type::Major>();
+    }
+    if (type_name == "REGULAR") {
+        return compaction::compaction_type_set::of<compaction_type::Compaction>();
+    }
+
+    compaction_type type;
+    try {
+        type = compaction::to_compaction_type(type_name);
+    } catch (...) {
+        return std::unexpected(fmt::format("Invalid compaction type {}, valid compaction types are: ({} and REGULAR)", type_name, fmt::join(valid_compaction_types_for_stop(), ", ")));
+    }
+    switch (type) {
+    case compaction_type::Validation:
+    case compaction_type::Index_build:
+        return std::unexpected(format("Compaction type {} is unsupported", type_name));
+    case compaction_type::Reshard:
+        return std::unexpected(format("Stopping compaction of type {} is disallowed", type_name));
+    default:
+        break;
+    }
+    compaction::compaction_type_set ret;
+    ret.set(type);
+    return ret;
+}
 
 static future<json::json_return_type> get_cm_stats(sharded<compaction::compaction_manager>& cm,
         int64_t compaction::compaction_manager::stats::*f) {
@@ -101,21 +159,26 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction::co
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    cm::stop_compaction.set(r, [&cm] (std::unique_ptr<http::request> req) {
-        auto type = req->get_query_param("type");
-        return cm.invoke_on_all([type] (compaction::compaction_manager& cm) {
-            return cm.stop_compaction(type);
-        }).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
+    cm::stop_compaction.set(r, [&cm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto res = parse_compaction_types_to_stop(req->get_query_param("type"));
+        if (!res) {
+            throw std::invalid_argument(res.error());
+        }
+        co_await cm.invoke_on_all([types = res.value()] (compaction::compaction_manager& cm) {
+            return cm.stop_compaction(types);
         });
+        co_return json_void();
     });
 
     cm::stop_keyspace_compaction.set(r, [&ctx, &cm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto [ks_name, tables] = parse_table_infos(ctx, *req, "tables");
-        auto type = req->get_query_param("type");
-        co_await cm.invoke_on_all([&] (compaction::compaction_manager& cm) {
+        auto res = parse_compaction_types_to_stop(req->get_query_param("type"));
+        if (!res) {
+            throw std::invalid_argument(res.error());
+        }
+        co_await cm.invoke_on_all([&, types = res.value()] (compaction::compaction_manager& cm) {
             return parallel_for_each(tables, [&] (const table_info& ti) {
-                return cm.stop_compaction(type, [id = ti.id] (const compaction::compaction_group_view* x) {
+                return cm.stop_compaction(types, [id = ti.id] (const compaction::compaction_group_view* x) {
                     return x->schema()->id() == id;
                 });
             });
