@@ -1175,6 +1175,44 @@ future<> snapshot_table_helper::insert_snapshot_entries(std::string_view snapsho
 }
 
 /**
+ * Helper to build a snapshot_table_entry describing the current schema of the given table
+ */
+db::snapshot_table_entry snapshot_table_helper::make_snapshot_table_entry(std::string_view snapshot_name, const replica::table& table) const {
+    auto s = table.schema();
+
+    auto helper = replica::make_schema_describe_helper(s, _qp.db());
+    auto desc = s->describe(helper, cql3::describe_option::STMTS_AND_INTERNALS);
+
+    auto type = snapshot_table_type::cql_table;
+    table_id base_table_id;
+
+    if (s->is_view()) {
+        type = snapshot_table_type::cql_view;
+        base_table_id = s->view_info()->base_id();
+    }
+
+    std::string tablet_layout = "none";
+
+    if (table.uses_tablets()) {
+        auto erm = table.get_effective_replication_map();
+        auto& tm = erm->get_token_metadata().tablets().get_tablet_map(s->id());
+        tablet_layout = locator::tablet_layout_to_string(tm.get_layout());
+    }
+
+    // TODO: check alternator etc...
+    return db::snapshot_table_entry{
+        .snapshot_name = std::string(snapshot_name),
+        .keyspace_name = s->ks_name(),
+        .table_name = s->cf_name(),
+        .table_id = s->id(),
+        .type = type,
+        .base_table_id = base_table_id,
+        .table_schema = desc.create_statement->linearize(),
+        .tablet_layout = tablet_layout
+    };
+}
+
+/**
  * Helper to write snapshot base metadata
  */
 future<> snapshot_table_helper::insert_snapshot_info(std::string_view snapshot_name
@@ -1207,36 +1245,7 @@ future<> snapshot_table_helper::insert_snapshot_info(std::string_view snapshot_n
             });
        }
 
-       auto helper = replica::make_schema_describe_helper(s, _qp.db());
-       auto desc = s->describe(helper, cql3::describe_option::STMTS_AND_INTERNALS);
-
-       auto type = snapshot_table_type::cql_table;
-       table_id base_table_id;
-
-       if (s->is_view()) {
-           type = snapshot_table_type::cql_view;
-           base_table_id = s->view_info()->base_id();
-       }
-
-       std::string tablet_layout = "none";
-
-       if (t->uses_tablets()) {
-           auto erm = t->get_effective_replication_map();
-           auto& tm = erm->get_token_metadata().tablets().get_tablet_map(s->id());
-           tablet_layout = locator::tablet_layout_to_string(tm.get_layout());
-       }
-
-       // TODO: check alternator etc...
-       tables.emplace_back(db::snapshot_table_entry{
-            .snapshot_name = std::string(snapshot_name),
-            .keyspace_name = name,
-            .table_name = s->cf_name(),
-            .table_id = s->id(),
-            .type = type,
-            .base_table_id = base_table_id,
-            .table_schema = desc.create_statement->linearize(),
-            .tablet_layout = tablet_layout
-       });
+       tables.emplace_back(make_snapshot_table_entry(snapshot_name, *t));
     }
 
     co_await insert_snapshot_keyspaces(keyspaces | std::views::values | std::ranges::to<std::vector>(), cl);
