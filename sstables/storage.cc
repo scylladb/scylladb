@@ -697,12 +697,12 @@ protected:
         return _as;
     }
 public:
-    object_storage_base(sstring type, schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, seastar::abort_source* as)
+    object_storage_base(sstring type, schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, bool uses_foreign_location, seastar::abort_source* as)
         : _type(type) 
         , _schema(std::move(schema))
         , _client(std::move(client))
         , _bucket(std::move(bucket))
-        , _uses_foreign_location(loc.has_value())
+        , _uses_foreign_location(uses_foreign_location)
         , _prefix(loc ? std::move(*loc) : "sstables")
         , _as(as)
     {
@@ -713,6 +713,9 @@ public:
     future<> snapshot(const sstable& sst, sstring name) const override;
     future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const override;
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
+    void use_live_object_storage_layout() override {
+        _uses_foreign_location = false;
+    }
     // runs in async context
     void open(sstable& sst) override;
     future<> wipe(sstable& sst, const atomic_deletion* deletion = nullptr) noexcept override;
@@ -795,8 +798,8 @@ public:
 
 class s3_storage : public object_storage_base {
 public:
-    s3_storage(schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, seastar::abort_source* as)
-        : object_storage_base("S3", std::move(schema), std::move(client), std::move(bucket), std::move(loc), as)
+    s3_storage(schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, bool uses_foreign_location, seastar::abort_source* as)
+        : object_storage_base("S3", std::move(schema), std::move(client), std::move(bucket), std::move(loc), uses_foreign_location, as)
     {}
 
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
@@ -1224,10 +1227,10 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schem
         },
         [&] (const data_dictionary::storage_options::object_storage& os) mutable -> std::unique_ptr<sstables::storage> {
             if (s_opts.is_s3_type()) {
-                return std::make_unique<sstables::s3_storage>(schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
+                return std::make_unique<sstables::s3_storage>(schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.location.has_value(), os.abort_source);
             }
             if (s_opts.is_gs_type()) {
-                return std::make_unique<sstables::object_storage_base>("GS", schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
+                return std::make_unique<sstables::object_storage_base>("GS", schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.location.has_value(), os.abort_source);
             }
             throw std::runtime_error(fmt::format("Not implemented: '{}'", os.type));
         }

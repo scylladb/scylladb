@@ -545,6 +545,9 @@ public:
     const storage& get_storage() const {
         return *_storage;
     }
+    void use_live_object_storage_layout() {
+        _storage->use_live_object_storage_layout();
+    }
 
 private:
     friend struct component_name;
