@@ -175,7 +175,7 @@ future<> managed_identity_credentials::refresh(const resource_type& resource_uri
         client.add_header("Metadata", "true");
 
         if (az_creds_logger.is_enabled(log_level::trace)) {
-            az_creds_logger.trace("[{}] Sending request: {}", *this, rest::redacted_request_type{ client.request(), filter });
+            az_creds_logger.trace("[{}] Sending request: {}", *this, rest::redacted_request_type{ client, filter });
         }
 
         auto res = co_await client.send();
