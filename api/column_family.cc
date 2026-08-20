@@ -1186,6 +1186,42 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         co_await replica::database::flush_tables_on_all_shards(db, std::move(table_infos));
         co_return json_void();
     });
+
+    ss::is_incremental_backups_enabled.set(r, [&db] (std::unique_ptr<http::request> req) {
+        // If this is issued in parallel with an ongoing change, we may see values not agreeing.
+        // Reissuing is asking for trouble, so we will just return true upon seeing any true value.
+        return db.map_reduce(adder<bool>(), [] (replica::database& db) {
+            for (auto& pair: db.get_keyspaces()) {
+                auto& ks = pair.second;
+                if (ks.incremental_backups_enabled()) {
+                    return true;
+                }
+            }
+            return false;
+        }).then([] (bool val) {
+            return make_ready_future<json::json_return_type>(val);
+        });
+    });
+
+    ss::set_incremental_backups_enabled.set(r, [&db] (std::unique_ptr<http::request> req) {
+        auto val_str = req->get_query_param("value");
+        bool value = (val_str == "True") || (val_str == "true") || (val_str == "1");
+        return db.invoke_on_all([value] (replica::database& db) {
+            db.set_enable_incremental_backups(value);
+
+            // Change both KS and CF, so they are in sync
+            for (auto& pair: db.get_keyspaces()) {
+                auto& ks = pair.second;
+                ks.set_incremental_backups(value);
+            }
+
+            db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
+                table->set_incremental_backups(value);
+            });
+        }).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
 }
 
 void unset_column_family(http_context& ctx, routes& r) {
@@ -1305,5 +1341,7 @@ void unset_column_family(http_context& ctx, routes& r) {
     hs::drop_sstable_caches.unset(r);
     ss::force_flush.unset(r);
     ss::force_keyspace_flush.unset(r);
+    ss::is_incremental_backups_enabled.unset(r);
+    ss::set_incremental_backups_enabled.unset(r);
 }
 }

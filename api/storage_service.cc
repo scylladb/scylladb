@@ -1065,46 +1065,6 @@ rest_is_joined(sharded<service::storage_service>& ss, std::unique_ptr<http::requ
 
 static
 future<json::json_return_type>
-rest_is_incremental_backups_enabled(http_context& ctx, std::unique_ptr<http::request> req) {
-        // If this is issued in parallel with an ongoing change, we may see values not agreeing.
-        // Reissuing is asking for trouble, so we will just return true upon seeing any true value.
-        return ctx.db.map_reduce(adder<bool>(), [] (replica::database& db) {
-            for (auto& pair: db.get_keyspaces()) {
-                auto& ks = pair.second;
-                if (ks.incremental_backups_enabled()) {
-                    return true;
-                }
-            }
-            return false;
-        }).then([] (bool val) {
-            return make_ready_future<json::json_return_type>(val);
-        });
-}
-
-static
-future<json::json_return_type>
-rest_set_incremental_backups_enabled(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto val_str = req->get_query_param("value");
-        bool value = (val_str == "True") || (val_str == "true") || (val_str == "1");
-        return ctx.db.invoke_on_all([value] (replica::database& db) {
-            db.set_enable_incremental_backups(value);
-
-            // Change both KS and CF, so they are in sync
-            for (auto& pair: db.get_keyspaces()) {
-                auto& ks = pair.second;
-                ks.set_incremental_backups(value);
-            }
-
-            db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
-                table->set_incremental_backups(value);
-            });
-        }).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
-}
-
-static
-future<json::json_return_type>
 rest_rebuild(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         utils::optional_param source_dc;
         if (auto source_dc_str = req->get_query_param("source_dc"); !source_dc_str.empty()) {
@@ -2090,8 +2050,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::is_initialized.set(r, gated(ss, rest_bind(rest_is_initialized, ss)));
     ss::join_ring.set(r, gated(ss, rest_bind(rest_join_ring)));
     ss::is_joined.set(r, gated(ss, rest_bind(rest_is_joined, ss)));
-    ss::is_incremental_backups_enabled.set(r, gated(ss, rest_bind(rest_is_incremental_backups_enabled, ctx)));
-    ss::set_incremental_backups_enabled.set(r, gated(ss, rest_bind(rest_set_incremental_backups_enabled, ctx)));
     ss::rebuild.set(r, gated(ss, rest_bind(rest_rebuild, ss)));
     ss::bulk_load.set(r, gated(ss, rest_bind(rest_bulk_load)));
     ss::bulk_load_async.set(r, gated(ss, rest_bind(rest_bulk_load_async)));
@@ -2176,8 +2134,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::is_initialized.unset(r);
     ss::join_ring.unset(r);
     ss::is_joined.unset(r);
-    ss::is_incremental_backups_enabled.unset(r);
-    ss::set_incremental_backups_enabled.unset(r);
     ss::rebuild.unset(r);
     ss::bulk_load.unset(r);
     ss::bulk_load_async.unset(r);
