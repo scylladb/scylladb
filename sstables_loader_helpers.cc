@@ -49,17 +49,36 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
     //
     // In short: Scylla must be written second so that all following output() calls
     // can properly update its metadata instead of silently skipping it.
+    //
+    // save_metadata() is also what replaces the sstable_id of the backup sstable
+    // with the sstable_id assigned below, so the same ordering is what makes the
+    // new sstable_id reach the copy.
     auto scylla_it = std::ranges::find_if(components, [](const auto& component) { return component.first == component_type::Scylla; });
     if (scylla_it != std::next(components.begin())) {
         swap(*scylla_it, *std::next(components.begin()));
     }
 
+    // sstable::load() assigns an sstable_id to every sstable it opens, taken from
+    // scylla_metadata or derived from the generation, so a backup sstable opened
+    // for restore always has one.
+    auto source_sid = sstable->sstable_identifier();
+    if (!source_sid) {
+        on_internal_error(logger, fmt::format("Backup sstable {} has no sstable_id", sstable->get_filename()));
+    }
+
     auto gen = table.get_sstable_generation_generator()();
+    // A restored sstable is a copy and gets its own sstable_id, derived from the
+    // new generation the same way sstable::clone() derives one. For object storage
+    // the sstable_id is the prefix of the component object keys, so reusing the
+    // sstable_id of the backup sstable would make the copies which different
+    // replicas create of it overwrite each other.
+    auto sid = sstables::sstable_id(gen.as_uuid());
     auto files = co_await sstable->readable_file_for_all_components();
     for (auto it = components.cbegin(); it != components.cend(); ++it) {
         try {
             auto descriptor = sstable->get_descriptor(it->first);
             descriptor.generation = gen;
+            descriptor.sid = sid;
             auto sstable_sink =
                 sstables::create_stream_sink(table.schema(),
                                              table.get_sstables_manager(),
@@ -102,7 +121,7 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
                     on_internal_error(logger, "Fully-contained sstable must belong to one shard only");
                 }
                 logger.debug("SSTable gen={} sid={}: shards {}", gen, sst->sstable_identifier(), fmt::join(shards, ", "));
-                co_return minimal_sst_info{shards.front(), gen, descriptor.version, descriptor.format};
+                co_return minimal_sst_info{shards.front(), gen, descriptor.version, descriptor.format, sid, *source_sid};
             }
         } catch (...) {
             logger.info("Error downloading SSTable component {}. Reason: {}", it->first, std::current_exception());
