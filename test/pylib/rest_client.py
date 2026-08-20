@@ -659,11 +659,15 @@ class ScyllaRESTAPIClient:
     async def repair_and_wait(self, node_ip: str, keyspace: str = "", table: str = "", data_centers: str = "") -> None:
         """Issue repair_async and poll repair_status until completion.
 
-        If keyspace is empty, repairs all non-system keyspaces.
+        If keyspace is empty, repairs all non-system vnode keyspaces, which is
+        what `nodetool repair` without arguments does. Tablet keyspaces are
+        rejected by /storage_service/repair_async, they have to be repaired via
+        the tablet repair API (see `repair()`).
         """
         params = {k: v for k, v in (("columnFamilies", table), ("dataCenters", data_centers)) if v}
         if not keyspace:
-            keyspaces = await self.client.get_json("/storage_service/keyspaces", host=node_ip, params={"type": "non_local_strategy"})
+            keyspaces = await self.client.get_json("/storage_service/keyspaces", host=node_ip,
+                                                   params={"type": "non_local_strategy", "replication": "vnodes"})
             for ks in keyspaces:
                 await self._repair_keyspace(node_ip, ks, params)
         else:
