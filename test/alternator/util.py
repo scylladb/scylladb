@@ -14,6 +14,7 @@ import pytest
 from contextlib import contextmanager
 from botocore import UNSIGNED
 from botocore.hooks import HierarchicalEmitter
+import boto3
 
 from test.pylib.skip_types import skip_env
 
@@ -447,3 +448,61 @@ def get_signed_request(dynamodb, op, payload, extra_headers=None):
     if signer._signature_version != UNSIGNED:
         signer.get_auth(signer.signing_name, signer.region_name).add_auth(request=req)
     return req
+
+# new_role() is a context manager for temporarily creating a new role with
+# a unique name and returning its name and the secret key needed to connect
+# to it with the DynamoDB API.
+# The "login" and "superuser" flags are passed to the CREATE ROLE statement.
+# This is a ScyllaDB-only feature, and currently uses CQL to create the role.
+@contextmanager
+def new_role(cql, login=True, superuser=False):
+    # The role name is not a table's name but it doesn't matter. Because our
+    # unique_table_name() uses (deliberately) a non-lower-case character, the
+    # role name has to be quoted in double quotes when used in CQL below.
+    role = unique_table_name()
+    # The password set for the new role is identical to the user name (not
+    # very secure ;-)) - but we later need to retrieve the "salted hash" of
+    # this password, which serves in Alternator as the secret key of the role.
+    cql.execute(f"CREATE ROLE \"{role}\" WITH PASSWORD = '{role}' AND SUPERUSER = {superuser} AND LOGIN = {login}")
+    # Newer Scylla places the "roles" table in the "system" keyspace, but
+    # older versions used "system_auth_v2" or "system_auth"
+    key = None
+    for ks in ['system', 'system_auth_v2', 'system_auth']:
+        try:
+            e = list(cql.execute(f"SELECT salted_hash FROM {ks}.roles WHERE role = '{role}'"))
+            if e != []:
+                key = e[0].salted_hash
+                if key is not None:
+                    break
+        except:
+            pass
+    assert key is not None
+    try:
+        yield (role, key)
+    finally:
+        cql.execute(f'DROP ROLE "{role}"')
+
+# Create a new DynamoDB API resource (connection object) similar to the
+# existing "dynamodb" resource - but authenticating with the given role
+# and key.
+# This is a ScyllaDB-only feature.
+@contextmanager
+def new_dynamodb(dynamodb, role, key):
+    # Under mTLS, identity is determined solely by the client certificate
+    # presented on the connection (and SigV4 signatures, if any, are
+    # ignored) - so there is no way to authenticate as a different role
+    # using a role/key pair. Skip such tests instead of silently
+    # reconnecting as whatever identity the certificate maps to.
+    if get_cert(dynamodb):
+        skip_env("new_dynamodb() authenticates using SigV4 role/key pairs, which are not supported under mTLS")
+    url = dynamodb.meta.client._endpoint.host
+    config = dynamodb.meta.client._client_config
+    region_name = dynamodb.meta.client.meta.region_name
+    verify = not url.startswith('https')
+    ret = boto3.resource('dynamodb', endpoint_url=url, verify=verify,
+        aws_access_key_id=role, aws_secret_access_key=key,
+        region_name=region_name, config=config)
+    try:
+        yield ret
+    finally:
+        ret.meta.client.close()

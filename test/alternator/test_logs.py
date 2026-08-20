@@ -35,8 +35,7 @@ from botocore.exceptions import ClientError
 
 from test.pylib.skip_types import skip_env
 
-from .util import new_test_table, scylla_config_temporary
-from .test_cql_rbac import new_dynamodb, new_role
+from .util import new_test_table, scylla_config_temporary, new_role, new_dynamodb
 
 # Utility function for trying to find a local process which is listening to
 # the given local IP address and port. If such a process exists, return its

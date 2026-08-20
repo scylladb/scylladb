@@ -338,6 +338,48 @@ def test_audit_query_item_operations(dynamodb, cql, alternator_audit_enabled):
         _assert_audit_entries(new_rows, expected, ks_name, table.name)
 
 
+# Test auditing of the QUERY vector-search operation: SearchVectors.
+# Unlike GetItem/Query/Scan, SearchVectors has no ConsistentRead parameter -
+# it always goes through the (eventually-consistent) vector store, so it is
+# always audited with consistency LOCAL_ONE.
+# This test doesn't need a working vector store: maybe_audit() runs before
+# SearchVectors reaches the vector store, so the audit entry is produced
+# regardless of whether the search itself succeeds or fails (e.g., with
+# "Vector Store is disabled" if none is configured) - hence we don't check
+# the error(bool) field here, unlike the other audit tests above.
+def test_audit_search_vectors(dynamodb, cql, alternator_audit_enabled):
+    with new_test_table(dynamodb,
+            KeySchema=[{"AttributeName": "p", "KeyType": "HASH"}],
+            AttributeDefinitions=[{"AttributeName": "p", "AttributeType": "S"}],
+            VectorIndexes=[{
+                "IndexName": "vind",
+                "VectorAttribute": {"AttributeName": "v"},
+                "Dimensions": 3,
+                "DistanceFunction": "COSINE",
+                "Projection": {"ProjectionType": "KEYS_ONLY"},
+            }]) as table:
+        ks_name = f"alternator_{table.name}"
+        # Enable audit for the current table's keyspace. The `alternator_audit_enabled` fixture
+        # ensures that `audit_keyspaces` in system.config has been already stored too and will be
+        # restored after the test.
+        cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", (ks_name,))
+        before_rows = _get_audit_log_rows(cql)
+        try:
+            table.meta.client.search_vectors(
+                TableName=table.name, IndexName="vind", SearchVector=[1, 0, 0], TopK=1)
+        except ClientError:
+            pass
+        new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
+        assert len(new_rows) == 1
+        row = new_rows[0]
+        assert row.category == "QUERY"
+        assert row.consistency == "LOCAL_ONE"
+        assert row.keyspace_name == ks_name
+        assert row.table_name == table.name
+        assert "SearchVectors" in row.operation
+        assert "vind" in row.operation
+
+
 # Test auditing of the QUERY batch operation: BatchGetItem.
 # A single BatchGetItem call produces one audit entry.
 # The audit entry records CL=ANY as a placeholder; per-item consistency is set individually.
