@@ -4543,6 +4543,15 @@ private:
         }
         auto& metadata = *_sst->get_shared_components().scylla_metadata;
 
+        // download_sstable() in sstables_loader_helpers.cc streams the Scylla
+        // component of the backup sstable verbatim, so scylla_metadata still holds
+        // the sstable_id of the backup sstable. Replace the sstable_id with the one
+        // of the sstable being written, before serialized_checksum() below computes
+        // the digest over scylla_metadata::data.
+        if (auto sid = _sst->sstable_identifier()) {
+            metadata.set_sstable_identifier(*sid);
+        }
+
         file_output_stream_options options;
         options.buffer_size = default_sstable_buffer_size;
         co_await seastar::async([&] {
