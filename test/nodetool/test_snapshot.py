@@ -78,10 +78,10 @@ def test_listsnapshots(nodetool, request):
     expected_output =\
 """Snapshot Details: 
 Snapshot name Keyspace name Column family name True size Size on disk
-1698236289867 ks1           tbl1               0 bytes   44 KB       
-1698236289867 ks1           tbl2               0 bytes   40 KB       
-1698236070745 ks1           tbl1               0 bytes   34.23 KB    
-1698236070745 ks1           tbl2               0 bytes   20.46 KB    
+1698236289867 ks1           tbl1               0 bytes   44 KiB      
+1698236289867 ks1           tbl2               0 bytes   40 KiB      
+1698236070745 ks1           tbl1               0 bytes   34.23 KiB   
+1698236070745 ks1           tbl2               0 bytes   20.46 KiB   
 
 Total TrueDiskSpaceUsed: 923.08 KiB
 

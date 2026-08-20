@@ -25,7 +25,7 @@ In this example, a snapshot was created. As you can see, its ``True size`` value
    Snapshot Details:
 
    Snapshot name Keyspace name Column family name True size Size on disk
-   1574708464997 ks3           standard1          0 bytes   2.23 GB
+   1574708464997 ks3           standard1          0 bytes   2.23 GiB
 
    Total TrueDiskSpaceUsed: 0 bytes
 
@@ -38,7 +38,7 @@ After time, you can see its ``True size`` is the same as the space it utilizes o
 
    Snapshot Details:
    Snapshot name Keyspace name Column family name True size Size on disk
-   1574708464997 ks3           standard1          2.23 GB   2.23 GB
+   1574708464997 ks3           standard1          2.23 GiB  2.23 GiB
 
    Total TrueDiskSpaceUsed: 2.23 GiB
 

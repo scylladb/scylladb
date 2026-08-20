@@ -20,11 +20,11 @@ Example output:
     =======================
     Status=Up/Down/eXcluded
     |/ State=Normal/Leaving/Joining/Moving
-    --  Address    Load       Tokens  Owns (effective)  Host ID                               Rack
-    UN  127.0.0.1  394.97 MB  256     33.4%             292a6c7f-2063-484c-b54d-9015216f1750  rack1
-    UN  127.0.0.2  151.07 MB  256     34.3%             102b6ecd-2081-4073-8172-bf818c35e27b  rack1
-    UN  127.0.0.3  249.07 MB  256     32.3%             20db6ecd-2981-447s-l172-jf118c17o27y  rack1
-    XN  127.0.0.4  149.07 MB  256     32.3%             dd961642-c7c6-4962-9f5a-ea774dbaed77  rack1
+    --  Address    Load        Tokens  Owns (effective)  Host ID                               Rack
+    UN  127.0.0.1  394.97 MiB  256     33.4%             292a6c7f-2063-484c-b54d-9015216f1750  rack1
+    UN  127.0.0.2  151.07 MiB  256     34.3%             102b6ecd-2081-4073-8172-bf818c35e27b  rack1
+    UN  127.0.0.3  249.07 MiB  256     32.3%             20db6ecd-2981-447s-l172-jf118c17o27y  rack1
+    XN  127.0.0.4  149.07 MiB  256     32.3%             dd961642-c7c6-4962-9f5a-ea774dbaed77  rack1
 
 +----------+---------------------------------------------------------------+
 |Parameter |Description                                                    |

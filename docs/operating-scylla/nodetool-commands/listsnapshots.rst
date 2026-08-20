@@ -14,9 +14,9 @@ For example:
    Snapshot Details: 
    Snapshot Name  Keyspace   Column Family  True Size   Size on Disk 
 
-   5487138454987  nba        player_name    0 bytes     308.66 MB
-   2157384283120  nba        player_team    0 bytes     107.21 MB
-   4824891793663  nba        player_stats   0 bytes      41.69 MB                   
+   5487138454987  nba        player_name    0 bytes     308.66 MiB
+   2157384283120  nba        player_team    0 bytes     107.21 MiB
+   4824891793663  nba        player_stats   0 bytes      41.69 MiB
                
 
 ================================================  =================================================================================
