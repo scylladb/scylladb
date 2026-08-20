@@ -13,6 +13,7 @@
 #include "mutation_partition_serializer.hh"
 #include "counters.hh"
 #include "converting_mutation_partition_applier.hh"
+#include "partition_builder.hh"
 #include "idl/mutation.dist.impl.hh"
 
 canonical_mutation::canonical_mutation(bytes_ostream data)
@@ -62,8 +63,8 @@ mutation canonical_mutation::to_mutation(schema_ptr s) const {
 
     if (version == m.schema()->version()) {
         auto partition_view = mutation_partition_view::from_view(mv.partition());
-        mutation_application_stats app_stats;
-        m.partition().apply(*m.schema(), partition_view, *m.schema(), app_stats);
+        partition_builder b(*m.schema(), m.partition());
+        partition_view.accept(*m.schema(), b);
     } else {
         column_mapping cm = mv.mapping();
         converting_mutation_partition_applier v(cm, *m.schema(), m.partition());

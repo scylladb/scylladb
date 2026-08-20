@@ -85,8 +85,8 @@ future<mutation> to_mutation_gently(const canonical_mutation& cm, schema_ptr s) 
 
     if (version == m.schema()->version()) {
         auto partition_view = mutation_partition_view::from_view(mv.partition());
-        mutation_application_stats app_stats;
-        co_await apply_gently(m.partition(), *m.schema(), partition_view, *m.schema(), app_stats);
+        partition_builder b(*m.schema(), m.partition());
+        co_await partition_view.accept_gently(*m.schema(), b);
     } else {
         column_mapping cm = mv.mapping();
         converting_mutation_partition_applier v(cm, *m.schema(), m.partition());
