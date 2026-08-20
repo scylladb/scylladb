@@ -7,6 +7,7 @@
 import string
 import random
 import collections
+import ssl
 import time
 import requests
 import json
@@ -376,6 +377,51 @@ def scylla_config_temporary(dynamodb, name, value, nop = False):
     finally:
         scylla_config_write(dynamodb, name, original_value)
 
+<<<<<<< HEAD
+||||||| parent of ff45ba1650 (test/alternator: extract client_ssl_context() helper)
+# get_cert() returns the (cert_file, key_file) tuple that should be passed
+# as the "cert" parameter of requests.get()/post() to authenticate to the
+# given dynamodb connection's endpoint, or None if that connection does not
+# use a client certificate. Tests which send raw HTTP requests (i.e., not
+# through boto3) to the same endpoint as "dynamodb" - instead of through
+# get_signed_request()/manual_request() below - need to pass this "cert" too,
+# because under mTLS (--mtls) the TLS handshake itself will fail without it,
+# regardless of the request's content.
+def get_cert(dynamodb):
+    session = dynamodb.meta.client._endpoint.http_session
+    cert_file = getattr(session, '_cert_file', None)
+    return (cert_file, session._key_file) if cert_file else None
+
+=======
+# get_cert() returns the (cert_file, key_file) tuple that should be passed
+# as the "cert" parameter of requests.get()/post() to authenticate to the
+# given dynamodb connection's endpoint, or None if that connection does not
+# use a client certificate. Tests which send raw HTTP requests (i.e., not
+# through boto3) to the same endpoint as "dynamodb" - instead of through
+# get_signed_request()/manual_request() below - need to pass this "cert" too,
+# because under mTLS (--mtls) the TLS handshake itself will fail without it,
+# regardless of the request's content.
+def get_cert(dynamodb):
+    session = dynamodb.meta.client._endpoint.http_session
+    cert_file = getattr(session, '_cert_file', None)
+    return (cert_file, session._key_file) if cert_file else None
+
+# An ssl.SSLContext for connecting to the given server as a client, for
+# tests which bypass boto3 and establish TLS connections themselves.
+def client_ssl_context(dynamodb):
+    context = ssl.create_default_context()
+    # check_hostname and verify_mode is needed when we use self-signed
+    # certificates in tests.
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    # Under mTLS, the server requires a client certificate at the TLS
+    # handshake level - so load it if there is one.
+    cert = get_cert(dynamodb)
+    if cert:
+        context.load_cert_chain(certfile=cert[0], keyfile=cert[1])
+    return context
+
+>>>>>>> ff45ba1650 (test/alternator: extract client_ssl_context() helper)
 # manual_request() can be used to send a DynamoDB API request without any
 # boto3 involvement in preparing the request - the operation name and
 # operation payload (a JSON string) are created by the caller. Use this
