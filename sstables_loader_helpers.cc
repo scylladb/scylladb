@@ -28,6 +28,9 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
     // Move the TOC to the front to be processed first since `sstables::create_stream_sink` takes care
     // of creating behind the scene TemporaryTOC instead of usual one. This assures that in case of failure
     // this partially created SSTable will be cleaned up properly at some point.
+    // Object storage writes no TemporaryTOC. There the sink of the first component
+    // registers the sstable in the sstables registry, which marks it incomplete
+    // until it is sealed, so an interrupted download is cleaned up on the next boot.
     auto toc_it = std::ranges::find_if(components, [](const auto& component) { return component.first == component_type::TOC; });
     if (toc_it != components.begin()) {
         swap(*toc_it, components.front());
@@ -85,7 +88,9 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
                                              table.get_storage_options(),
                                              sstables::sstable_state::normal,
                                              descriptor,
-                                             sstables::sstable_stream_sink_cfg{.last_component = std::next(it) == components.cend(), .leave_unsealed = true});
+                                             sstables::sstable_stream_sink_cfg{.first_component = it == components.cbegin(),
+                                                                               .last_component = std::next(it) == components.cend(),
+                                                                               .leave_unsealed = true});
             auto out = co_await sstable_sink->output(foptions, stream_options);
 
             input_stream src(co_await [&it, sstable, f = files.at(it->first), &db, &table]() -> future<input_stream<char>> {
