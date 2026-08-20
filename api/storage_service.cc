@@ -844,26 +844,6 @@ rest_reset_cleanup_needed(http_context& ctx, sharded<service::storage_service>& 
 
 static
 future<json::json_return_type>
-rest_force_flush(http_context& ctx, std::unique_ptr<http::request> req) {
-        apilog.info("flush all tables");
-        co_await ctx.db.invoke_on_all([] (replica::database& db) {
-            return db.flush_all_tables();
-        });
-        co_return json_void();
-}
-
-static
-future<json::json_return_type>
-rest_force_keyspace_flush(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
-        apilog.info("perform_keyspace_flush: keyspace={} tables={}", keyspace, table_infos);
-        auto& db = ctx.db;
-        co_await replica::database::flush_tables_on_all_shards(db, std::move(table_infos));
-        co_return json_void();
-}
-
-static
-future<json::json_return_type>
 rest_logstor_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
         bool major = false;
         if (auto major_param = req->get_query_param("major"); !major_param.empty()) {
@@ -2089,8 +2069,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }
         co_return json::json_return_type(0);
     });
-    ss::force_flush.set(r, gated(ss, rest_bind(rest_force_flush, ctx)));
-    ss::force_keyspace_flush.set(r, gated(ss, rest_bind(rest_force_keyspace_flush, ctx)));
     ss::decommission.set(r, gated(ss, rest_bind(rest_decommission, ss, ssc)));
     ss::logstor_compaction.set(r, gated(ss, rest_bind(rest_logstor_compaction, ctx)));
     ss::logstor_flush.set(r, gated(ss, rest_bind(rest_logstor_flush, ctx)));
@@ -2177,8 +2155,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::reset_cleanup_needed.unset(r);
     t::force_keyspace_cleanup_async.unset(r);
     ss::force_keyspace_cleanup.unset(r);
-    ss::force_flush.unset(r);
-    ss::force_keyspace_flush.unset(r);
     ss::logstor_compaction.unset(r);
     ss::logstor_flush.unset(r);
     ss::decommission.unset(r);

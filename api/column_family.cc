@@ -1171,6 +1171,21 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
+
+    ss::force_flush.set(r, [&db] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        apilog.info("flush all tables");
+        co_await db.invoke_on_all([] (replica::database& db) {
+            return db.flush_all_tables();
+        });
+        co_return json_void();
+    });
+
+    ss::force_keyspace_flush.set(r, [&ctx, &db] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
+        apilog.info("perform_keyspace_flush: keyspace={} tables={}", keyspace, table_infos);
+        co_await replica::database::flush_tables_on_all_shards(db, std::move(table_infos));
+        co_return json_void();
+    });
 }
 
 void unset_column_family(http_context& ctx, routes& r) {
@@ -1288,5 +1303,7 @@ void unset_column_family(http_context& ctx, routes& r) {
     ss::get_metrics_load.unset(r);
     ss::get_keyspaces.unset(r);
     hs::drop_sstable_caches.unset(r);
+    ss::force_flush.unset(r);
+    ss::force_keyspace_flush.unset(r);
 }
 }
