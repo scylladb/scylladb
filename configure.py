@@ -863,6 +863,11 @@ arg_parser.add_argument('--coverage', action = 'store_true', help = 'Compile scy
 arg_parser.add_argument('--build-dir', action='store', default='build',
                         help='Build directory path')
 arg_parser.add_argument('--disable-precompiled-header', action='store_true', default=False, help='Disable precompiled header for scylla binary')
+arg_parser.add_argument('--allow-stale-aws-models', action='store_true', default=False,
+                        help='Compile the committed copy of the AWS error table when '
+                             'the c2j models cannot be fetched from GitHub, instead of '
+                             'failing. For working offline; do not use in CI, where it '
+                             'would hide the error table going out of date.')
 arg_parser.add_argument('--time-trace', action='store_true', default=False,
                         help='Enable Clang -ftime-trace for build profiling. '
                              'Each .o produces a .json file analyzable with '
@@ -2517,7 +2522,7 @@ def write_build_file(f,
             command = ./idl-compiler.py --ns ser -f $in -o $out
             description = IDL compiler $out
         rule aws_service_errors
-            command = ./utils/s3/gen_aws_service_errors.py --output-dir $out_dir
+            command = ./utils/s3/gen_aws_service_errors.py --output-dir $out_dir{aws_models_offline_fallback}
             description = AWS service errors generator $out
         rule ninja
             command = {ninja} -C $subdir $target
@@ -2591,6 +2596,7 @@ def write_build_file(f,
                     link_pool_depth=link_pool_depth,
                     seastar_path=args.seastar_path,
                     ninja=ninja,
+                    aws_models_offline_fallback=' --offline-fallback' if args.allow_stale_aws_models else '',
                     ragel_exec=args.ragel_exec))
 
     for binary in sorted(wasms):
