@@ -2898,6 +2898,7 @@ int main(int ac, char** av) {
         {"perf-row-cache-update", perf::scylla_row_cache_update_main, "run performance tests by updating row cache on this server"},
         {"perf-tablets", perf::scylla_tablets_main, "run performance tests of tablet metadata management"},
         {"perf-load-balancing", perf::scylla_tablet_load_balancing_main, "run tablet load balancer tests"},
+        {"perf-tablet-hint-propagation", perf::scylla_perf_tablet_hint_propagation_main, "measure tablet hint propagation performance benefit"},
         {"perf-simple-query", perf::scylla_simple_query_main, "run performance tests by sending simple queries to this server"},
         {"perf-sstable", perf::scylla_sstable_main, "run performance tests by exercising sstable related operations on this server"},
         {"perf-compaction-efficiency", perf::scylla_compaction_efficiency_main, "benchmark compaction strategy efficiency with simulated workloads"},
