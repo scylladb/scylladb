@@ -464,7 +464,7 @@ class topo:
         self.racks = racks
         self.dcs = dcs
 
-async def create_cluster(topology, manager, logger, object_storage=None, extra_config=None):
+async def create_cluster(topology, manager, logger, object_storage=None, extra_config=None, extra_cmdline=None):
     rf_rack_valid_keyspaces = (topology.rf <= topology.racks)
     logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks, rf_rack_valid_keyspaces: {rf_rack_valid_keyspaces}')
 
@@ -476,6 +476,8 @@ async def create_cluster(topology, manager, logger, object_storage=None, extra_c
         cfg |= extra_config
 
     cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=debug:sstable=debug:http=debug:api=info' ]
+    if extra_cmdline:
+        cmd += extra_cmdline
     servers = []
     host_ids = {}
 
@@ -1438,6 +1440,42 @@ async def test_restore_into_vnodes_table(manager: ManagerClient, object_storage)
             assert kept == rows, f'Restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {kept}'
 
 
+async def test_restore_vnodes_backup_into_tablets_table(manager: ManagerClient, object_storage):
+    '''Check that a backup of a vnodes-based table can be restored into a tablet-based one'''
+
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'object_storage_endpoints': objconf, 'task_ttl_in_seconds': 300}
+    server = await manager.server_add(config=cfg)
+
+    cql = manager.get_cql()
+
+    schema = '( name text primary key, value text )'
+    rows = {'0': 'zero', '1': 'one', '2': 'two'}
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}} {VNODES_KS_OPTS}") as src_ks:
+        await cql.run_async(f"CREATE TABLE {src_ks}.cf1 {schema};")
+        await asyncio.gather(*(cql.run_async(f"INSERT INTO {src_ks}.cf1 ( name, value ) VALUES ('{name}', '{value}');") for name, value in rows.items()))
+
+        snap_name, toc_names = await take_snapshot_on_one_server(src_ks, server, manager, logger)
+        prefix = f'cf1/{snap_name}'
+        await do_backup(server, snap_name, prefix, src_ks, 'cf1', object_storage, manager, logger)
+
+        async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as dst_ks:
+            await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 {schema} WITH tablets = {{'min_tablet_count': 4}};")
+            assert not await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;"), f'{dst_ks}.cf2 is not empty before the restore'
+
+            logger.info(f'Restore vnodes-based {src_ks}.cf1 into tablet-based {dst_ks}.cf2')
+            tid = await manager.api.restore(server.ip_addr, dst_ks, 'cf2', object_storage.address, object_storage.bucket_name, prefix, toc_names)
+            status = await manager.api.wait_task(server.ip_addr, tid)
+            assert (status is not None) and (status['state'] == 'done'), f'Restore into {dst_ks}.cf2 failed: {status}'
+
+            restored = {x.name: x.value for x in await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;")}
+            assert restored == rows, f'Unexpected contents of {dst_ks}.cf2 after restore: {restored}'
+
+            kept = {x.name: x.value for x in await cql.run_async(f"SELECT * FROM {src_ks}.cf1;")}
+            assert kept == rows, f'Restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {kept}'
+
+
 async def test_restore_tablets_into_vnodes_table(manager: ManagerClient, object_storage):
     '''Check that tablet-aware restore into a vnodes-based table is rejected'''
 
@@ -1474,6 +1512,57 @@ async def test_restore_tablets_into_vnodes_table(manager: ManagerClient, object_
 
             kept = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {src_ks}.cf1;")}
             assert kept == {str(i): i for i in range(num_keys)}, f'Failed restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {len(kept)} rows'
+
+
+async def test_restore_tablets_vnodes_backup_into_tablets_table(manager: ManagerClient, object_storage):
+    '''Check that tablet-aware restore of a vnodes-based backup is rejected'''
+
+    topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 1)
+
+    # A vnodes-based backup records a tablet count of 0 in its manifest, which the tablet-aware
+    # restore reports through on_internal_error. The nodes are started with
+    # --abort-on-internal-error, which takes the node down instead, and the command line wins over
+    # the yaml file, so the flag has to be turned off there.
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage,
+                                             extra_cmdline=['--abort-on-internal-error', '0'])
+
+    cql = manager.get_cql()
+
+    num_keys = 20
+    expected = {str(i): i for i in range(num_keys)}
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}} {VNODES_KS_OPTS}") as src_ks:
+        await cql.run_async(f"CREATE TABLE {src_ks}.cf1 ( pk text primary key, value int );")
+        stmt = cql.prepare(f"INSERT INTO {src_ks}.cf1 (pk, value) VALUES (?, ?)")
+        stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(stmt, (str(i), i)) for i in range(num_keys)))
+
+        snap_name, _ = await take_snapshot(src_ks, servers, manager, logger)
+        await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}', src_ks, 'cf1', object_storage, manager, logger) for s in servers))
+
+        async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as dst_ks:
+            await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': 4}};")
+
+            manifests = [ f'{s.server_id}/{snap_name}/manifest.json' for s in servers ]
+            log = await manager.server_open_log(servers[1].server_id)
+            mark = await log.mark()
+
+            # The manifests are parsed before the restore task is created, so the rejection comes
+            # out of the request itself rather than as a failed task
+            logger.info(f'Restore vnodes-based {src_ks}.cf1 into tablet-based {dst_ks}.cf2')
+            with pytest.raises(HTTPError) as excinfo:
+                await manager.api.restore_tablets(servers[1].ip_addr, dst_ks, 'cf2', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+            assert excinfo.value.code == 500, f'Unexpected status for a restore of a vnodes-based backup: {excinfo.value}'
+
+            # the response carries no body, the reason is only in the log
+            assert await log.grep('Invalid tablet_count 0 in manifest', from_mark=mark), \
+                    f'{servers[1].ip_addr} did not report the tablet count of the vnodes-based manifest'
+
+            res = await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;")
+            assert not res, f'{dst_ks}.cf2 returned {len(res)} rows after a restore that failed'
+
+            kept = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {src_ks}.cf1;")}
+            assert kept == expected, f'Failed restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {len(kept)} rows'
 
 
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_storage):
