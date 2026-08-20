@@ -17,7 +17,7 @@ from cassandra.query import SimpleStatement
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.cluster.util import new_test_keyspace
 
 
@@ -446,3 +446,95 @@ async def test_repair_rejects_equal_start_and_end_token(manager):
     with pytest.raises(HTTPError, match="Start and end tokens must be different"):
         await manager.api.client.post_json(f"/storage_service/repair_async/ks",
                                            host=servers[0].ip_addr, params=params)
+
+
+async def test_repair_batched_stream_rack_compression_and_dict(manager: ManagerClient) -> None:
+    """
+    Batched repair over the wire with real LZ4 compression and dict training enabled -
+    the unit tests only cover the grouping logic in isolation, no rpc::sink/compression.
+
+    internode_compression: rack (cross-rack/dc only, not 'all') with the two nodes in
+    different racks, so repair traffic between them is actually compressed. zstd stays
+    at its default-disabled 0 cpu fraction, so this is the LZ4 path specifically.
+    """
+    # Row counts kept minimal (debug builds are slow); batching itself doesn't need
+    # scale to be exercised - every send goes through a batch, even a "batch of 1".
+    # hinted_handoff_enabled disabled: otherwise node2's downtime writes get delivered as
+    # hints on restart, resyncing it before repair's row-level comparison ever runs -
+    # leaving no diff for the batched path to actually send.
+    cfg = {
+        'internode_compression': 'rack',
+        'internode_compression_enable_advanced': True,
+        'internode_compression_zstd_max_cpu_fraction': 0.0,
+        'rpc_dict_training_when': 'when_leader',
+        'rpc_dict_training_min_bytes': 8 * 1024,
+        'rpc_dict_training_min_time_seconds': 0,
+        'hinted_handoff_enabled': False,
+    }
+    cmdline = ['--logger-log-level=repair=trace']
+    node1, node2 = await manager.servers_add(2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, [node1, node2], time.time() + 30)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
+        cql.execute(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY, v text)")
+
+        write_stmt = cql.prepare(f"INSERT INTO {ks}.tbl (pk, v) VALUES (?, ?)")
+        row_value = "x" * 200
+        synced_rows = 300
+        diff_rows = 150
+
+        write_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*[cql.run_async(write_stmt, [pk, row_value]) for pk in range(synced_rows)])
+
+        # Seed the dict trainer before repair, so repair traffic is dict-compressed too.
+        async def dict_trained():
+            rows = list(cql.execute("SELECT data FROM system.dicts"))
+            return rows if rows else None
+        await wait_for(dict_trained, time.time() + 60)
+
+        await manager.server_stop_gracefully(node2.server_id)
+
+        # Diverge node1 only; > row_batch_max_count (32) so batching emits several frames.
+        write_stmt.consistency_level = ConsistencyLevel.ONE
+        await asyncio.gather(*[cql.run_async(write_stmt, [pk, row_value])
+                               for pk in range(synced_rows, synced_rows + diff_rows)])
+
+        await manager.server_start(node2.server_id, wait_others=1)
+        await wait_for_cql_and_get_hosts(cql, [node1, node2], time.time() + 30)
+
+        # node1 is master (repair is driven from it) and pushes the row diff to node2;
+        # node2 is follower and answers get_full_row_hashes - each logs a different
+        # batched-send trace line, so both logs need watching.
+        master_log = await manager.server_open_log(node1.server_id)
+        master_mark = await master_log.mark()
+        follower_log = await manager.server_open_log(node2.server_id)
+        follower_mark = await follower_log.mark()
+
+        metrics_before = await manager.metrics.query(node1.ip_addr)
+        await manager.api.repair(node1.ip_addr, ks, "tbl")
+        metrics_after = await manager.metrics.query(node1.ip_addr)
+
+        # Batched algorithm was negotiated and actually used to move real data, not just offered.
+        await master_log.wait_for(r"common_diff_detect_algorithms=.*send_full_set_rpc_stream_batched", from_mark=master_mark)
+        await follower_log.wait_for(r"send_hashes_batched: batch of", from_mark=follower_mark)
+        await master_log.wait_for(r"send_rows_batched: batch of", from_mark=master_mark)
+
+        # Compression (LZ4, zstd disabled) actually engaged on the wire.
+        def lz4_bytes(metrics, name):
+            return metrics.get(name, {"algorithm": "lz4"}) or 0
+        sent_delta = (lz4_bytes(metrics_after, "scylla_rpc_compression_bytes_sent")
+                      - lz4_bytes(metrics_before, "scylla_rpc_compression_bytes_sent"))
+        compressed_delta = (lz4_bytes(metrics_after, "scylla_rpc_compression_compressed_bytes_sent")
+                             - lz4_bytes(metrics_before, "scylla_rpc_compression_compressed_bytes_sent"))
+        assert sent_delta > 5_000, f"expected a meaningful volume of lz4-compressed repair traffic, got {sent_delta}"
+        assert compressed_delta < sent_delta
+
+        # Stop node1 so the read is served only by node2, and check it caught up.
+        await manager.server_stop_gracefully(node1.server_id)
+        count_stmt = SimpleStatement(f"SELECT count(*) FROM {ks}.tbl", consistency_level=ConsistencyLevel.ONE)
+        count = cql.execute(count_stmt).one()[0]
+        assert count == synced_rows + diff_rows
+        await manager.server_start(node1.server_id, wait_others=1)
+        await wait_for_cql_and_get_hosts(cql, [node1, node2], time.time() + 30)
