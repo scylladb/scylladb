@@ -73,14 +73,9 @@ static std::ostream& operator<<(std::ostream& os, const std::vector<sstring>& v)
 struct file_size_printer {
     int64_t value;
     bool human_readable;
-    bool use_correct_units;
-    // Cassandra nodetool uses base_2 and base_10 units interchangeably, some
-    // commands use this, some that. Let's accomodate this for now, and maybe
-    // fix this mess at one point in the future, after the rewrite is done.
-    file_size_printer(int64_t value, bool human_readable = true, bool use_correct_units = false)
+    file_size_printer(int64_t value, bool human_readable = true)
         : value{value}
         , human_readable{human_readable}
-        , use_correct_units{use_correct_units}
     {}
 };
 
@@ -91,18 +86,17 @@ struct fmt::formatter<file_size_printer> : fmt::formatter<string_view> {
             return fmt::format_to(ctx.out(), "{}", size.value);
         }
 
-        using unit_t = std::tuple<int64_t, std::string_view, std::string_view>;
+        using unit_t = std::pair<int64_t, std::string_view>;
         const unit_t units[] = {
-            {1LL << 40, "TiB", "TB"},
-            {1LL << 30, "GiB", "GB"},
-            {1LL << 20, "MiB", "MB"},
-            {1LL << 10, "KiB", "KB"},
+            {1LL << 40, "TiB"},
+            {1LL << 30, "GiB"},
+            {1LL << 20, "MiB"},
+            {1LL << 10, "KiB"},
         };
-        for (auto [n, base_2, base_10] : units) {
-            if ((size.value > n) || (size.value < -n)) {
+        for (auto [n, unit] : units) {
+            if ((size.value >= n) || (size.value <= -n)) {
                 auto d = static_cast<float>(size.value) / n;
-                auto postfix = size.use_correct_units ? base_2 : base_10;
-                return fmt::format_to(ctx.out(), "{:.2f} {}", d, postfix);
+                return fmt::format_to(ctx.out(), "{:.2f} {}", d, unit);
             }
         }
         return fmt::format_to(ctx.out(), "{} bytes", size.value);
@@ -1339,8 +1333,8 @@ void info_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     // the JVM heap memory usage is meaningless for Scylla
     const double mem_used = 0;
     const double mem_max = 0;
-    fmt::print("{:<23}: {:.2f} / {:.2f}\n", "Heap Memory (MB)", mem_used, mem_max);
-    fmt::print("{:<23}: {:.2f}\n", "Off Heap Memory (MB)",
+    fmt::print("{:<23}: {:.2f} / {:.2f}\n", "Heap Memory (MiB)", mem_used, mem_max);
+    fmt::print("{:<23}: {:.2f}\n", "Off Heap Memory (MiB)",
                static_cast<float>(get_off_heap_memory_used(client)) / 1_MiB);
     fmt::print("{:<23}: {}\n", "Data Center", rjson::to_string_view(client.get("/snitch/datacenter")));
     fmt::print("{:<23}: {}\n", "Rack", rjson::to_string_view(client.get("/snitch/rack")));
@@ -1395,9 +1389,8 @@ void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_ma
         max_column_length[c] = header_row[c].size();
     }
 
-    auto format_hr_size = [] (uint64_t val, bool use_alternative_units) {
-        const char* const units[] = {"bytes", "KB", "MB", "GB", "TB", "PB", "EB"};
-        const char* const alternative_units[] = {"bytes", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"};
+    auto format_hr_size = [] (uint64_t val) {
+        const char* const units[] = {"bytes", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"};
 
         unsigned i = 0;
         const uint64_t step = 1024;
@@ -1415,7 +1408,7 @@ void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_ma
         if (formatted_number.ends_with(".00")) {
             formatted_number.erase(formatted_number.size() - 3);
         }
-        return fmt::format("{} {}", formatted_number, use_alternative_units ? alternative_units[i] : units[i]);
+        return fmt::format("{} {}", formatted_number, units[i]);
     };
 
     std::vector<std::array<std::string, 5>> rows;
@@ -1426,8 +1419,8 @@ void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_ma
                     snapshot_name,
                     std::string(rjson::to_string_view(snapshot["ks"])),
                     std::string(rjson::to_string_view(snapshot["cf"])),
-                    format_hr_size(snapshot["live"].GetInt64(), false),
-                    format_hr_size(snapshot["total"].GetInt64(), false)});
+                    format_hr_size(snapshot["live"].GetInt64()),
+                    format_hr_size(snapshot["total"].GetInt64())});
 
             for (size_t c = 0; c < rows.back().size(); ++c) {
                 max_column_length[c] = std::max(max_column_length[c], rows.back()[c].size());
@@ -1446,7 +1439,7 @@ void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_ma
         fmt::print(std::cout, fmt::runtime(regular_row_format.c_str()), r[0], r[1], r[2], r[3], r[4]);
     }
 
-    fmt::print(std::cout, "\nTotal TrueDiskSpaceUsed: {}\n\n", format_hr_size(true_size, true));
+    fmt::print(std::cout, "\nTotal TrueDiskSpaceUsed: {}\n\n", format_hr_size(true_size));
 }
 
 void move_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -1481,7 +1474,7 @@ void print_stream_session(
         if (!human_readable) {
             return format("{} bytes", value);
         }
-        return format("{}", file_size_printer(value, true, true));
+        return format("{}", file_size_printer(value));
     };
 
     fmt::print(std::cout, "        {} {} files, {} total. Already {} {} files, {} total\n",
