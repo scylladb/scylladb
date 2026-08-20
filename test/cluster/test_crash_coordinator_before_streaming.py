@@ -57,10 +57,10 @@ async def test_kill_coordinator_during_op(manager: ManagerClient, failure_detect
     logger.debug("Kill coordinator during decommission")
     coordinator_host = await get_coordinator_host(manager)
     other_nodes = [srv for srv in nodes if srv.server_id != coordinator_host.server_id]
-    num_elections = len(await get_coordinator_host_ids(manager))
+    previous_coordinator_id = await manager.get_host_id(coordinator_host.server_id)
     await manager.api.enable_injection(coordinator_host.ip_addr, "crash_coordinator_before_stream", one_shot=True)
     await manager.decommission_node(server_id=other_nodes[-1].server_id, expected_error="Decommission failed. See earlier errors")
-    await wait_new_coordinator_elected(manager, num_elections + 1, time.time() + scale_timeout(60))
+    await wait_new_coordinator_elected(manager, previous_coordinator_id, time.time() + scale_timeout(60))
     await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
     await manager.server_restart(coordinator_host.server_id, wait_others=1)
     await manager.servers_see_each_other(await manager.running_servers())
@@ -75,14 +75,14 @@ async def test_kill_coordinator_during_op(manager: ManagerClient, failure_detect
     node_to_remove_srv_id = other_nodes[-1].server_id
     logger.debug("Stop node with srv_id %s", node_to_remove_srv_id)
     await manager.server_stop_gracefully(node_to_remove_srv_id)
-    num_elections = len(await get_coordinator_host_ids(manager))
+    previous_coordinator_id = await manager.get_host_id(coordinator_host.server_id)
     await manager.api.enable_injection(coordinator_host.ip_addr, "crash_coordinator_before_stream", one_shot=True)
     logger.debug("Start removenode with srv_id %s from node with srv_id %s", node_to_remove_srv_id, working_srv_id)
     await manager.remove_node(working_srv_id,
                               node_to_remove_srv_id,
                               expected_error="Removenode failed. See earlier errors")
 
-    await wait_new_coordinator_elected(manager, num_elections + 1, time.time() + scale_timeout(60))
+    await wait_new_coordinator_elected(manager, previous_coordinator_id, time.time() + scale_timeout(60))
     await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
 
     await manager.others_not_see_server(server_ip=coordinator_host.ip_addr)
@@ -103,11 +103,11 @@ async def test_kill_coordinator_during_op(manager: ManagerClient, failure_detect
     coordinator_host = await get_coordinator_host(manager)
     other_nodes = [srv for srv in nodes if srv.server_id != coordinator_host.server_id]
     new_node = await manager.server_add(start=False, config=config, cmdline=cmdline)
-    num_elections = len(await get_coordinator_host_ids(manager))
+    previous_coordinator_id = await manager.get_host_id(coordinator_host.server_id)
     await manager.api.enable_injection(coordinator_host.ip_addr, "crash_coordinator_before_stream", one_shot=True)
     await manager.server_start(new_node.server_id,
                                expected_error="Startup failed: std::runtime_error")
-    await wait_new_coordinator_elected(manager, num_elections + 1, time.time() + scale_timeout(60))
+    await wait_new_coordinator_elected(manager, previous_coordinator_id, time.time() + scale_timeout(60))
     await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
     await manager.server_restart(coordinator_host.server_id, wait_others=1)
     await manager.servers_see_each_other(await manager.running_servers())
@@ -120,12 +120,12 @@ async def test_kill_coordinator_during_op(manager: ManagerClient, failure_detect
     other_nodes = [srv for srv in nodes if srv.server_id != coordinator_host.server_id]
     node_to_replace_srv_id = other_nodes[-1].server_id
     await manager.server_stop_gracefully(node_to_replace_srv_id)
-    num_elections = len(await get_coordinator_host_ids(manager))
+    previous_coordinator_id = await manager.get_host_id(coordinator_host.server_id)
     await manager.api.enable_injection(coordinator_host.ip_addr, "crash_coordinator_before_stream", one_shot=True)
     replace_cfg = ReplaceConfig(replaced_id = node_to_replace_srv_id, reuse_ip_addr = False, use_host_id = True)
     new_node = await manager.server_add(start=False, config=config, replace_cfg=replace_cfg, cmdline=cmdline)
     await manager.server_start(new_node.server_id, expected_error="Replace failed. See earlier errors")
-    await wait_new_coordinator_elected(manager, num_elections + 1, time.time() + scale_timeout(60))
+    await wait_new_coordinator_elected(manager, previous_coordinator_id, time.time() + scale_timeout(60))
     await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
     logger.debug("Start old coordinator node")
     await manager.others_not_see_server(server_ip=coordinator_host.ip_addr)
