@@ -66,6 +66,10 @@ future<> logstor::do_recovery(replica::database& db) {
     co_await _segment_manager.do_recovery(db);
 }
 
+future<> logstor::do_recovery_for_test() {
+    co_await _segment_manager.do_recovery_for_test();
+}
+
 future<> logstor::start() {
     logstor_logger.info("Starting logstor");
 
@@ -116,12 +120,13 @@ std::unique_ptr<primary_index> logstor::make_primary_index(schema_ptr schema, bo
     return index;
 }
 
-future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout) {
+future<> logstor::write(const mutation& m, write_target target, db::timeout_clock::time_point timeout) {
     auto gate_holder = _async_gate.hold();
 
+    auto& cg = *target.cg;
     primary_index_key key(m.decorated_key());
     table_id table = m.schema()->id();
-    auto& index = cg.get_logstor_index();
+    auto& index = cg.logstor_index();
 
     const auto ts = extract_logstor_record_timestamp(m);
 
@@ -136,7 +141,7 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
 
     auto writer = log_record_writer(std::move(record));
 
-    auto result_f = co_await coroutine::as_future(_write_buffer.write(std::move(writer), timeout, &cg, std::move(cg_holder)));
+    auto result_f = co_await coroutine::as_future(_write_buffer.write(std::move(writer), timeout, std::move(target)));
     if (result_f.failed()){
         _stats.write_failures++;
         co_await coroutine::return_exception_ptr(result_f.get_exception());
@@ -334,12 +339,10 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
     );
 }
 
-void logstor::set_trigger_compaction_hook(std::function<void()> fn) {
-    _segment_manager.set_trigger_compaction_hook(std::move(fn));
-}
-
-void logstor::set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn) {
-    _segment_manager.set_trigger_separator_flush_hook(std::move(fn));
+future<> logstor::flush_to_separator() {
+    auto gate_holder = _async_gate.hold();
+    co_await _write_buffer.flush();
+    co_await _segment_manager.await_pending_writes();
 }
 
 }
