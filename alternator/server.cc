@@ -19,6 +19,7 @@
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/try_future.hh>
 #include <seastar/util/defer.hh>
 #include "seastarx.hh"
 #include "error.hh"
@@ -650,6 +651,27 @@ read_entire_stream(input_stream<char>& inp, size_t length_limit) {
     co_return ret;
 }
 
+// Reads and discards the body of a request we reject without processing,
+// so that the connection remains reusable. Replying while the body is
+// unread results in Seastar's HTTP server closing the connection.
+static future<> drain_request_body(input_stream<char>& inp, size_t request_size_limit) {
+    size_t drained = 0;
+    while (drained <= request_size_limit) {
+        temporary_buffer<char> buf = co_await inp.read();
+        if (buf.empty()) {
+            co_return;
+        }
+        drained += buf.size();
+    }
+    // Exceeding the limit while draining is possible only for a chunked
+    // request - a non-chunked one is bounded by its Content-Length, which
+    // was checked against the limit before the drain. Seastar's httpd will
+    // close the connection after sending the reply, as it does for any
+    // reply sent before reading the entire body (the client may rarely
+    // miss the reply - see #12166).
+    throw api_error::payload_too_large(fmt::format("Request body exceeds the request size limit of {} bytes", request_size_limit));
+}
+
 // safe_gzip_stream is an exception-safe wrapper for zlib's z_stream.
 // The "z_stream" struct is used by zlib to hold state while decompressing a
 // stream of data. It allocates memory which must be freed with inflateEnd(),
@@ -772,7 +794,12 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     // (transport/server.cc).
     if (_pending_requests.get_count() >= _max_concurrent_requests) {
         _executor._stats.requests_shed++;
-        co_return api_error::request_limit_exceeded(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _pending_requests.get_count()));
+        // Build the msg early, before the co_await below invalidates the request counter.
+        auto err = api_error::request_limit_exceeded(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _pending_requests.get_count()));
+        // Discard the unread request body before replying, so the connection stays reusable
+        throwing_assert(req->content_stream);
+        co_await coroutine::try_future(drain_request_body(*req->content_stream, request_content_length_limit));
+        co_return std::move(err);
     }
     _pending_requests.enter();
     auto leave = defer([this] () noexcept { _pending_requests.leave(); });
