@@ -188,6 +188,12 @@ SOURCE_TEMPLATE = HERE / "aws_error_definitions.cc.in"
 GENERATED_HEADER_NAME = "aws_error_definitions_generated.hh"
 GENERATED_SOURCE_NAME = "aws_error_definitions_generated.cc"
 HASHES_NAME = "aws_error_definitions.hashes.json"
+# Committed copies of the generated files, so that a build which cannot reach
+# GitHub has something to compile. Deliberately not in utils/s3/ itself: the
+# source root precedes the generated directory on the include path, so a copy
+# named aws_error_definitions_generated.hh there would shadow the one the
+# build just produced. Refreshed by --update-pregenerated.
+PREGENERATED_DIR = HERE / "pregenerated"
 
 
 def _substitute_tags(text: str, per_service: dict[str, str], context: str) -> str:
@@ -311,6 +317,31 @@ def _save_hashes(path: Path, hashes: dict) -> None:
     path.write_text(json.dumps(hashes, indent=2, sort_keys=True) + "\n")
 
 
+def _update_pregenerated() -> int:
+    """Regenerate the committed copies from the current upstream models.
+
+    A maintenance action -- a build never writes into the source tree."""
+    raw_models = {service: _fetch_raw(filename) for service, filename in SERVICES.items()}
+    header_text, source_text = _render_from_models(raw_models)
+    _write_if_changed(PREGENERATED_DIR / GENERATED_HEADER_NAME, header_text)
+    _write_if_changed(PREGENERATED_DIR / GENERATED_SOURCE_NAME, source_text)
+    return 0
+
+
+def _render_from_models(raw_models: dict[str, bytes]) -> tuple[str, str]:
+    """Expand both templates from a set of raw c2j models."""
+    per_service = {s: _extract_service_errors(json.loads(raw_models[s])) for s in SERVICES}
+    header_text = _substitute_tags(
+        HEADER_TEMPLATE.read_text(),
+        {s: _render_enum_lines(e, "    ") for s, e in per_service.items()},
+        context=HEADER_TEMPLATE.name)
+    source_text = _substitute_tags(
+        SOURCE_TEMPLATE.read_text(),
+        {s: _render_mapping_lines(e, "        ") for s, e in per_service.items()},
+        context=SOURCE_TEMPLATE.name)
+    return header_text, source_text
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true",
@@ -319,6 +350,11 @@ def main() -> int:
     parser.add_argument("--force", action="store_true",
                         help="regenerate even if the cached sidefile shows "
                              "all model/template/output hashes still match")
+    parser.add_argument("--update-pregenerated", action="store_true",
+                        help="fetch the models, regenerate, and rewrite the "
+                             "committed copies under utils/s3/pregenerated/, "
+                             "then exit. Maintenance action, never run by a "
+                             "build.")
     parser.add_argument("--output-dir", type=Path, default=None,
                         help="build-system mode: read the source templates "
                              "utils/s3/aws_error_definitions.{hh,cc}.in and "
@@ -327,6 +363,9 @@ def main() -> int:
                              "When omitted, the generated files land next to "
                              "the templates.")
     args = parser.parse_args()
+
+    if args.update_pregenerated:
+        return _update_pregenerated()
 
     # Where do generated files (and the sidefile) live? In `--output-dir`
     # mode: under the build tree. Otherwise: alongside the source templates
@@ -426,14 +465,7 @@ def main() -> int:
             print(_render_mapping_lines(errors, "        "))
         return 0
 
-    header_text = _substitute_tags(
-        HEADER_TEMPLATE.read_text(),
-        {s: _render_enum_lines(e, "    ") for s, e in per_service.items()},
-        context=HEADER_TEMPLATE.name)
-    source_text = _substitute_tags(
-        SOURCE_TEMPLATE.read_text(),
-        {s: _render_mapping_lines(e, "        ") for s, e in per_service.items()},
-        context=SOURCE_TEMPLATE.name)
+    header_text, source_text = _render_from_models(raw_models)
 
     _write_if_changed(header_out, header_text)
     _write_if_changed(source_out, source_text)
