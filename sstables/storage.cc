@@ -767,10 +767,16 @@ public:
     bool is_object_storage() const override { return true; }
 
     future<> put_object(object_name name, ::memory_data_sink_buffers bufs) const {
-        return _client->put_object(std::move(name), std::move(bufs), abort_source());
+        return _client->put_object(std::move(name), std::move(bufs), {}, abort_source());
+    }
+    future<> put_object(object_name name, ::memory_data_sink_buffers bufs, object_storage_attributes attributes) const {
+        return _client->put_object(std::move(name), std::move(bufs), std::move(attributes), abort_source());
     }
     future<> copy_object(object_name src, object_name dst) const {
-        return _client->copy_object(std::move(src), std::move(dst), abort_source());
+        return _client->copy_object(std::move(src), std::move(dst), {}, abort_source());
+    }
+    future<> copy_object(object_name src, object_name dst, object_storage_attributes attributes) const {
+        return _client->copy_object(std::move(src), std::move(dst), std::move(attributes), abort_source());
     }
     future<> delete_object(object_name name) const {
         return _client->delete_object(std::move(name), abort_source());
@@ -779,10 +785,10 @@ public:
         return _client->make_readable_file(std::move(name), abort_source());
     }
     data_sink make_data_upload_sink(object_name name, std::optional<unsigned> max_parts_per_piece) {
-        return _client->make_data_upload_sink(std::move(name), max_parts_per_piece, abort_source());
+        return _client->make_data_upload_sink(std::move(name), max_parts_per_piece, {}, abort_source());
     }
-    data_sink make_upload_sink(object_name name) {
-        return _client->make_upload_sink(std::move(name), abort_source());
+    data_sink make_upload_sink(object_name name, object_storage_attributes attributes = {}) {
+        return _client->make_upload_sink(std::move(name), std::move(attributes), abort_source());
     }
 };
 
@@ -1184,7 +1190,7 @@ future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_typ
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
 
     auto ref_name = make_ref_object_name(sid, gen, node_owner);
-    co_await _client->put_object(ref_name, memory_data_sink_buffers(), abort_source());
+    co_await _client->put_object(ref_name, memory_data_sink_buffers(), {}, abort_source());
     auto refs = co_await num_references(sid);
     sstlog.debug("Cloned {} sstable_id={} num_references={}", sst.get_filename(), sid, refs);
 
