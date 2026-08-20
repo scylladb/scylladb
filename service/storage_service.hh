@@ -656,7 +656,8 @@ private:
     std::optional<locator::endpoint_dc_rack> get_dc_rack_for(locator::host_id endpoint);
 private:
     // Should be serialized under token_metadata_lock.
-    future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;
+    future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr,
+            const std::optional<locator::tablet_metadata_change_hint>& tablet_hint = {}) noexcept;
     sharded<db::system_keyspace>& _sys_ks;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     locator::snitch_signal_slot_t _snitch_reconfigure;
