@@ -720,10 +720,18 @@ future<schema_diff_per_shard> schema_diff_per_shard::copy_from(replica::database
     co_return result;
 }
 
-// Computed from old_schema: by notification time the live column family
-// already carries the new schema.
-static bool columns_changed(const schema_ptr& old_schema, const schema_ptr& new_schema) {
-    return !old_schema->equal_columns(*new_schema);
+// What cached client state (prepared statements, driver metadata) depends on.
+// Computed from old_schema: the live table already carries the new schema.
+struct client_visible_changes {
+    bool columns;
+    bool indexes;
+};
+
+static client_visible_changes get_client_visible_changes(const schema_ptr& old_schema, const schema_ptr& new_schema) {
+    return {
+        .columns = !old_schema->equal_columns(*new_schema),
+        .indexes = old_schema->all_indices() != new_schema->all_indices(),
+    };
 }
 
 static future<> notify_tables_and_views(service::migration_notifier& notifier, const affected_tables_and_views& diff) {
@@ -745,13 +753,16 @@ static future<> notify_tables_and_views(service::migration_notifier& notifier, c
     co_await notify(views.created, [&] (auto&& gs) { return notifier.create_view(view_ptr(gs)); });
     // Table altering is notified first, in case new base columns appear
     co_await notify(tables.altered, [&] (auto&& altered) {
-        return notifier.update_column_family(altered.new_schema, columns_changed(altered.old_schema, altered.new_schema));
+        auto changed = get_client_visible_changes(altered.old_schema, altered.new_schema);
+        return notifier.update_column_family(altered.new_schema, changed.columns, changed.indexes);
     });
     co_await notify(cdc.altered, [&] (auto&& altered) {
-        return notifier.update_column_family(altered.new_schema, columns_changed(altered.old_schema, altered.new_schema));
+        auto changed = get_client_visible_changes(altered.old_schema, altered.new_schema);
+        return notifier.update_column_family(altered.new_schema, changed.columns, changed.indexes);
     });
     co_await notify(views.altered, [&] (auto&& altered) {
-        return notifier.update_view(view_ptr(altered.new_schema), columns_changed(altered.old_schema, altered.new_schema));
+        auto changed = get_client_visible_changes(altered.old_schema, altered.new_schema);
+        return notifier.update_view(view_ptr(altered.new_schema), changed.columns, changed.indexes);
     });
 }
 
