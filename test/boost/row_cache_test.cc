@@ -3997,6 +3997,65 @@ SEASTAR_TEST_CASE(test_eviction_after_old_snapshot_touches_overriden_rows_keeps_
     });
 }
 
+// Checks that reading individual rows of a cached wide partition promotes them
+// in the LRU, so that under eviction the least-recently-read rows are evicted
+// first, not the least-recently-populated ones.
+SEASTAR_TEST_CASE(test_reads_promote_rows_within_partition_in_lru) {
+    return seastar::async([] {
+        simple_schema table;
+        auto s = table.schema();
+        memtable_snapshot_source underlying(s);
+        cache_tracker tracker;
+        row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
+
+        constexpr int n_rows = 16;
+        auto pk = table.make_pkey();
+        mutation m(s, pk);
+        for (int i = 0; i < n_rows; ++i) {
+            table.add_row(m, table.make_ckey(i), "v");
+        }
+        apply(cache, underlying, m);
+
+        auto pr = dht::partition_range::make_singular(pk);
+        // Populates rows in clustering order, so without subsequent touches
+        // the eviction order is ck(0), ck(1), ...
+        populate_range(cache, pr);
+
+        auto read_row = [&] (int ck) {
+            populate_range(cache, pr, query::clustering_range::make_singular(table.make_ckey(ck)));
+        };
+
+        // Make the first half hot. If reads touch rows in the LRU, this moves
+        // them behind the unread second half in eviction order. If they don't,
+        // the hot rows remain first in line for eviction.
+        auto s0 = tracker.get_stats();
+        for (int i = 0; i < n_rows / 2; ++i) {
+            read_row(i);
+        }
+        // Sanity check: those reads were served from cache.
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().row_misses, s0.row_misses);
+
+        for (int i = 0; i < n_rows / 2; ++i) {
+            evict_one_row(tracker);
+        }
+
+        // The hot rows must have survived...
+        auto s1 = tracker.get_stats();
+        for (int i = 0; i < n_rows / 2; ++i) {
+            read_row(i);
+        }
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().row_misses, s1.row_misses);
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().reads_with_misses, s1.reads_with_misses);
+
+        // ...and the cold rows are the ones which were evicted.
+        auto s2 = tracker.get_stats();
+        for (int i = n_rows / 2; i < n_rows; ++i) {
+            read_row(i);
+        }
+        BOOST_REQUIRE_GT(tracker.get_stats().row_misses, s2.row_misses);
+    });
+}
+
 SEASTAR_TEST_CASE(test_reading_progress_with_small_buffer_and_invalidation) {
     return seastar::async([] {
         simple_schema s;

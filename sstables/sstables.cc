@@ -4025,6 +4025,10 @@ void register_index_page_cache_metrics(seastar::metrics::metric_groups& metrics,
             sm::description("Total number of bytes cached in the index page cache")),
         sm::make_gauge("index_page_cache_bytes_in_std", [&m] { return m.bytes_in_std; },
             sm::description("Total number of bytes in temporary buffers which live in the std allocator")),
+        sm::make_counter("index_page_cache_disk_read_bytes", [&m] { return m.disk_read_bytes; },
+            sm::description("Total number of bytes read from disk by the index page cache, including read-ahead")),
+        sm::make_gauge("index_page_cache_pages", [&m] { return m.page_populations - m.page_evictions; },
+            sm::description("Number of pages currently held by the index page cache")),
     });
 }
 
