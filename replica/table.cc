@@ -5211,7 +5211,8 @@ table::disable_auto_compaction() {
     auto holder = _async_gate.hold();
 
     co_await parallel_foreach_compaction_group_view([this] (compaction::compaction_group_view& view) {
-        return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &view, compaction::compaction_type::Compaction);
+        return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &view,
+                compaction::compaction_type_set::of<compaction::compaction_type::Compaction>());
     });
 
     if (uses_logstor()) {

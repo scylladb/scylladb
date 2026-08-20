@@ -1290,15 +1290,15 @@ future<> compaction_manager::await_tasks(std::vector<shared_ptr<compaction_task_
 }
 
 std::vector<shared_ptr<compaction_task_executor>>
-compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt) noexcept {
+compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type_set> types_opt) noexcept {
     // Avoid get_compactions(filter): it builds a vector<compaction_info>, copying ks_name/cf_name
     // for every matching task, just to be discarded here for its count.
     auto ongoing_compactions = std::ranges::count_if(_tasks, [&filter] (const compaction_task_executor& task) {
         return filter(task.compacting_table());
     });
     auto tasks = _tasks
-            | std::views::filter([&filter, type_opt] (const auto& task) {
-                return filter(task.compacting_table()) && (!type_opt || task.compaction_type() == *type_opt);
+            | std::views::filter([&filter, types_opt] (const auto& task) {
+                return filter(task.compacting_table()) && (!types_opt || types_opt->contains(task.compaction_type()));
             })
             | std::views::transform([] (auto& task) { return task.shared_from_this(); })
             | std::ranges::to<std::vector<shared_ptr<compaction_task_executor>>>();
@@ -1311,8 +1311,8 @@ compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bo
                 scope = fmt::format(" for table {}", *t);
             }
         }
-        if (type_opt) {
-            scope += fmt::format(" {} type={}", scope.size() ? "and" : "for", *type_opt);
+        if (types_opt) {
+            scope += fmt::format(" {} types={}", scope.size() ? "and" : "for", fmt::join(*types_opt, ","));
         }
         cmlog.log(level, "Stopping {} tasks for {} ongoing compactions{} due to {}", tasks.size(), ongoing_compactions, scope, reason);
     }
@@ -1320,13 +1320,13 @@ compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bo
     return tasks;
 }
 
-future<> compaction_manager::stop_ongoing_compactions(sstring reason, compaction_group_view* t, std::optional<compaction_type> type_opt) noexcept {
-    return stop_ongoing_compactions(std::move(reason), [t] (const compaction_group_view* x) { return !t || x == t; }, type_opt);
+future<> compaction_manager::stop_ongoing_compactions(sstring reason, compaction_group_view* t, std::optional<compaction_type_set> types_opt) noexcept {
+    return stop_ongoing_compactions(std::move(reason), [t] (const compaction_group_view* x) { return !t || x == t; }, types_opt);
 }
 
-future<> compaction_manager::stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view* t)> filter, std::optional<compaction_type> type_opt) noexcept {
+future<> compaction_manager::stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view* t)> filter, std::optional<compaction_type_set> types_opt) noexcept {
     try {
-        auto tasks = do_stop_ongoing_compactions(std::move(reason), std::move(filter), type_opt);
+        auto tasks = do_stop_ongoing_compactions(std::move(reason), std::move(filter), types_opt);
         bool task_stopped = true;
         co_await await_tasks(std::move(tasks), task_stopped);
     } catch (...) {
@@ -2689,7 +2689,9 @@ future<> compaction_manager::stop_compaction(sstring type, std::function<bool(co
     default:
         break;
     }
-    return stop_ongoing_compactions("user request", std::move(filter), target_type);
+    compaction_type_set cs;
+    cs.set(target_type);
+    return stop_ongoing_compactions("user request", std::move(filter), std::move(cs));
 }
 
 void compaction_manager::propagate_replacement(compaction_group_view& t,
