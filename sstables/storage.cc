@@ -766,11 +766,16 @@ public:
 
     bool is_object_storage() const override { return true; }
 
-    future<> put_object(object_name name, ::memory_data_sink_buffers bufs) const {
-        return _client->put_object(std::move(name), std::move(bufs), abort_source());
+    // The attributes are deliberately not defaulted: every object this class
+    // writes either carries the sstable descriptor or knowingly carries nothing,
+    // and a component path that silently forgot them would produce an sstable
+    // that no reader can describe.  Saying object_storage_attributes{} is cheap;
+    // finding out later that a component lost its descriptor is not.
+    future<> put_object(object_name name, ::memory_data_sink_buffers bufs, object_storage_attributes attributes) const {
+        return _client->put_object(std::move(name), std::move(bufs), std::move(attributes), abort_source());
     }
-    future<> copy_object(object_name src, object_name dst) const {
-        return _client->copy_object(std::move(src), std::move(dst), abort_source());
+    future<> copy_object(object_name src, object_name dst, object_storage_attributes attributes) const {
+        return _client->copy_object(std::move(src), std::move(dst), std::move(attributes), abort_source());
     }
     future<> delete_object(object_name name) const {
         return _client->delete_object(std::move(name), abort_source());
@@ -778,11 +783,11 @@ public:
     file make_readable_file(object_name name) {
         return _client->make_readable_file(std::move(name), abort_source());
     }
-    data_sink make_data_upload_sink(object_name name, std::optional<unsigned> max_parts_per_piece) {
-        return _client->make_data_upload_sink(std::move(name), max_parts_per_piece, abort_source());
+    data_sink make_data_upload_sink(object_name name, object_storage_attributes attributes, std::optional<unsigned> max_parts_per_piece) {
+        return _client->make_data_upload_sink(std::move(name), std::move(attributes), max_parts_per_piece, abort_source());
     }
-    data_sink make_upload_sink(object_name name) {
-        return _client->make_upload_sink(std::move(name), abort_source());
+    data_sink make_upload_sink(object_name name, object_storage_attributes attributes) {
+        return _client->make_upload_sink(std::move(name), std::move(attributes), abort_source());
     }
 };
 
@@ -876,14 +881,14 @@ void object_storage_base::open(sstable& sst) {
     sst.manager().sstables_registry().create_entry(owner(), host_id, status_creating, sst._state, std::move(desc)).get();
 
     auto ref_name = make_ref_object_name(sid, sst.generation(), host_id);
-    put_object(ref_name, memory_data_sink_buffers()).get();
+    put_object(ref_name, memory_data_sink_buffers(), object_storage_attributes{}).get();
 
     memory_data_sink_buffers bufs;
     auto out = data_sink(std::make_unique<memory_data_sink>(bufs));
     auto w = std::make_unique<crc32_digest_file_writer>(std::move(out), sst.sstable_buffer_size, component_name(sst, component_type::TOC));
 
     sst.write_toc(std::move(w));
-    put_object(make_object_name(sst, component_type::TOC), std::move(bufs)).get();
+    put_object(make_object_name(sst, component_type::TOC), std::move(bufs), object_storage_attributes{}).get();
     sstlog.debug("Created reference {}: {}", sst.get_filename(), ref_name);
 }
 
@@ -940,7 +945,7 @@ future<data_sink> object_storage_base::make_data_or_index_sink(sstable& sst, com
         || type == component_type::Rows
         || type == component_type::Partitions);
     // FIXME: if we have file size upper bound upfront, it's better to use make_upload_sink() instead
-    return maybe_wrap_sink(sst, type, make_data_upload_sink(make_object_name(sst, type), std::nullopt));
+    return maybe_wrap_sink(sst, type, make_data_upload_sink(make_object_name(sst, type), object_storage_attributes{}, std::nullopt));
 }
 
 future<data_source>
@@ -970,7 +975,7 @@ s3_storage::make_source(sstable& sst, component_type type, file f, uint64_t offs
 }
 
 future<data_sink> object_storage_base::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
-    return maybe_wrap_sink(sst, type, make_upload_sink(make_object_name(sst, type)));
+    return maybe_wrap_sink(sst, type, make_upload_sink(make_object_name(sst, type), object_storage_attributes{}));
 }
 
 future<> object_storage_base::seal(const sstable& sst) {
@@ -1151,7 +1156,7 @@ future<> object_storage_base::copy_components(const sstable& sst, sstable_id sid
         if (excluded_components.contains(p.first)) {
             co_return;
         }
-        co_await copy_object(make_object_name(sst, p.second, sst.generation()), object_name(_bucket, prefix, sid, p.second));
+        co_await copy_object(make_object_name(sst, p.second, sst.generation()), object_name(_bucket, prefix, sid, p.second), object_storage_attributes{});
     });
 }
 
@@ -1167,7 +1172,7 @@ future<> object_storage_base::link_with_excluded_components(const sstable& sst, 
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
 
     auto ref_name = make_ref_object_name(sid, new_gen, node_owner);
-    co_await put_object(ref_name, memory_data_sink_buffers());
+    co_await put_object(ref_name, memory_data_sink_buffers(), object_storage_attributes{});
 
     co_await copy_components(sst, sid, excluded_components);
 }
@@ -1184,7 +1189,7 @@ future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_typ
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
 
     auto ref_name = make_ref_object_name(sid, gen, node_owner);
-    co_await _client->put_object(ref_name, memory_data_sink_buffers(), abort_source());
+    co_await put_object(ref_name, memory_data_sink_buffers(), object_storage_attributes{});
     auto refs = co_await num_references(sid);
     sstlog.debug("Cloned {} sstable_id={} num_references={}", sst.get_filename(), sid, refs);
 
@@ -1193,7 +1198,7 @@ future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_typ
         auto scylla_metadata = co_await sst.copy_scylla_metadata();
         scylla_metadata->set_sstable_identifier(sid);
         auto scylla_metadata_bufs = co_await sst.serialize_scylla_metadata(std::move(*scylla_metadata));
-        co_await put_object(object_name(_bucket, prefix(), sid, sstable_version_constants::get_component_map(sst.get_version()).at(component_type::Scylla)), std::move(*scylla_metadata_bufs));
+        co_await put_object(object_name(_bucket, prefix(), sid, sstable_version_constants::get_component_map(sst.get_version()).at(component_type::Scylla)), std::move(*scylla_metadata_bufs), object_storage_attributes{});
     }
 
     if (!leave_unsealed) {
