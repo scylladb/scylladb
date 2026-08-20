@@ -79,7 +79,8 @@ async def run_random_resizes(
 
         # Apply resize
         await tester.cql.run_async(
-            f"ALTER TABLE {ks}.{table} WITH tablets = {{'min_tablet_count': {target_cnt}}}"
+            f"ALTER TABLE {ks}.{table} WITH tablets = "
+            f"{{'min_tablet_count': {target_cnt}, 'max_tablet_count': {target_cnt}}}"
         )
 
         count_after_resize = await wait_for_tablet_count(
