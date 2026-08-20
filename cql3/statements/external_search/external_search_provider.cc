@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-#include "external_score_provider.hh"
+#include "external_search_provider.hh"
 
 #include <cmath>
 
@@ -19,7 +19,7 @@
 
 namespace cql3::statements {
 
-external_score_provider::external_score_provider(const vector_search::vector_store_client::primary_keys& results, size_t score_slot,
+external_search_provider::external_search_provider(const vector_search::vector_store_client::primary_keys& results, size_t score_slot,
         const schema& schema)
     : _results(results)
     , _next_result(0)
@@ -27,7 +27,7 @@ external_score_provider::external_score_provider(const vector_search::vector_sto
     , _schema(schema) {
 }
 
-bool external_score_provider::try_fill(std::vector<cql3::raw_value>& temporaries, std::span<const bytes> partition_key,
+bool external_search_provider::try_fill(std::vector<cql3::raw_value>& temporaries, std::span<const bytes> partition_key,
         std::span<const bytes> clustering_key, const query::result_row_view&, const query::result_row_view*) const {
     const auto row_pk = ::partition_key::from_range(partition_key);
     const auto row_ck = (_schema.clustering_key_size() > 0) ? ::clustering_key_prefix::from_range(clustering_key) : ::clustering_key_prefix{};

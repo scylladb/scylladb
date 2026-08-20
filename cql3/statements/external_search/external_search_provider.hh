@@ -27,14 +27,14 @@ namespace cql3::statements {
 /// A provider instance is therefore single-use and tied to one response - it
 /// cannot be rewound or replayed, which is worth keeping in mind when paging
 /// arrives.
-class external_score_provider : public cql3::selection::external_values_provider {
+class external_search_provider : public cql3::selection::external_values_provider {
     const vector_search::vector_store_client::primary_keys& _results;
     mutable size_t _next_result;    // cursor into _results: which entry to match next
     const size_t _score_slot;       // temporary slot the score is written to
     const schema& _schema;
 
 public:
-    external_score_provider(const vector_search::vector_store_client::primary_keys& results, size_t score_slot, const schema& schema);
+    external_search_provider(const vector_search::vector_store_client::primary_keys& results, size_t score_slot, const schema& schema);
 
     bool try_fill(std::vector<cql3::raw_value>& temporaries, std::span<const bytes> partition_key, std::span<const bytes> clustering_key,
             const query::result_row_view& static_row, const query::result_row_view* row) const override;
