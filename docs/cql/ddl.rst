@@ -332,6 +332,37 @@ consistency is guaranteed for operations going to all DCs. Note that
 `local` or `global` consistencies are guaranteed only for requests that
 are going to the same partition.
 
+The option accepts either the consistency type alone (``consistency = 'global'``),
+or a map, which sets the type together with additional options::
+
+  CREATE KEYSPACE ks
+   WITH consistency = { 'type': 'global', 'dedicated_rack': { 'dc1': 'rack1' } }
+   AND replication = { 'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2', 'rack3'] };
+
+``dedicated_rack`` names the rack whose replicas should serve the keyspace's
+requests. A strongly consistent request is served by the leader of the tablet's
+Raft group, so the nodes of the dedicated rack are preferred as leaders: whenever
+a group holds an election, its replica in that rack is the first to stand for it and
+normally wins. This saves a cross-rack hop for the clients in the rack.
+
+The preference is also restored once it is lost. A group whose dedicated-rack replica was
+unavailable elects another replica, and that replica hands the leadership back once the
+dedicated-rack one is up again and has caught up, so leadership returns to the rack
+without an operator having to intervene.
+
+The ``consistency`` option cannot be changed after the keyspace is created - neither the
+type nor the dedicated rack - because the data the keyspace already holds would have to
+move between two write paths. An ``ALTER KEYSPACE`` which restates the current value is
+accepted; one which would change it is rejected.
+
+``dedicated_rack`` requires:
+
+- the `global` consistency type, and tablets;
+- exactly one entry - a single datacenter with a single rack in it;
+- a datacenter which is listed in the ``replication`` options, replicated with a
+  :ref:`rack list <rack_list_rf>` rather than a numeric replication factor, and
+  a rack which is in that list.
+
 .. _use-statement:        
         
 USE
