@@ -148,7 +148,7 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
                 # handler so _after_test doesn't wait 120s for it.
                 logger.info("Shutdown did not complete within the timeout, killing all servers")
                 for s in await manager.all_servers() + await manager.starting_servers():
-                    await manager.server_stop(s.server_id)
+                    await manager.server_stop(s.server_id, convict=True)
                 pytest.fail(f"Shutdown did not complete within 15s — deadlock reproduced"
                             f" (target={target_server})")
 

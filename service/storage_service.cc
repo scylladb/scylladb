@@ -4777,6 +4777,26 @@ future<> storage_service::snitch_reconfigured() {
     }
 }
 
+// A write issued with an internal client state gets its timeouts from
+// infinite_timeout_config, which is one hour ("not really infinite, but long enough",
+// replica/database.cc), indistinguishable from forever for a topology operation. A write
+// handler that pins a stale token_metadata version and whose deadline is further away than
+// this threshold is treated as effectively unbounded and given a bounded deadline. The
+// threshold sits above every deliberate finite write deadline in the tree: client writes
+// (write_request_timeout_in_ms, seconds), view writes (5 minutes) and modest per-statement
+// USING TIMEOUT values, so those are left to expire on their own.
+static constexpr auto stale_write_unbounded_threshold = std::chrono::minutes(10);
+
+// How long such a handler is then given to finish. Long enough that a write which is merely
+// in flight across the version bump still completes normally, short enough that a stuck one
+// cannot hold up a topology operation for meaningfully longer than an ordinary write timeout.
+static constexpr auto stale_write_grace_period = std::chrono::seconds(30);
+
+// How often the barrier rescans for such handlers, to catch ones that were created, or whose
+// timer was armed, after the previous pass (e.g. a logged batch registers its handlers with a
+// pre-bump ERM but arms their timers only after the batchlog write finishes).
+static constexpr auto stale_write_rescan_period = std::chrono::seconds(30);
+
 future<> storage_service::local_topology_barrier() {
     if (this_shard_id() != 0) {
         co_await container().invoke_on(0, [] (storage_service& ss) {
@@ -4833,7 +4853,46 @@ future<> storage_service::local_topology_barrier() {
                               version, ss._shared_token_metadata.describe_stale_versions());
             });
             warn_timer.arm_periodic(std::chrono::minutes(5));
-            co_await ss._shared_token_metadata.stale_versions_in_use();
+
+            // A write response handler holds its effective_replication_map, and thus a
+            // token_metadata version, until it is destroyed. A write issued with an
+            // internal client state has a one-hour expire timer (infinite_timeout_config),
+            // so a lost MUTATION_DONE pins the version for up to an hour and this barrier
+            // would stall for as long. Give such handlers a bounded deadline; ordinary
+            // writes, whose deadlines are below stale_write_unbounded_threshold, are left
+            // to expire on their own. This lambda already runs on every shard, so only the
+            // local proxy is touched. The pass runs as an awaited coroutine that rescans
+            // periodically (to catch handlers that appear, or arm their timer, after the
+            // previous pass) so nothing outlives this scope and failures surface here.
+            abort_source stop_bounding;
+            auto bounder = [] (storage_service& ss, locator::token_metadata::version_t current_version,
+                               abort_source& as) -> future<> {
+                while (!as.abort_requested()) {
+                    try {
+                        co_await ss._qp.proxy().bound_write_handlers_pinning_stale_versions(
+                                current_version, stale_write_unbounded_threshold, stale_write_grace_period);
+                    } catch (...) {
+                        rtlogger.warn("raft_topology_cmd::barrier_and_drain version {}: failed to bound "
+                                      "write handlers pinning stale versions, will retry: {}",
+                                      current_version, std::current_exception());
+                    }
+                    try {
+                        co_await sleep_abortable(stale_write_rescan_period, as);
+                    } catch (const sleep_aborted&) {}
+                }
+            }(ss, current_version, stop_bounding);
+
+            std::exception_ptr ex;
+            try {
+                co_await ss._shared_token_metadata.stale_versions_in_use();
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            stop_bounding.request_abort();
+            co_await std::move(bounder);
+            if (ex) {
+                std::rethrow_exception(ex);
+            }
         }
         rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: stale versions released, draining closing sessions", version);
         co_await get_topology_session_manager().drain_closing_sessions();
