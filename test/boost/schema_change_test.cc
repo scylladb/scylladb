@@ -26,6 +26,7 @@
 #include "types/list.hh"
 #include "types/user.hh"
 #include "db/system_keyspace.hh"
+#include "cql3/untyped_result_set.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
@@ -576,6 +577,41 @@ SEASTAR_TEST_CASE(test_prepared_statement_is_invalidated_by_schema_change) {
                 // expected
             }
         });
+    });
+}
+
+// A prepared statement keeps the schema_ptr it was prepared with and reads
+// table properties off it at execution time: update_parameters::ttl() falls back
+// to schema::default_time_to_live(), the mutations it builds carry that schema
+// into cdc::needs_cdc_augmentation(), and LWT reads
+// schema::paxos_grace_seconds() from it. Changing such a property therefore has
+// to invalidate the statement, or the ALTER appears to have no effect.
+// See scylladb/scylladb#1255.
+SEASTAR_TEST_CASE(test_prepared_statement_observes_altered_table_properties) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table t (pk int primary key, v int);").get();
+
+        auto insert = [&e] (const cql3::prepared_cache_key_type& id, int32_t pk) {
+            return e.execute_prepared(id, {{cql3::raw_value::make_value(int32_type->decompose(pk)),
+                                            cql3::raw_value::make_value(int32_type->decompose(int32_t(0)))}}).get();
+        };
+        auto has_ttl = [&e] (int32_t pk) {
+            auto msg = e.execute_cql(format("select ttl(v) as ttl_v from t where pk = {};", pk)).get();
+            cql3::untyped_result_set rows(msg);
+            return rows.one().has("ttl_v");
+        };
+
+        auto id = e.prepare("insert into t (pk, v) values (?, ?);").get();
+        insert(id, 1);
+        BOOST_REQUIRE(!has_ttl(1));
+
+        e.execute_cql("alter table t with default_time_to_live = 1000;").get();
+
+        // The statement must have been invalidated...
+        BOOST_REQUIRE_THROW(insert(id, 2), not_prepared_exception);
+        // ...so that re-preparing it picks up the new default TTL.
+        insert(e.prepare("insert into t (pk, v) values (?, ?);").get(), 2);
+        BOOST_REQUIRE(has_ttl(2));
     });
 }
 
