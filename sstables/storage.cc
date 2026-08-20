@@ -798,6 +798,18 @@ public:
     }
 };
 
+// The descriptor rides on the TOC object, which is the one a reader looks for
+// and the one that is written first.  Every other component gets no attributes.
+static object_storage_attributes make_sstable_object_attributes(component_type type, const sstable& sst) {
+    if (type != component_type::TOC) {
+        return {};
+    }
+    return {
+        {sstring(object_storage_sstable_version_attribute), fmt::format("{}", sst.get_version())},
+        {sstring(object_storage_sstable_format_attribute), fmt::format("{}", sst.get_format())},
+    };
+}
+
 class s3_storage : public object_storage_base {
 public:
     s3_storage(schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, data_dictionary::storage_options::object_storage_layout layout, seastar::abort_source* as)
@@ -899,7 +911,7 @@ void object_storage_base::open(sstable& sst) {
     auto w = std::make_unique<crc32_digest_file_writer>(std::move(out), sst.sstable_buffer_size, component_name(sst, component_type::TOC));
 
     sst.write_toc(std::move(w));
-    put_object(make_object_name(sst, component_type::TOC), std::move(bufs), object_storage_attributes{}).get();
+    put_object(make_object_name(sst, component_type::TOC), std::move(bufs), make_sstable_object_attributes(component_type::TOC, sst)).get();
     sstlog.debug("Created reference {}: sstable_id={}", sst.get_filename(), sid);
 }
 
@@ -986,7 +998,7 @@ s3_storage::make_source(sstable& sst, component_type type, file f, uint64_t offs
 }
 
 future<data_sink> object_storage_base::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
-    return maybe_wrap_sink(sst, type, make_upload_sink(make_object_name(sst, type), object_storage_attributes{}));
+    return maybe_wrap_sink(sst, type, make_upload_sink(make_object_name(sst, type), make_sstable_object_attributes(type, sst)));
 }
 
 future<> object_storage_base::seal(const sstable& sst) {
@@ -1167,7 +1179,8 @@ future<> object_storage_base::copy_components(const sstable& sst, sstable_id sid
         if (excluded_components.contains(p.first)) {
             co_return;
         }
-        co_await copy_object(make_object_name(sst, p.second, sst.generation()), object_name(_bucket, prefix, sid, p.second), object_storage_attributes{});
+        co_await copy_object(make_object_name(sst, p.second, sst.generation()), object_name(_bucket, prefix, sid, p.second),
+                make_sstable_object_attributes(p.first, sst));
     });
 }
 
