@@ -6,7 +6,10 @@
 # by boto3, in order to allow non-validated input to get through
 
 import base64
+import http.client
 import json
+import urllib.parse
+
 import pytest
 import requests
 import urllib3
@@ -15,7 +18,8 @@ from packaging.version import Version
 
 from test.pylib.skip_types import skip_env
 
-from test.alternator.util import random_bytes, random_string, get_signed_request, manual_request, ManualRequestError
+from test.alternator.util import random_bytes, random_string, get_signed_request, client_ssl_context, manual_request, ManualRequestError
+from test.cqlpy.util import config_value_context
 
 
 def gen_json(n):
@@ -643,3 +647,54 @@ def test_write_malformed_value(dynamodb, test_table_s, op):
         # will return this broken map and boto3's attempt to parse the
         # returned map will fail, causing the following call to fail.
         test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+
+# A test which verifies that a request rejected with RequestLimitExceeded
+# on a keep-alive connection does not break the connection. Until
+# SCYLLADB-3786 was solved the rejection was sent without reading the
+# request body, prompting the Seastar HTTP server to close the connection
+# right after the response was sent, despite the keep-alive header present
+# in the response. The affected HTTP client failed a later request with a
+# surprising disconnect.
+# The test uses http.client directly to hold exactly one connection with no
+# automatic reconnection or retry, and sets max_concurrent_requests_per_shard
+# to 0 (it's live-updatable) so every request is rejected.
+def test_request_limit_exceeded_connection_reuse(dynamodb, cql):
+    url = urllib.parse.urlsplit(dynamodb.meta.client._endpoint.host)
+    if url.scheme == 'https':
+        conn = http.client.HTTPSConnection(url.hostname, url.port, context=client_ssl_context(dynamodb), timeout=60)
+    else:
+        conn = http.client.HTTPConnection(url.hostname, url.port, timeout=60)
+
+    def do_request():
+        req = get_signed_request(dynamodb, 'DescribeTable', '{"TableName": "no_such_table"}')
+        conn.request('POST', '/', body=req.body, headers=req.headers)
+        response = conn.getresponse()
+        return response.status, response.read().decode('utf-8')
+
+    try:
+        # Sanity check - a normal request on this connection works (the
+        # table doesn't exist, so we expect ResourceNotFoundException):
+        status, body = do_request()
+        assert 'ResourceNotFoundException' in body, body
+        # config_value_context() returns after the new value has been applied
+        # on all shards, so the next request is already rejected.
+        # Careful: this test works only because the two servers gate on the same
+        # config item but not by the same condition - Alternator sheds on '>=',
+        # CQL on '>' (transport/server.cc). A limit of 0 thus rejects every
+        # Alternator request, while a CQL one still passes and can put the
+        # original limit back. Aligning the two would have broken this test: the
+        # CQL restore would be shed too, leaving the limit at 0 for later tests.
+        with config_value_context(cql, 'max_concurrent_requests_per_shard', '0'):
+            # The interesting part: each rejection must leave the connection
+            # usable. Before the fix the server closed it right after the
+            # first one, so the next do_request() raised an exception
+            # (http.client.RemoteDisconnected or similar).
+            for _ in range(2):
+                status, body = do_request()
+                assert status == 400 and 'RequestLimitExceeded' in body, body
+        # After the original limit is restored, the same connection must
+        # still work for normal request processing:
+        status, body = do_request()
+        assert 'ResourceNotFoundException' in body, body
+    finally:
+        conn.close()
