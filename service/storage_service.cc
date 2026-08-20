@@ -2141,13 +2141,31 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(
             change.open_sessions.insert(session);
         }
 
-        for (auto&& [table, tables] : tmptr->tablets().all_table_groups()) {
+        auto collect_open_sessions_for_table = [&] (table_id table) {
+            // A hinted table may have just been dropped, in which case it no
+            // longer has a tablet_map (and can't have any open sessions).
+            if (!tmptr->tablets().has_tablet_map(table)) {
+                return;
+            }
             const auto& tmap = tmptr->tablets().get_tablet_map(table);
             for (auto&& [tid, trinfo]: tmap.transitions()) {
                 if (trinfo.session_id) {
                     auto id = session_id(trinfo.session_id);
                     change.open_sessions.insert(id);
                 }
+            }
+        };
+
+        if (tablet_hint) {
+            // Tables not in the hint have an unchanged tablet_map (same pointer,
+            // per replica::update_tablet_metadata), so their transitions() can't
+            // have gained anything new since the last call.
+            for (auto&& [table, table_hint] : tablet_hint->tables) {
+                collect_open_sessions_for_table(table);
+            }
+        } else {
+            for (auto&& [table, tables] : tmptr->tablets().all_table_groups()) {
+                collect_open_sessions_for_table(table);
             }
         }
     }
