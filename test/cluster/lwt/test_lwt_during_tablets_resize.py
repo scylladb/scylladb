@@ -146,7 +146,7 @@ async def test_multi_column_lwt_during_split_merge(manager: ManagerClient, scale
     cfg = {
         "enable_tablets": True,
         "tablet_load_stats_refresh_interval_in_seconds": 1,
-        "target-tablet-size-in-bytes": 1024 * 16,
+        "target_tablet_size_in_bytes": 1024 * 16,
     }
     properties = [
         {"dc": "dc1", "rack": "r1"},
