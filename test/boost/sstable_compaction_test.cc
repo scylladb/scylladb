@@ -182,18 +182,6 @@ static void assert_table_sstable_count(table_for_tests& t, size_t expected_count
     BOOST_REQUIRE(uint64_t(t->get_stats().live_sstable_count) == expected_count);
 }
 
-static void corrupt_sstable(sstables::shared_sstable sst, component_type type = component_type::Data) {
-    auto f = sstables::test(sst).open_file(type, {}, {}).get();
-    auto close_f = deferred_close(f);
-    const auto wbuf_align = f.memory_dma_alignment();
-    const auto wbuf_len = f.size().get();
-    auto wbuf = seastar::temporary_buffer<char>::aligned(wbuf_align, wbuf_len);
-    std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
-    auto os = output_stream<char>(sstables::test(sst).get_storage().make_component_sink(*sst, type, open_flags::wo, {}).get());
-    auto close_os = deferred_close(os);
-    os.write(std::move(wbuf)).get();
-}
-
 void compaction_manager_basic(test_env& env) {
     BOOST_REQUIRE(this_smp_shard_count() == 1);
     auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
