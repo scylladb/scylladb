@@ -2629,6 +2629,7 @@ bool compaction_manager::compaction_disabled(compaction_group_view& t) const {
     }
 }
 
+<<<<<<< HEAD
 future<> compaction_manager::stop_compaction(sstring type, std::function<bool(const compaction_group_view*)> filter) {
     compaction_type target_type;
     try {
@@ -2648,6 +2649,30 @@ future<> compaction_manager::stop_compaction(sstring type, std::function<bool(co
     compaction_type_set cs;
     cs.set(target_type);
     return stop_ongoing_compactions("user request", std::move(filter), std::move(cs));
+||||||| parent of be6a7872c3 (api: fix stop_compaction of type COMPACTION not stopping major compaction)
+future<> compaction_manager::stop_compaction(sstring type, std::function<bool(const compaction_group_view*)> filter) {
+    compaction_type target_type;
+    try {
+        target_type = to_compaction_type(type);
+    } catch (...) {
+        throw std::runtime_error(format("Compaction of type {} cannot be stopped by compaction manager: {:t}", type.c_str(), std::current_exception()));
+    }
+    switch (target_type) {
+    case compaction_type::Validation:
+    case compaction_type::Index_build:
+        throw std::runtime_error(format("Compaction type {} is unsupported", type.c_str()));
+    case compaction_type::Reshard:
+        throw std::runtime_error(format("Stopping compaction of type {} is disallowed", type.c_str()));
+    default:
+        break;
+    }
+    compaction_type_set cs;
+    cs.set(target_type);
+    return stop_ongoing_compactions("user request", std::move(filter), std::move(cs));
+=======
+future<> compaction_manager::stop_compaction(compaction_type_set types, std::function<bool(const compaction_group_view*)> filter) {
+    return stop_ongoing_compactions("user request", std::move(filter), types);
+>>>>>>> be6a7872c3 (api: fix stop_compaction of type COMPACTION not stopping major compaction)
 }
 
 void compaction_manager::propagate_replacement(compaction_group_view& t,
