@@ -4780,9 +4780,34 @@ table::disable_auto_compaction() {
     // - it will break computation of major compaction descriptor
     //   for new submissions
     _compaction_disabled_by_user = true;
+<<<<<<< HEAD
     return with_gate(_async_gate, [this] {
         return parallel_foreach_compaction_group_view([this] (compaction::compaction_group_view& view) {
             return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &view, compaction::compaction_type::Compaction);
+||||||| parent of ec9da60cae (compaction: select compactions to stop by a set of types)
+
+    auto holder = _async_gate.hold();
+
+    co_await parallel_foreach_compaction_group_view([this] (compaction::compaction_group_view& view) {
+        return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &view, compaction::compaction_type::Compaction);
+    });
+
+    if (uses_logstor()) {
+        co_await parallel_foreach_compaction_group([this] (compaction_group& cg) {
+            return get_logstor_compaction_manager().stop_ongoing_compactions(cg);
+=======
+
+    auto holder = _async_gate.hold();
+
+    co_await parallel_foreach_compaction_group_view([this] (compaction::compaction_group_view& view) {
+        return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &view,
+                compaction::compaction_type_set::of<compaction::compaction_type::Compaction>());
+    });
+
+    if (uses_logstor()) {
+        co_await parallel_foreach_compaction_group([this] (compaction_group& cg) {
+            return get_logstor_compaction_manager().stop_ongoing_compactions(cg);
+>>>>>>> ec9da60cae (compaction: select compactions to stop by a set of types)
         });
     });
 }
