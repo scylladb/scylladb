@@ -629,11 +629,11 @@ public:
     virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override {}
 
     virtual void on_update_keyspace(const sstring& ks_name) override { keyspace_changed(ks_name).get(); }
-    virtual void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool) override {}
+    virtual void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool, bool) override {}
     virtual void on_update_user_type(const sstring& ks_name, const sstring& type_name) override {}
     virtual void on_update_function(const sstring& ks_name, const sstring& function_name) override {}
     virtual void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
-    virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {}
+    virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed, bool indexes_changed) override {}
 
     virtual void on_drop_keyspace(const sstring& ks_name) override { keyspace_changed(ks_name).get(); }
     virtual void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {}

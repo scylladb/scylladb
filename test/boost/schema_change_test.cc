@@ -390,6 +390,7 @@ public:
     int update_keyspace_count = 0;
     int update_column_family_count = 0;
     int columns_changed_count = 0;
+    int indexes_changed_count = 0;
     int update_user_type_count = 0;
     int update_function_count = 0;
     int update_aggregate_count = 0;
@@ -408,14 +409,19 @@ public:
     virtual void on_create_aggregate(const sstring&, const sstring&) override { ++create_aggregate_count; }
     virtual void on_create_view(const sstring&, const sstring&) override { ++create_view_count; }
     virtual void on_update_keyspace(const sstring&) override { ++update_keyspace_count; }
-    virtual void on_update_column_family(const sstring&, const sstring&, bool columns_changed) override {
+    virtual void on_update_column_family(const sstring&, const sstring&, bool columns_changed, bool indexes_changed) override {
         ++update_column_family_count;
         columns_changed_count += int(columns_changed);
+        indexes_changed_count += int(indexes_changed);
     }
     virtual void on_update_user_type(const sstring&, const sstring&) override { ++update_user_type_count; }
     virtual void on_update_function(const sstring&, const sstring&) override { ++update_function_count; }
     virtual void on_update_aggregate(const sstring&, const sstring&) override { ++update_aggregate_count; }
-    virtual void on_update_view(const sstring&, const sstring&, bool) override { ++update_view_count; }
+    virtual void on_update_view(const sstring&, const sstring&, bool columns_changed, bool indexes_changed) override {
+        ++update_view_count;
+        columns_changed_count += int(columns_changed);
+        indexes_changed_count += int(indexes_changed);
+    }
     virtual void on_drop_keyspace(const sstring&) override { ++drop_keyspace_count; }
     virtual void on_drop_column_family(const sstring&, const sstring&) override { ++drop_column_family_count; }
     virtual void on_drop_user_type(const sstring&, const sstring&) override { ++drop_user_type_count; }
@@ -503,6 +509,44 @@ SEASTAR_TEST_CASE(test_notifications) {
             BOOST_REQUIRE_EQUAL(listener.update_column_family_count, 3);
             BOOST_REQUIRE_EQUAL(listener.columns_changed_count, 3);
 
+            // Runs `cql` and asserts how many update notifications it produced
+            // and which of the two client-visible properties they reported as
+            // changed. The notification count has to be checked too, or a change
+            // reported as (0, 0) is indistinguishable from no notification.
+            auto check_reported_changes = [&] (const char* cql, int expected_updates,
+                    int expected_columns, int expected_indexes) {
+                auto updates_before = listener.update_column_family_count + listener.update_view_count;
+                auto columns_before = listener.columns_changed_count;
+                auto indexes_before = listener.indexes_changed_count;
+                e.execute_cql(cql).get();
+                BOOST_REQUIRE_EQUAL(listener.update_column_family_count + listener.update_view_count - updates_before,
+                        expected_updates);
+                BOOST_REQUIRE_EQUAL(listener.columns_changed_count - columns_before, expected_columns);
+                BOOST_REQUIRE_EQUAL(listener.indexes_changed_count - indexes_before, expected_indexes);
+            };
+
+            // Properties other than columns and indexes.
+            check_reported_changes("alter table tests.table1 with comment = 'hello';", 1, 0, 0);
+            check_reported_changes("alter table tests.table1 with bloom_filter_fp_chance = 0.1;", 1, 0, 0);
+            check_reported_changes("alter table tests.table1 with default_time_to_live = 100;", 1, 0, 0);
+            check_reported_changes("alter table tests.table1 with compaction = "
+                    "{'class': 'LeveledCompactionStrategy'};", 1, 0, 0);
+
+            // Indexes change without any column changing, and vice versa.
+            check_reported_changes("create index table1_idx on tests.table1 (c1);", 1, 0, 1);
+            check_reported_changes("drop index tests.table1_idx;", 1, 0, 1);
+            check_reported_changes("alter table tests.table1 rename pk to pk2;", 1, 1, 0);
+
+            // Materialized views are notified the same way, and have no indexes
+            // of their own. Altering a view notifies its base table too, so the
+            // property-only change below reports two updates, one per table.
+            e.execute_cql("create materialized view tests.mv1 as select pk2, c1 from tests.table1 "
+                    "where pk2 is not null and c1 is not null primary key (c1, pk2);").get();
+            auto update_view_count_before = listener.update_view_count;
+            check_reported_changes("alter materialized view tests.mv1 with comment = 'hello';", 2, 0, 0);
+            BOOST_REQUIRE_EQUAL(listener.update_view_count - update_view_count_before, 1);
+
+            e.execute_cql("drop materialized view tests.mv1;").get();
             e.execute_cql("drop table tests.table1;").get();
 
             BOOST_REQUIRE_EQUAL(listener.drop_column_family_count, 1);

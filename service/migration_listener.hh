@@ -59,11 +59,11 @@ public:
 
     // The callback runs inside seastar thread
     virtual void on_update_keyspace(const sstring& ks_name) = 0;
-    virtual void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed) = 0;
+    virtual void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed, bool indexes_changed) = 0;
     virtual void on_update_user_type(const sstring& ks_name, const sstring& type_name) = 0;
     virtual void on_update_function(const sstring& ks_name, const sstring& function_name) = 0;
     virtual void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) = 0;
-    virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) = 0;
+    virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed, bool indexes_changed) = 0;
 
     // The callback runs inside seastar thread
     virtual void on_drop_keyspace(const sstring& ks_name) = 0;
@@ -103,7 +103,7 @@ public:
     void on_create_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
 
     void on_update_keyspace(const sstring& ks_name) override {}
-    void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed) override {}
+    void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed, bool indexes_changed) override {}
     void on_update_user_type(const sstring& ks_name, const sstring& type_name) override {}
     void on_update_function(const sstring& ks_name, const sstring& function_name) override {}
     void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
@@ -118,7 +118,7 @@ public:
 class migration_listener::empty_listener : public only_view_notifications {
 public:
     void on_create_view(const sstring& ks_name, const sstring& view_name) override {};
-    void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {};
+    void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed, bool indexes_changed) override {};
     void on_drop_view(const sstring& ks_name, const sstring& view_name) override {};
 };
 
@@ -139,9 +139,9 @@ public:
     future<> create_user_type(user_type type);
     future<> create_view(view_ptr view);
     future<> update_keyspace(const sstring& ks_name);
-    future<> update_column_family(schema_ptr cfm, bool columns_changed);
+    future<> update_column_family(schema_ptr cfm, bool columns_changed, bool indexes_changed);
     future<> update_user_type(user_type type);
-    future<> update_view(view_ptr view, bool columns_changed);
+    future<> update_view(view_ptr view, bool columns_changed, bool indexes_changed);
     future<> drop_keyspace(const sstring& ks_name);
     future<> drop_column_family(schema_ptr cfm);
     future<> drop_user_type(user_type type);

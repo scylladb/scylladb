@@ -2744,7 +2744,7 @@ future<> view_builder::dispatch_update_view(sstring ks_name, sstring view_name) 
     }
 }
 
-void view_builder::on_update_view(const sstring& ks_name, const sstring& view_name, bool) {
+void view_builder::on_update_view(const sstring& ks_name, const sstring& view_name, bool, bool) {
     // Do it in the background, serialized.
     static_cast<void>(with_gate(_ops_gate, [this, ks_name = ks_name, view_name = view_name] () mutable {
         return dispatch_update_view(std::move(ks_name), std::move(view_name));

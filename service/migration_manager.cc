@@ -351,11 +351,11 @@ future<> migration_notifier::update_keyspace(const sstring& ks_name) {
     });
 }
 
-future<> migration_notifier::update_column_family(schema_ptr cfm, bool columns_changed) {
+future<> migration_notifier::update_column_family(schema_ptr cfm, bool columns_changed, bool indexes_changed) {
     const auto& ks_name = cfm->ks_name();
     const auto& cf_name = cfm->cf_name();
     co_await on_schema_change([&] (migration_listener* listener) {
-        listener->on_update_column_family(ks_name, cf_name, columns_changed);
+        listener->on_update_column_family(ks_name, cf_name, columns_changed, indexes_changed);
     }, [&] (std::exception_ptr ex) {
         return fmt::format("Update column family notification failed {}.{}: {}", ks_name, cf_name, ex);
     });
@@ -371,11 +371,11 @@ future<> migration_notifier::update_user_type(user_type type) {
     });
 }
 
-future<> migration_notifier::update_view(view_ptr view, bool columns_changed) {
+future<> migration_notifier::update_view(view_ptr view, bool columns_changed, bool indexes_changed) {
     const auto& ks_name = view->ks_name();
     const auto& view_name = view->cf_name();
     co_await on_schema_change([&] (migration_listener* listener) {
-        listener->on_update_view(ks_name, view_name, columns_changed);
+        listener->on_update_view(ks_name, view_name, columns_changed, indexes_changed);
     }, [&] (std::exception_ptr ex) {
         return fmt::format("Update view notification failed {}.{}: {}", ks_name, view_name, ex);
     });

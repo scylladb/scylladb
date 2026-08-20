@@ -3114,7 +3114,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         trigger_load_stats_refresh();
     }
 
-    virtual void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed) override {
+    virtual void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool, bool) override {
         // Tablet hints may have changed. Wake up so that load balancer re-evaluates tablet distribution.
         _topo_sm.event.broadcast();
     }

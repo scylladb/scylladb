@@ -1231,9 +1231,14 @@ void query_processor::migration_subscriber::on_update_keyspace(const sstring& ks
 void query_processor::migration_subscriber::on_update_column_family(
         const sstring& ks_name,
         const sstring& cf_name,
-        bool columns_changed) {
-    // #1255: Ignoring columns_changed deliberately.
-    log.info("Column definitions for {}.{} changed, invalidating related prepared statements", ks_name, cf_name);
+        bool columns_changed,
+        bool indexes_changed) {
+    // Both flags are deliberately ignored. A prepared statement holds the
+    // schema_ptr it was prepared with and reads table properties off it when
+    // executed - default_time_to_live, cdc_options, paxos_grace_seconds - so an
+    // update that touches neither columns nor indexes can still make it stale.
+    // See scylladb/scylladb#1255.
+    log.info("Schema for {}.{} changed, invalidating related prepared statements", ks_name, cf_name);
     remove_invalid_prepared_statements(ks_name, cf_name);
 }
 
@@ -1248,10 +1253,10 @@ void query_processor::migration_subscriber::on_update_aggregate(const sstring& k
 
 void query_processor::migration_subscriber::on_update_view(
         const sstring& ks_name,
-        const sstring& view_name, bool columns_changed) {
+        const sstring& view_name, bool columns_changed, bool indexes_changed) {
     // scylladb/scylladb#16392 - Materialized views are also tables so we need at least handle
     // them as such when changed.
-    on_update_column_family(ks_name, view_name, columns_changed);
+    on_update_column_family(ks_name, view_name, columns_changed, indexes_changed);
 }
 
 void query_processor::migration_subscriber::on_drop_keyspace(const sstring& ks_name) {
