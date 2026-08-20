@@ -79,6 +79,12 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
     auto files = co_await sstable->readable_file_for_all_components();
     for (auto it = components.cbegin(); it != components.cend(); ++it) {
         try {
+            if (it != components.cbegin()) {
+                // Injected once the first component was fully written, so that the
+                // sstable is already registered in the sstables registry.
+                utils::get_local_injector().inject("fail_download_sstable_mid_stream",
+                        [] { throw std::runtime_error("Failing sstable download mid-stream"); });
+            }
             auto descriptor = sstable->get_descriptor(it->first);
             descriptor.generation = gen;
             descriptor.sid = sid;
