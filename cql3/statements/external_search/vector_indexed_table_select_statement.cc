@@ -285,7 +285,8 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
     auto provider = _ann_ordering_info.temporary_index
                             ? std::make_unique<external_score_provider>(pkeys.value(), *_ann_ordering_info.temporary_index, *_schema)
                             : nullptr;
-    co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout, std::move(provider));
+    auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys.value());
+    co_return co_await emit_result_set(std::move(table_results), options, provider.get());
 }
 
 } // namespace statements
