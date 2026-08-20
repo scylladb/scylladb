@@ -47,6 +47,9 @@ namespace sstables {
 
 using object_storage_attributes = std::unordered_map<sstring, sstring>;
 
+inline constexpr std::string_view object_storage_sstable_version_attribute = "version";
+inline constexpr std::string_view object_storage_sstable_format_attribute = "format";
+
 struct object_storage_metadata {
     object_storage_attributes attributes;
 };
