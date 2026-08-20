@@ -159,6 +159,8 @@ private:
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
+    future<> update_history(compaction_group_view& t, compaction_result&& res, const compaction_data& cdata);
+
     serialized_action _update_compaction_static_shares_action;
     utils::observer<float> _compaction_static_shares_observer;
     utils::observer<float> _compaction_max_shares_observer;
@@ -597,9 +599,9 @@ protected:
     future<compaction_result> compact_sstables(compaction_descriptor descriptor, compaction_data& cdata, on_replacement&,
                                 compaction_manager::can_purge_tombstones can_purge = compaction_manager::can_purge_tombstones::yes,
                                 sstables::offstrategy offstrategy = sstables::offstrategy::no);
-    future<> update_history(::compaction::compaction_group_view& t, compaction_result&& res, const compaction_data& cdata);
-    bool should_update_history(compaction_type ct) {
-        return ct == compaction_type::Compaction || ct == compaction_type::Major;
+    // Delegates to compaction_manager::update_history
+    future<> update_history(::compaction::compaction_group_view& t, compaction_result&& res, const compaction_data& cdata) {
+        return _cm.update_history(t, std::move(res), cdata);
     }
 public:
     compaction_manager::compaction_stats_opt get_stats() const noexcept {
