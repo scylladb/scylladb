@@ -39,6 +39,7 @@
 #include <ranges>
 #include <unordered_map>
 
+#include "api/stop_compaction.hh"
 #include "api/scrub_status.hh"
 #include "gms/application_state.hh"
 #include "db/config.hh"
@@ -2868,6 +2869,8 @@ void statusgossip_operation(scylla_rest_client& client, const bpo::variables_map
     fmt::print(std::cout, "{}\n", status.GetBool() ? "running" : "not running");
 }
 
+static const auto stop_compaction_type_description = fmt::to_string(fmt::join(api::valid_compaction_types_for_stop(), ", "));
+
 void stop_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm.contains("id")) {
         throw std::invalid_argument("stopping compactions by id is not implemented");
@@ -2876,12 +2879,10 @@ void stop_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
         throw std::invalid_argument("missing required parameter: compaction_type");
     }
 
-    static const std::vector<std::string_view> recognized_compaction_types{"COMPACTION", "CLEANUP", "SCRUB", "RESHAPE", "RESHARD", "UPGRADE"};
-
     const auto compaction_type = vm["compaction_type"].as<sstring>();
 
-    if (std::ranges::find(recognized_compaction_types, compaction_type) == recognized_compaction_types.end()) {
-        throw std::invalid_argument(fmt::format("invalid compaction type: {}", compaction_type));
+    if (auto res = api::parse_compaction_types_to_stop(compaction_type); !res) {
+        throw std::invalid_argument(res.error());
     }
 
     client.post("/compaction_manager/stop_compaction", {{"type", compaction_type}});
@@ -5157,7 +5158,7 @@ For more information, see: {}
                     typed_option<int>("id", "The id of the compaction operation to stop (not implemented)"),
                 },
                 {
-                    typed_option<sstring>("compaction_type", "The type of compaction to be stopped", 1),
+                    typed_option<sstring>("compaction_type", stop_compaction_type_description.c_str(), 1),
                 },
             },
             {
