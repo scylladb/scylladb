@@ -440,6 +440,9 @@ SEASTAR_TEST_CASE(test_nested_type_mutation_in_update) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         counting_migration_listener listener;
         e.local_mnotifier().register_listener(&listener);
+        auto listener_lease = defer([&e, &listener] noexcept {
+            e.local_mnotifier().unregister_listener(&listener).get();
+        });
 
         e.execute_cql("CREATE TYPE foo (foo_k int);").get();
         e.execute_cql("CREATE TYPE bar (bar_k frozen<foo>);").get();
@@ -471,8 +474,9 @@ SEASTAR_TEST_CASE(test_notifications) {
         return seastar::async([&] {
             counting_migration_listener listener;
             e.local_mnotifier().register_listener(&listener);
-            // May throw, but zero probability in a test
-            auto listener_lease = defer([&e, &listener] noexcept { e.local_mnotifier().register_listener(&listener); });
+            auto listener_lease = defer([&e, &listener] noexcept {
+                e.local_mnotifier().unregister_listener(&listener).get();
+            });
 
             e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
 
