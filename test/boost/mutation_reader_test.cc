@@ -1242,7 +1242,7 @@ SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
 }
 
 // Best run with SMP >= 2
-SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source, *test_label::label("nightly")) {
+SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source, *test_label::label("tier2")) {
     if (this_smp_shard_count() < 2) {
         std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 2" << std::endl;
         return;

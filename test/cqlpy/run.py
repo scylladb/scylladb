@@ -524,17 +524,17 @@ def _has_marker_expression(pytest_args: list[str]) -> bool:
 def _prepare_pytest_args(pytest_args: list[str]) -> list[str]:
     """Prepare pytest arguments for runpy wrappers.
 
-    By default, runpy wrappers skip tests marked ``nightly`` to keep
+    By default, runpy wrappers skip tests marked ``tier2`` to keep
     local and per-PR runs focused and fast.
 
     Marker policy:
-    * if no marker expression is provided, add ``-m 'not nightly'``;
+    * if no marker expression is provided, add ``-m 'not tier2'``;
     * if marker expression is provided, keep it unchanged.
     """
     prepared_args = list(pytest_args)
     if _has_marker_expression(prepared_args):
         return prepared_args
-    return ["-m", "not nightly"] + prepared_args
+    return ["-m", "not tier2"] + prepared_args
 
 def run_pytest(pytest_dir, additional_parameters):
     global run_with_temporary_dir_pids
