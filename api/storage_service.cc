@@ -55,6 +55,7 @@
 #include "compaction/task_manager_module.hh"
 #include "sstables/object_storage_client.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstable_version.hh"
 #include "sstables/storage.hh"
 #include "replica/database.hh"
 #include "db/extensions.hh"
@@ -1511,6 +1512,27 @@ static std::optional<sstring> first_path_component(std::string_view path) {
     return sstring(path.substr(0, pos));
 }
 
+// Component object names in the live object-storage layout carry no version or
+// format, so the sstable descriptor is kept in the TOC object's attributes.
+// An sstable that is still being created, or already being removed, may have no
+// readable TOC: report what we do know rather than failing the whole listing.
+static future<> set_object_storage_sstable_descriptor(sstables::object_storage_client& client, const sstring& bucket, sstables::sstable_id sid, ss::object_storage_sstable& sst) {
+    auto toc = sstables::object_name(bucket, object_storage_prefix, sid, sstables::sstable_version_constants::TOC_SUFFIX);
+    sstables::object_storage_metadata metadata;
+    try {
+        metadata = co_await client.get_object_metadata(toc);
+    } catch (...) {
+        apilog.warn("object_storage_sstables: could not read the attributes of {}: {}", toc.str(), std::current_exception());
+        co_return;
+    }
+    if (auto it = metadata.attributes.find(sstring(sstables::object_storage_sstable_version_attribute)); it != metadata.attributes.end()) {
+        sst.version = it->second;
+    }
+    if (auto it = metadata.attributes.find(sstring(sstables::object_storage_sstable_format_attribute)); it != metadata.attributes.end()) {
+        sst.format = it->second;
+    }
+}
+
 static
 future<json::json_return_type>
 rest_object_storage_sstables(http_context& ctx, std::unique_ptr<http::request> req) {
@@ -1526,12 +1548,24 @@ rest_object_storage_sstables(http_context& ctx, std::unique_ptr<http::request> r
         auto& sst = sstables[*sid];
         sst.sstable_id = *sid;
     }
+    // FIXME: this walks the sstables one at a time, and each one costs two
+    // remote round trips - listing its references and reading its TOC
+    // attributes - so reporting a bucket that holds many sstables is slow.
+    //
+    // Making this loop concurrent on this shard is not the fix: the endpoint
+    // client splits object_storage_connections_per_shard across the scheduling
+    // groups that use it, in proportion to their shares, and this handler has
+    // no scheduling group of its own, so it would compete for the default
+    // group's connections with normal object-storage work.  The API should run
+    // in the maintenance scheduling group instead, and the traversal should be
+    // spread across shards rather than made concurrent within one.
     for (auto& [sid_string, sst] : sstables) {
         auto sid = sstables::sstable_id(utils::UUID(sid_string));
         auto refs = co_await sstables::list_object_storage_references(client, bucket, object_storage_prefix, sid);
         std::ranges::sort(refs);
         sst.num_references = refs.size();
         sst.references = std::move(refs);
+        co_await set_object_storage_sstable_descriptor(client, bucket, sid, sst);
     }
     std::vector<ss::object_storage_sstable> result;
     result.reserve(sstables.size());
