@@ -114,7 +114,7 @@ void cql_server::event_notifier::on_update_keyspace(const sstring& ks_name)
     }
 }
 
-void cql_server::event_notifier::on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed)
+void cql_server::event_notifier::on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed, bool indexes_changed)
 {
     for (auto&& conn : _schema_change_listeners) {
         using namespace cql_transport;
@@ -144,9 +144,9 @@ void cql_server::event_notifier::on_update_user_type(const sstring& ks_name, con
     }
 }
 
-void cql_server::event_notifier::on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed)
+void cql_server::event_notifier::on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed, bool indexes_changed)
 {
-    on_update_column_family(ks_name, view_name, columns_changed);
+    on_update_column_family(ks_name, view_name, columns_changed, indexes_changed);
 }
 
 void cql_server::event_notifier::on_update_function(const sstring& ks_name, const sstring& function_name)
