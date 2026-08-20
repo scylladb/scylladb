@@ -395,6 +395,7 @@ add_scylla_test(combined_tests
     row_cache_test.cc
     schema_change_test.cc
     schema_registry_test.cc
+    scrub_test.cc
     secondary_index_test.cc
     sessions_test.cc
     simple_value_with_expiry_test.cc
