@@ -164,7 +164,7 @@ public:
     {}
 
     future<> put_object(object_name name, ::memory_data_sink_buffers bufs, abort_source* as) override {
-        auto sink = _client->create_upload_sink(name.bucket(), name.object(), {}, as);
+        auto sink = _client->create_upload_sink(name.bucket(), name.object(), gcp::storage::object_metadata{}, as);
         for (auto&& buf : bufs.buffers()) {
             co_await sink.put(std::move(buf));
         }
@@ -172,7 +172,7 @@ public:
         co_await sink.close();
     }
     future<> copy_object(object_name src, object_name dst, abort_source* as) override {
-        return _client->copy_object(src.bucket(), src.object(), dst.bucket(), dst.object(), as);
+        return _client->copy_object(src.bucket(), src.object(), dst.bucket(), dst.object(), gcp::storage::object_metadata{}, as);
     }
     future<> delete_object(object_name name, abort_source* as) override {
         return _client->delete_object(name.bucket(), name.object(), as);
@@ -187,7 +187,7 @@ public:
         return make_upload_sink(std::move(name), as);
     }
     data_sink make_upload_sink(object_name name, abort_source* as) override {
-        return _client->create_upload_sink(name.bucket(), name.object(), {}, as);
+        return _client->create_upload_sink(name.bucket(), name.object(), gcp::storage::object_metadata{}, as);
     }
     data_source make_download_source(object_name name, abort_source* as) override {
         return _client->create_download_source(name.bucket(), name.object(), as);
