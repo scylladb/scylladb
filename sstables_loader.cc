@@ -1378,16 +1378,22 @@ protected:
 };
 
 future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations) {
-    if (locations.size() != 1) {
-        throw std::invalid_argument("expected exactly one backup location");
-    }
-    auto& loc = locations.front();
-
-    auto summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, loc.endpoint, loc.bucket, loc.prefix, snap_name, loc.datacenter, std::move(loc.manifests));
-
     db::snapshot_table_helper sth(_sys_dist_ks.qp());
-    // TODO: update state when all restored...
-    co_await sth.insert_snapshot_remote_location(snap_name, loc.datacenter, loc.endpoint, loc.bucket, loc.prefix, db::snapshot_state::remote);
+    manifest_summary summary = { .tablet_count = 0, .nr_sstables = 0 };
+
+    for (auto& loc : locations) {
+        auto loc_summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, loc.endpoint, loc.bucket, loc.prefix, snap_name, loc.datacenter, std::move(loc.manifests));
+        if (summary.tablet_count == 0) {
+            summary.tablet_count = loc_summary.tablet_count;
+        } else if (summary.tablet_count != loc_summary.tablet_count) {
+            throw std::runtime_error(fmt::format("Inconsistent tablet_count values across backup locations: expected {}, datacenter '{}' has {}",
+                summary.tablet_count, loc.datacenter, loc_summary.tablet_count));
+        }
+        summary.nr_sstables += loc_summary.nr_sstables;
+
+        // TODO: update state when all restored...
+        co_await sth.insert_snapshot_remote_location(snap_name, loc.datacenter, loc.endpoint, loc.bucket, loc.prefix, db::snapshot_state::remote);
+    }
 
     auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>({}, container(), keyspace, tid, std::move(snap_name), summary);
     co_return task->id();
