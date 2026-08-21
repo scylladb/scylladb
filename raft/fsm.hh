@@ -70,6 +70,20 @@ struct fsm_config {
     // selects the smallest-id voter. When unset (the default), fast bootstrap is
     // disabled and a bare fsm starts as a follower; raft::server sets it.
     std::optional<uint64_t> fast_bootstrap_seed;
+    // LeaseGuard leader-lease parameters. Absent unless leases are enabled for
+    // this server. When present, the leader records `clock.interval_now()` in
+    // each log entry it creates, defers committing writes until a deposed
+    // leader's lease has expired, and may serve linearizable reads locally
+    // while its own lease is valid.
+    struct leaseguard_config {
+        // Source of bounded-uncertainty time readings. Non-owning: must outlive
+        // the fsm.
+        bounded_clock& clock;
+        // Lease duration (Δ). Should be on the order of the election timeout.
+        // (arXiv:2512.15659 "Raft Leases Done  Right", Section 5.2)
+        lease_clock::duration delta;
+    };
+    std::optional<leaseguard_config> leaseguard;
 };
 
 class fsm;
@@ -117,6 +131,56 @@ struct leader {
     // Set to true when last_read_id increases and reset back in get_output() call
     bool last_read_id_changed = false;
     read_id max_read_id_with_quorum{0};
+
+    // LeaseGuard: a linearizable read was served in this leadership term since
+    // the last lease-renewal no-op. Gates proactive lease extension in
+    // tick_leader() so that a read-only workload keeps the lease alive, while an
+    // idle group (no reads) appends nothing.
+    bool read_since_renewal = false;
+
+    // LeaseGuard: index of the newest log entry that predates this leader's
+    // term (i.e. the deposed leader's lease), captured at election time as
+    // last_idx(). Non-zero whenever the group has any prior entry -- including
+    // when the in-memory log is empty but a snapshot covers earlier entries, in
+    // which case it equals the snapshot index. Zero only for a genesis cluster
+    // with no entries at all (in memory or snapshot), where there is no deposed
+    // lease to wait for.
+    index_t last_prev_term_idx{0};
+    // LeaseGuard: a bounded-uncertainty time reading taken at or shortly after
+    // this node became leader. Every prior-term entry was created before the
+    // election, so once this reading is more than delta old the deposed lease is
+    // guaranteed expired. Used as the age reference when the deposed leader's
+    // entry is not available in memory (folded into a snapshot, empty log at
+    // election, or no recorded interval of its own). Set lazily on the first
+    // available clock reading, so it may be empty until then.
+    std::optional<time_bounds> lease_wait_start;
+    // LeaseGuard: elapsed-time reading taken when this node became leader. Every
+    // prior-term entry was created before the election, so once delta of physical
+    // time has passed since this anchor the deposed lease is certainly expired.
+    // Unlike lease_wait_start this needs no synchronized clock, so it is the path
+    // that lets a leader with an unusable clock make progress at all rather than
+    // stalling. See prev_term_lease_expired().
+    mono_clock::time_point lease_wait_mono_start{};
+    // LeaseGuard: set once the deferred-commit restriction no longer applies
+    // for this leadership term -- either because there was no deposed lease to
+    // wait for (no prior-term entry at election) or because that lease has
+    // expired.
+    bool lease_wait_done = false;
+    // LeaseGuard: true once we have warned that the clock is unusable while a
+    // commit is deferred, so the warning is emitted once per leadership term
+    // rather than once per tick.
+    bool clock_unavailable_warned = false;
+    // LeaseGuard: elapsed-time reading at which our clock last became unusable,
+    // or empty while it is usable. A leader with no clock can serve no local
+    // reads, stamp nothing and renew nothing, so once this has persisted we hand
+    // leadership to a replica whose clock works. Measured on the monotonic clock
+    // precisely because the clock being judged is the one that failed.
+    std::optional<mono_clock::time_point> clock_unusable_since;
+    // LeaseGuard: per-group delay added to that wait. Scylla runs one raft group
+    // per strongly-consistent tablet, so without it a single node's clock
+    // failure would transfer every group it leads at the same instant -- and
+    // again in reverse when the clock recovers. Drawn once per leadership term.
+    mono_clock::duration clock_stepdown_jitter{0};
 
     leader(size_t max_log_size, const class fsm& fsm_) : fsm(fsm_), log_limiter_semaphore(std::make_unique<seastar::semaphore>(max_log_size)) {}
     leader(leader&&) = default;
@@ -188,6 +252,16 @@ class fsm {
     // Set if we want to actively search for a leader.
     // Can be true only if the leader is not known
     bool _ping_leader = false;
+    // LeaseGuard: whether our bounded clock was usable at the last tick, i.e.
+    // whether we could hold a lease. Reported to the leader in
+    // append_reply::clock_ok so it can hand leadership to a node that still can.
+    //
+    // Sampled once per tick rather than per reply on purpose: append_entries is
+    // the hottest path in raft and a follower otherwise never reads the clock
+    // (interval_now() is a syscall on the adjtimex backend), while the value
+    // only feeds a leadership decision gated on the failure persisting for
+    // multiples of delta -- a tick of staleness cannot matter.
+    bool _clock_ok = false;
 
     // Stores the last state observed by get_output().
     // Is updated with the actual state of the FSM after
@@ -252,6 +326,25 @@ private:
     // Signals _sm_events. May resign leadership if we committed
     // a configuration change.
     void maybe_commit();
+    // LeaseGuard: true if the deposed leader's lease is known to be more than
+    // delta old, so it is safe to advance the commit index past all prior-term
+    // entries. Uses the deposed entry's own recorded interval when it is still
+    // in the in-memory log, otherwise a delta wait since this node became
+    // leader. An unsynchronized clock only delays this -- the elapsed-time path
+    // still discharges it a little over delta after the election -- so it never
+    // defers indefinitely.
+    // Precondition: is_leader(), leases enabled, last_prev_term_idx > 0.
+    bool prev_term_lease_expired();
+    // LeaseGuard: true if this leader currently holds a valid lease, i.e. its
+    // newest committed entry (which the caller has verified is in the current
+    // term) is present in memory, carries a recorded interval, and is less than
+    // delta old. When true the leader may serve a linearizable read locally
+    // without a quorum round-trip. Precondition: is_leader().
+    bool can_serve_lease_read();
+    // LeaseGuard: hand leadership to a replica whose clock still works, if ours
+    // has been unusable long enough and such a replica exists. A no-op unless
+    // leases are enabled. Precondition: is_leader(), not already stepping down.
+    void maybe_transfer_leadership_on_clock_loss();
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
         return election_elapsed() >= _randomized_election_timeout;
@@ -267,6 +360,19 @@ private:
 
     // A helper to update the FSM's current term.
     void update_current_term(term_t current_term);
+
+    // True if LeaseGuard leader leases are enabled for this fsm.
+    bool leaseguard_enabled() const noexcept {
+        return _config.leaseguard.has_value();
+    }
+    // The bounded-uncertainty time interval to stamp on a new log entry, or
+    // nullopt when leases are disabled or the clock is unsynchronized.
+    std::optional<time_bounds> lease_time_now() const {
+        if (!_config.leaseguard) {
+            return std::nullopt;
+        }
+        return _config.leaseguard->clock.interval_now();
+    }
 
     void check_is_leader() const {
         if (!is_leader()) {

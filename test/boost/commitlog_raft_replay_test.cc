@@ -49,6 +49,21 @@ raft::log_entry_ptr make_command_entry(raft::term_t term, raft::index_t idx) {
     return make_lw_shared<raft::log_entry>(raft::log_entry{.term = term, .idx = idx, .data = std::move(cmd)});
 }
 
+// A LeaseGuard-stamped entry. The bounds are deliberately not whole
+// microseconds: raft::lease_clock fixes the wire unit at nanoseconds, so if that
+// ever coarsened these digits would be lost rather than the change passing
+// unnoticed.
+constexpr int64_t lease_earliest_ns = 1'234'567'891;
+constexpr int64_t lease_latest_ns = 1'234'567'893;
+
+raft::log_entry_ptr make_lease_entry(raft::term_t term, raft::index_t idx) {
+    return make_lw_shared<raft::log_entry>(raft::log_entry{.term = term, .idx = idx,
+            .data = raft::log_entry::dummy{},
+            .lease_time = raft::time_bounds{
+                    raft::lease_clock::time_point(std::chrono::nanoseconds(lease_earliest_ns)),
+                    raft::lease_clock::time_point(std::chrono::nanoseconds(lease_latest_ns))}});
+}
+
 raft::log_entry_ptr make_config_entry(raft::term_t term, raft::index_t idx) {
     return make_lw_shared<raft::log_entry>(raft::log_entry{.term = term,
             .idx = idx,
@@ -96,7 +111,16 @@ future<rp_handle> write_raft_entry_to_commitlog(commitlog& cl, table_id tid, raf
 
 // Test commitlog_raft_log_entry_writer: size computation is consistent with
 // the serialized output, and a write/read roundtrip preserves all fields
-// for every entry type (command, configuration, dummy).
+// for every entry type (command, configuration, dummy, LeaseGuard-stamped).
+//
+// This is the *persisted* encoding, which is not the same byte format as the
+// plain ser::serialize/ser::deserialize pair -- see the SCYLLADB-1029 note in
+// db/commitlog/commitlog_entry.cc: the writer path
+// (ser::writer_of_commitlog_entry) and the "manual" deserializer are not binary
+// compatible, which is why replay reads through the view deserializer. So a
+// field surviving ser::serialize says nothing about it surviving here, and
+// log_entry::lease_time has to be asserted on this path too. The last entry
+// below carries an interval and the others do not, covering both cases.
 SEASTAR_TEST_CASE(test_commitlog_raft_log_entry_writer) {
     return cl_test([](commitlog& log) -> future<> {
         auto gid = make_group_id();
@@ -106,6 +130,7 @@ SEASTAR_TEST_CASE(test_commitlog_raft_log_entry_writer) {
                 make_command_entry(raft::term_t(1), raft::index_t(1)),
                 make_config_entry(raft::term_t(2), raft::index_t(2)),
                 make_dummy_entry(raft::term_t(3), raft::index_t(3)),
+                make_lease_entry(raft::term_t(4), raft::index_t(4)),
         };
 
         // Verify size() and accessor for each entry type, then write to commitlog.
@@ -150,6 +175,18 @@ SEASTAR_TEST_CASE(test_commitlog_raft_log_entry_writer) {
                         BOOST_REQUIRE_EQUAL(rle.entry->term, expected->term);
                         BOOST_REQUIRE_EQUAL(rle.entry->idx, expected->idx);
                         BOOST_REQUIRE_EQUAL(rle.entry->data.index(), expected->data.index());
+                        // A LeaseGuard interval must survive the envelope intact,
+                        // and an entry written without one must not gain one.
+                        BOOST_REQUIRE_EQUAL(rle.entry->lease_time.has_value(),
+                                expected->lease_time.has_value());
+                        if (expected->lease_time) {
+                            BOOST_REQUIRE_EQUAL(
+                                    rle.entry->lease_time->earliest.time_since_epoch().count(),
+                                    lease_earliest_ns);
+                            BOOST_REQUIRE_EQUAL(
+                                    rle.entry->lease_time->latest.time_since_epoch().count(),
+                                    lease_latest_ns);
+                        }
                         ++found;
                         co_return;
                     });
@@ -1808,6 +1845,48 @@ SEASTAR_TEST_CASE(test_raft_commitlog_load_log_one_shot) {
         BOOST_REQUIRE(entries2.empty());
         co_return;
     });
+}
+
+// The other encoding of lease_time: the plain ser::serialize/ser::deserialize
+// pair, which is what idl/raft.idl.hh uses for append_request::entries. That is
+// the replication path, and for LeaseGuard it is the primary one -- "the log is
+// the lease" reaches a new leader over append_entries, not off disk. The
+// persisted encoding is a different byte format and is covered by
+// test_commitlog_raft_log_entry_writer above; neither test substitutes for the
+// other.
+//
+// A misread here is silent and unsafe: a lease decoded as younger than it is
+// lets a deposed leader serve a stale local read. So the encoding must be a
+// fixed unit rather than whatever std::chrono::system_clock::period happens to
+// be for the build (see raft::lease_clock). The bounds are deliberately not
+// whole microseconds, so a coarsened unit drops digits here. Cross-build
+// divergence is what the static_asserts in raft/bounded_clock.hh guard -- a
+// round trip cannot see it, since both ends share a standard library.
+BOOST_AUTO_TEST_CASE(test_log_entry_lease_time_round_trip) {
+    constexpr int64_t earliest_ns = lease_earliest_ns;
+    constexpr int64_t latest_ns = lease_latest_ns;
+
+    raft::log_entry_ptr entry = make_lease_entry(raft::term_t(7), raft::index_t(11));
+
+    bytes_ostream buf;
+    ser::serialize(buf, entry);
+    auto bv = buf.linearize();
+    auto in = ser::as_input_stream(bv);
+    auto decoded = ser::deserialize(in, std::type_identity<raft::log_entry_ptr>());
+
+    BOOST_REQUIRE(decoded->lease_time);
+    BOOST_REQUIRE_EQUAL(decoded->lease_time->earliest.time_since_epoch().count(), earliest_ns);
+    BOOST_REQUIRE_EQUAL(decoded->lease_time->latest.time_since_epoch().count(), latest_ns);
+
+    // An absent interval must stay absent (leases disabled, or an unsynchronized
+    // clock at the time the entry was created).
+    raft::log_entry_ptr no_lease = make_lw_shared<raft::log_entry>(raft::log_entry{
+            .term = raft::term_t(7), .idx = raft::index_t(12), .data = raft::log_entry::dummy{}});
+    bytes_ostream buf2;
+    ser::serialize(buf2, no_lease);
+    auto bv2 = buf2.linearize();
+    auto in2 = ser::as_input_stream(bv2);
+    BOOST_REQUIRE(!ser::deserialize(in2, std::type_identity<raft::log_entry_ptr>())->lease_time);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

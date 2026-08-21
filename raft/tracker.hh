@@ -34,6 +34,12 @@ public:
     // is_voter::yes if the follower is a voting one
     raft::is_voter can_vote = raft::is_voter::yes;
 
+    // LeaseGuard: the follower's clock health as of its last append_reply. A
+    // leader whose own clock has failed uses this to find a replica that can
+    // still hold a lease and hand leadership to it. Starts false, so a follower
+    // we have not heard from is never chosen.
+    bool clock_ok = false;
+
     enum class state {
         // In this state only one append entry is send until matching index is found
         PROBE,
