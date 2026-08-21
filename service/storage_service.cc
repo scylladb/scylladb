@@ -4135,31 +4135,57 @@ locator::tablet_map storage_service::build_tablet_map_for_migration(
     locator::tablet_map tmap(std::move(last_tokens));
     auto tablet_count = tmap.tablet_count();
 
-    // Stateful lambdas for round-robin shard assignment per node.
-    std::unordered_map<locator::host_id, std::function<shard_id()>> next_shard_for;
-    tm.for_each_token_owner([&] (const locator::node& node) {
-        auto host = node.host_id();
-        next_shard_for[host] = [num_shards = node.get_shard_count(), idx = 0u] () mutable {
-            return shard_id(idx++ % num_shards);
-        };
-    });
+    struct tablet_desc {
+        locator::tablet_id id;
+        dht::token vnode_token;
+        uint64_t token_range_size;
+    };
+    utils::chunked_vector<tablet_desc> tablets;
+    tablets.reserve(tablet_count);
 
     size_t vnode_idx = 0;
+    // unbias() maps tokens monotonically onto [0, 2^64), so the distance between
+    // consecutive tablet boundaries is the size of the range a tablet owns.
+    // unbias(minimum_token()) is 0, the lower bound of the first tablet.
+    uint64_t prev_boundary = dht::minimum_token().unbias();
     for (size_t i = 0; i < tablet_count; ++i) {
-        auto tablet = locator::tablet_id(i);
-        auto tablet_last = dht::raw_token(tmap.get_last_token(tablet));
-        while (vnode_idx < sorted_tokens.size() && dht::raw_token(sorted_tokens[vnode_idx]) < tablet_last) {
+        auto tablet_last = tmap.get_last_token(locator::tablet_id(i));
+        while (vnode_idx < sorted_tokens.size() && dht::raw_token(sorted_tokens[vnode_idx]) < dht::raw_token(tablet_last)) {
             ++vnode_idx;
         }
         auto vnode_token = (vnode_idx < sorted_tokens.size())
             ? sorted_tokens[vnode_idx]
             : sorted_tokens[0]; // wrap-around vnode
-        auto vnode_replica_hosts = erm->get_natural_replicas(vnode_token, true);
-        locator::tablet_replica_set tablet_replicas;
-        for (auto host : vnode_replica_hosts) {
-            tablet_replicas.push_back(locator::tablet_replica{host, next_shard_for[host]()});
+        auto boundary = tablet_last.unbias();
+        tablets.push_back(tablet_desc{locator::tablet_id(i), vnode_token, boundary - prev_boundary});
+        prev_boundary = boundary;
+    }
+
+    // Aggregate token range assigned to each shard of a node. A tablet is placed
+    // on at most one shard per node, so the per-shard sums add up to the size of
+    // the ring at most, which uint64_t holds exactly.
+    std::unordered_map<locator::host_id, std::vector<uint64_t>> shard_load;
+    tm.for_each_token_owner([&] (const locator::node& node) {
+        auto shard_count = node.get_shard_count();
+        if (!shard_count) {
+            throw std::runtime_error(fmt::format("Shard count not known for node {}", node.host_id()));
         }
-        tmap.set_tablet(tablet, locator::tablet_info(std::move(tablet_replicas)));
+        shard_load.emplace(node.host_id(), std::vector<uint64_t>(shard_count));
+    });
+
+    std::ranges::sort(tablets, [] (const auto& a, const auto& b) {
+        return a.token_range_size > b.token_range_size;
+    });
+
+    for (const auto& tablet : tablets) {
+        locator::tablet_replica_set tablet_replicas;
+        for (auto host : erm->get_natural_replicas(tablet.vnode_token, true)) {
+            auto& load = shard_load.at(host);
+            auto least_loaded = std::ranges::min_element(load);
+            *least_loaded += tablet.token_range_size;
+            tablet_replicas.push_back(locator::tablet_replica{host, shard_id(least_loaded - load.begin())});
+        }
+        tmap.set_tablet(tablet.id, locator::tablet_info(std::move(tablet_replicas)));
     }
 
     if (target_pow2 && tablet_count != target_pow2) {
@@ -4260,9 +4286,10 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // vnode range. If the last vnode token is not MAX_TOKEN, an additional
         // tablet is created to cover the wrap-around range
         // (last_vnode_token, MAX_TOKEN].
-        // Tablets inherit their replica hosts from their corresponding vnode
-        // and shards are assigned in round-robin fashion per node so that
-        // tablets are evenly distributed within each node.
+        // Tablets inherit their replica hosts from their corresponding vnode.
+        // Shards are picked per node so that the aggregate token range owned by
+        // each shard is as even as possible, since vnode-derived tablets differ
+        // widely in size and counting them alone would misrepresent the load.
         //
         // However, this direct 1:1 mapping is not sufficient in terms of
         // performance because vnode token ranges vary in size, producing
