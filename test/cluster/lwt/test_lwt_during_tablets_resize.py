@@ -79,7 +79,8 @@ async def run_random_resizes(
 
         # Apply resize
         await tester.cql.run_async(
-            f"ALTER TABLE {ks}.{table} WITH tablets = {{'min_tablet_count': {target_cnt}}}"
+            f"ALTER TABLE {ks}.{table} WITH tablets = "
+            f"{{'min_tablet_count': {target_cnt}, 'max_tablet_count': {target_cnt}}}"
         )
 
         count_after_resize = await wait_for_tablet_count(
@@ -145,7 +146,7 @@ async def test_multi_column_lwt_during_split_merge(manager: ManagerClient, scale
     cfg = {
         "enable_tablets": True,
         "tablet_load_stats_refresh_interval_in_seconds": 1,
-        "target-tablet-size-in-bytes": 1024 * 16,
+        "target_tablet_size_in_bytes": 1024 * 16,
     }
     properties = [
         {"dc": "dc1", "rack": "r1"},
