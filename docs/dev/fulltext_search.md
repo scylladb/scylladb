@@ -77,14 +77,14 @@ carrying the search term and the highlighted column's text of every row. The alt
 the text in the index or having the index read the base table, were rejected: the first duplicates
 data the base table owns, the second gives the index a read path into the cluster.
 
-That request needs all the rows in hand and has to suspend, and `external_values_provider::try_fill()`
-can do neither: it is called from a synchronous walk over the serialized `query::result`. So
-`execute_search()` reads the base-table rows and emits the result set in two steps, with the
-request in between. `join_table_results()` walks the rows once, matching the ranked keys to them
-and reading out the highlighted column; `highlights_of()` sends that text to the index and turns
-the reply into one temporary's values; `external_search_provider` is built from those values and
-does no I/O: `try_fill()` hands out the value computed for each row, in order, and says which rows
-to leave out.
+That request needs all the rows in hand and has to suspend, and
+`external_values_provider::try_fill()` can do neither: it is called from a synchronous walk over the
+serialized `query::result`. So `execute_search()` reads the base-table rows and emits the result set
+in two steps, with the request in between. `join_table_results()` walks the rows once, matching each
+to the candidate `vector_search::search_all()` returned for it and reading out the highlighted
+column; `highlights_of()` sends that text to the index and turns the reply into one temporary's
+values; `external_search_provider` is built from those values and does no I/O: `try_fill()` hands
+out the value computed for each row, in order, and says which rows to leave out.
 
 The reply is positional: entry *i* belongs to the *i*-th document sent, and carries no primary
 keys. Position is exact because `join_table_results()` walks the rows with
