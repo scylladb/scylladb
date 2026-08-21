@@ -246,23 +246,28 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
             text_column = columns.size();
             columns.push_back(&ranked_column(*_schema, _bm25_ordering_info.index));
         }
-        // Only the score and the rank are matched to a row by key; a fragment is matched by
-        // position, and the key columns are read only when one of those is selected.
-        const bool matched = temporaries.score.has_value() || temporaries.rank.has_value();
+        // The score and the rank are matched to a row by key; a fragment is matched by position,
+        // and the key columns are read only when the score or the rank is selected.
+        auto answers = std::vector<const vector_search::vector_store_client::primary_keys*>{};
+        if (temporaries.score || temporaries.rank) {
+            answers.push_back(&pkeys.value());
+        }
         const auto& read = table_results.value();
-        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection,
-                matched ? &pkeys.value() : nullptr, columns);
+        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, answers, columns);
 
         auto filled = std::vector<external_search::external_values>{};
-        if (matched) {
-            external_search::drop_unscored_rows(rows, pkeys.value());
-            filled = external_search::search_values_of(temporaries, rows, pkeys.value());
+        external_search::drop_unscored_rows(rows, answers);
+        if (temporaries.score) {
+            filled.push_back(external_search::external_values{.temporary_index = *temporaries.score,
+                    .values = external_search::similarities_of(rows, 0, pkeys.value())});
+        }
+        if (temporaries.rank) {
+            filled.push_back(external_search::external_values{
+                    .temporary_index = *temporaries.rank, .values = external_search::ranks_of(rows, 0, pkeys.value())});
         }
         if (temporaries.fragment) {
-            auto fragments = co_await highlights_of(qp.vector_store_client(), *_schema, _index, search_term_text, rows,
-                    *text_column, aoe.abort_source());
-            filled.push_back(external_search::external_values{
-                    .temporary_index = *temporaries.fragment, .values = std::move(fragments)});
+            auto fragments = co_await highlights_of(qp.vector_store_client(), *_schema, _index, search_term_text, rows, *text_column, aoe.abort_source());
+            filled.push_back(external_search::external_values{.temporary_index = *temporaries.fragment, .values = std::move(fragments)});
         }
         provider.emplace(std::move(filled), rows);
     }

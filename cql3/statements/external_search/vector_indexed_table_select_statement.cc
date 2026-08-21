@@ -156,11 +156,24 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
     auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys.value());
 
     auto provider = std::optional<external_search::external_search_provider>{};
-    if (table_results && _ann_ordering_info.temporaries.any()) {
+    if (table_results && (_ann_ordering_info.temporaries.score || _ann_ordering_info.temporaries.rank)) {
+        // A rescoring index allocates neither temporary: there the similarity is computed from the
+        // row's own vector instead.
+        const auto* answers = &pkeys.value();
         const auto& read = table_results.value();
-        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, &pkeys.value(), {});
-        external_search::drop_unscored_rows(rows, pkeys.value());
-        provider.emplace(external_search::search_values_of(_ann_ordering_info.temporaries, rows, pkeys.value()), rows);
+        auto rows = external_search::join_table_results(
+                *read.rows, read.command->slice, *_schema, *_selection, std::span(&answers, 1), {});
+        external_search::drop_unscored_rows(rows, std::span(&answers, 1));
+        auto filled = std::vector<external_search::external_values>{};
+        if (_ann_ordering_info.temporaries.score) {
+            filled.push_back(external_search::external_values{
+                    .temporary_index = *_ann_ordering_info.temporaries.score, .values = external_search::similarities_of(rows, 0, pkeys.value())});
+        }
+        if (_ann_ordering_info.temporaries.rank) {
+            filled.push_back(external_search::external_values{
+                    .temporary_index = *_ann_ordering_info.temporaries.rank, .values = external_search::ranks_of(rows, 0, pkeys.value())});
+        }
+        provider.emplace(std::move(filled), rows);
     }
     co_return co_await emit_result_set(std::move(table_results), options, provider ? &*provider : nullptr);
 }
