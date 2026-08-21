@@ -429,6 +429,24 @@ public:
     const dht::decorated_key& get_first_decorated_key() const;
     const dht::decorated_key& get_last_decorated_key() const;
 
+    // Tokens of the sstable's first and last key, i.e. the bounds of the token
+    // range it spans.
+    //
+    // If the keys are not known the range is reported as unbounded on that side,
+    // so the sstable appears to span everything. Callers index and search
+    // sstables by this range, and there widening it can only cost a needless
+    // lookup, whereas narrowing it could hide data.
+    //
+    // Defined inline, and reading the key directly rather than through
+    // get_{first,last}_decorated_key(), because those callers fetch the bounds of
+    // many sstables in a row and should not pay a function call per sstable.
+    dht::token get_first_token() const noexcept {
+        return _first ? _first->token() : dht::token::minimum();
+    }
+    dht::token get_last_token() const noexcept {
+        return _last ? _last->token() : dht::token::maximum();
+    }
+
     // SSTable comparator using the first key (decorated key).
     std::strong_ordering compare_by_first_key(const sstable& other) const;
 

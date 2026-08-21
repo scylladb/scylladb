@@ -183,6 +183,90 @@ SEASTAR_TEST_CASE(test_partitioned_sstable_set_bytes_on_disk) {
     });
 }
 
+// select() must return every sstable whose token range overlaps the queried
+// range, and the comparison is asymmetric: an sstable's first token is bounded by
+// the *end* of the query range and its last token by its *start*. Mixing the two
+// up silently drops sstables that do overlap -- and only a non-singular range can
+// tell the difference, since for a single key the two bounds coincide. The
+// production callers that pass a wider range are the size_estimates and
+// mutation_dump virtual tables and estimated_partitions_in_range(), none of which
+// the C++ suites reach, so cover it directly.
+SEASTAR_TEST_CASE(test_partitioned_sstable_set_select_range) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        constexpr size_t nr_keys = 48;
+        auto pks = tests::generate_partition_keys(nr_keys, s);
+        std::vector<mutation> muts;
+        for (const auto& pk : pks) {
+            auto mut = mutation(s, pk);
+            ss.add_row(mut, ss.make_ckey(0), "val");
+            muts.push_back(std::move(mut));
+        }
+
+        sstable_writer_config cfg = env.manager().configure_writer("");
+        // An sstable spanning pks[first]..pks[last].
+        auto make_sst = [&] (size_t first, size_t last) {
+            utils::chunked_vector<mutation> ms;
+            for (size_t i = first; i <= last; ++i) {
+                ms.push_back(muts[i]);
+            }
+            auto mr = make_mutation_reader_from_mutations(s, env.make_reader_permit(), std::move(ms));
+            return make_sstable_easy(env, std::move(mr), cfg);
+        };
+
+        // Every way an sstable can sit relative to a query range -- entirely
+        // before it, overlapping only its start, contained in it, overlapping only
+        // its end, entirely after it, and spanning everything -- across a ladder of
+        // widths, so that an index which partitions by width has to get the bound
+        // right for several partitions rather than one. A width bound that is too
+        // small drops sstables that do overlap, which is why this is checked
+        // against the definition of overlap rather than against a fixture.
+        std::vector<sstables::shared_sstable> ssts;
+        for (size_t width : {size_t(1), size_t(2), size_t(3), size_t(5), size_t(9),
+                             size_t(17), size_t(33), nr_keys - 1}) {
+            for (size_t lo : {size_t(0), nr_keys / 3, nr_keys - 1 - width}) {
+                if (lo + width >= nr_keys) {
+                    continue;
+                }
+                ssts.push_back(make_sst(lo, lo + width));
+            }
+        }
+        auto all = make_lw_shared<sstable_list>(ssts.begin(), ssts.end());
+        auto set = make_sstable_set(s, all);
+
+        auto generations = [] (const auto& ssts) {
+            std::vector<sstables::generation_type> gens;
+            for (const auto& sst : ssts) {
+                gens.push_back(sst->generation());
+            }
+            std::ranges::sort(gens);
+            return gens;
+        };
+
+        // Check every range the keys can form, against the definition of overlap
+        // applied by brute force. Ranges below and above the middle of the set's
+        // span exercise both of the sides select() can choose to walk.
+        for (size_t i = 0; i < nr_keys; ++i) {
+            for (size_t j = i; j < nr_keys; ++j) {
+                auto range = dht::partition_range::make({pks[i], true}, {pks[j], true});
+                std::vector<sstables::shared_sstable> expected;
+                for (const auto& sst : *all) {
+                    if (sst->get_first_token() <= pks[j].token() && sst->get_last_token() >= pks[i].token()) {
+                        expected.push_back(sst);
+                    }
+                }
+                auto selected_gens = generations(set.select(range));
+                auto expected_gens = generations(expected);
+                BOOST_REQUIRE_MESSAGE(selected_gens == expected_gens,
+                        fmt::format("select({}) returned generations {}, expected {}",
+                                range, selected_gens, expected_gens));
+            }
+        }
+    });
+}
+
 SEASTAR_TEST_CASE(test_tablet_sstable_set_copy_ctor) {
     // enable tablets, to get access to tablet_storage_group_manager
     cql_test_config cfg;
