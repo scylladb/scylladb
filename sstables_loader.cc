@@ -1269,19 +1269,16 @@ class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::ta
         auto s = db.find_schema(_tid);
         auto md = db.get_token_metadata_ptr();
         const auto& topo = md->get_topology();
-        auto dc = topo.get_datacenter();
-        auto dc_racks_it = topo.get_datacenter_racks().find(dc);
-        if (dc_racks_it == topo.get_datacenter_racks().end()) {
-            co_return;
-        }
 
         db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
         tasks::task_manager::task::progress progress = {};
-        co_await max_concurrent_for_each(dc_racks_it->second, 16, [&](const auto& rack_entry) -> future<> {
+        for (const auto& [dc, racks] : topo.get_datacenter_racks()) {
+        co_await max_concurrent_for_each(racks, 16, [&](const auto& rack_entry) -> future<> {
             auto p = co_await sth.get_snapshot_sstables_progress(_snap_name, s->ks_name(), s->cf_name(), dc, rack_entry.first);
             progress.total += p.nr_sstables;
             progress.completed += p.nr_downloaded_sstables;
         });
+        }
         _progress = progress;
     }
 
