@@ -2004,6 +2004,14 @@ void writer::consume_end_of_stream() {
     auto decompressor = _sst.manager().get_compressor_factory().make_compressor_for_reading(_sst._components->compression).get();
     _sst._components->compression.set_compressor(std::move(decompressor));
     _sst._components->compression.discard_hidden_options();
+    if (_physical_index_positions) {
+        // The chunk offsets are in CompressionInfo.db now, and a physically indexed
+        // sstable doesn't read them from memory: its reads navigate Data.db by chunk
+        // coordinates, and the one path which addresses it by a logical range reads
+        // the offsets from the file on demand. Drop the copy we accumulated during
+        // the write.
+        _sst._components->compression.discard_offsets();
+    }
     run_identifier identifier{_run_identifier};
     std::optional<scylla_metadata::large_data_stats> ld_stats(scylla_metadata::large_data_stats{
         .map = {

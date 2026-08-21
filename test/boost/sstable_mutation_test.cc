@@ -1646,3 +1646,73 @@ SEASTAR_TEST_CASE(test_data_read) {
         }
     });
 }
+
+// Checks that for_each_compression_offset() returns the chunk offsets of every
+// format, including `mu`, which doesn't keep them in memory. For an sstable
+// with physical positions, reads each chunk at the returned offsets and
+// compares it with the logical data.
+SEASTAR_TEST_CASE(test_for_each_compression_offset) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (const auto version : writable_sstable_versions) {
+            simple_schema ss;
+            auto s = ss.schema();
+            auto pk = ss.make_pkey();
+            mutation m(s, pk);
+            for (uint32_t i = 0; i < 1000; ++i) {
+                ss.add_row(m, ss.make_ckey(i), tests::random::get_sstring(50));
+            }
+            auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
+            BOOST_REQUIRE(sst->has_component(component_type::CompressionInfo));
+
+            const auto& c = sst->get_compression();
+            const uint64_t size = sst->data_size();
+            const uint64_t chunk_len = c.uncompressed_chunk_length();
+            BOOST_REQUIRE_GT(size, 4 * chunk_len);
+
+            std::vector<uint64_t> offsets;
+            sst->for_each_compression_offset([&] (uint64_t offset) {
+                offsets.push_back(offset);
+            }).get();
+            BOOST_REQUIRE_EQUAL(offsets.size(), c.chunk_count());
+            BOOST_REQUIRE_EQUAL(offsets.size(), (size + chunk_len - 1) / chunk_len);
+            BOOST_REQUIRE_EQUAL(offsets.front(), 0);
+            BOOST_REQUIRE(std::ranges::adjacent_find(offsets, std::ranges::greater_equal()) == offsets.end());
+            BOOST_REQUIRE_LT(offsets.back(), c.compressed_file_length());
+
+            if (!sst->uses_physical_positions()) {
+                std::vector<uint64_t> in_memory;
+                for (uint64_t offset : c.offsets) {
+                    in_memory.push_back(offset);
+                }
+                BOOST_REQUIRE(offsets == in_memory);
+                continue;
+            }
+            BOOST_REQUIRE_EQUAL(c.offsets.size(), 0);
+
+            auto expected = sst->data_read(0, size, env.make_reader_permit()).get();
+            BOOST_REQUIRE_EQUAL(expected.size(), size);
+            for (size_t i = 0; i < offsets.size(); ++i) {
+                const uint64_t end = i + 1 < offsets.size() ? offsets[i + 1] : c.compressed_file_length();
+                disk_read_range range{
+                    sstable_position::from_physical(offsets[i], end - offsets[i], 0),
+                    sstable_position::from_physical(end, 0, 0),
+                };
+                auto stream = sst->data_stream(range, env.make_reader_permit(), nullptr, nullptr).get();
+                auto close_stream = defer([&] noexcept { stream->close().get(); });
+                const uint64_t want = std::min(chunk_len, size - i * chunk_len);
+                uint64_t filled = 0;
+                bool eof = false;
+                while (!eof) {
+                    stream->consume_one(std::nullopt, [&] (temporary_buffer<char> data) -> consumption_result<char> {
+                        eof = data.empty();
+                        BOOST_REQUIRE_LE(filled + data.size(), want);
+                        BOOST_REQUIRE(std::equal(data.begin(), data.end(), expected.begin() + i * chunk_len + filled));
+                        filled += data.size();
+                        return seastar::continue_consuming{};
+                    }).get();
+                }
+                BOOST_REQUIRE_EQUAL(filled, want);
+            }
+        }
+    });
+}

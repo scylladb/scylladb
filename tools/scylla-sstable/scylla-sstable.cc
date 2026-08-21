@@ -1277,9 +1277,9 @@ void write_compression_info_component(const sstables::shared_sstable& sst, json_
     writer.Uint64(compression.data_len);
     writer.Key("offsets");
     writer.StartArray();
-    for (const auto& offset : compression.offsets) {
+    sst->for_each_compression_offset([&writer] (uint64_t offset) {
         writer.Uint64(offset);
-    }
+    }).get();
     writer.EndArray();
     writer.EndObject();
 }

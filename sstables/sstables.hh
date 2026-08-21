@@ -404,6 +404,11 @@ public:
     // Throws malformed_sstable_exception if the chunk length doesn't allow
     // physical positions.
     trie::bti_position_encoding get_bti_position_encoding() const;
+    // Calls `func` with the offset of each chunk of the compressed data
+    // component, in order. An sstable that uses physical positions doesn't keep
+    // the offsets in memory (see compression::offsets), so for it, reads them
+    // from CompressionInfo.db.
+    future<> for_each_compression_offset(noncopyable_function<void (uint64_t)> func) const;
     // Start/end positions of the data component, expressed as sstable_positions.
     sstable_position start_position() const;
     sstable_position end_position() const;

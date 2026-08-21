@@ -918,15 +918,34 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
     // be read from the file on demand, without an in-memory copy.
     c.set_offsets_start_pos(in.offset());
     c.set_chunk_count(len);
-    auto eoarr = [&c, &len] { return c.offsets.size() == len; };
 
-    while (!eoarr()) {
-        auto now = std::min(len - c.offsets.size(), 100000 / sizeof(uint64_t));
+    if (c.offsets.size() > 0) {
+        // Already parsed. This happens when an sstable is opened for reading right
+        // after being sealed: the same `compression` object still holds the offsets
+        // accumulated during the write, and appending a second copy of them would
+        // corrupt it (segmented_offsets requires ascending offsets).
+        co_return;
+    }
+
+    // A physically indexed (`mu`) sstable never consults the in-memory copy of the
+    // chunk offsets: its reads navigate Data.db by chunk coordinates taken from the
+    // index, and the one path which addresses it by a logical range reads the
+    // offsets from CompressionInfo.db on demand. So don't build the copy at all.
+    // We still have to read through the array, though - the caller might be
+    // computing the digest of the component as we read it.
+    const bool keep = !index_holds_physical_positions(v);
+
+    size_t parsed = 0;
+    while (parsed != len) {
+        auto now = std::min<size_t>(len - parsed, 100000 / sizeof(uint64_t));
         auto buf = co_await in.read_exactly(now * sizeof(uint64_t));
-        for (size_t i = 0; i < now; ++i) {
-            uint64_t value = read_unaligned<uint64_t>(buf.get() + i * sizeof(uint64_t));
-            offsets.push_back(net::ntoh(value));
+        if (keep) {
+            for (size_t i = 0; i < now; ++i) {
+                uint64_t value = read_unaligned<uint64_t>(buf.get() + i * sizeof(uint64_t));
+                offsets.push_back(net::ntoh(value));
+            }
         }
+        parsed += now;
     }
 }
 
@@ -3013,16 +3032,15 @@ sstable_position sstable::start_position() const {
     if (uses_physical_positions()) {
         // `mu` is read by the physical cursor, which navigates by chunk
         // coordinates, so the start position must carry the real coordinates of
-        // the first chunk. They come from the compression component: the first
-        // chunk begins at on-disk position 0, and its length is the extent of
-        // chunk 0. The logical/uncompressed position is 0.
-        const auto& comp = _components->compression;
-        auto accessor = comp.offsets.get_accessor();
-        auto chunk = comp.locate(0, accessor);
-        // extent_hint is an upper bound of the chunk's extent;
-        // the exact extent is such a bound.
-        return sstable_position::from_physical(
-                chunk.chunk_start, chunk.chunk_len, chunk.offset);
+        // the first chunk. The first chunk begins at on-disk position 0, at
+        // logical/uncompressed position 0.
+        //
+        // Its length is left unknown (an extent_hint of 0): we don't keep the
+        // chunk offsets of a `mu` sstable in memory, and this getter is
+        // synchronous, so it can't go to CompressionInfo.db for them. The cursor
+        // handles an unknown length by reading the length out of the chunk's own
+        // header, which costs one extra small read at the start of a scan.
+        return sstable_position::from_physical(0, 0, 0);
     }
     return sstable_position::from_logical(0);
 }
@@ -3659,6 +3677,34 @@ future<temporary_buffer<char>> sstable::read_compression_offsets(file& f, uint64
     }
 }
 
+future<> sstable::for_each_compression_offset(noncopyable_function<void (uint64_t)> func) const {
+    const auto& c = _components->compression;
+    if (!uses_physical_positions()) {
+        for (uint64_t offset : c.offsets) {
+            func(offset);
+        }
+        co_return;
+    }
+    auto f = co_await open_file(component_type::CompressionInfo, open_flags::ro);
+    std::exception_ptr ex;
+    try {
+        // Read the offsets in batches, so that memory use doesn't grow with the
+        // number of chunks.
+        const uint64_t per_read = 100000 / sizeof(uint64_t);
+        for (uint64_t first = 0; first < c.chunk_count(); first += per_read) {
+            const uint64_t n = std::min<uint64_t>(c.chunk_count() - first, per_read);
+            auto buf = co_await read_compression_offsets(f, first, n);
+            for (uint64_t i = 0; i < n; ++i) {
+                func(seastar::read_be<uint64_t>(buf.get() + i * sizeof(uint64_t)));
+            }
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await f.close();
+    maybe_rethrow_exception(std::move(ex));
+}
+
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, reader_permit permit) {
     // Clamp the range to the (uncompressed) data size so a read that runs off the
     // end of the file returns a short buffer rather than over-reading. Callers
@@ -3704,22 +3750,51 @@ static future<bool> do_validate_compressed(input_stream<char>& stream, const sst
     uint32_t actual_full_checksum = ChecksumType::init_checksum();
 
     auto accessor = c.offsets.get_accessor();
-    for (size_t i = 0; i < c.offsets.size(); ++i) {
-        auto current_pos = accessor.at(i);
-        auto next_pos = i + 1 == c.offsets.size() ? c.compressed_file_length() : accessor.at(i + 1);
-        auto chunk_len = next_pos - current_pos;
-        auto buf = co_await stream.read_exactly(chunk_len);
+    for (size_t i = 0; i < c.chunk_count(); ++i) {
+        uint64_t chunk_len;
+        temporary_buffer<char> buf;
 
-        if (!chunk_len) {
-            sstlog.error("Found unexpected chunk of length 0 at offset {}", offset);
-            valid = false;
-            break;
-        }
+        if (const auto frame_len = codec.frame_len()) {
+            // A physically indexed ("mu") sstable doesn't keep its chunk offsets in
+            // memory, so the length of this chunk comes from its own header - the
+            // first frame_len bytes of the chunk - rather than from the offset of
+            // the next one.
+            auto header = co_await stream.read_exactly(frame_len);
+            if (header.size() < frame_len) {
+                sstlog.error("Truncated file at offset {}: expected to get chunk header of size {}, got {}", offset, frame_len, header.size());
+                valid = false;
+                break;
+            }
+            // Throws if the length is obviously too large, which the caller turns
+            // into a validation failure.
+            chunk_len = codec.extent_from_frame(header.get());
+            auto body = co_await stream.read_exactly(chunk_len - frame_len);
+            if (body.size() < chunk_len - frame_len) {
+                sstlog.error("Truncated file at offset {}: expected to get chunk of size {}, got {}", offset, chunk_len, frame_len + body.size());
+                valid = false;
+                break;
+            }
+            // Reassemble the header with the rest into a single buffer.
+            buf = temporary_buffer<char>(chunk_len);
+            std::copy_n(header.get(), frame_len, buf.get_write());
+            std::copy_n(body.get(), body.size(), buf.get_write() + frame_len);
+        } else {
+            auto current_pos = accessor.at(i);
+            auto next_pos = i + 1 == c.chunk_count() ? c.compressed_file_length() : accessor.at(i + 1);
+            chunk_len = next_pos - current_pos;
+            buf = co_await stream.read_exactly(chunk_len);
 
-        if (buf.size() < chunk_len) {
-            sstlog.error("Truncated file at offset {}: expected to get chunk of size {}, got {}", offset, chunk_len, buf.size());
-            valid = false;
-            break;
+            if (!chunk_len) {
+                sstlog.error("Found unexpected chunk of length 0 at offset {}", offset);
+                valid = false;
+                break;
+            }
+
+            if (buf.size() < chunk_len) {
+                sstlog.error("Truncated file at offset {}: expected to get chunk of size {}, got {}", offset, chunk_len, buf.size());
+                valid = false;
+                break;
+            }
         }
 
         // Throws if the chunk is too small to hold its framing and checksum,
@@ -3736,6 +3811,17 @@ static future<bool> do_validate_compressed(input_stream<char>& stream, const sst
         }
 
         offset += chunk_len;
+    }
+
+    // Anything past the last chunk is data the compression metadata doesn't account
+    // for, e.g. bytes appended to Data.db after it was written. Without per-chunk
+    // framing this can't happen, because the last chunk is *defined* to extend to
+    // the end of the file; but a framed ("mu") chunk carries its own length, so
+    // trailing junk has to be caught explicitly.
+    if (valid && offset != c.compressed_file_length()) {
+        sstlog.error("Data.db has {} bytes of trailing data past the last chunk, at offset {}",
+                c.compressed_file_length() - offset, offset);
+        valid = false;
     }
 
     if (expected_digest && actual_full_checksum != *expected_digest) {

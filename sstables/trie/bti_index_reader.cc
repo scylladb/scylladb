@@ -459,11 +459,9 @@ class bti_index_reader : public sstables::abstract_index_reader {
     index_cursor _upper;
     // Partitions.db doesn't store the bounds of Data.db, so the cursor doesn't know
     // by itself what Data.db position to return at the very start (before it is set
-    // to a partition) or at EOF. We pass both from above, in the sstable's position
-    // kind. When they are physical, they carry the chunk coordinates (which the index
-    // reader can't compute itself - they come from the compression component) of the
-    // first chunk and of the end-of-data sentinel respectively. Their kind must
-    // match the position encoding of the index.
+    // to a partition) or at EOF. The caller passes both, in the position type of
+    // the sstable (see sstable::start_position() and sstable::end_position()). Their
+    // type must match the position encoding of the index.
     sstables::sstable_position _start_position;
     sstables::sstable_position _end_position;
 
@@ -952,8 +950,7 @@ future<> index_cursor::set_after_row(lazy_comparable_bytes_from_clustering_posit
 
 sstables::sstable_positions_range bti_index_reader::sstable_positions() const {
     // Before the lower cursor is set to a partition, the lower bound is the very
-    // start of Data.db, supplied from above (it carries the first chunk's
-    // coordinates for `mu`, which the index reader can't compute itself).
+    // start of Data.db, supplied by the caller.
     auto lo = _lower.partition_cursor_set() ? _lower.data_file_pos(_end_position) : _start_position;
     std::optional<sstables::sstable_position> hi;
     if (_upper.partition_cursor_set()) {

@@ -272,6 +272,14 @@ struct compression {
             return _size;
         }
 
+        // Frees the memory holding the offsets. The container stays usable (it keeps
+        // the layout it was init()ed with), but it becomes empty.
+        void clear() noexcept {
+            _storage = std::deque<bucket>();
+            _size = 0;
+            _last_written_offset = 0;
+        }
+
         const_iterator begin() const {
             return const_iterator(*this);
         }
@@ -292,6 +300,10 @@ struct compression {
     disk_string<uint16_t> name;
     disk_array<uint32_t, option> options;
     uint64_t data_len = 0;
+    // The offset of each chunk in the compressed data file. Empty for sstables
+    // that use physical positions (`mu`): their readers don't need the offsets,
+    // so they aren't kept in memory. Use sstable::for_each_compression_offset()
+    // to get the offsets of any sstable.
     segmented_offsets offsets;
 
 private:
@@ -365,6 +377,12 @@ public:
 
     void set_full_checksum(uint32_t checksum) {
         _full_checksum = checksum;
+    }
+
+    // Frees the in-memory copy of the chunk offsets. Use only for physically
+    // indexed sstables. Their readers don't use the in-memory copy.
+    void discard_offsets() noexcept {
+        offsets.clear();
     }
 
     uint64_t offsets_start_pos() const noexcept {
