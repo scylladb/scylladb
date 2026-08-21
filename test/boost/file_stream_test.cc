@@ -198,6 +198,20 @@ static std::function<future<>(shared_sstable)> corrupt_component_fn(component_ty
     };
 }
 
+// The component holding the sstable's index. Formats with a summary keep it in
+// Index.db, the trie-index formats (ms, mt) keep it in Partitions.db.
+static component_type index_component_of(const shared_sstable& sst) {
+    return sstables::has_summary_and_index(sst->get_version()) ? component_type::Index : component_type::Partitions;
+}
+
+static std::function<future<>(shared_sstable)> corrupt_index_component_fn() {
+    return [](shared_sstable sst) {
+        return seastar::async([sst] {
+            slightly_corrupt_sstable(sst, index_component_of(sst));
+        });
+    };
+}
+
 using compress_sstable = bool_class<struct compress_sstable_tag>;
 static future<>
 do_test_sstable_stream(cql_test_env& env, compress_sstable compress, std::function<future<>(shared_sstable)> corruption_fn = nullptr, const sstring& expected_error_msg = "", sstring storage_clause = "") {
@@ -575,7 +589,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_stream_digest_mismatched_uncompressed) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_stream_index_digest_mismatched) {
-    test_sstable_stream(compress_sstable::no, corrupt_component_fn(component_type::Index), "digest mismatch");
+    test_sstable_stream(compress_sstable::no, corrupt_index_component_fn(), "digest mismatch");
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_stream_scylla_digest_mismatched) {
@@ -882,6 +896,12 @@ do_test_sstable_stream_receiver_corruption(cql_test_env& env, std::optional<comp
 
             auto sst_snapshot = sstables.front();
             auto sources = co_await sstables::create_stream_sources(sst_snapshot, permit);
+
+            // The index lives in a different component depending on the sstable
+            // format, so resolve it now that we have the sstable at hand.
+            if (corrupted_component == component_type::Index) {
+                corrupted_component = index_component_of(sst_snapshot.sst);
+            }
 
             for (auto& source : sources) {
                 auto& info = files.emplace_back();
