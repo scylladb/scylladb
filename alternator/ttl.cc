@@ -526,7 +526,7 @@ struct scan_ranges_context {
         // member we may be forced to read the entire map - but it would
         // be good if we can read only the single item of the map - it
         // should be possible (and a must for issue #7751!).
-        lw_shared_ptr<service::pager::paging_state> paging_state = nullptr;
+        lw_shared_ptr<const service::pager::paging_state> paging_state = nullptr;
         auto regular_columns =
             s->regular_columns() | std::views::transform(&column_definition::id)
             | std::ranges::to<query::column_id_vector>();

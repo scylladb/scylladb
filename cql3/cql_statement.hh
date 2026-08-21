@@ -10,7 +10,11 @@
 
 #pragma once
 
+#include <optional>
+#include <string_view>
+
 #include "timeout_config.hh"
+#include "service/pager/query_plan.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "audit/audit.hh"
 #include "utils/chunked_string.hh"
@@ -115,6 +119,17 @@ public:
     }
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const = 0;
+
+    // What re-deriving this statement with the same plan pinned needs.
+    // Disengaged for statements that are never paged. See #18992.
+    struct paging_plan {
+        service::pager::query_plan plan;
+        // Borrowed from the statement, so only valid while it lives.
+        std::string_view keyspace;
+    };
+    virtual std::optional<paging_plan> query_plan_for_paging() const {
+        return std::nullopt;
+    }
 
     // Statements which keep their result set metadata elsewhere, e.g. in a
     // selection, override this instead of setting _metadata.

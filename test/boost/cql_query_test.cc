@@ -5004,14 +5004,10 @@ static size_t count_rows_fetched(::shared_ptr<cql_transport::messages::result_me
     return rows->rs().result_set().size();
 };
 
-static lw_shared_ptr<service::pager::paging_state> extract_paging_state(::shared_ptr<cql_transport::messages::result_message> res) {
+static lw_shared_ptr<const service::pager::paging_state> extract_paging_state(::shared_ptr<cql_transport::messages::result_message> res) {
     auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
     BOOST_REQUIRE(rows);
-    auto paging_state = rows->rs().get_metadata().paging_state();
-    if (!paging_state) {
-        return nullptr;
-    }
-    return make_lw_shared<service::pager::paging_state>(*paging_state);
+    return rows->rs().get_metadata().paging_state();
 };
 
 namespace cql_query_test {
@@ -5065,7 +5061,7 @@ SEASTAR_THREAD_TEST_CASE(test_query_limit) {
 
                     try {
                         bool has_more_pages = true;
-                        lw_shared_ptr<service::pager::paging_state> paging_state = nullptr;
+                        lw_shared_ptr<const service::pager::paging_state> paging_state = nullptr;
                         size_t next_expected_row_idx = 0;
                         while (has_more_pages) {
                             // FIXME: even though we chose a large page size, for reversed queries we may still obtain multiple pages.

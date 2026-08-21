@@ -13,7 +13,10 @@
 #include "test/lib/eventually.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/query_processor.hh"
+#include "schema/schema_builder.hh"
+#include "service/pager/paging_state.hh"
 #include "transport/messages/result_message.hh"
+#include "utils/UUID_gen.hh"
 
 BOOST_AUTO_TEST_SUITE(index_with_paging_test)
 
@@ -103,6 +106,52 @@ SEASTAR_TEST_CASE(test_index_with_paging_with_base_short_read_no_ck) {
             }).get();
             BOOST_REQUIRE_EQUAL(count, row_count);
         });
+    });
+}
+
+// Every plan must survive the round trip as itself rather than as no plan at
+// all, which means nothing was recorded and pins nothing. See #18992.
+SEASTAR_TEST_CASE(test_query_plan_survives_paging_state_serialization) {
+    using namespace service::pager;
+
+    auto schema = schema_builder(this_smp_shard_count(), "ks", "tab")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("v", int32_type)
+            .build();
+    auto pk = partition_key::from_single_value(*schema, int32_type->decompose(data_value(0)));
+
+    auto round_trip = [&] (std::optional<query_plan> plan) {
+        auto state = paging_state(pk, std::nullopt, 0, query_id::create_null_id(),
+                paging_state::replicas_per_token_range{}, std::nullopt, 0, 0, 0,
+                bound_weight::equal, partition_region::partition_start, std::move(plan));
+        return paging_state::deserialize(state.serialize())->get_query_plan();
+    };
+
+    const auto view_id = table_id(utils::UUID_gen::get_time_UUID());
+    BOOST_REQUIRE(round_trip(std::nullopt) == std::nullopt);
+    BOOST_REQUIRE(round_trip(primary_index_plan{}) == std::optional<query_plan>(primary_index_plan{}));
+    BOOST_REQUIRE(round_trip(index_plan{view_id}) == std::optional<query_plan>(index_plan{view_id}));
+    // The arm a plan kind added by a later version reads back as, which has to
+    // stay distinct from the plans this version knows how to keep.
+    BOOST_REQUIRE(round_trip(std::monostate{}) == std::optional<query_plan>(std::monostate{}));
+    return make_ready_future<>();
+}
+
+// A plan this version does not understand cannot be kept, and continuing without
+// it would read the saved position with another plan. See #18992.
+SEASTAR_TEST_CASE(test_paging_state_naming_an_unknown_plan_is_refused) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE tab (pk int PRIMARY KEY, v int)").get();
+        e.execute_cql("INSERT INTO tab (pk, v) VALUES (0, 1)").get();
+
+        auto state = make_lw_shared<const service::pager::paging_state>(partition_key::make_empty(),
+                position_in_partition_view::for_partition_start(), 1, query_id::create_random_id(),
+                service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0,
+                std::monostate{});
+        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
+                cql3::query_options::specific_options{1, std::move(state), {}, api::new_timestamp()});
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM tab WHERE v = 1 ALLOW FILTERING", std::move(qo)).get(),
+                exceptions::invalid_request_exception);
     });
 }
 
