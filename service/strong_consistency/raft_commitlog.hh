@@ -9,9 +9,63 @@
 #pragma once
 #include "raft/raft.hh"
 #include "db/commitlog/commitlog.hh"
+#include "db/commitlog/commitlog_entry.hh"
+#include <seastar/core/condition-variable.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/core/shared_future.hh>
+#include <unordered_map>
+
+namespace cql3 { class query_processor; }
 #include <deque>
 
 namespace service::strong_consistency {
+// Shard-wide batched raft IO ("rounds").
+//
+// One fiber per shard turns per-group commitlog writes into shared rounds:
+// each round is ONE multi-entry commitlog write (force-synced) carrying
+//   * every group's data-batch entries submitted while the previous round was
+//     in flight (submit_append — awaited by the group's raft io_fiber,
+//     preserving raft's log-before-message rule), and
+//   * a commit_idx entry for every group whose commit advanced
+//     (submit_commit_idx — awaited by the io_fiber before entries are pushed
+//     to the applier, preserving raft's persist-before-apply ordering: once
+//     anything reaches a memtable, its commit_idx is already durable, so
+//     memtable flush and segment discard need no SC-side cooperation).
+// Commit values ride the same synced write as the appends whenever appends
+// are flowing, and get their own round only when idle. The accumulation
+// window is the in-flight write's duration (write-behind; no timer), so the
+// coalescing factor self-tunes: it grows exactly when syncs are expensive.
+class sc_io_batcher {
+public:
+    sc_io_batcher(cql3::query_processor& qp, db::commitlog& cl);
+    void start();
+    future<> stop();
+    // Returns this call's rp_handles, in writer order, once the round covering
+    // them is durable.
+    future<utils::chunked_vector<db::rp_handle>> submit_append(utils::chunked_vector<commitlog_raft_log_entry_writer> writers);
+    // Resolves once a value >= idx for gid is durable and its fake
+    // system.raft_groups mutation has been applied in memory.
+    future<> submit_commit_idx(raft::group_id gid, raft::index_t idx);
+private:
+    future<> run();
+    struct append_item {
+        utils::chunked_vector<commitlog_raft_log_entry_writer> writers;
+        promise<utils::chunked_vector<db::rp_handle>> done;
+    };
+    future<> write_round(std::deque<append_item>& appends,
+            const std::vector<std::pair<raft::group_id, raft::index_t>>& commits);
+
+    cql3::query_processor& _qp;
+    db::commitlog& _commitlog;
+    std::deque<append_item> _appends;
+    std::unordered_map<raft::group_id, raft::index_t> _pending_commit;
+    shared_promise<> _round_done;
+    condition_variable _cv;
+    seastar::named_gate _gate{"sc_io_batcher"};
+    bool _stopping = false;
+    uint64_t _rounds = 0, _append_calls = 0, _entries = 0, _commit_values = 0;
+};
+
 struct index_and_replay_position {
     raft::index_t index;
     db::rp_handle replay_position_handle;
@@ -54,6 +108,7 @@ private:
     replay_position_list _config_positions;
     // The log entries that were loaded from database commit log on startup.
     raft::log_entries _replayed_entries;
+    sc_io_batcher* _batcher = nullptr;
 
 public:
     raft_commitlog(raft::group_id group_id, db::commitlog& commit_log, table_id target_table_id, replayed_data_per_group replayed_data);
@@ -64,6 +119,10 @@ public:
     // is placed into _command_positions, _config_positions or _dummy_positions
     // based on the entry data type.
     future<> store_log_entries(const raft::log_entry_ptr_list& entries);
+
+    void set_batcher(sc_io_batcher* b) { _batcher = b; }
+
+    db::commitlog& commit_log() noexcept { return _commit_log; }
 
     // Get the log items that were loaded from database commit log on startup.
     raft::log_entries load_log();

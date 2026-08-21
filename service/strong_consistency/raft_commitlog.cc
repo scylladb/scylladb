@@ -92,7 +92,11 @@ seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_li
         writers.emplace_back(_table_id, raft_commitlog_entry{.group_id = _group_id, .entry = log_entry_ptr});
     }
 
-    auto replay_handles = co_await _commit_log.add_raft_entries(std::move(writers));
+    // Through the shard batcher when wired (one shared synced write per round
+    // across all groups); direct write otherwise (unit tests).
+    auto replay_handles = _batcher
+            ? co_await _batcher->submit_append(std::move(writers))
+            : co_await _commit_log.add_raft_entries(std::move(writers));
 
     for (size_t i = 0; i < entries.size(); ++i) {
         const auto& log_entry_ptr = entries[i];

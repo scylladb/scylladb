@@ -30,6 +30,8 @@ class migration_manager;
 
 namespace service::strong_consistency {
 
+class sc_io_batcher;
+
 class raft_server;
 
 /// A cache of leader locations for raft groups where this node is not a replica.
@@ -132,6 +134,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     netw::messaging_service& _ms;
     raft_group_registry& _raft_gr;
     cql3::query_processor& _qp;
+    // Shard-wide batched raft IO (rounds); created lazily with the first
+    // group, stopped after all groups in stop().
+    std::unique_ptr<sc_io_batcher> _sc_io_batcher;
     replica::database& _db;
     service::migration_manager& _mm;
     db::system_keyspace& _sys_ks;
@@ -181,6 +186,8 @@ public:
     void start();
 
     // Called during node shutdown. Waits for all raft::server instances to stop.
+    ~groups_manager();
+
     future<> stop();
 
     future<> wait_for_groups_to_start(lowres_clock::time_point timeout);
