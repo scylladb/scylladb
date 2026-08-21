@@ -3040,22 +3040,6 @@ sstable_position sstable::end_position() const {
     return sstable_position::from_logical(data_size());
 }
 
-sstable_position sstable::sstable_position_from_logical_position(uint64_t logical_position) const {
-    if (!_components->compression || !index_holds_physical_positions(_version)) {
-        return sstable_position::from_logical(logical_position);
-    }
-    if (logical_position >= data_size()) {
-        return end_position();
-    }
-    const auto& comp = _components->compression;
-    auto chunk = comp.locate(logical_position, comp.offsets.get_accessor());
-    return sstable_position::from_physical(chunk.chunk_start, chunk.chunk_len, chunk.offset);
-}
-
-disk_read_range sstable::disk_read_range_from_logical_range(uint64_t begin, uint64_t end) const {
-    return {sstable_position_from_logical_position(begin), sstable_position_from_logical_position(end)};
-}
-
 // Which fraction of the data file is covered by `range`.
 double sstable::approximate_file_fraction(sstable_positions_range range) const {
     auto start = range.start;
@@ -3506,7 +3490,11 @@ future<std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>> ss
         digest = get_digest();
     }
 
-    if (_components->compression && index_holds_physical_positions(_version)) {
+    if (uses_physical_positions()) {
+        if (!range.start.is_physical() || !range.end.is_physical()) {
+            on_internal_error(sstlog, format("data_stream() of {} got the logical range [{}, {}), but the sstable uses physical positions",
+                    get_filename(), range.start, range.end));
+        }
         // The physical-position compressed format (`mu`) is read through the
         // decompressing cursor, which navigates the data file by chunk
         // coordinates. It opens its own (traced) file, verifies per-chunk
@@ -3614,16 +3602,75 @@ future<input_stream<char>> sstable::data_stream_compressed_chunks(
     co_return co_await stream_creator(pos, len, std::move(options));
 }
 
+future<disk_read_range> sstable::disk_read_range_from_logical_range(uint64_t begin, uint64_t end) {
+    SCYLLA_ASSERT(begin < end && end <= data_size());
+    if (!uses_physical_positions()) {
+        co_return disk_read_range{sstable_position::from_logical(begin), sstable_position::from_logical(end)};
+    }
+    // data_read() is the only caller that has a logical range of a physically
+    // indexed sstable. It has no index entry that supplies a physical position.
+    // Read the needed offsets from CompressionInfo.db, so that physically
+    // indexed sstables don't need the in-memory copy of the chunk offsets.
+    //
+    // The range starts in chunk `first` and ends in chunk `last`. The result
+    // needs the start of chunk `first`, its length, and the end of chunk
+    // `last`. A chunk ends where the next one starts, and the last chunk ends
+    // at the end of Data.db. The offsets of chunks `first` to `last + 1` are
+    // adjacent in the file, so a single read fetches them.
+    const auto& c = _components->compression;
+    const uint64_t chunk_len = c.uncompressed_chunk_length();
+    const uint64_t first = begin / chunk_len;
+    const uint64_t last = (end - 1) / chunk_len;
+    if (last >= c.chunk_count()) {
+        throw_malformed_sstable_exception(format("CompressionInfo of {} has {} chunks, but the data size {} needs at least {}",
+                get_filename(), c.chunk_count(), data_size(), last + 1));
+    }
+    const uint64_t n = std::min<uint64_t>(last + 2, c.chunk_count()) - first;
+    auto buf = co_await read_compression_offsets(_compression_info_file, first, n);
+    auto offset = [&] (uint64_t chunk) -> uint64_t {
+        if (chunk == c.chunk_count()) {
+            return c.compressed_file_length();
+        }
+        return seastar::read_be<uint64_t>(buf.get() + (chunk - first) * sizeof(uint64_t));
+    };
+    const uint64_t first_start = offset(first);
+    const uint64_t first_end = offset(first + 1);
+    const uint64_t last_end = offset(last + 1);
+    if (!(first_start < first_end && first_end <= last_end && last_end <= c.compressed_file_length())) {
+        throw_malformed_sstable_exception(format("CompressionInfo of {} has invalid offsets for chunks {} to {}",
+                get_filename(), first, last + 1));
+    }
+    // The exact extent is a valid extent_hint. The end position is
+    // the start of the chunk after the range, so the cursor reads no further.
+    co_return disk_read_range{
+        sstable_position::from_physical(first_start, first_end - first_start, begin % chunk_len),
+        sstable_position::from_physical(last_end, 0, 0),
+    };
+}
+
+future<temporary_buffer<char>> sstable::read_compression_offsets(file& f, uint64_t first, uint64_t n) const {
+    const auto& c = _components->compression;
+    try {
+        // dma_read_exactly() takes care of the alignment requirements of the underlying file.
+        co_return co_await f.dma_read_exactly<char>(c.offsets_start_pos() + first * sizeof(uint64_t), n * sizeof(uint64_t));
+    } catch (const file::eof_error&) {
+        throw_malformed_sstable_exception(format("CompressionInfo of {} is truncated: no offsets for chunks {} to {}",
+                get_filename(), first, first + n - 1));
+    }
+}
+
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, reader_permit permit) {
     // Clamp the range to the (uncompressed) data size so a read that runs off the
     // end of the file returns a short buffer rather than over-reading. Callers
     // (e.g. the data-file sampler, which may read a partial last chunk) rely on
-    // this.
-    if (pos >= data_size()) {
+    // this. An empty range returns an empty buffer, because
+    // disk_read_range_from_logical_range() requires a nonempty range. Clamp
+    // `len` before adding it to `pos`, so that the sum can't overflow.
+    if (pos >= data_size() || len == 0) {
         co_return temporary_buffer<char>();
     }
-    auto end = std::min<uint64_t>(pos + len, data_size());
-    auto disk_range = disk_read_range_from_logical_range(pos, end);
+    auto end = pos + std::min<uint64_t>(len, data_size() - pos);
+    auto disk_range = co_await disk_read_range_from_logical_range(pos, end);
     // Random-access read of a byte range. data_stream() decompresses if needed and
     // handles both compressed and uncompressed data files; we drain exactly the
     // requested number of decompressed bytes from it. No whole-file digest is

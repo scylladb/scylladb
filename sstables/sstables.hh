@@ -409,8 +409,6 @@ public:
     sstable_position end_position() const;
 
     double approximate_file_fraction(sstable_positions_range range) const;
-    sstable_position sstable_position_from_logical_position(uint64_t logical_position) const;
-    disk_read_range disk_read_range_from_logical_range(uint64_t begin, uint64_t end) const;
 
     uint64_t index_size() const {
         return _index_file_size;
@@ -920,6 +918,15 @@ public:
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, reader_permit permit);
 
 private:
+    // Translates the logical range [begin, end) of the data component to a
+    // disk_read_range in the position kind of this sstable. Requires
+    // begin < end <= data_size(). If the sstable uses physical positions, reads
+    // the offsets of the chunks in the range from CompressionInfo.db.
+    future<disk_read_range> disk_read_range_from_logical_range(uint64_t begin, uint64_t end);
+    // Reads the offsets of the chunks [first, first + n) from the CompressionInfo.db
+    // file `f`, as big-endian uint64_t values.
+    future<temporary_buffer<char>> read_compression_offsets(file& f, uint64_t first, uint64_t n) const;
+
     future<summary_entry&> read_summary_entry(size_t i);
 
     bool filter_has_key(const schema& s, const dht::decorated_key& dk) { return filter_has_key(key::from_partition_key(s, dk._key)); }

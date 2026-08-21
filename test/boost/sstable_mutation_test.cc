@@ -1579,3 +1579,70 @@ SEASTAR_TEST_CASE(test_reversed_read_io_does_not_scale_with_row_count) {
         }
     });
 }
+
+// Checks that data_read() returns the same bytes as a full scan of the data
+// component, for ranges that start, end or cross chunk boundaries.
+SEASTAR_TEST_CASE(test_data_read) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (const auto version : writable_sstable_versions) {
+            simple_schema ss;
+            auto s = ss.schema();
+            auto pk = ss.make_pkey();
+            mutation m(s, pk);
+            for (uint32_t i = 0; i < 1000; ++i) {
+                ss.add_row(m, ss.make_ckey(i), tests::random::get_sstring(50));
+            }
+            auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
+            BOOST_REQUIRE(sst->has_component(component_type::CompressionInfo));
+
+            const uint64_t size = sst->data_size();
+            const uint64_t chunk_len = sst->get_compression().uncompressed_chunk_length();
+            // Several chunks, so that ranges can cross chunk boundaries.
+            BOOST_REQUIRE_GT(size, 4 * chunk_len);
+
+            temporary_buffer<char> expected(size);
+            {
+                auto stream = sst->data_stream(sst->full_range(), env.make_reader_permit(), nullptr, nullptr).get();
+                auto close_stream = defer([&] noexcept { stream->close().get(); });
+                uint64_t filled = 0;
+                bool eof = false;
+                while (!eof) {
+                    stream->consume_one(std::nullopt, [&] (temporary_buffer<char> data) -> consumption_result<char> {
+                        eof = data.empty();
+                        BOOST_REQUIRE_LE(filled + data.size(), size);
+                        std::copy_n(data.get(), data.size(), expected.get_write() + filled);
+                        filled += data.size();
+                        return seastar::continue_consuming{};
+                    }).get();
+                }
+                BOOST_REQUIRE_EQUAL(filled, size);
+            }
+
+            auto check = [&] (uint64_t pos, uint64_t len) {
+                testlog.trace("version {}: data_read({}, {})", version, pos, len);
+                auto buf = sst->data_read(pos, len, env.make_reader_permit()).get();
+                const uint64_t want = pos < size ? std::min(len, size - pos) : 0;
+                BOOST_REQUIRE_EQUAL(buf.size(), want);
+                BOOST_REQUIRE(std::equal(buf.begin(), buf.end(), expected.begin() + std::min(pos, size)));
+            };
+            check(0, 1);
+            check(0, size);
+            check(0, size + 1);
+            check(chunk_len - 1, 2);
+            check(chunk_len, chunk_len);
+            check(chunk_len, chunk_len + 1);
+            check(chunk_len - 1, 2 * chunk_len + 2);
+            check(size - 1, 1);
+            check(size - 1, 10);
+            check(size - size % chunk_len, chunk_len);
+            check(size, 5);
+            check(0, 0);
+            check(chunk_len, 0);
+            check(size, 0);
+            check(chunk_len, std::numeric_limits<uint64_t>::max());
+            for (int i = 0; i < 20; ++i) {
+                check(tests::random::get_int<uint64_t>(0, size - 1), tests::random::get_int<uint64_t>(1, 3 * chunk_len));
+            }
+        }
+    });
+}
