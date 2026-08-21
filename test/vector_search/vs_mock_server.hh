@@ -88,6 +88,10 @@ public:
         return _search_requests;
     }
 
+    const std::vector<request>& highlight_requests() const {
+        return _highlight_requests;
+    }
+
     const std::vector<request>& status_requests() const {
         return _status_requests;
     }
@@ -98,6 +102,10 @@ public:
 
     void search_response_delay(std::chrono::seconds delay) {
         _search_response_delay = delay;
+    }
+
+    void next_highlight_response(response r) {
+        _next_highlight_response = std::move(r);
     }
 
     void next_status_response(response response) {
@@ -150,13 +158,22 @@ private:
     seastar::future<std::unique_ptr<seastar::http::reply>> handle_search_request(
             std::unique_ptr<seastar::http::request> req, std::unique_ptr<seastar::http::reply> rep) {
         auto full_path = req->get_path_param("path");
-        // Only handle requests matching our configured mode suffix; return 404 for others.
-        if (!full_path.ends_with(mode_suffix(_mode))) {
+        // The search endpoint is whichever this server was configured for; /highlight is served
+        // besides it, since a full-text search that asks for a fragment calls both in turn.  Any
+        // other path is 404, as an index that does not exist would be.
+        const auto is_highlight = full_path.ends_with(HIGHLIGHT_SUFFIX);
+        if (!is_highlight && !full_path.ends_with(mode_suffix(_mode))) {
             rep->set_status(seastar::http::reply::status_type::not_found);
             rep->write_body("json", R"("not found")");
             co_return rep;
         }
         request r{.path = INDEXES_PATH + "/" + full_path, .body = co_await util::read_entire_stream_contiguous(*req->content_stream)};
+        if (is_highlight) {
+            _highlight_requests.push_back(std::move(r));
+            rep->set_status(_next_highlight_response.status);
+            rep->write_body("json", _next_highlight_response.body);
+            co_return rep;
+        }
         _search_requests.push_back(std::move(r));
         rep->set_status(_next_search_response.status);
         rep->write_body("json", _next_search_response.body);
@@ -196,11 +213,16 @@ private:
     seastar::sstring _host;
     std::unique_ptr<seastar::httpd::http_server> _http_server;
     std::vector<request> _search_requests;
+    std::vector<request> _highlight_requests;
     std::vector<request> _status_requests;
     response _next_search_response = default_response(_mode);
+    // A highlight reply has to be as long as the list of documents that was sent, so there is no
+    // useful default: a test that lets a highlight request happen sets the reply it needs.
+    response _next_highlight_response{seastar::http::reply::status_type::ok, R"({"highlights":[]})"};
     std::chrono::seconds _search_response_delay = std::chrono::seconds(0);
     response _next_status_response{seastar::http::reply::status_type::ok, rjson::quote_json_string("SERVING")};
     const seastar::sstring INDEXES_PATH = "/api/v1/indexes";
+    static constexpr auto HIGHLIGHT_SUFFIX = "/highlight";
     seastar::httpd::http_server::server_credentials_ptr _credentials;
 };
 
