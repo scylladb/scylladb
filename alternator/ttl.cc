@@ -765,9 +765,11 @@ static future<bool> scan_table(
         // Collect candidate tablet ids in one yielding pass instead of
         // re-probing tablet-by-tablet on every scan resumption (was O(total tablets), see #31208).
         std::vector<locator::tablet_id> candidates;
+        size_t candidates_tablet_count = 0;
         {
             auto erm = s->table().get_effective_replication_map();
             const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(s->id());
+            candidates_tablet_count = tablet_map.tablet_count();
             auto my_host_id = erm->get_topology().my_host_id();
             co_await tablet_map.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info&) -> future<> {
                 auto primary = tablet_map.get_primary_replica(tid, erm->get_topology());
@@ -784,6 +786,9 @@ static future<bool> scan_table(
         } // Drop the ERM after the (yielding) collection pass, well before any scan.
 
         for (auto tid : candidates) {
+            if (abort_source.abort_requested()) {
+                break;
+            }
             std::optional<locator::tablet_metadata_guard> tablet_guard;
             std::optional<dht::partition_range> range;
             {
@@ -791,9 +796,10 @@ static future<bool> scan_table(
                 // the collection pass above and this point.
                 auto erm = s->table().get_effective_replication_map();
                 const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(s->id());
-                if (tid.value() >= tablet_map.tablet_count()) {
-                    // Tablet layout changed (e.g. a merge) and this id is stale; skip it.
-                    continue;
+                if (tablet_map.tablet_count() != candidates_tablet_count) {
+                    // A split/merge renumbers every tablet_id (see split_tablets()/
+                    // merge_tablets()), so a stale id could alias a different tablet; stop here.
+                    break;
                 }
                 auto my_host_id = erm->get_topology().my_host_id();
                 auto tablet_token_range = tablet_map.get_token_range(tid);

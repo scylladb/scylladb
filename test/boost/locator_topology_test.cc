@@ -584,3 +584,70 @@ SEASTAR_THREAD_TEST_CASE(test_ttl_style_tablet_scan_cost_tracks_owned_after_fix)
         BOOST_REQUIRE_EQUAL(found, 137u);
     }
 }
+
+// A split renumbers every tablet_id (tablet_allocator.cc split_tablets()), so a stale
+// candidate can alias an unrelated tablet after a resize, not just go out of range (#31208).
+SEASTAR_THREAD_TEST_CASE(test_ttl_style_tablet_scan_detects_split_during_validate) {
+    auto my_id = host_id::create_random_id();
+    auto other_id = host_id::create_random_id();
+
+    topology::config cfg = {
+        .this_endpoint = gms::inet_address("127.0.0.1"),
+        .this_host_id = my_id,
+        .local_dc_rack = endpoint_dc_rack::default_location,
+    };
+    topology topo(cfg);
+    topo.add_or_update_endpoint(other_id, endpoint_dc_rack::default_location, node::state::normal);
+    const shard_id my_shard = 0;
+
+    // Pre-split map: 4 tablets, only tablet 1 is mine.
+    tablet_map old_map(4);
+    for (auto tid : old_map.tablet_ids()) {
+        bool mine = tid.value() == 1;
+        old_map.set_tablet(tid, tablet_info {
+            tablet_replica_set { tablet_replica { mine ? my_id : other_id, mine ? my_shard : shard_id(0) } }
+        });
+    }
+
+    // Collection pass (mirrors ttl.cc): one candidate, tid 1, plus the
+    // tablet_count seen at collection time.
+    std::vector<tablet_id> candidates;
+    for (auto tid : old_map.tablet_ids()) {
+        auto primary = old_map.get_primary_replica(tid, topo);
+        if (primary.host == my_id && primary.shard == my_shard) {
+            candidates.push_back(tid);
+        }
+    }
+    BOOST_REQUIRE_EQUAL(candidates.size(), 1u);
+    size_t candidates_tablet_count = old_map.tablet_count();
+
+    // Post-split map: old tablet X becomes new tablets X<<1 and X<<1|1 (as split_tablets() does).
+    tablet_map new_map(old_map.tablet_count() * 2);
+    for (auto tid : old_map.tablet_ids()) {
+        auto& info = old_map.get_tablet_info(tid);
+        tablet_id left(tid.value() << 1);
+        tablet_id right(left.value() + 1);
+        new_map.set_tablet(left, info);
+        new_map.set_tablet(right, info);
+    }
+    BOOST_REQUIRE_NE(new_map.tablet_count(), candidates_tablet_count);
+
+    // Buggy shape (bounds check only): id 1 is in bounds of the doubled map, but now
+    // aliases old tablet 0's right child, so this misreads as "not owned" -- not stale.
+    for (auto tid : candidates) {
+        BOOST_REQUIRE_LT(tid.value(), new_map.tablet_count());
+        auto primary = new_map.get_primary_replica(tid, topo);
+        bool mine = primary.host == my_id && primary.shard == my_shard;
+        BOOST_REQUIRE(!mine); // wrong tablet, misleadingly reads as "not owned"
+    }
+
+    // Fixed shape: the tablet_count mismatch is caught before any per-candidate check runs.
+    size_t candidates_examined = 0;
+    for (size_t i = 0; i < candidates.size(); i++) {
+        if (new_map.tablet_count() != candidates_tablet_count) {
+            break;
+        }
+        candidates_examined++;
+    }
+    BOOST_REQUIRE_EQUAL(candidates_examined, 0u);
+}
