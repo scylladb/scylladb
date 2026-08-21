@@ -81,10 +81,30 @@ def test_quoted_ann_function_in_where_clause_without_ordering(cql, indexed_vecto
     with pytest.raises(InvalidRequest, match="requires a matching ORDER BY clause"):
         cql.execute(f'SELECT * FROM {indexed_vector_table} WHERE "ann"(v, [0.1, 0.2, 0.3]) > 0 LIMIT 5')
 
-def test_ann_function_in_select_clause(cql, indexed_vector_table):
-    with pytest.raises(InvalidRequest, match=re.escape("ANN() is not supported in the SELECT clause")):
-        cql.execute(f"SELECT p, ANN(v, [0.1, 0.2, 0.3]) FROM {indexed_vector_table} "
-                    f"ORDER BY ANN(v, [0.1, 0.2, 0.3]) LIMIT 5")
+def test_ann_function_in_select_clause_without_ordering(cql, indexed_vector_table):
+    # ANN() selected reports the score the rows are ranked by, so it needs an ANN ordering
+    # to agree with. Occurrences that disagree with one are covered by
+    # test_vector_search_rescoring_with_mock.py, which can answer the vector search.
+    with pytest.raises(InvalidRequest,
+            match=re.escape("ANN() is not supported in the SELECT clause without a matching ANN ordering")):
+        cql.execute(f"SELECT p, ANN(v, [0.1, 0.2, 0.3]) FROM {indexed_vector_table} WHERE p = 1")
+
+# GROUP BY condenses the rows of a group into one, which says nothing about which row's score to
+# report, so a query that selects ANN() cannot have one. The refusal cannot come from the aggregation
+# machinery the plain case relies on: it wraps a column in first() but leaves a lowered score alone,
+# so a selection made only of scores never looks like an aggregate one.
+@pytest.mark.parametrize("select_clause,message", [
+    ("p", "cannot be run with aggregation"),
+    ("ANN(v, [0.1, 0.2, 0.3])", "cannot be selected by a query with GROUP BY"),
+])
+def test_ann_query_with_group_by_rejected(cql, test_keyspace, scylla_only, select_clause, message):
+    schema = "p int, c int, v vector<float, 3>, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+        with pytest.raises(InvalidRequest, match=message):
+            cql.prepare(f"SELECT {select_clause} FROM {table} GROUP BY p "
+                        f"ORDER BY ANN(v, [0.1, 0.2, 0.3]) LIMIT 5")
+
 
 def test_ann_function_with_too_few_arguments(cql, indexed_vector_table):
     with pytest.raises(InvalidRequest, match=re.escape(ANN_ARGUMENT_COUNT_MESSAGE)):

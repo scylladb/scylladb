@@ -2143,12 +2143,34 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     // with temporary nodes that an external_values_provider fills at execution time.
     expr::temporary_allocator temporaries_allocator;
     if (prepare_bm25_selectors(prepared_selectors, bm25_ordering_info_opt, temporaries_allocator)) {
-        for (auto& term : bm25_ordering_info_opt->selected_bm25_terms) {
-            expr::fill_prepare_context(term, ctx);
+        // GROUP BY condenses the rows of a group into one, which says nothing about which row's score
+        // to report.  Rejected here rather than by the aggregation machinery below, which a lowered
+        // score is invisible to: levellize_aggregation_depth() wraps a column in first() but leaves a
+        // temporary alone, so a selection made only of scores never becomes an aggregate one and the
+        // search's own refusal to aggregate does not fire.
+        if (!_group_by_columns.empty()) {
+            throw exceptions::invalid_request_exception("A scoring function cannot be selected by a query with GROUP BY");
+        }
+
+        // A recorded term is all that is left of the call it was written in: that call was replaced
+        // with a temporary, a leaf nothing descends into, so nothing else registers its bind marker.
+        for (auto& term : bm25_ordering_info_opt->deferred_select_terms) {
+            expr::fill_prepare_context(term.term, ctx);
         }
     }
 
-    prepare_ann_selectors(prepared_selectors);
+    // Likewise for ANN() calls in SELECT, except that an index that rescores computes the score
+    // locally instead, and so needs no slot.
+    if (prepare_ann_selectors(prepared_selectors, ann_ordering_info_opt, temporaries_allocator, db, schema)) {
+        // Likewise not answerable per group, and likewise invisible to the aggregation machinery.
+        if (!_group_by_columns.empty()) {
+            throw exceptions::invalid_request_exception("A scoring function cannot be selected by a query with GROUP BY");
+        }
+
+        for (auto& query_vector : ann_ordering_info_opt->deferred_select_vectors) {
+            expr::fill_prepare_context(query_vector, ctx);
+        }
+    }
 
     for (auto& ps : prepared_selectors) {
         expr::fill_prepare_context(ps.expr, ctx);
@@ -2160,9 +2182,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     select_statement::ordering_comparator_type ordering_comparator;
     bool hide_last_column = false;
     if (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled) {
-        uint32_t similarity_column_index = add_similarity_function_to_selectors(prepared_selectors, *ann_ordering_info_opt, db, schema);
+        // Appends the trailing selector holding the score it sorts by, hidden from the client below.
+        ordering_comparator = rescored_similarity_ordering(prepared_selectors, *ann_ordering_info_opt, db, schema);
         hide_last_column = true;
-        ordering_comparator = get_similarity_ordering_comparator(prepared_selectors, similarity_column_index);
     }
 
     for (auto& ps : prepared_selectors) {
@@ -2340,8 +2362,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 std::move(prepared_attrs));
     } else if (is_ann_query) {
         stmt = vector_indexed_table_select_statement::prepare(db, schema, ctx.bound_variables_size(), _parameters, std::move(selection), std::move(restrictions),
-                std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator), std::move(ann_ordering_info_opt->_prepared_ann_ordering),
-                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, ann_ordering_info_opt->_index, std::move(prepared_attrs));
+                std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator),
+                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, std::move(*ann_ordering_info_opt),
+                std::move(prepared_attrs));
     } else if (is_fts_query) {
         stmt = fulltext_indexed_table_select_statement::prepare(
             db,

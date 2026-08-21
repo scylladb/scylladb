@@ -2377,6 +2377,11 @@ bool is_native_function_call(const function_call& fc, const functions::function_
     return is_function_call_name_equal(fc, name);
 }
 
+bool is_external_function_call(const function_call& fc) {
+    const shared_ptr<functions::function>* fun = std::get_if<shared_ptr<functions::function>>(&fc.func);
+    return fun != nullptr && (*fun)->is_external();
+}
+
 bool is_token_function(const expression& e) {
     const function_call* fun_call = as_if<function_call>(&e);
     if (fun_call == nullptr) {

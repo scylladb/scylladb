@@ -15,13 +15,46 @@
 
 namespace cql3::statements {
 
+/// A SELECT occurrence's search term that prepare could not tell apart from the ORDER BY term,
+/// together with the name of the function it was written in, so that execution can name that
+/// function when the two turn out to differ.
+struct deferred_select_term {
+    expr::expression term;
+    std::string_view function_name;
+};
+
+/// Which of a full-text search's values a SELECT occurrence names.  Both are read from the one
+/// search the rows are ranked by and validated by the one set of rules; they differ only in where
+/// the value comes from and in what its slot holds.
+enum class bm25_value {
+    /// The relevance score, which the index reports along with the row's key.
+    score,
+    /// A fragment of the row's own text with the matched terms marked, which only exists once the
+    /// rows have been read and a second request has asked the index for it.
+    fragment,
+};
+
+/// The name the given value is called by in CQL, for matching a call and for naming it in a
+/// rejection message.
+std::string_view function_name_of(bm25_value value);
+
 struct bm25_ordering_info {
     secondary_index::index index;
     expr::expression search_term;
     // Temporary slot the score is delivered in, allocated on the first bm25()
-    // occurrence in SELECT and filled per row by external_score_provider.
-    std::optional<size_t> temporary_index;
-    std::vector<expr::expression> selected_bm25_terms;
+    // occurrence in SELECT and filled per row by external_search_provider.
+    std::optional<size_t> score_temporary_index;
+    // Temporary slot the fragment is delivered in, allocated on the first bm25_highlight()
+    // occurrence in SELECT and filled per row from the second request's answer.
+    std::optional<size_t> highlight_temporary_index;
+    // The column the fragment is generated from, recorded when a fragment is selected: its text has
+    // to be read from every row and sent to the index.  Always the column the rows are ranked by.
+    const column_definition* highlighted_column = nullptr;
+    // The search terms of the SELECT occurrences, and of the WHERE one, that prepare could not tell
+    // apart from the ORDER BY term - a bind marker stands where at least one of the two values will
+    // be. Checked once they have values; left empty where prepare has already settled it.
+    std::vector<deferred_select_term> deferred_select_terms;
+    std::optional<expr::expression> deferred_where_term;
 };
 
 /// Resolves BM25 ordering metadata from the query's prepared ORDER BY call.
@@ -31,13 +64,12 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
         schema_ptr schema,
         const expr::function_call& fc);
 
-/// Processes bm25() calls in prepared_selectors:
-/// - When ordering_info is absent, throws on the first bm25() occurrence at any nesting level.
-/// - When present, validates each against ordering_info (column name at prepare time,
-///   constant terms eagerly), replaces with temporary{index, float_type},
-///   and stores non-literal search terms for runtime validation.
-/// Stores index into ordering_info->temporary_index on first bm25() occurrence.
-/// Returns true if any bm25() call was found and processed.
+/// Lowers every call to a full-text search's values in the SELECT clause - bm25() and
+/// bm25_highlight(), nested occurrences included - to the slot that value is delivered in,
+/// allocating it on the first occurrence of each, and rejects an occurrence that does not agree with
+/// the WHERE and ORDER BY clauses on the column and the search term, or that has no such clauses to
+/// agree with.  A term whose agreement only execution can settle is recorded in ordering_info for it
+/// to check.  Returns whether any slot was allocated, i.e. whether the clause named either value.
 bool prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_selectors, std::optional<bm25_ordering_info>& ordering_info,
         expr::temporary_allocator& temporaries_allocator);
 
