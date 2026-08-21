@@ -7,6 +7,12 @@ find_package(Python3 COMPONENTS QUIET REQUIRED Interpreter)
 # the source templates in utils/s3/, using the current AWS c2j service models
 # for S3 and STS. The stitching of these generated files into the compile
 # graph is done elsewhere.
+option(Scylla_ALLOW_STALE_AWS_MODELS
+  "Compile the committed AWS error table when the c2j models cannot be fetched (for offline builds; not for CI)"
+  OFF)
+if(Scylla_ALLOW_STALE_AWS_MODELS)
+  set(aws_error_gen_offline_fallback "--offline-fallback")
+endif()
 set(aws_error_gen_script
   "${CMAKE_SOURCE_DIR}/utils/s3/gen_aws_service_errors.py")
 set(aws_error_gen_hh
@@ -17,6 +23,7 @@ add_custom_command(
   OUTPUT ${aws_error_gen_hh} ${aws_error_gen_cc}
   COMMAND ${Python3_EXECUTABLE} ${aws_error_gen_script}
           --output-dir ${scylla_gen_build_dir}
+          ${aws_error_gen_offline_fallback}
   DEPENDS
     ${aws_error_gen_script}
     ${CMAKE_CURRENT_SOURCE_DIR}/s3/aws_error_definitions.hh.in

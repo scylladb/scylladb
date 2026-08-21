@@ -75,6 +75,20 @@ The `mode` flag determines build flags for the `scylla` executable:
 
 If you don't specify a build mode, the `build.ninja` will contain configuration for _all build modes_.
 
+### Building without access to GitHub
+
+The build generates Scylla's AWS error table from the S3 and STS `c2j` models, which it fetches from `aws/aws-sdk-cpp` on every fresh build tree. A fetch that fails is a build failure, deliberately: the point of generating the table from the models is to pick up a new AWS error as soon as upstream describes it, so a build that quietly carried on with an old table would ship one that is silently behind.
+
+When failing is not what you want, such as working offline or working while GitHub is down, configure with:
+
+```console
+./configure.py --mode=<mode> --allow-stale-aws-models
+```
+
+or, under CMake, `-DScylla_ALLOW_STALE_AWS_MODELS=ON`. The build then compiles the copy of the error table committed in `utils/s3/pregenerated/`, saying so in the build log. It copies that table rather than regenerating it — without the models there is nothing to regenerate from, and this path exists to keep the build going, not to produce a current table.
+
+Do not turn this on in CI. It would turn "the error table is out of date" from a build failure into a warning nobody reads.
+
 [Ninja]: https://ninja.org/
 
 ## Building

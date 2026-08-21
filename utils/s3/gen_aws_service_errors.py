@@ -13,19 +13,24 @@
 #   * ServiceErrorsSource.vm GetErrorForName() body  → mapping snippet
 #
 # Usage:
-#   python3 utils/s3/gen_aws_service_errors.py           # writes generated files next to templates
 #   python3 utils/s3/gen_aws_service_errors.py --output-dir DIR
 #                                                        # build-system mode
 #   python3 utils/s3/gen_aws_service_errors.py --dry-run # prints to stdout instead
+#   python3 utils/s3/gen_aws_service_errors.py --update-pregenerated
+#                                                        # refresh the committed copies
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import NamedTuple
 
@@ -73,6 +78,19 @@ MODEL_URL_TEMPLATE = (
     "https://raw.githubusercontent.com/aws/aws-sdk-cpp/main/"
     "tools/code-generation/api-descriptions/{filename}"
 )
+
+# Bounds for the model fetch. Without an explicit timeout urlopen() inherits
+# socket.getdefaulttimeout(), which is None, so a black-holed connection
+# blocks forever and wedges the build.
+FETCH_TIMEOUT_SECONDS = 10
+FETCH_ATTEMPTS = 3
+FETCH_BACKOFF_SECONDS = 2
+# HTTP statuses worth another attempt. Anything else (404 for a renamed
+# model, 403) will not change on a retry, so fail immediately.
+FETCH_RETRY_STATUSES: set[int] = {408, 425, 429, 500, 502, 503, 504}
+# Cap on an honoured Retry-After, so a server asking for a long wait cannot
+# stall the build either.
+FETCH_MAX_RETRY_AFTER_SECONDS = 30
 
 # --- data types ----------------------------------------------------------------
 
@@ -171,6 +189,12 @@ SOURCE_TEMPLATE = HERE / "aws_error_definitions.cc.in"
 GENERATED_HEADER_NAME = "aws_error_definitions_generated.hh"
 GENERATED_SOURCE_NAME = "aws_error_definitions_generated.cc"
 HASHES_NAME = "aws_error_definitions.hashes.json"
+# Committed copies of the generated files, so that a build which cannot reach
+# GitHub has something to compile. Deliberately not in utils/s3/ itself: the
+# source root precedes the generated directory on the include path, so a copy
+# named aws_error_definitions_generated.hh there would shadow the one the
+# build just produced. Refreshed by --update-pregenerated.
+PREGENERATED_DIR = HERE / "pregenerated"
 
 
 def _substitute_tags(text: str, per_service: dict[str, str], context: str) -> str:
@@ -202,19 +226,74 @@ def _write_if_changed(path: Path, text: str) -> bool:
 # --- main ----------------------------------------------------------------------
 
 
+def _retry_after_seconds(value: str) -> float | None:
+    """How long Retry-After asks us to wait, or None if it cannot be read.
+
+    The header carries either delay-seconds or an HTTP-date. Only a
+    non-negative integer counts as the former, so that "inf" or "nan" cannot
+    reach time.sleep()."""
+    text = value.strip()
+    if text.isdigit():
+        return float(text)
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        # The obsolete asctime form carries no zone, and HTTP dates are GMT.
+        # Without this the subtraction below raises TypeError.
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
+def _retry_delay(error: Exception, attempt: int) -> float | None:
+    """How long to wait before retrying, or None if the error is permanent.
+
+    Anything that carries no HTTP status is a transport failure (DNS, TCP,
+    TLS, a timeout, a truncated response) and is always worth retrying. An
+    HTTPError is retried only for the statuses a server uses to say "later",
+    honouring Retry-After when it sends one."""
+    backoff = FETCH_BACKOFF_SECONDS * (2 ** (attempt - 1))
+    if not isinstance(error, urllib.error.HTTPError):
+        return backoff
+    if error.code not in FETCH_RETRY_STATUSES:
+        return None
+    retry_after = error.headers.get("Retry-After") if error.headers else None
+    if retry_after:
+        seconds = _retry_after_seconds(retry_after)
+        if seconds is not None:
+            return min(seconds, FETCH_MAX_RETRY_AFTER_SECONDS)
+    return backoff
+
+
 def _fetch_raw(filename: str) -> bytes:
-    """Fetch one c2j model. Raises RuntimeError on any network/HTTP error;
-    the caller decides how to react (e.g. fall back to cached outputs)."""
+    """Fetch one c2j model, retrying transient failures. Raises RuntimeError
+    once the attempts are exhausted or the failure is permanent; the caller
+    decides how to react (e.g. fall back to cached outputs).
+
+    Every attempt is bounded by FETCH_TIMEOUT_SECONDS, so an unresponsive
+    endpoint fails the build instead of hanging it."""
     url = MODEL_URL_TEMPLATE.format(filename=filename)
     print(f"# fetching {url}", file=sys.stderr)
-    try:
-        with urllib.request.urlopen(url) as resp:
-            return resp.read()
-    except urllib.error.URLError as e:
-        # HTTPError is a subclass of URLError, so this catches both
-        # transient network failures (DNS, TCP, TLS) and non-2xx
-        # HTTP responses (rate-limiting, model moved/renamed, etc.).
-        raise RuntimeError(f"failed to fetch {url}: {e}") from e
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=FETCH_TIMEOUT_SECONDS) as resp:
+                return resp.read()
+        except (OSError, http.client.HTTPException) as e:
+            # URLError (and its HTTPError subclass) derive from OSError, so
+            # this catches non-2xx responses (rate-limiting, model moved or
+            # renamed) alongside transport failures. urllib only wraps
+            # socket errors in URLError while connecting -- a timeout or a
+            # reset while reading the response body surfaces bare, as
+            # TimeoutError or ConnectionResetError, and a truncated body
+            # surfaces as http.client.IncompleteRead.
+            delay = _retry_delay(e, attempt)
+            if delay is None or attempt == FETCH_ATTEMPTS:
+                raise RuntimeError(f"failed to fetch {url}: {e}") from e
+            print(f"# attempt {attempt}/{FETCH_ATTEMPTS} failed ({e}), "
+                  f"retrying in {delay:g}s", file=sys.stderr)
+            time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -239,6 +318,47 @@ def _save_hashes(path: Path, hashes: dict) -> None:
     path.write_text(json.dumps(hashes, indent=2, sort_keys=True) + "\n")
 
 
+def _copy_pregenerated(header_out: Path, source_out: Path) -> bool:
+    """Install the committed copies as this build's generated files.
+
+    They are copied verbatim, not regenerated: without models there is
+    nothing to expand the templates from, and this path exists to keep an
+    offline build going rather than to produce a current table. Returns
+    False when the copies are missing."""
+    header_src = PREGENERATED_DIR / GENERATED_HEADER_NAME
+    source_src = PREGENERATED_DIR / GENERATED_SOURCE_NAME
+    if not header_src.is_file() or not source_src.is_file():
+        return False
+    _write_if_changed(header_out, header_src.read_text())
+    _write_if_changed(source_out, source_src.read_text())
+    return True
+
+
+def _update_pregenerated() -> int:
+    """Regenerate the committed copies from the current upstream models.
+
+    A maintenance action -- a build never writes into the source tree."""
+    raw_models = {service: _fetch_raw(filename) for service, filename in SERVICES.items()}
+    header_text, source_text = _render_from_models(raw_models)
+    _write_if_changed(PREGENERATED_DIR / GENERATED_HEADER_NAME, header_text)
+    _write_if_changed(PREGENERATED_DIR / GENERATED_SOURCE_NAME, source_text)
+    return 0
+
+
+def _render_from_models(raw_models: dict[str, bytes]) -> tuple[str, str]:
+    """Expand both templates from a set of raw c2j models."""
+    per_service = {s: _extract_service_errors(json.loads(raw_models[s])) for s in SERVICES}
+    header_text = _substitute_tags(
+        HEADER_TEMPLATE.read_text(),
+        {s: _render_enum_lines(e, "    ") for s, e in per_service.items()},
+        context=HEADER_TEMPLATE.name)
+    source_text = _substitute_tags(
+        SOURCE_TEMPLATE.read_text(),
+        {s: _render_mapping_lines(e, "        ") for s, e in per_service.items()},
+        context=SOURCE_TEMPLATE.name)
+    return header_text, source_text
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true",
@@ -247,22 +367,42 @@ def main() -> int:
     parser.add_argument("--force", action="store_true",
                         help="regenerate even if the cached sidefile shows "
                              "all model/template/output hashes still match")
+    parser.add_argument("--offline-fallback", action="store_true",
+                        help="when the models cannot be fetched, compile the "
+                             "copies committed under utils/s3/pregenerated/ "
+                             "instead of failing. Off by default: a build "
+                             "that silently uses a stale error table ships a "
+                             "stale error table.")
+    parser.add_argument("--update-pregenerated", action="store_true",
+                        help="fetch the models, regenerate, and rewrite the "
+                             "committed copies under utils/s3/pregenerated/, "
+                             "then exit. Maintenance action, never run by a "
+                             "build.")
     parser.add_argument("--output-dir", type=Path, default=None,
-                        help="build-system mode: read the source templates "
+                        help="read the source templates "
                              "utils/s3/aws_error_definitions.{hh,cc}.in and "
                              "write the fully-expanded copies (plus the "
                              "hashes sidefile) to <output-dir>/utils/s3/. "
-                             "When omitted, the generated files land next to "
-                             "the templates.")
+                             "Required unless --dry-run.")
     args = parser.parse_args()
 
-    # Where do generated files (and the sidefile) live? In `--output-dir`
-    # mode: under the build tree. Otherwise: alongside the source templates
-    # (developer in-place workflow).
-    if args.output_dir is not None:
-        out_dir = args.output_dir / "utils" / "s3"
-    else:
-        out_dir = HERE
+    if args.update_pregenerated:
+        return _update_pregenerated()
+
+    # A dry run prints and writes nothing, so it has nowhere to put a
+    # fallback copy -- and without --output-dir it would put one next to the
+    # templates, at the very path that shadows the build's own header.
+    if args.dry_run and args.offline_fallback:
+        parser.error("--offline-fallback cannot be used with --dry-run")
+
+    # Generated files (and the sidefile) always live under the build tree.
+    # Writing them next to the templates would put a header at
+    # utils/s3/aws_error_definitions_generated.hh, which precedes the
+    # generated directory on the include path and would shadow the one the
+    # build produces.
+    if args.output_dir is None and not args.dry_run:
+        parser.error("--output-dir is required")
+    out_dir = args.output_dir / "utils" / "s3" if args.output_dir else HERE
     header_out = out_dir / GENERATED_HEADER_NAME
     source_out = out_dir / GENERATED_SOURCE_NAME
     hashes_file = out_dir / HASHES_NAME
@@ -295,34 +435,26 @@ def main() -> int:
     cached_gen = cached.get("generated", {})
 
     if fetch_error is not None:
-        # No network. If cached outputs are present at all we let the build
-        # proceed with them — leaving a developer stranded without a
-        # buildable tree is worse than shipping a possibly-stale registry.
-        # If the recorded hashes don't match (someone hand-edited the
-        # generated files, or the sidefile is stale) we surface a second
-        # warning so it's not silent.
-        outputs_present = (
-            not args.dry_run
-            and header_out.exists() and source_out.exists()
-        )
-        if outputs_present and not args.force:
-            print(f"warning: {fetch_error}", file=sys.stderr)
-            hashes_match = (
-                cached_gen.get(header_out.name) == _sha256_file(header_out)
-                and cached_gen.get(source_out.name) == _sha256_file(source_out)
-            )
-            if not hashes_match:
-                print(f"warning: cached generated files at {out_dir} do not "
-                      f"match the sidefile hashes (manual edits or stale "
-                      f"sidefile); using them anyway to keep the build "
-                      f"working", file=sys.stderr)
-            else:
-                print(f"warning: keeping existing generated files at "
-                      f"{out_dir} (offline build)", file=sys.stderr)
-            return 0
-        # No cached outputs to fall back to, or --force was requested.
-        sys.exit(f"error: {fetch_error} and no cached outputs at "
-                 f"{out_dir}; cannot regenerate offline")
+        # Failing the build is the default on purpose. The point of generating
+        # this table from the c2j models is to pick up a new AWS error as soon
+        # as upstream describes it, and a build that quietly carried on with an
+        # old table would defeat that without anyone noticing.
+        if not args.offline_fallback:
+            sys.exit(f"error: {fetch_error}; configure with "
+                     f"--allow-stale-aws-models (CMake: "
+                     f"-DScylla_ALLOW_STALE_AWS_MODELS=ON) to compile the "
+                     f"committed copies instead")
+        print(f"warning: {fetch_error}", file=sys.stderr)
+        if not _copy_pregenerated(header_out, source_out):
+            sys.exit(f"error: no committed copies in {PREGENERATED_DIR} to "
+                     f"fall back on")
+        print(f"warning: compiling the copies committed in "
+              f"{PREGENERATED_DIR}; the AWS error table may be out of date",
+              file=sys.stderr)
+        # The sidefile describes files generated from fetched models, so it is
+        # deliberately left alone: the next build that reaches GitHub finds no
+        # match and regenerates.
+        return 0
 
     # Short-circuit only if every input matches AND the outputs on disk
     # still match what we last wrote (guards against manual edits).
@@ -354,14 +486,7 @@ def main() -> int:
             print(_render_mapping_lines(errors, "        "))
         return 0
 
-    header_text = _substitute_tags(
-        HEADER_TEMPLATE.read_text(),
-        {s: _render_enum_lines(e, "    ") for s, e in per_service.items()},
-        context=HEADER_TEMPLATE.name)
-    source_text = _substitute_tags(
-        SOURCE_TEMPLATE.read_text(),
-        {s: _render_mapping_lines(e, "        ") for s, e in per_service.items()},
-        context=SOURCE_TEMPLATE.name)
+    header_text, source_text = _render_from_models(raw_models)
 
     _write_if_changed(header_out, header_text)
     _write_if_changed(source_out, source_text)

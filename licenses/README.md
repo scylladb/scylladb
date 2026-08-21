@@ -16,6 +16,22 @@ They contain the following tag:
 
   SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
 
+### AWS SDK for C++ service models
+
+`utils/s3/pregenerated/aws_error_definitions_generated.{hh,cc}` are generated
+from the S3 and STS `c2j` API models in aws/aws-sdk-cpp:
+  https://github.com/aws/aws-sdk-cpp/tree/main/tools/code-generation/api-descriptions
+
+Only the AWS error names, wire codes and retryability flags are carried over.
+`utils/s3/gen_aws_service_errors.py` refreshes the generated files from the
+current models; the AWS models themselves are not committed here.
+
+aws-sdk-cpp as a whole is licensed under the Apache License (version 2),
+included in `licenses/apache-license-2.0.txt`. The generated files and the
+templates they are expanded from are therefore dual-licensed and carry:
+
+  SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
+
 ### `musl libc` files
 
 `licenses/musl-license.txt` is obtained from:
