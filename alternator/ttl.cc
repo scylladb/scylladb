@@ -771,10 +771,10 @@ static future<bool> scan_table(
             const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(s->id());
             candidates_tablet_count = tablet_map.tablet_count();
             auto my_host_id = erm->get_topology().my_host_id();
-            co_await tablet_map.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info&) -> future<> {
+            co_await tablet_map.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
                 auto primary = tablet_map.get_primary_replica(tid, erm->get_topology());
                 bool mine = primary.host == my_host_id && primary.shard == this_shard_id();
-                if (!mine && erm->get_replication_factor() > 1) {
+                if (!mine && info.replicas.size() > 1) {
                     auto secondary = tablet_map.get_secondary_replica(tid, erm->get_topology()); // throws if no secondary replica
                     mine = secondary.host == my_host_id && secondary.shard == this_shard_id();
                 }
@@ -806,7 +806,7 @@ static future<bool> scan_table(
                 auto tablet_primary_replica = tablet_map.get_primary_replica(tid, erm->get_topology());
                 if (tablet_primary_replica.host == my_host_id && tablet_primary_replica.shard == this_shard_id()) {
                     range = dht::to_partition_range(std::move(tablet_token_range));
-                } else if (erm->get_replication_factor() > 1) {
+                } else if (tablet_map.get_tablet_info(tid).replicas.size() > 1) {
                     // If each node only scans its own primary ranges, then when any node is
                     // down part of the token range will not get scanned. This can be viewed
                     // as acceptable (when it comes back online, it will resume its scan),
