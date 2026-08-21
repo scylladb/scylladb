@@ -46,15 +46,17 @@ private:
     // The driver needs this information in order to compute the partition token and send the request to the right node.
     std::vector<std::pair<std::size_t, lw_shared_ptr<column_specification>>> _targets;
 
-    // A list of pointers to prepared `function_call` cache ids, that
-    // participate in partition key ranges computation within an LWT statement.
-    std::vector<::shared_ptr<std::optional<uint8_t>>> _pk_function_calls_cache_ids;
+    // The non-pure `function_call`s that participate in partition key ranges
+    // computation, in the order they were found. Each was replaced in the
+    // statement's expressions by an `expr::temporary` holding its index here,
+    // which is also its slot in the temporaries vector query_options carries.
+    std::vector<expr::expression> _pk_function_calls;
 
     // The flag denoting whether the context is currently in partition key
     // processing mode (inside query restrictions AST nodes). If set to true,
-    // then every `function_call` instance will be recorded in the context and
-    // will be assigned an identifier, which will then be used for caching
-    // the function call results.
+    // then every non-pure `function_call` instance will be recorded in the
+    // context and replaced by a temporary, whose value is computed once per
+    // request and survives a bounce to another shard.
     bool _processing_pk_restrictions = false;
 
     // The dialect the statement is parsed and prepared under. Captured when the
@@ -85,11 +87,17 @@ public:
 
     const dialect& get_dialect() const;
 
-    void clear_pk_function_calls_cache();
+    // Record a new function call, which evaluates a partition key constraint,
+    // and replace it in `e` with the temporary that stands in for it. The
+    // caller has to make sure `e` holds a prepared `expr::function_call`.
+    void add_pk_function_call(cql3::expr::expression& e);
 
-    // Record a new function call, which evaluates a partition key constraint.
-    // Also automatically assigns an id to the AST node for caching purposes.
-    void add_pk_function_call(cql3::expr::function_call& fn);
+    // The function calls recorded by add_pk_function_call(), indexed by the
+    // slot of the temporary that replaced them. Whoever evaluates expressions
+    // holding those temporaries is responsible for filling their slots.
+    const std::vector<expr::expression>& pk_function_calls() const {
+        return _pk_function_calls;
+    }
 
     // Inform the context object that it has started or ended processing the
     // partition key part of statement restrictions.

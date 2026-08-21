@@ -523,8 +523,9 @@ select_statement::do_execute(query_processor& qp,
         const auto token = key_ranges[0].start()->value().as_decorated_key().token();
         cas_shard.emplace(*_schema, token);
         if (!cas_shard->this_shard()) {
+            // The const_cast is gross, but at least we're returning now and we're sure it won't be used again.
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                    qp.bounce_to_shard(cas_shard->shard(), std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()))
+                    qp.bounce_to_shard(cas_shard->shard(), const_cast<cql3::query_options&>(options).take_cached_pk_function_calls())
                 );
         }
     }

@@ -1295,6 +1295,8 @@ statement_restrictions::statement_restrictions(private_tag,
     _get_global_index_token_clustering_ranges_fn = build_get_global_index_token_clustering_ranges_fn();
     _get_local_index_clustering_ranges_fn = build_get_local_index_clustering_ranges_fn();
     _value_for_index_partition_key_fn = build_value_for_index_partition_key_fn();
+
+    _pk_function_calls = ctx.pk_function_calls();
 }
 
 bool
@@ -1706,7 +1708,20 @@ dht::partition_range_vector partition_ranges_from_EQs(
 
 } // anonymous namespace
 
+void statement_restrictions::evaluate_pk_function_calls(const query_options& options) const {
+    // The calls are evaluated in slot order and the ones already cached keep
+    // their result: on a bounce the results computed by the bouncing shard
+    // arrive in the options, and computing them again is exactly what the
+    // caching is here to prevent. In a BATCH all statements share the prepare
+    // context, so the statements sharing one query_options also share the
+    // cached results.
+    for (size_t i = options.nr_cached_pk_function_calls(); i < _pk_function_calls.size(); ++i) {
+        options.cache_pk_function_call(i, expr::evaluate(_pk_function_calls[i], options));
+    }
+}
+
 dht::partition_range_vector statement_restrictions::get_partition_key_ranges(const query_options& options) const {
+    evaluate_pk_function_calls(options);
     return _get_partition_key_ranges_fn(options);
 }
 
@@ -2359,6 +2374,7 @@ statement_restrictions::build_get_clustering_bounds_fn() const {
     }
 
 std::vector<query::clustering_range> statement_restrictions::get_clustering_bounds(const query_options& options) const {
+    evaluate_pk_function_calls(options);
     return _get_clustering_bounds_fn(options);
 }
 
@@ -2636,6 +2652,7 @@ statement_restrictions::build_get_global_index_clustering_ranges_fn() const {
 
 std::vector<query::clustering_range> statement_restrictions::get_global_index_clustering_ranges(
         const query_options& options) const {
+    evaluate_pk_function_calls(options);
     return _get_global_index_clustering_ranges_fn(options);
 }
 
@@ -2662,6 +2679,7 @@ statement_restrictions::build_get_global_index_token_clustering_ranges_fn() cons
 
 std::vector<query::clustering_range> statement_restrictions::get_global_index_token_clustering_ranges(
     const query_options& options) const {
+    evaluate_pk_function_calls(options);
     return _get_global_index_token_clustering_ranges_fn(options);
 }
 
@@ -2679,6 +2697,7 @@ statement_restrictions::build_get_local_index_clustering_ranges_fn() const {
 
 std::vector<query::clustering_range> statement_restrictions::get_local_index_clustering_ranges(
         const query_options& options) const {
+    evaluate_pk_function_calls(options);
     return _get_local_index_clustering_ranges_fn(options);
 }
 
@@ -2714,6 +2733,7 @@ statement_restrictions::build_value_for_index_partition_key_fn() const {
 
 bytes_opt
 statement_restrictions::value_for_index_partition_key(const query_options& options) const {
+    evaluate_pk_function_calls(options);
     return _value_for_index_partition_key_fn(options);
 }
 
@@ -2740,6 +2760,7 @@ static void validate_primary_key_restrictions(const query_options& options, std:
 }
 
 void statement_restrictions::validate_primary_key(const query_options& options) const {
+    evaluate_pk_function_calls(options);
     std::visit(overloaded_functor{
         [&] (const no_partition_range_restrictions&) {
         },

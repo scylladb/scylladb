@@ -306,35 +306,6 @@ struct function_call {
     std::variant<functions::function_name, shared_ptr<db::functions::function>> func;
     std::vector<expression> args;
 
-    // 0-based index of the function call within a CQL statement.
-    // Used to populate the cache of execution results while passing to
-    // another shard (handling `bounce_to_shard` messages) in LWT statements.
-    //
-    // The id is set only for the function calls that are a part of LWT
-    // statement restrictions for the partition key. Otherwise, the id is not
-    // set and the call is not considered when using or populating the cache.
-    //
-    // For example in a query like:
-    // INSERT INTO t (pk) VALUES (uuid()) IF NOT EXISTS
-    // The query should be executed on a shard that has the pk partition,
-    // but it changes with each uuid() call.
-    // uuid() call result is cached and sent to the proper shard.
-    //
-    // Cache id is kept in shared_ptr because of how prepare_context works.
-    // During fill_prepare_context all function cache ids are collected
-    // inside prepare_context.
-    // Later when some condition occurs we might decide to clear
-    // cache ids of all function calls found in prepare_context.
-    // However by this time these function calls could have been
-    // copied multiple times. Prepare_context keeps a shared_ptr
-    // to function_call ids, and then clearing the shared id
-    // clears it in all possible copies.
-    // This logic was introduced back when everything was shared_ptr<term>,
-    // now a better solution might exist.
-    //
-    // This field can be nullptr, it means that there is no cache id set.
-    ::shared_ptr<std::optional<uint8_t>> lwt_cache_id;
-
     friend bool operator==(const function_call&, const function_call&) = default;
 };
 
@@ -478,9 +449,19 @@ struct usertype_constructor {
 // writes them. Each slot has exactly one writer and any number of readers. What
 // writes a slot is not a property of the slot - the writers in use today are an
 // aggregation inner-loop step, holding state that accumulates across the rows of
-// a group (e.g. a running SUM), and an external_values_provider, supplying per-row
+// a group (e.g. a running SUM), an external_values_provider, supplying per-row
 // input that doesn't come from the base table (e.g. a BM25 relevance score
-// returned by the vector store). Slots are allocated in one space, in the order
+// returned by the vector store), and statement_restrictions, which evaluates a
+// non-pure function call in a partition key restriction (e.g. uuid()) once per
+// request, so that a shard bounce sees the value the bouncing shard computed.
+//
+// An index is an index into the temporaries vector the evaluation is given, and
+// there is more than one such vector: a selection builds its own, sized by the
+// temporary_allocator that hands out the selection's slots, while query_options
+// carries the one holding the partition key function call values. The two are
+// separate index spaces, which is sound only because no expression reads both:
+// restrictions are evaluated against query_options', selectors against the
+// selection's. Within one vector, slots are allocated in one space, in the order
 // their writers appear: prepare first, then split_aggregation().
 //
 // A slot is restored to an initial value at the start of a group if its writer
