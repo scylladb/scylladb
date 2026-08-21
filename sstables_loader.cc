@@ -7,6 +7,7 @@
  */
 
 #include <fmt/ranges.h>
+#include <random>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/map_reduce.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -451,6 +452,11 @@ future<> tablet_sstable_streamer::stream(shared_ptr<stream_progress> progress) {
         _sstables, _tablet_map.tablet_ids() | std::views::filter([this](auto tid) { return tablet_in_scope(tid); }) | std::views::transform([this](auto tid) {
                        return _tablet_map.get_token_range(tid);
                    }) | std::ranges::to<std::vector>());
+
+    // Shuffle tablet ranges to distribute the load more evenly across tablets
+    // during streaming.
+    static thread_local std::default_random_engine rng{std::random_device{}()};
+    std::ranges::shuffle(classified_sstables, rng);
 
     for (auto& [tablet_range, sstables_fully_contained, sstables_partially_contained] : classified_sstables) {
         auto per_tablet_progress = make_shared<per_tablet_stream_progress>(
