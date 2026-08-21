@@ -8,6 +8,8 @@
 
 #include "test/lib/scylla_test_case.hh"
 
+#include <algorithm>
+#include <vector>
 #include <seastar/util/defer.hh>
 #include <seastar/core/memory.hh>
 #include "utils/base64.hh"
@@ -56,6 +58,60 @@ BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_no_keyspace) {
     std::string_view arn = "arn:aws:dynamodb:us-east-1:797456418907:table/dynamodb_streams_verification_table_rc";
 
     BOOST_REQUIRE_THROW(alternator::parse_arn(arn, "", "", ""), alternator::api_error);
+}
+
+// Reproduces a bug where set_sum() (backing UpdateExpression "ADD attr :v"
+// on a set attribute) can append a duplicate element from set2 into the
+// result, because the membership-lookup std::set is built once from set1
+// and never updated as set2's elements are appended. If set2 itself has a
+// repeated value not present in set1, each occurrence independently passes
+// the "not in set1" check and gets appended, yielding a result with a
+// duplicate - breaking the set-uniqueness invariant.
+BOOST_AUTO_TEST_CASE(test_set_sum_no_duplicates_from_repeated_set2_element) {
+    rjson::value set1 = rjson::parse(R"({"SS": ["a", "b"]})");
+    rjson::value set2 = rjson::parse(R"({"SS": ["c", "c"]})");
+
+    rjson::value sum = alternator::set_sum(set1, set2);
+    const rjson::value* result = alternator::unwrap_set(sum).second;
+    BOOST_REQUIRE(result != nullptr);
+
+    std::vector<std::string> elements;
+    for (auto it = result->Begin(); it != result->End(); ++it) {
+        elements.push_back(rjson::to_string(*it));
+    }
+    std::sort(elements.begin(), elements.end());
+    for (const auto& e : elements) {
+        BOOST_TEST_MESSAGE("set_sum element: " << e);
+    }
+
+    BOOST_REQUIRE_EQUAL(elements.size(), 3u);
+    BOOST_REQUIRE_EQUAL(elements[0], "a");
+    BOOST_REQUIRE_EQUAL(elements[1], "b");
+    BOOST_REQUIRE_EQUAL(elements[2], "c");
+}
+
+// Same bug class, but with the duplicate straddling set1 and set2 (an
+// element already present in set1 is repeated in set2) - checks that
+// de-duplication isn't just self-consistent within set2, but also
+// order-independent with respect to which side an element originated from.
+BOOST_AUTO_TEST_CASE(test_set_sum_no_duplicates_straddling_set1_and_set2) {
+    rjson::value set1 = rjson::parse(R"({"SS": ["a", "b"]})");
+    rjson::value set2 = rjson::parse(R"({"SS": ["b", "c"]})");
+
+    rjson::value sum = alternator::set_sum(set1, set2);
+    const rjson::value* result = alternator::unwrap_set(sum).second;
+    BOOST_REQUIRE(result != nullptr);
+
+    std::vector<std::string> elements;
+    for (auto it = result->Begin(); it != result->End(); ++it) {
+        elements.push_back(rjson::to_string(*it));
+    }
+    std::sort(elements.begin(), elements.end());
+
+    BOOST_REQUIRE_EQUAL(elements.size(), 3u);
+    BOOST_REQUIRE_EQUAL(elements[0], "a");
+    BOOST_REQUIRE_EQUAL(elements[1], "b");
+    BOOST_REQUIRE_EQUAL(elements[2], "c");
 }
 
 BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_wrong_postfix) {
