@@ -17,7 +17,14 @@ from test.cqlpy.rest_api import scylla_inject_error
 from test.cluster.test_config import wait_for_config
 from test.cluster.util import new_test_keyspace
 from test.pylib.tablets import get_all_tablet_replicas
+<<<<<<< HEAD
 from test.pylib.skip_types import skip_bug
+||||||| parent of f28ccb8536 (test/object_store: re-enable the gs config update test)
+from test.pylib.skip_types import skip_bug
+from test.pylib.util import wait_for
+=======
+from test.pylib.util import wait_for
+>>>>>>> f28ccb8536 (test/object_store: re-enable the gs config update test)
 
 logger = logging.getLogger(__name__)
 
@@ -340,7 +347,15 @@ async def test_create_keyspace_after_config_update(manager: ManagerClient, objec
     else:
         updated_ep['credentials_file'] = ''
         updated_expected_conf = f'{{ "type": "gs", "credentials_file": "{updated_ep["credentials_file"]}" }}'
+<<<<<<< HEAD
         skip_bug("https://scylladb.atlassian.net/browse/SCYLLADB-1559")
+||||||| parent of f28ccb8536 (test/object_store: re-enable the gs config update test)
+        skip_bug(
+            link="https://scylladb.atlassian.net/browse/SCYLLADB-1559",
+            reason="Flaky test due to race condition closing the GCS object storage client while operations are in flight",
+        )
+=======
+>>>>>>> f28ccb8536 (test/object_store: re-enable the gs config update test)
 
     await manager.server_update_config(server.server_id, 'object_storage_endpoints', updated_objconf)
     await wait_for_config(manager, server, 'object_storage_endpoints', {updated_ep['name']: updated_expected_conf})
