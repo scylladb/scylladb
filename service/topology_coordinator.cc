@@ -4742,12 +4742,26 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
     std::unordered_map<table_id, size_t> total_replicas;
     bool table_load_stats_invalid = false;
 
-    for (auto& [dc, nodes] : tm->get_datacenter_token_owners_nodes()) {
+    for (auto& [dc, nodes] : tm->get_topology().get_datacenter_nodes()) {
         locator::load_stats dc_stats;
-        rtlogger.debug("raft topology: Refreshing table load stats for DC {} that has {} token owners", dc, nodes.size());
+        // Nodes owning no tokens (e.g. in an arbiter DC) are polled too, so that the
+        // vnodes-to-tablets migration can tell whether they switched to tablets. They hold
+        // no tablet replicas though, so they must stay out of the DC-level aggregation
+        // below: split readiness is a minimum over replicas, so a non-replica would pin it
+        // at its initial minimum and stall resize convergence.
+        bool dc_has_token_owners = std::ranges::any_of(nodes, [&] (const auto& node) {
+            return tm->is_normal_token_owner(node.get().host_id());
+        });
+        rtlogger.debug("raft topology: Refreshing table load stats for DC {} that has {} node(s)", dc, nodes.size());
         co_await coroutine::parallel_for_each(nodes, [&] (const auto& node) -> future<> {
             auto dst = node.get().host_id();
             auto dst_server = raft::server_id(dst.uuid());
+
+            // get_datacenter_nodes() also contains nodes in transient states; only normal
+            // ones take part in the migration and can be expected to report load stats.
+            if (!_topo_sm._topology.normal_nodes.contains(dst_server)) {
+                co_return;
+            }
 
             _as.check();
 
@@ -4788,8 +4802,17 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
             }
 
             _load_stats_per_node[dst] = node_stats;
-            dc_stats += node_stats;
+            if (tm->is_normal_token_owner(dst)) {
+                dc_stats += node_stats;
+            }
         });
+
+        // A DC without token owners has no replicas of any table. Merging its (empty)
+        // dc_stats would invalidate split readiness for every table already aggregated,
+        // because load_stats::operator+= keys that off the destination, not the source.
+        if (!dc_has_token_owners) {
+            continue;
+        }
 
         for (auto& [table_id, table_stats] : dc_stats.tables) {
             co_await coroutine::maybe_yield();
