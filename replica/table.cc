@@ -236,7 +236,7 @@ table::make_mutation_reader(schema_ptr s,
     }
 
     if (_logstor) [[unlikely]] {
-        return _logstor->make_reader(s, logstor_index(), std::move(permit), range, slice, std::move(trace_state));
+        return _logstor->make_reader(s, logstor_index(), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr);
     }
 
     std::vector<mutation_reader> readers;
@@ -4752,9 +4752,6 @@ void table::set_schema(schema_ptr s) {
     if (_counter_cell_locks) {
         _counter_cell_locks->set_schema(s);
     }
-    if (_logstor_index) {
-        _logstor_index->set_schema(s);
-    }
     _schema = std::move(s);
     _large_data_guardrail = make_large_data_guardrail();
     _large_data_guardrail->rebuild(*get_sstables());
@@ -5670,7 +5667,7 @@ future<> compaction_group::cleanup() {
     _t.rebuild_statistics();
 
     if (_t.uses_logstor()) {
-        co_await _t.logstor_index().erase(p_range);
+        co_await _t.logstor_index().erase(token_range());
         co_await discard_logstor_segments();
     }
 

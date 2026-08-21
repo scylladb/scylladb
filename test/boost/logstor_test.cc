@@ -22,12 +22,14 @@
 #include "replica/logstor/write_buffer.hh"
 #include <seastar/testing/thread_test_case.hh>
 
-#include "idl/logstor.dist.hh"
-#include "idl/logstor.dist.impl.hh"
 #include "replica/logstor/segment_io.hh"
+#include "dht/i_partitioner.hh"
 #include "schema/schema_builder.hh"
 #include <seastar/core/simple-stream.hh>
+#include "sstables/key.hh"
 #include "test/lib/mutation_assertions.hh"
+#include "test/lib/mutation_reader_assertions.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 
 using namespace replica::logstor;
 
@@ -55,7 +57,7 @@ log_record make_log_record(schema_ptr schema, sstring pk, sstring value, api::ti
     auto m = make_kv_mutation(schema, std::move(pk), std::move(value), ts);
     return log_record {
         .header = {
-            .key = primary_index_key{m.decorated_key()},
+            .key = primary_index_key{*m.schema(), m.decorated_key()},
             .timestamp = ts,
             .table = schema->id(),
         },
@@ -299,6 +301,72 @@ void assert_records_in_order(schema_ptr schema, const std::vector<scanned_record
     }
 }
 
+// Verifies that the fixed serialized size declared by a serializer is the number of bytes
+// that write(), read() and skip() actually cover.
+template <typename T>
+void check_serialized_size(const char* name, const T& value) {
+    constexpr size_t expected = ser::serializer<T>::serialized_size;
+
+    BOOST_TEST_CONTEXT(name) {
+        seastar::measuring_output_stream ms;
+        ser::serialize(ms, value);
+        BOOST_REQUIRE_EQUAL(ms.size(), expected);
+
+        std::vector<char> buf(expected);
+        seastar::simple_memory_output_stream out(buf.data(), buf.size());
+        ser::serialize(out, value);
+
+        seastar::simple_memory_input_stream in(buf.data(), buf.size());
+        auto read_back = ser::deserialize(in, std::type_identity<T>{});
+        BOOST_REQUIRE_EQUAL(buf.size() - in.size(), expected);
+        BOOST_REQUIRE(read_back == value);
+
+        seastar::simple_memory_input_stream skip_in(buf.data(), buf.size());
+        ser::serializer<T>::skip(skip_in);
+        BOOST_REQUIRE_EQUAL(buf.size() - skip_in.size(), expected);
+    }
+}
+
+}
+
+// Checks that the on-disk size constants match what the serializers actually write, read and skip.
+// These sizes drive the substream sizing in write_buffer and segment_io, where a mismatch would
+// silently truncate or pad records rather than fail, so they are verified against the real encoding.
+SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_serialized_sizes) {
+    key_hash hash;
+    for (size_t i = 0; i < hash.size(); ++i) {
+        hash[i] = static_cast<uint8_t>(i + 1);
+    }
+    auto key = primary_index_key(dht::token::from_int64(0x0123456789abcdef), hash);
+    auto table = table_id(utils::UUID(int64_t(0x1122334455667788), int64_t(0x99aabbccddeeff00)));
+
+    check_serialized_size("primary_index_key", key);
+
+    check_serialized_size("log_record_header", log_record_header {
+        .key = key,
+        .timestamp = api::timestamp_type(0x0f0e0d0c0b0a0908),
+        .table = table,
+    });
+
+    check_serialized_size("buffer_header", ondisk::buffer_header {
+        .magic = ondisk::buffer_header_magic,
+        .kind = segment_kind::full,
+        .version = ondisk::current_version,
+        .reserved = 0x1234,
+        .segment_seq = segment_sequence{0x0102030405060708},
+        .data_size = 0xdeadbeef,
+        .crc = 0xfeedface,
+    });
+
+    check_serialized_size("segment_header", ondisk::segment_header {
+        .table = table,
+        .first_token = dht::token::from_int64(-0x0123456789abcdef),
+        .last_token = dht::token::from_int64(0x7fffffffffffffff),
+    });
+
+    check_serialized_size("record_header", ondisk::record_header {
+        .data_size = 0xcafebabe,
+    });
 }
 
 // Checks that sealing a full raw write buffer writes the expected header fields.
@@ -324,8 +392,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_record_and_header_serializati
 
     auto sh = ser::deserialize(in, std::type_identity<ondisk::segment_header>{});
     BOOST_REQUIRE_EQUAL(sh.table, schema->id());
-    BOOST_REQUIRE_EQUAL(sh.first_token, expected.header.key.dk.token());
-    BOOST_REQUIRE_EQUAL(sh.last_token, expected.header.key.dk.token());
+    BOOST_REQUIRE_EQUAL(sh.first_token, expected.header.key.token());
+    BOOST_REQUIRE_EQUAL(sh.last_token, expected.header.key.token());
 }
 
 // Checks that a raw write buffer can hold and seal a record whose serialized size is exactly max_record_size().
@@ -390,11 +458,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
         }
     } accounting;
 
-    primary_index index(schema, accounting);
+    primary_index index(schema, accounting, nullptr);
 
-    const auto pk0 = primary_index_key{make_kv_mutation(schema, "pk0", "v0").decorated_key()};
-    const auto pk1 = primary_index_key{make_kv_mutation(schema, "pk1", "v1").decorated_key()};
-    const auto pk2 = primary_index_key{make_kv_mutation(schema, "pk2", "v2").decorated_key()};
+    const auto pk0 = primary_index_key{*schema, make_kv_mutation(schema, "pk0", "v0").decorated_key()};
+    const auto pk1 = primary_index_key{*schema, make_kv_mutation(schema, "pk1", "v1").decorated_key()};
+    const auto pk2 = primary_index_key{*schema, make_kv_mutation(schema, "pk2", "v2").decorated_key()};
 
     const log_location loc0{.segment = log_segment_id{1}, .offset = 0, .size = 11};
     const log_location loc0_old{.segment = log_segment_id{1}, .offset = 16, .size = 7};
@@ -405,9 +473,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     const log_location loc5{.segment = log_segment_id{6}, .offset = 0, .size = 29};
 
     // insert(pk0, loc0): new entry, succeeds, no previous entry to free  →  {pk0: loc0}
-    auto [inserted0, prev0] = index.insert(pk0, index_entry{.location = loc0, .timestamp = api::timestamp_type(10)});
-    BOOST_REQUIRE(inserted0);
-    BOOST_REQUIRE(!prev0);
+    auto outcome0 = index.insert(pk0, index_entry{.location = loc0, .timestamp = api::timestamp_type(10)});
+    BOOST_REQUIRE(outcome0.inserted());
+    BOOST_REQUIRE(!outcome0.previous_entry);
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc0.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 1u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 0u);
@@ -415,11 +483,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     BOOST_REQUIRE(accounting.is_live(loc0));
 
     // insert(pk0, loc0_old): older timestamp, rejected, no accounting change  →  {pk0: loc0}
-    auto [inserted_old, prev_old] = index.insert(pk0, index_entry{.location = loc0_old, .timestamp = api::timestamp_type(9)});
-    BOOST_REQUIRE(!inserted_old);
-    BOOST_REQUIRE(prev_old);
-    BOOST_REQUIRE(prev_old->location == loc0);
-    BOOST_REQUIRE_EQUAL(prev_old->timestamp, api::timestamp_type(10));
+    auto outcome_old = index.insert(pk0, index_entry{.location = loc0_old, .timestamp = api::timestamp_type(9)});
+    BOOST_REQUIRE(outcome_old.result == primary_index::insert_result::superseded);
+    BOOST_REQUIRE(outcome_old.previous_entry);
+    BOOST_REQUIRE(outcome_old.previous_entry->location == loc0);
+    BOOST_REQUIRE_EQUAL(outcome_old.previous_entry->timestamp, api::timestamp_type(10));
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc0.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 1u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 0u);
@@ -427,11 +495,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     BOOST_REQUIRE(accounting.is_live(loc0));
 
     // insert(pk0, loc1): newer timestamp, replaces loc0, old location freed via accounting  →  {pk0: loc1}
-    auto [inserted1, prev1] = index.insert(pk0, index_entry{.location = loc1, .timestamp = api::timestamp_type(11)});
-    BOOST_REQUIRE(inserted1);
-    BOOST_REQUIRE(prev1);
-    BOOST_REQUIRE(prev1->location == loc0);
-    BOOST_REQUIRE_EQUAL(prev1->timestamp, api::timestamp_type(10));
+    auto outcome1 = index.insert(pk0, index_entry{.location = loc1, .timestamp = api::timestamp_type(11)});
+    BOOST_REQUIRE(outcome1.inserted());
+    BOOST_REQUIRE(outcome1.previous_entry);
+    BOOST_REQUIRE(outcome1.previous_entry->location == loc0);
+    BOOST_REQUIRE_EQUAL(outcome1.previous_entry->timestamp, api::timestamp_type(10));
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc1.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 2u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 1u);
@@ -442,9 +510,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     BOOST_REQUIRE(accounting.freed_locations.back() == loc0);
 
     // insert(pk1, loc2): new key, succeeds, adds to live bytes  →  {pk0: loc1, pk1: loc2}
-    auto [inserted2, prev2] = index.insert(pk1, index_entry{.location = loc2, .timestamp = api::timestamp_type(7)});
-    BOOST_REQUIRE(inserted2);
-    BOOST_REQUIRE(!prev2);
+    auto outcome2 = index.insert(pk1, index_entry{.location = loc2, .timestamp = api::timestamp_type(7)});
+    BOOST_REQUIRE(outcome2.inserted());
+    BOOST_REQUIRE(!outcome2.previous_entry);
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc1.size + loc2.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 3u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 1u);
@@ -489,20 +557,23 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     BOOST_REQUIRE(accounting.freed_locations.back() == loc2);
 
     // insert(pk1, loc4): new entry for pk1 (previously erased), succeeds  →  {pk0: loc3, pk1: loc4}
-    auto [inserted4, prev4] = index.insert(pk1, index_entry{.location = loc4, .timestamp = api::timestamp_type(12)});
-    BOOST_REQUIRE(inserted4);
-    BOOST_REQUIRE(!prev4);
+    auto outcome4 = index.insert(pk1, index_entry{.location = loc4, .timestamp = api::timestamp_type(12)});
+    BOOST_REQUIRE(outcome4.inserted());
+    BOOST_REQUIRE(!outcome4.previous_entry);
     // insert(pk2, loc5): new key, succeeds  →  {pk0: loc3, pk1: loc4, pk2: loc5}
-    auto [inserted5, prev5] = index.insert(pk2, index_entry{.location = loc5, .timestamp = api::timestamp_type(13)});
-    BOOST_REQUIRE(inserted5);
-    BOOST_REQUIRE(!prev5);
+    auto outcome5 = index.insert(pk2, index_entry{.location = loc5, .timestamp = api::timestamp_type(13)});
+    BOOST_REQUIRE(outcome5.inserted());
+    BOOST_REQUIRE(!outcome5.previous_entry);
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc3.size + loc4.size + loc5.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 6u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 3);
 
     // range erase pk1: removes pk1 entry (loc4), frees via accounting  →  {pk0: loc3, pk2: loc5}
-    index.erase(dht::partition_range::make_singular(pk1.dk)).get();
+    dht::token_range pk1_range(
+            std::optional(interval_bound(pk1.token(), true)),
+            std::optional(interval_bound(pk1.token(), true)));
+    index.erase(pk1_range).get();
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc3.size + loc5.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 6u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 4u);
@@ -543,7 +614,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
         }
     } accounting;
 
-    primary_index index(schema, accounting);
+    primary_index index(schema, accounting, nullptr);
 
     struct entry {
         primary_index_key key;
@@ -551,21 +622,21 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     };
 
     std::vector<entry> entries = {
-        { primary_index_key{make_kv_mutation(schema, "pk0", "v0").decorated_key()}, {.segment = log_segment_id{11}, .offset = 0, .size = 5} },
-        { primary_index_key{make_kv_mutation(schema, "pk1", "v1").decorated_key()}, {.segment = log_segment_id{12}, .offset = 0, .size = 7} },
-        { primary_index_key{make_kv_mutation(schema, "pk2", "v2").decorated_key()}, {.segment = log_segment_id{13}, .offset = 0, .size = 11} },
-        { primary_index_key{make_kv_mutation(schema, "pk3", "v3").decorated_key()}, {.segment = log_segment_id{14}, .offset = 0, .size = 13} },
-        { primary_index_key{make_kv_mutation(schema, "pk4", "v4").decorated_key()}, {.segment = log_segment_id{15}, .offset = 0, .size = 17} },
+        { primary_index_key{*schema, make_kv_mutation(schema, "pk0", "v0").decorated_key()}, {.segment = log_segment_id{11}, .offset = 0, .size = 5} },
+        { primary_index_key{*schema, make_kv_mutation(schema, "pk1", "v1").decorated_key()}, {.segment = log_segment_id{12}, .offset = 0, .size = 7} },
+        { primary_index_key{*schema, make_kv_mutation(schema, "pk2", "v2").decorated_key()}, {.segment = log_segment_id{13}, .offset = 0, .size = 11} },
+        { primary_index_key{*schema, make_kv_mutation(schema, "pk3", "v3").decorated_key()}, {.segment = log_segment_id{14}, .offset = 0, .size = 13} },
+        { primary_index_key{*schema, make_kv_mutation(schema, "pk4", "v4").decorated_key()}, {.segment = log_segment_id{15}, .offset = 0, .size = 17} },
     };
 
     std::sort(entries.begin(), entries.end(), [&] (const entry& a, const entry& b) {
-        return dht::decorated_key::less_comparator(schema)(a.key.dk, b.key.dk);
+        return a.key.token() < b.key.token();
     });
 
     auto insert = [&] (const entry& e, api::timestamp_type ts) {
-        auto [inserted, prev] = index.insert(e.key, index_entry{.location = e.loc, .timestamp = ts});
-        BOOST_REQUIRE(inserted);
-        BOOST_REQUIRE(!prev);
+        auto outcome = index.insert(e.key, index_entry{.location = e.loc, .timestamp = ts});
+        BOOST_REQUIRE(outcome.inserted());
+        BOOST_REQUIRE(!outcome.previous_entry);
     };
 
     insert(entries[0], api::timestamp_type(10));
@@ -578,18 +649,19 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 0u);
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(entries[0].loc.size + entries[1].loc.size + entries[2].loc.size + entries[3].loc.size + entries[4].loc.size));
 
-    index.erase(dht::partition_range(
-            dht::partition_range::bound(entries[1].key.dk, true),
-            dht::partition_range::bound(entries[3].key.dk, true))).get();
+    dht::token_range range(
+            std::optional(interval_bound(entries[1].key.token(), true)),
+            std::optional(interval_bound(entries[3].key.token(), true)));
+    index.erase(range).get();
 
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 5u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(entries[0].loc.size + entries[4].loc.size));
-    BOOST_REQUIRE(index.find(entries[0].key.dk) != index.end());
-    BOOST_REQUIRE(index.find(entries[1].key.dk) == index.end());
-    BOOST_REQUIRE(index.find(entries[2].key.dk) == index.end());
-    BOOST_REQUIRE(index.find(entries[3].key.dk) == index.end());
-    BOOST_REQUIRE(index.find(entries[4].key.dk) != index.end());
+    BOOST_REQUIRE(index.get(entries[0].key).has_value());
+    BOOST_REQUIRE(!index.get(entries[1].key).has_value());
+    BOOST_REQUIRE(!index.get(entries[2].key).has_value());
+    BOOST_REQUIRE(!index.get(entries[3].key).has_value());
+    BOOST_REQUIRE(index.get(entries[4].key).has_value());
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[1].loc), 1);
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[2].loc), 1);
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[3].loc), 1);
@@ -603,6 +675,75 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     BOOST_REQUIRE_EQUAL(accounting.freed_locations.size(), 5u);
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[0].loc), 1);
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[4].loc), 1);
+}
+
+// Checks that primary_index caps the number of distinct keys sharing a token at
+// max_keys_per_token, and that freeing a slot lets another key in.
+SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_bounds_keys_per_token) {
+    struct noop_accounting : space_accounting_subscriber {
+        void on_add_record(log_location) noexcept override {}
+        void on_free_record(log_location) noexcept override {}
+    } accounting;
+
+    auto schema = make_kv_schema();
+    primary_index index(schema, accounting, nullptr);
+
+    const auto colliding_token = dht::token::from_int64(0x1234567890abcdef);
+    // Keys that share a token but differ in their key hash.
+    auto make_colliding_key = [&] (uint8_t suffix) {
+        key_hash hash{};
+        hash.back() = suffix;
+        return primary_index_key(colliding_token, hash);
+    };
+
+    auto entry_at = [] (uint32_t segment) {
+        return index_entry{
+            .location = log_location{.segment = log_segment_id{segment}, .offset = 0, .size = 8},
+            .timestamp = api::timestamp_type(1),
+        };
+    };
+
+    std::vector<primary_index_key> keys;
+    for (size_t i = 0; i < primary_index::max_keys_per_token + 1; ++i) {
+        keys.push_back(make_colliding_key(uint8_t(i)));
+    }
+
+    for (size_t i = 0; i < primary_index::max_keys_per_token; ++i) {
+        BOOST_REQUIRE(index.insert(keys[i], entry_at(i)).inserted());
+    }
+    BOOST_REQUIRE_EQUAL(index.get_key_count(), primary_index::max_keys_per_token);
+
+    // One key too many for this token: rejected, and the index is left untouched.
+    const auto& extra_key = keys.back();
+    auto overflow = index.insert(extra_key, entry_at(100));
+    BOOST_REQUIRE(overflow.result == primary_index::insert_result::token_overflow);
+    BOOST_REQUIRE(!overflow.previous_entry);
+    BOOST_REQUIRE(!index.get(extra_key));
+    BOOST_REQUIRE_EQUAL(index.get_key_count(), primary_index::max_keys_per_token);
+    for (size_t i = 0; i < primary_index::max_keys_per_token; ++i) {
+        auto entry = index.get(keys[i]);
+        BOOST_REQUIRE(entry);
+        BOOST_REQUIRE(entry->location == entry_at(i).location);
+    }
+
+    // The bound counts distinct keys, so overwriting a resident key still works.
+    auto overwrite = index.insert(keys[0], index_entry{.location = entry_at(200).location, .timestamp = api::timestamp_type(2)});
+    BOOST_REQUIRE(overwrite.inserted());
+    BOOST_REQUIRE(overwrite.previous_entry);
+    BOOST_REQUIRE_EQUAL(index.get_key_count(), primary_index::max_keys_per_token);
+
+    // A key on another token is unaffected by the full bucket.
+    auto other_token_key = primary_index_key(dht::token::from_int64(1), key_hash{});
+    BOOST_REQUIRE(index.insert(other_token_key, entry_at(300)).inserted());
+    BOOST_REQUIRE_EQUAL(index.get_key_count(), primary_index::max_keys_per_token + 1);
+
+    // Freeing a slot admits the previously rejected key.
+    BOOST_REQUIRE(index.erase(keys[1], entry_at(1).location));
+    BOOST_REQUIRE(index.insert(extra_key, entry_at(100)).inserted());
+    BOOST_REQUIRE(index.get(extra_key));
+    BOOST_REQUIRE_EQUAL(index.get_key_count(), primary_index::max_keys_per_token + 1);
+
+    index.clear().get();
 }
 
 // Checks that scan_segment() returns mixed-buffer log locations that can be used to read back the expected records.
@@ -793,14 +934,14 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_buffer_records_wit
     BOOST_REQUIRE(std::holds_alternative<segment_header::full>(maybe_header->v));
     auto& full = std::get<segment_header::full>(maybe_header->v);
     auto expected_first_token = std::min({
-        seen_records[0].header.key.dk.token(),
-        seen_records[1].header.key.dk.token(),
-        seen_records[2].header.key.dk.token(),
+        seen_records[0].header.key.token(),
+        seen_records[1].header.key.token(),
+        seen_records[2].header.key.token(),
     });
     auto expected_last_token = std::max({
-        seen_records[0].header.key.dk.token(),
-        seen_records[1].header.key.dk.token(),
-        seen_records[2].header.key.dk.token(),
+        seen_records[0].header.key.token(),
+        seen_records[1].header.key.token(),
+        seen_records[2].header.key.token(),
     });
     BOOST_REQUIRE_EQUAL(full.table, schema->id());
     BOOST_REQUIRE_EQUAL(full.first_token, expected_first_token);
