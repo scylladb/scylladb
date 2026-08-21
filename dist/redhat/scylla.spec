@@ -63,10 +63,7 @@ This package installs all required packages for ScyllaDB,  including
 %build
 
 %install
-%if 0%{housekeeping}
-install_arg="--housekeeping"
-%endif
-./install.sh --packaging --root "$RPM_BUILD_ROOT" --p11-trust-paths /etc/pki/ca-trust/source:/usr/share/pki/ca-trust-source $install_arg
+./install.sh --packaging --root "$RPM_BUILD_ROOT" --p11-trust-paths /etc/pki/ca-trust/source:/usr/share/pki/ca-trust-source
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -99,6 +96,18 @@ if [ $1 -eq 1 ] ; then
     /usr/bin/systemctl preset scylla-server.service ||:
 fi
 
+if [ $1 -ge 2 ] ; then
+    # upgrade from a version that shipped housekeeping: disable and remove leftovers
+    /usr/bin/systemctl disable --now scylla-housekeeping-daily.timer scylla-housekeeping-restart.timer 2>/dev/null ||:
+    rm -f /opt/scylladb/scripts/scylla-housekeeping
+    rm -f %{_sysconfdir}/sysconfig/scylla-housekeeping %{_sysconfdir}/scylla.d/housekeeping.cfg
+    rm -f %{_unitdir}/scylla-housekeeping-daily.service %{_unitdir}/scylla-housekeeping-restart.service
+    rm -f %{_unitdir}/scylla-housekeeping-daily.timer %{_unitdir}/scylla-housekeeping-restart.timer
+    rm -rf %{_sharedstatedir}/scylla-housekeeping
+    rm -rf /etc/systemd/system/scylla-housekeeping-daily.service.d /etc/systemd/system/scylla-housekeeping-restart.service.d
+    /usr/bin/systemctl daemon-reload ||:
+fi
+
 %preun server
 if [ $1 -eq 0 ] ; then
     /usr/bin/systemctl --no-reload disable scylla-server.service ||:
@@ -119,13 +128,10 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 %defattr(-,root,root)
 
 %config(noreplace) %{_sysconfdir}/sysconfig/scylla-server
-%config(noreplace) %{_sysconfdir}/sysconfig/scylla-housekeeping
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla.d
 %config(noreplace) %{_sysconfdir}/scylla.d/*.conf
 /opt/scylladb/share/doc/scylla/*
 %{_unitdir}/scylla-fstrim.service
-%{_unitdir}/scylla-housekeeping-daily.service
-%{_unitdir}/scylla-housekeeping-restart.service
 %{_unitdir}/scylla-server.service
 %{_unitdir}/*.timer
 %{_unitdir}/*.slice
@@ -151,7 +157,6 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/hints
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/view_hints
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/coredump
-%attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla-housekeeping
 %ghost /etc/systemd/system/scylla-helper.slice.d/
 %ghost /etc/systemd/system/scylla-helper.slice.d/memory.conf
 %ghost /etc/systemd/system/scylla-server.service.d/capabilities.conf
@@ -178,9 +183,6 @@ This package contains the main scylla configuration file.
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla
 %config(noreplace) %{_sysconfdir}/scylla/scylla.yaml
 %config(noreplace) %{_sysconfdir}/scylla/cassandra-rackdc.properties
-%if 0%{housekeeping}
-%config(noreplace) %{_sysconfdir}/scylla.d/housekeeping.cfg
-%endif
 
 
 %package kernel-conf

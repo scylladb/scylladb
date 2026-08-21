@@ -20,7 +20,15 @@ if [ "$1" = configure ]; then
         adduser scylla scylla
     fi
     chown -R scylla:scylla /var/lib/scylla
-    chown -R scylla:scylla /var/lib/scylla-housekeeping
+fi
+
+if [ "$1" = configure ] && [ -n "$2" ]; then
+    # upgrade from a version that shipped housekeeping: disable and remove leftovers
+    systemctl disable --now scylla-housekeeping-daily.timer scylla-housekeeping-restart.timer 2>/dev/null || true
+    rm -f /opt/scylladb/scripts/scylla-housekeeping
+    rm -f /etc/default/scylla-housekeeping /etc/scylla.d/housekeeping.cfg
+    rm -rf /var/lib/scylla-housekeeping
+    rm -rf /etc/systemd/system/scylla-housekeeping-daily.service.d /etc/systemd/system/scylla-housekeeping-restart.service.d
 fi
 
 ln -sfT /etc/scylla /var/lib/scylla/conf

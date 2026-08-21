@@ -14,14 +14,13 @@ import glob
 import shutil
 import stat
 import re
-from scylla_util import colorprint, is_valid_nic, scylladir_p, is_offline, is_debian_variant, is_redhat_variant, is_suse_variant, is_gentoo, out, is_unused_disk, scriptsdir, is_nonroot, sysconfdir_p, sysconfig_parser, systemd_unit, swap_exists, get_product, etcdir
+from scylla_util import colorprint, is_valid_nic, scylladir_p, is_offline, is_debian_variant, is_redhat_variant, is_suse_variant, is_gentoo, out, is_unused_disk, scriptsdir, is_nonroot, systemd_unit, swap_exists, get_product, etcdir
 from subprocess import run, DEVNULL
 
 PRODUCT = get_product(etcdir())
 
 
 interactive = False
-HOUSEKEEPING_TIMEOUT = 60
 def when_interactive_ask_service(interactive, msg1, msg2, default = None):
     if not interactive:
         return default
@@ -254,8 +253,6 @@ if __name__ == '__main__':
                         help='Run I/O configuration setup (i.e. iotune). Defaults to 1.')
     parser.add_argument('--no-io-setup', dest='io_setup', action='store_const', const=0,
                         help='skip IO configuration setup')
-    parser.add_argument('--no-version-check', action='store_true', default=False,
-                        help='skip daily version check')
     parser.add_argument('--no-cpuscaling-setup', action='store_true',
                         default=default_no_cpuscaling_setup,
                         help='skip cpu scaling setup')
@@ -308,7 +305,6 @@ if __name__ == '__main__':
     coredump_setup = not args.no_coredump_setup
     sysconfig_setup = not args.no_sysconfig_setup
     io_setup = args.io_setup
-    version_check = not args.no_version_check
     cpuscaling_setup = not args.no_cpuscaling_setup
     fstrim_setup = not args.no_fstrim_setup
     memory_setup = not args.no_memory_setup
@@ -341,44 +337,9 @@ if __name__ == '__main__':
         systemd_unit('scylla-server.service').enable()
 
     if not is_nonroot():
-        if not os.path.exists('/etc/scylla.d/housekeeping.cfg'):
-            version_check = interactive_ask_service('Do you want to enable Scylla to check if there is a newer version of Scylla available?', 'Yes - start the Scylla-housekeeping service to check for a newer version. This check runs periodically. No - skips this step.', version_check)
-            args.no_version_check = not version_check
-            if version_check:
-                cfg = sysconfig_parser(sysconfdir_p() / 'scylla-housekeeping')
-                repo_files = cfg.get('REPO_FILES')
-                for f in glob.glob(repo_files):
-                    os.chmod(f, 0o644)
-                with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
-                    f.write('[housekeeping]\ncheck-version: True\n')
-                os.chmod('/etc/scylla.d/housekeeping.cfg', 0o644)
-                systemd_unit('scylla-housekeeping-daily.timer').unmask()
-                systemd_unit('scylla-housekeeping-restart.timer').unmask()
-            else:
-                with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
-                    f.write('[housekeeping]\ncheck-version: False\n')
-                os.chmod('/etc/scylla.d/housekeeping.cfg', 0o644)
-                hk_daily = systemd_unit('scylla-housekeeping-daily.timer')
-                hk_daily.mask()
-                hk_daily.stop()
-                hk_restart = systemd_unit('scylla-housekeeping-restart.timer')
-                hk_restart.mask()
-                hk_restart.stop()
-
         cur_version=out('scylla --version')
-        if len(cur_version) > 0:
-            if is_debian_variant():
-                new_version=out('{}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/apt/sources.list.d/scylla*.list\' version --version {} --mode i'.format(scriptsdir(), cur_version), user='scylla', group='scylla', timeout=HOUSEKEEPING_TIMEOUT)
-            else:
-                new_version=out('{}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/yum.repos.d/scylla*.repo\' version --version {} --mode i'.format(scriptsdir(), cur_version), user='scylla', group='scylla', timeout=HOUSEKEEPING_TIMEOUT)
-            if len(new_version) > 0:
-                print(new_version)
-        else:
-            if is_debian_variant():
-                new_version=out('{}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/apt/sources.list.d/scylla*.list\' version --version unknown --mode u'.format(scriptsdir()), user='scylla', group='scylla', timeout=HOUSEKEEPING_TIMEOUT)
-            else:
-                new_version=out('{}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/yum.repos.d/scylla*.repo\' version --version unknown --mode u'.format(scriptsdir()), user='scylla', group='scylla', timeout=HOUSEKEEPING_TIMEOUT)
-            print('A Scylla executable was not found, please check your installation {}'.format(new_version))
+        if len(cur_version) == 0:
+            print('A Scylla executable was not found, please check your installation')
 
         if is_redhat_variant():
             selinux_setup = interactive_ask_service('Do you want to disable SELinux?', 'Yes - disables SELinux. Choosing Yes greatly improves performance. No - keeps SELinux activated.', selinux_setup)
