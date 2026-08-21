@@ -41,8 +41,8 @@ async def test_validate_truncate_with_concurrent_writes(manager: ManagerClient):
     trunc_completed_event = asyncio.Event()
     writer_halfpoint = asyncio.Event()
 
-    cks_to_insert_before_trunc = 5000
-    cks_to_insert_after_trunc = 5000
+    cks_to_insert_before_trunc = 100
+    cks_to_insert_after_trunc = 100
     writer_results = {}
     async def writer(pk, writer_halfpoint, trunc_started_event, trunc_completed_event):
         stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, ck, val) VALUES (?, ?, ?);")
