@@ -249,6 +249,26 @@ public:
         _rack_list_colocation_plan = std::move(rack_list_colocation_plan);
     }
 
+<<<<<<< HEAD
+||||||| parent of 38e9955347 (tablet load balancer: extract per-DC helper for rack-list colocation plan)
+    const keyspace_rf_change_plan& rf_change_plan() const { return _rf_change_plan; }
+
+    void set_rf_change_plan(keyspace_rf_change_plan rf_change_plan) {
+        _rf_change_plan = std::move(rf_change_plan);
+    }
+
+=======
+    const keyspace_rf_change_plan& rf_change_plan() const { return _rf_change_plan; }
+
+    void set_rf_change_plan(keyspace_rf_change_plan rf_change_plan) {
+        _rf_change_plan = std::move(rf_change_plan);
+    }
+
+    void maybe_add_rack_list_request_to_resume(const utils::UUID& id) {
+        _rack_list_colocation_plan.maybe_add_request_to_resume(id);
+    }
+
+>>>>>>> 38e9955347 (tablet load balancer: extract per-DC helper for rack-list colocation plan)
     future<std::unordered_set<locator::global_tablet_id>> get_migration_tablet_ids() const;
 };
 
