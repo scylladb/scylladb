@@ -1142,7 +1142,7 @@ future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets_for_test
 }
 
 static future<manifest_summary> process_manifest(input_stream<char>& is, sstring keyspace, sstring table,
-                                 const sstring& expected_snapshot_name,
+                                 const sstring& expected_snapshot_name, const sstring& expected_datacenter,
                                  const sstring& manifest_prefix, db::system_distributed_keyspace& sys_dist_ks,
                                  db::consistency_level cl) {
     // Read the entire JSON content
@@ -1175,6 +1175,10 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
     auto& node_obj = rjson::get(parsed, "node");
     auto datacenter = rjson::get<std::string>(node_obj, "datacenter");
     auto rack = rjson::get<std::string>(node_obj, "rack");
+    if (!expected_datacenter.empty() && datacenter != expected_datacenter) {
+        throw std::runtime_error(fmt::format("Manifest {} belongs to datacenter '{}', expected '{}'",
+            manifest_prefix, datacenter, expected_datacenter));
+    }
 
     // Process each sstable entry in the manifest
     // FIXME: cleanup of the snapshot-related rows is needed in case anything throws in here.
@@ -1212,7 +1216,7 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
     co_return manifest_summary{tablet_count, sstables->Size()};
 }
 
-future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
+future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, sstring expected_datacenter, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
     if (manifest_prefixes.empty()) {
         throw std::invalid_argument("manifest prefixes list must not be empty");
     }
@@ -1230,7 +1234,7 @@ future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::sto
         sstables::object_name name(bucket, join_path(prefix, manifest_prefix));
         auto source = client->make_download_source(name);
         return seastar::with_closeable(input_stream<char>(std::move(source)), [&] (input_stream<char>& is) {
-            return process_manifest(is, keyspace, table, expected_snapshot_name, manifest_prefix, sys_dist_ks, cl).then([&](manifest_summary ms) {
+            return process_manifest(is, keyspace, table, expected_snapshot_name, expected_datacenter, manifest_prefix, sys_dist_ks, cl).then([&](manifest_summary ms) {
                 size_t count = ms.tablet_count;
                 if (!tablet_count) {
                     tablet_count = count;
@@ -1374,7 +1378,7 @@ protected:
 };
 
 future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, sstring endpoint, sstring bucket, sstring prefix, utils::chunked_vector<sstring> manifests) {
-    auto summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, endpoint, bucket, prefix, snap_name, std::move(manifests));
+    auto summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, endpoint, bucket, prefix, snap_name, "", std::move(manifests));
 
     auto datacenter = _db.local().get_token_metadata().get_topology().get_datacenter();
 
