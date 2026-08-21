@@ -422,6 +422,18 @@ functions::try_get(data_dictionary::database db,
     });
 
     const auto func_name = name.has_keyspace() ? name : name.as_native_function();
+    if (func_name == RRF_FUNCTION_NAME) {
+        // Variadic: one argument per search being fused, so the signature is built per call site.
+        if (provided_args.size() < 2) {
+            return resolution_failed(format("{}() fuses the answers of several searches and needs at least two", func_name));
+        }
+        auto fun = make_rrf_function(provided_args.size());
+        if (auto err = check_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf)) {
+            return resolution_failed(std::move(*err));
+        }
+        return fun;
+    }
+
     if (SIMILARITY_FUNCTIONS.contains(func_name) || is_ann_function_name(func_name)) {
         auto arg_types = retrieve_vector_arg_types(func_name, provided_args);
         shared_ptr<function> fun = is_ann_function_name(func_name)

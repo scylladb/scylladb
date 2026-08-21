@@ -132,6 +132,36 @@ shared_ptr<function> make_bm25_rank_function() {
             search_value::rank);
 }
 
+/// The constant k in reciprocal-rank fusion, sum(1 / (k + rank)) over the searches that found the
+/// row. It flattens the curve so that agreement between searches can outweigh one search's first
+/// place. 60 is the value from the original paper (Cormack, Clarke and Buettcher, 2009) and the one
+/// other implementations use.
+constexpr int32_t RRF_K = 60;
+
+shared_ptr<function> make_rrf_function(size_t arity) {
+    // rrf(hit, hit, ...) -> float, where each hit is the (score, rank) tuple ANN() or BM25() returns.
+    //
+    // Pure, unlike the search functions: it is an ordinary computation over its arguments.
+    return make_native_scalar_function<true>(RRF_FUNCTION_NAME.name, float_type,
+            std::vector<data_type>(arity, score_and_rank_type()),
+            [] (std::span<const bytes_opt> args) -> bytes_opt {
+        float score = 0.0f;
+        for (const auto& arg : args) {
+            if (!arg) {
+                continue;
+            }
+            auto hit = value_cast<tuple_type_impl::native_type>(score_and_rank_type()->deserialize(bytes_view(*arg)));
+            // Only the rank is used: ranks are comparable between searches, scores are not. A null
+            // rank is a search that did not return the row.
+            if (hit.size() < 2 || hit[1].is_null()) {
+                continue;
+            }
+            score += 1.0f / static_cast<float>(RRF_K + value_cast<int32_t>(hit[1]));
+        }
+        return float_type->decompose(score);
+    });
+}
+
 shared_ptr<function> make_ann_function(const function_name& name, const std::vector<data_type>& arg_types) {
     // ann(column, query_vector) -> (score, rank), ann_score() -> float and ann_rank() -> int.
     return ::make_shared<external_search_function>(name.name, ann_return_type(name), arg_types, search_family::ann, ann_value(name));
