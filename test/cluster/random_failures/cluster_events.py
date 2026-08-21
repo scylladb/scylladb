@@ -660,8 +660,11 @@ async def stop_coordinator_node_gracefully(manager: ManagerClient,
     yield
 
     LOGGER.info("Stop the coordinator node gracefully")
-    await manager.server_stop_gracefully(server_id=(await get_coordinator_host(manager=manager)).server_id)
-    await wait_new_coordinator_elected(manager=manager, expected_num_of_elections=2, deadline=time.time() + 60)
+    coordinator = await get_coordinator_host(manager=manager)
+    coordinator_host_id = await manager.get_host_id(server_id=coordinator.server_id)
+    await manager.server_stop_gracefully(server_id=coordinator.server_id)
+    await wait_new_coordinator_elected(manager=manager, previous_coordinator_id=coordinator_host_id,
+                                       deadline=time.time() + 60)
 
     yield
 
@@ -686,8 +689,11 @@ async def kill_coordinator_node(manager: ManagerClient,
     yield
 
     LOGGER.info("Kill the coordinator node")
-    await manager.server_stop(server_id=(await get_coordinator_host(manager=manager)).server_id, convict=True)
-    await wait_new_coordinator_elected(manager=manager, expected_num_of_elections=2, deadline=time.time() + 60)
+    coordinator = await get_coordinator_host(manager=manager)
+    coordinator_host_id = await manager.get_host_id(server_id=coordinator.server_id)
+    await manager.server_stop(server_id=coordinator.server_id, convict=True)
+    await wait_new_coordinator_elected(manager=manager, previous_coordinator_id=coordinator_host_id,
+                                       deadline=time.time() + 60)
 
     yield
 

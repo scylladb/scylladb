@@ -498,7 +498,7 @@ async def trigger_stepdown(manager, server: ServerInfo) -> None:
 
 
 
-async def get_coordinator_host_ids(manager: ManagerClient) -> list[str]:
+async def get_coordinator_host_ids(manager: ManagerClient) -> list[HostID]:
     """ Get coordinator host id from history
 
     Select all records with elected coordinator
@@ -511,11 +511,11 @@ async def get_coordinator_host_ids(manager: ManagerClient) -> list[str]:
 
     cql = manager.get_cql()
     result = await cql.run_async(stm)
-    coordinators_ids = []
+    coordinators_ids: list[HostID] = []
     for row in result:
         coordinator_host_id = get_uuid_from_str(row.description)
         if coordinator_host_id:
-            coordinators_ids.append(coordinator_host_id)
+            coordinators_ids.append(HostID(coordinator_host_id))
     assert len(coordinators_ids) > 0, f"No coordinator ids {coordinators_ids} were found"
     return coordinators_ids
 
@@ -587,20 +587,25 @@ def get_uuid_from_str(string: str) -> str:
     return uuid
 
 
-async def wait_new_coordinator_elected(manager: ManagerClient, expected_num_of_elections: int, deadline: float) -> None:
-    """Wait new coordinator to be elected
+async def wait_new_coordinator_elected(manager: ManagerClient, previous_coordinator_id: HostID, deadline: float) -> None:
+    """Wait for a node other than previous_coordinator_id to become topology coordinator
 
-    Wait while the table 'system.group0_history' will have at least
-    expected_num_of_elections lines with 'new topology coordinator',
-    and the latest host_id coordinator differs from the previous one.
+    previous_coordinator_id is the coordinator observed before the operation
+    which is expected to trigger the election, i.e. get_coordinator_host_ids()[0]
+    taken up front.
+
+    Do not compare the two newest entries of 'system.group0_history' with each
+    other: a node which loses and immediately regains raft leadership re-elects
+    itself, so consecutive entries may legitimately hold the same host id and
+    such a predicate would never be satisfied (SCYLLADB-3852).
     """
     async def new_coordinator_elected():
         coordinators_ids = await get_coordinator_host_ids(manager)
         logger.debug(f"Coordinators ids in history: {coordinators_ids}")
-        if len(coordinators_ids) >= expected_num_of_elections \
-            and coordinators_ids[0] != coordinators_ids[1]:
+        if coordinators_ids[0] != previous_coordinator_id:
             return True
-        logger.warning("New coordinator was not elected %s", coordinators_ids)
+        logger.warning("New coordinator was not elected, still %s, history %s",
+                       previous_coordinator_id, coordinators_ids)
 
     await wait_for(new_coordinator_elected, deadline=deadline)
 

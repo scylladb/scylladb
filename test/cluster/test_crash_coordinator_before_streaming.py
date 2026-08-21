@@ -7,15 +7,54 @@ import logging
 import time
 
 import pytest
+from aiohttp import ClientConnectionError
 
+from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import ReplaceConfig
+from test.pylib.util import wait_for
 from test.cluster.util import (check_token_ring_and_group0_consistency, wait_for_token_ring_and_group0_consistency,
                                get_coordinator_host, get_coordinator_host_ids, wait_new_coordinator_elected,
                                wait_for_no_pending_topology_transition)
 
 
 logger = logging.getLogger(__name__)
+
+INJECTION = "crash_coordinator_before_stream"
+INJECTION_ABORT_LINE = f"{INJECTION}: aborting"
+
+
+async def arm_injection(manager: ManagerClient, servers: list[ServerInfo]) -> list[ServerInfo]:
+    """Arm the crash injection on all given servers and return them.
+
+    Raft leadership may move between arming the injection and the streaming
+    point, so arm every node to make sure the node which actually coordinates
+    the operation is the one which crashes (SCYLLADB-3876).
+    """
+    for srv in servers:
+        await manager.api.enable_injection(srv.ip_addr, INJECTION, one_shot=True)
+    return servers
+
+
+async def find_crashed_server(manager: ManagerClient, armed: list[ServerInfo]) -> ServerInfo:
+    """Wait for and return the armed server which crashed on the injection."""
+    async def crashed_server():
+        for srv in armed:
+            if await manager.server_get_returncode(srv.server_id) is not None:
+                return srv
+        return None
+
+    crashed = await wait_for(crashed_server, time.time() + 60)
+    log = await manager.server_open_log(crashed.server_id)
+    assert await log.grep(INJECTION_ABORT_LINE), f"Server {crashed} did not crash on the injection"
+    return crashed
+
+
+async def disarm_injection(manager: ManagerClient, armed: list[ServerInfo], crashed: ServerInfo) -> None:
+    """Disable the one-shot injection still armed on the servers which survived."""
+    for srv in armed:
+        if srv.server_id != crashed.server_id:
+            await manager.api.disable_injection(srv.ip_addr, INJECTION)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -51,18 +90,23 @@ async def test_kill_coordinator_during_op(manager: ManagerClient, failure_detect
     assert len(coordinators_ids) == 1, "At least 1 coordinator id should be found"
 
     # Configure manager to ignore crashes caused by crash_coordinator_before_stream injection
-    manager.ignore_cores_log_patterns.append("crash_coordinator_before_stream: aborting")
+    manager.ignore_cores_log_patterns.append(INJECTION_ABORT_LINE)
 
     # kill coordinator during decommission
     logger.debug("Kill coordinator during decommission")
     coordinator_host = await get_coordinator_host(manager)
     other_nodes = [srv for srv in nodes if srv.server_id != coordinator_host.server_id]
-    num_elections = len(await get_coordinator_host_ids(manager))
-    await manager.api.enable_injection(coordinator_host.ip_addr, "crash_coordinator_before_stream", one_shot=True)
-    await manager.decommission_node(server_id=other_nodes[-1].server_id, expected_error="Decommission failed. See earlier errors")
-    await wait_new_coordinator_elected(manager, num_elections + 1, time.time() + scale_timeout(60))
+    armed = await arm_injection(manager, await manager.running_servers())
+    try:
+        await manager.decommission_node(server_id=other_nodes[-1].server_id, expected_error="Decommission failed. See earlier errors")
+    except ClientConnectionError:
+        # The decommissioned node was the coordinator and crashed on the injection.
+        pass
+    crashed_host = await find_crashed_server(manager, armed)
+    await disarm_injection(manager, armed, crashed_host)
+    await wait_new_coordinator_elected(manager, await manager.get_host_id(crashed_host.server_id), time.time() + scale_timeout(60))
     await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
-    await manager.server_restart(coordinator_host.server_id, wait_others=1)
+    await manager.server_restart(crashed_host.server_id, wait_others=1)
     await manager.servers_see_each_other(await manager.running_servers())
     await check_token_ring_and_group0_consistency(manager)
 
@@ -75,19 +119,24 @@ async def test_kill_coordinator_during_op(manager: ManagerClient, failure_detect
     node_to_remove_srv_id = other_nodes[-1].server_id
     logger.debug("Stop node with srv_id %s", node_to_remove_srv_id)
     await manager.server_stop_gracefully(node_to_remove_srv_id)
-    num_elections = len(await get_coordinator_host_ids(manager))
-    await manager.api.enable_injection(coordinator_host.ip_addr, "crash_coordinator_before_stream", one_shot=True)
+    armed = await arm_injection(manager, await manager.running_servers())
     logger.debug("Start removenode with srv_id %s from node with srv_id %s", node_to_remove_srv_id, working_srv_id)
-    await manager.remove_node(working_srv_id,
-                              node_to_remove_srv_id,
-                              expected_error="Removenode failed. See earlier errors")
+    try:
+        await manager.remove_node(working_srv_id,
+                                  node_to_remove_srv_id,
+                                  expected_error="Removenode failed. See earlier errors")
+    except ClientConnectionError:
+        # The removenode initiator was the coordinator and crashed on the injection.
+        pass
 
-    await wait_new_coordinator_elected(manager, num_elections + 1, time.time() + scale_timeout(60))
+    crashed_host = await find_crashed_server(manager, armed)
+    await disarm_injection(manager, armed, crashed_host)
+    await wait_new_coordinator_elected(manager, await manager.get_host_id(crashed_host.server_id), time.time() + scale_timeout(60))
     await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
 
-    await manager.others_not_see_server(server_ip=coordinator_host.ip_addr)
-    logger.debug("Start old coordinator node with srv_id %s", coordinator_host.server_id)
-    await manager.server_restart(coordinator_host.server_id, wait_others=1)
+    await manager.others_not_see_server(server_ip=crashed_host.ip_addr)
+    logger.debug("Start old coordinator node with srv_id %s", crashed_host.server_id)
+    await manager.server_restart(crashed_host.server_id, wait_others=1)
     await manager.servers_see_each_other(await manager.running_servers())
     logger.debug("Remove node with srv_id %s from node with srv_id %s because it was banned in a previous attempt", node_to_remove_srv_id, working_srv_id)
     await manager.remove_node(working_srv_id, node_to_remove_srv_id)
@@ -103,13 +152,14 @@ async def test_kill_coordinator_during_op(manager: ManagerClient, failure_detect
     coordinator_host = await get_coordinator_host(manager)
     other_nodes = [srv for srv in nodes if srv.server_id != coordinator_host.server_id]
     new_node = await manager.server_add(start=False, config=config, cmdline=cmdline)
-    num_elections = len(await get_coordinator_host_ids(manager))
-    await manager.api.enable_injection(coordinator_host.ip_addr, "crash_coordinator_before_stream", one_shot=True)
+    armed = await arm_injection(manager, await manager.running_servers())
     await manager.server_start(new_node.server_id,
                                expected_error="Startup failed: std::runtime_error")
-    await wait_new_coordinator_elected(manager, num_elections + 1, time.time() + scale_timeout(60))
+    crashed_host = await find_crashed_server(manager, armed)
+    await disarm_injection(manager, armed, crashed_host)
+    await wait_new_coordinator_elected(manager, await manager.get_host_id(crashed_host.server_id), time.time() + scale_timeout(60))
     await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
-    await manager.server_restart(coordinator_host.server_id, wait_others=1)
+    await manager.server_restart(crashed_host.server_id, wait_others=1)
     await manager.servers_see_each_other(await manager.running_servers())
     await check_token_ring_and_group0_consistency(manager)
 
@@ -120,16 +170,17 @@ async def test_kill_coordinator_during_op(manager: ManagerClient, failure_detect
     other_nodes = [srv for srv in nodes if srv.server_id != coordinator_host.server_id]
     node_to_replace_srv_id = other_nodes[-1].server_id
     await manager.server_stop_gracefully(node_to_replace_srv_id)
-    num_elections = len(await get_coordinator_host_ids(manager))
-    await manager.api.enable_injection(coordinator_host.ip_addr, "crash_coordinator_before_stream", one_shot=True)
+    armed = await arm_injection(manager, await manager.running_servers())
     replace_cfg = ReplaceConfig(replaced_id = node_to_replace_srv_id, reuse_ip_addr = False, use_host_id = True)
     new_node = await manager.server_add(start=False, config=config, replace_cfg=replace_cfg, cmdline=cmdline)
     await manager.server_start(new_node.server_id, expected_error="Replace failed. See earlier errors")
-    await wait_new_coordinator_elected(manager, num_elections + 1, time.time() + scale_timeout(60))
+    crashed_host = await find_crashed_server(manager, armed)
+    await disarm_injection(manager, armed, crashed_host)
+    await wait_new_coordinator_elected(manager, await manager.get_host_id(crashed_host.server_id), time.time() + scale_timeout(60))
     await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
     logger.debug("Start old coordinator node")
-    await manager.others_not_see_server(server_ip=coordinator_host.ip_addr)
-    await manager.server_restart(coordinator_host.server_id, wait_others=1)
+    await manager.others_not_see_server(server_ip=crashed_host.ip_addr)
+    await manager.server_restart(crashed_host.server_id, wait_others=1)
     await manager.servers_see_each_other(await manager.running_servers())
     logger.debug("Replaced node is already non-voter and will be banned after restart. Remove it")
     coordinator_host = await get_coordinator_host(manager)
