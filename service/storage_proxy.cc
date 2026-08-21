@@ -7619,6 +7619,85 @@ future<> storage_proxy::cancel_all_write_response_handlers() {
     co_await std::move(f);
 }
 
+future<> storage_proxy::bound_write_handlers_pinning_stale_versions(
+        locator::token_metadata::version_t current_version,
+        clock_type::duration unbounded_threshold, clock_type::duration grace) {
+    // A write response handler holds its effective_replication_map, and therefore the
+    // token_metadata version that was current when the write started, until it is
+    // destroyed. A write issued with an internal client state gets its expire timer from
+    // infinite_timeout_config, which is not literally infinite but one hour ("not really
+    // infinite, but long enough", replica/database.cc), indistinguishable from forever for
+    // a topology operation. If such a write's MUTATION_DONE is never delivered - e.g. the
+    // replica aborted mid-apply as its transport was shutting down for a rolling upgrade,
+    // and its MUTATION_FAILED could no longer be sent - the handler, and the pinned
+    // version, survive for up to that hour. raft_topology_cmd::barrier_and_drain then
+    // blocks in stale_versions_in_use() for as long, stalling every subsequent topology
+    // operation on this node (a joining node does not leave the bootstrap state).
+    //
+    // Selection: only handlers whose own deadline is more than unbounded_threshold away
+    // are touched. The threshold is what keeps deliberately long but finite writes out of
+    // scope: ordinary client writes (timeout_config), view writes (armed at now + 5min to
+    // keep view-update backpressure applied), and modest per-statement USING TIMEOUT
+    // values all sit below it and are left to expire on their own; the barrier simply
+    // waits them out. A statement that asked for more than the threshold via USING TIMEOUT
+    // is treated as effectively unbounded here: a topology barrier cannot be held up that
+    // long.
+    //
+    // Handlers whose timer is not armed are skipped: they are registered but not yet
+    // waited on (response_wait() arms the timer, and e.g. a logged batch registers its
+    // handlers before writing the batchlog), and arming the timer here would make the
+    // later expire_at() double-arm and abort. They are caught by a later pass once armed;
+    // the caller rescans periodically.
+    //
+    // Re-arm rather than cancel: unlike a repair, a write may be legitimately in flight
+    // across the version bump, and it deserves a fair deadline instead of instant failure.
+    //
+    // Note the bound is on the handler's timer, not on the version's release: a handler
+    // whose local apply is still in progress is kept alive by the apply itself (see
+    // lmutate) and keeps the version pinned until the apply completes; timeout_cb() only
+    // removes it from the map.
+    const auto now = clock_type::now();
+    const auto deadline = now + grace;
+    const auto threshold = now + unbounded_threshold;
+    // Collect ids first: the bounding loop below logs and yields, and the map must not be
+    // iterated across yields. The collection loop body is trivial (a version compare and a
+    // timer read), as in cancel_nonlocal_write_response_handlers().
+    std::vector<response_id_type> to_bound;
+    for (auto& [id, handler] : _response_handlers) {
+        const auto pinned_version =
+                handler->_effective_replication_map_ptr->get_token_metadata_ptr()->get_version();
+        if (pinned_version >= current_version) {
+            continue;
+        }
+        if (!handler->_expire_timer.armed() || handler->_expire_timer.get_timeout() <= threshold) {
+            continue;
+        }
+        to_bound.push_back(id);
+    }
+    for (auto id : to_bound) {
+        auto it = _response_handlers.find(id);
+        if (it == _response_handlers.end()) {
+            continue;
+        }
+        auto& handler = it->second;
+        // Revalidate after possible yields: the handler may have completed and a concurrent
+        // pass may have bounded it already.
+        if (!handler->_expire_timer.armed() || handler->_expire_timer.get_timeout() <= deadline) {
+            continue;
+        }
+        const auto pinned_version =
+                handler->_effective_replication_map_ptr->get_token_metadata_ptr()->get_version();
+        auto s = handler->get_schema();
+        slogger.warn("Bounding write handler {} on {}.{} to {} s: it pins stale token metadata "
+                     "version {}, which blocks a topology barrier for version {}",
+                     id, s ? s->ks_name() : "?", s ? s->cf_name() : "?",
+                     std::chrono::duration_cast<std::chrono::duration<float>>(grace).count(),
+                     pinned_version, current_version);
+        handler->_expire_timer.rearm(deadline);
+        co_await coroutine::maybe_yield();
+    }
+}
+
 future<> storage_proxy::cancel_nonlocal_write_response_handlers() {
     // Cancel handlers that have pending remote targets. After
     // stop_transport(), MUTATION_DONE responses from remote nodes can
