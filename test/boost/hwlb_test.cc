@@ -179,7 +179,9 @@ static void test_hit_rates(std::vector<float> hr, unsigned CL,
     // the statistics we get from these few requests can be inaccurate, so
     // such tests should use a higher number of iterations - or we can pick
     // a high-enough slack here.
-    BOOST_CHECK(max_misses/min_misses < 1.06);
+    BOOST_CHECK_MESSAGE(max_misses/min_misses < 1.06,
+        fmt::format("miss rate ratio {} >= 1.06 (hit rates: {}, CL={}, iterations={})",
+            max_misses/min_misses, fmt::join(hr, " "), CL, iterations));
 
     // While the primary design goal of HWLB is that it equalizes miss rates
     // of the different nodes, HWLB has a second design goal: to keep as many
