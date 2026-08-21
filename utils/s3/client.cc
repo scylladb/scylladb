@@ -35,6 +35,8 @@
 #include <seastar/http/request.hh>
 #include <seastar/http/exception.hh>
 #include "default_aws_retry_strategy.hh"
+#include "utils/s3/aws_throttling_controller.hh"
+#include "utils/s3/noop_throttling_controller.hh"
 #include "db/config.hh"
 #include "utils/assert.hh"
 #include "utils/s3/aws_error.hh"
@@ -83,7 +85,8 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<http::retry_strategy> rs)
+client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<http::retry_strategy> rs,
+               std::unique_ptr<throttling_controller> tc)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _creds_sem(1)
@@ -106,6 +109,7 @@ client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, pri
                 }
             }();
         })
+        , _request_limiter(std::move(tc))
         , _gf(std::move(gf))
         , _retry_strategy(std::move(rs)) {
     _creds_provider_chain
@@ -114,9 +118,13 @@ client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, pri
         .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>(_cfg->region, _cfg->role_arn));
 
     _creds_update_timer.arm(lowres_clock::now());
-    if (!_retry_strategy) {
-        _retry_strategy = std::make_unique<aws::default_aws_retry_strategy>();
+    if (!_request_limiter) {
+        _request_limiter = std::make_unique<noop_throttling_controller>();
     }
+    if (!_retry_strategy) {
+        _retry_strategy = std::make_unique<aws::default_aws_retry_strategy>(aws::default_aws_retry_strategy::default_max_retries, *_request_limiter);
+    }
+    register_client_metrics();
 }
 
 void client::update_config_sync(std::string region, std::string ira) {
@@ -162,12 +170,24 @@ void client::update_connections_per_shard(unsigned connections_per_shard) {
     });
 }
 
+static std::unique_ptr<throttling_controller> make_default_throttling_controller() {
+    return std::make_unique<aws_throttling_controller>();
+}
+
 shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf) {
-    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{});
+    return make(std::move(endpoint), std::move(cfg), nullptr, nullptr, std::move(gf));
 }
 
 shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<http::retry_strategy> rs, global_factory gf) {
-    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{}, std::move(rs));
+    return make(std::move(endpoint), std::move(cfg), std::move(rs), nullptr, std::move(gf));
+}
+
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<http::retry_strategy> rs,
+                                std::unique_ptr<throttling_controller> tc, global_factory gf) {
+    if (!tc) {
+        tc = make_default_throttling_controller();
+    }
+    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{}, std::move(rs), std::move(tc));
 }
 
 shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, global_factory gf, unsigned connections_per_shard) {
@@ -309,6 +329,27 @@ void client::group_client::register_metrics(std::string class_name, std::string 
     }
 
     metrics.add_group("s3", defs);
+}
+
+// Per-client metrics, as opposed to the per-scheduling-group ones in
+// group_client::register_metrics. The send brake is shared by every scheduling
+// group on the shard, so registering its numbers per group would produce one
+// series per group all reporting the same thing.
+void client::register_client_metrics() {
+    namespace sm = seastar::metrics;
+    auto ep_label = sm::label("endpoint")(_host);
+    auto op_label = sm::label("operation");
+    auto request_op = op_label("request");
+
+    std::vector<sm::metric_definition> defs;
+    defs.emplace_back(sm::make_counter("throttles", [this] { return _request_limiter->throttles(); },
+            sm::description("Total number of throttling responses (503 SlowDown etc.) from S3"), {ep_label, request_op})
+            (sm::skip_when_empty::yes));
+    defs.emplace_back(sm::make_counter("send_freezes", [this] { return _request_limiter->freezes(); },
+            sm::description("Times sending was held back after a throttling response"), {ep_label, request_op})
+            (sm::skip_when_empty::yes));
+
+    _client_metrics.add_group("s3", defs);
 }
 
 future<client::group_client&> client::find_or_create_client() {
@@ -504,6 +545,8 @@ future<> client::make_request(http::request req,
     auto handler = wrap_handler(request, std::move(handle), expected);
     co_await authorize(request);
     auto& gc = co_await find_or_create_client();
+
+    co_await _request_limiter->acquire(as);
 
     co_await gc.http.make_request(request, handler, rs, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
         err_handler(std::move(ex));
