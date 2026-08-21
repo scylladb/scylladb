@@ -1000,7 +1000,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     auto snapshot_info = co_await sth.get_snapshot_remote_location(snapshot_name, datacenter);
     llog.info("Downloading sstables for tablet {} from {}@{}/{}", tid, snapshot_name, snapshot_info.endpoint, snapshot_info.bucket);
     auto sst_infos = co_await sth.get_snapshot_sstables(snapshot_name, keyspace_name, table_name, datacenter, rack,
-            db::consistency_level::LOCAL_QUORUM, tablet_range.start().transform([] (auto& v) { return v.value(); }), tablet_range.end().transform([] (auto& v) { return v.value(); }));
+            db::consistency_level::QUORUM, tablet_range.start().transform([] (auto& v) { return v.value(); }), tablet_range.end().transform([] (auto& v) { return v.value(); }));
     llog.debug("{} SSTables found for tablet {}", sst_infos.size(), tid);
     if (sst_infos.empty()) {
         // It can happen when the restored table has more tablets than the original.
