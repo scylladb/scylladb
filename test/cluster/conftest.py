@@ -12,6 +12,8 @@ import asyncio
 import concurrent.futures
 import ssl
 import threading
+import sys
+import tempfile
 from concurrent.futures.thread import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -39,6 +41,10 @@ from cassandra.policies import WhiteListRoundRobinPolicy                 # type:
 from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
 from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
 from collections.abc import AsyncIterator
+
+SCRIPTS_DIR = str(TOP_SRC_DIR / "scripts")
+if SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, SCRIPTS_DIR)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

@@ -468,9 +468,12 @@ install -d -m755 -d "$rprefix"/api
 cp -pr api/api-doc "$rprefix"/api
 install -d -m755 -d "$rprefix"/scyllatop
 cp -pr tools/scyllatop/* "$rprefix"/scyllatop
+install -d -m755 -d "$rprefix"/lib-python/tablets
+cp -pr scripts/tablets/*.py "$rprefix"/lib-python/tablets
 install -d -m755 -d "$rprefix"/scripts
 cp -pr dist/common/scripts/* "$rprefix"/scripts
 ln -srf "$rprefix/scyllatop/scyllatop.py" "$rprefix/bin/scyllatop"
+ln -srf "$rprefix/lib-python/scylla-tablets.py" "$rprefix/bin/scylla-tablets"
 if $supervisor; then
     install -d -m755 "$rprefix"/supervisor
     install -m755 dist/common/supervisor/* -Dt "$rprefix"/supervisor
@@ -555,6 +558,7 @@ EOS
     ln -srf "$rprefix/bin/scylla" "$rusr/bin/scylla"
     ln -srf "$rprefix/bin/iotune" "$rusr/bin/iotune"
     ln -srf "$rprefix/bin/scyllatop" "$rusr/bin/scyllatop"
+    ln -srf "$rprefix/bin/scylla-tablets" "$rusr/bin/scylla-tablets"
     ln -srf "$rprefix/bin/nodetool" "$rusr/bin/nodetool"
     install -d -m755 "$rusr"/sbin
     for i in $SBINFILES; do
@@ -598,6 +602,7 @@ for i in seastar/scripts/{perftune.py,addr2line.py,seastar-addr2line}; do
     relocate_python3 "$rprefix"/scripts "$i"
 done
 relocate_python3 "$rprefix"/scyllatop tools/scyllatop/scyllatop.py
+relocate_python3 "$rprefix"/lib-python scripts/tablets/scylla-tablets.py
 relocate_python3 "$rprefix"/scripts fix_system_distributed_tables.py
 
 if $supervisor; then
