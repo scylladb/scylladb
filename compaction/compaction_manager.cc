@@ -1534,7 +1534,8 @@ protected:
                     descriptor.sstables, compacting_table()->get_sstables_repaired_at(),
                     compacting_table()->token_range(), uuid, _compaction_data.compaction_uuid);
 
-            auto old_sstables = ::format("{}", descriptor.sstables);
+            // descriptor is moved into compact_sstables() below; keep a cheap (shared_ptr) copy for the later debug log.
+            auto old_sstables = descriptor.sstables;
 
             if (descriptor.sstables.empty() || !can_proceed() || t.is_auto_compaction_disabled_by_user()) {
                 cmlog.debug("{}: sstables={} can_proceed={} auto_compaction={}", *this, descriptor.sstables.size(), can_proceed(), t.is_auto_compaction_disabled_by_user());
