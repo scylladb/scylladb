@@ -12,6 +12,7 @@
 #include <boost/algorithm/string/classification.hpp>
 #include <json/json.h>
 #include <fmt/ranges.h>
+#include <limits>
 
 #include "test/lib/cql_test_env.hh"
 #include "test/perf/perf.hh"
@@ -34,10 +35,21 @@
 #include "keys/keys.hh"
 #include "dht/i_partitioner.hh"
 #include "replica/database.hh"
+#include "types/types.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/loop.hh>
 
 static const sstring table_name = "cf";
+
+// Assignments for the C0..C4 regular columns, shared by every write workload so
+// that they all produce identically sized rows.
+static constexpr const char* regular_column_assignments =
+        "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
+        "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
+        "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
+        "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
+        "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27";
 
 static bytes make_key(uint64_t sequence) {
     bytes b(bytes::initialized_later(), sizeof(sequence));
@@ -73,13 +85,8 @@ static void execute_update_for_key(cql_test_env& env, const bytes& key, unsigned
     // Strongly consistent writes need QUORUM/LOCAL_QUORUM.
     // For eventual consistency it does not matter because there is only one node involved.
     auto qo = std::make_unique<cql3::query_options>(db::consistency_level::QUORUM, std::vector<cql3::raw_value>{}, cql3::query_options::specific_options::DEFAULT);
-    env.execute_cql(fmt::format("UPDATE cf SET "
-        "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
-        "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
-        "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
-        "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
-        "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27{} "
-        "WHERE \"KEY\"= 0x{};", col_suffix, to_hex(key)), std::move(qo)).get();
+    env.execute_cql(fmt::format("UPDATE cf SET {}{} "
+        "WHERE \"KEY\"= 0x{};", regular_column_assignments, col_suffix, to_hex(key)), std::move(qo)).get();
 };
 
 static void execute_counter_update_for_key(cql_test_env& env, const bytes& key) {
@@ -94,6 +101,10 @@ static void execute_counter_update_for_key(cql_test_env& env, const bytes& key) 
 
 struct test_config {
     enum class run_mode { read, write, del };
+    // Shape of the read issued by the clustering-key workload.
+    //  partition: single-partition read spanning every clustering row
+    //  slice:     read restricted by clustering bounds
+    enum class clustering_query_kind { partition, slice };
     run_mode mode;
     unsigned partitions;
     unsigned concurrency;
@@ -110,6 +121,11 @@ struct test_config {
     unsigned collection = 0;
     db::consistency_level consistency_level;
     bool shard_aware;
+    // 0 keeps the historical schema, which has no clustering key at all.
+    unsigned clustering_columns = 0;
+    unsigned rows_per_partition = 1;
+    unsigned clustering_fanout = 64;
+    clustering_query_kind clustering_query = clustering_query_kind::partition;
 };
 
 // Partition sequence numbers grouped by the shard that services reads for them,
@@ -128,18 +144,175 @@ std::ostream& operator<<(std::ostream& os, const test_config::run_mode& m) {
     abort();
 }
 
+static const char* clustering_query_kind_name(test_config::clustering_query_kind q) {
+    switch (q) {
+        case test_config::clustering_query_kind::partition: return "partition";
+        case test_config::clustering_query_kind::slice: return "slice";
+    }
+    abort();
+}
+
 std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
-    return os << "{partitions=" << cfg.partitions
-           << ", concurrency=" << cfg.concurrency
-           << ", mode=" << cfg.mode
-           << ", query_single_key=" << (cfg.query_single_key ? "yes" : "no")
-           << ", counters=" << (cfg.counters ? "yes" : "no")
-           << ", collection=" << cfg.collection
-           << ", shard_aware=" << (cfg.shard_aware ? "yes" : "no")
-           << "}";
+    os << "{partitions=" << cfg.partitions
+       << ", concurrency=" << cfg.concurrency
+       << ", mode=" << cfg.mode
+       << ", query_single_key=" << (cfg.query_single_key ? "yes" : "no")
+       << ", counters=" << (cfg.counters ? "yes" : "no")
+       << ", collection=" << cfg.collection
+       << ", shard_aware=" << (cfg.shard_aware ? "yes" : "no");
+    if (cfg.clustering_columns > 0) {
+        os << ", clustering_columns=" << cfg.clustering_columns
+           << ", rows_per_partition=" << cfg.rows_per_partition
+           << ", clustering_fanout=" << cfg.clustering_fanout
+           << ", clustering_query=" << clustering_query_kind_name(cfg.clustering_query);
+    }
+    return os << "}";
+}
+
+// ---------------------------------------------------------------------------
+// Clustering key workload.
+//
+// The historical schema has no clustering key, so it cannot exercise the
+// clustering key comparator at all. This workload adds an optional clustering
+// key of a configurable number of components, alternating a variable-length
+// utf8 component with a fixed-width int32 one: the length headers of the
+// variable-length components are what makes walking a clustering key
+// expensive.
+//
+// Component i of row r is r / fanout^(N-1-i), so the leading components are
+// shared by `fanout` consecutive rows and the last component is r itself. Keys
+// are therefore unique, sorted by row number, and comparisons between nearby
+// rows walk a long *equal* prefix - which is the path being measured.
+// ---------------------------------------------------------------------------
+
+static sstring ck_column_name(unsigned component) {
+    return fmt::format("CK{}", component);
+}
+
+static data_type ck_column_type(unsigned component) {
+    return component % 2 == 0 ? utf8_type : int32_type;
+}
+
+// Rejects configurations where the largest divisor computed below
+// (fanout^(clustering_columns - 1)) would overflow uint64_t; unchecked, the
+// overflow wraps the divisor to 0 and make_ck_components() divides by it.
+static void validate_clustering_fanout(const test_config& cfg) {
+    uint64_t max_div = 1;
+    for (unsigned i = 0; i + 1 < cfg.clustering_columns; ++i) {
+        if (max_div > std::numeric_limits<uint64_t>::max() / cfg.clustering_fanout) {
+            throw std::invalid_argument(fmt::format(
+                    "--clustering-fanout {} with --clustering-columns {} overflows uint64_t "
+                    "(fanout^(columns-1))", cfg.clustering_fanout, cfg.clustering_columns));
+        }
+        max_div *= cfg.clustering_fanout;
+    }
+}
+
+static std::vector<bytes> make_ck_components(const test_config& cfg, uint64_t row) {
+    std::vector<bytes> components;
+    components.reserve(cfg.clustering_columns);
+    for (unsigned i = 0; i < cfg.clustering_columns; ++i) {
+        uint64_t div = 1;
+        for (unsigned j = i + 1; j < cfg.clustering_columns; ++j) {
+            div *= cfg.clustering_fanout;
+        }
+        const uint64_t value = row / div;
+        if (i % 2 == 0) {
+            // Zero padded so that byte-wise utf8 ordering matches numeric ordering.
+            components.push_back(serialized(sstring(fmt::format("ck{}_{:010d}", i, value))));
+        } else {
+            components.push_back(serialized(int32_t(value)));
+        }
+    }
+    return components;
+}
+
+// Bind values for the clustering key of every row, precomputed so that the
+// measured loop only copies bytes instead of formatting strings.
+using ck_bind_values = std::vector<std::vector<cql3::raw_value>>;
+
+static ck_bind_values precompute_ck_bind_values(const test_config& cfg) {
+    ck_bind_values all;
+    all.reserve(cfg.rows_per_partition);
+    for (uint64_t row = 0; row < cfg.rows_per_partition; ++row) {
+        std::vector<cql3::raw_value> values;
+        for (auto&& c : make_ck_components(cfg, row)) {
+            values.push_back(cql3::raw_value::make_value(std::move(c)));
+        }
+        all.push_back(std::move(values));
+    }
+    return all;
+}
+
+static sstring clustering_key_equality_restrictions(const test_config& cfg) {
+    sstring restrictions;
+    for (unsigned i = 0; i < cfg.clustering_columns; ++i) {
+        restrictions += format(" AND \"{}\" = ?", ck_column_name(i));
+    }
+    return restrictions;
+}
+
+// UPDATE touching a single row identified by its full primary key.
+static sstring clustering_update_query(const test_config& cfg) {
+    sstring usings;
+    if (!cfg.timeout.empty()) {
+        usings += "USING TIMEOUT " + cfg.timeout + " ";
+    }
+    sstring col_suffix;
+    if (cfg.collection > 0) {
+        col_suffix = fmt::format(", \"CC\" = {}", make_collection_literal(cfg.collection));
+    }
+    return format("UPDATE cf {}SET {}{} WHERE \"KEY\" = ?{}",
+            usings, regular_column_assignments, col_suffix, clustering_key_equality_restrictions(cfg));
+}
+
+static std::vector<cql3::raw_value> make_row_bind_values(const bytes& key, const std::vector<cql3::raw_value>& ck) {
+    std::vector<cql3::raw_value> values;
+    values.reserve(ck.size() + 1);
+    values.push_back(cql3::raw_value::make_value(key));
+    values.insert(values.end(), ck.begin(), ck.end());
+    return values;
+}
+
+// Populates cfg.partitions partitions with cfg.rows_per_partition clustering
+// rows each. Rows within a partition are inserted concurrently; the content of
+// a row depends only on its row number, so the resulting data set is
+// deterministic.
+static void create_clustering_partitions(cql_test_env& env, test_config& cfg) {
+    std::cout << "Creating " << cfg.partitions << " partitions of "
+              << cfg.rows_per_partition << " rows..." << std::endl;
+    auto id = env.prepare(clustering_update_query(cfg)).get();
+    const auto ck_values = precompute_ck_bind_values(cfg);
+    constexpr unsigned concurrency = 128;
+    unsigned next_flush = (cfg.memtable_partitions > 0 ? cfg.memtable_partitions : cfg.partitions);
+    for (unsigned sequence = 0; sequence < cfg.partitions; ++sequence) {
+        const auto key = make_key(sequence);
+        for (unsigned row = 0; row < cfg.rows_per_partition; row += concurrency) {
+            const unsigned n = std::min<unsigned>(concurrency, cfg.rows_per_partition - row);
+            std::vector<future<>> pending;
+            pending.reserve(n);
+            for (unsigned i = 0; i < n; ++i) {
+                pending.push_back(env.execute_prepared(id, make_row_bind_values(key, ck_values[row + i]),
+                        db::consistency_level::QUORUM).discard_result());
+            }
+            when_all_succeed(pending.begin(), pending.end()).get();
+        }
+        if (sequence + 1 >= next_flush) {
+            env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
+            next_flush += cfg.memtable_partitions;
+        }
+    }
+
+    if (cfg.flush_memtables) {
+        std::cout << "Flushing partitions..." << std::endl;
+        env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
+    }
 }
 
 static void create_partitions(cql_test_env& env, test_config& cfg) {
+    if (cfg.clustering_columns > 0) {
+        return create_clustering_partitions(env, cfg);
+    }
     std::cout << "Creating " << cfg.partitions << " partitions..." << std::endl;
     unsigned next_flush = (cfg.memtable_partitions > 0 ? cfg.memtable_partitions : cfg.partitions);
     for (unsigned sequence = 0; sequence < cfg.partitions; ++sequence) {
@@ -233,13 +406,8 @@ static std::vector<perf_result> test_write(cql_test_env& env, test_config& cfg, 
     if (cfg.collection > 0) {
         col_suffix = fmt::format(", \"CC\" = {}", make_collection_literal(cfg.collection));
     }
-    sstring query = format("UPDATE cf {}SET "
-            "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
-            "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
-            "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
-            "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
-            "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27{} "
-            "WHERE \"KEY\" = ?", usings, col_suffix);
+    sstring query = format("UPDATE cf {}SET {}{} "
+            "WHERE \"KEY\" = ?", usings, regular_column_assignments, col_suffix);
     auto id = env.prepare(query).get();
     return time_parallel([&env, &cfg, &shard_seqs, id] {
             auto key = next_key(cfg, shard_seqs.local());
@@ -299,6 +467,87 @@ static std::vector<perf_result> test_counter_update(cql_test_env& env, test_conf
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
+// Read restricted by clustering bounds: the first N-1 components are pinned to
+// one prefix and the last one is given a range covering a whole fanout group,
+// so every comparison against a row of that group compares equal up to the
+// last component.
+static std::vector<perf_result> test_clustering_slice_read(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
+    create_partitions(env, cfg);
+    const unsigned last = cfg.clustering_columns - 1;
+    sstring query = "select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"";
+    if (cfg.collection > 0) {
+        query += ", \"CC\"";
+    }
+    query += " from cf where \"KEY\" = ?";
+    for (unsigned i = 0; i < last; ++i) {
+        query += format(" and \"{}\" = ?", ck_column_name(i));
+    }
+    query += format(" and \"{0}\" >= ? and \"{0}\" <= ?", ck_column_name(last));
+    if (cfg.bypass_cache) {
+        query += " bypass cache";
+    }
+    if (!cfg.timeout.empty()) {
+        query += " using timeout " + cfg.timeout;
+    }
+    auto id = env.prepare(query).get();
+
+    // Bind values of every slice, without the partition key, precomputed once.
+    const auto ck_values = precompute_ck_bind_values(cfg);
+    std::vector<std::vector<cql3::raw_value>> slices;
+    for (unsigned first_row = 0; first_row < cfg.rows_per_partition; first_row += cfg.clustering_fanout) {
+        const unsigned last_row = std::min<unsigned>(first_row + cfg.clustering_fanout, cfg.rows_per_partition) - 1;
+        auto values = ck_values[first_row];
+        values.push_back(ck_values[last_row][last]);
+        slices.push_back(std::move(values));
+    }
+    std::cout << "Slice reads over " << slices.size() << " clustering ranges of up to "
+              << cfg.clustering_fanout << " rows" << std::endl;
+
+    return time_parallel([&env, &cfg, &shard_seqs, &slices, id] {
+            auto key = next_key(cfg, shard_seqs.local());
+            if (!key) {
+                return seastar::sleep(std::chrono::seconds(1));
+            }
+            const auto& slice = slices[tests::random::get_int<uint64_t>(slices.size() - 1)];
+            auto values = make_row_bind_values(*key, slice);
+            return env.execute_prepared(id, std::move(values), cfg.consistency_level).discard_result();
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
+}
+
+// Write/delete of a single clustering row picked at random.
+static std::vector<perf_result> test_clustering_row_op(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs, sstring query) {
+    auto id = env.prepare(std::move(query)).get();
+    const auto ck_values = precompute_ck_bind_values(cfg);
+    return time_parallel([&env, &cfg, &shard_seqs, &ck_values, id] {
+            auto key = next_key(cfg, shard_seqs.local());
+            if (!key) {
+                return seastar::sleep(std::chrono::seconds(1));
+            }
+            const auto& ck = ck_values[tests::random::get_int<uint64_t>(ck_values.size() - 1)];
+            auto values = make_row_bind_values(*key, ck);
+            return env.execute_prepared(id, std::move(values), cfg.consistency_level).discard_result();
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
+}
+
+static std::vector<perf_result> test_clustering_write(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
+    return test_clustering_row_op(env, cfg, shard_seqs, clustering_update_query(cfg));
+}
+
+static std::vector<perf_result> test_clustering_delete(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
+    create_partitions(env, cfg);
+    sstring usings;
+    if (!cfg.timeout.empty()) {
+        usings += "USING TIMEOUT " + cfg.timeout;
+    }
+    sstring col_suffix;
+    if (cfg.collection > 0) {
+        col_suffix = ", \"CC\"";
+    }
+    return test_clustering_row_op(env, cfg, shard_seqs,
+            format("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"{} FROM cf {}WHERE \"KEY\" = ?{}",
+                    col_suffix, usings, clustering_key_equality_restrictions(cfg)));
+}
+
 static schema_ptr make_counter_schema(std::string_view ks_name) {
     return schema_builder(this_smp_shard_count(), ks_name, "cf")
             .with_column("KEY", bytes_type, column_kind::partition_key)
@@ -317,8 +566,11 @@ static std::vector<perf_result> do_cql_test(cql_test_env& env, test_config& cfg)
             return *make_counter_schema(ks_name);
         }
         auto sb = schema_builder(this_smp_shard_count(), ks_name, "cf")
-                .with_column("KEY", bytes_type, column_kind::partition_key)
-                .with_column("C0", bytes_type)
+                .with_column("KEY", bytes_type, column_kind::partition_key);
+        for (unsigned i = 0; i < cfg.clustering_columns; ++i) {
+            sb.with_column(to_bytes(ck_column_name(i)), ck_column_type(i), column_kind::clustering_key);
+        }
+        sb.with_column("C0", bytes_type)
                 .with_column("C1", bytes_type)
                 .with_column("C2", bytes_type)
                 .with_column("C3", bytes_type)
@@ -328,6 +580,15 @@ static std::vector<perf_result> do_cql_test(cql_test_env& env, test_config& cfg)
         }
         return *sb.build();
     }).get();
+
+    if (cfg.clustering_columns > 0) {
+        auto s = env.local_db().find_column_family("ks", table_name).schema();
+        SCYLLA_ASSERT(s->clustering_key_size() == cfg.clustering_columns);
+        auto first = clustering_key::from_exploded(*s, make_ck_components(cfg, 0));
+        auto last = clustering_key::from_exploded(*s, make_ck_components(cfg, cfg.rows_per_partition - 1));
+        fmt::print("Clustering key has {} component(s); first row {}, last row {}\n",
+                s->clustering_key_size(), first.with_schema(*s), last.with_schema(*s));
+    }
 
     std::cout << "Disabling auto compaction" << std::endl;
     env.db().invoke_on_all([] (auto& db) {
@@ -349,14 +610,24 @@ static std::vector<perf_result> do_cql_test(cql_test_env& env, test_config& cfg)
 
     switch (cfg.mode) {
     case test_config::run_mode::read:
+        if (cfg.clustering_columns > 0 && cfg.clustering_query == test_config::clustering_query_kind::slice) {
+            return test_clustering_slice_read(env, cfg, shard_seqs);
+        }
+        // The partition-wide read is the same query as the keyless one, it just
+        // spans cfg.rows_per_partition clustering rows.
         return test_read(env, cfg, shard_seqs);
     case test_config::run_mode::write:
         if (cfg.counters) {
             return test_counter_update(env, cfg, shard_seqs);
+        } else if (cfg.clustering_columns > 0) {
+            return test_clustering_write(env, cfg, shard_seqs);
         } else {
             return test_write(env, cfg, shard_seqs);
         }
     case test_config::run_mode::del:
+        if (cfg.clustering_columns > 0) {
+            return test_clustering_delete(env, cfg, shard_seqs);
+        }
         return test_delete(env, cfg, shard_seqs);
     };
     abort();
@@ -375,6 +646,11 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     if (cfg.collection > 0) {
         params["collection"] = cfg.collection;
     }
+    if (cfg.clustering_columns > 0) {
+        params["clustering_columns"] = cfg.clustering_columns;
+        params["rows_per_partition"] = cfg.rows_per_partition;
+        params["clustering_fanout"] = cfg.clustering_fanout;
+    }
 
     std::string test_type;
     switch (cfg.mode) {
@@ -384,6 +660,16 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     }
     if (cfg.counters) {
         test_type += "_counters";
+    }
+    if (cfg.clustering_columns > 0) {
+        // clustering_query only shapes the read query; write/delete always
+        // operate on a single row by full key regardless of its value, so
+        // don't tag them with a read shape they didn't use.
+        if (cfg.mode == test_config::run_mode::read) {
+            test_type += fmt::format("_clustering_{}", clustering_query_kind_name(cfg.clustering_query));
+        } else {
+            test_type += "_clustering";
+        }
     }
 
     perf::write_json_result(result_file, agg, params, test_type);
@@ -414,6 +700,10 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("operations-per-shard", bpo::value<unsigned>(), "run this many operations per shard (overrides duration)")
         ("counters", "test counters")
         ("collection", bpo::value<unsigned>()->default_value(0), "add map<text,text> collection column with N cells per row (excludes --counters)")
+        ("clustering-columns", bpo::value<unsigned>()->default_value(0), "number of clustering key components (0 keeps the clustering-key-less schema); components alternate utf8 and int32 (excludes --counters)")
+        ("rows-per-partition", bpo::value<unsigned>()->default_value(1024), "clustering rows per partition, with --clustering-columns")
+        ("clustering-fanout", bpo::value<unsigned>()->default_value(64), "number of consecutive rows sharing the same clustering key prefix; also the width of a slice read")
+        ("clustering-query", bpo::value<std::string>()->default_value("partition"), "clustering read shape: 'partition' (whole partition) or 'slice' (clustering bounds)")
         ("tablets", "use tablets")
         ("strongly-consistent-tables", "use strongly consistent tables")
         ("consistency-level", bpo::value<std::string>()->default_value("QUORUM"), "consistency level used for read and write operations")
@@ -493,6 +783,32 @@ int scylla_simple_query_main(int argc, char** argv) {
             cfg.collection = app.configuration()["collection"].as<unsigned>();
             if (cfg.counters && cfg.collection > 0) {
                 throw std::invalid_argument("--collection and --counters are mutually exclusive");
+            }
+            cfg.clustering_columns = app.configuration()["clustering-columns"].as<unsigned>();
+            if (cfg.clustering_columns > 0) {
+                if (cfg.counters) {
+                    throw std::invalid_argument("--clustering-columns and --counters are mutually exclusive");
+                }
+                cfg.rows_per_partition = app.configuration()["rows-per-partition"].as<unsigned>();
+                cfg.clustering_fanout = app.configuration()["clustering-fanout"].as<unsigned>();
+                if (cfg.rows_per_partition == 0 || cfg.clustering_fanout == 0) {
+                    throw std::invalid_argument("--rows-per-partition and --clustering-fanout must be positive");
+                }
+                validate_clustering_fanout(cfg);
+                auto q = app.configuration()["clustering-query"].as<std::string>();
+                if (q == "partition") {
+                    cfg.clustering_query = test_config::clustering_query_kind::partition;
+                } else if (q == "slice") {
+                    cfg.clustering_query = test_config::clustering_query_kind::slice;
+                } else {
+                    throw std::invalid_argument(fmt::format("unknown --clustering-query: {}", q));
+                }
+                if (app.configuration()["partitions"].defaulted()) {
+                    // The default partition count assumes one row per partition;
+                    // populating it with rows_per_partition rows each would take
+                    // far too long.
+                    cfg.partitions = 100;
+                }
             }
             if (app.configuration().contains("tablets")) {
                 cfg.initial_tablets = app.configuration()["initial-tablets"].as<unsigned>();
