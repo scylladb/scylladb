@@ -432,12 +432,7 @@ class ScyllaRESTAPIClient:
         return await self.client.post_json(f"/storage_service/restore", host=node_ip, params=params, json=sstables)
 
     async def restore_tablets(self, node_ip: str, ks: str, cf: str, snap: str, datacenter: str, endpoint: str, bucket: str, manifests, prefix: str = '') -> str:
-        """Restore tablets from a backup location"""
-        params = {
-            "keyspace": ks,
-            "table": cf,
-            "snapshot": snap
-        }
+        """Restore tablets from a single backup location"""
         backup_location = [
             {
                 "datacenter": datacenter,
@@ -447,7 +442,16 @@ class ScyllaRESTAPIClient:
                 "manifests": manifests
             }
         ]
-        return await self.client.post_json(f"/storage_service/tablets/restore", host=node_ip, params=params, json=backup_location)
+        return await self.restore_tablets_multidc(node_ip, ks, cf, snap, backup_location)
+
+    async def restore_tablets_multidc(self, node_ip: str, ks: str, cf: str, snap: str, locations: list[dict]) -> str:
+        """Restore tablets from a list of per-datacenter backup locations"""
+        params = {
+            "keyspace": ks,
+            "table": cf,
+            "snapshot": snap
+        }
+        return await self.client.post_json(f"/storage_service/tablets/restore", host=node_ip, params=params, json=locations)
 
     async def take_snapshot(self, node_ip: str, ks: str, tag: str, tables: list[str] = None, ttl: Optional[str] = None) -> None:
         """Take keyspace snapshot"""
