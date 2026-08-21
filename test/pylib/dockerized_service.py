@@ -1,0 +1,217 @@
+#
+# Copyright (C) 2025-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
+import logging
+import shutil
+import asyncio
+import pathlib
+import re
+import subprocess
+import uuid
+from typing import Callable
+
+logger = logging.getLogger("DockerizedServer")
+
+# Number of times we retry launching the container when the host port forward
+# fails to bind. See _PortInUseError for why this is necessary.
+PORT_BIND_MAX_RETRIES = 8
+
+
+class _PortInUseError(RuntimeError):
+    """Raised when the container could not bind the forwarded host port.
+
+    Rootless podman picks a free host port by probing with a temporary
+    listener, then closes it before the port forwarder rebinds the port.
+    Another process can grab the port in that window, which makes
+    ``podman run`` fail with::
+
+        Error: rootlessport listen tcp 0.0.0.0:<port>: bind: address already in use
+
+    The failure is transient: retrying the launch lets podman pick a fresh
+    random port, so it is worth a handful of attempts before giving up.
+    See https://github.com/containers/podman/issues/10205
+    """
+
+
+class DockerizedServer:
+    """class for running an external dockerized service image, typically mock server
+
+    The container's stderr is written to ``<log_dir>/<logfilenamebase>-<uuid>.log``.
+    Callers must point ``log_dir`` at a directory CI archives (i.e. somewhere under
+    ``--tmpdir``/testlog), otherwise the container log is lost with the per-test
+    temporary directory and post-mortem analysis of a container failure is impossible.
+    """
+    # pylint: disable=too-many-instance-attributes
+
+    def __init__(self, image, log_dir, logfilenamebase,
+                 success_string : Callable[[str, int], bool] | str,
+                 failure_string : Callable[[str, int], bool] | str,
+                 docker_args : Callable[[str, int], list[str]] | list[str] = [],
+                 image_args : Callable[[str, int], list[str]] | list[str] = [],
+                 host = '127.0.0.1',
+                 port = None):
+        self.image = image
+        self.host = host
+        self.log_dir = log_dir
+        self.logfilenamebase = logfilenamebase
+        self.docker_args: Callable[[str, int], list[str]] = (lambda host,port : docker_args) if isinstance(docker_args, list) else docker_args
+        self.image_args: Callable[[str, int], list[str]] = (lambda host,port : image_args) if isinstance(image_args, list) else image_args
+        self.is_success_line = lambda line, port : success_string.lower() in line.lower() if isinstance(success_string, str) else success_string
+        self.is_failure_line = lambda line, port : failure_string.lower() in line.lower() if isinstance(failure_string, str) else failure_string
+        self.logfile = None
+        self.port = None
+        self.proc = None
+        self.service_port = port
+        self.echo_thread = None
+
+    async def start(self):
+        """Starts the docker image on a random port, retrying on port-bind failures (see _PortInUseError)."""
+        exe = pathlib.Path(next(exe for exe in [shutil.which(path)
+                                                for path in ["podman", "docker"]]
+                                                if exe is not None)).resolve()
+        for attempt in range(PORT_BIND_MAX_RETRIES + 1):
+            name = f'{self.logfilenamebase}-{uuid.uuid4()}'
+            try:
+                await self._start_attempt(exe, name)
+                return
+            except _PortInUseError as e:
+                if attempt >= PORT_BIND_MAX_RETRIES:
+                    raise
+                logger.warning("Container %s failed to bind host port (attempt %d/%d), retrying: %s",
+                               name, attempt + 1, PORT_BIND_MAX_RETRIES, e)
+
+    async def _cleanup_failed_attempt(self, proc):
+        """Tear down the half-started container and reader thread after a failed launch."""
+        proc.kill()
+        proc.wait()
+        if self.echo_thread:
+            await self.echo_thread
+            self.echo_thread = None
+        if self.logfile:
+            self.logfile.close()
+            self.logfile = None
+        self.port = None
+
+    async def _start_attempt(self, exe, name):
+        """Launch the container once. Raises _PortInUseError if the host port could not be bound."""
+        log_dir = pathlib.Path(self.log_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        logfilename = (log_dir / name).with_suffix(".log")
+        self.logfile = logfilename.open("wb")
+        # Logged at INFO so the archived pytest log always points at the container
+        # log file, even when the container starts fine and only misbehaves later.
+        logger.info("Container %s stderr is captured in %s", name, logfilename)
+
+        docker_args = self.docker_args(self.host, self.service_port)
+        image_args = self.image_args(self.host, self.service_port)
+
+        args = [exe, "run", "--name", name, "--rm" ]
+        if self.service_port is None:
+            args = args + ["-P"]
+        else:
+            args = args + ["-p", str(self.service_port)]
+
+        args = args + docker_args + [self.image] + image_args
+
+        # This seems weird, using the blocking IO subprocess.
+        # However, we want to use a pipe reader so we can push the 
+        # output into the test log (because we are bad at propagating
+        # log files etc from CI)
+        # But the pipe reader needs to read until EOF, otherwise the
+        # docker process will eventually hang. So we can't await a 
+        # coroutine.
+        # We _can_, sort of, use pool.create_task(...) to send a coro
+        # to the background, and use a signal for waiting, like here,
+        # thus ensuring the coro runs forever, sort of... However, 
+        # this currently breaks, probably due to some part of the 
+        # machinery/tests that don't async fully, causing us to not
+        # process the log, and thus hang/fail, bla bla.
+        # The solution is to make the process synced, and use a 
+        # background thread (execution pool) for the processing.
+        # This way we know the pipe reader will not suddenly get
+        # blocked at inconvenient times.
+        proc = subprocess.Popen(args, stderr=subprocess.PIPE)
+        loop = asyncio.get_running_loop()
+        ready_fut = loop.create_future()
+
+        def process_io(): 
+            f = ready_fut
+            try:
+                while True:
+                    data = proc.stderr.readline()
+                    if not data:
+                        rc = proc.poll()
+                        level = logging.DEBUG
+                        if f:
+                            level = logging.ERROR
+                            self.logfile.close()
+                            self.logfile = None
+                            with logfilename.open('r') as lf:
+                                for line in lf:
+                                    logger.error(line)
+                            loop.call_soon_threadsafe(f.set_exception, RuntimeError(f"Log EOF, return code {rc}"))
+
+                        logger.log(level, "EOF received: %s", rc)
+                        break
+                    line = data.decode()
+                    self.logfile.write(data)
+                    logger.debug(line)
+                    if f and self.is_success_line(line, self.service_port):
+                        logger.info('Got start message: %s', line)
+                        loop.call_soon_threadsafe(f.set_result, True)
+                        f = None
+                    if f and self.is_failure_line(line, self.service_port):
+                        logger.info('Got fail message: %s', line)
+                        loop.call_soon_threadsafe(f.set_result, False)
+                        f = None
+            except Exception as e:
+                logger.error("Exception in log processing: %s", e)
+                if f:
+                    loop.call_soon_threadsafe(f.set_exception, e)
+
+        self.echo_thread = loop.run_in_executor(None, process_io)
+        ok = await ready_fut
+        if not ok:
+            # is_failure_line matched (e.g. "address already in use"); this is a
+            # transient host port-bind race, so let start() retry on a new port.
+            await self._cleanup_failed_attempt(proc)
+            raise _PortInUseError(f"Container {name} failed to bind host port")
+
+        check_proc = await asyncio.create_subprocess_exec(exe
+                                                          , *["container", "port", name]
+                                                          , stdout=asyncio.subprocess.PIPE
+        )
+        while True:
+            data = await check_proc.stdout.readline()
+            if not data:
+                break
+            s = data.decode()
+            m = re.search(r"\d+\/\w+ -> [\w+\.\[\]\:]+:(\d+)", s)
+            if m:
+                self.port = int(m.group(1))
+
+        await check_proc.wait()
+        if not self.port:
+            proc.kill()
+            proc.wait()
+            raise RuntimeError("Could not query port from container")
+        self.proc = proc
+
+    async def stop(self):
+        """Stops docker image"""
+        if self.proc:
+            logger.debug("Stopping docker process")
+            self.proc.terminate()
+            self.proc.wait()
+            self.proc = None
+        if self.echo_thread:
+            logger.debug("Waiting for IO thread")
+            await self.echo_thread
+            self.echo_thread = None
+        if self.logfile:
+            logger.debug("Closing log file")
+            self.logfile.close()
+            self.logfile = None

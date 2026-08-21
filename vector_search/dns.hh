@@ -1,0 +1,80 @@
+/*
+ * Copyright (C) 2025-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+
+#pragma once
+
+#include <seastar/core/future.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/core/abort_source.hh>
+#include <seastar/core/lowres_clock.hh>
+#include <seastar/core/condition-variable.hh>
+#include <seastar/core/sstring.hh>
+#include "utils/log.hh"
+#include <chrono>
+#include <map>
+#include <vector>
+#include <functional>
+#include <seastar/net/inet_address.hh>
+
+namespace vector_search {
+
+class dns {
+public:
+    using address_type = std::vector<seastar::net::inet_address>;
+    using resolver_type = std::function<seastar::future<address_type>(seastar::sstring const&)>;
+    using host_address_map = std::unordered_map<seastar::sstring, address_type>;
+    using listener_type = std::function<seastar::future<>(host_address_map const&)>;
+
+    explicit dns(logging::logger& logger, std::vector<seastar::sstring> hosts, listener_type listener, uint64_t& refreshes_counter);
+
+    void start_background_tasks();
+
+    void refresh_interval(std::chrono::milliseconds interval) {
+        _refresh_interval = interval;
+    }
+
+    void hosts(std::vector<seastar::sstring> hosts) {
+        _addresses.clear();
+        _hosts = std::move(hosts);
+        _last_refresh = {};  // reset throttle so the refresh happens immediately
+        trigger_refresh();
+    }
+
+    void resolver(resolver_type r) {
+        _resolver = std::move(r);
+    }
+
+    void trigger_refresh() {
+        _refresh_cv.signal();
+    }
+
+    seastar::future<> refresh_addr_task();
+
+    seastar::future<> stop() {
+        _abort_refresh.request_abort();
+        _refresh_cv.signal();
+        return _tasks_gate.close();
+    }
+
+private:
+    seastar::future<> refresh_addr();
+
+    seastar::gate _tasks_gate;
+    logging::logger& _logger;
+    seastar::abort_source _abort_refresh;
+    seastar::lowres_clock::time_point _last_refresh;
+    std::chrono::milliseconds _refresh_interval;
+    seastar::condition_variable _refresh_cv;
+    resolver_type _resolver;
+    std::vector<seastar::sstring> _hosts;
+    host_address_map _addresses;
+    listener_type _listener;
+    uint64_t& _refreshes_counter;
+};
+
+} // namespace vector_search

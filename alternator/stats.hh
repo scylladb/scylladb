@@ -1,0 +1,212 @@
+/*
+ * Copyright 2019-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+
+#pragma once
+
+#include <cstdint>
+
+#include <seastar/core/metrics_registration.hh>
+#include "utils/histogram.hh"
+#include "utils/estimated_histogram.hh"
+#include "cql3/stats.hh"
+
+namespace alternator {
+using batch_histogram = utils::estimated_histogram_with_max<128>;
+using op_size_histogram = utils::estimated_histogram_with_max<512>;
+
+// Object holding per-shard statistics related to Alternator.
+// While this object is alive, these metrics are also registered to be
+// visible by the metrics REST API, with the "alternator" prefix.
+class stats {
+public:
+    // Count of DynamoDB API operations by types
+    struct {
+        uint64_t batch_get_item = 0;
+        uint64_t batch_write_item = 0;
+        uint64_t batch_get_item_batch_total = 0;
+        uint64_t batch_write_item_batch_total = 0;
+        uint64_t create_backup = 0;
+        uint64_t create_global_table = 0;
+        uint64_t create_table = 0;
+        uint64_t delete_backup = 0;
+        uint64_t delete_item = 0;
+        uint64_t delete_table = 0;
+        uint64_t describe_backup = 0;
+        uint64_t describe_continuous_backups = 0;
+        uint64_t describe_endpoints = 0;
+        uint64_t describe_global_table = 0;
+        uint64_t describe_global_table_settings = 0;
+        uint64_t describe_limits = 0;
+        uint64_t describe_table = 0;
+        uint64_t describe_time_to_live = 0;
+        uint64_t get_item = 0;
+        uint64_t list_backups = 0;
+        uint64_t list_global_tables = 0;
+        uint64_t list_tables = 0;
+        uint64_t list_tags_of_resource = 0;
+        uint64_t put_item = 0;
+        uint64_t query = 0;
+        uint64_t restore_table_from_backup = 0;
+        uint64_t restore_table_to_point_in_time = 0;
+        uint64_t scan = 0;
+        uint64_t tag_resource = 0;
+        uint64_t transact_get_items = 0;
+        uint64_t transact_write_items = 0;
+        uint64_t untag_resource = 0;
+        uint64_t update_continuous_backups = 0;
+        uint64_t update_global_table = 0;
+        uint64_t update_global_table_settings = 0;
+        uint64_t update_item = 0;
+        uint64_t update_table = 0;
+        uint64_t update_time_to_live = 0;
+        uint64_t list_streams = 0;
+        uint64_t describe_stream = 0;
+        uint64_t get_shard_iterator = 0;
+        uint64_t get_records = 0;
+
+
+        utils::timed_rate_moving_average_summary_and_histogram put_item_latency;
+        utils::timed_rate_moving_average_summary_and_histogram get_item_latency;
+        utils::timed_rate_moving_average_summary_and_histogram delete_item_latency;
+        utils::timed_rate_moving_average_summary_and_histogram update_item_latency;
+        utils::timed_rate_moving_average_summary_and_histogram batch_write_item_latency;
+        utils::timed_rate_moving_average_summary_and_histogram batch_get_item_latency;
+        utils::timed_rate_moving_average_summary_and_histogram get_records_latency;
+        utils::timed_rate_moving_average_summary_and_histogram query_latency;
+        utils::timed_rate_moving_average_summary_and_histogram scan_latency;
+
+        batch_histogram batch_get_item_histogram;
+        batch_histogram batch_write_item_histogram;
+    } api_operations;
+    // Metrics for vector search operations
+    struct {
+        // Number of Query requests with VectorSearch. Note that these
+        // requests are also counted in api_operations.query.
+        uint64_t query = 0;
+        // Total number of items actually returned by vector search queries.
+        // Similar to "Count" in the results, except that when SELECT="COUNT"
+        // no items are really returned, so this metric isn't incremented.
+        uint64_t query_returned_items = 0;
+        // Total number of nearest neighbors found by the vector store
+        // (some of them may be post-filtered or re-scored and not returned).
+        uint64_t query_items_from_vs = 0;
+        // Total number of items read from the base table by vector search
+        // queries. Some vector search queries (e.g., those with
+        // SELECT="COUNT" or SELECT="ALL_PROJECTED_ATTRIBUTES") may not
+        // need to read items from the base table (what they get from the
+        // vector store is enough), so this metric isn't incremented.
+        uint64_t query_items_from_base_table = 0;
+    } vector_search;
+
+
+    // Operation size metrics
+    struct {
+        // Item size statistics collected per table and aggregated per node.
+        // Each histogram covers the range 0 - 512. Resolves #25143.
+        // A size is the retrieved item's size.
+        op_size_histogram get_item_op_size_kb;
+        // A size is the maximum of the new item's size and the old item's size.
+        op_size_histogram put_item_op_size_kb;
+        // A size is the deleted item's size. If the deleted item's size is
+        // unknown (i.e. read-before-write wasn't necessary and it wasn't
+        // forced by a configuration option), it won't be recorded on the
+        // histogram.
+        op_size_histogram delete_item_op_size_kb;
+        // A size is the maximum of existing item's size and the estimated size
+        // of the update. This will be changed to the maximum of the existing item's
+        // size and the new item's size in a subsequent PR.
+        op_size_histogram update_item_op_size_kb;
+
+        // A size is the sum of the sizes of all items per table. This means
+        // that a single BatchGetItem / BatchWriteItem updates the histogram
+        // for each table that it has items in.
+        // The sizes are the retrieved items' sizes grouped per table.
+        op_size_histogram batch_get_item_op_size_kb;
+        // The sizes are the the written items' sizes grouped per table.
+        op_size_histogram batch_write_item_op_size_kb;
+        // A size is the sum of the attribute sizes (name + value lengths) of
+        // the returned stream records, approximating record sizes the same way
+        // the other read operations approximate item sizes.
+        op_size_histogram get_records_op_size_kb;
+    } operation_sizes;
+    // Count of authentication and authorization failures, counted if either
+    // alternator_enforce_authorization or alternator_warn_authorization are
+    // set to true. If both are false, no authentication or authorization
+    // checks are performed, so failures are not recognized or counted.
+    // "authentication" failure means the request was not signed with a valid
+    // user and key combination. "authorization" failure means the request was
+    // authenticated to a valid user - but this user did not have permissions
+    // to perform the operation (considering RBAC settings and the user's
+    // superuser status).
+    uint64_t authentication_failures = 0;
+    uint64_t authorization_failures = 0;
+    // Count of ConditionalCheckFailedException errors
+    uint64_t conditional_check_failed = 0;
+    // Count of items returned by Query and Scan operations
+    uint64_t returned_items = 0;
+    // Histogram of the number of items returned per Query or Scan operation
+    batch_histogram returned_items_histogram;
+    // Count of stream records returned by GetRecords operations
+    uint64_t returned_records = 0;
+    // Count of HTTP 400 errors (DynamoDB "UserErrors"), excluding
+    // ConditionalCheckFailedException which DynamoDB does not count.
+    uint64_t user_errors = 0;
+    // Count of HTTP 500 errors (DynamoDB "SystemErrors")
+    uint64_t system_errors = 0;
+    // Miscellaneous event counters
+    uint64_t total_operations = 0;
+    uint64_t unsupported_operations = 0;
+    uint64_t reads_before_write = 0;
+    uint64_t write_using_lwt = 0;
+    uint64_t shard_bounce_for_lwt = 0;
+    uint64_t requests_blocked_memory = 0;
+    uint64_t requests_shed = 0;
+    uint64_t rcu_half_units_total = 0;
+    // wcu can results from put, update, delete and index
+    // Index related will be done on top of the operation it comes with
+    enum wcu_types {
+        PUT_ITEM,
+        UPDATE_ITEM,
+        DELETE_ITEM,
+        INDEX,
+        NUM_TYPES
+    };
+
+    uint64_t wcu_total[NUM_TYPES] = {0};
+    // CQL-derived stats
+    cql3::cql_stats cql_stats;
+
+    // Enumeration of expression types only for stats
+    // if needed it can be extended e.g. per operation
+    enum expression_types {
+        UPDATE_EXPRESSION,
+        CONDITION_EXPRESSION,
+        PROJECTION_EXPRESSION,
+        NUM_EXPRESSION_TYPES
+    };
+    struct {
+        struct {
+            uint64_t hits = 0;
+            uint64_t misses = 0;
+        } requests[NUM_EXPRESSION_TYPES];
+        uint64_t evictions = 0;
+    } expression_cache;
+};
+
+struct table_stats {
+    table_stats(const sstring& ks, const sstring& table);
+    seastar::metrics::metric_groups _metrics;
+    lw_shared_ptr<stats> _stats;
+};
+void register_metrics(seastar::metrics::metric_groups& metrics, const stats& stats);
+
+inline uint64_t bytes_to_kb_ceil(uint64_t bytes) {
+    return (bytes) / 1024;
+}
+
+}

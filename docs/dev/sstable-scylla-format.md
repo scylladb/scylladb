@@ -1,0 +1,243 @@
+# File format of the Scylla.db sstable component
+
+The `Scylla.db` component (present in a file named like `mc-223-big-Scylla.db`
+contains assorted Scylla-only metadata. Its presence indicates the sstable was
+created by Scylla (or some Scylla-aware creator). Non-Scylla consumers will ignore it.
+
+The file is small and intended to be processed in-memory.
+
+## Main structure
+
+The main structure is that of an unordered set of subcomponents. Each component
+is prefixed with a be32 tag that indicates its type, and its serialized size
+(so unknown subcomponents can be skipped).
+
+    scylla_db = subcomponent_count (tag serialized_size subcomponent)*
+    subcomponent_count = be32
+    serialized_size = be32
+    tag = be32
+
+## Subcomponents and tag values
+
+The following subcomponents are recognized. They are described in more detail
+in individual sections
+
+    subcomponent = sharding_metadata
+        | features
+        | extension_attributes
+        | run_identifier
+        | large_data_stats
+        | sstable_origin
+        | scylla_build_id
+        | scylla_version
+        | ext_timestamp_stats
+        | schema
+        | components_digests
+        | large_data_records
+
+`sharding_metadata` (tag 1): describes what token sub-ranges are included in this
+sstable. This is used, when loading the sstable, to determine which shard(s)
+it occupies.
+
+`features` (tag 2): a set of boolean flags that describe the sstable
+
+`extension_attributes` (tag 3): a `map<string, string>` with additional attributes
+
+`run_identifier` (tag 4): a uuid that is the same for all sstables in the same run
+(and different for sstables in different runs).
+
+`large_data_stats` (tag 5): a `map<large_data_type, large_data_stats_entry>` with statistics
+about large data entities in the sstable.
+
+`sstable_origin` (tag 6): a string describing the origin of the
+sstable ("memtable" for memtable flush, "garbage collection" for
+compaction, etc.).
+
+`scylla_build_id` (tag 7): a string containing the build id of the
+Scylla executable that created the sstable.
+
+`scylla_version` (tag 8): a string containing the version of the
+Scylla executable that created the sstable.
+
+`ext_timestamp_stats` (tag 9): a `map<ext_timestamp_stats_type, int64_t>` with statistics
+about timestamps in the sstable, like: `min_live_timestamp`, and `min_live_row_marker_timestamp`.
+
+`sstable_identifier` (tag 10): a uuid identifying the sstable for its whole lifetime.
+It is derived from the sstable uuid generation, upon creation (or uniquely generated
+if the sstable has numerical generation).  Yet, unlike the sstable generation that may
+change if the sstable is migrated to a different shard or node, the sstable
+identifier is stable and copied with the rest of the scylla metadata.
+
+`schema` (tag 11): the schema of the table the sstable belongs to. It stores
+the most important fields: the table id and version (as UUIDs), keyspace name,
+table name, and a list of all columns with their kind, name and type. It is not
+a complete schema equivalent to the one stored in the system schema tables, but
+it contains enough information for tools like
+[scylla-sstable](https://github.com/scylladb/scylladb/blob/master/docs/operating-scylla/admin-tools/scylla-sstable.rst)
+to parse an sstable in a self-sufficient manner.
+
+`components_digests` (tag 12): a `map<component_type, uint32_t>` with CRC32 digests of
+all SSTable component files that are checksummed during write. Each entry maps a component
+type (e.g., Data, Index, Filter, Statistics, etc.) to its CRC32 checksum. This allows
+verifying the integrity of individual component files.
+
+`large_data_records` (tag 13): an `array<large_data_record>` with the top-N individual large
+data entries (partitions, rows, cells) found during the sstable write. Unlike `large_data_stats`
+which only stores aggregate statistics, this records the actual keys and sizes so they survive
+tablet/shard migration.
+
+The [scylla sstable dump-scylla-metadata](https://github.com/scylladb/scylladb/blob/master/docs/operating-scylla/admin-tools/scylla-sstable.rst#dump-scylla-metadata) tool
+can be used to dump the scylla metadata in JSON format.
+
+## Trailing digest
+
+When the `components_digests` subcomponent is present, the `Scylla.db` file contains
+a trailing CRC32 digest appended after the serialized subcomponents data.
+This digest covers the entire serialized `data` section (i.e., all subcomponents)
+and can be used to verify the integrity of the scylla metadata itself.
+
+## sharding_metadata subcomponent
+
+    sharding_metadata = token_range_count token_range*
+    token_range_count = be32
+    token_range = left_token_bound right_token_bound
+    left_token_bound = token_bound
+    right_token_bound = token_bound
+    token_bound = exclusive_flag token
+    exclusive_flag = byte          // 0=inclusive, 1=exclusive
+    token = token_size byte*
+    token_size = be16
+
+Sharding metadata is a sorted list of disjoint token ranges. Each token range
+consists of a left bound and a right bound; either bound may be inclusive or
+exclusive. The tokens are interpreted according to the partitioner.
+
+The sstable contains no partitions whose token is outside the ranges described by
+sharding_metadata.
+
+## features subcomponent
+
+    features = be64      // interpreted as a set of bits
+
+bit 0: NonCompoundPIEntries (if set, indicates the sstable was generated by
+Scylla with issue #2993 fixed)
+
+bit 1: NonCompoundRangeTombstones (if set, indicates the sstable was generated by
+Scylla with issue #2986 fixed)
+
+bit 2: ShadowableTombstones (if set, indicates the sstable was generated by
+Scylla with issue #3885 fixed)
+
+bit 3: CorrectStaticCompact (if set, indicates the sstable was generated by
+Scylla with issue #4139 fixed)
+
+bit 4: CorrectEmptyCounters (if set, indicates the sstable was generated by
+Scylla with issue #4363 fixed)
+
+bit 5: CorrectUDTsInCollections (if set, indicates that the sstable was generated
+by Scylla with issue #6130 fixed)
+
+bit 6: CorrectLastPiBlockWidth (if set, indicates that the width of the last promoted index block never includes
+the partition end marker)
+
+## extension_attributes subcomponent
+
+    extension_attributes = extension_attribute_count extension_attribute*
+    extension_attribute_count = be32
+    extension_attribute = extension_attribute_key extension_attribute_value
+    extension_attribute_key = string32
+    extension_attribute_value = string32
+    string32 = string32_size byte*
+    string32_size = be32
+
+There are currently no defined attributes.
+
+## run_identifier subcomponent
+
+    run_identifier = uuid
+    uuid = uuid_high_bits uuid_low_bits
+    uuid_high_bits = be64
+    uuid_low_bits = be64
+
+If the run_identifier subcomponent is present, the sstable is part of a run.
+All sstables with the same run_identifier belong to the same run. They are
+guaranteed to be disjoint (non-overlapping) in their partition keys.
+
+## large_data_stats subcomponent
+
+    large_data_stats = large_data_count large_data_pair*
+    large_data_count = be32
+    large_data_pair = large_data_type large_data_stats_entry
+    large_data_type = partition_size | row_size | cell_size | rows_in_partition | elements_in_collection
+        partition_size = be32(1)    // partition size, in bytes
+        row_size = be32(2)          // row size, in bytes
+        cell_size = be32(3)         // cell size, in bytes
+        rows_in_partition = be32(4) // number of rows in a partition
+        elements_in_collection = be32(5) // number of elements in a collection
+    large_data_stats_entry = max_value threshold above_threshold
+        max_value = be64
+        threshold = be64
+        above_threshold = be32
+
+The large_data_stats component holds statistics about partition,
+row, and cell sizes and about number of rows in partition.
+For each entry, it keeps the largest value for the entry type,
+the respective large_data threshold and the number of entities
+that are above the threshold.
+
+## schema subcomponent
+
+    schema = table_id table_schema_version keyspace_name table_name column_count column_description*
+    table_id = uuid
+    table_schema_version = uuid
+    uuid = uuid_high_bits uuid_low_bits
+    uuid_high_bits = be64
+    uuid_low_bits = be64
+    keyspace_name = string32
+    table_name = string32
+    column_count = be32
+    column_description = column_kind column_name column_type
+    column_kind = byte    // 1=partition_key, 2=clustering_key, 3=static_column, 4=regular_column
+    column_name = string32
+    column_type = string32    // CQL type name (e.g. "org.apache.cassandra.db.marshal.UTF8Type")
+    string32 = string32_size byte*
+    string32_size = be32
+
+The schema subcomponent stores the most important schema fields of the table the
+sstable belongs to. It serves as an alternative schema source to the one stored
+in the statistics component, which lacks column names and other metadata. Unlike
+the full schema stored in the system schema tables, it is not intended to be
+comprehensive, but it contains enough information for tools like scylla-sstable
+to parse an sstable in a self-sufficient manner.
+
+## large_data_records subcomponent
+
+    large_data_records = record_count large_data_record*
+    record_count = be32
+    large_data_record = large_data_type partition_key clustering_key column_name value elements_count range_tombstones dead_rows
+        large_data_type = be32     // same enum as in large_data_stats
+        partition_key = string32   // binary serialized partition key (sstables::key::get_bytes())
+        clustering_key = string32  // binary serialized clustering key (clustering_key_prefix::representation()), empty if N/A
+        column_name = string32     // column name as text, empty for partition/row entries
+        value = be64               // size in bytes (partition, row, or cell size depending on type)
+        elements_count = be64      // type-dependent element count (see below)
+        range_tombstones = be64    // number of range tombstones (partition_size records only, 0 otherwise)
+        dead_rows = be64           // number of dead rows (partition_size records only, 0 otherwise)
+    string32 = string32_size byte*
+    string32_size = be32
+
+The large_data_records component holds individual top-N large data entries
+(partitions, rows, cells) found during the sstable write. Unlike large_data_stats,
+which only stores aggregate per-type statistics (max value, threshold, count above
+threshold), large_data_records preserves the actual partition key, clustering key,
+column name, and size for each above-threshold entry. This information is embedded
+in the sstable file itself and therefore survives tablet/shard migration.
+
+The elements_count field carries a type-dependent element count:
+
+- For partition_size and rows_in_partition records: number of rows in the partition
+- For cell_size and elements_in_collection records: number of elements in the collection (0 for non-collection cells)
+- For row_size records: 0
+
+The range_tombstones and dead_rows fields are meaningful only for
+partition_size records and are zero for all other record types.

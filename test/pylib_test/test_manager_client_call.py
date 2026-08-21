@@ -1,0 +1,210 @@
+#
+# Copyright (C) 2026-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+"""Tests for how ManagerClient reaches ScyllaClusterManager.
+
+The manager runs on its own event loop and owns state that belongs to it: the
+Scylla subprocess transports and the per-server asyncio locks.  Its coroutines
+therefore have to run on that loop, whichever loop -- or thread -- the caller
+happens to be on.  ManagerClient._call is what guarantees that.
+
+The exercise here uses a real ScyllaClusterManager and a real ManagerClient
+with a stub cluster, so the decorator and the bridge under test are the
+production ones.
+"""
+
+import asyncio
+import concurrent.futures
+import logging
+import threading
+from collections.abc import Iterator
+
+import pytest
+
+from test.pylib.internal_types import ServerNum
+from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster import ScyllaClusterManager
+
+
+SERVER_ID = ServerNum(1)
+TIMEOUT = 30
+
+
+class StubCluster:
+    """Stands in for ScyllaCluster, with one genuinely loop-bound object.
+
+    ScyllaServer.stop() awaits its subprocess transport, and that transport
+    suspends on a future belonging to the loop that spawned Scylla (see
+    _UnixSubprocessTransport._wait).  `_release` plays that part.  Awaiting it
+    from another loop is what raises "got Future attached to a different loop",
+    so an operation has to actually suspend on it for these tests to mean
+    anything -- hence the callers below release it only after the operation has
+    entered.
+    """
+
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._loop = loop
+        self._release = loop.create_future()
+        self.entered = threading.Event()      # readable from any thread
+        self.stopped: list[ServerNum] = []
+        self.is_dirty = False
+
+    async def server_stop(self, server_id: ServerNum, gracefully: bool) -> None:
+        self.entered.set()
+        await self._release
+        self.stopped.append(server_id)
+
+    def release(self) -> None:
+        """Let a suspended server_stop() finish; callable from any thread."""
+        self._loop.call_soon_threadsafe(
+            lambda: None if self._release.done() else self._release.set_result(None))
+
+
+@pytest.fixture
+def manager_client() -> Iterator[tuple[ManagerClient, StubCluster, asyncio.AbstractEventLoop]]:
+    """A ManagerClient wired to a manager running on its own thread and loop.
+
+    Mirrors the manager_server fixture in test/cluster/conftest.py: the loop
+    stays alive but idle until teardown, so callers on other loops and threads
+    have something to hand work to.
+    """
+    ready: concurrent.futures.Future = concurrent.futures.Future()
+    stop_event = threading.Event()
+
+    async def run_manager() -> None:
+        manager = ScyllaClusterManager(
+            test_uname="test_manager_client_call",
+            create_cluster=None,
+            base_dir="",
+        )
+        manager.logger = logging.getLogger("test_manager_client_call")
+        manager.cluster = StubCluster(asyncio.get_running_loop())
+        ready.set_result((manager, asyncio.get_running_loop()))
+        await asyncio.get_running_loop().run_in_executor(None, stop_event.wait)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(asyncio.run, run_manager())
+        future.add_done_callback(
+            lambda f: None if ready.done() else ready.set_exception(
+                f.exception() or RuntimeError("manager exited before signaling readiness")))
+        manager, loop = ready.result(timeout=TIMEOUT)
+        client = ManagerClient(
+            cluster_manager=manager,
+            manager_loop=loop,
+            port=9042,
+            use_ssl=False,
+            auth_provider=None,
+            con_gen=lambda *args, **kwargs: None,
+        )
+        try:
+            yield client, manager.cluster, loop
+        finally:
+            manager.cluster.release()   # don't strand an operation on shutdown
+            stop_event.set()
+            future.result(timeout=TIMEOUT)
+
+
+async def test_operation_runs_on_the_managers_loop(manager_client) -> None:
+    """An async caller on its own loop still gets the manager's loop."""
+    client, cluster, manager_loop = manager_client
+    assert asyncio.get_running_loop() is not manager_loop
+
+    stopping = asyncio.ensure_future(client.server_stop(SERVER_ID, convict=False))
+    assert await asyncio.to_thread(cluster.entered.wait, TIMEOUT), "operation never started"
+    cluster.release()
+    await asyncio.wait_for(stopping, TIMEOUT)
+
+    assert cluster.stopped == [SERVER_ID]
+
+
+def test_operation_from_a_worker_thread(manager_client) -> None:
+    """A synchronous caller on a worker thread reaches loop-bound state.
+
+    This is the dtest pattern -- `executor.submit(node.stop, ...)` -- and the
+    reason _call cannot simply await the manager's coroutine: universalasync
+    creates a fresh event loop per thread, and the manager's state does not
+    belong to it.
+    """
+    client, cluster, _ = manager_client
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            # No running loop here, so universalasync drives the call itself.
+            client.server_stop(SERVER_ID, convict=False)
+        except BaseException as exc:  # pylint: disable=broad-except
+            errors.append(exc)
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    assert cluster.entered.wait(TIMEOUT), "operation never started"
+    cluster.release()
+    thread.join(timeout=TIMEOUT)
+
+    assert not thread.is_alive(), "call from a worker thread hung"
+    assert not errors, f"call from a worker thread failed: {errors[0]!r}"
+    assert cluster.stopped == [SERVER_ID]
+
+
+async def test_caller_timeout_leaves_the_operation_running(manager_client) -> None:
+    """A timed-out caller orphans the operation instead of aborting it.
+
+    The HTTP server never cancelled a handler when its client went away, and
+    after_test() relies on that: it drains whatever a test left running.
+    """
+    client, cluster, manager_loop = manager_client
+
+    with pytest.raises(asyncio.TimeoutError):
+        await client._call(client._manager.server_stop(SERVER_ID), timeout=0.2)
+
+    assert cluster.entered.is_set(), "operation never started"
+    assert len(client._manager.tasks_history) == 1, "operation was not left for the drain"
+    op, descr = next(iter(client._manager.tasks_history.items()))
+    assert not op.done()
+    assert descr.startswith("server_stop")
+
+    # Once it completes it removes itself, which is what leaves after_test()'s
+    # drain looking only at genuinely in-flight work.  _op_finished is
+    # registered before gather's own done callback, so by the time the wait
+    # below returns the entry is already gone.
+    cluster.release()
+
+    async def wait_operations_done() -> None:
+        await asyncio.gather(*client._manager.tasks_history)
+
+    await asyncio.wrap_future(
+        asyncio.run_coroutine_threadsafe(wait_operations_done(), manager_loop))
+    assert not client._manager.tasks_history
+    assert cluster.stopped == [SERVER_ID]
+
+
+async def test_exception_keeps_its_type(manager_client) -> None:
+    """Failures arrive as themselves, not as an HTTP status turned into a string."""
+    client, cluster, _ = manager_client
+
+    async def fail(server_id: ServerNum, gracefully: bool) -> None:
+        raise ValueError("stop failed")
+
+    cluster.server_stop = fail
+
+    with pytest.raises(ValueError, match="stop failed"):
+        await client.server_stop(SERVER_ID, convict=False)
+
+
+async def test_broken_manager_refuses_mutations(manager_client) -> None:
+    """A manager fenced off by a previous test rejects further changes."""
+    client, cluster, manager_loop = manager_client
+    async def do_break() -> None:
+        client._manager.break_manager("leaked task", "some_test")
+
+    await asyncio.wrap_future(
+        asyncio.run_coroutine_threadsafe(do_break(), manager_loop))
+
+    with pytest.raises(RuntimeError, match="BROKEN"):
+        await client.server_stop(SERVER_ID, convict=False)
+    assert not cluster.entered.is_set(), "a broken manager still ran the operation"
+
+    # Reads stay available so that after-test bookkeeping can still run.
+    assert await client.is_dirty() is False

@@ -1,0 +1,421 @@
+#
+# Copyright (C) 2022-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+# This file configures pytest for all tests in this directory, and also
+# defines common test fixtures for all of them to use
+
+from __future__ import annotations
+
+import asyncio
+import concurrent.futures
+import ssl
+import threading
+from concurrent.futures.thread import ThreadPoolExecutor
+from pathlib import Path
+from typing import TYPE_CHECKING
+from test import TOP_SRC_DIR, MODES_TIMEOUT_FACTOR, path_to
+from test.pylib.runner import PHASE_REPORT_KEY, MANAGER_LOGS_KEY, make_failed_test_dir
+from test.cluster.object_store.conftest import make_object_storage
+from test.pylib.random_tables import RandomTables
+from test.pylib.skip_types import skip_env
+from test.pylib.util import unique_name
+from test.pylib.manager_client import ManagerClient
+from test.pylib.async_cql import run_async
+from test.pylib.scylla_cluster import ScyllaClusterManager, ScyllaVersionDescription, get_scylla_2025_1_description
+from test.pylib.connect_options import add_cql_connection_options, add_s3_options
+from test.pylib.encryption_provider import KeyProvider, make_key_provider_factory
+import logging
+import pytest
+from cassandra.auth import PlainTextAuthProvider                         # type: ignore # pylint: disable=no-name-in-module
+from cassandra.cluster import Session                                    # type: ignore # pylint: disable=no-name-in-module
+from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore # pylint: disable=no-name-in-module
+from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore # pylint: disable=no-name-in-module
+from cassandra.policies import ExponentialReconnectionPolicy             # type: ignore
+from cassandra.policies import RoundRobinPolicy                          # type: ignore
+from cassandra.policies import TokenAwarePolicy                          # type: ignore
+from cassandra.policies import WhiteListRoundRobinPolicy                 # type: ignore
+from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
+from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
+from collections.abc import AsyncIterator
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+    from typing import Callable
+
+    from cassandra.connection import EndPoint
+
+    from test.pylib.internal_types import IPAddress
+    from test.pylib.scylla_cluster import ClusterFactory
+
+
+Session.run_async = run_async     # patch Session for convenience
+
+
+logger = logging.getLogger(__name__)
+
+print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
+
+
+async def decode_backtrace(build_mode: str, input: str):
+    executable = Path(path_to(build_mode, "scylla"))
+    proc = await asyncio.create_subprocess_exec(
+        (TOP_SRC_DIR / "seastar" / "scripts" / "seastar-addr2line").absolute(),
+        "-e",
+        executable.absolute(),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate(input=input.encode())
+    return f"{stdout.decode()}\n{stderr.decode()}"
+
+
+def pytest_addoption(parser):
+    add_cql_connection_options(parser)
+    add_s3_options(parser)
+    parser.addoption('--skip-internet-dependent-tests', action='store_true', default=False,
+                     help='Skip tests which depend on artifacts from the internet')
+
+
+conn_logger = logging.getLogger("conn_messages")
+conn_logger.setLevel(logging.INFO)
+
+class CustomConnection(Cluster.connection_class):
+    def send_msg(self, *args, **argv):
+        conn_logger.debug(f"send_msg: ({id(self)}): {args} {argv}")
+        return super(CustomConnection, self).send_msg(*args, **argv)
+
+    def process_msg(self, msg, protocol_version):
+        conn_logger.debug(f"process_msg: ({id(self)}): {msg}")
+        return super(CustomConnection, self).process_msg(msg, protocol_version)
+
+
+# cluster_con helper: set up client object for communicating with the CQL API.
+def cluster_con(hosts: list[IPAddress | EndPoint], port: int = 9042, use_ssl: bool = False, auth_provider=None,
+                load_balancing_policy=RoundRobinPolicy()):
+    """Create a CQL Cluster connection object according to configuration.
+       It does not .connect() yet."""
+    assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
+    profile = ExecutionProfile(
+        load_balancing_policy=load_balancing_policy,
+        consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+        serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
+        # The default timeouts should have been more than enough, but in some
+        # extreme cases with a very slow debug build running on a slow or very busy
+        # machine, they may not be. Observed tests reach 160 seconds. So it's
+        # incremented to 200 seconds.
+        # See issue #11289.
+        # NOTE: request_timeout is the main cause of timeouts, even if logs say heartbeat
+        request_timeout=200)
+    whitelist_profile = ExecutionProfile(
+        load_balancing_policy=TokenAwarePolicy(WhiteListRoundRobinPolicy(hosts)),
+        consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+        serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
+        request_timeout=200)
+    if use_ssl:
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    else:
+        ssl_context = None
+
+    return Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile, 'whitelist': whitelist_profile},
+                   contact_points=hosts,
+                   port=port,
+                   # TODO: make the protocol version an option, to allow testing with
+                   # different versions. If we drop this setting completely, it will
+                   # mean pick the latest version supported by the client and the server.
+                   protocol_version=4,
+                   # NOTE: No auth provider as auth keysppace has RF=1 and topology will take
+                   # down nodes, causing errors. If auth is needed in the future for topology
+                   # tests, they should bump up auth RF and run repair.
+                   ssl_context=ssl_context,
+                   # The default timeouts should have been more than enough, but in some
+                   # extreme cases with a very slow debug build running on a slow or very busy
+                   # machine, they may not be. Observed tests reach 160 seconds. So it's
+                   # incremented to 200 seconds.
+                   # See issue #11289.
+                   connect_timeout = 200,
+                   control_connection_timeout = 200,
+                   # NOTE: max_schema_agreement_wait must be 2x or 3x smaller than request_timeout
+                   # else the driver can't handle a server being down
+                   max_schema_agreement_wait=20,
+                   idle_heartbeat_timeout=200,
+                   # The default reconnection policy has a large maximum interval
+                   # between retries (600 seconds). In tests that restart/replace nodes,
+                   # where a node can be unavailable for an extended period of time,
+                   # this can cause the reconnection retry interval to get very large,
+                   # longer than a test timeout.
+                   reconnection_policy = ExponentialReconnectionPolicy(1.0, 4.0),
+
+                   auth_provider=auth_provider,
+                   # Capture messages for debugging purposes.
+                   connection_class=CustomConnection
+                   )
+
+
+@pytest.fixture(scope="module")
+async def manager_server(suite_log_dir: Path,
+                         testpy_cluster_factory: ClusterFactory,
+                         testpy_uname: str,
+                         ) -> AsyncGenerator[tuple[ScyllaClusterManager, asyncio.AbstractEventLoop]]:
+    """Run the cluster manager and publish it together with its event loop.
+
+    The manager owns loop-bound state -- the Scylla subprocess transports and
+    the per-server asyncio locks -- so all of its coroutines have to run on one
+    loop, and that loop has to keep running: tests reach the manager from
+    pytest's event loops and, in dtest, from plain worker threads.  Hence a
+    dedicated thread whose loop is idle but alive until teardown.
+    """
+    ready: concurrent.futures.Future[tuple[ScyllaClusterManager, asyncio.AbstractEventLoop]] = \
+        concurrent.futures.Future()
+    stop_event = threading.Event()
+
+    async def run_manager() -> None:
+        mgr = ScyllaClusterManager(
+            test_uname=testpy_uname,
+            create_cluster=testpy_cluster_factory,
+            base_dir=str(suite_log_dir),
+        )
+        try:
+            await mgr.start()
+        except BaseException:
+            # Dispose of a partially started manager, e.g. a cluster
+            # created before the API site failed to start.
+            await mgr.stop()
+            raise
+        ready.set_result((mgr, asyncio.get_running_loop()))
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, stop_event.wait)
+        finally:
+            await mgr.stop()
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="cluster-manager") as executor:
+        future = executor.submit(asyncio.run, run_manager())
+        # Fail instead of waiting forever when the manager dies before it
+        # signals readiness, e.g. because creating the first cluster failed.
+        # The callback fires only once the future is done, so reaching it
+        # without a result always means a startup failure.
+        future.add_done_callback(
+            lambda f: None if ready.done() else ready.set_exception(
+                f.exception() or RuntimeError("ScyllaClusterManager exited before signaling readiness")))
+        # ready.result() blocks, so hand it to a thread rather than stalling
+        # the loop this fixture runs on.
+        server = await asyncio.get_running_loop().run_in_executor(None, ready.result)
+        try:
+            yield server
+        finally:
+            stop_event.set()
+            future.result()
+
+
+@pytest.fixture(scope="module")
+async def manager_internal(request: pytest.FixtureRequest,
+                           manager_server: tuple[ScyllaClusterManager, asyncio.AbstractEventLoop],
+                           ) -> Callable[[], ManagerClient]:
+    """Module fixture to prepare client object for communicating with the Cluster API.
+       Pass a function to create driver connections.
+       Test cases (functions) should not use this fixture.
+    """
+    port = int(request.config.getoption('port'))
+    use_ssl = bool(request.config.getoption('ssl'))
+    auth_username = request.config.getoption('auth_username', default=None)
+    auth_password = request.config.getoption('auth_password', default=None)
+    if auth_username is not None and auth_password is not None:
+        auth_provider = PlainTextAuthProvider(username=auth_username, password=auth_password)
+    else:
+        auth_provider = None
+    manager, manager_loop = manager_server
+    return lambda: ManagerClient(
+        cluster_manager=manager,
+        manager_loop=manager_loop,
+        port=port,
+        use_ssl=use_ssl,
+        auth_provider=auth_provider,
+        con_gen=cluster_con,
+    )
+
+
+@pytest.fixture(scope="function")
+async def manager(request: pytest.FixtureRequest,
+                  manager_internal: Callable[[], ManagerClient],
+                  suite_log_dir: Path,
+                  testpy_uname: str,
+                  build_mode: str) -> AsyncGenerator[ManagerClient]:
+    """
+    Per test fixture to notify Manager client object when tests begin so it can perform checks for cluster state.
+    """
+    test_case_name = request.node.name
+    # this should be consistent with scylla_cluster.py ScyllaClusterManager.before_test()
+    test_py_log_test = suite_log_dir / f"{Path(testpy_uname).stem}.{test_case_name}_cluster.log"
+
+    manager_client = manager_internal()  # set up client object in fixture with scope function
+    logger.debug("before_test for %s", test_case_name)
+    if await manager_client.is_dirty():
+        manager_client.driver_close()  # Close driver connection to old cluster
+    cluster_str = await manager_client.before_test(test_case_name)
+    logger.info(f"Using cluster: {cluster_str} for test {test_case_name}")
+    servers = await manager_client.running_servers()
+    if manager_client.cql is None and servers:
+        await manager_client.driver_connect()  # Connect driver to new cluster
+
+    # Publish what pytest_runtest_makereport needs to attach this test's logs on
+    # failure (single source of truth), so it doesn't re-derive these paths.
+    # The pytest session log is not listed here: it is written per xdist worker
+    # (see PYTEST_LOG_FILE in test/pylib/runner.py) and is already linked from the
+    # failed test's properties by record_failed_test_artifacts().
+    request.node.stash[MANAGER_LOGS_KEY] = {
+        "client": manager_client,
+        "logs": {"test_py.log": test_py_log_test},
+    }
+    yield manager_client
+    # `request.node.stash` contains reports stored per phase in `pytest_runtest_makereport`
+    # from where we can retrieve test failure.
+    cluster_status = None
+    found_errors = {}
+    failed = False
+    failed_test_dir_path = None
+    try:
+        reports = request.node.stash[PHASE_REPORT_KEY]
+        call_report = reports.get("call")
+        failed = call_report is not None and call_report.failed
+
+        # Check if the test has the check_nodes_for_errors marker
+        found_errors = await manager_client.check_all_errors(check_all_errors=(request.node.get_closest_marker("check_nodes_for_errors") is not None))
+
+        if failed or found_errors:
+            # Server logs / traceback / links are attached by pytest_runtest_makereport;
+            # here we only need the dir for the manager-specific found_errors files below.
+            failed_test_dir_path = make_failed_test_dir(request.config, build_mode, test_case_name)
+
+        # Tear down (after test): notify the manager that the test finished.
+        # This also cuts off manager access for tasks leaked by the test.
+        logger.debug("after_test for %s (success: %s)", test_case_name, not failed)
+        cluster_status = await manager_client.after_test(success=not failed)
+        logger.info("Cluster after test %s (success: %s): %s", test_case_name, not failed, cluster_status)
+    finally:
+        # Drop the stash entry before closing the client so a teardown-phase
+        # failure report doesn't gather logs through a stopped client.
+        request.node.stash[MANAGER_LOGS_KEY] = None
+        await manager_client.stop()  # Stop client session and close driver after each test
+
+    if cluster_status is not None and cluster_status["server_broken"] and not failed:
+        failed = True
+        pytest.fail(
+            f"test case {test_case_name} left unfinished tasks on Scylla server. Server marked as broken,"
+            f" server_broken_reason: {cluster_status["message"]}"
+        )
+    if found_errors:
+        full_message = []
+        for server, data in found_errors.items():
+            summary = []
+            detailed = []
+
+            if criticals := data.get("critical", []):
+                summary.append(f"{len(criticals)} critical error(s)")
+                detailed.extend(map(str.rstrip, criticals))
+
+            if backtraces := data.get("backtraces", []):
+                summary.append(f"{len(backtraces)} backtrace(s)")
+                with open(failed_test_dir_path / f"scylla-{server.server_id}-backtraces.txt", "w") as bt_file:
+                    for backtrace in backtraces:
+                        bt_file.write(backtrace + "\n\n")
+                        decoded_bt = await decode_backtrace(build_mode, backtrace)
+                        bt_file.write(decoded_bt + "\n\n")
+                    detailed.append(f"{len(backtraces)} backtrace(s) saved in {Path(bt_file.name).name}")
+
+            if errors := data.get("error", []):
+                summary.append(f"{len(errors)} error(s)")
+                detailed.extend(map(str.rstrip, errors))
+
+            if cores := data.get("cores", []):
+                summary.append(f"{len(cores)} core(s): {', '.join(cores)}")
+
+            if summary:
+                summary_line = f"Server {server.server_id}: found {', '.join(summary)} (log: { data['log']})"
+                detailed = [f"  {line}" for line in detailed]
+                full_message.append(summary_line)
+                full_message.extend(detailed)
+
+        with open(failed_test_dir_path / "found_errors.txt", "w") as f:
+            f.write("\n".join(full_message))
+        if not failed:
+            pytest.fail(f"\n{'\n'.join(full_message)}")
+
+# "cql" fixture: set up client object for communicating with the CQL API.
+# Since connection is managed by manager just return that object
+@pytest.fixture(scope="function")
+def cql(manager):
+    yield manager.cql
+
+# "random_tables" fixture: Creates and returns a temporary RandomTables object
+# used in tests to make schema changes. Tables are dropped after test finishes
+# unless the cluster is dirty or the test has failed.
+@pytest.fixture(scope="function")
+async def random_tables(request, manager):
+    rf_marker = request.node.get_closest_marker("replication_factor")
+    replication_factor = rf_marker.args[0] if rf_marker is not None else 3  # Default 3
+    enable_tablets = request.node.get_closest_marker("enable_tablets")
+    enable_tablets = enable_tablets.args[0] if enable_tablets is not None else None
+    tables = RandomTables(request.node.name, manager, unique_name(),
+                          replication_factor, None, enable_tablets)
+    yield tables
+
+    # Don't drop tables at the end if we failed or the cluster is dirty - it may be impossible
+    # (e.g. the cluster is completely dead) and it doesn't matter (we won't reuse the cluster
+    # anyway).
+    # The cluster will be marked as dirty if the test failed, but that happens
+    # at the end of `manager` fixture which we depend on (so these steps will be
+    # executed after us) - so at this point, we need to check for failure ourselves too.
+    reports = request.node.stash[PHASE_REPORT_KEY]
+    call_report = reports.get("call")
+    failed = call_report is not None and call_report.failed
+    if not failed and not await manager.is_dirty():
+        tables.drop_all()
+
+@pytest.fixture(scope="function", autouse=True)
+async def prepare_3_nodes_cluster(request, manager):
+    if request.node.get_closest_marker("prepare_3_nodes_cluster"):
+        await manager.servers_add(3)
+
+
+@pytest.fixture(scope="function", autouse=True)
+async def prepare_3_racks_cluster(request, manager):
+    if request.node.get_closest_marker("prepare_3_racks_cluster"):
+        await manager.servers_add(3, auto_rack_dc="dc1")
+
+
+@pytest.fixture(scope="function")
+def internet_dependency_enabled(request) -> None:
+    if request.config.getoption('skip_internet_dependent_tests'):
+        skip_env(reason="skip_internet_dependent_tests is set")
+
+
+@pytest.fixture(scope="function")
+async def scylla_2025_1(request, build_mode, internet_dependency_enabled) -> AsyncIterator[ScyllaVersionDescription]:
+    yield await get_scylla_2025_1_description(build_mode)
+
+@pytest.fixture(scope="function", params=list(KeyProvider))
+async def key_provider(request, tmpdir, suite_log_dir, scylla_binary):
+    """Encryption providers fixture"""
+    async with make_key_provider_factory(request.param, tmpdir, suite_log_dir, scylla_binary) as res:
+        yield res
+
+
+@pytest.fixture(scope="function")
+def failure_detector_timeout(build_mode):
+    return 5000 * MODES_TIMEOUT_FACTOR[build_mode]
+
+@pytest.fixture(params=[None, 's3', 'gs'], ids=['local', 's3', 'gs'])
+async def storage(request, pytestconfig, tmpdir, suite_log_dir):
+    """Parametrize tests over local / S3 / GCS storage.
+
+    When storage is None the test runs with local (filesystem) storage.
+    Otherwise the fixture yields an object-storage server handle.
+    """
+    if request.param is None:
+        yield None
+        return
+
+    async with make_object_storage(request.param, pytestconfig, tmpdir, suite_log_dir, request.node.name) as server:
+        yield server

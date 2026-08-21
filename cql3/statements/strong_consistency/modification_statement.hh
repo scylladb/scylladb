@@ -1,0 +1,58 @@
+/*
+ * Copyright (C) 2025-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+
+#pragma once
+
+#include "cql3/cql_statement.hh"
+#include "cql3/expr/expression.hh"
+#include "cql3/statements/modification_statement.hh"
+
+namespace cql3::statements::strong_consistency {
+
+class modification_statement : public cql_statement {
+    using result_message = cql_transport::messages::result_message;
+    using base_statement = cql3::statements::modification_statement;
+
+    shared_ptr<base_statement> _statement;
+public:
+    modification_statement(shared_ptr<base_statement> statement);
+
+    shared_ptr<base_statement> inner() const {
+        return _statement;
+    }
+
+    const base_statement& inner_statement() const {
+        return *_statement;
+    }
+
+    future<shared_ptr<result_message>> execute(query_processor& qp, service::query_state& state,
+        const query_options& options, std::optional<service::group0_guard> guard) const override;
+
+    future<shared_ptr<result_message>> execute_without_checking_exception_message(query_processor& qp,
+        service::query_state& qs, const query_options& options,
+        std::optional<service::group0_guard> guard) const override;
+
+    mutation get_mutation(const query_options& options, api::timestamp_type ts,
+            base_statement::json_cache_opt& json_cache, const std::vector<dht::partition_range>& keys) const;
+
+    future<> check_access(query_processor& qp, const service::client_state& state) const override;
+
+    void validate(query_processor& qp, const service::client_state& state) const override;
+
+    uint32_t get_bound_terms() const override;
+
+    bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
+
+    // Wraps a regular modification, so it carries user load exactly when the
+    // wrapped statement does.
+    bool should_reclassify_control_connection() const override {
+        return _statement->should_reclassify_control_connection();
+    }
+};
+
+}

@@ -1,0 +1,74 @@
+keyspace: sec_index
+
+keyspace_definition: |
+
+  CREATE KEYSPACE IF NOT EXISTS sec_index WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3};
+
+table: users
+
+table_definition: |
+
+  CREATE TABLE IF NOT EXISTS users (
+    userid bigint,
+    initials int,
+    first_name text,
+    last_name text,
+    password text,
+    email text,
+    address text,
+    userdata blob,
+    last_access timeuuid,
+    PRIMARY KEY(userid)
+  );
+
+extra_definitions:
+  - CREATE INDEX IF NOT EXISTS  users_last_name_ind ON sec_index.users (last_name)
+  - CREATE INDEX IF NOT EXISTS  users_first_name_ind ON sec_index.users (first_name)
+  - CREATE INDEX IF NOT EXISTS  users_initials_ind ON sec_index.users (initials)
+
+columnspec:
+  - name: userid
+    population: exp(1..10000000)
+
+  - name: initials
+    size: fixed(2)
+    population: gaussian(1..20000)
+
+  - name: first_name
+    size: fixed(5)
+
+  - name: last_name
+    size: fixed(5)
+
+  - name: password
+    size: fixed(80) # sha-512
+
+  - name: email
+    size: uniform(16..50)
+
+  - name: address
+    size: uniform(16..50)
+
+  - name: userdata
+    size: fixed(10240)
+
+insert:
+  partitions: fixed(1)
+  batchtype: UNLOGGED
+
+queries:
+  si_read1:
+    cql: select * from sec_index.users where userid = ?
+    fields: samerow
+  si_read2:
+    cql: select * from sec_index.users where first_name = ?
+    fields: samerow
+  si_read3:
+    cql: select * from sec_index.users where last_name = ?
+    fields: samerow
+  si_read4:
+    cql: select * from sec_index.users where first_name = ? and last_name = ? ALLOW FILTERING
+    fields: samerow
+  si_read5:
+    cql: select userid, initials, first_name, last_name from sec_index.users where initials = ?
+    fields: samerow

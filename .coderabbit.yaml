@@ -1,0 +1,265 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+language: en-US
+
+# Keep reviews terse; we only want actionable findings. Note this constrains
+# review comments, not the walkthrough summary - don't ban "summaries" here or
+# high_level_summary below has nothing to produce.
+tone_instructions: "Be concise. No pleasantries, no follow-up suggestions. Only report actionable issues found in the code."
+
+reviews:
+  # `assertive` rather than `chill`: under `chill`, CodeRabbit posts only what
+  # it rates high-confidence inline and folds everything else into a collapsed
+  # "nitpick" section of the walkthrough - a dozen unrelated remarks in one
+  # comment, detached from the code they refer to. `assertive` puts every
+  # remark inline on the line it belongs to, where it can be replied to and
+  # resolved. Volume is kept down by the path_instructions below instead.
+  profile: assertive
+  # Drop the "Prompt for AI Agents" block appended to every inline comment and
+  # review summary. It's boilerplate for the human readers the review is
+  # actually for, and it works against the terse tone asked for above.
+  enable_prompt_for_ai_agents: false
+  # Submits a formal GitHub review (Reviewers section): "Request Changes"
+  # while findings are unresolved, "Approve" once resolved and pre-merge
+  # checks pass.
+  request_changes_workflow: true
+
+  # Keep the summary in CodeRabbit's own walkthrough comment instead of
+  # editing the PR description, so the PR body stays identical to the
+  # commit message. Both flags are needed: high_level_summary gates whether a
+  # summary is produced at all, and _in_walkthrough moves it out of the PR
+  # description into the walkthrough comment.
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+
+  poem: false
+  # Suppress the "Review skipped" status comment CodeRabbit posts on
+  # drafts / skipped runs.
+  review_status: false
+  collapse_walkthrough: true
+  changed_files_summary: false
+  sequence_diagrams: false
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+
+  # Don't let CodeRabbit mutate PR metadata. These default to false in the
+  # schema but are enabled in our CodeRabbit UI settings, which caused it to
+  # apply labels and request reviewers on PRs (including drafts, since
+  # auto_review.drafts only gates the review itself, not these actions).
+  auto_apply_labels: false
+  auto_assign_reviewers: false
+  # Keep the walkthrough free of label/reviewer suggestions too.
+  suggested_labels: false
+  suggested_reviewers: false
+
+  auto_review:
+    enabled: true
+    # Only the automatic trigger is off for drafts. A draft can still be
+    # reviewed on demand by commenting "@coderabbitai review" on it (or
+    # "@coderabbitai full review" to re-review the whole diff rather than
+    # just what changed since the last review).
+    drafts: false
+    auto_incremental_review: true
+    # Don't stop reviewing a branch just because it's seen a few commits.
+    # The default (5) makes CodeRabbit pause itself and post a "Reviews
+    # paused" comment mid-PR, which on our normally-rebased branches means it
+    # goes quiet exactly when the PR is being iterated on, and only a manual
+    # "@coderabbitai resume" brings it back.
+    auto_pause_after_reviewed_commits: 0
+    ignore_title_keywords:
+      - "[skip-review]"
+      - "WIP"
+    # Skip mechanical bot PRs: scylladbbot's "[Backport ...]" cherry-picks of
+    # already-reviewed commits, and renovate's dependency bumps. Matching on
+    # author rather than the "[Backport" title prefix so human-authored
+    # reverts of backports still get reviewed.
+    ignore_usernames:
+      - "scylladbbot"
+      - "renovate[bot]"
+    # `master` is the default branch and is always reviewed; listed explicitly
+    # so it's clear no other base branch (branch-*) is auto-reviewed.
+    base_branches:
+      - "master"
+
+  # Post-review code generation, off across the board. These are opt-in (a
+  # checkbox in the walkthrough or an "@coderabbitai autofix" comment), but
+  # what they produce is machine-written code and tests pushed onto the
+  # author's branch - or a stacked PR - carrying the author's sign-off.
+  # Fixes here get written by the person who signs them.
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    autofix:
+      enabled: false
+
+  # Posts a "CodeRabbit" GitHub status check that fails until these pass.
+  # To actually block merging on it, add "CodeRabbit" as a required status
+  # check in master's branch protection rules (separate, repo-settings change).
+  # Deliberately not done yet: a PR that auto_review skips (scylladbbot,
+  # renovate, "WIP"/"[skip-review]" titles) never reports this check, so
+  # requiring it would leave exactly those PRs unmergeable. Making it required
+  # means first narrowing the ignore lists or granting them a bypass.
+  pre_merge_checks:
+    # Without this the PR author can dismiss their own failing check, which
+    # makes the check advisory-only; require someone else to override.
+    override_requested_reviewers_only: true
+    title:
+      mode: "error"
+    # Only a warning: unlike the title check, this one has no `requirements`
+    # field in the schema, so what it validates against comes from the
+    # CodeRabbit UI settings and can't be pinned down here. It has already
+    # failed a PR for not justifying backport/* labels the PR doesn't carry.
+    # Advisory until the requirement is something this file can state.
+    description:
+      mode: "warning"
+    # We turn off the docstring finishing touch above; don't gate merges on
+    # docstring coverage either. Defaults to `warning`, so it needs saying.
+    docstrings:
+      mode: "off"
+
+  # No vendor/** entry: our third-party code (seastar, abseil, swagger-ui,
+  # tools/python3, tools/cqlsh) lives in submodules, which only ever show up
+  # in a diff as a pointer bump.
+  path_filters:
+    - "!**/*.lock"
+    # Vendored, minified third-party JS and the assets around it - not
+    # submoduled, so unlike the rest of our third-party code it does show up
+    # in diffs.
+    - "!docs/_static/**"
+
+  # Every analyzer CodeRabbit ships defaults to enabled, so this section is a
+  # list of opt-outs rather than an allowlist: an analyzer is turned off if we
+  # already run it in CI (a finding should be reported once) or if it only
+  # reports style, which the path instructions below tell the reviewer not to
+  # raise. The list covers every default-enabled analyzer that can match a
+  # file in this tree; the rest target languages we don't have (Go, Ruby, PHP,
+  # Swift, Kotlin, Terraform, protobuf, Rego, ...) and are no-ops here. What
+  # is deliberately left on is secret scanning, dependency and workflow
+  # security, plus clippy - our first-party Rust under rust/ has no other
+  # linter in CI.
+  tools:
+    ruff:
+      enabled: true
+    actionlint:
+      enabled: true
+
+    # Already covered by .github/workflows/differential-shellcheck.yaml.
+    shellcheck:
+      enabled: false
+
+    # C/C++ analyzers: without a compile_commands.json for the Seastar-heavy
+    # build they can't resolve our includes, so they report noise rather than
+    # real defects. .github/workflows/clang-tidy.yaml covers this ground
+    # properly; the C++ path instructions below carry the prose review.
+    clang:
+      enabled: false
+    cppcheck:
+      enabled: false
+    fbinfer:
+      enabled: false
+
+    # Python: ruff above already covers these, and both are far noisier.
+    pylint:
+      enabled: false
+    flake8:
+      enabled: false
+
+    # Pure style checkers - exactly what we tell the reviewer to skip.
+    markdownlint:
+      enabled: false
+    yamllint:
+      enabled: false
+    checkmake:
+      enabled: false
+    htmlhint:
+      enabled: false
+    # Docker best-practice lint on tools/toolchain/Dockerfile only, which we
+    # don't run in CI and don't intend to start enforcing through review.
+    hadolint:
+      enabled: false
+
+    # JS/TS/JSON linters and formatters. Our only JavaScript is the vendored
+    # minified bundles under docs/_static (already excluded by path_filters);
+    # the rest of what these would report is formatting.
+    biome:
+      enabled: false
+    eslint:
+      enabled: false
+    oxc:
+      enabled: false
+
+    # tools/scylla-sstable-scripts/*.lua run inside the sstable tool's
+    # sandbox, where the API is injected as globals. luacheck has no way to
+    # know that and flags every one of them as an undefined global.
+    luacheck:
+      enabled: false
+
+    # Grammar checking is worth having on docs/. There is no per-path tool
+    # scoping, so this is repo-wide, but LanguageTool always disables its
+    # TYPOS, TYPOGRAPHY and CASING categories - the ones that would otherwise
+    # fire on identifiers and code comments.
+    languagetool:
+      enabled: true
+
+  path_instructions:
+    # Style and formatting are handled mechanically by our linters, so the
+    # prose review should stick to things that block a merge.
+    - path: "**/*"
+      instructions: |
+        - Only comment on issues that would block merging.
+        - Restrict feedback to correctness bugs, security risks, and
+          functionality-breaking problems.
+        - Do not comment on code style, formatting, naming, or missing type
+          hints; our linters already cover those.
+        - Limit review comments to 3-5 items, unless more genuine blockers exist.
+
+    - path: "**/*.{cc,hh}"
+      instructions: |
+        This is Seastar-based asynchronous C++. Flag only runtime-breaking
+        problems:
+        - Lifetime bugs across suspension points: references, string_view /
+          span, or captured-by-reference lambda state that may dangle after a
+          co_await or .then(), and coroutine frames outliving their captures.
+          Look for missing gate/semaphore/shared_ptr keepalives.
+        - Blocking or long CPU-bound work on the reactor without a preemption
+          point (yield / maybe_yield), and any use of blocking syscalls,
+          std::mutex, or sleeping in a reactor thread.
+        - Cross-shard access to per-shard state without invoke_on / submit_to,
+          and sharing non-thread-safe objects between shards.
+        - Dropped or unhandled futures (ignored exceptional futures, missing
+          finally/handle_exception), and exceptions escaping a noexcept path.
+        - On-disk / on-wire format and RPC verb changes that break
+          compatibility with older nodes during a rolling upgrade, and schema
+          or feature changes missing a cluster feature gate.
+
+    - path: "**/*.py"
+      instructions: |
+        Flag bare `except:` that swallows failures, and subprocess calls that
+        don't check exit status - both silently mask test and tooling errors.
+
+    - path: "**/*.sh"
+      instructions: |
+        Flag missing `set -euo pipefail`, unquoted expansions in paths or
+        commands, and unchecked command substitutions.
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  learnings:
+    scope: auto
+  issues:
+    scope: auto
+  pull_requests:
+    scope: auto
+  # "auto" rather than "enabled": scylladb/scylladb is public, and "auto" is
+  # CodeRabbit's own guard that keeps Jira content out of reviews on public
+  # repositories. "enabled" overrides that guard, which would let internal
+  # ticket text be quoted into public PR comments. The project keys stay so
+  # the scope is already correct if this is ever enabled on a private repo.
+  jira:
+    usage: "auto"
+    project_keys:
+      - "RELENG"
+      - "SCYLLADB"

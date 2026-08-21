@@ -1,0 +1,78 @@
+
+/*
+ * Copyright (C) 2015-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+
+#pragma once
+
+#include <vector>
+#include <seastar/core/sstring.hh>
+
+#include "seastarx.hh"
+#include "locator/tablets.hh"
+
+namespace cql_transport {
+namespace messages {
+
+class result_message {
+    std::vector<sstring> _warnings;
+    std::optional<std::unordered_map<sstring, bytes>> _custom_payload;
+public:
+    class visitor;
+    class visitor_base;
+    //
+    // Message types:
+    //
+    class void_message;
+    class set_keyspace;
+    class prepared;
+    class schema_change;
+    class rows;
+    class bounce;
+    class exception;
+
+    virtual ~result_message() {}
+
+    virtual void accept(visitor&) const = 0;
+
+    void add_warning(sstring w) {
+        _warnings.push_back(std::move(w));
+    }
+
+    const std::vector<sstring>& warnings() const {
+        return _warnings;
+    }
+
+    void add_custom_payload(sstring key, bytes value) {
+        if (!_custom_payload) {
+            _custom_payload = std::optional<std::unordered_map<sstring, bytes>>{std::unordered_map<sstring, bytes>()};
+        }
+        _custom_payload.value()[key] = value;
+    }
+
+    void add_tablet_info(locator::tablet_routing_info info);
+    void add_tablet_info_v2(locator::tablet_routing_info_v2);
+
+    const std::optional<std::unordered_map<sstring, bytes>>& custom_payload() const {
+        return _custom_payload;
+    }
+
+    virtual const result_message::bounce* as_bounce() const {
+        return nullptr;
+    }
+
+    virtual bool is_exception() const {
+        return false;
+    }
+
+    virtual void throw_if_exception() const {}
+};
+
+std::ostream& operator<<(std::ostream& os, const result_message& msg);
+
+}
+}

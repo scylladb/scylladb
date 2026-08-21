@@ -1,0 +1,20 @@
+{
+    "problemMatcher": [
+        {
+            "owner": "clang-include-cleaner",
+            "severity": "error",
+            "pattern": [
+                {
+                    "regexp": "^([^\\-\\+].*)$",
+                    "file": 1
+                },
+                {
+                    "regexp": "^(-\\s+[^\\s]+)\\s+@Line:(\\d+)$",
+                    "line": 2,
+                    "message": 1,
+                    "loop": true
+                }
+            ]
+        }
+    ]
+}

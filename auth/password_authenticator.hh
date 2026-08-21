@@ -1,0 +1,95 @@
+/*
+ * Copyright (C) 2016-present ScyllaDB
+ *
+ * Modified by ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
+ */
+
+#pragma once
+
+#include <seastar/core/abort_source.hh>
+#include <seastar/core/shared_future.hh>
+
+#include "auth/authenticator.hh"
+#include "auth/passwords.hh"
+#include "auth/cache.hh"
+#include "service/raft/raft_group0_client.hh"
+
+namespace cql3 {
+
+class query_processor;
+
+} // namespace cql3
+
+namespace service {
+class migration_manager;
+}
+
+namespace auth {
+
+struct config;
+
+extern const std::string_view password_authenticator_name;
+
+class password_authenticator : public authenticator {
+    cql3::query_processor& _qp;
+    ::service::raft_group0_client& _group0_client;
+    ::service::migration_manager& _migration_manager;
+    cache& _cache;
+    std::string _superuser_name;
+    std::string _superuser_salted_password;
+    future<> _stopped;
+    abort_source _as;
+    shared_promise<> _superuser_created_promise;
+    // We used to also support bcrypt, SHA-256, and MD5 (ref. scylladb#24524).
+    constexpr static auth::passwords::scheme _scheme = passwords::scheme::sha_512;
+
+public:
+    password_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&, const config&);
+
+    ~password_authenticator();
+
+    virtual future<> start() override;
+
+    virtual future<> stop() override;
+
+    virtual std::string_view qualified_java_name() const override;
+
+    virtual bool require_authentication() const override;
+
+    virtual authentication_option_set supported_options() const override;
+
+    virtual authentication_option_set alterable_options() const override;
+
+    virtual future<authenticated_user> authenticate(const credentials_map& credentials) const override;
+
+    virtual future<> create(std::string_view role_name, const authentication_options& options, ::service::group0_batch& mc) override;
+
+    virtual future<> alter(std::string_view role_name, const authentication_options& options, ::service::group0_batch&) override;
+
+    virtual future<> drop(std::string_view role_name, ::service::group0_batch&) override;
+
+    virtual future<custom_options> query_custom_options(std::string_view role_name) const override;
+
+    virtual bool uses_password_hashes() const override;
+
+    virtual future<std::optional<sstring>> get_password_hash(std::string_view role_name) const override;
+
+    virtual const resource_set& protected_resources() const override;
+
+    virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const override;
+
+    virtual future<> ensure_superuser_is_created() const override;
+
+private:
+    future<> maybe_create_default_password();
+    future<> maybe_create_default_password_with_retries();
+
+    sstring update_row_query() const;
+};
+
+}
+

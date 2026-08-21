@@ -1,0 +1,15 @@
+All tests in this directory and its subdirectories were translated from
+Apache Cassandra's unit tests - the test/unit/org/apache/cassandra/cql3
+directory in the Apache Cassandra source code repository.
+
+The organization of this directory mirrors that of the Cassandra directory,
+with test files renamed from SomeThingTest.java to some_thing_test.py.
+
+Individual files were translated in their entirety, and each individual
+file includes a comment on which version of the file was translated
+(Cassandra's tests continue to evolve, so we may later want to catch up
+with the differences).
+
+Please avoid adding new tests, not translated from Cassandra, in this
+directory. Instead, place new tests written from scratch for Scylla,
+or improved tests, in the directory above.

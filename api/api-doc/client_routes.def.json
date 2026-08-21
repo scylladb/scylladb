@@ -1,0 +1,23 @@
+    , "client_routes_entry": {
+        "id": "client_routes_entry",
+        "summary": "An entry storing client routes",
+        "properties": {
+            "connection_id": {"type": "string"},
+            "host_id": {"type": "string", "format": "uuid"},
+            "address": {"type": "string"},
+            "port": {"type": "integer"},
+            "tls_port": {"type": "integer"},
+            "alternator_port": {"type": "integer"},
+            "alternator_https_port": {"type": "integer"}
+        },
+        "required": ["connection_id", "host_id", "address"]
+    }
+    , "client_routes_key": {
+        "id": "client_routes_key",
+        "summary": "A key of client_routes_entry",
+        "properties": {
+            "connection_id": {"type": "string"},
+            "host_id": {"type": "string", "format": "uuid"}
+        }
+    }
+

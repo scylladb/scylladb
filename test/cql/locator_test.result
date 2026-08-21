@@ -1,0 +1,50 @@
+> --
+> -- https://github.com/scylladb/scylla/issues/7595
+> -- Fail on wrong DC name
+> --
+> CREATE KEYSPACE t WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'nosuchdc' : 3 } AND DURABLE_WRITES = true;
+<Error from server: code=2300 [Query invalid because of configuration issue] message="Unrecognized strategy option {nosuchdc} passed to NetworkTopologyStrategy">
+> CREATE KEYSPACE t WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'datacenter1' : 3 } AND DURABLE_WRITES = true;
+OK
+> DROP KEYSPACE t;
+OK
+> --
+> -- https://github.com/scylladb/scylla/issues/5962
+> -- wrong de-facto replication factor
+> -- when RF=0 and SimpleStrategy
+> --
+> CREATE KEYSPACE t WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 0 } AND DURABLE_WRITES =  true;
+OK
+> CREATE TABLE t.t (a INT PRIMARY KEY, b int);
+OK
+> INSERT INTO t.t (a, b) VALUES (1, 1);
+('Unable to complete the operation against any hosts', {<Host: 127.0.0.1:9042 datacenter1>: Unavailable('Error from server: code=1000 [Unavailable exception] message="Cannot achieve consistency level for cl ONE. Requires 1, alive 0" info={\'consistency\': \'ONE\', \'required_replicas\': 1, \'alive_replicas\': 0}')})
+> INSERT INTO t.t (a, b) VALUES (2, 2);
+('Unable to complete the operation against any hosts', {<Host: 127.0.0.1:9042 datacenter1>: Unavailable('Error from server: code=1000 [Unavailable exception] message="Cannot achieve consistency level for cl ONE. Requires 1, alive 0" info={\'consistency\': \'ONE\', \'required_replicas\': 1, \'alive_replicas\': 0}')})
+> SELECT * FROM t.t ALLOW FILTERING;
+('Unable to complete the operation against any hosts', {<Host: 127.0.0.1:9042 datacenter1>: Unavailable('Error from server: code=1000 [Unavailable exception] message="Cannot achieve consistency level for cl ONE. Requires 1, alive 0" info={\'consistency\': \'ONE\', \'required_replicas\': 1, \'alive_replicas\': 0}')})
+> -- This statement used to trigger a crash
+> SELECT a FROM t.t WHERE a IN (1, 2);
+('Unable to complete the operation against any hosts', {<Host: 127.0.0.1:9042 datacenter1>: Unavailable('Error from server: code=1000 [Unavailable exception] message="Cannot achieve consistency level for cl ONE. Requires 1, alive 0" info={\'consistency\': \'ONE\', \'required_replicas\': 1, \'alive_replicas\': 0}')})
+> DELETE FROM t.t WHERE a = 1;
+('Unable to complete the operation against any hosts', {<Host: 127.0.0.1:9042 datacenter1>: Unavailable('Error from server: code=1000 [Unavailable exception] message="Cannot achieve consistency level for cl ONE. Requires 1, alive 0" info={\'consistency\': \'ONE\', \'required_replicas\': 1, \'alive_replicas\': 0}')})
+> DELETE FROM t.t WHERE a = 2;
+('Unable to complete the operation against any hosts', {<Host: 127.0.0.1:9042 datacenter1>: Unavailable('Error from server: code=1000 [Unavailable exception] message="Cannot achieve consistency level for cl ONE. Requires 1, alive 0" info={\'consistency\': \'ONE\', \'required_replicas\': 1, \'alive_replicas\': 0}')})
+> CREATE INDEX b ON t.t (b);
+OK
+> SELECT * FROM t.t WHERE b=2;
+('Unable to complete the operation against any hosts', {<Host: 127.0.0.1:9042 datacenter1>: Unavailable('Error from server: code=1000 [Unavailable exception] message="Cannot achieve consistency level for cl ONE. Requires 1, alive 0" info={\'consistency\': \'ONE\', \'required_replicas\': 1, \'alive_replicas\': 0}')})
+> INSERT INTO t.t (a) VALUES (1) IF NOT EXISTS;
+('Unable to complete the operation against any hosts', {<Host: 127.0.0.1:9042 datacenter1>: Unavailable('Error from server: code=1000 [Unavailable exception] message="Cannot achieve consistency level for cl SERIAL. Requires 1, alive 0" info={\'consistency\': \'SERIAL\', \'required_replicas\': 1, \'alive_replicas\': 0}')})
+> DELETE FROM t.t WHERE a=1 IF EXISTS;
+('Unable to complete the operation against any hosts', {<Host: 127.0.0.1:9042 datacenter1>: Unavailable('Error from server: code=1000 [Unavailable exception] message="Cannot achieve consistency level for cl SERIAL. Requires 1, alive 0" info={\'consistency\': \'SERIAL\', \'required_replicas\': 1, \'alive_replicas\': 0}')})
+> CREATE MATERIALIZED VIEW t.mv AS SELECT a, b FROM t.t WHERE b > 1 PRIMARY KEY (b, a);
+OK
+> SELECT * FROM t.mv WHERE b IN (2, 1);
+('Unable to complete the operation against any hosts', {<Host: 127.0.0.1:9042 datacenter1>: Unavailable('Error from server: code=1000 [Unavailable exception] message="Cannot achieve consistency level for cl ONE. Requires 1, alive 0" info={\'consistency\': \'ONE\', \'required_replicas\': 1, \'alive_replicas\': 0}')})
+> DROP MATERIALIZED VIEW t.mv;
+OK
+> DROP TABLE t.t;
+OK
+> DROP KEYSPACE t;
+OK

@@ -1,0 +1,204 @@
+/*
+ *
+ * Modified by ScyllaDB
+ * Copyright (C) 2020-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
+ *
+ * Copyright (C) 2020-present ScyllaDB
+ */
+
+#pragma once
+
+#include <vector>
+
+#include <seastar/core/sharded.hh>
+#include <seastar/core/future.hh>
+#include "replica/database_fwd.hh"
+#include "tasks/task_manager.hh"
+#include "sstables/types.hh"
+#include <seastar/core/gate.hh>
+#include <seastar/core/rwlock.hh>
+#include <seastar/core/condition-variable.hh>
+
+using namespace seastar;
+
+namespace netw { class messaging_service; }
+namespace sstables { class storage_manager; }
+namespace service { class storage_proxy; }
+
+namespace dht {
+class token;
+}
+
+namespace cql3 {
+class query_processor;
+}
+namespace db {
+
+struct snapshot_dc_location;
+
+namespace snapshot {
+
+class task_manager_module : public tasks::task_manager::module {
+public:
+    task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "snapshot") {}
+};
+
+class backup_task_impl;
+
+} // snapshot namespace
+
+struct snapshot_options {
+    bool skip_flush = false;
+    gc_clock::time_point created_at = gc_clock::now();
+    std::optional<gc_clock::time_point> expires_at;
+};
+
+class snapshot_ctl : public peering_sharded_service<snapshot_ctl> {
+public:
+    struct table_snapshot_details {
+        int64_t total;
+        int64_t live;
+    };
+
+    struct table_snapshot_details_ext {
+        sstring ks;
+        sstring cf;
+        table_snapshot_details details;
+    };
+
+    struct config {
+        seastar::scheduling_group backup_sched_group;
+    };
+
+    using db_snapshot_details = std::vector<table_snapshot_details_ext>;
+
+    snapshot_ctl(sharded<replica::database>& db, sharded<service::storage_proxy>& sp, sharded<cql3::query_processor>& qp, netw::messaging_service& ms, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg);
+
+    future<> stop();
+
+    sharded<replica::database>& db() { return _db; };
+    sharded<service::storage_proxy>& sp() { return _sp; }
+    sharded<cql3::query_processor>& qp() { return _qp; }
+    netw::messaging_service& ms() { return _ms; }
+    sstables::storage_manager& sstm() { return _storage_manager; }
+
+    /**
+     * Takes the snapshot for all keyspaces. A snapshot name must be specified.
+     *
+     * @param tag the tag given to the snapshot; may not be null or empty
+     */
+    future<> take_snapshot(sstring tag, snapshot_options opts = {}) {
+        return take_snapshot(tag, {}, opts);
+    }
+
+    /**
+     * Takes the snapshot for the given keyspaces. A snapshot name must be specified.
+     *
+     * @param tag the tag given to the snapshot; may not be null or empty
+     * @param keyspace_names the names of the keyspaces to snapshot; empty means "all"
+     */
+    future<> take_snapshot(sstring tag, std::vector<sstring> keyspace_names, snapshot_options opts = {});
+
+    /**
+     * Takes the snapshot of multiple tables. A snapshot name must be specified.
+     *
+     * @param ks_name the keyspace which holds the specified column family
+     * @param tables a vector of tables names to snapshot
+     * @param tag the tag given to the snapshot; may not be null or empty
+     */
+    future<> take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
+
+    /**
+     * Takes the snapshot of multiple tables or a whole keyspace, or all keyspaces,
+     * using global, clusterwide topology coordinated op.
+     * A snapshot name must be specified.
+     *
+     * @param ks_names the keyspaces to snapshot
+     * @param tables optional - a vector of tables names to snapshot
+     * @param tag the tag given to the snapshot; may not be null or empty
+     */
+    future<> take_cluster_column_family_snapshot(std::vector<sstring>  ks_names, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
+
+    /**
+     * Remove the snapshot with the given name from the given keyspaces.
+     * If no tag is specified we will remove all snapshots.
+     * If a cf_name is specified, only that table will be deleted
+     */
+    future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name);
+
+    future<tasks::task_id> start_backup(sstring endpoint, sstring bucket, sstring prefix, sstring keyspace, sstring table, sstring snapshot_name, bool move_files);
+
+    future<std::unordered_map<sstring, db_snapshot_details>> get_snapshot_details();
+
+    future<int64_t> true_snapshots_size();
+    future<int64_t> true_snapshots_size(sstring ks, sstring cf);
+
+    future<tasks::task_id> start_global_backup(std::unordered_map<sstring, snapshot_dc_location> locations, std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, bool move_files);
+
+    future<> disable_all_operations();
+
+    // Must be called on shard 0
+    void schedule_expiration(gc_clock::time_point when, sstring ks_name, sstring table_name, sstring tag);
+
+    // For canceling expiration, ks_name or table_name can be empty
+    // And then all snapshots with the given tag (or all, if `tag` is empty) are erased from the expiration queue
+    // within the given scope.
+    // Must be called on shard 0
+    void cancel_expiration(sstring tag, std::vector<sstring> ks_names = {}, sstring table_name = "");
+
+    future<> run_snapshot_modify_operation(noncopyable_function<future<>()>&&);
+    future<> run_snapshot_gate_operation(noncopyable_function<future<>()>&&);
+
+private:
+    config _config;
+    sharded<replica::database>& _db;
+    sharded<service::storage_proxy>& _sp;
+    sharded<cql3::query_processor>& _qp;
+    netw::messaging_service& _ms;
+    seastar::rwlock _lock;
+    seastar::named_gate _ops;
+    shared_ptr<snapshot::task_manager_module> _task_manager_module;
+    sstables::storage_manager& _storage_manager;
+    condition_variable _expiration_cond;
+
+    struct expiration_info {
+        gc_clock::time_point expires_at;
+        sstring ks_name;
+        sstring table_name;
+        sstring tag;
+    };
+    std::vector<expiration_info> _expiration_queue;
+    future<> _delete_expired_snapshots = make_ready_future<>();
+
+    future<> check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter = {});
+
+    // Resolve a user-provided table name that may be a logical index name
+    // (e.g. "myindex") to its backing column family name (e.g.
+    // "myindex_index"). Returns the name unchanged if it already
+    // matches a column family.
+    sstring resolve_table_name(const sstring& ks_name, const sstring& name) const;
+
+    template <typename Func>
+    std::invoke_result_t<Func> run_snapshot_list_operation(Func&& f) {
+        return with_gate(_ops, [f = std::move(f), this] () {
+            return container().invoke_on(0, [f = std::move(f)] (snapshot_ctl& snap) mutable {
+                return with_lock(snap._lock.for_read(), std::move(f));
+            });
+        });
+    }
+
+    friend class snapshot::backup_task_impl;
+
+    future<> do_take_snapshot(sstring tag, std::vector<sstring> keyspace_names, snapshot_options opts = {}  );
+    future<> do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
+    future<> do_take_cluster_column_family_snapshot(std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
+
+    future<> delete_expired_snapshots();
+    future<> backup_sstables(table_id, std::string, std::string, std::string, std::string, dht::token, dht::token, utils::chunked_vector<sstables::sstable_id>, bool);
+};
+
+}

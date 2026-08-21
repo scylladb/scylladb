@@ -1,0 +1,142 @@
+
+/*
+ * Copyright (C) 2018-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+
+#include "result_message.hh"
+#include "cql3/cql_statement.hh"
+#include "replica/tablets.hh"
+#include "types/tuple.hh"
+#include <bit>
+#include <seastar/core/format.hh>
+#include <fmt/std.h>
+
+namespace cql_transport::messages {
+
+void result_message::add_tablet_info(locator::tablet_routing_info info) {
+    auto replicas_values = make_list_value(replica::get_replica_set_type(), replica::replicas_to_data_value(info.tablet_replicas));
+    auto v1 = data_value(dht::token::to_int64(info.token_range.first));
+    auto v2 = data_value(dht::token::to_int64(info.token_range.second));
+
+    auto tablets_routing = make_tuple_value(replica::get_tablet_info_type(), {v1, v2, replicas_values});
+    add_custom_payload("tablets-routing-v1", tablets_routing.serialize_nonnull());
+}
+
+void result_message::add_tablet_info_v2(locator::tablet_routing_info_v2 info) {
+    auto replica_values = make_list_value(replica::get_replica_set_type(), replica::replicas_to_data_value(info.tablet_replicas));
+    auto v1 = data_value(dht::token::to_int64(info.token_range.first));
+    auto v2 = data_value(dht::token::to_int64(info.token_range.second));
+    auto hash = data_value(std::bit_cast<int64_t>(info.hash.value()));
+
+    auto tablets_routing_v2 = make_tuple_value(
+        replica::get_tablet_info_v2_type(),
+        {v1, v2, replica_values, hash}
+    );
+    add_custom_payload("tablets-routing-v2", tablets_routing_v2.serialize_nonnull());
+}
+
+std::ostream& operator<<(std::ostream& os, const result_message::void_message& msg) {
+    fmt::print(os, "{{result_message::void}}");
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const result_message::bounce& msg) {
+    fmt::print(os, "{{result_message::bounce to host {}, shard {} }}", msg.target_host(), msg.target_shard());
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const result_message::exception& msg) {
+    fmt::print(os, "{{result_message::exception {}}}", msg.get_exception());
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const result_message::set_keyspace& msg) {
+    fmt::print(os, "{{result_message::set_keyspace {}}}", msg.get_keyspace());
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const result_message::prepared::cql& msg) {
+    fmt::print(os, "{{result_message::prepared::cql {}}}", to_hex(msg.get_id()));
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const result_message::schema_change& msg) {
+    // FIXME: format contents
+    fmt::print(os, "{{result_message::prepared::schema_change {:p}}}", (void*)msg.get_change().get());
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const result_message& msg) {
+    class visitor : public result_message::visitor {
+        std::ostream& _os;
+    public:
+        explicit visitor(std::ostream& os) : _os(os) {}
+        void visit(const result_message::void_message& m) override { _os << m; };
+        void visit(const result_message::set_keyspace& m) override { _os << m; };
+        void visit(const result_message::prepared::cql& m) override { _os << m; };
+        void visit(const result_message::schema_change& m) override { _os << m; };
+        void visit(const result_message::rows& m) override { fmt::print(_os, "{}", m); };
+        void visit(const result_message::bounce& m) override { _os << m; };
+        void visit(const result_message::exception& m) override { _os << m; };
+    };
+    visitor print_visitor{os};
+    msg.accept(print_visitor);
+    return os;
+}
+
+void result_message::visitor_base::visit(const result_message::exception& ex) {
+    ex.throw_me();
+}
+
+result_message::prepared::prepared(cql3::prepared_statements_cache::pinned_value_type prepared_entry, bool support_lwt_opt)
+        : _prepared_entry(std::move(prepared_entry))
+        , _metadata(
+            (*_prepared_entry)->bound_names,
+            (*_prepared_entry)->partition_key_bind_indices,
+            support_lwt_opt ? (*_prepared_entry)->statement->is_conditional() : false)
+        , _result_metadata{extract_result_metadata((*_prepared_entry)->statement)}
+{
+    for (const auto& w : (*_prepared_entry)->warnings){
+        add_warning(w);
+    }
+}
+
+::shared_ptr<const cql3::metadata> result_message::prepared::extract_result_metadata(::shared_ptr<cql3::cql_statement> statement) {
+    return statement->get_result_metadata();
+}
+
+}
+
+auto
+fmt::formatter<cql_transport::messages::result_message::rows>::format(
+    const cql_transport::messages::result_message::rows& msg,
+    fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    using out_t = decltype(ctx.out());
+    out_t out = ctx.out();
+    out = fmt::format_to(out, "{{result_message::rows ");
+    struct visitor {
+        out_t& _os;
+        void start_row() {
+            _os = fmt::format_to(_os, "{{row: ");
+        }
+        void accept_value(managed_bytes_view_opt value) {
+            if (!value) {
+                _os = fmt::format_to(_os, " null");
+                return;
+            }
+            _os = fmt::format_to(_os, " ");
+            for (auto fragment : fragment_range(*value)) {
+                _os = fmt::format_to(_os, "{}", fmt_hex(fragment));
+            }
+        }
+        void end_row() {
+            _os = fmt::format_to(_os, "}}");
+        }
+    };
+    msg.rs().visit(visitor { out });
+    return fmt::format_to(out, "}}");
+}

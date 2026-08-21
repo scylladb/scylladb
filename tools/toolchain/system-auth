@@ -1,0 +1,9 @@
+#%PAM-1.0
+# Dummy system-auth file to allow sudo within the container
+auth        required      pam_permit.so
+
+account     required      pam_permit.so
+
+password    required      pam_permit.so
+
+session     required      pam_permit.so

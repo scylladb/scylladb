@@ -1,0 +1,2 @@
+usr/lib/systemd/system/scylla-perf-collector.service
+var/log/scylla-perf

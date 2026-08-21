@@ -1,0 +1,1 @@
+SYSCONFDIR="/etc/sysconfig"

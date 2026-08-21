@@ -1,0 +1,27 @@
+> -- single null value
+> CREATE KEYSPACE reproducer WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
+OK
+> CREATE TABLE reproducer.t(pk int PRIMARY KEY, v int);
+OK
+> INSERT INTO reproducer.t (pk) VALUES (1);
+OK
+> SELECT TOKEN(v) FROM reproducer.t;
++-------------------+
+| system.token(v)   |
+|-------------------|
+| null              |
++-------------------+
+> 
+> -- multiple null values
+> CREATE TABLE reproducer.t2(pk int PRIMARY KEY, a int, b int);
+OK
+> INSERT INTO reproducer.t2 (pk) VALUES (1);
+OK
+> SELECT TOKEN(pk, a, b) FROM reproducer.t2;
+Error from server: code=2200 [Invalid query] message="Invalid number of arguments in call to function system.token: 1 required but 3 provided"
+> SELECT TOKEN(pk, b) FROM reproducer.t2;
+Error from server: code=2200 [Invalid query] message="Invalid number of arguments in call to function system.token: 1 required but 2 provided"
+> SELECT TOKEN(a, b) FROM reproducer.t2;
+Error from server: code=2200 [Invalid query] message="Invalid number of arguments in call to function system.token: 1 required but 2 provided"
+> 
+> DROP KEYSPACE reproducer;OK

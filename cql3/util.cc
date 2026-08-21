@@ -1,0 +1,244 @@
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+
+/* Copyright 2020-present ScyllaDB */
+
+#include "utils/assert.hh"
+#include "util.hh"
+#include "cql_config.hh"
+#include "cql3/expr/expr-utils.hh"
+#include "db_clock.hh"
+#include "utils/chunked_string.hh"
+#include "utils/reusable_buffer.hh"
+
+#ifdef DEBUG
+
+#include <seastar/core/align.hh>
+#include <seastar/core/posix.hh>
+
+#include <sys/mman.h>
+#include <ucontext.h>
+#include <unistd.h>
+
+extern "C" {
+void __sanitizer_start_switch_fiber(void** fake_stack_save, const void* stack_bottom, size_t stack_size);
+void __sanitizer_finish_switch_fiber(void* fake_stack_save, const void** stack_bottom_old, size_t* stack_size_old);
+}
+
+#endif
+
+namespace cql3::util {
+
+static void do_with_parser_impl_impl(utils::chunked_string_view chunked_cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f) {
+    // ANTLR3 does pointer arithmetic on char* pointers, so we must linearize.
+    // Use a thread-local reusable_buffer to avoid a heap allocation per call.
+    using namespace std::chrono_literals;
+    static thread_local utils::reusable_buffer<seastar::lowres_clock> linearization_buffer(600s);
+
+    std::variant<sstring, utils::reusable_buffer_guard> buf_source;
+    std::string_view  cql;
+    if (linearization_buffer.used()) {
+        // Nested call to with_parser(). Such calls usually (re) parse a sub-set
+        // of the original query, so it is fine to linearize.
+        buf_source.emplace<sstring>(chunked_cql.linearize());
+        cql = std::get<sstring>(buf_source);
+    } else {
+        buf_source.emplace<utils::reusable_buffer_guard>(linearization_buffer);
+        bytes_view cql_bytes = std::get<utils::reusable_buffer_guard>(buf_source).get_linearized_view(chunked_cql.data());
+        cql = std::string_view(reinterpret_cast<const char*>(cql_bytes.data()), cql_bytes.size());
+    }
+
+    cql3_parser::CqlLexer::collector_type lexer_error_collector(cql);
+    cql3_parser::CqlParser::collector_type parser_error_collector(cql);
+    cql3_parser::CqlLexer::InputStreamType input{reinterpret_cast<const ANTLR_UINT8*>(cql.data()), ANTLR_ENC_UTF8, static_cast<ANTLR_UINT32>(cql.size()), nullptr};
+    cql3_parser::CqlLexer lexer{&input};
+    lexer.set_error_listener(lexer_error_collector);
+    cql3_parser::CqlParser::TokenStreamType tstream(ANTLR_SIZE_HINT, lexer.get_tokSource());
+    cql3_parser::CqlParser parser{&tstream};
+    parser.set_error_listener(parser_error_collector);
+    parser.set_dialect(d);
+    f(parser);
+}
+
+#ifndef DEBUG
+
+void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f) {
+    return do_with_parser_impl_impl(cql, d, std::move(f));
+}
+
+#else
+
+// The CQL parser uses huge amounts of stack space in debug mode, enough to
+// overflow a seastar fiber stack - 256 KiB in the builds that define DEBUG,
+// since those enable ASAN and Seastar raises its default accordingly. The
+// mechanism below runs the parser on a larger stack.
+
+// The parser stack is hand-rolled, so nothing stops a deep parse from running
+// off its lower end into whatever is mapped below. That overflow used to be
+// completely silent under ASAN: the frame instrumentation writes the shadow
+// bytes of the frame it believes it owns, which un-poisons the redzones of the
+// neighbouring heap chunks, so the subsequent data writes clobber allocator
+// metadata without tripping a single check. The damage only surfaced much
+// later, as a CHECK failure inside ASAN's quarantine, in whatever unrelated
+// code happened to be freeing memory at the time (SCYLLADB-3116,
+// SCYLLADB-3264).
+//
+// A PROT_NONE guard region below the stack turns that into an immediate fault
+// at the offending frame instead.
+//
+// A guard only fires if the overflowing frame writes into it, so a frame larger
+// than the guard could move the stack pointer past it in one step and never
+// touch it. That does not happen here: -fstack-usage over the generated parser
+// in a debug build puts the largest frame at 536 bytes, median 40, so a single
+// page would already be impossible to step over. The rest of the 16 KiB is
+// margin for the non-parser frames that also run on this stack and for the
+// functions that allocate dynamically on top of their static frame. The margin
+// is free - guard pages are never touched, so none of them is ever committed.
+class parser_stack {
+    static constexpr size_t min_guard_size = 16 * 1024;
+    static constexpr size_t usable_size = 1 << 20;
+
+    // mprotect() rounds the protected range up to a page boundary, so the
+    // guard must be a whole number of pages or bottom() would land inside it.
+    size_t _guard_size;
+    mmap_area _area;
+public:
+    parser_stack()
+            : _guard_size(align_up(min_guard_size, size_t(getpagesize())))
+            , _area(mmap_anonymous(nullptr, _guard_size + usable_size,
+                                   PROT_READ | PROT_WRITE, MAP_PRIVATE)) {
+        throw_system_error_on(mprotect(_area.get(), _guard_size, PROT_NONE) != 0, "mprotect");
+    }
+
+    // Lowest usable address, i.e. what makecontext(3) wants as ss_sp.
+    char* bottom() const noexcept { return _area.get() + _guard_size; }
+    static constexpr size_t size() noexcept { return usable_size; }
+};
+
+struct thunk_args {
+    // arguments to do_with_parser_impl_impl
+    utils::chunked_string_view cql;
+    dialect d;
+    noncopyable_function<void (cql3_parser::CqlParser&)>&& func;
+    // Exceptions can't be returned from another stack, so store
+    // any thrown exception here
+    std::exception_ptr ex;
+    // Caller's stack
+    ucontext_t caller_stack;
+    // Address Sanitizer needs some extra storage for stack switches.
+    struct {
+        void* fake_stack;
+        const void* stack_bottom;
+        size_t stack_size;
+    } sanitizer_state;
+};
+
+// Translate from makecontext(3)'s strange calling convention
+// to do_with_parser_impl_impl().
+static void thunk(int p1, int p2) {
+    auto p = uint32_t(p1) | (uint64_t(uint32_t(p2)) << 32);
+    auto args = reinterpret_cast<thunk_args*>(p);
+    auto& san = args->sanitizer_state;
+    // Complete stack switch started in do_with_parser_impl()
+    __sanitizer_finish_switch_fiber(nullptr, &san.stack_bottom, &san.stack_size);
+    try {
+        do_with_parser_impl_impl(args->cql, args->d, std::move(args->func));
+    } catch (...) {
+        args->ex = std::current_exception();
+    }
+    // Switch back to original stack
+    __sanitizer_start_switch_fiber(nullptr, san.stack_bottom, san.stack_size);
+    setcontext(&args->caller_stack);
+};
+
+void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f) {
+    static thread_local parser_stack stack;
+    thunk_args args{
+        .cql = cql,
+        .d = d,
+        .func = std::move(f),
+    };
+    ucontext_t uc;
+    auto r = getcontext(&uc);
+    throwing_assert(r == 0);
+    if (stack.bottom() <= (char*)&uc && (char*)&uc < stack.bottom() + stack.size()) {
+        // We are already running on the large stack, so just call the
+        // parser directly.
+        return do_with_parser_impl_impl(cql, d, std::move(f));
+    }
+    uc.uc_stack.ss_sp = stack.bottom();
+    uc.uc_stack.ss_size = stack.size();
+    uc.uc_link = nullptr;
+    auto q = reinterpret_cast<uint64_t>(reinterpret_cast<uintptr_t>(&args));
+    makecontext(&uc, reinterpret_cast<void (*)()>(thunk), 2, int(q), int(q >> 32));
+    auto& san = args.sanitizer_state;
+    // Tell Address Sanitizer we are switching to another stack
+    __sanitizer_start_switch_fiber(&san.fake_stack, stack.bottom(), stack.size());
+    swapcontext(&args.caller_stack, &uc);
+    // Completes stack switch started in thunk()
+    __sanitizer_finish_switch_fiber(san.fake_stack, nullptr, 0);
+    if (args.ex) {
+        std::rethrow_exception(std::move(args.ex));
+    }
+}
+
+#endif
+
+void validate_timestamp(const cql_config& cql_cfg, const query_options& options, const std::unique_ptr<attributes>& attrs) {
+    if (attrs->is_timestamp_set() && cql_cfg.restrict_future_timestamp()) {
+        static constexpr int64_t MAX_DIFFERENCE = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::days(3)).count();
+        auto now = std::chrono::duration_cast<std::chrono::microseconds>(db_clock::now().time_since_epoch()).count();
+
+        auto timestamp = attrs->get_timestamp(now, options);
+
+        if (timestamp > now && timestamp - now > MAX_DIFFERENCE) {
+            throw exceptions::invalid_request_exception("Cannot provide a timestamp more than 3 days into the future. If this was not intended, "
+            "make sure the timestamp is in microseconds. You can also disable this check by setting the restrict_future_timestamp "
+            "configuration option to false.");
+        }
+    }
+}
+
+sstring relations_to_where_clause(const expr::expression& e) {
+    auto expr_to_pretty_string = [](const expr::expression& e) -> sstring {
+        return fmt::format("{:user}", e);
+    };
+    auto relations = expr::boolean_factors(e);
+    auto expressions = relations | std::views::transform(expr_to_pretty_string);
+    return fmt::to_string(fmt::join(expressions, " AND "));
+}
+
+expr::expression where_clause_to_relations(const std::string_view& where_clause, dialect d) {
+    return do_with_parser(utils::chunked_string_view(where_clause), d, std::mem_fn(&cql3_parser::CqlParser::whereClause));
+}
+
+sstring rename_columns_in_where_clause(const std::string_view& where_clause, std::vector<std::pair<::shared_ptr<column_identifier>, ::shared_ptr<column_identifier>>> renames, dialect d) {
+    std::vector<expr::expression> relations = boolean_factors(where_clause_to_relations(where_clause, d));
+    std::vector<expr::expression> new_relations;
+    new_relations.reserve(relations.size());
+
+    for (const expr::expression& old_relation : relations) {
+        new_relations.emplace_back(
+            expr::search_and_replace(old_relation,
+                [&](const expr::expression& e) -> std::optional<expr::expression> {
+                    for (const auto& [view_from, view_to] : renames) {
+                        if (auto ident = expr::as_if<expr::unresolved_identifier>(&e)) {
+                            auto from = column_identifier::raw(view_from->text(), true);
+                            if (*ident->ident == from) {
+                                return expr::unresolved_identifier{
+                                    ::make_shared<column_identifier::raw>(view_to->text(), true)
+                                };
+                            }
+                        }
+                    }
+                    return std::nullopt;
+                }
+            )
+        );
+    }
+
+    return relations_to_where_clause(expr::conjunction{std::move(new_relations)});
+}
+
+}

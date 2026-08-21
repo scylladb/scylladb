@@ -1,0 +1,1275 @@
+#
+# Copyright (C) 2026-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
+import asyncio
+import random
+import time
+from pathlib import Path
+from test.pylib.manager_client import ManagerClient
+from test.cluster.util import new_test_keyspace
+from cassandra import WriteFailure, WriteTimeout
+from cassandra.protocol import ConfigurationException, ServerError
+import pytest
+import logging
+from test.pylib.tablets import get_tablet_count, get_tablet_replica
+from test.pylib.util import wait_for
+
+logger = logging.getLogger(__name__)
+
+segment_size = 128 * 1024
+
+async def count_logstor_data_files(manager: ManagerClient, server_id: int, shard: int) -> int:
+    workdir = await manager.server_get_workdir(server_id)
+    return len(list((Path(workdir) / "logstor").glob(f"ls_{shard}-*-Data.db")))
+
+async def test_config_option_consistency(manager: ManagerClient):
+    """
+    Test that logstor storage engine requires the experimental 'logstor' feature to be enabled.
+    Without the feature flag, users cannot create logstor tables.
+    """
+    cmdline = ['--logger-log-level', 'logstor=debug']
+    # Logstor feature is NOT enabled
+    cfg = {'experimental_features': []}
+    await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "") as ks:
+        # Should fail because logstor feature is not enabled
+        with pytest.raises(ConfigurationException, match="The experimental feature 'logstor' must be enabled"):
+            await cql.run_async(f"CREATE TABLE {ks}.t_logstor (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
+
+async def test_parallel_writes(manager: ManagerClient):
+    cmdline = ['--logger-log-level', 'logstor=debug']
+    cfg = {'experimental_features': ['logstor']}
+    await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
+
+        # write to different keys in parallel
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, {i+1})") for i in range(100)])
+
+        # validate
+        for i in range(100):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
+            assert rows[0].pk == i
+            assert rows[0].v == i + 1
+
+async def test_parallel_big_writes(manager: ManagerClient):
+    """
+    Perform multiple writes in parallel with large values and validate to test segment switching.
+    """
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {'experimental_features': ['logstor']}
+    await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        # Create a large value of approximately 100KB, close to segment size
+        large_value = 'x' * (100 * 1024)
+        num_writes = 8
+
+        # Perform parallel writes with large values
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{i}-{large_value}')") for i in range(num_writes)])
+
+        # Validate that all writes succeeded
+        for i in range(num_writes):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
+            assert rows[0].pk == i
+            assert rows[0].v == f"{i}-{large_value}"
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_write_failure_retires_active_segment(manager: ManagerClient):
+    """
+    A failed segment write breaks the segment's append semaphore, so the segment must be
+    retired and the active segment switched. Otherwise every later write to that segment
+    fails and writes are stuck until restart.
+
+    This test:
+    1. Writes and verifies a few keys, establishing an active segment
+    2. Injects a failure into the segment write path and verifies the write fails
+    3. Verifies the segment was retired
+    4. Verifies that writes after the failure succeed, including to the failed key
+    5. Restarts the server and verifies all data is recovered
+    """
+    inj = 'logstor_fail_segment_write'
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {'experimental_features': ['logstor']}
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    server_log = await manager.server_open_log(servers[0].server_id)
+
+    async with new_test_keyspace(manager, "") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        expected_data = {}
+        for pk in range(5):
+            value = f"before_{pk}"
+            expected_data[pk] = value
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
+
+        log_mark = await server_log.mark()
+
+        # Fail the next segment write. The injection is not one-shot, so the write is
+        # guaranteed to fail rather than racing with background segment writes, but it
+        # is disabled again immediately to keep the failure window to a single write.
+        await manager.api.enable_injection(servers[0].ip_addr, inj, one_shot=False)
+        try:
+            with pytest.raises((WriteFailure, WriteTimeout, ServerError)):
+                await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES (100, 'failed')")
+        finally:
+            await manager.api.disable_injection(servers[0].ip_addr, inj)
+
+        await server_log.wait_for('retiring segment', from_mark=log_mark, timeout=60)
+
+        # All writes after the failure must succeed. Without retiring the failed segment
+        # they would keep failing on its broken append semaphore.
+        for pk in list(range(5, 10)) + [100]:
+            value = f"after_{pk}"
+            expected_data[pk] = value
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
+
+        for pk, expected_v in expected_data.items():
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1, f"Key {pk} not found"
+            assert rows[0].v == expected_v, f"Key {pk} has wrong value"
+
+        # The retired segment has a hole at the failed write. Verify it doesn't break recovery.
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        for pk, expected_v in expected_data.items():
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1, f"Key {pk} not found after recovery"
+            assert rows[0].v == expected_v, f"Key {pk} has wrong value after recovery"
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize("fail_separator_flush", [False, True], ids=["normal", "fail_separator_flush"])
+async def test_recovery_basic(manager: ManagerClient, fail_separator_flush: bool):
+    """
+    Test that logstor data persists across server restarts.
+
+    This test:
+    1. Writes initial data to several keys with large values (~40KB each) to fill multiple segments
+    2. Overwrites some keys with new large values
+    3. Stops the server
+    4. Starts the server again
+    5. Verifies all data is correctly recovered
+    6. Performs additional writes and reads to verify system continues functioning
+    """
+    cmdline = ['--logger-log-level', 'logstor=trace']
+    cfg = {'experimental_features': ['logstor']}
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    if fail_separator_flush:
+        await manager.api.enable_injection(servers[0].ip_addr, "fail_flush_separator_buffer", one_shot=False)
+
+    async with new_test_keyspace(manager, "") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        # Create large values (~40KB each) to fill multiple segments
+        value_size = 40 * 1024
+
+        initial_data = {}
+        for pk in [1, 2, 3, 4, 5]:
+            value = f"initial_{pk}_" + ('x' * (value_size - 20))
+            initial_data[pk] = value
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
+
+        # overwrite some keys with new large values
+        overwrites = {}
+        for pk in [2, 4]:
+            value = f"updated_{pk}_" + ('y' * (value_size - 20))
+            overwrites[pk] = value
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
+
+        # Expected final state combines initial data with overwrites
+        expected_data = {**initial_data, **overwrites}
+
+        # Verify data before restart
+        for pk, expected_v in expected_data.items():
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1
+            assert rows[0].pk == pk
+            assert rows[0].v == expected_v
+
+        # restart the server
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        # verify data after restart
+        for pk, expected_v in expected_data.items():
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1, f"Key {pk} not found after recovery"
+            assert rows[0].pk == pk, f"Key {pk} has wrong pk value"
+            assert rows[0].v == expected_v, f"Key {pk} has wrong value: length expected {len(expected_v)}, got {len(rows[0].v)}"
+
+        # perform additional writes after recovery
+        new_writes = {}
+        for pk in [6, 7, 8]:
+            value = f"post_recovery_{pk}_" + ('z' * (value_size - 30))
+            new_writes[pk] = value
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
+
+        # also overwrite one of the recovered keys
+        pk = 1
+        value = f"post_recovery_overwrite_{pk}_" + ('w' * (value_size - 40))
+        new_writes[pk] = value
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
+
+        # Update expected data with new writes
+        expected_data.update(new_writes)
+
+        # Verify all data including new writes
+        for pk, expected_v in expected_data.items():
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1, f"Key {pk} not found after additional writes"
+            assert rows[0].pk == pk, f"Key {pk} has wrong pk value"
+            assert rows[0].v == expected_v, f"Key {pk} has wrong value after additional writes"
+
+async def test_recovery_with_segment_reuse(manager: ManagerClient):
+    """
+    Test recovery after segments have been compacted and reused.
+
+    This test:
+    1. Writes to 10 keys multiple times with overwrites
+    2. Fills the disk approximately twice to trigger compaction and segment reuse
+    3. Tracks the last written value for each key
+    4. Stops and restarts the server
+    5. Verifies all last values are correctly recovered
+    """
+    disk_size_mb = 4
+    file_size_mb = 1
+    value_size = 50 * 1024
+    num_keys = 10
+
+    cmdline = ['--logger-log-level', 'logstor=trace', '--smp=1']
+    cfg = {
+        'logstor_disk_size_in_mb': disk_size_mb,
+        'logstor_file_size_in_mb': file_size_mb,
+        'experimental_features': ['logstor']
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        # Track the last value written to each key
+        last_values = {}
+
+        # Calculate how many writes needed to fill disk twice
+        disk_size_bytes = disk_size_mb * 1024 * 1024
+        writes_to_fill_disk = disk_size_bytes // (value_size + 100)
+        total_writes = 2 * writes_to_fill_disk
+
+        # Write with overwrites to fill disk twice
+        for i in range(total_writes):
+            pk = i % num_keys  # Rotate through the 10 keys
+            value = f"value_{i}_" + ('x' * (value_size - 20))
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
+            last_values[pk] = value
+
+        # Verify data before restart
+        for pk, expected_v in last_values.items():
+            rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1
+            assert rows[0].v == expected_v
+
+        # Verify compaction ran
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        segments_compacted = metrics.get("scylla_logstor_sm_segments_compacted") or 0
+        logger.info(f"Segments compacted: {segments_compacted}")
+        assert segments_compacted > 0, "Compaction should have run when filling disk twice"
+
+        # restart the server
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        # Verify all data after restart
+        for pk, expected_v in last_values.items():
+            rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1, f"Key {pk} not found after recovery"
+            assert rows[0].v == expected_v, f"Key {pk} value mismatch after recovery"
+
+async def test_grow_logstor_disk_size(manager: ManagerClient):
+    """
+    Test that increasing the configured logstor disk size works correctly.
+
+    This test starts a node with a smaller logstor disk size, verifies the
+    initial file count, restarts the node with a larger configured size, and
+    checks that new files are created and the number of free segments grows.
+    """
+    old_disk_size_mb = 4
+    new_disk_size_mb = 8
+    file_size_mb = 1
+
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {
+        'logstor_disk_size_in_mb': old_disk_size_mb,
+        'logstor_file_size_in_mb': file_size_mb,
+        'logstor_format_on_startup': True,
+        'experimental_features': ['logstor'],
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        files_before_restart = await count_logstor_data_files(manager, servers[0].server_id, 0)
+        assert files_before_restart == old_disk_size_mb // file_size_mb
+
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        old_free_segments = metrics.get("scylla_logstor_sm_free_segments") or 0
+
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_update_config(servers[0].server_id, 'logstor_disk_size_in_mb', new_disk_size_mb)
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        files_after_growth = await count_logstor_data_files(manager, servers[0].server_id, 0)
+        assert files_after_growth == new_disk_size_mb // file_size_mb
+
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        new_free_segments = metrics.get("scylla_logstor_sm_free_segments") or 0
+
+        assert new_free_segments >= old_free_segments + ((new_disk_size_mb - old_disk_size_mb) * 1024 * 1024) // segment_size, \
+            "Free segments should increase after growing disk size"
+
+async def test_shrink_logstor_disk_size_no_data(manager: ManagerClient):
+    """
+    Test that shrinking the configured logstor disk size works correctly when
+    there is no live data to preserve the extra capacity.
+
+    This test starts a node with a larger logstor disk size, verifies the
+    initial file count, restarts the node with a smaller configured size, and
+    checks that the extra file is removed and the free segment count stays
+    within the new capacity.
+    """
+    old_disk_size_mb = 8
+    new_disk_size_mb = 4
+    file_size_mb = 1
+
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {
+        'logstor_disk_size_in_mb': old_disk_size_mb,
+        'logstor_file_size_in_mb': file_size_mb,
+        'logstor_format_on_startup': True,
+        'experimental_features': ['logstor'],
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        files_before_restart = await count_logstor_data_files(manager, servers[0].server_id, 0)
+        assert files_before_restart == old_disk_size_mb // file_size_mb
+
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_update_config(servers[0].server_id, 'logstor_disk_size_in_mb', new_disk_size_mb)
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        files_after_restart = await count_logstor_data_files(manager, servers[0].server_id, 0)
+        assert files_after_restart == new_disk_size_mb // file_size_mb
+
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        free_segments = metrics.get("scylla_logstor_sm_free_segments") or 0
+        assert free_segments <= new_disk_size_mb * 1024 * 1024 // segment_size, "Free segments should not exceed total segments after shrinking disk size"
+
+
+async def test_shrink_logstor_disk_size_dead_data(manager: ManagerClient):
+    """
+    Test that shrinking the configured logstor disk size can remove a file when
+    all data in that file is dead.
+
+    This test starts with two files, writes enough segment-sized data to use
+    both files, drops the table so all data becomes dead, restarts with a
+    smaller configured disk size, and checks that the extra file disappears and
+    the remaining segment accounting matches the new capacity.
+    """
+    old_disk_size_mb = 8
+    new_disk_size_mb = 4
+    file_size_mb = 4
+    segments_per_file = (file_size_mb * 1024 * 1024) // segment_size
+
+    cmdline = ['--logger-log-level', 'logstor=trace', '--smp=1']
+    cfg = {
+        'logstor_disk_size_in_mb': old_disk_size_mb,
+        'logstor_file_size_in_mb': file_size_mb,
+        'logstor_format_on_startup': True,
+        'experimental_features': ['logstor'],
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        files_before = await count_logstor_data_files(manager, servers[0].server_id, 0)
+        assert files_before == old_disk_size_mb // file_size_mb
+
+        # Fill segments in both files by writing segments_per_file+1 segment-sized values to unique keys.
+        # Since there are only two files, this ensure each file has at least one segment with data.
+        value_size = 120 * 1024  # ~120 KB fills approximately one 128 KB segment
+        value = 'x' * value_size
+        for i in range(segments_per_file + 1):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{value}')")
+
+        # Drop the table to mark all data as dead
+        await cql.run_async(f"DROP TABLE {ks}.test")
+
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_update_config(servers[0].server_id, 'logstor_disk_size_in_mb', new_disk_size_mb)
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        files_after_shrink = await count_logstor_data_files(manager, servers[0].server_id, 0)
+        assert files_after_shrink == new_disk_size_mb // file_size_mb, \
+            f"Expected {new_disk_size_mb // file_size_mb} file(s) after shrink with dead data, got {files_after_shrink}"
+
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        free_segments = metrics.get("scylla_logstor_sm_free_segments") or 0
+        segments_in_use = metrics.get("scylla_logstor_sm_segments_in_use") or 0
+        configured_segments = new_disk_size_mb * 1024 * 1024 // segment_size
+        # The segment manager allocates one empty active segment on startup, so
+        # after recovery with no live data all configured segments should be
+        # accounted for by free segments plus that active segment.
+        assert free_segments + segments_in_use == configured_segments, \
+            f"Expected all configured segments to be accounted for after shrink with dead data, got free={free_segments}, in_use={segments_in_use}"
+        assert segments_in_use <= 1, \
+            f"Expected at most one active segment after shrink with dead data, got {segments_in_use}"
+
+
+async def test_shrink_logstor_disk_size_live_data(manager: ManagerClient):
+    """
+    Test that shrinking the configured logstor disk size preserves files that
+    still contain live data.
+
+    This test starts with two files, writes enough unique segment-sized values
+    to place live data in the second file, restarts with a smaller configured
+    disk size, and checks that the file is kept and the data remains readable.
+    """
+    old_disk_size_mb = 8
+    new_disk_size_mb = 4
+    file_size_mb = 4
+    segments_per_file = (file_size_mb * 1024 * 1024) // segment_size
+
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {
+        'logstor_disk_size_in_mb': old_disk_size_mb,
+        'logstor_file_size_in_mb': file_size_mb,
+        'logstor_format_on_startup': True,
+        'experimental_features': ['logstor'],
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        files_before = await count_logstor_data_files(manager, servers[0].server_id, 0)
+        assert files_before == old_disk_size_mb // file_size_mb
+
+        # Fill segments in both files by writing segments_per_file+1 segment-sized values to unique keys.
+        # Since there are only two files, this ensure each file has at least one segment with live data.
+        num_keys = segments_per_file + 1
+        value_size = 120 * 1024  # ~120 KB fills approximately one 128 KB segment
+        value = 'x' * value_size
+        for i in range(num_keys):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{value}')")
+
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_update_config(servers[0].server_id, 'logstor_disk_size_in_mb', new_disk_size_mb)
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        # The second file must not be removed because it contains live data
+        files_after_shrink = await count_logstor_data_files(manager, servers[0].server_id, 0)
+        assert files_after_shrink == old_disk_size_mb // file_size_mb, \
+            f"Expected {old_disk_size_mb // file_size_mb} files (live data prevents removal of second file), got {files_after_shrink}"
+
+        # Verify all data is still accessible
+        for i in range(num_keys):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
+            assert len(rows) == 1, f"Key {i} not found after attempted shrink with live data"
+            assert rows[0].v == value, f"Wrong value for key {i} after attempted shrink with live data"
+
+
+async def test_space_accounting_metrics(manager: ManagerClient):
+    """
+    Verify the space accounting metrics scylla_logstor_sm_live_record_bytes and
+    scylla_logstor_sm_live_record_count are correct after writes, overwrites,
+    restarts, and table drops.
+    """
+    disk_size_mb = 4
+    file_size_mb = 1
+    key_count = 100
+    value_size = 2000
+    max_value_overhead = 500
+
+    cmdline = ['--logger-log-level', 'logstor=trace', '--smp=1']
+    cfg = {
+        'logstor_disk_size_in_mb': disk_size_mb,
+        'logstor_file_size_in_mb': file_size_mb,
+        'experimental_features': ['logstor']
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    server = servers[0]
+    cql = manager.get_cql()
+
+    async def get_live_record_metrics() -> tuple[int, int]:
+        metrics = await manager.metrics.query(server.ip_addr)
+        live_record_bytes = metrics.get("scylla_logstor_sm_live_record_bytes")
+        live_record_count = metrics.get("scylla_logstor_sm_live_record_count")
+        assert live_record_bytes is not None
+        assert live_record_count is not None
+        return int(live_record_bytes), int(live_record_count)
+
+    def make_value(tag: str) -> str:
+        return tag + ('x' * (value_size - len(tag)))
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        insert = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+
+        initial_value = make_value("initial_")
+        await asyncio.gather(*[cql.run_async(insert, [pk, initial_value]) for pk in range(key_count)])
+
+        await manager.api.logstor_flush(server.ip_addr)
+
+        baseline_live_record_bytes, baseline_live_record_count = await get_live_record_metrics()
+        logger.info(f"baseline live_record_bytes={baseline_live_record_bytes}, baseline_live_record_count={baseline_live_record_count}, avg overhead per record={(baseline_live_record_bytes / baseline_live_record_count) - value_size}")
+
+        assert baseline_live_record_count == key_count, (
+            f"expected live_record_count to be {key_count}, got {baseline_live_record_count}"
+        )
+
+        assert baseline_live_record_bytes >= key_count * value_size, (
+            f"expected live_record_bytes to be at least {key_count * value_size}, "
+            f"got {baseline_live_record_bytes}"
+        )
+        # live_record_bytes tracks full durable record bytes, so allow room for
+        # mutation and log record metadata on top of the raw value payload.
+        assert baseline_live_record_bytes <= key_count * (value_size + max_value_overhead), (
+            f"expected live_record_bytes to be at most {key_count * (value_size + max_value_overhead)}, "
+            f"got {baseline_live_record_bytes}"
+        )
+
+        # overwrite few keys and verify that the live_record_bytes and live_record_count remain unchanged
+        for i in range(10):
+            overwrite_value = make_value(f"overwrite_{i}_")
+            await asyncio.gather(*[cql.run_async(insert, [pk, overwrite_value]) for pk in range(key_count)])
+
+        live_record_bytes_after_overwrites, live_record_count_after_overwrites = await get_live_record_metrics()
+        assert live_record_bytes_after_overwrites == baseline_live_record_bytes, (
+            f"expected live_record_bytes to remain {baseline_live_record_bytes} after overwrites, "
+            f"got {live_record_bytes_after_overwrites}"
+        )
+        assert live_record_count_after_overwrites == baseline_live_record_count, (
+            f"expected live_record_count to remain {baseline_live_record_count} after overwrites, "
+            f"got {live_record_count_after_overwrites}"
+        )
+
+        # restart the server and verify that after recovery the live_record_bytes and live_record_count are correct
+        await manager.server_stop_gracefully(server.server_id)
+        await manager.server_start(server.server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        final_live_record_bytes_after_restart, final_live_record_count_after_restart = await get_live_record_metrics()
+        logger.info(f"final_live_record_bytes_after_restart={final_live_record_bytes_after_restart}, final_live_record_count_after_restart={final_live_record_count_after_restart}")
+
+        assert final_live_record_count_after_restart == key_count, (
+            f"expected live_record_count to remain {key_count} after restart, "
+            f"got {final_live_record_count_after_restart}"
+        )
+
+        assert final_live_record_bytes_after_restart == baseline_live_record_bytes, (
+            f"expected live_record_bytes to remain {baseline_live_record_bytes} after restart, "
+            f"got {final_live_record_bytes_after_restart}"
+        )
+
+        # drop the table and verify the space accounting metrics are cleared to 0
+        await cql.run_async(f"DROP TABLE {ks}.test")
+
+        final_live_record_bytes_after_drop, final_live_record_count_after_drop = await get_live_record_metrics()
+        assert final_live_record_bytes_after_drop == 0, (
+            f"expected live_record_bytes to be 0 after table drop, "
+            f"got {final_live_record_bytes_after_drop}"
+        )
+        assert final_live_record_count_after_drop == 0, (
+            f"expected live_record_count to be 0 after table drop, "
+            f"got {final_live_record_count_after_drop}"
+        )
+
+async def test_compaction(manager: ManagerClient):
+    """
+    Test log compaction by creating dead data and verifying space reclamation.
+    """
+    cmdline = ['--logger-log-level', 'logstor=trace', '--smp=1']
+    cfg = {'experimental_features': ['logstor']}
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        # write few segments with unique keys, then few segments with overwrites.
+        # write large values so each write fills a single segment.
+        value_size = 120 * 1024
+        value = 'x' * value_size
+
+        # write few unique keys
+        for i in range(10):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{value}')")
+
+        # few writes to the same key to create dead data except the last one
+        for _ in range(5):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES (100, '{value}')")
+
+        # flush all segments and put them into a single compaction group since
+        # there is a single tablet.
+        await manager.api.logstor_flush(servers[0].ip_addr)
+
+        # trigger compaction. should take the 4 segments with dead data and compact them
+        await manager.api.logstor_compaction(servers[0].ip_addr)
+
+        async def segments_compacted():
+            metrics = await manager.metrics.query(servers[0].ip_addr)
+            segments_compacted = metrics.get("scylla_logstor_sm_segments_compacted") or 0
+            if segments_compacted == 4:
+                return True
+            await manager.api.logstor_compaction(servers[0].ip_addr)
+        await wait_for(segments_compacted, time.time() + 60)
+
+async def test_drop_table(manager: ManagerClient):
+    """
+    Test that DROP TABLE works properly with logstor tables.
+    """
+    cmdline = ['--logger-log-level', 'logstor=trace']
+    cfg = {'experimental_features': ['logstor']}
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial': 4}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test1 (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        # create another table that will not be dropped to verify it's not affected
+        await cql.run_async(f"CREATE TABLE {ks}.test2 (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        # write data to fill few segments
+        value_size = 30 * 1024
+        value = 'x' * value_size
+        for i in range(20):
+            await cql.run_async(f"INSERT INTO {ks}.test1 (pk, v) VALUES ({i}, '{value}')")
+            await cql.run_async(f"INSERT INTO {ks}.test2 (pk, v) VALUES ({i}, '{value}')")
+
+        await cql.run_async(f"DROP TABLE {ks}.test1")
+
+        # verify test2 is not affected
+        for i in range(20):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test2 WHERE pk = {i}")
+            assert len(rows) == 1, f"Expected 1 row for key {i} in test2, but got {len(rows)}"
+            assert rows[0].v == value, f"Expected value of size {value_size} for key {i} in test2, but got {len(rows[0].v)}"
+
+        # recreate the table and verify that old data is not visible
+        await cql.run_async(f"CREATE TABLE {ks}.test1 (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        for i in range(20):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test1 WHERE pk = {i}")
+            assert len(rows) == 0, f"Expected no rows for key {i} after table drop, but got {len(rows)}"
+
+        # write new data to the recreated table and verify
+        await cql.run_async(f"INSERT INTO {ks}.test1 (pk, v) VALUES (1, 'new_value')")
+        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test1 WHERE pk = 1")
+        assert len(rows) == 1, f"Expected 1 row for key 1 after new insert, but got {len(rows)}"
+        assert rows[0].v == 'new_value', f"Expected value 'new_value' for key 1 after new insert, but got {rows[0].v}"
+
+        # verify test2 again
+        for i in range(20):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test2 WHERE pk = {i}")
+            assert len(rows) == 1, f"Expected 1 row for key {i} in test2 after all operations, but got {len(rows)}"
+            assert rows[0].v == value, f"Expected value of size {value_size} for key {i} in test2 after all operations, but got {len(rows[0].v)}"
+
+        # now test recovery after drop table.
+        await cql.run_async(f"DROP TABLE {ks}.test1")
+
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        # verify test2
+        for i in range(20):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test2 WHERE pk = {i}")
+            assert len(rows) == 1, f"Expected 1 row for key {i} in test2 after all operations, but got {len(rows)}"
+            assert rows[0].v == value, f"Expected value of size {value_size} for key {i} in test2 after all operations, but got {len(rows[0].v)}"
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_drop_table_during_logstor_compaction(manager: ManagerClient):
+    cmdline = ['--logger-log-level', 'logstor=trace', '--logger-log-level', 'debug_error_injection=debug', '--smp=1']
+    cfg = {
+        'experimental_features': ['logstor'],
+        'logstor_disk_size_in_mb': 8,
+        'logstor_file_size_in_mb': 8,
+    }
+    server = await manager.server_add(cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+    inj = 'logstor_compaction_wait_before_remove_segments'
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        value_size = 30 * 1024
+        base_value = 'a' * value_size
+        overwritten_value = 'b' * value_size
+
+        for i in range(10):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{base_value}')")
+
+        for _ in range(4):
+            for i in range(5):
+                await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{overwritten_value}')")
+
+        await manager.api.logstor_flush(server.ip_addr)
+
+        server_log = await manager.server_open_log(server.server_id)
+        await manager.api.enable_injection(server.ip_addr, inj, one_shot=True)
+        log_mark = await server_log.mark()
+
+        await manager.api.logstor_compaction(server.ip_addr)
+        await server_log.wait_for(f'{inj}: waiting for message', from_mark=log_mark, timeout=60)
+
+        drop_task = cql.run_async(f"DROP TABLE {ks}.test")
+        await server_log.wait_for(f"Dropping {ks}.test", from_mark=log_mark, timeout=60)
+
+        await manager.api.message_injection(server.ip_addr, inj)
+        await drop_task
+
+async def test_trigger_separator_flush(manager: ManagerClient):
+    """
+    Write to 2 tablets, one slower than the other.
+    The separator buffer of the slow tablet holds writes from many different segments until it becomes full.
+    Separator flush should be triggered for the slow tablet before it's full in order to free the segments it holds.
+    Otherwise, the faster tablet can get stuck.
+    """
+    disk_size_mb = 4
+    file_size_mb = 1
+    value_size = 50 * 1024
+
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {
+        'logstor_disk_size_in_mb': disk_size_mb,
+        'logstor_file_size_in_mb': file_size_mb,
+        'experimental_features': ['logstor']
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':2}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        # Calculate how many writes needed to fill disk twice
+        disk_size_bytes = disk_size_mb * 1024 * 1024
+        writes_to_fill_disk = disk_size_bytes // (value_size + 100)
+        total_writes = 2 * writes_to_fill_disk
+
+        # Write with overwrites to fill disk twice
+        for i in range(total_writes):
+            # write small values to multiple keys that will go to both tablets, in order to fill the slow tablet.
+            for k in range(10):
+                await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({k}, 'x')")
+
+            # write large values to a single key in the fast tablet
+            pk = 0
+            value = f"value_{i}_" + ('x' * (value_size - 20))
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
+
+async def test_tablet_split_trigger_by_size(manager: ManagerClient):
+    """
+    Test that a logstor table automatically splits tablets when the data size
+    exceeds --target-tablet-size-in-bytes.
+
+    The split threshold is set to 300KB (~2 segments at 128KB each).
+    Writing 5 keys with ~100KB values fills 5 segments (~640KB total), which
+    exceeds the threshold and should trigger an automatic split.
+    After the split, all data must remain readable.
+    """
+    cmdline = [
+        '--logger-log-level', 'logstor=debug',
+        '--logger-log-level', 'load_balancer=debug',
+        '--target-tablet-size-in-bytes', '300000',
+        '--smp=1',
+    ]
+    cfg = {
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+        'experimental_features': ['logstor'],
+    }
+    servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
+    cql = manager.get_cql()
+
+    s0_log = await manager.server_open_log(servers[0].server_id)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        assert await get_tablet_count(manager, servers[0], ks, 'test') == 1
+
+        s0_mark = await s0_log.mark()
+
+        # Write 5 keys with ~100KB values to fill 5 segments (~640KB total).
+        # This exceeds the 300KB target and should trigger a split.
+        value = 'x' * (100 * 1024)
+        for i in range(5):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{value}')")
+
+        # Flush to assign segments to compaction groups so their size is
+        # visible to tablet load stats.
+        await manager.api.logstor_flush(servers[0].ip_addr)
+
+        await s0_log.wait_for('Detected tablet split for table', from_mark=s0_mark, timeout=60)
+        await asyncio.sleep(1)
+
+        # Verify all data is accessible after the split
+        for i in range(5):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
+            assert len(rows) == 1, f"Key {i} not found after tablet split"
+            assert rows[0].v == value, f"Wrong value for key {i} after tablet split"
+
+async def test_tablet_split_and_merge(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'table=debug',
+        '--logger-log-level', 'load_balancer=debug',
+        '--logger-log-level', 'logstor=trace',
+        '--smp', '1'
+    ]
+    cfg = {
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+        'experimental_features': ['logstor']
+    }
+    servers = [await manager.server_add(config=cfg, cmdline=cmdline)]
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1 AND storage_engine='logstor';")
+
+        total_keys = 10
+        keys = range(total_keys)
+        insert = cql.prepare(f"INSERT INTO {ks}.test(pk, c) VALUES(?, ?)")
+        await asyncio.gather(*[cql.run_async(insert, [pk, random.randbytes(30*1024)]) for pk in keys])
+
+        async def check():
+            logger.info("Checking table")
+            cql = manager.get_cql()
+            rows = await cql.run_async(f"SELECT * FROM {ks}.test;")
+            assert len(rows) == len(keys)
+
+        await check()
+
+        await manager.api.logstor_flush(servers[0].ip_addr)
+
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+        assert tablet_count == 1
+
+        s0_log = await manager.server_open_log(servers[0].server_id)
+        s0_mark = await s0_log.mark()
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets={{'min_tablet_count': 4}}")
+        await s0_log.wait_for('Detected tablet split for table', from_mark=s0_mark)
+
+        async def tablet_split_finished():
+            tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+            if tablet_count >= 4:
+                return True
+        await wait_for(tablet_split_finished, time.time() + 60)
+
+        await check()
+
+        s0_mark = await s0_log.mark()
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets={{'min_tablet_count': 1}}")
+        await s0_log.wait_for('Detected tablet merge for table', from_mark=s0_mark)
+
+        async def tablet_merge_finished():
+            tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+            if tablet_count == 1:
+                return True
+        await wait_for(tablet_merge_finished, time.time() + 60)
+
+        await check()
+
+async def test_tablet_migration(manager: ManagerClient):
+    """
+    Test tablet migration
+    """
+    cmdline = ['--logger-log-level', 'logstor=trace', '--logger-log-level', 'stream_blob=trace','--smp=1']
+    cfg = {'experimental_features': ['logstor']}
+    s1 = await manager.server_add(cmdline=cmdline, config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
+    servers = [s1]
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 2}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        nrows = 20
+        value = 'x' * (30 * 1024)
+        for i in range(nrows):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{i}_{value}')")
+
+        s2 = await manager.server_add(cmdline=cmdline, config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
+        servers.append(s2)
+        cql, hosts = await manager.get_ready_cql(servers)
+
+        # migrate one tablet to the other node
+        h1 = await manager.get_host_id(s1.server_id)
+        h2 = await manager.get_host_id(s2.server_id)
+        tablet_token = 0
+        await manager.api.move_tablet(servers[0].ip_addr, ks, "test", h1, 0, h2, 0, tablet_token)
+
+        for i in range(nrows):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
+            assert len(rows) == 1, f"Expected 1 row for key {i} after tablet migration, but got {len(rows)}"
+            assert rows[0].v == f"{i}_{value}", f"Expected value '{i}_{value}' for key {i} after tablet migration, but got {rows[0].v}"
+
+async def test_tablet_intranode_migration(manager: ManagerClient):
+    """
+    Test tablet intranode migration
+    """
+    cmdline = ['--logger-log-level', 'logstor=trace', '--logger-log-level', 'stream_blob=trace','--smp=2']
+    cfg = {'experimental_features': ['logstor']}
+    s1 = await manager.server_add(cmdline=cmdline, config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
+    servers = [s1]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 2}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        nrows = 20
+        value = 'x' * (30 * 1024)
+        for i in range(nrows):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{i}_{value}')")
+
+        tablet_token = 0
+        replica = await get_tablet_replica(manager, s1, ks, 'test', tablet_token)
+        h1 = replica[0]
+        src_shard = replica[1]
+        dst_shard = 1 - src_shard
+
+        # migrate one tablet to the other shard
+        await manager.api.move_tablet(servers[0].ip_addr, ks, "test", h1, src_shard, h1, dst_shard, tablet_token)
+
+        for i in range(nrows):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
+            assert len(rows) == 1, f"Expected 1 row for key {i} after tablet migration, but got {len(rows)}"
+            assert rows[0].v == f"{i}_{value}", f"Expected value '{i}_{value}' for key {i} after tablet migration, but got {rows[0].v}"
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_migration_with_compaction(manager: ManagerClient):
+    """
+    Test that tablet migration is correct when compaction runs concurrently on the source.
+    Verifies that data migrated to the destination is intact even when segments are freed
+    by compaction while they are being streamed.
+
+    Uses an injection to pause migration after the snapshot of segments is taken
+    but before they are streamed, then triggers compaction to free dead
+    segments, then unpauses streaming to verify data survives.
+
+    This test:
+    1. Writes several segments with overwrites to create dead data suitable for compaction
+    2. Flushes to assign all segments to the tablet's compaction group
+    3. Enables the injection
+    4. Starts intranode tablet migration asynchronously
+    5. Waits for the injection to be hit (snapshot taken, streaming paused)
+    6. Triggers and waits for compaction to free dead segments
+    7. Releases the injection to let streaming proceed
+    8. Verifies all data is correct on the destination after migration
+    """
+    cmdline = ['--logger-log-level', 'logstor=trace', '--logger-log-level', 'stream_blob=trace', '--smp=2']
+    cfg = {'experimental_features': ['logstor']}
+    s1 = await manager.server_add(cmdline=cmdline, config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
+    servers = [s1]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    inj = 'wait_before_tablet_stream_files_after_snapshot'
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        value_size = 30 * 1024
+        nrows = 20
+        expected = {}
+
+        # Write nrows unique keys to fill several segments
+        for i in range(nrows):
+            value = f"v{i}_" + ('a' * (value_size - 4))
+            expected[i] = value
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{value}')")
+
+        # Overwrite the first half of the keys multiple times to accumulate dead segments
+        dead_value = 'b' * value_size
+        for _ in range(4):
+            for i in range(nrows // 2):
+                await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{dead_value}')")
+
+        # Write the final expected values for the overwritten keys
+        for i in range(nrows // 2):
+            value = f"final{i}_" + ('c' * (value_size - 9))
+            expected[i] = value
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{value}')")
+
+        # Flush to assign all segments to the tablet's compaction group before migration
+        await manager.api.logstor_flush(s1.ip_addr)
+
+        # Find which shard owns the tablet and pick the other shard as destination
+        tablet_token = 0
+        replica = await get_tablet_replica(manager, s1, ks, 'test', tablet_token)
+        h1 = replica[0]
+        src_shard = replica[1]
+        dst_shard = 1 - src_shard
+
+        # Enable the injection that pauses streaming after the snapshot is taken
+        await manager.api.enable_injection(s1.ip_addr, inj, one_shot=True)
+
+        # Start migration in the background; it will pause at the injection point
+        migration_task = asyncio.ensure_future(
+            manager.api.move_tablet(servers[0].ip_addr, ks, "test", h1, src_shard, h1, dst_shard, tablet_token)
+        )
+
+        # Wait until streaming has taken the snapshot and is paused at the injection
+        await manager.api.wait_for_injection_enter(s1.ip_addr, inj)
+
+        # Trigger compaction while streaming is paused; the snapshot holds segment refs so
+        # compaction can compact and free dead segments without affecting the in-flight data
+        await manager.api.logstor_compaction(s1.ip_addr)
+        await manager.api.logstor_flush(s1.ip_addr)
+
+        # Release the injection to let streaming proceed
+        await manager.api.message_injection(s1.ip_addr, inj)
+        await migration_task
+
+        # Verify all data is correct on the destination after migration with concurrent compaction
+        for pk, expected_v in expected.items():
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1, f"Key {pk} not found after migration with concurrent compaction"
+            assert rows[0].v == expected_v, f"Key {pk} has wrong value after migration with concurrent compaction"
+
+@pytest.mark.asyncio
+async def test_cache(manager: ManagerClient):
+    """
+    Verify the logstor mutation cache works correctly.
+    """
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {'experimental_features': ['logstor']}
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async def cache_metrics():
+        """Return (hits, misses, insertions, evictions) summed over all shards."""
+        m = await manager.metrics.query(servers[0].ip_addr)
+        hits       = m.get("scylla_cache_partition_hits")       or 0
+        misses     = m.get("scylla_cache_partition_misses")     or 0
+        insertions = m.get("scylla_cache_partition_insertions") or 0
+        evictions  = m.get("scylla_cache_partition_evictions")  or 0
+        return hits, misses, insertions, evictions
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial': 1}") as ks:
+        await cql.run_async(
+            f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)"
+            " WITH storage_engine = 'logstor'"
+        )
+
+        # ------------------------------------------------------------------ #
+        # Phase 1: cold reads — every point read is a miss + insertion.       #
+        # ------------------------------------------------------------------ #
+        num_keys = 10
+        for i in range(num_keys):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, {i * 10})")
+
+        hits0, misses0, insertions0, _ = await cache_metrics()
+
+        for i in range(num_keys):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
+            assert rows[0].v == i * 10, f"unexpected value for pk={i}"
+
+        hits1, misses1, insertions1, _ = await cache_metrics()
+
+        # The cache metrics are shared with row_cache, so unrelated background
+        # activity can add extra hits/misses/insertions. We therefore only
+        # assert the deltas caused by the logstor reads as lower bounds.
+        assert misses1 - misses0 >= num_keys, (
+            f"expected at least {num_keys} misses for cold reads, "
+            f"got {misses1 - misses0}"
+        )
+        assert insertions1 - insertions0 >= num_keys, (
+            f"expected at least {num_keys} insertions, got {insertions1 - insertions0}"
+        )
+
+        # ------------------------------------------------------------------ #
+        # Phase 2: warm reads — same keys should all be cache hits.           #
+        # ------------------------------------------------------------------ #
+        for i in range(num_keys):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
+            assert rows[0].v == i * 10, f"unexpected value for pk={i} (warm read)"
+
+        hits2, misses2, insertions2, _ = await cache_metrics()
+
+        assert hits2 - hits1 >= num_keys, (
+            f"expected at least {num_keys} cache hits for warm reads, "
+            f"got {hits2 - hits1}"
+        )
+
+        # ------------------------------------------------------------------ #
+        # Phase 3: overwrite invalidates cache.  The overwritten keys should  #
+        # be misses on the next read; the untouched keys should still be hits. #
+        # ------------------------------------------------------------------ #
+        overwrite_pks = [0, 3, 7]
+        for pk in overwrite_pks:
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, {pk * 100})")
+
+        hits3_before, misses3_before, insertions3_before, _ = await cache_metrics()
+
+        for i in range(num_keys):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
+            if i in overwrite_pks:
+                assert rows[0].v == i * 100, f"pk={i}: expected overwritten value"
+            else:
+                assert rows[0].v == i * 10, f"pk={i}: unexpected value after overwrite"
+
+        hits3, misses3, insertions3, _ = await cache_metrics()
+
+        # Overwritten keys were invalidated → misses; others → hits.
+        assert misses3 - misses3_before >= len(overwrite_pks), (
+            f"expected at least {len(overwrite_pks)} misses after overwrite, "
+            f"got {misses3 - misses3_before}"
+        )
+        assert hits3 - hits3_before >= num_keys - len(overwrite_pks), (
+            f"expected at least {num_keys - len(overwrite_pks)} hits for untouched keys, "
+            f"got {hits3 - hits3_before}"
+        )
+        assert insertions3 - insertions3_before >= len(overwrite_pks), (
+            f"expected at least {len(overwrite_pks)} new insertions after overwrite, "
+            f"got {insertions3 - insertions3_before}"
+        )
+
+        # ------------------------------------------------------------------ #
+        # Phase 4: range read — scans all keys through the cache.             #
+        # After Phase 3 every key is cached, so a full-table scan should      #
+        # produce all hits and no new misses/insertions.                      #
+        # ------------------------------------------------------------------ #
+        hits4_before, misses4_before, insertions4_before, _ = await cache_metrics()
+
+        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test")
+        assert len(rows) == num_keys, f"expected {num_keys} rows in range scan"
+
+        hits4, misses4, insertions4, _ = await cache_metrics()
+
+        assert hits4 - hits4_before >= num_keys, (
+            f"expected at least {num_keys} cache hits for range scan, "
+            f"got {hits4 - hits4_before}"
+        )
+
+        # ------------------------------------------------------------------ #
+        # Phase 5: BYPASS CACHE — reads go directly to disk, skipping the    #
+        # cache entirely. Shared cache metrics may still move due to         #
+        # unrelated background activity, so we only verify that data is      #
+        # correct and that the cache remains warm afterward.                 #
+        # ------------------------------------------------------------------ #
+        for i in range(num_keys):
+            expected_v = (i * 100) if i in overwrite_pks else (i * 10)
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i} BYPASS CACHE")
+            assert rows[0].v == expected_v, f"BYPASS CACHE point read: unexpected value for pk={i}"
+
+        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test BYPASS CACHE")
+        assert len(rows) == num_keys, f"BYPASS CACHE range scan: expected {num_keys} rows"
+
+        # Verify the cache is intact after BYPASS CACHE reads: normal reads
+        # should still produce cache hits.
+        hits5c_before, misses5c_before, insertions5c_before, _ = await cache_metrics()
+
+        for i in range(num_keys):
+            expected_v = (i * 100) if i in overwrite_pks else (i * 10)
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
+            assert rows[0].v == expected_v, f"warm read after BYPASS CACHE: unexpected value for pk={i}"
+
+        hits5c, misses5c, insertions5c, _ = await cache_metrics()
+
+        assert hits5c - hits5c_before >= num_keys, (
+            f"expected at least {num_keys} cache hits for warm reads after BYPASS CACHE, "
+            f"got {hits5c - hits5c_before}"
+        )
+
+        # ------------------------------------------------------------------ #
+        # Phase 6: schema change on cached row. The first read after ALTER    #
+        # should upgrade the cached mutation in place, and the second read    #
+        # should hit the already-upgraded cache entry.                        #
+        # ------------------------------------------------------------------ #
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES (100, 1000)")
+        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = 100")
+        assert rows[0].pk == 100
+        assert rows[0].v == 1000
+
+        hits6_before, misses6_before, insertions6_before, _ = await cache_metrics()
+
+        await cql.run_async(f"ALTER TABLE {ks}.test ADD v2 int")
+
+        rows = await cql.run_async(f"SELECT pk, v, v2 FROM {ks}.test WHERE pk = 100")
+        assert rows[0].pk == 100
+        assert rows[0].v == 1000
+        assert rows[0].v2 is None
+
+        hits6_mid, misses6_mid, insertions6_mid, _ = await cache_metrics()
+        assert hits6_mid - hits6_before >= 1, (
+            f"expected at least 1 cache hit for schema-upgrade read, got {hits6_mid - hits6_before}"
+        )
+
+        rows = await cql.run_async(f"SELECT pk, v, v2 FROM {ks}.test WHERE pk = 100")
+        assert rows[0].pk == 100
+        assert rows[0].v == 1000
+        assert rows[0].v2 is None
+
+        hits6, misses6, insertions6, _ = await cache_metrics()
+        assert hits6 - hits6_mid >= 1, (
+            f"expected at least 1 cache hit for read after cache upgrade, got {hits6 - hits6_mid}"
+        )
+        hits_final, misses_final, insertions_final, evictions_final = await cache_metrics()
+        logger.info(
+            "logstor cache test complete: hits=%d misses=%d insertions=%d evictions=%d",
+            hits_final, misses_final, insertions_final, evictions_final,
+        )
+
+        # ------------------------------------------------------------------ #
+        # Phase 7: test table with caching disabled. Shared cache metrics are #
+        # global, so we validate correctness only.                           #
+        # ------------------------------------------------------------------ #
+        await cql.run_async(
+            f"CREATE TABLE {ks}.test_no_cache (pk int PRIMARY KEY, v int)"
+            " WITH storage_engine = 'logstor' AND caching = {'enabled': false}"
+        )
+
+        num_keys = 10
+        for i in range(num_keys):
+            await cql.run_async(f"INSERT INTO {ks}.test_no_cache (pk, v) VALUES ({i}, {i * 10})")
+
+        for _ in range(2):
+            for i in range(num_keys):
+                rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_no_cache WHERE pk = {i}")
+                assert rows[0].v == i * 10, f"unexpected value for pk={i}"

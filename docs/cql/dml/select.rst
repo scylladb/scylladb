@@ -1,0 +1,862 @@
+.. highlight:: cql
+
+.. _select-statement:
+
+SELECT
+^^^^^^
+
+Querying data from data is done using a ``SELECT`` statement:
+
+.. code-block::
+   
+   select_statement: SELECT [ JSON ] [ DISTINCT ] ( `select_clause` | '*' )
+                   : [ FROM `table_name` ]
+                   : [ WHERE `where_clause` ]
+                   : [ GROUP BY `group_by_clause` ]
+                   : [ ORDER BY `ordering_clause` ]
+                   : [ ORDER BY ( `vector_column_name` ANN OF `vector` | ANN '(' `vector_column_name` ',' `vector` ')' ) LIMIT `integer` ]
+                   : [ WHERE BM25 '(' `column_name` ',' `term` ')' '>' 0 ORDER BY BM25 '(' `column_name` ',' `term` ')' LIMIT `integer` ]
+                   : [ PER PARTITION LIMIT (`integer` | `bind_marker`) ]
+                   : [ LIMIT (`integer` | `bind_marker`) ]
+                   : [ ALLOW FILTERING ]
+                   : [ BYPASS CACHE ]
+                   : [ USING TIMEOUT `timeout` ]
+   select_clause: `selector` [ AS `identifier` ] ( ',' `selector` [ AS `identifier` ] )*
+   selector: ( `column_name`
+           : | CAST '(' `selector` AS `cql_type` ')'
+           : | `function_name` '(' [ `selector` ( ',' `selector` )* ] ')'
+           : | COUNT '(' '*' ')'
+           : | literal
+           : | bind_marker
+           : )
+           : ( '.' `field_name` | '[' `term` ']' )*
+   where_clause: `relation` ( AND `relation` )*
+   group_by_clause: `column_name` (',' `column_name` )*
+   relation: `column_name` `operator` `term`
+           : '(' `column_name` ( ',' `column_name` )* ')' `operator` `tuple_literal`
+           : TOKEN '(' `column_name` ( ',' `column_name` )* ')' `operator` `term`
+   operator: '=' | '<' | '>' | '<=' | '>=' | IN | NOT IN | CONTAINS | CONTAINS KEY
+   ordering_clause: `column_name` [ ASC | DESC ] ( ',' `column_name` [ ASC | DESC ] )*
+   timeout: `duration`
+   literal: number | 'string' | boolean | NULL | tuple_literal | list_literal | map_literal
+   bind_marker: '?' | ':' `identifier`
+
+For instance::
+
+    SELECT name, occupation FROM users WHERE userid IN (199, 200, 207);
+    SELECT name AS user_name, occupation AS user_occupation FROM users;
+
+    SELECT time, value
+    FROM events
+    WHERE event_type = 'myEvent'
+      AND time > '2011-02-03'
+      AND time <= '2012-01-01'
+
+    SELECT COUNT (*) AS user_count FROM users;
+
+    SELECT * FROM users WHERE event_type = 'myEvent' USING TIMEOUT 50ms;
+
+The ``SELECT`` statement reads one or more columns for one or more rows in a table. It returns a result-set of the rows
+matching the request, where each row contains the values for the selection corresponding to the query. Additionally,
+functions, including aggregation ones, can be applied to the result.
+
+A ``SELECT`` statement contains at least a :ref:`selection clause <selection-clause>` and typically the name of the table
+on which the selection is on (note that CQL does **not** support joins or sub-queries, and thus a select statement only
+applies to a single table). The ``FROM`` clause may be omitted; the statement then evaluates the selected expressions
+and returns them as a single row (see :ref:`SELECT without FROM <select-without-from>`). In most cases, a select will also have a
+:ref:`where clause <where-clause>` and it can optionally have additional clauses to :ref:`order <ordering-clause>` or
+:ref:`limit <limit-clause>` the results. Lastly, :ref:`queries that require filtering <allow-filtering>` can be allowed
+if the ``ALLOW FILTERING`` flag is provided.
+
+If your ``SELECT`` query results in what appears to be missing data, see this :doc:`KB Article </kb/cqlsh-results>` for information. 
+
+.. _selection-clause:
+
+Selection clause
+~~~~~~~~~~~~~~~~
+
+The :token:`select_clause` determines which columns need to be queried and returned in the result-set, as well as any
+transformation to apply to this result before returning. It consists of a comma-separated list of *selectors* or,
+alternatively, of the wildcard character (``*``) to select all the columns defined in the table.
+
+Selectors
+`````````
+
+A :token:`selector` can be one of the following:
+
+- A column name of the table selected to retrieve the values for that column.
+- A casting, which allows you to convert a nested selector to a (compatible) type.
+- A function call, where the arguments are selector themselves.
+- A call to the :ref:`COUNT function <count-function>`, which counts all non-null results.
+- A literal value: a constant, or a collection or tuple literal.
+- A bind variable (`?` or `:name`).
+
+Literals can be used as top-level selectors. Their type is inferred automatically.
+The default inferred type depends on the literal kind:
+
+- Whole numbers: the smallest of ``int``, ``bigint``, or ``varint`` that fits the
+  value. For example, ``1`` is inferred as ``int``, ``10000000000`` as ``bigint``,
+  and very large integers as ``varint``. Note that ``tinyint`` and ``smallint`` are
+  never inferred — use a cast (``CAST(1 AS tinyint)`` or the ``(tinyint)1`` type hint)
+  to obtain them.
+- Decimal or scientific-notation numbers (e.g. ``3.14``, ``1e6``): always ``double``.
+  ``float`` and ``decimal`` are never inferred.
+- Strings: ``text``.
+- Booleans: ``boolean``.
+- UUIDs: ``uuid``.
+- Hex literals (e.g. ``0xCAFE``): ``blob``.
+- Durations: ``duration``.
+
+Collection and tuple literals are supported, with element types inferred recursively.
+When collection elements have different sizes within the same numeric family, they are
+widened to the largest type within two lossless chains:
+
+- Integer: ``tinyint`` < ``smallint`` < ``int`` < ``bigint`` < ``varint``
+- Floating-point: ``float`` < ``double``
+
+Cross-family widening (e.g. ``int`` and ``double``) is not supported and requires an
+explicit ``CAST``.
+
+Bind markers (``?`` and ``:name``) cannot be used as *top-level* selectors, since their
+type cannot be inferred without context; they can be used nested inside a function
+call, where the parameter type provides it.
+
+Examples::
+
+    SELECT 1, 'hello', true FROM t;            -- int, text, boolean
+    SELECT [1, 2, 3] FROM t;                   -- frozen<list<int>>
+    SELECT {'a': 1, 'b': 2} FROM t;            -- frozen<map<text, int>>
+    SELECT [1, 10000000000] FROM t;            -- frozen<list<bigint>>, widened from int + bigint
+    SELECT CAST(1 AS bigint) FROM t;           -- bigint via explicit cast
+
+Aliases
+```````
+
+Every *top-level* selector can also be aliased (using `AS`). If so, the name of the corresponding column in the result
+set will be that of the alias. For instance::
+
+    // Without alias
+    SELECT intAsBlob(4) FROM t;
+
+    //  intAsBlob(4)
+    // --------------
+    //  0x00000004
+
+    // With alias
+    SELECT intAsBlob(4) AS four FROM t;
+
+    //  four
+    // ------------
+    //  0x00000004
+
+.. note:: Currently, aliases aren't recognized anywhere else in the statement where they are used (not in the ``WHERE``
+   clause, not in the ``ORDER BY`` clause, ...). You must use the original column name instead.
+
+
+.. _select-writetime-ttl:
+
+``WRITETIME`` and ``TTL`` function
+```````````````````````````````````
+
+Selection supports two special functions (which aren't allowed anywhere else): ``WRITETIME`` and ``TTL``. Both functions
+take only one argument, which must be either a column name, a subscript expression of the form ``collection_column[element]``
+for an individual element of a non-frozen map or set collection, or a field selection of the form ``udt_column.field``
+for an individual field of a non-frozen user-defined type column (so, for instance, ``TTL(3)`` is invalid).
+
+Those functions let you retrieve meta-information that is stored internally for each column, namely:
+
+- ``WRITETIME`` retrieves the timestamp used when writing the column. The timestamp is typically the number of *microseconds* since the `Unix epoch <https://en.wikipedia.org/wiki/Unix_time>`_ (January 1st 1970 at 00:00:00 UTC).
+
+You can read more about the ``TIMESTAMP`` retrieved by ``WRITETIME`` in the :ref:`UPDATE <update-parameters>` section.
+
+- ``TTL`` retrieves the remaining time to live (in *seconds*) for the value of the column, if it set to expire, or ``null`` otherwise.
+
+You can read more about TTL in the :doc:`documentation </cql/time-to-live>` and also in `this ScyllaDB University lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`_.
+
+**Using** ``WRITETIME`` **and** ``TTL`` **on map and set collection elements**
+
+For a non-frozen map or set column, each element is stored as an independent cell and may have its own write timestamp and TTL.
+You can retrieve the per-element timestamp or TTL by subscripting the column with the element::
+
+    -- Create a table with a map column and a set column
+    CREATE TABLE t (pk int PRIMARY KEY, m map<int, int>, s set<int>);
+
+    -- Insert elements with an explicit timestamp
+    INSERT INTO t (pk, m, s) VALUES (1, {1: 10, 2: 20}, {1, 2}) USING TIMESTAMP 1000000;
+
+    -- Update one element with a newer timestamp
+    UPDATE t USING TIMESTAMP 2000000 SET m = m + {2: 30}, s = s + {3} WHERE pk = 1;
+
+    -- WRITETIME(m[key]) returns the write timestamp of that specific map element
+    SELECT WRITETIME(m[1]), WRITETIME(m[2]) FROM t WHERE pk = 1;
+    -- Returns: 1000000 | 2000000
+
+    -- WRITETIME(s[element]) returns the write timestamp of that specific set element
+    SELECT WRITETIME(s[1]), WRITETIME(s[3]) FROM t WHERE pk = 1;
+    -- Returns: 1000000 | 2000000
+
+    -- TTL(m[key]) returns the remaining TTL of that specific map element
+    INSERT INTO t (pk, m) VALUES (1, {1: 10}) USING TTL 3600;
+    SELECT TTL(m[1]) FROM t WHERE pk = 1;
+    -- Returns the remaining TTL in seconds for element m[1]
+
+Note that ``WRITETIME(m)`` and ``TTL(m)`` on an entire non-frozen map or set column are **not** supported —
+since each element may have a different timestamp or TTL, there is no single meaningful value to return.
+Only ``WRITETIME(m[key])`` and ``TTL(m[key])`` (for a specific map key) or ``WRITETIME(s[element])``
+and ``TTL(s[element])`` (for a specific set element) are allowed.
+
+**Using** ``WRITETIME`` **and** ``TTL`` **on user-defined type fields**
+
+For a non-frozen user-defined type (UDT) column, each field is stored as an independent cell and may have its own
+write timestamp and TTL. You can retrieve the per-field timestamp or TTL using dot notation::
+
+    CREATE TYPE address (street text, city text);
+    CREATE TABLE person (pk int PRIMARY KEY, addr address);
+
+    -- Write two fields at different timestamps
+    UPDATE person USING TIMESTAMP 1000000 SET addr.street = '123 Main St' WHERE pk = 1;
+    UPDATE person USING TIMESTAMP 2000000 SET addr.city = 'Springfield' WHERE pk = 1;
+
+    -- WRITETIME(udt_column.field) returns the write timestamp of that specific UDT field
+    SELECT WRITETIME(addr.street), WRITETIME(addr.city) FROM person WHERE pk = 1;
+    -- Returns: 1000000 | 2000000
+
+    -- TTL(udt_column.field) returns the remaining TTL of that specific UDT field
+    UPDATE person USING TTL 3600 SET addr.street = 'Oak Ave' WHERE pk = 1;
+    SELECT TTL(addr.street) FROM person WHERE pk = 1;
+    -- Returns the remaining TTL in seconds for addr.street
+
+.. _where-clause:
+
+The ``WHERE`` clause
+~~~~~~~~~~~~~~~~~~~~
+
+The ``WHERE`` clause specifies which rows must be queried. It is composed of relations on the columns that are part of
+the ``PRIMARY KEY``, and relations can be joined only with ``AND`` (``OR`` and other logical operators are not supported).
+
+Not all relations are allowed in a query. For instance, non-equal relations (where ``IN`` is considered as an equal
+relation) on a partition key are not supported (see the use of the ``TOKEN`` method below to do non-equal queries on
+the partition key). Moreover, for a given partition key, the clustering columns induce an ordering of rows and relations
+on them restricted to the relations that let you select a **contiguous** (for the ordering) set of rows. For
+instance, given::
+
+    CREATE TABLE posts (
+        userid text,
+        blog_title text,
+        posted_at timestamp,
+        entry_title text,
+        content text,
+        category int,
+        PRIMARY KEY (userid, blog_title, posted_at)
+    )
+
+The following query is allowed::
+
+    SELECT entry_title, content FROM posts
+     WHERE userid = 'john doe'
+       AND blog_title='John''s Blog'
+       AND posted_at >= '2012-01-01' AND posted_at < '2012-01-31'
+
+But the following query is not, as it does not select a contiguous set of rows (and we suppose no secondary indexes are
+set)::
+
+    // Needs a blog_title to be set to select ranges of posted_at
+    SELECT entry_title, content FROM posts
+     WHERE userid = 'john doe'
+       AND posted_at >= '2012-01-01' AND posted_at < '2012-01-31'
+
+When specifying relations, the ``TOKEN`` function can be used on the ``PARTITION KEY`` column to query. In that case,
+rows will be selected based on the token of their ``PARTITION_KEY`` rather than on the value. Note that the token of a
+key depends on the partitioner in use and that, in particular, the RandomPartitioner won't yield a meaningful order. Also
+note that ordering partitioners always order token values by bytes (so even if the partition key is of type int,
+``token(-1) > token(0)`` in particular). For example::
+
+    SELECT * FROM posts
+     WHERE token(userid) > token('tom') AND token(userid) < token('bob')
+
+Moreover, the ``IN`` relation is only allowed on the last column of the partition key and on the last column of the full
+primary key.
+
+It is also possible to “group” ``CLUSTERING COLUMNS`` together in a relation using the tuple notation. For instance::
+
+    SELECT * FROM posts
+     WHERE userid = 'john doe'
+       AND (blog_title, posted_at) > ('John''s Blog', '2012-01-01')
+
+will request all rows that sort after the one having “John's Blog” as ``blog_title`` and '2012-01-01' for ``posted_at``
+in the clustering order. In particular, rows having a ``posted_at <= '2012-01-01'`` will be returned as long as their
+``blog_title > 'John''s Blog'``.
+
+The tuple notation may also be used for ``IN`` clauses on clustering columns::
+
+    SELECT * FROM posts
+     WHERE userid = 'john doe'
+       AND (blog_title, posted_at) IN (('John''s Blog', '2012-01-01'), ('Extreme Chess', '2014-06-01'))
+
+This tuple notation is different from boolean grouping. For example, the following query is not supported::
+
+    SELECT * FROM users
+     WHERE (country = 'BR' AND state = 'SP')
+
+because parentheses are only allowed around a single relation, so this works: ``(country = 'BR') AND (state = 'SP')``, but this does not: ``(country = 'BR' AND state = 'SP')``.
+Similarly, an extended query of the form of::
+
+    SELECT * FROM users
+     WHERE (country = 'BR' AND state = 'SP')
+       OR (country = 'BR' AND state = 'RJ')
+
+won't work due to both: grouping boolean expressions and not supporting ``OR``, so when possible,
+rewrite such queries with ``IN`` on the varying column, for example
+``country = 'BR' AND state IN ('SP', 'RJ')``, or run multiple queries and merge
+the results client-side.
+
+The ``CONTAINS`` operator may only be used on collection columns (lists, sets, and maps). In the case of maps,
+``CONTAINS`` applies to the map values. The ``CONTAINS KEY`` operator may only be used on map columns and applies to the
+map keys.
+
+.. _group-by-clause:
+
+Grouping results
+~~~~~~~~~~~~~~~~~
+
+The ``GROUP BY`` option lets you condense into a single row all selected rows that share the same values for a set of columns. 
+Using the ``GROUP BY`` option, it is only possible to group rows at the partition key level or at a clustering column level. 
+The ``GROUP BY`` arguments must form a prefix of the primary key. 
+
+For example, if the primary key is ``(p1, p2, c1, c2)``, then the following queries are valid::
+
+    GROUP BY p1
+    GROUP BY p1, p2
+    GROUP BY p1, p2, c1
+    GROUP BY p1, p2, c1, c2
+
+The following should be considered when using the ``GROUP BY`` option:
+
+* If a primary key column is restricted by an equality restriction, it is not required to be present in the ``GROUP BY`` clause. 
+
+* Aggregate functions will produce a separate value for each group. 
+
+* If no ``GROUP BY`` clause is specified, aggregate functions will produce a single value for all the rows.
+
+* If a column is selected without an aggregate function, in a statement with a ``GROUP BY``, the first value encounter in each group will be returned.
+
+
+.. _ordering-clause:
+
+Ordering results
+~~~~~~~~~~~~~~~~
+
+The default order for a SELECT statement depends on the default clustering order of a table, which is defined when 
+the table is created - it is ``ASC`` (ascendant) by default, but can be changed using the ``WITH CLUSTERING ORDER BY``
+option. See :ref:`CREATE TABLE <create-table-statement>`.
+
+The ``ORDER BY`` clause allows you to configure a non-default order of the returned result. It takes a list of column names
+along with the order for the column as an argument  (``ASC`` for ascendant and ``DESC`` for descendant, omitting the default order). 
+
+Currently, the possible orderings are limited by the :ref:`clustering order <clustering-order>` defined on the table:
+
+- If the table has been defined without any specific ``CLUSTERING ORDER``, then allowed orderings are the order
+  induced by the clustering columns and the reverse of that one.
+- Otherwise, the orderings allowed are the order of the ``CLUSTERING ORDER`` option and the reversed one.
+
+
+.. _vector-queries:
+
+Vector queries :label-note:`ScyllaDB Cloud`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``ORDER BY`` clause can also be used with vector columns to perform the approximate nearest neighbor (ANN) search. 
+When using vector columns, the syntax is as follows:
+
+.. code-block::
+
+   order_by_vector: ORDER BY ( `vector_column_name` ANN OF `vector` | ANN '(' `vector_column_name` ',' `vector` ')' ) LIMIT `integer`
+
+Where ``vector_column_name`` is the name of the vector column,
+``vector`` is the query :ref:`vector <vectors>`, and ``LIMIT`` is a limit on the number of results to return.
+Vector queries can only be performed on a vector column that has a :ref:`vector index <create-vector-index-statement>` created.
+
+The two forms are equivalent: ``ORDER BY embedding ANN OF [0.1, 0.2]`` and
+``ORDER BY ANN(embedding, [0.1, 0.2])`` produce the same query. The function form is a
+ScyllaDB extension, and is consistent with how the :ref:`BM25 <fulltext-queries>` scoring
+function is written; the ``ANN OF`` form is compatible with Apache Cassandra.
+
+The ANN ordering clause orders the results by their distance to the provided query vector,
+using the distance function defined for the vector column when
+:ref:`creating the vector index <create-vector-index-statement>`.
+The query vector must have the same dimension as the vector column.
+
+Supported ``LIMIT`` values are integers between 1 and 1000, inclusive.
+However, based on the index parameters and the dataset size and distribution,
+the actual number of results returned may be less than the specified limit.
+
+For example::
+
+    SELECT image_id FROM ImageEmbeddings
+      ORDER BY embedding ANN OF [0.1, 0.2, 0.3, 0.4] LIMIT 5;
+
+This query returns up to 5 rows with the closest distance of ``embedding`` vector to the provided query vector,
+in this case ``[0.1, 0.2, 0.3, 0.4]``. Written with the function form, it is::
+
+    SELECT image_id FROM ImageEmbeddings
+      ORDER BY ANN(embedding, [0.1, 0.2, 0.3, 0.4]) LIMIT 5;
+
+There's also possibility to return the similarity score along with the results by using the :ref:`similarity functions <vector-similarity-functions>`.
+
+For example::
+
+    SELECT image_id, similarity_cosine(embedding, [0.1, 0.2, 0.3, 0.4])
+      FROM ImageEmbeddings
+      ORDER BY embedding ANN OF [0.1, 0.2, 0.3, 0.4] LIMIT 5;
+
+
+Vector queries also support filtering with ``WHERE`` clauses on columns that are part of the primary key.
+See :ref:`WHERE <where-clause>`.
+
+For example::
+
+    SELECT image_id FROM ImageEmbeddings
+      WHERE user_id = 'user123'
+      ORDER BY embedding ANN OF [0.1, 0.2, 0.3, 0.4] LIMIT 5;
+
+.. note::
+
+   Vector indexes are supported in ScyllaDB Cloud only in clusters that have the Vector Search feature enabled.
+   Vector indexes do not support all ScyllaDB features (e.g., tracing, paging, and grouping). More information
+   about Vector Search is available in the
+   `ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com/stable/vector-search/>`_.
+
+.. _fulltext-queries:
+
+Full-Text Search queries (BM25) :label-note:`ScyllaDB Cloud`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. note::
+
+   Full-Text Search is supported in ScyllaDB Cloud only in clusters that have the Vector and Text Search feature enabled.
+   For more information, see the :doc:`Full-Text Search documentation </features/fulltext-search>`.
+
+The ``BM25()`` function enables full-text search queries over text columns that
+have a :ref:`full-text index <create-fulltext-index-statement>` created with
+``USING 'fulltext_index'``. ``BM25()`` takes a column name and a query string
+and scores rows using the BM25 ranking algorithm.
+
+A full-text search query must contain **both** of the following clauses,
+referencing the **same** column:
+
+* A ``WHERE`` filter of the exact form ``BM25(column, 'term') > 0``.
+* An ``ORDER BY BM25(column, 'term')`` clause that ranks the matching rows.
+
+Neither clause is accepted on its own. A query that has only ``WHERE BM25()`` or
+only ``ORDER BY BM25()`` is rejected, and the two clauses must reference the same
+column.
+
+**Syntax:**
+
+.. code-block::
+
+   fts_query: SELECT ... FROM `table_name`
+            :   WHERE BM25 '(' `column_name` ',' `term` ')' '>' 0
+            :   ORDER BY BM25 '(' `column_name` ',' `term` ')'
+            :   LIMIT `integer`
+
+In the ``WHERE`` clause, ``>`` is the only supported comparison operator, and the right-hand side must be
+the literal ``0``. The column must be of type ``text``, ``varchar``, or ``ascii``
+and have a ``fulltext_index``; it may be a regular or clustering-key column, but
+not a partition-key column.
+
+``ORDER BY BM25()`` must be the only ordering in the query - it cannot be combined
+with another ``ORDER BY`` column, a second ``BM25()`` ordering, or an ``ANN``
+ordering.
+
+**Examples:**
+
+Filter and rank by relevance::
+
+    SELECT * FROM articles
+        WHERE BM25(body, 'distributed database') > 0
+        ORDER BY BM25(body, 'distributed database')
+        LIMIT 10;
+
+Use bind markers for the query term::
+
+    SELECT * FROM articles
+        WHERE BM25(body, ?) > 0
+        ORDER BY BM25(body, ?)
+        LIMIT 10;
+
+The ``BM25()`` operator is not a reserved word. If a user-defined function named
+``bm25`` exists in a keyspace, unqualified ``BM25()`` becomes ambiguous; qualify
+the built-in operator as ``system.bm25(...)`` to disambiguate it.
+
+.. note::
+
+   ``BM25()`` is only valid in the ``WHERE`` and ``ORDER BY`` clauses.
+   It cannot be used as a selector in the ``SELECT`` clause.
+
+For the full list of query constraints and requirements, see
+:doc:`Full-Text Search </features/fulltext-search>`.
+
+.. _limit-clause:
+
+Limiting results
+~~~~~~~~~~~~~~~~
+
+The ``LIMIT`` option to a ``SELECT`` statement limits the number of rows returned by a query, while the ``PER PARTITION
+LIMIT`` option limits the number of rows returned for a given **partition** by the query. Note that both types of limit can be
+used in the same statement.
+
+.. note::
+    The ``LIMIT`` and ``PER PARTITION LIMIT`` are applied to the output of the aggregate functions.
+
+Examples:
+
+The Partition Key in the following table is ``client_id``, and the clustering key is ``when``.
+The table has seven rows, split between four clients (partition keys)
+
+.. code-block:: cql
+
+   cqlsh:ks1> SELECT client_id, when FROM test;
+
+   client_id | when
+   -----------+---------------------------------
+          1 | 2019-12-31 22:00:00.000000+0000
+          1 | 2020-01-01 22:00:00.000000+0000
+          2 | 2020-02-10 22:00:00.000000+0000
+          2 | 2020-02-11 22:00:00.000000+0000
+          2 | 2020-02-12 22:00:00.000000+0000
+          4 | 2020-02-10 22:00:00.000000+0000
+          3 | 2020-02-10 22:00:00.000000+0000
+
+   (7 rows)
+
+
+You can ask the query to limit the number of rows returned from **all partition** with LIMIT, for example:
+
+.. code-block:: cql
+
+   cqlsh:ks1> SELECT client_id, when FROM ks1.test LIMIT 3;
+
+   client_id | when
+   -----------+---------------------------------
+          1 | 2019-12-31 22:00:00.000000+0000
+          1 | 2020-01-01 22:00:00.000000+0000
+          2 | 2020-02-10 22:00:00.000000+0000
+
+   (3 rows)
+
+You can ask the query to limit the number of rows returned for **each** ``client_id``. For example, with limit of *1* :
+
+.. code-block:: cql
+
+   cqlsh:ks1> SELECT client_id, when FROM ks1.test PER PARTITION LIMIT 1;
+
+   client_id | when
+   -----------+---------------------------------
+          1 | 2019-12-31 22:00:00.000000+0000
+          2 | 2020-02-10 22:00:00.000000+0000
+          4 | 2020-02-10 22:00:00.000000+0000
+          3 | 2020-02-10 22:00:00.000000+0000
+
+   (4 rows)
+
+Increasing limit to *2*, would yield:
+
+.. code-block:: cql
+
+   cqlsh:ks1> SELECT client_id, when FROM ks1.test PER PARTITION LIMIT 2;
+
+   client_id | when
+   -----------+---------------------------------
+          1 | 2019-12-31 22:00:00.000000+0000
+          1 | 2020-01-01 22:00:00.000000+0000
+          2 | 2020-02-10 22:00:00.000000+0000
+          2 | 2020-02-11 22:00:00.000000+0000
+          4 | 2020-02-10 22:00:00.000000+0000
+          3 | 2020-02-10 22:00:00.000000+0000
+
+   (6 rows)
+
+You can also mix the two limits types:
+
+.. code-block:: cql
+
+   cqlsh> SELECT client_id, when FROM ks1.test PER PARTITION LIMIT 1 LIMIT 3;
+
+   client_id | when
+   -----------+---------------------------------
+          1 | 2019-12-31 22:00:00.000000+0000
+          2 | 2020-02-10 22:00:00.000000+0000
+          4 | 2020-02-10 22:00:00.000000+0000
+
+   (3 rows)
+
+
+.. _allow-filtering:
+
+Allowing filtering
+~~~~~~~~~~~~~~~~~~
+
+By default, CQL only allows select queries that don't involve “filtering” server-side, i.e. queries where we know that
+all (live) record read will be returned (maybe partly) in the result set. The reasoning is that those “non filtering”
+queries have predictable performance in the sense that they will execute in a time that is proportional to the amount of
+data **returned** by the query (which can be controlled through ``LIMIT``).
+
+The ``ALLOW FILTERING`` option lets you explicitly allow (some) queries that require filtering. Please note that a
+query using ``ALLOW FILTERING`` may thus have unpredictable performance (for the definition above), i.e. even a query
+that selects a handful of records **may** exhibit performance that depends on the total amount of data stored in the
+cluster.
+
+For instance, consider the following table holding user profiles with their year of birth (with a secondary index on
+it) and country of residence::
+
+    CREATE TABLE users (
+        username text PRIMARY KEY,
+        firstname text,
+        lastname text,
+        birth_year int,
+        country text
+    )
+
+    CREATE INDEX ON users(birth_year);
+
+Then the following queries are valid::
+
+    SELECT * FROM users;
+    SELECT * FROM users WHERE birth_year = 1981;
+
+because in both cases, ScyllaDB guarantees that these queries' performance will be proportional to the amount of data
+returned. In particular, if no users were born in 1981, then the second query performance will not depend on the number
+of user profiles stored in the database (not directly at least: due to secondary index implementation consideration, this
+query may still depend on the number of nodes in the cluster, which indirectly depends on the amount of data stored.
+Nevertheless, the number of nodes will always be multiple orders of magnitude lower than the number of user profiles
+stored). Of course, both queries may return very large result sets in practice, but the amount of data returned can always
+be controlled by adding a ``LIMIT``.
+
+However, the following query will be rejected::
+
+    SELECT * FROM users WHERE birth_year = 1981 AND country = 'FR';
+
+because ScyllaDB cannot guarantee that it won't have to scan a large amount of data even if the result of those queries is
+small. Typically, it will scan all the index entries for users born in 1981 even if only a handful are actually from
+France. However, if you “know what you are doing”, you can force the execution of this query by using ``ALLOW
+FILTERING`` and so the following query is valid::
+
+    SELECT * FROM users WHERE birth_year = 1981 AND country = 'FR' ALLOW FILTERING;
+
+.. _eval-order:
+
+Evaluation order of SELECT statement clauses
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This section explains the relative priority among the various clauses
+of the SELECT statement.
+
+ - All rows of the table named in the FROM clause are considered as candidates.
+ - Rows are ordered in token order first, then partition key order, then clustering key order.
+ - If ORDER BY is specified, then the clustering key order can be reversed.
+ - The WHERE clause predicate is applied.
+ - GROUP BY is then applied to create groups.
+ - Aggregate functions in the SELECT clause are applied to groups, or to the entire query if GROUP BY was not specified.
+ - If there are selectors that are not aggregate functions, then the first value in the group is selected.
+ - If specified, PER PARTITION LIMIT is applied to each partition result.
+ - If specified, LIMIT is applied to the entire query result.
+
+.. note:: The server may use a different execution plan, as long as it arrives at the same result. For
+  example, conditions in the WHERE clause will limit the candidate row set first by looking up the
+  primary index or a secondary index.
+
+
+.. _select-without-from:
+
+``SELECT`` without ``FROM`` :label-note:`ScyllaDB Extension`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``FROM`` clause is optional. When omitted, the ``SELECT`` statement evaluates the given
+expressions and returns them as a single row, which is useful for evaluating functions or
+computing constant expressions without needing a table. Internally, the statement runs as
+an ordinary select over ``system.one_row``, a built-in table with exactly one row.
+
+``*`` and ``DISTINCT`` are not allowed without ``FROM``, and there are no columns in
+scope to reference. Aggregate functions operate on the single row, so, for example,
+``count(*)`` returns 1.
+
+Examples::
+
+    SELECT 1 AS one, 'hello' AS greeting;
+    SELECT toTimestamp(now()) AS ts;
+    SELECT JSON 1, now();
+
+.. note:: ``SELECT`` without ``FROM`` is a ScyllaDB CQL extension and is not supported
+   by Apache Cassandra.
+
+
+.. _bypass-cache:
+
+Bypass Cache
+~~~~~~~~~~~~~~~~~~
+
+The ``BYPASS CACHE`` clause on SELECT statements informs the database that the data being read is unlikely to be read again in the near future, and also was unlikely to have been read in the near past; therefore, no attempt should be made to read it from the cache or to populate the cache with the data. This is mostly useful for range scans; these typically process large amounts of data with no temporal locality and do not benefit from the cache.
+The clause is placed immediately after the optional ALLOW FILTERING clause.
+
+``BYPASS CACHE`` is a ScyllaDB CQL extension and not part of Apache Cassandra CQL.
+
+For example::
+  
+  SELECT * FROM users BYPASS CACHE;
+  SELECT name, occupation FROM users WHERE userid IN (199, 200, 207) BYPASS CACHE;
+  SELECT * FROM users WHERE birth_year = 1981 AND country = 'FR' ALLOW FILTERING BYPASS CACHE;
+
+.. _using-timeout:
+
+Using Timeout
+~~~~~~~~~~~~~~~~~~
+
+The ``USING TIMEOUT`` clause allows specifying a timeout for a specific request.
+
+For example::
+
+  SELECT * FROM users USING TIMEOUT 5s;
+  SELECT name, occupation FROM users WHERE userid IN (199, 200, 207) BYPASS CACHE USING TIMEOUT 200ms;
+
+``USING TIMEOUT`` is a ScyllaDB CQL extension and not part of Apache Cassandra CQL.
+
+.. _like-operator:
+
+LIKE Operator
+~~~~~~~~~~~~~
+
+The ``LIKE`` operation on ``SELECT`` statements informs ScyllaDB that you are looking for a pattern match. The expression ‘column LIKE pattern’ yields true only if the entire column value matches the pattern.   
+ 
+The search pattern is a string of characters with two wildcards, as shown:
+
+* ``_`` matches any single character
+* ``%`` matches any substring (including an empty string)
+* ``\`` escapes the next pattern character, so it matches verbatim
+* any other pattern character matches itself
+* an empty pattern matches empty text fields
+ 
+ 
+.. note:: Only string types (ascii, text, and varchar) are valid for matching
+
+Currently, the match is **case sensitive**. The entire column value must match the pattern. 
+For example, consider the search pattern 'M%n' - this will match ``Martin``, but will not match ``Moonbeam`` because the ``m`` at the end isn't matched. In addition, ``moon`` is not matched because ``M`` is not the same as ``m``. Both the pattern and the column value are assumed to be UTF-8 encoded.
+ 
+A query can find all values containing some text fragment by matching to an appropriate ``LIKE`` pattern.
+
+**Differences Between ScyllaDB and Cassandra LIKE Operators**
+
+* In Apache Cassandra, you must create a SASI index to use LIKE. ScyllaDB supports LIKE as a regular filter.
+* Consequently, ScyllaDB LIKE will be less performant than Apache Cassandra LIKE for some workloads.
+* ScyllaDB treats underscore (_) as a wildcard; Cassandra doesn't.
+* ScyllaDB treats percent (%) as a wildcard anywhere in the pattern; Cassandra only at the beginning/end
+* ScyllaDB interprets backslash (\\) as an escape character; Cassandra doesn't.
+* Cassandra allows case-insensitive LIKE; ScyllaDB doesn't (see `#4911 <https://github.com/scylladb/scylla/issues/4911>`_).
+* ScyllaDB allows empty LIKE pattern; Cassandra doesn't.
+
+**Example A**
+ 
+In this example, ``LIKE`` specifies that the match is looking for a word that starts with the letter ``S``. The ``%`` after the letter ``S`` matches any text to the end of the field. 
+
+.. code-block:: none
+
+   SELECT * FROM pet_owners WHERE firstname LIKE ‘S%’ ALLOW FILTERING;
+   ╭──────────┬─────────────────────┬────────────────╮
+   │ID        │LastName             │FirstName       │
+   ├──────────┼─────────────────────┼────────────────┤
+   │1         │Adams                │Steven          │
+   ├──────────┼─────────────────────┼────────────────┤
+   │15        │Erg                  │Sylvia          │
+   ├──────────┼─────────────────────┼────────────────┤
+   │20        │Goldberg             │Stephanie       │
+   ├──────────┼─────────────────────┼────────────────┤
+   │25        │Harris               │Stephanie       │
+   ├──────────┼─────────────────────┼────────────────┤
+   │88        │Rosenberg            │Samuel          │
+   ├──────────┼─────────────────────┼────────────────┤
+   │98        │Smith                │Sara            │
+   ├──────────┼─────────────────────┼────────────────┤
+   │115       │Williams             │Susan           │
+   ├──────────┼─────────────────────┼────────────────┤
+   │130       │Young                │Stuart          │
+   ╰──────────┴─────────────────────┴────────────────╯
+
+
+
+
+**Example B**
+
+In this example, you are searching for all pet owners whose last name contains the characters 'erg'.
+
+.. code-block:: none
+
+   SELECT * FROM pet_owners WHERE lastname LIKE ‘%erg%’ ALLOW FILTERING;
+
+   ╭──────────┬─────────────────────┬────────────────╮
+   │ID        │LastName             │FirstName       │
+   ├──────────┼─────────────────────┼────────────────┤
+   │11        │Berger               │David           │
+   ├──────────┼─────────────────────┼────────────────┤
+   │18        │Gerg                 │Lawrence        │
+   ├──────────┼─────────────────────┼────────────────┤
+   │20        │Goldberg             │Stephanie       │
+   ├──────────┼─────────────────────┼────────────────┤
+   │88        │Rosenberg            │Samuel          │
+   ├──────────┼─────────────────────┼────────────────┤
+   │91        │Schulberg            │Barry           │
+   ├──────────┼─────────────────────┼────────────────┤
+   │110       │Weinberg             │Stuart          │
+   ╰──────────┴─────────────────────┴────────────────╯
+
+Note that this query does not return: 
+
+.. code-block:: none
+
+   ╭──────────┬─────────────────────┬────────────────╮
+   │ID        │LastName             │FirstName       │
+   ├──────────┼─────────────────────┼────────────────┤
+   │15        │Erg                  │Sylvia          │
+   ╰──────────┴─────────────────────┴────────────────╯
+
+As it is case sensitive. 
+
+
+**Example C**
+
+This table contains some commonly used ``LIKE`` filters and the matches you can expect the filter to return.
+
+.. list-table::
+   :widths: 50 50
+   :header-rows: 1
+
+   * - Filter
+     - Matches
+   * - %abe%
+     - Babel, aberration, cabernet, scarabees
+   * - _0\%
+     - 10%, 20%, 50%
+   * - a%t
+     - asphalt, adapt, at
+
+
+
+:doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
+
+.. include:: /rst_include/apache-copyrights.rst
+
+
+.. Licensed to the Apache Software Foundation (ASF) under one
+.. or more contributor license agreements.  See the NOTICE file
+.. distributed with this work for additional information
+.. regarding copyright ownership.  The ASF licenses this file
+.. to you under the Apache License, Version 2.0 (the
+.. "License"); you may not use this file except in compliance
+.. with the License.  You may obtain a copy of the License at
+..
+..     http://www.apache.org/licenses/LICENSE-2.0
+..
+.. Unless required by applicable law or agreed to in writing, software
+.. distributed under the License is distributed on an "AS IS" BASIS,
+.. WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+.. See the License for the specific language governing permissions and
+.. limitations under the License.

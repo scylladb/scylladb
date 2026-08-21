@@ -1,0 +1,18 @@
+﻿name: Sync Jira Based on PR Events
+
+on:
+  pull_request_target:
+    types: [opened, edited, ready_for_review, review_requested, labeled, unlabeled, closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  jira-sync:
+    uses: scylladb/github-automation/.github/workflows/main_pr_events_jira_sync.yml@main
+    with:
+      caller_action: ${{ github.event.action }}
+    secrets:
+      caller_jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}

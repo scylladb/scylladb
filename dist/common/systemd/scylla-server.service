@@ -1,0 +1,33 @@
+[Unit]
+Description=Scylla Server
+Wants=scylla-housekeeping-restart.timer
+Wants=scylla-housekeeping-daily.timer
+# This will only requires for abrt < 2.14
+Conflicts=abrt-ccpp.service
+
+[Service]
+Type=notify
+LimitCORE=infinity
+LimitMEMLOCK=infinity
+LimitNOFILE=800000
+LimitAS=infinity
+LimitNPROC=8096
+# Intel Golden Cove branches > 2GB occupy more slots in the branch target buffer,
+# so map libraries close to the executable for shorter branches.
+Environment=LD_PREFER_MAP_32BIT_EXEC=1
+EnvironmentFile=/etc/sysconfig/scylla-server
+EnvironmentFile=/etc/scylla.d/*.conf
+ExecStartPre=+/opt/scylladb/scripts/scylla_prepare
+ExecStart=/usr/bin/scylla $SCYLLA_ARGS $SEASTAR_IO $DEV_MODE $CPUSET $MEM_CONF
+ExecStopPost=+/opt/scylladb/scripts/scylla_stop
+TimeoutStartSec=1y
+TimeoutStopSec=900
+Restart=on-abnormal
+User=scylla
+OOMScoreAdjust=-950
+SyslogLevelPrefix=false
+AmbientCapabilities=CAP_SYS_NICE CAP_IPC_LOCK
+Slice=scylla-server.slice
+
+[Install]
+WantedBy=multi-user.target

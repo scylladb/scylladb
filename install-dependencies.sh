@@ -1,0 +1,497 @@
+#!/bin/bash -e
+#
+# This file is open source software, licensed to you under the terms
+# of the Apache License, Version 2.0 (the "License").  See the NOTICE file
+# distributed with this work for additional information regarding copyright
+# ownership.  You may not use this file except in compliance with the License.
+#
+# You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
+# os-release may be missing in container environment by default.
+if [ -f "/etc/os-release" ]; then
+    . /etc/os-release
+elif [ -f "/etc/arch-release" ]; then
+    export ID=arch
+else
+    echo "/etc/os-release missing."
+    exit 1
+fi
+
+debian_base_packages=(
+    clang
+    clang-tools
+    gdb
+    cargo
+    wabt
+    liblua5.3-dev
+    python3-aiohttp
+    python3-pyparsing
+    python3-colorama
+    python3-dev
+    python3-tabulate
+    python3-pytest
+    python3-pytest-asyncio
+    python3-pytest-timeout
+    python3-pytest-sugar
+    python3-pexpect
+    libsnappy-dev
+    libjsoncpp-dev
+    rapidjson-dev
+    scylla-antlr35-c++-dev
+    git
+    pigz
+    libunistring-dev
+    libzstd-dev
+    libdeflate-dev
+    librapidxml-dev
+    libcrypto++-dev
+    libxxhash-dev
+    zlib1g-dev
+    slapd
+    ldap-utils
+    libcpp-jwt-dev
+    elfutils
+    curl
+    jq
+    git-lfs
+    e2fsprogs
+    fuse3
+    libev-dev # for python driver
+)
+
+fedora_packages=(
+    clang
+    clang-tools-extra
+    compiler-rt
+    libasan
+    libubsan
+    gdb
+    lua-devel
+    yaml-cpp-devel
+    jsoncpp-devel
+    rapidjson-devel
+    snappy-devel
+    libdeflate-devel
+    systemd-devel
+    cryptopp-devel
+    git
+    git-lfs
+    python
+    sudo
+    patchelf
+    python3
+    python3-aiohttp
+    python3-devel
+    python3-pip
+    python3-file-magic
+    python3-colorama
+    python3-tabulate
+    python3-boto3
+    python3-pytest
+    python3-pytest-asyncio
+    python3-pytest-timeout
+    python3-unidiff
+    python3-humanfriendly
+    python3-jinja2
+    python3-deepdiff
+    python3-cryptography
+    python3-pexpect
+    dnf-utils
+    pigz
+    net-tools
+    tar
+    gzip
+    gawk
+    util-linux
+    ethtool
+    hwloc
+    glibc-langpack-en
+    xxhash-devel
+    makeself
+    libzstd-static libzstd-devel
+    lz4-static lz4-devel
+    zlib-ng-compat-devel
+    rpm-build
+    devscripts
+    debhelper
+    fakeroot
+    file
+    dpkg-dev
+    curl
+    rust
+    cargo
+    rapidxml-devel
+    rust-std-static-wasm32-wasip1
+    wabt
+    binaryen
+    lcov
+    e2fsprogs
+    fuse3
+
+    lld
+    llvm-bolt
+    moreutils
+    iproute
+    llvm
+    openldap-servers
+    openldap-devel
+    cyrus-sasl
+    fipscheck
+    cpp-jwt-devel
+
+    podman
+    buildah
+    passt
+
+    # for cassandra-stress
+    java-openjdk-headless
+    snappy
+
+    elfutils
+    jq
+
+    libev-devel # for python driver
+)
+
+fedora_python3_packages=(
+    python3-pyyaml
+    python3-urwid
+    python3-pyparsing
+    python3-requests
+    python3-setuptools
+    python3-psutil
+    python3-distro
+    python3-click
+    python3-six
+    python3-pyudev
+)
+
+# an associative array from packages to constrains
+declare -A pip_packages=(
+    [scylla-driver]="==$(cat tools/cqlsh/requirements.txt | grep scylla-driver | cut -d= -f3)"
+    [geomet]=""
+    [traceback-with-variables]=""
+    [scylla-api-client]=""
+    [treelib]=""
+    [allure-pytest]=""
+    [pytest-xdist]=""
+    [pykmip]=""
+    [universalasync]=""
+    [boto3-stubs[dynamodb]]=""
+    [setuptools_scm]=""
+)
+
+pip_symlinks=(
+    scylla-api-client
+)
+
+centos_packages=(
+    gdb
+    yaml-cpp-devel
+    scylla-antlr35-tool
+    scylla-antlr35-C++-devel
+    jsoncpp-devel snappy-devel
+    rapidjson-devel
+    scylla-boost163-static
+    scylla-python34-pyparsing20
+    systemd-devel
+    pigz
+    openldap-servers
+    openldap-devel
+    cpp-jwt-devel
+)
+
+# 1) glibc 2.30-3 has sys/sdt.h (systemtap include)
+#    some old containers may contain glibc older,
+#    so enforce update on that one.
+# 2) if problems with signatures, ensure having fresh
+#    archlinux-keyring: pacman -Sy archlinux-keyring && pacman -Syyu
+# 3) aur installations require having sudo and being
+#    a sudoer. makepkg does not work otherwise.
+#
+# aur: antlr3, antlr3-cpp-headers-git
+arch_packages=(
+    gdb
+    base-devel
+    filesystem
+    git
+    glibc
+    jsoncpp
+    lua
+    python-pyparsing
+    python3
+    rapidjson
+    snappy
+)
+
+ANTLR3_VERSION=3.5.3
+ANTLR3_JAR_URL="https://repo1.maven.org/maven2/org/antlr/antlr-complete/${ANTLR3_VERSION}/antlr-complete-${ANTLR3_VERSION}.jar"
+ANTLR3_JAR_SHA256=e781de9b3e2cc1297dfdaf656da946a1fd22f449bd9e0ce1e12d488976887f83
+ANTLR3_SOURCE_URL="https://github.com/antlr/antlr3/archive/${ANTLR3_VERSION}/antlr3-${ANTLR3_VERSION}.tar.gz"
+ANTLR3_SOURCE_SHA256=a0892bcf164573d539b930e57a87ea45333141863a0dd3a49e5d8c919c8a58ab
+# Patches from Fedora 43 (src.fedoraproject.org) that apply to the C++ headers
+ANTLR3_PATCHES=(
+    0006-antlr3memory.hpp-fix-for-C-20-mode.patch
+    0008-unconst-cyclicdfa-gcc-14.patch
+)
+
+install_antlr3() {
+    local prefix=/usr/local
+    local jardir="${prefix}/share/java"
+    local bindir="${prefix}/bin"
+    local includedir="${prefix}/include"
+
+    if [ -f "${jardir}/antlr-complete-${ANTLR3_VERSION}.jar" ] \
+        && [ -f "${bindir}/antlr3" ] \
+        && [ -f "${includedir}/antlr3.hpp" ]; then
+        echo "antlr3 ${ANTLR3_VERSION} already installed, skipping"
+        return
+    fi
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    # Download and install the complete JAR
+    mkdir -p "${jardir}"
+    curl -fSL -o "${tmpdir}/antlr-complete-${ANTLR3_VERSION}.jar" "${ANTLR3_JAR_URL}"
+    echo "${ANTLR3_JAR_SHA256}  ${tmpdir}/antlr-complete-${ANTLR3_VERSION}.jar" | sha256sum --check
+    mv "${tmpdir}/antlr-complete-${ANTLR3_VERSION}.jar" "${jardir}/"
+
+    # Create the antlr3 wrapper script
+    mkdir -p "${bindir}"
+    cat > "${bindir}/antlr3" <<'WRAPPER'
+#!/bin/bash
+exec java -cp /usr/local/share/java/antlr-complete-ANTLR3_VERSION.jar org.antlr.Tool "$@"
+WRAPPER
+    sed -i "s/ANTLR3_VERSION/${ANTLR3_VERSION}/" "${bindir}/antlr3"
+    chmod +x "${bindir}/antlr3"
+
+    # Download and extract the source for C++ headers
+    curl -fSL -o "${tmpdir}/antlr3-${ANTLR3_VERSION}.tar.gz" "${ANTLR3_SOURCE_URL}"
+    echo "${ANTLR3_SOURCE_SHA256}  ${tmpdir}/antlr3-${ANTLR3_VERSION}.tar.gz" | sha256sum --check
+    tar -xzf "${tmpdir}/antlr3-${ANTLR3_VERSION}.tar.gz" -C "${tmpdir}"
+
+    # Apply patches to C++ headers
+    local srcdir="${tmpdir}/antlr3-${ANTLR3_VERSION}"
+    local patchdir
+    patchdir="$(dirname "$0")/tools/antlr3-patches"
+    for patch in "${ANTLR3_PATCHES[@]}"; do
+        patch -d "${srcdir}" -p1 < "${patchdir}/${patch}"
+    done
+
+    # Install C++ headers (header-only library)
+    mkdir -p "${includedir}"
+    install -m 644 "${srcdir}"/runtime/Cpp/include/* "${includedir}/"
+
+    rm -rf "${tmpdir}"
+    echo "antlr3 ${ANTLR3_VERSION} installed to ${prefix}"
+}
+
+go_arch() {
+    local -A GO_ARCH=(
+        ["x86_64"]=amd64
+        ["aarch64"]=arm64
+    )
+    echo ${GO_ARCH["$(arch)"]}
+}
+
+MINIO_BINARIES_DIR=/usr/local/bin
+
+minio_server_url() {
+    echo "https://dl.minio.io/server/minio/release/linux-$(go_arch)/minio"
+}
+
+minio_client_url() {
+    echo "https://dl.min.io/client/mc/release/linux-$(go_arch)/mc"
+}
+
+minio_download_jobs() {
+    cfile=$(mktemp)
+    echo "$(curl -sL "$(minio_server_url).sha256sum" | cut -f1 -d' ') ${MINIO_BINARIES_DIR}/minio" > "$cfile"
+    echo "$(curl -sL "$(minio_client_url).sha256sum" | cut -f1 -d' ') ${MINIO_BINARIES_DIR}/mc" >> "$cfile"
+    sha256sum -c $cfile | grep -F FAILED | sed \
+        -e 's/:.*$//g' \
+        -e "s#${MINIO_BINARIES_DIR}/minio#$(minio_server_url) -o ${MINIO_BINARIES_DIR}/minio#" \
+        -e "s#${MINIO_BINARIES_DIR}/mc#$(minio_client_url) -o ${MINIO_BINARIES_DIR}/mc#"
+    rm -f ${cfile}
+}
+
+print_usage() {
+    echo "Usage: install-dependencies.sh [OPTION]..."
+    echo ""
+    echo "  --print-python3-runtime-packages Print required python3 packages for Scylla"
+    echo "  --print-pip-runtime-packages Print required pip packages for Scylla"
+    echo "  --print-pip-symlinks Print list of pip provided commands which need to install to /usr/bin"
+    echo "  --future Install dependencies for future toolchain (Fedora rawhide based)"
+    exit 1
+}
+
+PRINT_PYTHON3=false
+PRINT_PIP=false
+PRINT_PIP_SYMLINK=false
+FUTURE=false
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--print-python3-runtime-packages")
+            PRINT_PYTHON3=true
+            shift 1
+            ;;
+        "--print-pip-runtime-packages")
+            PRINT_PIP=true
+            shift 1
+            ;;
+        "--print-pip-symlinks")
+            PRINT_PIP_SYMLINK=true
+            shift 1
+            ;;
+        "--future")
+            FUTURE=true
+            shift 1
+            ;;
+         *)
+            print_usage
+            ;;
+    esac
+done
+
+if $PRINT_PYTHON3; then
+    if [ "$ID" != "fedora" ]; then
+        echo "Unsupported Distribution: $ID"
+        exit 1
+    fi
+    echo "${fedora_python3_packages[@]}"
+    exit 0
+fi
+
+if $PRINT_PIP; then
+    echo "${!pip_packages[@]}"
+    exit 0
+fi
+
+if $PRINT_PIP_SYMLINK; then
+    echo "${pip_symlinks[@]}"
+    exit 0
+fi
+
+if ! $FUTURE; then
+    fedora_packages+=(
+        python3-pytest-sugar
+    )
+fi
+
+umask 0022
+
+./seastar/install-dependencies.sh
+
+if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
+    apt-get -y install "${debian_base_packages[@]}"
+    if [ "$VERSION_ID" = "8" ]; then
+        apt-get -y install libsystemd-dev scylla-antlr35 libyaml-cpp-dev
+    elif [ "$VERSION_ID" = "14.04" ]; then
+        apt-get -y install scylla-antlr35 libyaml-cpp-dev
+    elif [ "$VERSION_ID" = "9" ]; then
+        apt-get -y install libsystemd-dev antlr3 scylla-libyaml-cpp05-dev
+    else
+        apt-get -y install libsystemd-dev antlr3 libyaml-cpp-dev
+    fi
+    apt-get -y install libssl-dev
+
+    echo -e "Configure example:\n\t./configure.py --enable-dpdk --mode=release --static-boost --static-yaml-cpp --compiler=/opt/scylladb/bin/g++-7 --cflags=\"-I/opt/scylladb/include -L/opt/scylladb/lib/x86-linux-gnu/\" --ldflags=\"-Wl,-rpath=/opt/scylladb/lib\""
+elif [ "$ID" = "fedora" ]; then
+    fedora_packages+=(openssl-devel)
+    if rpm -q --quiet yum-utils; then
+        echo
+        echo "This script will install dnf-utils package, witch will conflict with currently installed package: yum-utils"
+        echo "Please remove the package and try to run this script again."
+        exit 1
+    fi
+    dnf install -y "${fedora_packages[@]}" "${fedora_python3_packages[@]}"
+
+    install_antlr3
+
+    # Fedora 45 tightened key checks, and cassandra-stress is not signed yet.
+    dnf install --no-gpgchecks -y https://github.com/scylladb/cassandra-stress/releases/download/v3.18.1/cassandra-stress-java21-3.18.1-1.noarch.rpm
+
+    PIP_DEFAULT_ARGS="--only-binary=:all: -v"
+    pip_constrained_packages=""
+    for package in "${!pip_packages[@]}"
+    do
+        pip_constrained_packages="${pip_constrained_packages} ${package}${pip_packages[$package]}"
+    done
+    pip3 install --upgrade --no-cache-dir "$PIP_DEFAULT_ARGS" $pip_constrained_packages
+
+elif [ "$ID" = "centos" ]; then
+    centos_packages+=(openssl-devel)
+    dnf install -y "${centos_packages[@]}"
+    echo -e "Configure example:\n\tpython3.4 ./configure.py --enable-dpdk --mode=release --static-boost --compiler=/opt/scylladb/bin/g++-7.3 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64 --cflags=-I/opt/scylladb/include --with-antlr3=/opt/scylladb/bin/antlr3"
+elif [ "$ID" == "arch" ]; then
+    # main
+    if [ "$EUID" -eq "0" ]; then
+        pacman -Sy --needed --noconfirm "${arch_packages[@]}"
+    else
+        echo "scylla: You now ran $0 as non-root. Run it again as root to execute the pacman part of the installation." 1>&2
+    fi
+
+    # aur
+    if [ ! -x /usr/bin/antlr3 ]; then
+        echo "Installing aur/antlr3..."
+        if (( EUID == 0 )); then
+            echo "You now ran $0 as root. This can only update dependencies with pacman. Please run again it as non-root to complete the AUR part of the installation." 1>&2
+            exit 1
+        fi
+        TEMP=$(mktemp -d)
+        pushd "$TEMP" > /dev/null || exit 1
+        git clone --depth 1 https://aur.archlinux.org/antlr3.git
+        cd antlr3 || exit 1
+        makepkg -si
+        popd > /dev/null || exit 1
+    fi
+    if [ ! -f /usr/include/antlr3.hpp ]; then
+        echo "Installing aur/antlr3-cpp-headers-git..."
+        if (( EUID == 0 )); then
+            echo "You now ran $0 as root. This can only update dependencies with pacman. Please run again it as non-root to complete the AUR part of the installation." 1>&2
+            exit 1
+        fi
+        TEMP=$(mktemp -d)
+        pushd "$TEMP" > /dev/null || exit 1
+        git clone --depth 1 https://aur.archlinux.org/antlr3-cpp-headers-git.git
+        cd antlr3-cpp-headers-git || exit 1
+        makepkg -si
+        popd > /dev/null || exit 1
+    fi
+    echo -e "Configure example:\n\t./configure.py\n\tninja release"
+fi
+
+# Keep this version in lockstep with the `cxx` crate pinned in rust/inc/Cargo.toml
+# and rust/wasmtime_bindings/Cargo.toml: the cxxbridge CLI generates the C++ side
+# of the FFI and the cxx crate generates the Rust side, so a version mismatch
+# breaks linking (unresolved cxxbridge symbols). Bumping one requires bumping the
+# other (and rebuilding the toolchain image).
+cargo --config net.git-fetch-with-cli=true install cxxbridge-cmd --version 1.0.83 --root /usr/local
+
+CURL_ARGS=$(minio_download_jobs)
+if [ ! -z "${CURL_ARGS}" ]; then
+    curl -fSL --remove-on-error --parallel --parallel-immediate ${CURL_ARGS}
+    chmod +x "${MINIO_BINARIES_DIR}/minio"
+    chmod +x "${MINIO_BINARIES_DIR}/mc"
+else
+    echo "Minio server and client are up-to-date, skipping download"
+fi
+
+toxyproxy_version="v2.12.0"
+for bin in toxiproxy-cli toxiproxy-server; do
+    curl -fSL -o "/usr/local/bin/${bin}" "https://github.com/Shopify/toxiproxy/releases/download/${toxyproxy_version}/${bin}-linux-$(go_arch)"
+    chmod +x "/usr/local/bin/${bin}"
+done

@@ -1,0 +1,31 @@
+#
+# Copyright (C) 2026-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
+# liblttng-ust dlopen()s itself from its ELF constructors - both from
+# lttng_ust__tracepoints__init() (include/lttng/tracepoint.h, RTLD_NOW |
+# RTLD_GLOBAL) and from lttng_ust_ctor() (src/lib/lttng-ust/lttng-ust-comm.c,
+# RTLD_LAZY | RTLD_NODELETE). It does so deliberately: its ust_listener_threads
+# are detached and can never be joined, so the code they run must never be
+# unmapped, and the reference is never dropped (lttng-ust b2292d856737).
+#
+# What LeakSanitizer reports is therefore not lttng-ust's own state but the
+# glibc dynamic-loader bookkeeping allocated to service those dlopen()s. It is
+# referenced only from ld.so's private _rtld_global, which LeakSanitizer does
+# not scan, so it looks unreachable at exit even though it stays in use for the
+# whole lifetime of the process - and it is reported for a command as trivial
+# as "scylla --version".
+#
+# The allocations belong to the third-party library, not to Scylla. They only
+# became visible when we started linking lttng-ust: the seastar update in
+# dafe9e9a80 ("Update seastar submodule") pulled in seastar's LTTng-UST
+# tracepoints, which added liblttng-ust to the relocatable package for the
+# first time.
+#
+# The pattern is a substring match on the module name, so it covers both
+# liblttng-ust.so and liblttng-ust-tracepoint.so.
+leak:liblttng-ust

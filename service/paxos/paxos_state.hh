@@ -1,0 +1,186 @@
+/*
+ * Copyright (C) 2019-present ScyllaDB
+ *
+ * Modified by ScyllaDB
+ */
+/*
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
+ */
+#pragma once
+#include <chrono>
+#include <seastar/core/lowres_clock.hh>
+#include <seastar/core/semaphore.hh>
+#include <seastar/core/timer.hh>
+#include <seastar/util/noncopyable_function.hh>
+#include "service/paxos/proposal.hh"
+#include "utils/log.hh"
+#include "utils/digest_algorithm.hh"
+#include "utils/hash.hh"
+#include "db/timeout_clock.hh"
+#include <unordered_map>
+#include "utils/UUID_gen.hh"
+#include "service/paxos/prepare_response.hh"
+#include "service/migration_listener.hh"
+#include "cql3/statements/prepared_statement.hh"
+
+namespace cql3 {
+    class query_processor;
+    class untyped_result_set;
+}
+
+namespace gms {
+    class feature_service;
+}
+
+namespace service {
+class storage_proxy;
+}
+namespace db { class system_keyspace; }
+
+namespace service::paxos {
+
+using clock_type = db::timeout_clock;
+
+template <typename Key>
+class key_lock_map {
+    using semaphore = basic_semaphore<semaphore_default_exception_factory, clock_type>;
+    struct lock {
+        semaphore sem{1};
+        unsigned refs{0};
+    };
+    using map = std::unordered_map<Key, lock>;
+    map _locks;
+public:
+    key_lock_map(bool preallocate);
+
+    class guard {
+        map& _map;
+        map::value_type* _entry;
+        bool _locked;
+    public:
+        guard(key_lock_map<Key>& map, const Key& key);
+        guard(guard&& o) noexcept;
+        guard(const guard&) = delete;
+        ~guard();
+        future<> lock(clock_type::time_point timeout);
+        const Key& key() const { return _entry->first; }
+        semaphore& sem() { return _entry->second.sem; }
+    };
+};
+using token_lock_map = key_lock_map<dht::token>;
+using token_guard = token_lock_map::guard;
+
+class paxos_store;
+
+// The state of a CAS update of a given primary key as persisted in the paxos table.
+class paxos_state {
+private:
+    // Locks are local to the shard which owns the corresponding token range.
+    // Protects concurrent reads and writes of the same row in system.paxos table.
+    static thread_local token_lock_map _paxos_table_lock;
+    // Taken by the coordinator code to allow only one instance of PAXOS to run for each key.
+    // This prevents contantion between multiple clients trying to modify the
+    // same key through the same coordinator and stealing the ballot from
+    // each other.
+    static thread_local token_lock_map _coordinator_lock;
+
+    using token_guard_foreign_ptr = foreign_ptr<lw_shared_ptr<token_guard>>;
+    using replica_guard = boost::container::static_vector<token_guard_foreign_ptr, 2>;
+    static future<replica_guard> get_replica_lock(const schema& s, const dht::token& token,
+        clock_type::time_point timeout);
+
+    utils::UUID _promised_ballot = utils::UUID_gen::min_time_UUID();
+    std::optional<proposal> _accepted_proposal;
+    std::optional<proposal> _most_recent_commit;
+
+public:
+
+    static future<token_guard> get_cas_lock(const dht::token& key, clock_type::time_point timeout);
+
+    static logging::logger logger;
+
+    paxos_state() {}
+
+    paxos_state(utils::UUID promised, std::optional<proposal> accepted, std::optional<proposal> commit)
+        : _promised_ballot(std::move(promised))
+        , _accepted_proposal(std::move(accepted))
+        , _most_recent_commit(std::move(commit)) {}
+    // Replica RPC endpoint for Paxos "prepare" phase.
+    static future<prepare_response> prepare(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema,
+            const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
+            bool only_digest, query::digest_algorithm da, clock_type::time_point timeout);
+    // Replica RPC endpoint for Paxos "accept" phase.
+    static future<bool> accept(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
+            clock_type::time_point timeout);
+    // Replica RPC endpoint for Paxos "learn".
+    static future<> learn(storage_proxy& sp, paxos_store& paxos_store, schema_ptr schema, proposal decision, clock_type::time_point timeout, tracing::trace_state_ptr tr_state);
+    // Replica RPC endpoint for pruning Paxos table
+    static future<> prune(paxos_store& paxos_store, schema_ptr schema, const partition_key& key, utils::UUID ballot, clock_type::time_point timeout,
+            tracing::trace_state_ptr tr_state);
+};
+
+class paxos_store:
+    public seastar::peering_sharded_service<paxos_store>, 
+    public seastar::async_sharded_service<paxos_store>,
+    private service::migration_listener::empty_listener
+{
+    db::system_keyspace& _sys_ks;
+    gms::feature_service& _features;
+    replica::database& _db;
+    migration_manager& _mm;
+    bool _stopped = false;
+    key_lock_map<table_id> _table_lock_map{false};
+
+    enum class paxos_state_query {
+        load,
+        save_promise,
+        save_proposal,
+        save_decision,
+        delete_decision,
+    };
+
+    using prepared_statement_cache_key = std::pair<table_id, paxos_state_query>;
+    using prepared_statement_ptr = cql3::statements::prepared_statement::checked_weak_ptr;
+    using prepared_statement_cache = std::unordered_map<prepared_statement_cache_key, prepared_statement_ptr, utils::tuple_hash>;
+
+    prepared_statement_cache _prepared_statements;
+    static constexpr auto prepared_statements_prune_period = std::chrono::minutes(1);
+    seastar::timer<seastar::lowres_clock> _prepared_statements_prune_timer;
+
+    template <typename... Args>
+    future<cql3::untyped_result_set> execute_cql_with_timeout(const schema& s, paxos_state_query query,
+            noncopyable_function<sstring(const schema&, const schema&)> make_query, db::timeout_clock::time_point timeout,
+            Args&&... args);
+    future<cql3::untyped_result_set> do_execute_cql_with_timeout(const schema& s, paxos_state_query query,
+            noncopyable_function<sstring(const schema&, const schema&)> make_query, db::timeout_clock::time_point timeout,
+            std::vector<data_value_or_unset> values);
+    future<schema_ptr> get_paxos_state_schema(const schema& s, db::timeout_clock::time_point timeout) const;
+    future<> create_paxos_state_table(const schema& s, db::timeout_clock::time_point timeout);
+    static schema_ptr create_paxos_state_schema(const schema& s);
+    schema_ptr try_get_paxos_state_schema(const schema& s) const;
+    void prune_invalid_prepared_statements();
+public:
+    explicit paxos_store(db::system_keyspace& sys_ks, gms::feature_service& features, replica::database& db, migration_manager& mm);
+    ~paxos_store();
+    future<> stop();
+
+    future<> ensure_initialized(const schema& s, db::timeout_clock::time_point timeout);
+    static std::optional<std::string_view> try_get_base_table(std::string_view cf_name);
+
+    future<column_mapping> get_column_mapping(const schema& query_schema, dht::token token, table_schema_version version, clock_type::time_point timeout);
+    future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
+        db::timeout_clock::time_point timeout);
+    future<> save_paxos_promise(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout);
+    future<> save_paxos_proposal(const schema& s, const service::paxos::proposal& proposal, db::timeout_clock::time_point timeout);
+    future<> save_paxos_decision(const schema& s, const service::paxos::proposal& decision, db::timeout_clock::time_point timeout);
+    future<> delete_paxos_decision(const schema& s, const partition_key& key, utils::UUID ballot, db::timeout_clock::time_point timeout);
+
+    void on_before_drop_column_family(const schema& schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) override;
+
+    // For testing only
+    const prepared_statement_cache& get_prepared_statements_cache() const;
+    void set_prepared_statements_prune_period(seastar::lowres_clock::duration period);
+};
+
+} // end of namespace "service::paxos"
+

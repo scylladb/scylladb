@@ -1,0 +1,163 @@
+/*
+ *
+ * Modified by ScyllaDB
+ * Copyright (C) 2015-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
+ */
+
+#pragma once
+
+#include <seastar/core/sstring.hh>
+#include "locator/host_id.hh"
+#include "utils/chunked_string.hh"
+#include "version_generator.hh"
+#include "gms/inet_address.hh"
+#include "dht/token.hh"
+#include "schema/schema_fwd.hh"
+#include "service/state_id.hh"
+#include "version.hh"
+#include <set>
+#include <unordered_set>
+
+namespace gms {
+
+/**
+ * This abstraction represents the state associated with a particular node which an
+ * application wants to make available to the rest of the nodes in the cluster.
+ * Whenever a piece of state needs to be disseminated to the rest of cluster wrap
+ * the state in an instance of <i>ApplicationState</i> and add it to the Gossiper.
+ * <p></p>
+ * e.g. if we want to disseminate load information for node A do the following:
+ * <p></p>
+ * ApplicationState loadState = new ApplicationState(<string representation of load>);
+ * Gossiper.instance.addApplicationState("LOAD STATE", loadState);
+ */
+
+class versioned_value {
+    version_type _version;
+    utils::chunked_string _value;
+public:
+    // this must be a char that cannot be present in any token
+    static constexpr std::string_view DELIMITER{","};
+
+    // values for ApplicationState.STATUS
+    static constexpr std::string_view STATUS_UNKNOWN{"UNKNOWN"};
+    static constexpr std::string_view STATUS_NORMAL{"NORMAL"};
+
+    static constexpr std::string_view SHUTDOWN{"shutdown"};
+
+    [[nodiscard]] version_type version() const noexcept { return _version; };
+    [[nodiscard]] const utils::chunked_string& value() const noexcept { return _value; };
+
+    bool operator==(const versioned_value& other) const noexcept {
+        return _version == other._version &&
+               _value   == other._value;
+    }
+
+    explicit versioned_value(utils::chunked_string value, version_type version = version_generator::get_next_version()) noexcept
+        : _version(version), _value(std::move(value)) {
+    }
+
+    versioned_value() noexcept
+        : _version(-1) {
+    }
+
+    static versioned_value clone_with_higher_version(const versioned_value& value) noexcept {
+        return versioned_value(utils::chunked_string(utils::chunked_string_view(value.value())));
+    }
+
+private:
+    static sstring version_string(const std::initializer_list<sstring>& args) {
+        return fmt::to_string(fmt::join(args, versioned_value::DELIMITER));
+    }
+
+    static sstring make_token_string(const std::unordered_set<dht::token>& tokens);
+
+public:
+    static versioned_value normal(const std::unordered_set<dht::token>& tokens) {
+        return versioned_value(version_string({sstring(versioned_value::STATUS_NORMAL),
+                                               make_token_string(tokens)}));
+    }
+
+    static versioned_value load(double load) {
+        return versioned_value(to_sstring(load));
+    }
+
+    static versioned_value schema(const table_schema_version& new_version) {
+        return versioned_value(new_version.to_sstring());
+    }
+
+    static versioned_value host_id(const locator::host_id& host_id) {
+        return versioned_value(host_id.to_sstring());
+    }
+
+    static versioned_value shutdown(bool value) {
+        return versioned_value(sstring(SHUTDOWN) + sstring(DELIMITER) + (value ? "true" : "false"));
+    }
+
+    static versioned_value datacenter(const sstring& dc_id) {
+        return versioned_value(dc_id);
+    }
+
+    static versioned_value rack(const sstring& rack_id) {
+        return versioned_value(rack_id);
+    }
+
+    static versioned_value snitch_name(const sstring& snitch_name) {
+        return versioned_value(snitch_name);
+    }
+
+    static versioned_value shard_count(int shard_count) {
+        return versioned_value(format("{}", shard_count));
+    }
+
+    static versioned_value ignore_msb_bits(unsigned ignore_msb_bits) {
+        return versioned_value(format("{}", ignore_msb_bits));
+    }
+
+    static versioned_value rpcaddress(gms::inet_address endpoint) {
+        return versioned_value(format("{}", endpoint));
+    }
+
+    static versioned_value release_version() {
+        return versioned_value(version::release());
+    }
+
+    static versioned_value network_version();
+
+    static versioned_value internal_ip(const sstring &private_ip) {
+        return versioned_value(private_ip);
+    }
+
+    static versioned_value supported_features(const std::set<std::string_view>& features) {
+        return versioned_value(fmt::to_string(fmt::join(features, ",")));
+    }
+
+    static versioned_value cache_hitrates(utils::chunked_string hitrates) {
+        return versioned_value(std::move(hitrates));
+    }
+
+    static versioned_value cql_ready(bool value) {
+        return versioned_value(to_sstring(int(value)));
+    };
+
+    static versioned_value state_id(const service::state_id& state_id) {
+        return versioned_value(state_id.to_sstring());
+    }
+
+}; // class versioned_value
+
+} // namespace gms
+
+template <> struct fmt::formatter<gms::versioned_value> : fmt::formatter<string_view> {
+    static auto format(const gms::versioned_value& v, fmt::format_context& ctx) {
+        auto out = fmt::format_to(ctx.out(), "Value(");
+        for (bytes_view frag : fragment_range(managed_bytes_view(v.value().data()))) {
+            out = fmt::format_to(out, "{}", utils::to_string_view(frag));
+        }
+        return fmt::format_to(out, ",{})", v.version());
+    }
+};

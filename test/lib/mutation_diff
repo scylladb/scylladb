@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#
+# Converts assertion failure text involving two mutations to a diff.
+#
+
+cmd="diff -au"
+sed_cmd="sed -E"
+
+while getopts ":d:" opt; do
+    case $opt in
+    d)
+        cmd="$OPTARG";;
+    *)
+        echo "Usage: $0 [-d diff_command] [<path-to-test-output-file>]" 1>&2
+        exit 1;;
+    esac
+done
+shift $((OPTIND-1))
+
+file="$1"
+if [ -z "$file" -o "$file" = "-" ]; then
+    tmpfile=$(mktemp)
+    cat > "$tmpfile"
+    file="$tmpfile"
+fi
+
+function filter {
+    $sed_cmd 's/@0x[0-9a-f]*//g'
+}
+
+begin="(expected |critical check .+ == .+ has failed \[)"
+middle="(got:|\!=)"
+end="^$|\}\]|Leaving test case"
+
+$cmd <($sed_cmd -n "/$begin/,/$middle/p" "$file" | head -n-1 | $sed_cmd "s/.*$begin/&\n/" | filter) \
+     <($sed_cmd -n "/$middle/,/$end/p" "$file" | $sed_cmd "s/.*$middle /&\n/" | filter) | less -R
+
+if [ -n "$tmpfile" ]; then
+    rm -f "$tmpfile"
+fi

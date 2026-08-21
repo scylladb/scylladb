@@ -1,0 +1,51 @@
+name: License Header Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [master]
+
+env:
+  HEADER_CHECK_LINES: 10
+  LICENSE: "LicenseRef-ScyllaDB-Source-Available-1.1"
+  CHECKED_EXTENSIONS: ".cc .hh .py"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  check-license-headers:
+    name: Check License Headers
+    runs-on: ubuntu-latest
+    # check + artifact upload only; no token permissions needed
+    permissions: {}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Get changed files
+        id: changed-files
+        run: |
+          # Get list of added files comparing with base branch
+          echo "files=$(git diff --name-only --diff-filter=A ${{ github.event.pull_request.base.sha }} ${{ github.sha }} | tr '\n' ' ')" >> $GITHUB_OUTPUT
+
+      - name: Check license headers
+        if: steps.changed-files.outputs.files != ''
+        run: |
+          .github/scripts/check-license.py \
+            --files ${{ steps.changed-files.outputs.files }} \
+            --license "${{ env.LICENSE }}" \
+            --check-lines "${{ env.HEADER_CHECK_LINES }}" \
+            --extensions ${{ env.CHECKED_EXTENSIONS }}
+
+      - name: Save PR number
+        if: failure()
+        run: echo "${{ github.event.pull_request.number }}" > pr_number.txt
+
+      - name: Upload failure marker
+        if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: license-check-failed
+          path: pr_number.txt
