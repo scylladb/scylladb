@@ -6,6 +6,9 @@
 
 import hashlib
 import socket
+import subprocess
+import sys
+import sysconfig
 import time
 import os
 from pathlib import Path
@@ -18,6 +21,38 @@ TEST_RUNNER = os.environ.get("SCYLLA_TEST_RUNNER", "pytest")
 TOP_SRC_DIR = Path(__file__).parent.parent  # ScyllaDB's source code root directory
 TEST_DIR = TOP_SRC_DIR / "test"
 BUILD_DIR = TOP_SRC_DIR / "build"
+
+
+def _ensure_scylla_driver() -> None:
+    """Make scylla-driver importable, installing it on demand.
+
+    scylla-driver isn't baked into the frozen toolchain image, so it's
+    installed here into a cache dir keyed by Python ABI (since that cache
+    dir can outlive a toolchain/interpreter upgrade) and added to
+    sys.path, instead of every test.py run depending on an image rebuild
+    to pick up a new driver version. The cache dir is added to sys.path
+    before the importability check, so a populated cache from a previous
+    run is reused instead of re-invoking uv every time.
+    """
+    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    target_dir = cache_home / "scylla-test-uv-packages" / sysconfig.get_config_var("SOABI")
+    sys.path.insert(0, str(target_dir))
+
+    try:
+        import cassandra  # noqa: F401
+    except ImportError:
+        pass
+    else:
+        return
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["uv", "pip", "install", "--quiet", "--target", str(target_dir), "-r", str(TEST_DIR / "uv-requirements.txt")],
+        check=True,
+    )
+
+
+_ensure_scylla_driver()
 
 ALL_MODES = {
     "debug": "Debug",
