@@ -28,11 +28,14 @@
 #include "data_dictionary/keyspace_metadata.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/cql_config.hh"
+#include "cql3/statements/cf_prop_defs.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "create_keyspace_statement.hh"
 #include "gms/feature_service.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
+#include "db/schema_tables.hh"
+#include "cql3/untyped_result_set.hh"
 
 using namespace std::string_literals;
 
@@ -64,7 +67,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
             throw exceptions::invalid_request_exception("Cannot alter system keyspace");
         }
 
-        _attrs->validate();
+        _attrs->validate(qp.proxy().features());
 
         if (!bool(_attrs->get_replication_strategy_class()) && !_attrs->get_replication_options().empty()) {
             throw exceptions::configuration_exception("Missing replication strategy class");
@@ -160,6 +163,64 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
     try {
         event::schema_change::target_type target_type = event::schema_change::target_type::KEYSPACE;
         auto ks = qp.db().find_keyspace(_name);
+        const bool has_config_props = _attrs->has_keyspace_config_properties(qp.proxy().features());
+        const bool has_legacy_props = _attrs->has_non_keyspace_config_properties(qp.proxy().features());
+
+        // Combining registry-backed keyspace config properties with a tablets
+        // replication-factor change in the same statement is rejected: an RF change on a
+        // tablets-enabled keyspace defers the actual metadata update through the global
+        // topology-request machinery (see the changes_tablets(qp) branch below), and
+        // ks_prop_defs::flattened() -- which serializes the request payload for that deferred
+        // completion -- does not carry registry-backed config keys, so they would be silently
+        // dropped by the time the deferred completion runs. Every other combination (config
+        // properties together with durable_writes, storage, or non-tablets replication changes)
+        // resolves synchronously below and is safe, because as_ks_metadata_update() already
+        // folds config option updates into the resulting keyspace_metadata (see
+        // apply_config_updates in ks_prop_defs.cc).
+        if (has_config_props && has_legacy_props && changes_tablets(qp)) {
+            throw exceptions::invalid_request_exception(
+                    "Cannot combine cluster-config keyspace properties with a tablets replication-factor "
+                    "change in the same ALTER KEYSPACE statement; issue them as separate statements");
+        }
+
+        // A config-only ALTER KEYSPACE takes a dedicated path that copies the existing
+        // keyspace_metadata verbatim and swaps only config_options. This is a correctness
+        // requirement, not an optimization: the generic path below rebuilds the metadata from
+        // _attrs via as_ks_metadata_update(), which re-applies DEFAULTS for every legacy
+        // property the statement did not mention -- get_boolean(KW_DURABLE_WRITES, true) and
+        // get_storage_options() (a default-constructed, i.e. local, storage_options). Routing
+        // "ALTER KEYSPACE ks WITH <config_prop> = ..." through that rebuild would silently reset
+        // durable_writes to true and clobber non-local storage options.
+        //
+        // Note the resulting asymmetry: a MIXED statement (config + legacy properties) does go
+        // through the rebuild, so it still re-applies those defaults. That is pre-existing
+        // ALTER KEYSPACE behavior for any statement carrying legacy properties and is not
+        // changed here; only the config-only case is made non-destructive.
+        //
+        // changes_tablets(qp) cannot be true here: it requires a non-empty replication map,
+        // which is a legacy property, so it implies has_legacy_props. The config-only path
+        // therefore never races the deferred topology-request machinery, and the guard above is
+        // sufficient to cover that combination.
+        if (has_config_props && !has_legacy_props) {
+            auto updated_keyspace_configs = ks.metadata()->config_options();
+            auto config_updates = _attrs->get_keyspace_config_updates(qp.proxy().features());
+            for (auto&& [config_name, value] : config_updates) {
+                if (value) {
+                    updated_keyspace_configs[config_name] = *value;
+                } else {
+                    updated_keyspace_configs.erase(config_name);
+                }
+            }
+
+            auto updated_ks_md = data_dictionary::keyspace_metadata::new_keyspace(*ks.metadata());
+            updated_ks_md->set_config_options(std::move(updated_keyspace_configs));
+            mc.add_mutations(service::prepare_keyspace_update_announcement(qp.db().real_database(), updated_ks_md, mc.write_timestamp()), "CQL alter keyspace");
+
+            co_return std::make_tuple(
+                    ::make_shared<event::schema_change>(event::schema_change::change_type::UPDATED, target_type, _name),
+                    cql3::cql_warnings_vec{});
+        }
+
         auto ks_md = ks.metadata();
         const auto tmptr = qp.proxy().get_token_metadata_ptr();
         const auto& topo = tmptr->get_topology();

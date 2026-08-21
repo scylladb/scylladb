@@ -23,7 +23,7 @@ from test.pylib.skip_types import skip_env
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
 from test.pylib.async_cql import run_async
-from test.pylib.scylla_cluster import ScyllaClusterManager, ScyllaVersionDescription, get_scylla_2025_1_description
+from test.pylib.scylla_cluster import ScyllaClusterManager, ScyllaVersionDescription, get_scylla_2025_1_description, get_scylla_2026_1_description
 from test.pylib.connect_options import add_cql_connection_options, add_s3_options
 from test.pylib.encryption_provider import KeyProvider, make_key_provider_factory
 import logging
@@ -394,6 +394,10 @@ def internet_dependency_enabled(request) -> None:
 @pytest.fixture(scope="function")
 async def scylla_2025_1(request, build_mode, internet_dependency_enabled) -> AsyncIterator[ScyllaVersionDescription]:
     yield await get_scylla_2025_1_description(build_mode)
+
+@pytest.fixture(scope="function")
+async def scylla_2026_1(request, build_mode, internet_dependency_enabled) -> AsyncIterator[ScyllaVersionDescription]:
+    yield await get_scylla_2026_1_description(build_mode)
 
 @pytest.fixture(scope="function", params=list(KeyProvider))
 async def key_provider(request, tmpdir, suite_log_dir, scylla_binary):

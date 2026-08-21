@@ -575,6 +575,196 @@ SEASTAR_TEST_CASE(test_prepared_statement_is_invalidated_by_schema_change) {
     });
 }
 
+SEASTAR_TEST_CASE(test_prepared_statement_is_invalidated_when_referenced_column_is_dropped) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create table tests.table1 (pk int primary key, c1 int, c2 int);").get();
+            auto id = e.prepare("select c1 from tests.table1;").get();
+
+            e.execute_cql("alter table tests.table1 drop c1;").get();
+
+            try {
+                e.execute_prepared(id, {}).get();
+                BOOST_FAIL("prepared statement should have been invalidated after dropping a referenced column");
+            } catch (const not_prepared_exception&) {
+                // expected
+            }
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_prepared_statement_is_invalidated_by_existing_table_option_change) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create table tests.table1 (pk int primary key, c1 int);").get();
+            auto id = e.prepare("select * from tests.table1;").get();
+
+            e.execute_cql("alter table tests.table1 with gc_grace_seconds = 42;").get();
+
+            try {
+                e.execute_prepared(id, {}).get();
+                BOOST_FAIL("prepared statement should have been invalidated after changing an existing table option");
+            } catch (const not_prepared_exception&) {
+                // expected
+            }
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_prepared_statement_is_not_invalidated_by_existing_keyspace_option_change) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create table tests.table1 (pk int primary key, c1 int);").get();
+            auto id = e.prepare("select * from tests.table1;").get();
+
+            e.execute_cql("alter keyspace tests with durable_writes = false;").get();
+
+            BOOST_REQUIRE_NO_THROW(e.execute_prepared(id, {}).get());
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_inherited_auto_repair_scope_change_bumps_schema_without_invalidating_prepared_statement) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create table tests.table1 (pk int primary key, c1 int);").get();
+            auto initial_version = e.db().local().get_version();
+            auto id = e.prepare("select * from tests.table1;").get();
+
+            e.execute_cql("alter keyspace tests with auto_repair_enabled = true;").get();
+            BOOST_REQUIRE_NE(e.db().local().get_version(), initial_version);
+            BOOST_REQUIRE_NO_THROW(e.execute_prepared(id, {}).get());
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_cluster_auto_repair_scope_change_bumps_schema_without_invalidating_prepared_statement) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create table tests.table1 (pk int primary key, c1 int);").get();
+            auto initial_version = e.db().local().get_version();
+            auto id = e.prepare("select * from tests.table1;").get();
+
+            e.execute_cql("alter cluster with auto_repair_enabled = true;").get();
+            BOOST_REQUIRE_NE(e.db().local().get_version(), initial_version);
+            BOOST_REQUIRE_NO_THROW(e.execute_prepared(id, {}).get());
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_table_auto_repair_scope_change_invalidates_prepared_statement) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create table tests.table1 (pk int primary key, c1 int);").get();
+            auto initial_version = e.db().local().get_version();
+            auto id = e.prepare("select * from tests.table1;").get();
+
+            e.execute_cql("alter table tests.table1 with auto_repair_enabled = true;").get();
+            BOOST_REQUIRE_NE(e.db().local().get_version(), initial_version);
+            try {
+                e.execute_prepared(id, {}).get();
+                BOOST_FAIL("Should have failed");
+            } catch (const not_prepared_exception&) {
+                // expected
+            }
+        });
+    });
+}
+
+// Verifies the mechanism documented in the cluster-config design (Part 0 "Schema-Backed
+// Ownership"): every config write is schema-backed and therefore bumps the global schema
+// version, at every scope. The value lives in the scylla_clusters/scylla_keyspaces/...
+// config tables, not in the altered table's own schema row, so a config write never
+// changes that table's per-table (cf) schema version - regardless of scope. Prepared-
+// statement invalidation is therefore decided by scope (an explicit per-table notification
+// fan-out for TABLE scope), not by a change in the table's cf schema version. This is why
+// CLUSTER and KEYSPACE writes leave prepared statements valid while TABLE writes do not.
+SEASTAR_TEST_CASE(test_cluster_config_writes_bump_global_version_but_not_table_schema_version) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create table tests.table1 (pk int primary key, c1 int);").get();
+
+            auto global_version = [&] { return e.db().local().get_version(); };
+            auto table_version = [&] { return e.local_db().find_schema("tests", "table1")->version(); };
+
+            // The config value is stored out-of-band, so the table's own schema row never
+            // changes and its cf schema version stays constant across all of the writes below.
+            const auto table_version_baseline = table_version();
+
+            // Cluster scope: global version bumps, table cf schema version is untouched.
+            auto global_before = global_version();
+            e.execute_cql("alter cluster with auto_repair_enabled = true;").get();
+            BOOST_REQUIRE_NE(global_version(), global_before);
+            BOOST_REQUIRE_EQUAL(table_version(), table_version_baseline);
+
+            // Keyspace scope: global version bumps, table cf schema version is untouched.
+            global_before = global_version();
+            e.execute_cql("alter keyspace tests with auto_repair_enabled = true;").get();
+            BOOST_REQUIRE_NE(global_version(), global_before);
+            BOOST_REQUIRE_EQUAL(table_version(), table_version_baseline);
+
+            // Table scope: global version still bumps and the table cf schema version is
+            // *still* untouched - prepared-statement invalidation is driven by an explicit
+            // notification for the affected table, not by a change in its cf schema version.
+            global_before = global_version();
+            e.execute_cql("alter table tests.table1 with auto_repair_enabled = true;").get();
+            BOOST_REQUIRE_NE(global_version(), global_before);
+            BOOST_REQUIRE_EQUAL(table_version(), table_version_baseline);
+        });
+    });
+}
+
+// Verifies that removing an override (`= null`) is also a config write that bumps the
+// global schema version, matching the Part 0 claim that *every* config write bumps the
+// version (the schema-backed path is also the agreement/versioning mechanism).
+SEASTAR_TEST_CASE(test_cluster_config_unset_bumps_schema_version) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            e.execute_cql("alter cluster with auto_repair_enabled = true;").get();
+
+            auto version_before_unset = e.db().local().get_version();
+            e.execute_cql("alter cluster with auto_repair_enabled = null;").get();
+            BOOST_REQUIRE_NE(e.db().local().get_version(), version_before_unset);
+        });
+    });
+}
+
+// Verifies scope precision: a table-scope config change on one table invalidates only that
+// table's prepared statements, leaving an unrelated table's prepared statement valid. This
+// confirms invalidation is keyed on the modified table's own schema row, not the global
+// schema version (which bumps for both).
+SEASTAR_TEST_CASE(test_table_scope_change_does_not_invalidate_other_table_prepared_statement) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create table tests.table1 (pk int primary key, c1 int);").get();
+            e.execute_cql("create table tests.table2 (pk int primary key, c1 int);").get();
+            auto id1 = e.prepare("select * from tests.table1;").get();
+            auto id2 = e.prepare("select * from tests.table2;").get();
+
+            e.execute_cql("alter table tests.table1 with auto_repair_enabled = true;").get();
+
+            // table1's prepared statement is invalidated by the change to its own schema.
+            try {
+                e.execute_prepared(id1, {}).get();
+                BOOST_FAIL("table1 prepared statement should have been invalidated");
+            } catch (const not_prepared_exception&) {
+                // expected
+            }
+
+            // table2 was not touched, so its prepared statement remains valid.
+            BOOST_REQUIRE_NO_THROW(e.execute_prepared(id2, {}).get());
+        });
+    });
+}
+
 // Regression test, ensuring people don't forget to set the null sharder
 // for newly added schema tables.
 SEASTAR_TEST_CASE(test_schema_tables_use_null_sharder) {
@@ -678,6 +868,137 @@ SEASTAR_TEST_CASE(test_system_schema_version_is_stable) {
         // If you changed the schema of system.batchlog then this is expected to fail.
         // Just replace expected version with the new version.
         BOOST_REQUIRE_EQUAL(s->version(), table_schema_version(utils::UUID("95ec5e20-12f2-361a-90b3-662f8999400b")));
+    });
+}
+
+SEASTAR_TEST_CASE(test_cluster_config_schema_tables_are_registered) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto all_tables = db::schema_tables::all_tables(db::schema_features::full());
+        auto find_table = [&] (std::string_view table_name) -> schema_ptr {
+            auto it = std::ranges::find_if(all_tables, [table_name] (const schema_ptr& schema) {
+                return schema->cf_name() == table_name;
+            });
+            BOOST_REQUIRE(it != all_tables.end());
+            return *it;
+        };
+
+        auto configs_type = map_type_impl::get_instance(utf8_type, utf8_type, true);
+        auto scylla_keyspaces = find_table("scylla_keyspaces");
+        auto scylla_tables = find_table("scylla_tables");
+        auto keyspace_configs = scylla_keyspaces->get_column_definition("configs");
+        auto table_configs = scylla_tables->get_column_definition("configs");
+
+        BOOST_REQUIRE(keyspace_configs);
+        BOOST_REQUIRE(table_configs);
+        BOOST_REQUIRE(keyspace_configs->type == configs_type);
+        BOOST_REQUIRE(table_configs->type == configs_type);
+
+        (void)find_table("scylla_clusters");
+        (void)find_table("scylla_datacenters");
+        (void)find_table("scylla_racks");
+        (void)find_table("scylla_nodes");
+
+        (void)e;
+    });
+}
+
+// The node-oriented cluster-config tables must only enter the schema
+// (and therefore schema digest/version computation) when the CLUSTER_CONFIG_TABLES
+// schema feature is set. Otherwise an upgraded node would perturb the schema digest
+// of a mixed-version cluster in which the cluster-config cluster feature
+// (CLUSTER_CONFIG_REGISTRY_V0) is not yet enabled, breaking schema agreement
+// with nodes that predate cluster config.
+SEASTAR_TEST_CASE(test_cluster_config_tables_gated_by_schema_feature) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto contains = [] (const std::vector<schema_ptr>& tables, std::string_view name) {
+            return std::ranges::any_of(tables, [name] (const schema_ptr& s) { return s->cf_name() == name; });
+        };
+        constexpr std::array config_tables = {"scylla_clusters", "scylla_datacenters", "scylla_racks", "scylla_nodes"};
+
+        // Without the feature, none of the config tables are part of the schema.
+        auto without = db::schema_tables::all_tables(db::schema_features{});
+        for (auto name : config_tables) {
+            BOOST_REQUIRE_MESSAGE(!contains(without, name),
+                seastar::format("table {} must not be present without CLUSTER_CONFIG_TABLES", name));
+        }
+
+        // With the feature, all of them are.
+        auto with = db::schema_tables::all_tables(db::schema_features::of<db::schema_feature::CLUSTER_CONFIG_TABLES>());
+        for (auto name : config_tables) {
+            BOOST_REQUIRE_MESSAGE(contains(with, name),
+                seastar::format("table {} must be present with CLUSTER_CONFIG_TABLES", name));
+        }
+
+        // full() includes the feature, so the tables remain registered for local
+        // creation / auth / tooling.
+        auto full = db::schema_tables::all_tables(db::schema_features::full());
+        for (auto name : config_tables) {
+            BOOST_REQUIRE(contains(full, name));
+        }
+
+        (void)e;
+    });
+}
+
+// As long as the cluster-config tables are empty (no overrides have been
+// written, which is the case throughout the mixed-version window before the cluster
+// feature is enabled), enabling CLUSTER_CONFIG_TABLES must not perturb the schema
+// state used for digest/version computation. This is what lets an upgraded node
+// agree on schema with a not-yet-upgraded (cluster-config-unaware) node.
+//
+// Schema digests are computed from the mutations of every table returned by
+// all_table_infos()/all_tables() (see db::schema_tables). We verify the neutrality
+// property directly at that level: the extra config tables introduced by
+// CLUSTER_CONFIG_TABLES contain no partitions, so they cannot contribute anything
+// to whatever digest/version computation consumes those mutations.
+SEASTAR_TEST_CASE(test_cluster_config_tables_digest_neutral_when_empty) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        constexpr std::array config_tables = {"scylla_clusters", "scylla_datacenters", "scylla_racks", "scylla_nodes"};
+
+        auto with = db::schema_tables::all_tables(db::schema_features::full());
+        auto without = with;
+        std::erase_if(without, [] (const schema_ptr& s) {
+            return s->cf_name() == "scylla_clusters" || s->cf_name() == "scylla_datacenters"
+                || s->cf_name() == "scylla_racks" || s->cf_name() == "scylla_nodes";
+        });
+        // Sanity: the only difference between the two table sets is the 4 config tables.
+        BOOST_REQUIRE_EQUAL(with.size(), without.size() + 4);
+
+        for (auto name : config_tables) {
+            auto it = std::ranges::find_if(with, [name] (const schema_ptr& s) { return s->cf_name() == name; });
+            BOOST_REQUIRE(it != with.end());
+            auto rs = db::system_keyspace::query_mutations(e.db(), *it).get();
+            BOOST_REQUIRE_MESSAGE(rs->partitions().empty(),
+                seastar::format("table {} must be empty so it cannot affect the schema digest", name));
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_save_system_schema_skips_topology_config_tables) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        BOOST_REQUIRE_NO_THROW(db::schema_tables::save_system_schema(e.local_qp()).get());
+    });
+}
+
+// The node-oriented config tables are not partition-keyed by keyspace_name
+// (scylla_nodes is even keyed by a uuid). A keyspace DROP must therefore not fabricate
+// a keyspace_name-keyed mutation for any of them; doing so writes a spurious (and, for
+// scylla_nodes, type-invalid) partition into a config table. Verify no drop-keyspace
+// mutation targets these tables.
+SEASTAR_TEST_CASE(test_drop_keyspace_does_not_mutate_config_tables) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto keyspace = e.db().local().find_keyspace("ks").metadata();
+        auto features = e.db().local().features().cluster_schema_features();
+        auto mutations = db::schema_tables::make_drop_keyspace_mutations(
+            features, keyspace, api::new_timestamp());
+
+        for (const auto& m : mutations) {
+            auto name = m.schema()->cf_name();
+            BOOST_REQUIRE_MESSAGE(
+                name != "scylla_clusters" && name != "scylla_datacenters"
+                    && name != "scylla_racks" && name != "scylla_nodes",
+                seastar::format("drop-keyspace must not produce a mutation for config table {}", name));
+        }
     });
 }
 

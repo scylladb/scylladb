@@ -196,6 +196,7 @@ public:
     // RPCs (and their warnings) to nodes that do not register the verb during a
     // rolling upgrade.
     gms::feature small_table_optimization_size_probe { *this, "SMALL_TABLE_OPTIMIZATION_SIZE_PROBE"sv };
+    gms::feature cluster_config_registry_v0 { *this, "CLUSTER_CONFIG_REGISTRY_V0"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

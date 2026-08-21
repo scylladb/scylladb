@@ -52,16 +52,20 @@ void property_definitions::validate(const std::set<sstring>& keywords, const std
     }
 }
 
+sstring property_definitions::value_as_string(const sstring& name, const value_type& value) {
+    try {
+        return std::get<sstring>(value);
+    } catch (const std::bad_variant_access& e) {
+        throw exceptions::syntax_exception(format("Invalid value for property '{}'. It should be a string", name));
+    }
+}
+
 std::optional<sstring> property_definitions::get_simple(const sstring& name) const {
     auto it = _properties.find(name);
     if (it == _properties.end()) {
         return std::nullopt;
     }
-    try {
-        return std::get<sstring>(it->second);
-    } catch (const std::bad_variant_access& e) {
-        throw exceptions::syntax_exception(format("Invalid value for property '{}'. It should be a string", name));
-    }
+    return value_as_string(name, it->second);
 }
 
 std::optional<property_definitions::extended_map_type> property_definitions::get_extended_map(const sstring& name) const {

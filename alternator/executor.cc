@@ -4664,7 +4664,7 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
     }
     tablet_opts["enabled"] = initial_tablets ? "true" : "false";
     props.add_property(cql3::statements::ks_prop_defs::KW_TABLETS, std::move(tablet_opts));
-    props.validate();
+    props.validate(feat);
     return props.as_ks_metadata(sstring(keyspace_name), *sp.get_token_metadata_ptr(), feat, sp.local_db().get_config());
 }
 

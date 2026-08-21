@@ -15,6 +15,7 @@
 #include <seastar/core/coroutine.hh>
 #include "cql3/query_options.hh"
 #include "cql3/cql_config.hh"
+#include "cql3/query_processor.hh"
 #include "cql3/statements/alter_table_statement.hh"
 #include "cql3/statements/alter_type_statement.hh"
 #include "exceptions/exceptions.hh"
@@ -34,6 +35,7 @@
 #include "cdc/cdc_partitioner.hh"
 #include "db/tags/extension.hh"
 #include "db/tags/utils.hh"
+#include "db/schema_tables.hh"
 #include "alternator/ttl_tag.hh"
 
 namespace cql3 {
@@ -294,11 +296,19 @@ void alter_table_statement::drop_column(const query_options& options, const sche
     }
 }
 
-std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_schema_update(data_dictionary::database db, const query_options& options) const {
+// Checks that the statement's target exists and is an actual table, not a materialized
+// view. Shared by the legacy path (prepare_schema_update) and the cluster-config path in
+// prepare_schema_mutations, so the two report the same error.
+schema_ptr alter_table_statement::validate_altered_table(data_dictionary::database db) const {
     auto s = validation::validate_column_family(db, keyspace(), column_family());
     if (s->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View. (Did you mean ALTER MATERIALIZED VIEW)?");
     }
+    return s;
+}
+
+std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_schema_update(data_dictionary::database db, const query_options& options) const {
+    auto s = validate_altered_table(db);
 
     const bool is_cdc_log_table = cdc::is_log_for_some_table(db.real_database(), s->ks_name(), s->cf_name());
     // Only a CDC log table will have this partitioner name. User tables should
@@ -546,18 +556,69 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>
 alter_table_statement::prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type ts) const {
-  data_dictionary::database db = qp.db();
-  auto [s, view_updates] = prepare_schema_update(db, options);
-  auto m = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(s), std::move(view_updates), ts);
+    data_dictionary::database db = qp.db();
 
-  using namespace cql_transport;
-  auto ret = ::make_shared<event::schema_change>(
-            event::schema_change::change_type::UPDATED,
-            event::schema_change::target_type::TABLE,
-            keyspace(),
-            column_family());
+    // Registry-backed table config properties (e.g. auto_repair_enabled) and legacy schema
+    // properties (e.g. gc_grace_seconds) may be freely combined in one ALTER TABLE statement:
+    // the config write only ever touches the out-of-band `configs` column of
+    // system_schema.scylla_tables (see make_scylla_table_configs_mutation), while the legacy
+    // path rebuilds the schema object and never touches that column (see
+    // make_scylla_tables_mutation in db/schema_tables.cc), so the two mutation sets are
+    // column-disjoint on the same row and can simply be concatenated. The legacy part, if
+    // present, still drives the table's own schema-version bump exactly as it does today; the
+    // config write remains out-of-band and does not affect that version, per the design's
+    // Schema-Backed Ownership rules.
+    std::optional<mutation> config_mutation;
 
-  co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
+    if (_type == type::opts && _properties) {
+        auto schema_extensions = _properties->make_schema_extensions(db.extensions());
+        _properties->validate(db, keyspace(), schema_extensions);
+        const bool has_config_props = _properties->has_table_config_properties(db.features());
+        const bool has_legacy_props = _properties->has_non_table_config_properties(db.features());
+
+        if (has_config_props) {
+            validate_altered_table(db);
+            // The mutation is an incremental update of the stored `configs` map (a live
+            // cell per assigned key, a per-key tombstone per removed key), so the currently
+            // stored map does not need to be read here.
+            config_mutation = db::schema_tables::make_scylla_table_configs_mutation(
+                    keyspace(), column_family(), _properties->get_config_updates(db.features()), ts);
+        }
+
+        // A config-only statement must not fall through to the generic path below:
+        // prepare_schema_update() + prepare_column_family_update_announcement() rebuild the
+        // table's schema, bump its schema version and raise a per-table schema-change
+        // notification (invalidating prepared statements) - none of which an out-of-band
+        // config write is supposed to cause.
+        if (!has_legacy_props) {
+            using namespace cql_transport;
+            utils::chunked_vector<mutation> mutations;
+            if (config_mutation) {
+                mutations.push_back(std::move(*config_mutation));
+            }
+            auto ret = ::make_shared<event::schema_change>(
+                    event::schema_change::change_type::UPDATED,
+                    event::schema_change::target_type::TABLE,
+                    keyspace(),
+                    column_family());
+            co_return std::make_tuple(std::move(ret), std::move(mutations), std::vector<sstring>());
+        }
+    }
+
+    auto [s, view_updates] = prepare_schema_update(db, options);
+    auto m = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(s), std::move(view_updates), ts);
+    if (config_mutation) {
+        m.push_back(std::move(*config_mutation));
+    }
+
+    using namespace cql_transport;
+    auto ret = ::make_shared<event::schema_change>(
+                event::schema_change::change_type::UPDATED,
+                event::schema_change::target_type::TABLE,
+                keyspace(),
+                column_family());
+
+    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

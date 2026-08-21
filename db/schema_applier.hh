@@ -189,6 +189,11 @@ class schema_applier {
     std::unique_ptr<replica::tables_metadata_lock_on_all_shards> _metadata_locks;
 
     functions_change_batch_all_shards _functions_batch; // includes aggregates
+    // Set during prepare() when the incoming mutations touch a cluster-config table, so
+    // post_commit() can notify cluster_config_manager. Detecting it here costs a string
+    // compare per schema mutation on the (rare) DDL path, instead of taxing every read and
+    // write with a permanently installed data_listener.
+    bool _cluster_config_changed = false;
 
     future<schema_persisted_state> get_schema_persisted_state();
     future<> load_mutable_token_metadata();
@@ -205,6 +210,7 @@ public:
     // preferably no work should be done here but subsystem
     // may do some snapshot of 'before' data.
     future<> prepare(utils::chunked_vector<mutation>& muts);
+
     // Update is called after mutations are applied, it should create
     // all updates but not yet commit them to a subsystem (i.e. copy on write style).
     // All changes should be visible only to schema_applier object but not to other subsystems.
