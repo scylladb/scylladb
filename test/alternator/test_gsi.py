@@ -305,6 +305,27 @@ def test_gsi_missing_attribute_definition(dynamodb):
                 }
             ])
 
+# A GSI's KeySchema, just like a base table's, must list the HASH key before
+# the RANGE key.
+def test_gsi_key_schema_wrong_order(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*(first.*HASH|HASH.*precede)'):
+        create_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'x', 'AttributeType': 'S' },
+                { 'AttributeName': 'y', 'AttributeType': 'S' },
+            ],
+            GlobalSecondaryIndexes=[
+                {   'IndexName': 'hello',
+                    'KeySchema': [
+                        { 'AttributeName': 'y', 'KeyType': 'RANGE' },
+                        { 'AttributeName': 'x', 'KeyType': 'HASH' },
+                    ],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                }
+            ])
+
 # test_table_gsi_1_hash_only is a variant of test_table_gsi_1: It's another
 # case where the index doesn't involve non-key attributes. Again the base
 # table has a hash and sort key, but in this case the index has *only* a
@@ -1172,6 +1193,30 @@ def test_gsi_2_describe_table_schema(test_table_gsi_2):
     assert gsis[0]['KeySchema'] == expected_gsi_keyschema
     # The list of attribute definitions may be arbitrarily reordered
     assert multiset(got['AttributeDefinitions']) == multiset(expected_all_attribute_definitions)
+
+# A GSI whose key is exactly the base table's only key attribute: the base table
+# has a hash key and no range key, and the GSI has that same hash key and no
+# range key either. This is the one shape where Alternator has an empty clustering
+# key - the base table's only key column is already the view's partition key.
+# So the view has no clustering columns at all. DescribeTable must report just
+# the one HASH key, with no RANGE key invented for it.
+def test_gsi_describe_table_schema_hash_key_only_everywhere(dynamodb):
+    key_schema = [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ]
+    gsi_key_schema = [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ]
+    with new_test_table(dynamodb,
+        KeySchema=key_schema,
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'hello',
+                'KeySchema': gsi_key_schema,
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ]) as table:
+        got = table.meta.client.describe_table(TableName=table.name)['Table']
+        assert got['KeySchema'] == key_schema
+        gsis = got['GlobalSecondaryIndexes']
+        assert len(gsis) == 1
+        assert gsis[0]['KeySchema'] == gsi_key_schema
 
 # This test is a comprehensive regression test for issue #5320, testing that
 # DescribeTable shows the correct user-requested GSI key even when Alternator

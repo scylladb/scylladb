@@ -1230,20 +1230,15 @@ void view_updates::generate_update(
         // Note:
         // 1. By reaching here we know that updatable_view_key_cols has at
         //    least one member (in CQL, it's always one, in Alternator it
-        //    may be two).
+        //    may be two or more).
         // 2. Because has_new_row, we know all elements in that array have
         //    after.has_value() true, so we can use after.get_ts() et al.
         api::timestamp_type new_row_ts = updatable_view_key_cols[0].after.get_ts();
-        // This is the Alternator-only support for *two* regular base columns
-        // that become view key columns. The timestamp we use is the *maximum*
-        // of the two key columns, as explained in pull-request #17172.
-        if (updatable_view_key_cols.size() > 1) {
-            auto second_ts = updatable_view_key_cols[1].after.get_ts();
-            new_row_ts = std::max(new_row_ts, second_ts);
-            // Alternator isn't supposed to have more than two updatable view key columns!
-            if (updatable_view_key_cols.size() != 2) [[unlikely]] {
-                utils::on_internal_error(format("Unexpected updatable_view_key_col length {}", updatable_view_key_cols.size()));
-            }
+        // This is the Alternator-only support for *two or more* regular base
+        // columns that become view key columns. The timestamp we use is the
+        // *maximum* of those key columns, as explained in pull-request #17172.
+        for (size_t i = 1; i < updatable_view_key_cols.size(); ++i) {
+            new_row_ts = std::max(new_row_ts, updatable_view_key_cols[i].after.get_ts());
         }
         // We assume that either updatable_view_key_cols has just one column
         // (the only situation allowed in CQL) or if there is more then one
@@ -1255,25 +1250,20 @@ void view_updates::generate_update(
     if (has_old_row) {
         // As explained in #19977, when there is one updatable_view_key_cols
         // (the only case allowed in CQL) the deletion timestamp is before's
-        // timestamp. As explained in #17119, if there are two of them (only
-        // possible in Alternator), we take the maximum.
+        // timestamp. As explained in #17119, if there are two or more of them
+        // (only possible in Alternator), we take the maximum.
         // Note:
         // 1. By reaching here we know that updatable_view_key_cols has at
         //    least one member (in CQL, it's always one, in Alternator it
-        //    may be two).
+        //    may be two or more).
         // 2. Because has_old_row, we know all elements in that array have
         //    before.has_value() true, so we can use before.get_ts().
         auto old_row_ts = updatable_view_key_cols[0].before.get_ts();
-        if (updatable_view_key_cols.size() > 1) {
-            // This is the Alternator-only support for two regular base
-            // columns that become view key columns. See explanation in
-            // view_updates::compute_row_marker().
-            auto second_ts = updatable_view_key_cols[1].before.get_ts();
-            old_row_ts = std::max(old_row_ts, second_ts);
-            // Alternator isn't supposed to have more than two updatable view key columns!
-            if (updatable_view_key_cols.size() != 2) [[unlikely]] {
-                utils::on_internal_error(format("Unexpected updatable_view_key_col length {}", updatable_view_key_cols.size()));
-            }
+        // This is the Alternator-only support for two or more regular base
+        // columns that become view key columns. See explanation in
+        // view_updates::compute_row_marker().
+        for (size_t i = 1; i < updatable_view_key_cols.size(); ++i) {
+            old_row_ts = std::max(old_row_ts, updatable_view_key_cols[i].before.get_ts());
         }
         if (has_new_row) {
             if (same_row) {
