@@ -1175,7 +1175,7 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
     auto& node_obj = rjson::get(parsed, "node");
     auto datacenter = rjson::get<std::string>(node_obj, "datacenter");
     auto rack = rjson::get<std::string>(node_obj, "rack");
-    if (!expected_datacenter.empty() && datacenter != expected_datacenter) {
+    if (datacenter != expected_datacenter) {
         throw std::runtime_error(fmt::format("Manifest {} belongs to datacenter '{}', expected '{}'",
             manifest_prefix, datacenter, expected_datacenter));
     }
@@ -1383,7 +1383,7 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
     }
     auto& loc = locations.front();
 
-    auto summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, loc.endpoint, loc.bucket, loc.prefix, snap_name, "", std::move(loc.manifests));
+    auto summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, loc.endpoint, loc.bucket, loc.prefix, snap_name, loc.datacenter, std::move(loc.manifests));
 
     db::snapshot_table_helper sth(_sys_dist_ks.qp());
     // TODO: update state when all restored...
