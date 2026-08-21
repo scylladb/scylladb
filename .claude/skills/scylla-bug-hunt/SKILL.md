@@ -61,12 +61,17 @@ structure the final writeup must follow.
    The module name drives the manifest filename everywhere below (this
    step's lookup, step 4's write, the resume path) — it's normally a short
    word like "compaction," but never write `runs/<module>.json` with the
-   module name substituted verbatim into the path. Derive the filename by
-   keeping only `[A-Za-z0-9_-]` from the module name (reject/ask if that
-   leaves nothing usable), and confirm the resulting path still resolves
-   under `runs/` before reading, renaming, or writing it. The full,
-   unsanitized module name still belongs inside the manifest's `"module"`
-   field — just not in the path.
+   module name substituted verbatim into the path; a name like
+   `../../outside` would escape `runs/` entirely. Compute the manifest
+   filename with exactly this shell one-liner before any read, rename, or
+   write, and use its output as `<key>` in `runs/<key>.json` — do not
+   hand-derive it a different way:
+   ```
+   key=$(printf '%s' "$module" | tr -c 'A-Za-z0-9_-' '_')
+   [ -z "$key" ] && key=_
+   ```
+   The full, unsanitized module name still belongs inside the manifest's
+   `"module"` field — just not in the path.
 3. **Size the run before starting it** (fresh runs only). This pipeline
    compiles and runs real C++ (boost tests, sometimes a full scylla binary
    for cqlpy). Tell the user roughly how many submodules and how many
@@ -91,9 +96,10 @@ structure the final writeup must follow.
    Invoking this skill is itself the user's explicit request for
    sub-agent orchestration — don't ask again whether it's OK to use
    `Workflow`. As soon as the call returns a Task ID / Run ID, write
-   `runs/<module>.json` (see "Checkpointing across sessions" below)
-   *before* doing anything else — that write is what makes the run
-   recoverable if this very session ends a moment later.
+   `runs/<key>.json` using the sanitized `<key>` from step 2 (see
+   "Checkpointing across sessions" below) *before* doing anything else —
+   that write is what makes the run recoverable if this very session ends
+   a moment later.
 5. **Present the result, then stop.** The workflow returns confirmed bugs
    (each with a worktree path, branch, reproducer, and the impact/risk/
    complexity writeup) plus a short list of what was discarded and why
@@ -158,7 +164,8 @@ from you:
   a manifest:
 
   ```json
-  // runs/<module>.json
+  // runs/<key>.json -- <key> is the sanitized filename from step 2, not
+  // the raw module name
   {
     "module": "alternator",
     "scriptPath": ".claude/skills/scylla-bug-hunt/workflow.js",

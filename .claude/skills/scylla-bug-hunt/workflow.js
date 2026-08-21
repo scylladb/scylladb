@@ -84,7 +84,10 @@ const maxReproduce = Number.isInteger(args.maxReproduce) && args.maxReproduce >=
 // The legacy vnode repair path (repair.cc) is off-limits regardless of how submodules
 // were determined -- explicit args.submodules must not be able to bypass this any more
 // than a Scope-discovered list can. Case-insensitive so "Repair"/"REPAIR" are covered too.
-const isLegacyRepairAnchor = sm => /\brepair\.cc\b/i.test(String((sm && (sm.anchor_paths || sm.name)) || sm))
+// Scan the whole object, not just anchor_paths/name -- explicit args.submodules has no
+// fixed schema, so a caller could put the anchor in any field (e.g. "path" instead of
+// "anchor_paths") and slip past a check that only looked at the two known field names.
+const isLegacyRepairAnchor = sm => /\brepair\.cc\b/i.test(typeof sm === 'string' ? sm : JSON.stringify(sm || ''))
 function excludeLegacyRepair(mods) {
   if (!/^repair$/i.test(String(moduleName).trim())) {
     return mods
