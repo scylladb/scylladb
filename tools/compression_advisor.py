@@ -876,7 +876,12 @@ def format_output(
 
 
 def get_current_config_via_cql(
-    host: str, keyspace: str, table: str, port: int = 9042
+    host: str,
+    keyspace: str,
+    table: str,
+    port: int = 9042,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
 ) -> Optional[dict]:
     """Query ``system_schema.tables`` for the current compression config.
 
@@ -886,8 +891,9 @@ def get_current_config_via_cql(
          'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}
 
     Returns ``None`` (and prints a warning) if the ScyllaDB Python driver is
-    not installed.  In that case the caller can still produce the estimation
-    report, just without highlighting the current configuration.
+    not installed, if authentication is required but no credentials were
+    supplied, or if the query fails.  In that case the caller can still produce
+    the estimation report, just without highlighting the current configuration.
     """
     try:
         from cassandra.cluster import Cluster
@@ -900,7 +906,15 @@ def get_current_config_via_cql(
         )
         return None
 
-    cluster = Cluster([host], port=port)
+    auth_provider = None
+    if username and password:
+        from cassandra.cluster import PlainTextAuthProvider
+
+        auth_provider = PlainTextAuthProvider(username=username, password=password)
+    cluster_kwargs = {"port": port}
+    if auth_provider is not None:
+        cluster_kwargs["auth_provider"] = auth_provider
+    cluster = Cluster([host], **cluster_kwargs)
     try:
         session = cluster.connect()
         rows = session.execute(
@@ -995,12 +1009,18 @@ def main():
     parser.add_argument(
         "--no-color", action="store_true", help="Disable ANSI color output"
     )
+    parser.add_argument(
+        "--username", default=None, help="CQL username (required if the cluster uses PasswordAuthenticator)"
+    )
+    parser.add_argument(
+        "--password", default=None, help="CQL password (required if the cluster uses PasswordAuthenticator)"
+    )
     args = parser.parse_args()
 
     use_color = not args.no_color and sys.stdout.isatty()
 
     cql_map = get_current_config_via_cql(
-        args.host, args.keyspace, args.table, args.cql_port
+        args.host, args.keyspace, args.table, args.cql_port, args.username, args.password
     )
     current_config = parse_current_config(cql_map) if cql_map is not None else None
     results = call_estimate_api(args.host, args.keyspace, args.table, args.api_port)

@@ -1077,6 +1077,84 @@ class TestIOHelpers:
 
         assert ca.call_estimate_api("127.0.0.1", "ks", "tbl") == [entry]
 
+    def test_get_current_config_passes_auth_provider_when_credentials_given(self, monkeypatch):
+        """--username/--password must be wired into Cluster as a PlainTextAuthProvider."""
+
+        class FakeRow:
+            compression = None
+
+        class FakeResult:
+            def one(self):
+                return FakeRow()
+
+        class FakeSession:
+            def execute(self, *args, **kwargs):
+                return FakeResult()
+
+        captured = {}
+
+        class FakeCluster:
+            def __init__(self, hosts, port, auth_provider=None):
+                captured["auth_provider"] = auth_provider
+                self.shutdown_called = False
+
+            def connect(self):
+                return FakeSession()
+
+            def shutdown(self):
+                self.shutdown_called = True
+
+        class FakeAuthProvider:
+            def __init__(self, username, password):
+                self.username = username
+                self.password = password
+
+        cassandra_mod = types.ModuleType("cassandra")
+        cluster_mod = types.ModuleType("cassandra.cluster")
+        setattr(cluster_mod, "Cluster", FakeCluster)
+        setattr(cluster_mod, "PlainTextAuthProvider", FakeAuthProvider)
+        monkeypatch.setitem(sys.modules, "cassandra", cassandra_mod)
+        monkeypatch.setitem(sys.modules, "cassandra.cluster", cluster_mod)
+
+        ca.get_current_config_via_cql(
+            "127.0.0.1", "ks", "tbl", username="user", password="pass"
+        )
+        assert isinstance(captured["auth_provider"], FakeAuthProvider)
+
+    def test_get_current_config_no_auth_provider_without_credentials(self, monkeypatch):
+        class FakeRow:
+            compression = None
+
+        class FakeResult:
+            def one(self):
+                return FakeRow()
+
+        class FakeSession:
+            def execute(self, *args, **kwargs):
+                return FakeResult()
+
+        captured = {}
+
+        class FakeCluster:
+            def __init__(self, hosts, port, auth_provider=None):
+                captured["auth_provider"] = auth_provider
+                self.shutdown_called = False
+
+            def connect(self):
+                return FakeSession()
+
+            def shutdown(self):
+                self.shutdown_called = True
+
+        cassandra_mod = types.ModuleType("cassandra")
+        cluster_mod = types.ModuleType("cassandra.cluster")
+        setattr(cluster_mod, "Cluster", FakeCluster)
+        monkeypatch.setitem(sys.modules, "cassandra", cassandra_mod)
+        monkeypatch.setitem(sys.modules, "cassandra.cluster", cluster_mod)
+
+        ca.get_current_config_via_cql("127.0.0.1", "ks", "tbl")
+        assert captured["auth_provider"] is None
+
     def test_call_estimate_api_exits_on_malformed_entry(self, monkeypatch, capsys):
         class FakeResponse:
             def __enter__(self):
