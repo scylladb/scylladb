@@ -71,6 +71,7 @@
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/statements/index_target.hh"
 #include "index/secondary_index.hh"
+#include "index/vector_index.hh"
 #include "alternator/ttl_tag.hh"
 #include "vector_search/vector_store_client.hh"
 #include "utils/simple_value_with_expiry.hh"
@@ -599,8 +600,7 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
         abort_on_expiry vector_index_status_aoe(executor::default_timeout());
         for (const index_metadata& im : schema->indices()) {
             const auto& opts = im.options();
-            auto class_it = opts.find(db::index::secondary_index::custom_class_option_name);
-            if (class_it == opts.end() || class_it->second != "vector_index") {
+            if (!secondary_index::vector_index::is_vector_index(im)) {
                 continue;
             }
             rjson::value entry = rjson::empty_object();
@@ -610,15 +610,12 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
             if (target_it != opts.end()) {
                 rjson::add(vector_attribute, "AttributeName", rjson::from_string(target_it->second));
             }
-            auto dims_it = opts.find("dimensions");
-            if (dims_it != opts.end()) {
-                try {
-                    rjson::add(vector_attribute, "Dimensions", std::stoi(dims_it->second));
-                } catch (const std::logic_error&) {
-                    // This should never happen, because the dimensions option
-                    // is validated on index creation
-                    on_internal_error(elogger, fmt::format("Unexpected non-integer dimensions value '{}' for vector index '{}'", dims_it->second, im.name()));
-                }
+            if (auto dims = secondary_index::vector_index::parse_dimensions_option(im)) {
+                rjson::add(vector_attribute, "Dimensions", *dims);
+            } else if (opts.contains("dimensions")) {
+                // This should never happen, because the dimensions option
+                // is validated on index creation
+                on_internal_error(elogger, fmt::format("Unexpected non-integer dimensions value '{}' for vector index '{}'", opts.at("dimensions"), im.name()));
             }
             rjson::add(entry, "VectorAttribute", std::move(vector_attribute));
             // Always return a Projection. Currently only KEYS_ONLY is
@@ -626,9 +623,8 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
             rjson::value projection = rjson::empty_object();
             rjson::add(projection, "ProjectionType", "KEYS_ONLY");
             rjson::add(entry, "Projection", std::move(projection));
-            auto sf_it = opts.find("similarity_function");
-            if (sf_it != opts.end()) {
-                rjson::add(entry, "SimilarityFunction", rjson::from_string(sf_it->second));
+            if (auto sf = secondary_index::vector_index::get_similarity_function(im)) {
+                rjson::add(entry, "SimilarityFunction", rjson::from_string(*sf));
             }
             // Report IndexStatus and Backfilling based on the vector store's
             // reported state: SERVING -> ACTIVE, BOOTSTRAPPING -> CREATING+Backfilling,
@@ -640,7 +636,7 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
                 rjson::add(entry, "IndexStatus", "ACTIVE");
             } else {
                 rjson::add(entry, "IndexStatus", "CREATING");
-                if (vstatus == index_status::backfilling) {
+                if (vstatus == index_status::bootstrapping) {
                     rjson::add(entry, "Backfilling", rjson::value(true));
                 }
             }
@@ -2496,19 +2492,15 @@ std::unordered_map<bytes, std::string> si_key_attributes(data_dictionary::table 
 static std::unordered_map<bytes, int> vector_index_attributes(const schema& s) {
     std::unordered_map<bytes, int> ret;
     for (const index_metadata& im : s.indices()) {
-        const auto& opts = im.options();
-        auto class_it = opts.find(db::index::secondary_index::custom_class_option_name);
-        if (class_it == opts.end() || class_it->second != "vector_index") {
+        if (!secondary_index::vector_index::is_vector_index(im)) {
             continue;
         }
-        auto target_it = opts.find(cql3::statements::index_target::target_option_name);
-        auto dims_it = opts.find("dimensions");
-        if (target_it == opts.end() || dims_it == opts.end()) {
+        auto target_it = im.options().find(cql3::statements::index_target::target_option_name);
+        auto dims = secondary_index::vector_index::parse_dimensions_option(im);
+        if (target_it == im.options().end() || !dims) {
             continue;
         }
-        try {
-            ret[to_bytes(target_it->second)] = std::stoi(dims_it->second);
-        } catch (...) {}
+        ret[to_bytes(target_it->second)] = *dims;
     }
     return ret;
 }

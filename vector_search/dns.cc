@@ -122,10 +122,12 @@ seastar::future<> dns::refresh_addr() {
         ++_refreshes_counter;
         new_addrs[host] = co_await _resolver(host);
     });
-    if (new_addrs != _addresses) {
-        _addresses = new_addrs;
-        co_await _listener(_addresses);
-    }
+    _addresses = std::move(new_addrs);
+    // Notify the listener even when nothing changed: waiters blocked on the
+    // clients' refresh condition variable must be woken after every refresh
+    // attempt, or they would wait for the full timeout whenever a configured
+    // host stays unresolvable (see clients::get_clients()).
+    co_await _listener(_addresses);
 }
 
 } // namespace vector_search

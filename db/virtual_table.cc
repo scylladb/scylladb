@@ -62,7 +62,20 @@ mutation_source memtable_filling_virtual_table::as_mutation_source() {
                 units->memory_used = mt->occupancy().used_space();
             };
 
-            return execute(mutation_sink, permit).then([this, mt, s, units, &range, &slice, &trace_state, &fwd, &fwd_mr] () {
+            // The range lives in the populate closure, which is kept alive
+            // (by chained_delegating_reader) until the future returned by
+            // execute() resolves; restrictions is kept alive alongside by the
+            // continuation below.
+            struct restrictions final : public query_restrictions {
+                const dht::partition_range* pr;
+                explicit restrictions(const dht::partition_range* pr) : pr(pr) {}
+                const dht::partition_range& partition_range() const override {
+                    return *pr;
+                }
+            };
+            auto qr = std::make_unique<restrictions>(&range);
+            auto f = execute(mutation_sink, *qr, permit);
+            return f.then([this, mt, s, units, qr = std::move(qr), &range, &slice, &trace_state, &fwd, &fwd_mr] () {
                 auto rd = mt->as_data_source().make_mutation_reader(s, units->units.permit(), range, slice, trace_state, fwd, fwd_mr);
 
                 if (!_shard_aware) {
