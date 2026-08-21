@@ -2904,4 +2904,162 @@ SEASTAR_TEST_CASE(test_descriptor_roundtrip) {
     return make_ready_future<>();
 }
 
+// Write one entry and seal the segment holding it, so the segment's fate depends only on
+// its dirty count: an active segment is never reclaimed, regardless of that count.
+static future<rp_handle> write_and_seal_segment(commitlog& log, const table_id& id) {
+    sstring tmp = "hej bubba cow";
+    auto handle = co_await log.add_mutation(id, tmp.size(), db::commitlog::force_sync::yes,
+            [&tmp](db::commitlog::output& dst) {
+        dst.write(tmp.data(), tmp.size());
+    });
+    co_await log.force_new_active_segment();
+    co_await log.sync_all_segments();
+    co_return handle;
+}
+
+// An empty handle owns nothing: it converts to false, carries no replay position, and
+// destroying or releasing it is a no-op whatever its policy.
+SEASTAR_TEST_CASE(test_rp_handle_empty) {
+    rp_handle h;
+    BOOST_REQUIRE(!h);
+    BOOST_REQUIRE(h.rp() == replay_position());
+    BOOST_REQUIRE(static_cast<const replay_position&>(h) == h.rp());
+    h.set_destruction_policy(rp_handle::destruction_policy::retain_segment);
+    BOOST_REQUIRE(h.release() == replay_position());
+    BOOST_REQUIRE(!h);
+    return make_ready_future<>();
+}
+
+// release() hands the replay position out and empties the handle without touching the
+// segment's dirty count -- the segment stays behind, which is how callers that only need
+// the position keep it from being reclaimed.
+SEASTAR_TEST_CASE(test_rp_handle_release_keeps_segment) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto handle = co_await write_and_seal_segment(log, make_table_id());
+        BOOST_REQUIRE(handle);
+        const auto rp = handle.rp();
+        BOOST_REQUIRE(rp != replay_position());
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        {
+            auto h = std::move(handle);
+            BOOST_REQUIRE(h.release() == rp);
+            BOOST_REQUIRE(!h);
+            BOOST_REQUIRE(h.rp() == replay_position());
+        }
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+    });
+}
+
+// Moving a handle transfers ownership of the segment reference: the source is left empty,
+// the destination accounts for the segment, and the reference is given back exactly once.
+SEASTAR_TEST_CASE(test_rp_handle_move_transfers_ownership) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto a = co_await write_and_seal_segment(log, make_table_id());
+        const auto rp = a.rp();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        {
+            auto moved = std::move(a);
+            BOOST_REQUIRE(!a);
+            BOOST_REQUIRE(moved);
+            BOOST_REQUIRE(moved.rp() == rp);
+            BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        }
+        // Given back once by the destination; the emptied source has nothing left to give,
+        // and a second release would trip the dirty count assertion in mark_clean().
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+
+        // Move assignment: the destination gives back what it held before taking over.
+        auto b = co_await write_and_seal_segment(log, make_table_id());
+        auto c = co_await write_and_seal_segment(log, make_table_id());
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 2);
+        b = std::move(c);
+        BOOST_REQUIRE(!c);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+    });
+}
+
+// rp_set::put() takes over the segment reference and empties the handle, so the segment is
+// held by the set until discard_completed_segments() gives it back. This is how a memtable
+// ends up owning the reference.
+SEASTAR_TEST_CASE(test_rp_handle_rp_set_takes_over) {
+    return cl_test([](commitlog& log) -> future<> {
+        const auto id = make_table_id();
+        auto handle = co_await write_and_seal_segment(log, id);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        rp_set set;
+        set.put(std::move(handle));
+        BOOST_REQUIRE(!handle);
+        BOOST_REQUIRE_EQUAL(set.size(), 1);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        log.discard_completed_segments(id, set);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+    });
+}
+
+// A handle destroyed with destruction_policy::retain_segment keeps its segment's dirty count,
+// so the segment stays on disk -- and is replayed on the next startup -- instead of being
+// reclaimed (SCYLLADB-3347). get_num_dirty_segments() counts exactly those segments: sealed
+// and still dirty.
+//
+// Parameterized bodies are free coroutines rather than capturing lambdas: cl_test() does not
+// keep the callback alive across suspension points, while a coroutine's parameters live in
+// its own frame.
+static future<> check_destruction_policy(commitlog& log, rp_handle::destruction_policy policy,
+        uint64_t expected_dirty_after_drop) {
+    auto handle = co_await write_and_seal_segment(log, make_table_id());
+    BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+    {
+        auto h = std::move(handle);
+        h.set_destruction_policy(policy);
+    }
+    BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), expected_dirty_after_drop);
+}
+
+// Both policies, over a sealed segment: mark_clean reclaims it, retain_segment does not.
+SEASTAR_TEST_CASE(test_rp_handle_destruction_policy) {
+    co_await cl_test([](commitlog& log) {
+        return check_destruction_policy(log, rp_handle::destruction_policy::mark_clean, 0);
+    });
+    co_await cl_test([](commitlog& log) {
+        return check_destruction_policy(log, rp_handle::destruction_policy::retain_segment, 1);
+    });
+}
+
+// The destruction policy has to survive moves: handles are moved by value on the write path
+// (into continuations and lambdas), so the frame that destroys a handle is not necessarily
+// the one that chose the policy.
+SEASTAR_TEST_CASE(test_rp_handle_destruction_policy_survives_moves) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto id = make_table_id();
+        // Three sealed segments, one dirty reference each.
+        auto a = co_await write_and_seal_segment(log, id);
+        auto b = co_await write_and_seal_segment(log, id);
+        auto c = co_await write_and_seal_segment(log, id);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 3);
+
+        a.set_destruction_policy(rp_handle::destruction_policy::retain_segment);
+        {
+            // Move construction carries the policy: destroying the moved-to handle retains.
+            auto moved = std::move(a);
+        }
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 3);
+
+        b.set_destruction_policy(rp_handle::destruction_policy::retain_segment);
+        // Move assignment destroys the overwritten handle, which must retain b's segment, and
+        // takes over c's reference together with c's policy.
+        b = std::move(c);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 3);
+        {
+            auto sink = std::move(b);
+        }
+        // c's segment is the only one reclaimed: it kept the default policy through two moves.
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 2);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()

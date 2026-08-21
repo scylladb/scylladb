@@ -4088,7 +4088,7 @@ db::rp_handle::rp_handle(shared_ptr<cf_holder> h, cf_id_type cf, replay_position
 {}
 
 db::rp_handle::rp_handle(rp_handle&& v) noexcept
-    : _h(std::move(v._h)), _cf(v._cf), _rp(std::exchange(v._rp, {}))
+    : _h(std::move(v._h)), _cf(v._cf), _rp(std::exchange(v._rp, {})), _on_destruction(v._on_destruction)
 {}
 
 db::rp_handle& db::rp_handle::operator=(rp_handle&& v) noexcept {
@@ -4100,7 +4100,8 @@ db::rp_handle& db::rp_handle::operator=(rp_handle&& v) noexcept {
 }
 
 db::rp_handle::~rp_handle() {
-    if (_rp != replay_position() && _h) {
+    // retain_segment keeps the dirty count, like release() does, leaving the segment on disk.
+    if (_rp != replay_position() && _h && _on_destruction == destruction_policy::mark_clean) {
         _h->release_cf_count(_cf, _rp);
     }
 }

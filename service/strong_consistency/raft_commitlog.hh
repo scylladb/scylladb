@@ -45,6 +45,11 @@ private:
     // The log entries that were loaded from database commit log on startup.
     raft::log_entries _replayed_entries;
 
+    // The only way into _replay_positions: takes over the handle and makes it retain its
+    // commitlog segment, so that an entry we still hold is never dropped from the commitlog
+    // before it is applied or truncated.
+    void add_to_rp_list(raft::index_t index, db::rp_handle&& handle);
+
 public:
     raft_commitlog(raft::group_id group_id, db::commitlog& commit_log, table_id target_table_id, replayed_data_per_group replayed_data);
 

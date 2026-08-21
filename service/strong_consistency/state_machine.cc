@@ -30,6 +30,14 @@ namespace service::strong_consistency {
 
 static logging::logger logger("sc_state_machine");
 
+// Undo the retain_segment policy the handles carry: the caller has established that the
+// data behind them is not needed, so let the commitlog reclaim the segments.
+static void mark_clean_on_destruction(std::vector<index_and_replay_position>& positions) {
+    for (auto& position : positions) {
+        position.replay_position_handle.set_destruction_policy(db::rp_handle::destruction_policy::mark_clean);
+    }
+}
+
 class state_machine : public raft_state_machine {
     locator::global_tablet_id _tablet;
     raft::group_id _group_id;
@@ -58,6 +66,11 @@ public:
 
     future<> apply(raft::log_entry_ptr_list command) override {
         static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(10));
+        // Declared outside the try so the handlers below can decide what happens to the
+        // segments. The handles carry retain_segment, so throwing anywhere before a mutation
+        // reaches its memtable leaves the committed entry in the commitlog for replay to
+        // re-apply. Handles of applied mutations are disarmed by then (SCYLLADB-3347).
+        std::vector<index_and_replay_position> replay_positions;
         try {
             co_await utils::get_local_injector().inject("strong_consistency_state_machine_wait_before_apply", utils::wait_for_message(20min));
             // Collect mutations from the command list.
@@ -68,9 +81,15 @@ public:
                 muts.emplace_back(std::move(mutation));
             }
             // Get replay positions for the commands.
-            auto replay_positions = _persistence.acquire_replay_position_handles_for(command);
+            replay_positions = _persistence.acquire_replay_position_handles_for(command);
             // Make sure we got replay positions for all commands.
             throwing_assert(replay_positions.size() == command.size());
+            // Simulate what an abort between acquiring the handles and applying looks like
+            // (node shutdown or raft group removal aborting the group0 barrier below):
+            // apply() throws with all the batch's pins still held.
+            utils::get_local_injector().inject("sc_state_machine_abort_after_acquiring_rp_handles", [] {
+                throw abort_requested_exception();
+            });
             // Get schemas for all mutations (also upgrades mutations to current schema if needed).
             auto barrier = [this]() -> future<> {
                 if (utils::get_local_injector().enter("disable_raft_drop_append_entries_for_specified_group")) {
@@ -95,6 +114,10 @@ public:
             // because the state machine is created only after the table is created
             // (see `schema_applier::commit_on_shard()` and `storage_service::commit_token_metadata_change()`).
             // In this case, we should just ignore mutations without throwing an error.
+            // The table is gone, so reclaim the segments instead of retaining them. This is
+            // also the only handler that resumes normal operation, so retaining here would
+            // accumulate.
+            mark_clean_on_destruction(replay_positions);
             logger.log(log_level::warn, rate_limit, "apply(): table {} was already dropped, ignoring mutations", _tablet.table);
         } catch (replica::no_such_keyspace&) {
             // Thrown when DROP KEYSPACE races with the raft applier fiber.
@@ -106,7 +129,8 @@ public:
             // database::find_keyspace() — and that throws no_such_keyspace
             // if the keyspace was concurrently dropped.
             // Safe to ignore: the table's raft group is about to be destroyed
-            // by schedule_raft_group_deletion() anyway.
+            // by schedule_raft_group_deletion() anyway. As above, reclaim the segments.
+            mark_clean_on_destruction(replay_positions);
             logger.log(log_level::warn, rate_limit, "apply(): keyspace for table {} was already dropped, ignoring mutations", _tablet.table);
         } catch (const abort_requested_exception& ex) {
             // The exception can be thrown by get_schema_and_upgrade_mutations.
