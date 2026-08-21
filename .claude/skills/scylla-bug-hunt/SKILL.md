@@ -62,16 +62,24 @@ structure the final writeup must follow.
    step's lookup, step 4's write, the resume path) — it's normally a short
    word like "compaction," but never write `runs/<module>.json` with the
    module name substituted verbatim into the path; a name like
-   `../../outside` would escape `runs/` entirely. Compute the manifest
-   filename with exactly this shell one-liner before any read, rename, or
-   write, and use its output as `<key>` in `runs/<key>.json` — do not
-   hand-derive it a different way:
+   `../../outside` would escape `runs/`, and two different names (e.g.
+   `foo/bar` and `foo_bar`) could otherwise sanitize to the same filename
+   and overwrite each other's manifest. Compute the manifest filename with
+   exactly this shell one-liner before any read, rename, or write, and use
+   its output as `<key>` in `runs/<key>.json` — do not hand-derive it a
+   different way:
    ```
    key=$(printf '%s' "$module" | tr -c 'A-Za-z0-9_-' '_')
-   [ -z "$key" ] && key=_
+   key="${key:-_}-$(printf '%s' "$module" | cksum | cut -d' ' -f1)"
    ```
-   The full, unsanitized module name still belongs inside the manifest's
-   `"module"` field — just not in the path.
+   The trailing checksum makes same-key collisions between different
+   module names effectively impossible. The full, unsanitized module name
+   still belongs inside the manifest's `"module"` field — just not in the
+   path — and before treating any manifest found at `runs/<key>.json` as a
+   match in step 2, confirm its `"module"` field equals the requested
+   module name exactly; a mismatch (a residual collision, or a hand-edited
+   file) means it's not this module's manifest, so treat it as if none was
+   found rather than resuming from it.
 3. **Size the run before starting it** (fresh runs only). This pipeline
    compiles and runs real C++ (boost tests, sometimes a full scylla binary
    for cqlpy). Tell the user roughly how many submodules and how many
@@ -161,11 +169,10 @@ from you:
   belongs to *which* module unless you write it down. The running task and
   its `runId` live in this conversation and in `/workflows` — both gone if
   the session ends. So immediately after launching (step 4 above), write
-  a manifest:
+  a manifest at `runs/<key>.json` (`<key>` is the sanitized filename from
+  step 2, not the raw module name):
 
   ```json
-  // runs/<key>.json -- <key> is the sanitized filename from step 2, not
-  // the raw module name
   {
     "module": "alternator",
     "scriptPath": ".claude/skills/scylla-bug-hunt/workflow.js",
