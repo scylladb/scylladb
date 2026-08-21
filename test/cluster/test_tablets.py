@@ -2508,7 +2508,9 @@ async def check_tablet_rebuild_with_repair(manager: ManagerClient, fail: bool):
             logs.append(await manager.server_open_log(s.server_id))
 
         logger.info(f"Adding replica to tablet, host {new_replica[0]}")
-        await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], 0)
+        # Adding a third replica breaks the replication constraints of an RF-rack-valid
+        # keyspace, hence force=True.
+        await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], 0, force=True)
 
         assert sum([len(await log.grep(rf'.*Will set tablet .* stage to rebuild_repair.*')) for log in logs]) == 1
 

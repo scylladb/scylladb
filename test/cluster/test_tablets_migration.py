@@ -85,12 +85,14 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
         if action == 'move':
             logger.info(f"Move tablet {old_replica[0]} -> {new_replica[0]}")
             await manager.api.move_tablet(servers[0].ip_addr, ks, "test", old_replica[0], old_replica[1], new_replica[0], new_replica[1], 0)
+        # Both actions change the number of replicas the tablet has in rack r1, which breaks
+        # the replication constraints of an RF-rack-valid keyspace, hence force=True.
         if action == 'add_replica':
             logger.info(f"Adding replica to tablet, host {new_replica[0]}")
-            await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], 0)
+            await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], 0, force=True)
         if action == 'del_replica':
             logger.info(f"Deleting replica from tablet, host {old_replica[0]}")
-            await manager.api.del_tablet_replica(servers[0].ip_addr, ks, "test", old_replica[0], old_replica[1], 0)
+            await manager.api.del_tablet_replica(servers[0].ip_addr, ks, "test", old_replica[0], old_replica[1], 0, force=True)
 
         replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
         logger.info(f"Tablet is now on [{replicas}]")
@@ -118,6 +120,132 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
                 assert res[0].count != 0
             else:
                 assert res[0].count == 0
+
+
+async def make_rack_aware_cluster(manager: ManagerClient, cfg: dict):
+    """Creates a cluster of two nodes in rack r1 and one node in rack r2 of dc1.
+    Returns the servers and a rack name -> host ids mapping."""
+    servers = []
+    hosts_by_rack = defaultdict(list)
+
+    async def make_server(rack: str):
+        s = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": rack})
+        servers.append(s)
+        hosts_by_rack[rack].append(await manager.get_host_id(s.server_id))
+
+    await make_server("r1")
+    await make_server("r1")
+    await make_server("r2")
+
+    await manager.disable_tablet_balancing()
+
+    return servers, hosts_by_rack
+
+
+async def get_single_tablet_replicas(manager: ManagerClient, server, ks: str):
+    replicas = await get_all_tablet_replicas(manager, server, ks, 'test')
+    assert len(replicas) == 1
+    return replicas[0].replicas
+
+
+def pick_replica_and_free_host_in_rack(replicas, rack_hosts):
+    """Returns a replica of the tablet which sits in the given rack together with a node
+    in the same rack which doesn't hold a replica of that tablet."""
+    replica_hosts = [r[0] for r in replicas]
+    old_replica = next((r for r in replicas if r[0] in rack_hosts), None)
+    assert old_replica is not None, "Cannot find a replica in the rack"
+    new_host = next((h for h in rack_hosts if h not in replica_hosts), None)
+    assert new_host is not None, "Cannot find a node without a replica in the rack"
+    return old_replica, (new_host, 0)
+
+
+@pytest.mark.parametrize("action", ['add_replica', 'del_replica'])
+@pytest.mark.parametrize("constraint", ['rf_rack_valid', 'views', 'rack_list'])
+async def test_tablet_replica_change_requires_force_with_rack_constraints(manager: ManagerClient, action, constraint):
+    """Adding or removing a single tablet replica changes the number of replicas the tablet
+    has in one rack. Keyspaces which use rack lists, as well as keyspaces which are required
+    to be RF-rack-valid, must keep that number fixed, so such calls have to be rejected
+    unless the caller explicitly asks to break the constraints with force=true.
+
+    RF-rack-validity is required either by the rf_rack_valid_keyspaces option or by the
+    keyspace having materialized views.
+    """
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled',
+           'rf_rack_valid_keyspaces': constraint == 'rf_rack_valid'}
+    servers, hosts_by_rack = await make_rack_aware_cluster(manager, cfg)
+
+    rf = "'dc1': ['r1', 'r2']" if constraint == 'rack_list' else "'replication_factor': 2"
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
+                                          f"{rf}}} AND tablets = {{'initial': 1}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        if constraint == 'views':
+            await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.test_view AS SELECT * FROM {ks}.test "
+                                f"WHERE c IS NOT NULL PRIMARY KEY (c, pk)")
+
+        replicas = await get_single_tablet_replicas(manager, servers[0], ks)
+        logger.info(f"Tablet is on [{replicas}]")
+        assert len(replicas) == 2
+        replica_hosts = [r[0] for r in replicas]
+
+        old_replica, new_replica = pick_replica_and_free_host_in_rack(replicas, hosts_by_rack['r1'])
+
+        if action == 'add_replica':
+            call = lambda force: manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test",
+                                                                new_replica[0], new_replica[1], 0, force=force)
+            expected_replicas = sorted(replica_hosts + [new_replica[0]])
+        else:
+            call = lambda force: manager.api.del_tablet_replica(servers[0].ip_addr, ks, "test",
+                                                                old_replica[0], old_replica[1], 0, force=force)
+            expected_replicas = sorted(h for h in replica_hosts if h != old_replica[0])
+
+        with pytest.raises(HTTPError, match="would break the replication constraints of the keyspace"):
+            await call(False)
+
+        logger.info("Verifying that the rejected call left the tablet intact")
+        assert sorted(r[0] for r in await get_single_tablet_replicas(manager, servers[0], ks)) == sorted(replica_hosts)
+
+        logger.info(f"Retrying {action} with force=true")
+        await call(True)
+        assert sorted(r[0] for r in await get_single_tablet_replicas(manager, servers[0], ks)) == expected_replicas
+
+
+async def test_tablet_replica_change_without_rack_constraints(manager: ManagerClient):
+    """When the keyspace neither uses rack lists nor is required to be RF-rack-valid, adding
+    and removing tablet replicas is allowed. Adding a replica to a rack which already holds
+    one is still rejected, because it reduces availability, the same way the move API does.
+    """
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled',
+           'rf_rack_valid_keyspaces': False}
+    servers, hosts_by_rack = await make_rack_aware_cluster(manager, cfg)
+
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
+                                          "'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        replicas = await get_single_tablet_replicas(manager, servers[0], ks)
+        logger.info(f"Tablet is on [{replicas}]")
+        assert len(replicas) == 2
+        replica_hosts = [r[0] for r in replicas]
+
+        old_replica, new_replica = pick_replica_and_free_host_in_rack(replicas, hosts_by_rack['r1'])
+
+        logger.info("Rack r1 already holds a replica, so adding another one there reduces availability")
+        with pytest.raises(HTTPError, match="would reduce availability"):
+            await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], 0)
+
+        logger.info("Removing a replica is not constrained")
+        await manager.api.del_tablet_replica(servers[0].ip_addr, ks, "test", old_replica[0], old_replica[1], 0)
+        assert [r[0] for r in await get_single_tablet_replicas(manager, servers[0], ks)] == \
+               [h for h in replica_hosts if h != old_replica[0]]
+
+        logger.info("Rack r1 holds no replica now, so the tablet can be brought back to RF=2 there")
+        await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], 0)
+        assert sorted(r[0] for r in await get_single_tablet_replicas(manager, servers[0], ks)) == \
+               sorted([h for h in replica_hosts if h != old_replica[0]] + [new_replica[0]])
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
