@@ -22,7 +22,7 @@ from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import ScyllaRESTAPIClient, ScyllaMetricsClient
 from test.pylib.util import gather_safely, wait_for, wait_for_cql_and_get_hosts, universalasync_typed_wrap, Host
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
-from test.pylib.scylla_cluster import ReplaceConfig, ScyllaClusterManager, ScyllaServer, ScyllaVersionDescription
+from test.pylib.scylla_cluster import ReplaceConfig, ScyllaClusterManager, ScyllaServer, ScyllaVersionDescription, bind_to_current_loop
 from test.pylib.driver_utils import safe_driver_shutdown
 from cassandra.cluster import Session as CassandraSession, \
     ExecutionProfile, EXEC_PROFILE_DEFAULT  # type: ignore # pylint: disable=no-name-in-module
@@ -523,6 +523,33 @@ class ManagerClient:
                 ignored_server = await self.find_server_by_host_id(servers, ignored)
                 ignored_ips.append(ignored_server.ip_addr)
         return ignored_ips
+
+    async def add_teardown_callback(self, callback: Callable[[], Any], name: str | None = None) -> None:
+        """Register a callback to run once the cluster used by this test has
+        been stopped.
+
+        The callbacks belong to the cluster and fire from its
+        run_teardown_callbacks(), which recycle() calls right after the servers
+        are stopped.  They therefore run against a cluster that is down, and
+        may dispose of a resource it was using without racing against it: an
+        object storage bucket that an in-flight tablet migration could
+        otherwise still read from (SCYLLADB-2471).
+
+        Two consequences of firing that late are worth knowing.  The resource
+        the callback disposes of has to stay alive past the fixture that
+        created it, and a failure inside a callback is reported against the
+        test case that recycled the cluster, not necessarily the one that
+        registered the callback.
+
+        Callbacks fire in LIFO order; both plain callables and coroutine
+        functions are accepted.  Register them from a fixture rather than from
+        a test body, so that a coroutine is handed back to a loop that is still
+        alive when it is awaited.  `name` is what the cluster log calls this
+        callback, and defaults to the callable's qualified name.
+        """
+        await self._call(self._manager.add_teardown_callback(
+            bind_to_current_loop(callback),
+            name or getattr(callback, "__qualname__", repr(callback))))
 
     async def server_add(self,
                          replace_cfg: Optional[ReplaceConfig] = None,
