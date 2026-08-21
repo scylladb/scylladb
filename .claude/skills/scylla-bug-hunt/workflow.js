@@ -59,6 +59,10 @@ const REPRO_SCHEMA = {
     notes: { type: 'string' },
   },
   required: ['reproduced', 'evidence'],
+  // A reproduced:true candidate isn't proven without the artifacts that let someone
+  // actually run it -- don't let a candidate reach "confirmed" on evidence text alone.
+  if: { properties: { reproduced: { const: true } } },
+  then: { required: ['reproduced', 'evidence', 'worktree_path', 'branch', 'reproducer_path', 'how_to_run'] },
 }
 
 const IMPACT_SCHEMA = {
@@ -73,10 +77,27 @@ if (!args || !args.module) {
   throw new Error('scylla-bug-hunt requires args.module (e.g. "compaction")')
 }
 const moduleName = args.module
-const maxReproduce = args.maxReproduce || 3
+// Number.isInteger guards against the classic `0 || 3` falsy-zero trap: an explicit
+// maxReproduce: 0 must mean "reproduce nothing", not silently fall back to the default.
+const maxReproduce = Number.isInteger(args.maxReproduce) && args.maxReproduce >= 0 ? args.maxReproduce : 3
+
+// The legacy vnode repair path (repair.cc) is off-limits regardless of how submodules
+// were determined -- explicit args.submodules must not be able to bypass this any more
+// than a Scope-discovered list can. Case-insensitive so "Repair"/"REPAIR" are covered too.
+const isLegacyRepairAnchor = sm => /\brepair\.cc\b/i.test(String((sm && (sm.anchor_paths || sm.name)) || sm))
+function excludeLegacyRepair(mods) {
+  if (!/^repair$/i.test(String(moduleName).trim())) {
+    return mods
+  }
+  const kept = mods.filter(sm => !isLegacyRepairAnchor(sm))
+  if (kept.length < mods.length) {
+    log(`Repair module: excluded ${mods.length - kept.length} submodule(s) anchored in the legacy vnode repair path (repair.cc) -- only tablet/incremental repair is in scope`)
+  }
+  return kept
+}
 
 phase('Scope')
-let submodules = args.submodules || null
+let submodules = args.submodules ? excludeLegacyRepair(args.submodules) : null
 if (!submodules) {
   const scoped = await agent(
     `List the real submodules of the ScyllaDB "${moduleName}" module by using codegraph_explore to inspect the actual current code -- do not guess from general knowledge. Ground each submodule in real files/dirs. Aim for 3-6 submodules that are meaningfully distinct pieces of code, not a file-by-file listing. If the module is "repair", exclude the legacy vnode repair path (repair.cc) entirely -- only the tablet/incremental repair path (row_level.cc, incremental.*) is in scope.`,
@@ -96,7 +117,7 @@ if (!submodules) {
       },
     }
   )
-  submodules = (scoped && scoped.submodules) || []
+  submodules = excludeLegacyRepair((scoped && scoped.submodules) || [])
   log(`Scope: ${submodules.length} submodule(s) for "${moduleName}": ${submodules.map(s => s.name).join(', ')}`)
 }
 
@@ -126,8 +147,13 @@ const triaged = await agent(
   { label: 'triage', model: 'claude-opus-5', effort: 'high', schema: TRIAGE_SCHEMA }
 )
 
-const selected = (triaged && triaged.selected) || []
-const triageDiscarded = (triaged && triaged.discarded) || []
+// The prompt asks the triage agent to cap "selected" at maxReproduce, but nothing stops
+// it from returning more -- enforce the cap here too, since Reproduce is the expensive,
+// build-bound stage this limit exists to protect.
+const triagedSelected = (triaged && triaged.selected) || []
+const selected = triagedSelected.slice(0, maxReproduce)
+const overflow = triagedSelected.slice(maxReproduce).map(c => ({ title: c.title, reason: `exceeded maxReproduce (${maxReproduce}); triage ranked it below the cutoff` }))
+const triageDiscarded = [...((triaged && triaged.discarded) || []), ...overflow]
 log(`Triage: selected ${selected.length} of ${allCandidates.length} for reproduction; discarded ${triageDiscarded.length}`)
 
 if (selected.length === 0) {
@@ -155,11 +181,19 @@ const results = await pipeline(
     }
     return agent(
       `Write the impact/risk/complexity report for this confirmed ScyllaDB bug. Use exactly this structure:\n\n` +
-      `# <title>\n\n**Category:**\n**Module / submodule:**\n**Worktree:**\n**Branch:**\n**Reproducer:** \`<how to run>\`\n\n## Summary\n## Evidence\n## Impact\n## Risk\n## Complexity\n## Recommendation\n\n` +
+      `# <title>\n\n**Category:**\n**Module / submodule:**\n**Worktree:**\n**Branch:**\n**Reproducer:** <reproducer path> -- \`<how to run it>\`\n\n## Summary\n## Evidence\n## Impact\n## Risk\n## Complexity\n## Recommendation\n\n` +
       `Candidate: ${JSON.stringify(candidate, null, 2)}\n\nReproduction result: ${JSON.stringify(repro, null, 2)}\n\n` +
+      `Fill the Reproducer line with both repro.reproducer_path and repro.how_to_run -- the path alone or the command alone isn't enough for someone else to run it. ` +
       `Be concrete: name the threshold where it starts to matter, distinguish "already happens" from "will happen once X grows," and give an honest complexity estimate for a real fix including whether the fix itself is risky (hot path, on-disk/wire format, needs a migration).`,
       { label: `impact:${candidate.title}`, phase: 'Impact', model: 'claude-opus-5', effort: 'high', schema: IMPACT_SCHEMA }
-    ).then(report => ({ candidate, confirmed: true, repro, report_markdown: report && report.report_markdown }))
+    ).then(report => {
+      // Missing/empty report text is not a confirmed bug report -- don't let it through as one.
+      const reportText = report && report.report_markdown && report.report_markdown.trim()
+      if (!reportText) {
+        return { candidate, confirmed: false, reason: 'reproduced, but impact writeup was missing or empty', repro }
+      }
+      return { candidate, confirmed: true, repro, report_markdown: reportText }
+    })
   }
 )
 

@@ -57,6 +57,16 @@ structure the final writeup must follow.
    scope than the stale manifest records, archive it (rename with a
    `.stale` suffix, don't delete — it may still hold a useful `runId` to
    inspect) and proceed as a fresh run.
+
+   The module name drives the manifest filename everywhere below (this
+   step's lookup, step 4's write, the resume path) — it's normally a short
+   word like "compaction," but never write `runs/<module>.json` with the
+   module name substituted verbatim into the path. Derive the filename by
+   keeping only `[A-Za-z0-9_-]` from the module name (reject/ask if that
+   leaves nothing usable), and confirm the resulting path still resolves
+   under `runs/` before reading, renaming, or writing it. The full,
+   unsanitized module name still belongs inside the manifest's `"module"`
+   field — just not in the path.
 3. **Size the run before starting it** (fresh runs only). This pipeline
    compiles and runs real C++ (boost tests, sometimes a full scylla binary
    for cqlpy). Tell the user roughly how many submodules and how many
