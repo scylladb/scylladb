@@ -2635,6 +2635,11 @@ compaction_group::do_update_sstable_sets_on_compaction_completion(compaction::co
                 auto& cg = _t.compaction_group_for_sstable(sst);
                 _cg_desc[&cg].desc.new_sstables.push_back(sst);
             }
+            // Insert all GCed-data sstables into the original compaction group, so
+            // when they're removed, they can be found there.
+            for (auto& sst : _desc.new_gc_sstables) {
+                _cg_desc[&_cg].desc.new_sstables.push_back(sst);
+            }
             // The group that triggered compaction is the only one to have sstables removed from it.
             _cg_desc[&_cg].desc.old_sstables = _desc.old_sstables;
             for (auto& [cg, d] : _cg_desc) {
@@ -2715,6 +2720,7 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
     // (finish() already moved them out of the compaction, and they are sealed so ~sstable()
     // won't unlink them either), so a failure here would otherwise leak them on disk forever.
     auto new_sstables = desc.new_sstables;
+    std::ranges::copy(desc.new_gc_sstables, std::back_inserter(new_sstables));
     bool attached = false;
     std::exception_ptr ex;
     try {
