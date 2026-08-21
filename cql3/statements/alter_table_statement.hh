@@ -68,11 +68,15 @@ public:
     virtual future<::shared_ptr<messages::result_message>> execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const override;
 
     future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type) const override;
+
+    // Computes the schema (and dependent view schemas) that applying this ALTER TABLE statement
+    // to the current schema in `db` would produce. Exposed so that offline tooling (e.g. the
+    // scylla-sstable schema loader) can apply the ALTER TABLE statements found in a schema.cql.
+    std::pair<schema_ptr, std::vector<view_ptr>> prepare_schema_update(data_dictionary::database db, const query_options& options) const;
 private:
     void add_column(const query_options& options, const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const;
     void alter_column(const query_options& options, const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const;
     void drop_column(const query_options& options, const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const;
-    std::pair<schema_ptr, std::vector<view_ptr>> prepare_schema_update(data_dictionary::database db, const query_options& options) const;
 };
 
 class alter_table_statement::raw_statement : public raw::cf_statement {

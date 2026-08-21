@@ -24,6 +24,7 @@
 #include "cql3/statements/create_type_statement.hh"
 #include "cql3/statements/create_view_statement.hh"
 #include "cql3/statements/create_index_statement.hh"
+#include "cql3/statements/alter_table_statement.hh"
 #include "cql3/statements/update_statement.hh"
 #include "db/cql_type_parser.hh"
 #include "db/config.hh"
@@ -382,6 +383,20 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
                 auto time = row.get_nonnull<db_clock::time_point>("dropped_time");
                 it->schema = schema_builder(std::move(it->schema)).without_column(std::move(name), std::move(type), time.time_since_epoch().count()).build();
             }
+        } else if (auto p = dynamic_cast<cql3::statements::alter_table_statement*>(statement)) {
+            // A schema.cql (e.g. the one written next to a snapshot) may contain ALTER TABLE
+            // statements: a dropped column is described as ALTER TABLE ... DROP ... USING TIMESTAMP
+            // (followed by ALTER TABLE ... ADD when the column was re-added). Apply them here so the
+            // reconstructed schema matches the sstables, keeping data of dropped columns readable.
+            auto [new_schema, _] = p->prepare_schema_update(db, cql3::query_options::DEFAULT);
+            auto it = std::find_if(real_db.tables.begin(), real_db.tables.end(), [&] (const table& t) {
+                return t.schema->ks_name() == new_schema->ks_name() && t.schema->cf_name() == new_schema->cf_name();
+            });
+            if (it == real_db.tables.end()) {
+                throw std::runtime_error(fmt::format("tools::do_load_schemas(): ALTER TABLE statement refers to an unknown table: {}.{}",
+                            new_schema->ks_name(), new_schema->cf_name()));
+            }
+            it->schema = std::move(new_schema);
         } else {
             throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected statement to be one of (create keyspace, create type, create table), got: {}",
                         typeid(statement).name()));

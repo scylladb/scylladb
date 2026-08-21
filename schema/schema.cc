@@ -1051,7 +1051,7 @@ static void describe_index_columns(fragmented_ostringstream& os, bool is_local, 
     os << ")";
 }
 
-managed_string schema::get_create_statement(const schema_describe_helper& helper, bool with_internals) const {
+managed_string schema::get_create_statement(const schema_describe_helper& helper, bool with_id, bool with_dropped_columns) const {
     fragmented_ostringstream os;
 
     os << "CREATE ";
@@ -1076,7 +1076,7 @@ managed_string schema::get_create_statement(const schema_describe_helper& helper
             }
 
             os << " WITH ";
-            if (with_internals) {
+            if (with_id) {
                 os << "ID = " << id().to_sstring() << "\n    AND ";
             }
             if (is_compact_table()) {
@@ -1112,7 +1112,7 @@ managed_string schema::get_create_statement(const schema_describe_helper& helper
         // can mark it with "TTL".
         std::optional<std::string> ttl_column = db::find_tag(*this, TTL_TAG_KEY);
         for (auto& cdef : all_columns()) {
-            if (with_internals && dropped_columns().contains(cdef.name_as_text())) {
+            if (with_dropped_columns && dropped_columns().contains(cdef.name_as_text())) {
                 // If the column has been re-added after a drop, we don't include it right away. Instead, we'll add the
                 // dropped one first below, then we'll issue the DROP and then the actual ADD for this column, thus
                 // simulating the proper sequence of events.
@@ -1127,7 +1127,7 @@ managed_string schema::get_create_statement(const schema_describe_helper& helper
             os << ",";
         }
 
-        if (with_internals) {
+        if (with_dropped_columns) {
             for (auto& cdef: dropped_columns()) {
                 os << "\n    ";
                 os << cql3::util::maybe_quote(cdef.first) << " " << cdef.second.type->cql3_type_name() << ",";
@@ -1160,7 +1160,7 @@ managed_string schema::get_create_statement(const schema_describe_helper& helper
         os << "\n) ";
     }
     os << "WITH ";
-    if (with_internals) {
+    if (with_id) {
         os << "ID = " << id().to_sstring() << "\nAND ";
     }
     if (!clustering_key_columns().empty()) {
@@ -1186,7 +1186,7 @@ managed_string schema::get_create_statement(const schema_describe_helper& helper
     schema_properties(helper, os);
     os << ";\n";
 
-    if (with_internals) {
+    if (with_dropped_columns) {
         for (auto& cdef : dropped_columns()) {
             os << "\nALTER TABLE " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name())
                << " DROP " << cql3::util::maybe_quote(cdef.first) << " USING TIMESTAMP " << fmt::to_string(cdef.second.timestamp) << ";";
@@ -1224,13 +1224,17 @@ cql3::description schema::describe(const schema_describe_helper& helper, cql3::d
             ? secondary_index::index_name_from_table_name(cf_name())
             : cf_name();
 
+    const bool with_id = desc_opt == cql3::describe_option::STMTS_AND_INTERNALS;
+    const bool with_dropped_columns = desc_opt == cql3::describe_option::STMTS_AND_INTERNALS
+            || desc_opt == cql3::describe_option::STMTS_AND_DROPPED_COLUMNS;
+
     return cql3::description {
         .keyspace = ks_name(),
         .type = std::move(type),
         .name = std::move(name),
         .create_statement = desc_opt == cql3::describe_option::NO_STMTS
                 ? std::nullopt
-                : std::make_optional(get_create_statement(helper, desc_opt == cql3::describe_option::STMTS_AND_INTERNALS))
+                : std::make_optional(get_create_statement(helper, with_id, with_dropped_columns))
     };
 }
 
