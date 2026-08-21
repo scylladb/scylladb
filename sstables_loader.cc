@@ -1273,11 +1273,11 @@ class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::ta
         db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
         tasks::task_manager::task::progress progress = {};
         for (const auto& [dc, racks] : topo.get_datacenter_racks()) {
-        co_await max_concurrent_for_each(racks, 16, [&](const auto& rack_entry) -> future<> {
-            auto p = co_await sth.get_snapshot_sstables_progress(_snap_name, s->ks_name(), s->cf_name(), dc, rack_entry.first);
-            progress.total += p.nr_sstables;
-            progress.completed += p.nr_downloaded_sstables;
-        });
+            co_await max_concurrent_for_each(racks, 16, [&](const auto& rack_entry) -> future<> {
+                auto p = co_await sth.get_snapshot_sstables_progress(_snap_name, s->ks_name(), s->cf_name(), dc, rack_entry.first);
+                progress.total += p.nr_sstables;
+                progress.completed += p.nr_downloaded_sstables;
+            });
         }
         _progress = progress;
     }
