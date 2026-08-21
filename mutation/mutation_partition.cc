@@ -374,6 +374,18 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
     return stop_iteration::yes;
 }
 
+void mutation_partition::finish_apply(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats) {
+    apply_resume res;
+    apply_monotonically(s, std::move(p), no_cache_tracker, app_stats, is_preemptible::no, res);
+}
+
+void mutation_partition::do_apply(const schema& s, mutation_partition&& p, const schema& p_schema, mutation_application_stats& app_stats) {
+    if (s.version() != p_schema.version()) {
+        p.upgrade(p_schema, s);
+    }
+    finish_apply(s, std::move(p), app_stats);
+}
+
 void
 mutation_partition::apply(const schema& s, mutation_partition_view p,
         const schema& p_schema, mutation_application_stats& app_stats) {
@@ -381,27 +393,22 @@ mutation_partition::apply(const schema& s, mutation_partition_view p,
     mutation_partition p2(*this, copy_comparators_only{});
     partition_builder b(p_schema, p2);
     p.accept(p_schema, b);
-    if (s.version() != p_schema.version()) {
-        p2.upgrade(p_schema, s);
-    }
-    apply_resume res;
-    apply_monotonically(s, std::move(p2), no_cache_tracker, app_stats, is_preemptible::no, res);
+    do_apply(s, std::move(p2), p_schema, app_stats);
 }
 
 void mutation_partition::apply(const schema& s, const mutation_partition& p,
         const schema& p_schema, mutation_application_stats& app_stats) {
     // FIXME: Optimize
     mutation_partition p2(p_schema, p);
-    if (s.version() != p_schema.version()) {
-        p2.upgrade(p_schema, s);
-    }
-    apply_resume res;
-    apply_monotonically(s, std::move(p2), no_cache_tracker, app_stats, is_preemptible::no, res);
+    do_apply(s, std::move(p2), p_schema, app_stats);
 }
 
 void mutation_partition::apply(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats) {
-    apply_resume res;
-    apply_monotonically(s, std::move(p), no_cache_tracker, app_stats, is_preemptible::no, res);
+    finish_apply(s, std::move(p), app_stats);
+}
+
+void mutation_partition::apply(const schema& s, mutation_partition&& p, const schema& p_schema, mutation_application_stats& app_stats) {
+    do_apply(s, std::move(p), p_schema, app_stats);
 }
 
 tombstone
