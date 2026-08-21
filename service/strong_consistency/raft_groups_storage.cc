@@ -281,6 +281,35 @@ std::vector<index_and_replay_position> raft_groups_storage::acquire_replay_posit
 }
 
 
+future<> raft_groups_storage::store_commit_idx_if_higher(cql3::query_processor& qp, raft::group_id gid, shard_id shard, raft::index_t commit_idx) {
+    // Only advance, never regress: an earlier replay may already have
+    // persisted a value at or beyond the recovered one.
+    const auto persisted = co_await load_commit_idx(qp, gid, shard);
+    if (commit_idx <= persisted) {
+        co_return;
+    }
+    static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?)",
+        db::system_keyspace::RAFT_GROUPS);
+    co_await qp.execute_internal(
+        store_cql,
+        {int16_t(shard), gid.id, int64_t(commit_idx.value())},
+        cql3::query_processor::cache_internal::yes).discard_result();
+}
+
+future<std::pair<raft::index_t, raft::term_t>>
+raft_groups_storage::load_snapshot_idx_and_term(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+    static const auto load_cql = format("SELECT idx, term FROM system.{} WHERE shard = ? AND group_id = ?",
+        db::system_keyspace::RAFT_GROUPS_SNAPSHOTS);
+    auto rs = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    if (rs->empty()) {
+        co_return std::pair(raft::index_t(0), raft::term_t(0));
+    }
+    const auto& row = rs->one();
+    co_return std::pair(
+            raft::index_t(row.get_or<int64_t>("idx", 0)),
+            raft::term_t(row.get_or<int64_t>("term", 0)));
+}
+
 // ============================ sc_io_batcher ================================
 
 // Build a static-only system.raft_groups mutation that sets commit_idx for the
