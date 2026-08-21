@@ -4623,6 +4623,9 @@ future<> init_metrics() {
 
         sm::make_gauge("bloom_filter_memory_size", [] { return utils::filter::bloom_filter::get_shard_stats().memory_size; },
             sm::description("Bloom filter memory usage in bytes.")),
+
+        sm::make_gauge("compression_offsets_memory_size", [] { return sstables_stats::get_shard_stats().compression_offsets_memory; },
+            sm::description("Memory usage, in bytes, of the in-memory copies of sstable compression chunk offsets (CompressionInfo.db).")),
     });
   });
 }

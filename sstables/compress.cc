@@ -20,6 +20,7 @@
 #include "framed_chunk.hh"
 #include "exceptions.hh"
 #include "unimplemented.hh"
+#include "sstables/stats.hh"
 #include "sstables/version.hh"
 #include "sstables/checksum_utils.hh"
 #include "segmented_compress_params.hh"
@@ -209,6 +210,11 @@ std::pair<bucket_info, segment_info> params_for_chunk_size(uint32_t chunk_size) 
     return {std::move(b), std::move(s)};
 }
 
+void compression::segmented_offsets::bucket_storage_deleter::operator()(char* p) const noexcept {
+    delete[] p;
+    sstables_stats::on_compression_offsets_memory_freed(bucket_size);
+}
+
 uint64_t compression::segmented_offsets::read(uint64_t bucket_index, uint64_t offset_bits, uint64_t size_bits) const {
     const uint64_t offset_byte = offset_bits / 8;
     uint64_t value = seastar::read_le<uint64_t>(_storage[bucket_index].storage.get() + offset_byte);
@@ -315,7 +321,9 @@ void compression::segmented_offsets::push_back(uint64_t offset, compression::seg
     s.update_position_trackers(_size, _segment_size_bits, _segments_per_bucket, _grouped_offsets);
 
     if (s._current_bucket_index == _storage.size()) {
-        _storage.push_back(bucket{_last_written_offset, std::unique_ptr<char[]>(new char[bucket_size])});
+        auto storage = bucket_storage(new char[bucket_size]);
+        sstables_stats::on_compression_offsets_memory_allocated(bucket_size);
+        _storage.push_back(bucket{_last_written_offset, std::move(storage)});
     }
 
     const uint64_t bucket_base_offset = _storage[s._current_bucket_index].base_offset;

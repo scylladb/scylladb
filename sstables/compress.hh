@@ -121,9 +121,18 @@ struct compression {
             return writer(*this);
         }
     private:
+        // A bucket's storage is accounted for in the shard-wide
+        // sstables_stats::compression_offsets_memory counter. The subtraction is
+        // done by the deleter, so that it happens on every release path (clear(),
+        // destruction, assignment over a non-empty container).
+        struct bucket_storage_deleter {
+            void operator()(char* p) const noexcept;
+        };
+        using bucket_storage = std::unique_ptr<char[], bucket_storage_deleter>;
+
         struct bucket {
             uint64_t base_offset;
-            std::unique_ptr<char[]> storage;
+            bucket_storage storage;
         };
 
         uint32_t _chunk_size{0};
