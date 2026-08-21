@@ -47,6 +47,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/loop.hh>
+#include <seastar/core/when_all.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <boost/range/algorithm/find_end.hpp>
 #include <unordered_set>
@@ -2898,6 +2899,141 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 co_return api_error::validation(fmt::format("Unknown BatchWriteItem request type: {}", r_name));
             }
         }
+<<<<<<< HEAD
+||||||| parent of 207338c5d2 (alternator: fix use-after-free in batch_write_item)
+        per_table_wcu.emplace_back(std::make_pair(per_table_stats, schema));
+    }
+    for (const auto& b : mutation_builders) {
+        co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, b.first, auth::permission::MODIFY, _stats);
+    }
+    // If alternator_force_read_before_write is true we will first get the previous item size
+    // and only then do send the mutation.
+    if (_proxy.data_dictionary().get_config().alternator_force_read_before_write()) {
+        std::vector<future<uint64_t>> previous_items_sizes;
+        previous_items_sizes.reserve(mutation_builders.size());
+
+        // Parallel get all previous item sizes
+        for (const auto& b : mutation_builders) {
+            previous_items_sizes.emplace_back(get_previous_item_size(
+                _proxy,
+                client_state,
+                b.first,
+                b.second.pk(),
+                b.second.ck(),
+                permit));
+        }
+        size_t pos = 0;
+        // We are going to wait for all the requests
+        for (auto&& pi : previous_items_sizes) {
+            auto res = co_await std::move(pi);
+            if (mutation_builders[pos].second.length_in_bytes() < res) {
+                mutation_builders[pos].second.set_length_in_bytes(res);
+            }
+            pos++;
+        }
+    }
+
+
+    size_t wcu_put_units = 0;
+    size_t wcu_delete_units = 0;
+
+    size_t pos = 0;
+    size_t total_wcu;
+    // Here we calculate the per-table WCU.
+    // The size in the mutation is based either on the operation size,
+    // or, if we performed a read-before-write, on the larger of the operation size
+    // and the previous item's size.
+    for (const auto& w : per_table_wcu) {
+        total_wcu = 0;
+        // The following loop goes over all items from the same table
+        while(pos < mutation_builders.size() && w.second->id() == mutation_builders[pos].first->id()) {
+            uint64_t item_size = mutation_builders[pos].second.length_in_bytes();
+            size_t wcu = wcu_consumed_capacity_counter::get_units(item_size ? item_size : 1);
+            total_wcu += wcu;
+            if (mutation_builders[pos].second.is_put_item()) {
+                w.first->wcu_total[stats::PUT_ITEM] += wcu;
+                wcu_put_units += wcu;
+            } else {
+                w.first->wcu_total[stats::DELETE_ITEM] += wcu;
+                wcu_delete_units += wcu;
+            }
+            w.first->operation_sizes.batch_write_item_op_size_kb.add(bytes_to_kb_ceil(item_size));
+            pos++;
+        }
+=======
+        per_table_wcu.emplace_back(std::make_pair(per_table_stats, schema));
+    }
+    for (const auto& b : mutation_builders) {
+        co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, b.first, auth::permission::MODIFY, _stats);
+    }
+    // If alternator_force_read_before_write is true we will first get the previous item size
+    // and only then do send the mutation.
+    if (_proxy.data_dictionary().get_config().alternator_force_read_before_write()) {
+        std::vector<future<uint64_t>> previous_items_sizes;
+        previous_items_sizes.reserve(mutation_builders.size());
+
+        // Parallel get all previous item sizes
+        // Note - after starting we need to wait for all the `get_previous_item_size` requests to
+        // complete first before processing the results.
+        // This needs to be done, because `get_previous_item_size` fiber contains reference to `client_state`, which
+        // is allocated on heap in `server::handle_api_request` and partition / clustering key from `mutation_builders`.
+        // If it throws an error and `co_await` returns early (either here or when `.get()` is called) without
+        // waiting for other fibers the function will conclude and those objects be deleted.
+        // Once remaining `get_previous_item_size` fibers resume, they will access deleted memory and crash.
+        // We use `futurize_invoke` to avoid early returning here and `when_all_succeed` below to wait for all fibers to finish
+        // before processing any results.
+        for (const auto& b : mutation_builders) {
+            previous_items_sizes.emplace_back(futurize_invoke(get_previous_item_size,
+                _proxy,
+                client_state,
+                b.first,
+                b.second.pk(),
+                b.second.ck(),
+                permit));
+        }
+
+        // We are going to wait for all the requests.
+        // This will throw if any fiber throws an error, but other fibers will be waited for and their results collected
+        // or `ignore_ready_future()` will be called.
+        auto results = co_await when_all_succeed(std::move(previous_items_sizes));
+
+        size_t pos = 0;
+        for (auto res : results) {
+            if (mutation_builders[pos].second.length_in_bytes() < res) {
+                mutation_builders[pos].second.set_length_in_bytes(res);
+            }
+            pos++;
+        }
+    }
+
+
+    size_t wcu_put_units = 0;
+    size_t wcu_delete_units = 0;
+
+    size_t pos = 0;
+    size_t total_wcu;
+    // Here we calculate the per-table WCU.
+    // The size in the mutation is based either on the operation size,
+    // or, if we performed a read-before-write, on the larger of the operation size
+    // and the previous item's size.
+    for (const auto& w : per_table_wcu) {
+        total_wcu = 0;
+        // The following loop goes over all items from the same table
+        while(pos < mutation_builders.size() && w.second->id() == mutation_builders[pos].first->id()) {
+            uint64_t item_size = mutation_builders[pos].second.length_in_bytes();
+            size_t wcu = wcu_consumed_capacity_counter::get_units(item_size ? item_size : 1);
+            total_wcu += wcu;
+            if (mutation_builders[pos].second.is_put_item()) {
+                w.first->wcu_total[stats::PUT_ITEM] += wcu;
+                wcu_put_units += wcu;
+            } else {
+                w.first->wcu_total[stats::DELETE_ITEM] += wcu;
+                wcu_delete_units += wcu;
+            }
+            w.first->operation_sizes.batch_write_item_op_size_kb.add(bytes_to_kb_ceil(item_size));
+            pos++;
+        }
+>>>>>>> 207338c5d2 (alternator: fix use-after-free in batch_write_item)
         if (should_add_wcu) {
             rjson::value entry = rjson::empty_object();
             rjson::add(entry, "TableName", rjson::from_string(rjson::to_string_view(it->name)));
