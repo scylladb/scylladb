@@ -39,6 +39,7 @@ namespace service::strong_consistency {
 // on the same shard as the tablet replica.
 class raft_groups_storage : public raft::persistence {
     raft_commitlog _raft_commitlog;
+    sc_io_batcher* _batcher = nullptr;
     raft::group_id _group_id;
     raft::server_id _server_id;
     uint16_t _shard;
@@ -56,6 +57,14 @@ public:
     future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override;
     future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override;
     future<> store_commit_idx(raft::index_t) override;
+
+    // Wire the shard-wide IO batcher (append + commit_idx rounds). When unset
+    // (unit tests), appends write directly and commit_idx keeps the direct
+    // CQL write.
+    void set_batcher(sc_io_batcher* b) {
+        _batcher = b;
+        _raft_commitlog.set_batcher(b);
+    }
     future<raft::index_t> load_commit_idx() override;
     future<raft::log_entries> load_log() override;
     future<raft::snapshot_descriptor> load_snapshot_descriptor() override;
@@ -75,6 +84,13 @@ public:
     // Static version that doesn't require constructing a full raft_groups_storage object.
     // Useful during commitlog replay when only read access to metadata is needed.
     static future<raft::index_t> load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    // Persist commit_idx only if higher than the stored value. Used by
+    // commitlog replay to restore the recovered commit_idx.
+    static future<> store_commit_idx_if_higher(cql3::query_processor& qp, raft::group_id gid, shard_id shard, raft::index_t commit_idx);
+    // Load the current persisted snapshot's (idx, term) for this group.
+    // Returns (0, 0) if no snapshot has been recorded yet.
+    static future<std::pair<raft::index_t, raft::term_t>> load_snapshot_idx_and_term(
+            cql3::query_processor& qp, raft::group_id gid, shard_id shard);
     // Store snapshot idx and term without updating the configuration.
     // Used to advance the persisted snapshot index so that raft does not
     // re-apply already applied entries on restart. Only writes if the new

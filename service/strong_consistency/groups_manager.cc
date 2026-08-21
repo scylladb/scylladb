@@ -154,8 +154,13 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
 
     auto* commitlog = _db.commitlog();
     SCYLLA_ASSERT(commitlog);
+    if (!_sc_io_batcher) {
+        _sc_io_batcher = std::make_unique<sc_io_batcher>(_qp, *commitlog);
+        _sc_io_batcher->start();
+    }
     auto storage = std::make_unique<raft_groups_storage>(_qp, group_id, my_id, this_shard_id(),
         *commitlog, tablet.table, _raft_replay_buffer.take_replayed_group_entries(group_id));
+    storage->set_batcher(_sc_io_batcher.get());
 
     auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage);
 
@@ -546,6 +551,8 @@ void groups_manager::start() {
     }
 }
 
+groups_manager::~groups_manager() = default;
+
 future<> groups_manager::stop() {
     co_await uninit_messaging_service();
 
@@ -559,6 +566,11 @@ future<> groups_manager::stop() {
 
     while (!_raft_groups.empty()) {
         co_await _raft_groups.begin()->second.server_control_op.get_future();
+    }
+
+    // After all groups: their io_fibers are done, no submit can arrive.
+    if (_sc_io_batcher) {
+        co_await _sc_io_batcher->stop();
     }
 
     logger.info("stop() completed");

@@ -21,6 +21,11 @@ struct raft_commitlog_entry [[writable]] {
     raft::log_entry_ptr entry;
 };
 
+struct raft_commit_idx_entry [[writable]] {
+    raft::group_id group_id;
+    raft::index_t commit_idx;
+};
+
 struct commitlog_entry [[writable]] {
-    std::variant<raft_commitlog_entry, mutation_entry> item;
+    std::variant<raft_commitlog_entry, mutation_entry, raft_commit_idx_entry> item;
 };
