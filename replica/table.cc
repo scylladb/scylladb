@@ -549,6 +549,62 @@ void compaction_group::backlog_tracker_adjust_charges(const std::vector<sstables
     tracker.replace_sstables(old_sstables, new_sstables);
 }
 
+void compaction_group::link_sstable(const sstables::shared_sstable& sst) {
+    const auto* cg = sst->get_compaction_group();
+    if (cg == this) {
+        return;
+    }
+    if (cg) [[unlikely]] {
+        // An sstable can belong to at most one compaction group at a time.
+        on_internal_error(tlogger, fmt::format("Attempted to add SSTable {} of {}.{}, which already belongs to compaction group {}, to compaction group {}",
+                sst->get_filename(), _t.schema()->ks_name(), _t.schema()->cf_name(), *cg, *this));
+    }
+    sst->set_compaction_group(weak_from_this());
+}
+
+void compaction_group::unlink_sstable(const sstables::shared_sstable& sst) noexcept {
+    if (sst->get_compaction_group() == this) {
+        sst->set_compaction_group(nullptr);
+    }
+}
+
+void compaction_group::relink_sstables(const sstables::sstable_set& old_set, const sstables::sstable_set& new_set,
+                                       const sstables::sstable_set& other_set) {
+    // Phrased as three plain walks rather than membership tests, so that no set has
+    // to be materialized: the setters run from the execute() step of a row cache
+    // update and from the completion of a tablet merge, neither of which tolerates
+    // an allocation failure.
+    // for_each_sstable_until() rather than for_each_sstable() for the same reason:
+    // the latter wraps the callback in a second std::function, which is too large
+    // to be stored inline and therefore allocates on every call. The lambdas below
+    // capture nothing but this, so they are stored inline.
+    auto for_each = [] (const sstables::sstable_set& set, auto&& func) {
+        set.for_each_sstable_until([&func] (const sstables::shared_sstable& sst) {
+            func(sst);
+            return stop_iteration::no;
+        });
+    };
+    // Release everything the replaced set held.
+    for_each(old_set, [this] (const sstables::shared_sstable& sst) {
+        unlink_sstable(sst);
+    });
+    // Take ownership of everything the replacement brings in.
+    for_each(new_set, [this] (const sstables::shared_sstable& sst) {
+        link_sstable(sst);
+    });
+    // Restore the link of anything still held through the group's other set, which
+    // is how an sstable moved between the main and maintenance sets, e.g. by
+    // off-strategy compaction, stays linked across the two setter calls. Only
+    // sstables the first walk left unowned are relinked: one that moved to another
+    // group in this same update belongs to that group now, and it drops out of this
+    // set once that set is replaced in turn.
+    for_each(other_set, [this] (const sstables::shared_sstable& sst) {
+        if (!sst->get_compaction_group()) {
+            link_sstable(sst);
+        }
+    });
+}
+
 lw_shared_ptr<sstables::sstable_set>
 compaction_group::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
         enable_backlog_tracker backlog_tracker) {
@@ -562,6 +618,10 @@ compaction_group::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, 
     // allow in-progress reads to continue using old list
     auto new_sstables = make_lw_shared<sstables::sstable_set>(*sstables);
     new_sstables->insert(sstable);
+    // Kept ahead of the updates below, which aren't undone on failure: if the
+    // sstable turns out to belong to another group, the caller discards
+    // new_sstables and the group is left untouched.
+    link_sstable(sstable);
     if (backlog_tracker) {
         table::add_sstable_to_backlog_tracker(get_backlog_tracker(), sstable);
     }
@@ -584,6 +644,7 @@ sstables::sstable_set compaction_group::make_main_sstable_set() const {
 }
 
 void compaction_group::set_main_sstables(lw_shared_ptr<sstables::sstable_set> new_main_sstables) {
+    relink_sstables(*_main_sstables, *new_main_sstables, *_maintenance_sstables);
     _main_sstables = std::move(new_main_sstables);
 }
 
@@ -596,6 +657,7 @@ const lw_shared_ptr<sstables::sstable_set>& compaction_group::maintenance_sstabl
 }
 
 void compaction_group::set_maintenance_sstables(lw_shared_ptr<sstables::sstable_set> new_maintenance_sstables) {
+    relink_sstables(*_maintenance_sstables, *new_maintenance_sstables, *_main_sstables);
     _maintenance_sstables = std::move(new_maintenance_sstables);
 }
 
@@ -2505,10 +2567,18 @@ compaction_group::merge_sstables_from(compaction_group& group) {
     auto sstables_to_merge = group.all_sstables();
     // re-build new list for this group with sstables of the group being merged.
     auto res = co_await builder.build_new_list(*main_sstables(), make_main_sstable_set(), sstables_to_merge, {});
+    // The empty sets the merged group is left with are built here rather than by
+    // clear_sstables() below, since building them allocates and the block below
+    // must not fail.
+    auto emptied_main = make_lw_shared<sstables::sstable_set>(group.make_main_sstable_set());
+    auto emptied_maintenance = group.make_maintenance_sstable_set();
     // execute:
     std::invoke([&] noexcept {
+        // The other group has to release the sstables before this group takes them over,
+        // as an sstable can only be linked to one compaction group at a time.
+        group.set_main_sstables(std::move(emptied_main));
+        group.set_maintenance_sstables(std::move(emptied_maintenance));
         set_main_sstables(std::move(res.new_sstable_set));
-        group.clear_sstables();
         // FIXME: backlog adjustment is not exception safe.
         backlog_tracker_adjust_charges({}, sstables_to_merge);
     });
@@ -2599,8 +2669,22 @@ compaction_group::do_update_sstable_sets_on_compaction_completion(compaction::co
                 auto& cg = _t.compaction_group_for_sstable(sst);
                 _cg_desc[&cg].desc.new_sstables.push_back(sst);
             }
-            // The group that triggered compaction is the only one to have sstables removed from it.
-            _cg_desc[&_cg].desc.old_sstables = _desc.old_sstables;
+            // Remove each input sstable from the group that actually owns it.
+            // That is usually _cg, the group the compaction runs on, but it isn't
+            // guaranteed to be: an output sstable is routed to its group through
+            // the tablet map, by compaction_group_for_sstable() above, whereas the
+            // sstable is removed in a later replacer call, and a tablet merge can
+            // swap the tablet map in between. A garbage-collected sstable added to
+            // the new main group after such a swap would then be looked up in _cg,
+            // a merging group which never held it, and fail the check below.
+            // The sstable knows which group holds it, so ask it rather than
+            // recomputing the routing. Falls back to _cg for an sstable that
+            // belongs to no group, to report it below as the input we failed to
+            // remove.
+            for (auto& sst : _desc.old_sstables) {
+                auto* owner = sst->get_compaction_group();
+                _cg_desc[owner ? owner : &_cg].desc.old_sstables.push_back(sst);
+            }
             for (auto& [cg, d] : _cg_desc) {
                 size_t removed_sstables = 0;
                 d.main_sstable_set_builder_result = co_await _builder.build_new_list(*cg->main_sstables(), cg->make_main_sstable_set(),
@@ -2634,6 +2718,18 @@ compaction_group::do_update_sstable_sets_on_compaction_completion(compaction::co
             }
         }
         virtual void execute() override {
+            // Release the input sstables from the groups holding them before any group
+            // takes ownership below. An sstable can be an input and an output of the
+            // same completion, which is how a split moves an sstable that didn't need
+            // splitting into a split-ready group, and how off-strategy moves an sstable
+            // that didn't need reshaping into the main set. Such an sstable changes
+            // hands within this single update, and _cg_desc is unordered, so linking it
+            // to its new group first would find it still owned by the old one.
+            for (auto& [cg, d] : _cg_desc) {
+                for (auto& sst : d.desc.old_sstables) {
+                    cg->unlink_sstable(sst);
+                }
+            }
             for (auto&& [cg, d] : _cg_desc) {
                 cg->set_main_sstables(std::move(d.main_sstable_set_builder_result.new_sstable_set));
                 if (d.new_maintenance_sstables) {
@@ -3389,8 +3485,9 @@ const schema_ptr& compaction_group::schema() const {
 }
 
 void compaction_group::clear_sstables() {
-    _main_sstables = make_lw_shared<sstables::sstable_set>(make_main_sstable_set());
-    _maintenance_sstables = make_maintenance_sstable_set();
+    // Goes through the setters, so the sstables leaving the group are unlinked from it.
+    set_main_sstables(make_lw_shared<sstables::sstable_set>(make_main_sstable_set()));
+    set_maintenance_sstables(make_maintenance_sstable_set());
 }
 
 void storage_group::clear_sstables() {

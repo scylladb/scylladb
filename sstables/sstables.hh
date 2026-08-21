@@ -49,6 +49,7 @@
 #include "sstables/file_size_stats.hh"
 
 #include <seastar/util/optimized_optional.hh>
+#include <seastar/core/weak_ptr.hh>
 #include <fmt/format.h>
 
 class sstable_assertions;
@@ -64,6 +65,10 @@ class in_memory_config_type;
 namespace db {
 class large_data_handler;
 class corrupt_data_handler;
+}
+
+namespace replica {
+class compaction_group;
 }
 
 namespace sstables {
@@ -672,6 +677,15 @@ private:
     // Total memory reclaimed so far from this sstable
     size_t _total_memory_reclaimed{0};
     std::optional<db_clock::time_point> _unlinked_at;
+    // The compaction group this sstable currently belongs to, if any.
+    // Maintained by replica::compaction_group as the sstable joins and leaves
+    // its sstable sets. An sstable belongs to at most one compaction group at
+    // a time; replica::compaction_group reports an internal error if that
+    // invariant is found to be broken.
+    // Weak, since the compaction group is the one owning the sstable, and not
+    // the other way around. It is cleared automatically if the compaction group
+    // happens to be destroyed while the sstable is still linked to it.
+    seastar::weak_ptr<replica::compaction_group> _compaction_group;
     const bool _ignore_component_digest_mismatch;
 
     // The mutate semaphore is used to serialize operations like rewrite_statistics
@@ -1175,6 +1189,24 @@ public:
         return _unlinked_at;
     }
 
+    // Returns the compaction group this sstable belongs to, or nullptr if it
+    // doesn't belong to any (e.g. it was just created by compaction and wasn't
+    // attached to a table yet, or it was already compacted away).
+    replica::compaction_group* get_compaction_group() noexcept {
+        return _compaction_group.get();
+    }
+    const replica::compaction_group* get_compaction_group() const noexcept {
+        return _compaction_group.get();
+    }
+private:
+    // Records the compaction group this sstable now belongs to, or none when
+    // disengaged. Reserved for replica::compaction_group, which is responsible
+    // for keeping this in sync with its sstable sets.
+    void set_compaction_group(seastar::weak_ptr<replica::compaction_group> cg) noexcept {
+        _compaction_group = std::move(cg);
+    }
+public:
+
     // The sstable identifier identifies the sstable globally across all nodes, shards, and over time.
     // When the sstable is created, the sstable identifier is equal to the sstable generation,
     // but over time, e.g. when a sstable is migrated across shards or nodes, its identifier
@@ -1223,6 +1255,8 @@ public:
     friend class mc::writer;
     friend class index_reader;
     friend class sstables_manager;
+    // Calls set_compaction_group() as the sstable joins and leaves compaction groups.
+    friend class replica::compaction_group;
     template <typename DataConsumeRowsContext>
     friend future<std::unique_ptr<DataConsumeRowsContext>>
     data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t, integrity_check);

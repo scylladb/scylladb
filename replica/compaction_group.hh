@@ -9,6 +9,7 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/rwlock.hh>
+#include <seastar/core/weak_ptr.hh>
 
 #include "database_fwd.hh"
 #include "compaction/compaction_descriptor.hh"
@@ -56,7 +57,7 @@ using repair_classifier_func = std::function<repair_sstable_classification(const
 //      - Also, a group will be owned by a single table. Different tables own different groups.
 //      - Each group can be thought of an isolated LSM tree, where Memtable(s) and SSTable(s) are
 //          isolated from other groups.
-class compaction_group {
+class compaction_group : public seastar::weakly_referencable<compaction_group> {
     table& _t;
     // The compaction group views are the logical compaction groups, each having its own logical
     // set of sstables. Even though they share the same instance of sstable_set, compaction will
@@ -111,6 +112,27 @@ class compaction_group {
 private:
     std::unique_ptr<compaction_group_view> make_compacting_view();
     std::unique_ptr<compaction_group_view> make_non_compacting_view();
+
+    // Records in the sstable that it now belongs to this group. Idempotent.
+    // Calls on_internal_error() if the sstable belongs to another group already,
+    // as an sstable can be owned by at most one group at a time.
+    void link_sstable(const sstables::shared_sstable& sst);
+    // Records in the sstable that it no longer belongs to this group.
+    // Tolerates the sstable being linked to another group, or to none.
+    void unlink_sstable(const sstables::shared_sstable& sst) noexcept;
+    // Reconciles the sstables' back-pointers to this group after one of the group's
+    // sstable sets was replaced with a rebuilt one: `old_set` was replaced by
+    // `new_set`, while `other_set` is the group's other sstable set, as it stands
+    // once the replacement is complete.
+    // An sstable leaves the group only if it's gone from both sets, so that an
+    // sstable moved between the main and maintenance sets, e.g. by off-strategy
+    // compaction, remains linked throughout.
+    // Allocation free, as the callers can't afford to fail. Not noexcept, so that
+    // a broken invariant is still reported through on_internal_error() rather than
+    // being turned into a std::terminate().
+    // `old_set` and `other_set` must be the group's sets as they stand on entry.
+    void relink_sstables(const sstables::sstable_set& old_set, const sstables::sstable_set& new_set,
+                         const sstables::sstable_set& other_set);
 
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
