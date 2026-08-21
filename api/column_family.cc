@@ -12,6 +12,7 @@
 #include "api/validate.hh"
 #include "api/api-doc/column_family.json.hh"
 #include "api/api-doc/storage_service.json.hh"
+#include "api/api-doc/system.json.hh"
 #include <vector>
 #include <seastar/http/exception.hh>
 #include "sstables/sstables.hh"
@@ -34,6 +35,7 @@ using namespace httpd;
 using namespace json;
 namespace cf = httpd::column_family_json;
 namespace ss = httpd::storage_service_json;
+namespace hs = httpd::system_json;
 
 std::tuple<sstring, sstring> parse_fully_qualified_cf_name(sstring name) {
     auto pos = name.find("%3A");
@@ -1159,6 +1161,67 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
             return db.local().find_keyspace(ks).get_replication_strategy().uses_tablets() == want_tablets;
         }) | std::ranges::to<std::vector>();
     });
+
+    hs::drop_sstable_caches.set(r, [&db] (std::unique_ptr<http::request> req) {
+        apilog.info("Dropping sstable caches");
+        return db.invoke_on_all([] (replica::database& db) {
+            return db.drop_caches();
+        }).then([] {
+            apilog.info("Caches dropped");
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+
+    ss::force_flush.set(r, [&db] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        apilog.info("flush all tables");
+        co_await db.invoke_on_all([] (replica::database& db) {
+            return db.flush_all_tables();
+        });
+        co_return json_void();
+    });
+
+    ss::force_keyspace_flush.set(r, [&ctx, &db] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
+        apilog.info("perform_keyspace_flush: keyspace={} tables={}", keyspace, table_infos);
+        co_await replica::database::flush_tables_on_all_shards(db, std::move(table_infos));
+        co_return json_void();
+    });
+
+    ss::is_incremental_backups_enabled.set(r, [&db] (std::unique_ptr<http::request> req) {
+        // If this is issued in parallel with an ongoing change, we may see values not agreeing.
+        // Reissuing is asking for trouble, so we will just return true upon seeing any true value.
+        return db.map_reduce(adder<bool>(), [] (replica::database& db) {
+            for (auto& pair: db.get_keyspaces()) {
+                auto& ks = pair.second;
+                if (ks.incremental_backups_enabled()) {
+                    return true;
+                }
+            }
+            return false;
+        }).then([] (bool val) {
+            return make_ready_future<json::json_return_type>(val);
+        });
+    });
+
+    ss::set_incremental_backups_enabled.set(r, [&db] (std::unique_ptr<http::request> req) {
+        auto val_str = req->get_query_param("value");
+        bool value = (val_str == "True") || (val_str == "true") || (val_str == "1");
+        return db.invoke_on_all([value] (replica::database& db) {
+            db.set_enable_incremental_backups(value);
+
+            // Change both KS and CF, so they are in sync
+            for (auto& pair: db.get_keyspaces()) {
+                auto& ks = pair.second;
+                ks.set_incremental_backups(value);
+            }
+
+            db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
+                table->set_incremental_backups(value);
+            });
+        }).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
 }
 
 void unset_column_family(http_context& ctx, routes& r) {
@@ -1275,5 +1338,10 @@ void unset_column_family(http_context& ctx, routes& r) {
     ss::get_load.unset(r);
     ss::get_metrics_load.unset(r);
     ss::get_keyspaces.unset(r);
+    hs::drop_sstable_caches.unset(r);
+    ss::force_flush.unset(r);
+    ss::force_keyspace_flush.unset(r);
+    ss::is_incremental_backups_enabled.unset(r);
+    ss::set_incremental_backups_enabled.unset(r);
 }
 }
