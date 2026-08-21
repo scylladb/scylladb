@@ -502,7 +502,7 @@ async def trigger_stepdown(manager, server: ServerInfo) -> None:
 
 
 
-async def get_coordinator_host_ids(manager: ScyllaClusterManager) -> list[str]:
+async def get_coordinator_host_ids(manager: ScyllaClusterManager) -> list[HostID]:
     """ Get coordinator host id from history
 
     Select all records with elected coordinator
@@ -515,11 +515,11 @@ async def get_coordinator_host_ids(manager: ScyllaClusterManager) -> list[str]:
 
     cql = manager.get_cql()
     result = await cql.run_async(stm)
-    coordinators_ids = []
+    coordinators_ids: list[HostID] = []
     for row in result:
         coordinator_host_id = get_uuid_from_str(row.description)
         if coordinator_host_id:
-            coordinators_ids.append(coordinator_host_id)
+            coordinators_ids.append(HostID(coordinator_host_id))
     assert len(coordinators_ids) > 0, f"No coordinator ids {coordinators_ids} were found"
     return coordinators_ids
 
