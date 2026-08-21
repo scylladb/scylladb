@@ -1144,8 +1144,11 @@ SEASTAR_TEST_CASE(test_update_failure) {
         int partition_count = 1000;
 
         // populate cache with some partitions
-        using partitions_type = std::map<partition_key, mutation_partition, partition_key::less_compare>;
-        auto original_partitions = partitions_type(partition_key::less_compare(*s));
+        auto pk_less = [&s] (const partition_key& a, const partition_key& b) {
+            return a.view().ring_order_tri_compare(*s, b) < 0;
+        };
+        using partitions_type = std::map<partition_key, mutation_partition, decltype(pk_less)>;
+        auto original_partitions = partitions_type(pk_less);
         for (int i = 0; i < partition_count / 2; i++) {
             auto m = make_new_mutation(s, i + partition_count / 2);
             original_partitions.emplace(m.key(), mutation_partition(*s, m.partition()));
@@ -1154,7 +1157,7 @@ SEASTAR_TEST_CASE(test_update_failure) {
 
         // populate memtable with more updated partitions
         auto mt = make_lw_shared<replica::memtable>(s);
-        auto updated_partitions = partitions_type(partition_key::less_compare(*s));
+        auto updated_partitions = partitions_type(pk_less);
         for (int i = 0; i < partition_count; i++) {
             auto m = make_new_large_mutation(s, i);
             updated_partitions.emplace(m.key(), mutation_partition(*s, m.partition()));
