@@ -3101,16 +3101,15 @@ sstable_position sstable::start_position() const {
     if (uses_physical_positions()) {
         // `mu` is read by the physical cursor, which navigates by chunk
         // coordinates, so the start position must carry the real coordinates of
-        // the first chunk. They come from the compression component: the first
-        // chunk begins at on-disk position 0, and its length is the extent of
-        // chunk 0. The logical/uncompressed position is 0.
-        const auto& comp = _components->compression;
-        auto accessor = comp.offsets.get_accessor();
-        auto chunk = comp.locate(0, accessor);
-        // extent_hint is an upper bound of the chunk's extent;
-        // the exact extent is such a bound.
-        return sstable_position::from_physical(
-                chunk.chunk_start, chunk.chunk_len, chunk.offset);
+        // the first chunk. The first chunk begins at on-disk position 0, at
+        // logical/uncompressed position 0.
+        //
+        // Its length is left unknown (an extent_hint of 0), so that the start
+        // position doesn't depend on the chunk offsets from CompressionInfo.db.
+        // The cursor handles an unknown length by reading the length out of the
+        // chunk's own header, which costs one extra small read at the start of a
+        // scan.
+        return sstable_position::from_physical(0, 0, 0);
     }
     return sstable_position::from_logical(0);
 }
@@ -3756,22 +3755,41 @@ static future<bool> do_validate_compressed(input_stream<char>& stream, const sst
     uint32_t actual_full_checksum = ChecksumType::init_checksum();
 
     auto accessor = c.offsets.get_accessor();
+    framed_chunk_stream_reader chunk_reader(codec);
     for (size_t i = 0; i < c.offsets.size(); ++i) {
-        auto current_pos = accessor.at(i);
-        auto next_pos = i + 1 == c.offsets.size() ? c.compressed_file_length() : accessor.at(i + 1);
-        auto chunk_len = next_pos - current_pos;
-        auto buf = co_await stream.read_exactly(chunk_len);
+        uint64_t chunk_len;
+        temporary_buffer<char> buf;
 
-        if (!chunk_len) {
-            sstlog.error("Found unexpected chunk of length 0 at offset {}", offset);
-            valid = false;
-            break;
-        }
+        if (codec.framed()) {
+            // The length of this chunk comes from its own header, rather than
+            // from the offset of the next one. Throws if the stream ends in the
+            // header, or if the length is obviously too large, which the caller
+            // turns into a validation failure.
+            const auto header = co_await chunk_reader.read_header(stream, offset);
+            chunk_len = codec.extent(header.frame.compressed_len);
+            buf = co_await chunk_reader.read_chunk(stream, header);
+            if (buf.size() < chunk_len) {
+                sstlog.error("Truncated file at offset {}: expected to get chunk of size {}, got {}", offset, chunk_len, buf.size());
+                valid = false;
+                break;
+            }
+        } else {
+            auto current_pos = accessor.at(i);
+            auto next_pos = i + 1 == c.offsets.size() ? c.compressed_file_length() : accessor.at(i + 1);
+            chunk_len = next_pos - current_pos;
+            buf = co_await stream.read_exactly(chunk_len);
 
-        if (buf.size() < chunk_len) {
-            sstlog.error("Truncated file at offset {}: expected to get chunk of size {}, got {}", offset, chunk_len, buf.size());
-            valid = false;
-            break;
+            if (!chunk_len) {
+                sstlog.error("Found unexpected chunk of length 0 at offset {}", offset);
+                valid = false;
+                break;
+            }
+
+            if (buf.size() < chunk_len) {
+                sstlog.error("Truncated file at offset {}: expected to get chunk of size {}, got {}", offset, chunk_len, buf.size());
+                valid = false;
+                break;
+            }
         }
 
         // Throws if the chunk is too small to hold its framing and checksum,
@@ -3788,6 +3806,17 @@ static future<bool> do_validate_compressed(input_stream<char>& stream, const sst
         }
 
         offset += chunk_len;
+    }
+
+    // Anything past the last chunk is data the compression metadata doesn't account
+    // for, e.g. bytes appended to Data.db after it was written. Without per-chunk
+    // framing this can't happen, because the last chunk is *defined* to extend to
+    // the end of the file; but a framed ("mu") chunk carries its own length, so
+    // trailing junk has to be caught explicitly.
+    if (valid && offset != c.compressed_file_length()) {
+        sstlog.error("Data.db has {} bytes of trailing data past the last chunk, at offset {}",
+                c.compressed_file_length() - offset, offset);
+        valid = false;
     }
 
     if (expected_digest && actual_full_checksum != *expected_digest) {
