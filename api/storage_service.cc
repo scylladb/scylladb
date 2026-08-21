@@ -548,9 +548,8 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
             throw httpd::bad_param_exception("backup locations (in body) must be a JSON array");
         }
 
-        const auto& locations = parsed.GetArray();
-        if (locations.Size() != 1) {
-            throw httpd::bad_param_exception("backup locations array (in body) must contain exactly one entry");
+        if (parsed.Empty()) {
+            throw httpd::bad_param_exception("backup locations array (in body) must not be empty");
         }
 
         auto get_member = [] (const auto& location, const char* name) {
@@ -560,7 +559,8 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
             return sstring(rjson::to_string_view(location[name]));
         };
 
-        const auto& location = locations[0];
+        std::vector<tablet_restore_location> restore_locations;
+        for (const auto& location : parsed.GetArray()) {
         if (!location.IsObject()) {
             throw httpd::bad_param_exception("backup location (in body) must be a JSON object");
         }
@@ -585,7 +585,6 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} datacenter={} endpoint={} bucket={} prefix={} manifests_count={}",
                     keyspace, table, snapshot, dc, endpoint, bucket, prefix, manifests.size());
 
-        std::vector<tablet_restore_location> restore_locations;
         restore_locations.push_back(tablet_restore_location{
             .datacenter = std::move(dc),
             .endpoint = std::move(endpoint),
@@ -593,6 +592,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
             .prefix = sstring(prefix),
             .manifests = std::move(manifests),
         });
+        }
 
         auto table_id = validate_table(ctx.db.local(), keyspace, table);
         auto task_id = co_await sst_loader.local().restore_tablets(table_id, keyspace, table, snapshot, std::move(restore_locations));
