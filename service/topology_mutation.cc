@@ -8,6 +8,7 @@
 
 #include "utils/assert.hh"
 #include "db/system_keyspace.hh"
+#include "db/snapshot_types.hh"
 #include "topology_mutation.hh"
 #include "types/tuple.hh"
 #include "types/types.hh"
@@ -387,6 +388,10 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
     return set("done", true);
 }
 
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::percent_complete(uint32_t pc) {
+    return set("percent_complete", pc);
+}
+
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_truncate_table_data(const table_id& table_id) {
     apply_atomic("truncate_table_id", table_id.uuid());
     return *this;
@@ -399,6 +404,23 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
                                 set_type_impl::native_type(uuids.begin(), uuids.end())));
     apply_atomic("snapshot_tag", tag);
     apply_atomic("snapshot_skip_flush", skip_flush);
+    return *this;
+}
+
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_backup_snapshot_data(const std::unordered_set<table_id>& table_ids, const std::unordered_map<sstring, db::snapshot_dc_location>& locations, const sstring& tag, bool use_move) {
+    set_snapshot_tables_data(table_ids, tag, false);
+
+    auto locs = locations | std::views::transform([](const std::pair<sstring, db::snapshot_dc_location>& p) {
+        auto& [dc, l] = p;
+        return std::pair<data_value, data_value>(dc, tuple_type_impl::get_instance({utf8_type, utf8_type, utf8_type})->make_value(std::vector<data_value>({
+           l.endpoint, l.bucket, l.prefix
+        })));
+    });
+    apply_atomic("backup_locations",
+                 make_map_value(schema().get_column_definition("backup_locations")->type,
+                                map_type_impl::native_type(locs.begin(), locs.end())));
+    apply_atomic("backup_use_move", use_move);
+
     return *this;
 }
 
