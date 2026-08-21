@@ -1753,6 +1753,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/row_cache_test.cc',
     'test/boost/schema_change_test.cc',
     'test/boost/schema_registry_test.cc',
+    'test/boost/scrub_test.cc',
     'test/boost/secondary_index_test.cc',
     'test/boost/sessions_test.cc',
     'test/boost/simple_value_with_expiry_test.cc',

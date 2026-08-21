@@ -302,3 +302,4 @@ std::vector<replica::memtable*> active_memtables(replica::table& t);
 std::unique_ptr<sstable_stream_source> make_corrupted_sstable_stream_source(std::unique_ptr<sstable_stream_source> wrapped, sstables::shared_sstable sst, component_type type, size_t corrupted_byte = 0);
 
 void slightly_corrupt_sstable(sstables::shared_sstable sst, component_type component = component_type::Data);
+void corrupt_sstable(sstables::shared_sstable sst, component_type type = component_type::Data);

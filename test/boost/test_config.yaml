@@ -27,6 +27,8 @@ all_can_run_compaction_groups_except:
 custom_args:
     mutation_reader_test:
         - '-c3 -m2G'
+    scrub_test:
+        - '-c1 -m2G --logger-log-level compaction=debug --logger-log-level compaction_manager=debug --logger-log-level s3=trace --logger-log-level gcp_storage=trace --logger-log-level http=trace --logger-log-level default_http_retry_strategy=trace'
     sstable_test:
         - '-c1 -m2G'
     sstable_datafile_test:
