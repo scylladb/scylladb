@@ -7,6 +7,8 @@
  */
 #pragma once
 
+#include <unordered_set>
+
 #include <seastar/core/gate.hh>
 #include <seastar/core/abort_source.hh>
 #include <unordered_map>
@@ -201,6 +203,7 @@ class group0_state_machine : public raft_state_machine {
             table_id table;
         };
         std::vector<entry> entries;
+        std::unordered_set<table_id> update_cdc_streams;
     };
 
     raft_group0_client& _client;
