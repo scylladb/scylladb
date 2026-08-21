@@ -31,6 +31,7 @@
 #include "streaming/stream_reason.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "locator/network_topology_strategy.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
 #include "utils/error_injection.hh"
@@ -44,6 +45,7 @@
 
 #include <cfloat>
 #include <algorithm>
+#include <set>
 
 static logging::logger llog("sstables_loader");
 
@@ -1377,7 +1379,35 @@ protected:
     }
 };
 
+// Every datacenter the table replicates to restores from its own backup location,
+// so the locations must map one-to-one to the replicated-to datacenters.
+static void check_datacenter_coverage(const replica::table& t, const std::vector<tablet_restore_location>& locations) {
+    auto& rs = t.get_effective_replication_map()->get_replication_strategy();
+    const auto* nts = dynamic_cast<const locator::network_topology_strategy*>(&rs);
+    if (!nts) {
+        throw std::invalid_argument(fmt::format("Table {}.{} does not use NetworkTopologyStrategy", t.schema()->ks_name(), t.schema()->cf_name()));
+    }
+
+    auto replicated_dcs = nts->get_datacenters()
+        | std::views::filter([nts] (const sstring& dc) { return nts->get_replication_factor(dc) > 0; })
+        | std::ranges::to<std::set<sstring>>();
+
+    auto location_dcs = locations
+        | std::views::transform(&tablet_restore_location::datacenter)
+        | std::ranges::to<std::set<sstring>>();
+    if (location_dcs.size() != locations.size()) {
+        throw std::invalid_argument("Duplicate datacenters in backup locations");
+    }
+
+    if (location_dcs != replicated_dcs) {
+        throw std::invalid_argument(fmt::format("Backup locations datacenters [{}] don't match the datacenters [{}] keyspace {} replicates to",
+            fmt::join(location_dcs, ", "), fmt::join(replicated_dcs, ", "), t.schema()->ks_name()));
+    }
+}
+
 future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations) {
+    check_datacenter_coverage(_db.local().find_column_family(tid), locations);
+
     db::snapshot_table_helper sth(_sys_dist_ks.qp());
     manifest_summary summary = { .tablet_count = 0, .nr_sstables = 0 };
 
