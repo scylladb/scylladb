@@ -553,14 +553,21 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
             throw httpd::bad_param_exception("backup locations array (in body) must contain exactly one entry");
         }
 
+        auto get_member = [] (const auto& location, const char* name) {
+            if (!location.HasMember(name) || !location[name].IsString()) {
+                throw httpd::bad_param_exception(fmt::format("backup location entry must have '{}' string member", name));
+            }
+            return sstring(rjson::to_string_view(location[name]));
+        };
+
         const auto& location = locations[0];
         if (!location.IsObject()) {
             throw httpd::bad_param_exception("backup location (in body) must be a JSON object");
         }
 
-        auto endpoint = rjson::to_string_view(location["endpoint"]);
-        auto bucket = rjson::to_string_view(location["bucket"]);
-        auto dc = rjson::to_string_view(location["datacenter"]);
+        auto endpoint = get_member(location, "endpoint");
+        auto bucket = get_member(location, "bucket");
+        auto dc = get_member(location, "datacenter");
         auto prefix = location.HasMember("prefix") ? rjson::to_string_view(location["prefix"]) : std::string_view{};
 
         if (!location.HasMember("manifests") || !location["manifests"].IsArray()) {
@@ -580,9 +587,9 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
 
         std::vector<tablet_restore_location> restore_locations;
         restore_locations.push_back(tablet_restore_location{
-            .datacenter = sstring(dc),
-            .endpoint = sstring(endpoint),
-            .bucket = sstring(bucket),
+            .datacenter = std::move(dc),
+            .endpoint = std::move(endpoint),
+            .bucket = std::move(bucket),
             .prefix = sstring(prefix),
             .manifests = std::move(manifests),
         });
