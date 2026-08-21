@@ -42,7 +42,17 @@ async def test_kill_coordinator_during_op(manager: ScyllaClusterManager, failure
     """
     # Decrease the failure detector threshold so we don't have to wait for too long.
     config = {
-        'failure_detector_timeout_in_ms': failure_detector_timeout
+        'failure_detector_timeout_in_ms': failure_detector_timeout,
+        # Raise the raft direct failure detector threshold above its 2s default.
+        # A shard 0 stall in a loaded test environment (SCYLLADB-2121) otherwise
+        # gets a live voter marked dead, the group0 leader steps down and the
+        # topology coordinator moves to another node before the injection fires.
+        'error_injections_at_startup': [
+            {
+                'name': 'raft-group-registry-fd-threshold-in-ms',
+                'value': '5000'
+            }
+        ]
     }
     cmdline = [
         '--logger-log-level', 'raft_topology=trace',
