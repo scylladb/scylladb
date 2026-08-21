@@ -223,7 +223,7 @@ private:
         auto& table = db.find_column_family(ks, cf);
         auto& sst_manager = table.get_sstables_manager();
         auto sst = sst_manager.make_sstable(
-            table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
+            table.schema(), table.get_storage_options(), min_info.generation, min_info.sid, sstables::sstable_state::normal, min_info.version, min_info.format);
         sst->set_sstable_level(0);
         auto units = co_await sst_manager.dir_semaphore().get_units(1);
         sstables::sstable_open_config cfg {
@@ -937,7 +937,7 @@ future<sstables::shared_sstable> sstables_loader::attach_sstable(table_id tid, c
     llog.debug("Adding downloaded SSTable gen={} to the table {}.{} on shard {}", min_info.generation, table.schema()->ks_name(), table.schema()->cf_name(), this_shard_id());
     auto& sst_manager = table.get_sstables_manager();
     auto sst = sst_manager.make_sstable(
-        table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
+        table.schema(), table.get_storage_options(), min_info.generation, min_info.sid, sstables::sstable_state::normal, min_info.version, min_info.format);
     sst->set_sstable_level(0);
     auto erm = table.get_effective_replication_map();
     sstables::sstable_open_config cfg {
@@ -1108,12 +1108,16 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
             db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
             co_await max_concurrent_for_each(shard_ssts, 16, [&sth, &loader, tid, snap_name, keyspace_name, table_name, datacenter, rack](const auto& min_info) -> future<> {
                 sstables::shared_sstable attached_sst = co_await loader.attach_sstable(tid.table, min_info);
+                // The system_distributed.snapshot_sstables row is keyed by the
+                // sstable_id of the backup sstable, not by the sstable_id of the
+                // restored copy, so that a restore which is retried skips the
+                // sstables a previous attempt already downloaded.
                 co_await sth.update_sstable_download_status(snap_name,
                                                             keyspace_name,
                                                             table_name,
                                                             datacenter,
                                                             rack,
-                                                            *attached_sst->sstable_identifier(),
+                                                            min_info.source_sid,
                                                             attached_sst->get_first_decorated_key().token(),
                                                             db::is_downloaded::yes);
             });

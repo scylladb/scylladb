@@ -4498,6 +4498,7 @@ future<std::vector<std::unique_ptr<sstable_stream_source>>> create_stream_source
 class sstable_stream_sink_impl : public sstable_stream_sink {
     shared_sstable _sst;
     component_type _type;
+    bool _first_component;
     bool _last_component;
     bool _leave_unsealed;
     checksum _checksum;
@@ -4506,14 +4507,27 @@ public:
     sstable_stream_sink_impl(shared_sstable sst, component_type type, sstable_stream_sink_cfg cfg)
         : _sst(std::move(sst))
         , _type(type)
+        , _first_component(cfg.first_component)
         , _last_component(cfg.last_component)
         , _leave_unsealed(cfg.leave_unsealed)
         , _checksum(DEFAULT_CHUNK_SIZE, {})
         , _digest(crc32_utils::init_checksum())
     {
-        sstlog.debug("Creating stream sink for SSTable gen={} sid={} type={} last={} leave_unsealed={}", _sst->generation(), _sst->sstable_identifier(), _type, _last_component, _leave_unsealed);
+        // create_stream_sink() replaces component_type::TOC with TemporaryTOC for
+        // filesystem storage, so TOC reaches the sink only for object storage.
+        SCYLLA_ASSERT(_type != component_type::TOC || _sst->_storage->is_object_storage());
+        sstlog.debug("Creating stream sink for SSTable gen={} sid={} type={} first={} last={} leave_unsealed={}", _sst->generation(), _sst->sstable_identifier(), _type, _first_component, _last_component, _leave_unsealed);
     }
 private:
+    // TOC and scylla components are guaranteed not to depend on metadata. Ignore these (chicken, egg)
+    // TemporaryTOC is the name filesystem storage writes the TOC under, TOC the name
+    // object storage writes it under.
+    static bool depends_on_metadata(component_type type) {
+        return type != component_type::TOC
+                && type != component_type::TemporaryTOC
+                && type != component_type::Scylla;
+    }
+
     future<> load_metadata() const {
         if (!co_await _sst->_storage->exists(*_sst, component_type::Scylla)) {
             // for compatibility with streaming a non-scylla table (no scylla component)
@@ -4530,6 +4544,15 @@ private:
             co_return;
         }
         auto& metadata = *_sst->get_shared_components().scylla_metadata;
+
+        // download_sstable() in sstables_loader_helpers.cc streams the Scylla
+        // component of the backup sstable verbatim, so scylla_metadata still holds
+        // the sstable_id of the backup sstable. Replace the sstable_id with the one
+        // of the sstable being written, before serialized_checksum() below computes
+        // the digest over scylla_metadata::data.
+        if (auto sid = _sst->sstable_identifier()) {
+            metadata.set_sstable_identifier(*sid);
+        }
 
         file_output_stream_options options;
         options.buffer_size = default_sstable_buffer_size;
@@ -4575,9 +4598,10 @@ private:
     }
 public:
     future<output_stream<char>> output(const file_open_options& foptions, const file_output_stream_options& stream_options) override {
-        assert(_type != component_type::TOC);
-        // TOC and scylla components are guaranteed not to depend on metadata. Ignore these (chicken, egg)
-        bool load_save_meta = _type != component_type::TemporaryTOC && _type != component_type::Scylla;
+        if (_first_component) {
+            co_await _sst->_storage->open_for_stream(*_sst);
+        }
+        bool load_save_meta = depends_on_metadata(_type);
 
         // otherwise, first load scylla metadata from disk as written so far.
         if (load_save_meta) {
@@ -4623,10 +4647,10 @@ public:
         co_await _sst->_storage->unlink_component(*_sst, _type);
     }
     future<> validate_integrity() override {
-        if (_type == component_type::TemporaryTOC || _type == component_type::Scylla) {
+        if (!depends_on_metadata(_type)) {
             co_return;
         }
-        
+
         co_await load_metadata();
         do_validate_component_integrity(_type, _digest);
     }
@@ -4637,8 +4661,9 @@ std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr schema, sstab
 
     auto type = desc.component;
     // Don't write actual TOC. Write temp, if successful, storage::seal will rename this to actual
-    // TOC (see above close_and_seal).
-    if (type == component_type::TOC) {
+    // TOC (see above close_and_seal). Object storage records sealing as a status change of the
+    // system.sstables entry and renames no object, so there the TOC is written under its final name.
+    if (type == component_type::TOC && !s_opts.is_object_storage_type()) {
         type = component_type::TemporaryTOC;
     }
 

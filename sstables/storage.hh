@@ -125,6 +125,13 @@ public:
     virtual future<> change_state(const sstable& sst, sstable_state to, generation_type generation, delayed_commit_changes* delay) = 0;
     // runs in async context
     virtual void open(sstable& sst) = 0;
+    // Registers an sstable which is written through sstable_stream_sink instead
+    // of through open(). The sink writes every component including the TOC, so
+    // open_for_stream() must not write the TOC, unlike open().
+    // filesystem_storage implements open_for_stream() as a no-op: for filesystem
+    // storage the sink writes the TOC under the TemporaryTOC name, which already
+    // marks the sstable as incomplete.
+    virtual future<> open_for_stream(sstable& sst) = 0;
     // Must never return an exceptional future: implementations are expected
     // to catch and log any errors internally.
     virtual future<> wipe(sstable& sst, const atomic_deletion* deletion = nullptr) noexcept = 0;
