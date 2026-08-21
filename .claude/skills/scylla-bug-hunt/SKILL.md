@@ -54,14 +54,16 @@ structure the final writeup must follow.
    `resumeFromRunId`, and tell the user you're resuming run `<runId>`
    rather than starting over. Skip sizing/confirmation in that case; it
    already happened once. If the user is explicitly asking for a different
-   scope than the stale manifest records, archive it (rename with a
-   `.stale` suffix, don't delete — it may still hold a useful `runId` to
-   inspect) and proceed as a fresh run.
+   scope than the stale manifest records — a different module, or an
+   explicit `submodules` list that doesn't match the manifest's recorded
+   `args.submodules` — archive it (rename with a `.stale` suffix, don't
+   delete — it may still hold a useful `runId` to inspect) and proceed as
+   a fresh run.
 
    The module name drives the manifest filename everywhere below (this
-   step's lookup, step 4's write, the resume path) — it's normally a short
-   word like "compaction," but never write `runs/<module>.json` with the
-   module name substituted verbatim into the path; a name like
+   step's lookup, the claim below, the resume path) — it's normally a
+   short word like "compaction," but never write `runs/<module>.json` with
+   the module name substituted verbatim into the path; a name like
    `../../outside` would escape `runs/`, and two different names (e.g.
    `foo/bar` and `foo_bar`) could otherwise sanitize to the same filename
    and overwrite each other's manifest. Compute the manifest filename with
@@ -74,12 +76,37 @@ structure the final writeup must follow.
    ```
    The trailing checksum makes same-key collisions between different
    module names effectively impossible. The full, unsanitized module name
-   still belongs inside the manifest's `"module"` field — just not in the
-   path — and before treating any manifest found at `runs/<key>.json` as a
-   match in step 2, confirm its `"module"` field equals the requested
-   module name exactly; a mismatch (a residual collision, or a hand-edited
-   file) means it's not this module's manifest, so treat it as if none was
-   found rather than resuming from it.
+   and the requested `submodules` (if any were given explicitly) still
+   belong inside the manifest's `"module"` / `"args"` fields — just not in
+   the path — and before treating any manifest found at `runs/<key>.json`
+   as a match, confirm its `"module"` field equals the requested module
+   name exactly *and*, if this request names an explicit `submodules`
+   list, that it matches the manifest's recorded `args.submodules` as a
+   set. Either mismatch (a residual key collision, a hand-edited file, or
+   a genuinely different scope) means it's not this request's manifest —
+   treat it as if none was found (or, per the paragraph above, archive it
+   as stale) rather than resuming with the wrong scope silently in effect.
+
+   **Claim the key before doing anything else.** The check above and
+   step 4's write are not atomic with each other — two sessions can both
+   see "no resumable run" for the same module in the same instant, then
+   both proceed, and whichever writes `runs/<key>.json` second stomps the
+   other's still-running manifest. Close that window right here, before
+   step 3's sizing/confirmation, with an exclusive, fail-if-exists create:
+   ```
+   set -o noclobber
+   claimed=1
+   echo '{"status":"claiming"}' > "runs/$key.json" 2>/dev/null || claimed=0
+   set +o noclobber
+   ```
+   `claimed=0` means another session won the race between your check and
+   now: re-read `runs/$key.json` and go back to the top of this step
+   (resume it if it matches this module/scope, or surface the conflict to
+   the user if it doesn't — never overwrite a manifest you didn't create).
+   `claimed=1` means you now own `runs/<key>.json`: from here on, only this
+   session may write to it — step 4 overwrites it with the full manifest,
+   and step 5 marks it `"completed"` — until it's archived or completed.
+   A session that lost the claim must not touch the file again.
 3. **Size the run before starting it** (fresh runs only). This pipeline
    compiles and runs real C++ (boost tests, sometimes a full scylla binary
    for cqlpy). Tell the user roughly how many submodules and how many
@@ -103,11 +130,12 @@ structure the final writeup must follow.
    ```
    Invoking this skill is itself the user's explicit request for
    sub-agent orchestration — don't ask again whether it's OK to use
-   `Workflow`. As soon as the call returns a Task ID / Run ID, write
-   `runs/<key>.json` using the sanitized `<key>` from step 2 (see
-   "Checkpointing across sessions" below) *before* doing anything else —
-   that write is what makes the run recoverable if this very session ends
-   a moment later.
+   `Workflow`. As soon as the call returns a Task ID / Run ID, overwrite
+   `runs/<key>.json` — the placeholder you claimed in step 2, now owned by
+   this session — with the full manifest, using the sanitized `<key>` from
+   step 2 (see "Checkpointing across sessions" below) *before* doing
+   anything else. That write is what makes the run recoverable if this
+   very session ends a moment later.
 5. **Present the result, then stop.** The workflow returns confirmed bugs
    (each with a worktree path, branch, reproducer, and the impact/risk/
    complexity writeup) plus a short list of what was discarded and why
@@ -166,11 +194,15 @@ from you:
   hadn't finished yet. This is what makes resuming cheap instead of
   redoing the expensive (build-bound) Reproduce stage from scratch.
 - **Not free, and your job:** nothing durable records *which* `runId`
-  belongs to *which* module unless you write it down. The running task and
+  belongs to *which* module unless you write it down, and two sessions
+  starting the same module at once must not stomp each other's manifest —
+  that's why step 2 claims `runs/<key>.json` with an exclusive,
+  fail-if-exists write before anything else happens. The running task and
   its `runId` live in this conversation and in `/workflows` — both gone if
-  the session ends. So immediately after launching (step 4 above), write
-  a manifest at `runs/<key>.json` (`<key>` is the sanitized filename from
-  step 2, not the raw module name):
+  the session ends. So immediately after launching (step 4 above),
+  overwrite the manifest you claimed at `runs/<key>.json` (`<key>` is the
+  sanitized filename from step 2, not the raw module name) with the full
+  contents:
 
   ```json
   {
@@ -190,7 +222,9 @@ from you:
   conversation can still find it by module name, pass its `runId` to
   `Workflow`, and pick up exactly where things stopped. Update its
   `status` to `"completed"` when you present the final result (step 5) so
-  a later run on the same module doesn't get mistaken for a resume.
+  a later run on the same module doesn't get mistaken for a resume. Only
+  the session that claimed the key in step 2 should ever write to this
+  file — a session that lost the claim race must not touch it.
 
 ## Boundaries
 
