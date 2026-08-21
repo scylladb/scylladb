@@ -52,7 +52,11 @@ public:
     static unsigned ideal_level_for_input(const std::vector<sstables::shared_sstable>& input, uint64_t max_sstable_size);
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 
-    leveled_compaction_strategy(const std::map<sstring, sstring>& options);
+    /// @param defaults provides the values of the options that aren't set in @param options,
+    /// for the size-tiered compaction this strategy performs in level 0.
+    /// Defaults to the values used when the expected memtable size isn't known.
+    leveled_compaction_strategy(const std::map<sstring, sstring>& options,
+            const strategy_options_defaults& defaults = {});
     virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override;
 
     virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) const override;
