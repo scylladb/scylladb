@@ -561,37 +561,37 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
 
         std::vector<tablet_restore_location> restore_locations;
         for (const auto& location : parsed.GetArray()) {
-        if (!location.IsObject()) {
-            throw httpd::bad_param_exception("backup location (in body) must be a JSON object");
-        }
+            if (!location.IsObject()) {
+                throw httpd::bad_param_exception("backup location (in body) must be a JSON object");
+            }
 
-        auto endpoint = get_member(location, "endpoint");
-        auto bucket = get_member(location, "bucket");
-        auto dc = get_member(location, "datacenter");
-        auto prefix = location.HasMember("prefix") ? rjson::to_string_view(location["prefix"]) : std::string_view{};
+            auto endpoint = get_member(location, "endpoint");
+            auto bucket = get_member(location, "bucket");
+            auto dc = get_member(location, "datacenter");
+            auto prefix = location.HasMember("prefix") ? rjson::to_string_view(location["prefix"]) : std::string_view{};
 
-        if (!location.HasMember("manifests") || !location["manifests"].IsArray()) {
-            throw httpd::bad_param_exception("backup location entry must have 'manifests' array");
-        }
+            if (!location.HasMember("manifests") || !location["manifests"].IsArray()) {
+                throw httpd::bad_param_exception("backup location entry must have 'manifests' array");
+            }
 
-        auto manifests = location["manifests"].GetArray() |
-            std::views::transform([] (const auto& m) { return sstring(rjson::to_string_view(m)); }) |
-            std::ranges::to<utils::chunked_vector<sstring>>();
+            auto manifests = location["manifests"].GetArray() |
+                std::views::transform([] (const auto& m) { return sstring(rjson::to_string_view(m)); }) |
+                std::ranges::to<utils::chunked_vector<sstring>>();
 
-        if (manifests.empty()) {
-            throw httpd::bad_param_exception("backup location 'manifests' array must not be empty");
-        }
+            if (manifests.empty()) {
+                throw httpd::bad_param_exception("backup location 'manifests' array must not be empty");
+            }
 
-        apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} datacenter={} endpoint={} bucket={} prefix={} manifests_count={}",
-                    keyspace, table, snapshot, dc, endpoint, bucket, prefix, manifests.size());
+            apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} datacenter={} endpoint={} bucket={} prefix={} manifests_count={}",
+                        keyspace, table, snapshot, dc, endpoint, bucket, prefix, manifests.size());
 
-        restore_locations.push_back(tablet_restore_location{
-            .datacenter = std::move(dc),
-            .endpoint = std::move(endpoint),
-            .bucket = std::move(bucket),
-            .prefix = sstring(prefix),
-            .manifests = std::move(manifests),
-        });
+            restore_locations.push_back(tablet_restore_location{
+                .datacenter = std::move(dc),
+                .endpoint = std::move(endpoint),
+                .bucket = std::move(bucket),
+                .prefix = sstring(prefix),
+                .manifests = std::move(manifests),
+            });
         }
 
         auto table_id = validate_table(ctx.db.local(), keyspace, table);
