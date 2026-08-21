@@ -38,11 +38,21 @@ inline future<> wait_for_injection_enter(std::string_view injection_name, size_t
 // Runs in seastar thread.
 class scoped_error_injection {
     std::string_view _name;
+    bool _one_shot;
+    utils::error_injection_parameters _parameters;
 public:
     // Add other overloads as needed
-    explicit scoped_error_injection(std::string_view name) : _name(name) {
+    explicit scoped_error_injection(std::string_view name) : scoped_error_injection{name, false, {}}
+    {
+    }
+
+    scoped_error_injection(std::string_view name, bool one_shot, utils::error_injection_parameters parameters) 
+        : _name(name)
+        , _one_shot(one_shot)
+        , _parameters(std::move(parameters))
+    {
         smp::invoke_on_all([this] {
-            utils::get_local_injector().enable(_name);
+            utils::get_local_injector().enable(_name, _one_shot, _parameters);
         }).get();
     }
 

@@ -55,6 +55,7 @@ class custom_compaction_task_executor;
 class regular_compaction_task_executor;
 class offstrategy_compaction_task_executor;
 class rewrite_sstables_compaction_task_executor;
+class automatic_rewrite_sstables_compaction_task_executor;
 class rewrite_sstables_component_compaction_task_executor;
 class split_compaction_task_executor;
 class cleanup_sstables_compaction_task_executor;
@@ -84,6 +85,7 @@ public:
         utils::updateable_value<float> max_shares = utils::updateable_value<float>(0);
         utils::updateable_value<uint32_t> throughput_mb_per_sec = utils::updateable_value<uint32_t>(0);
         std::chrono::seconds flush_all_tables_before_major = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(1));
+        utils::updateable_value<uint32_t> scrub_period = utils::updateable_value<uint32_t>(0);
     };
 
 public:
@@ -136,6 +138,16 @@ private:
     // weight is value assigned to a compaction job that is log base N of total size of all input sstables.
     std::unordered_set<int> _weight_tracker;
 
+    // Fiber which waits for a signal and reevaluates automatic scrub.
+    std::optional<future<>> _waiting_automatic_scrub_reevaluation;
+
+    // Used to signal that automatic scrub reevaluation is needed.
+    condition_variable _automatic_scrub_reevaluation;
+    bool _automatic_scrub_reevaluation_requested = false;
+
+    // Compaction groups views which should be considered for automatic scrub.
+    std::unordered_set<compaction::compaction_group_view*> _awaiting_automatic_scrub;
+
     std::unordered_map<compaction::compaction_group_view*, compaction_state> _compaction_state;
 
     // Purpose is to serialize all maintenance (non regular) compaction activity to reduce aggressiveness and space requirement.
@@ -150,12 +162,37 @@ private:
     utils::pluggable<db::system_keyspace> _sys_ks;
 
     std::function<void()> compaction_submission_callback();
+
+    // Update scrub timer according to _scrub_period.
+    void update_automatic_scrub_submission_timer();
+    std::function<void(uint32_t)> scrub_period_observer_callback();
+
+    // Register all tables as candidates and initiate reevaluation.
+    std::function<void()> automatic_scrub_submission_callback();
+    void schedule_table_for_automatic_scrub(compaction::compaction_group_view* t);
+    void reevaluate_automatic_scrub() noexcept;
+
+    bool should_be_automatically_scrubbed(const sstables::shared_sstable&) const;
+
+    // Fiber waiting for signal and reevaluating automatic scrub.
+    future<> automatic_scrub_reevaluation();
+
+    // Automatically scrub sstables in a given compaction_groupx_view.
+    future<> do_automatic_scrub_for_table(compaction_group_view& t);
+
+    future<> stop_automatic_scrub() noexcept;
+
     // all registered tables are reevaluated at a constant interval.
     // Submission is a NO-OP when there's nothing to do, so it's fine to call it regularly.
     static constexpr std::chrono::seconds periodic_compaction_submission_interval() { return std::chrono::seconds(3600); }
 
     config _cfg;
     timer<lowres_clock> _compaction_submission_timer;
+    timer<lowres_clock> _automatic_scrub_submission_timer;
+    std::optional<lowres_clock::time_point> _automatic_scrub_timer_expiration;
+
+    utils::observer<uint32_t> _scrub_period_observer;
+    std::optional<std::chrono::seconds> _scrub_period;
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
@@ -237,7 +274,9 @@ private:
     void postpone_compaction_for_table(compaction::compaction_group_view* t);
 
     using quarantine_invalid_sstables = compaction_type_options::scrub::quarantine_invalid_sstables;
-    future<compaction_stats_opt> perform_sstable_scrub_validate_mode(compaction::compaction_group_view& t, tasks::task_info info, quarantine_invalid_sstables quarantine_sstables);
+    using update_scrub_time = compaction_type_options::scrub::update_scrub_time;
+    future<compaction_stats_opt> perform_sstable_scrub_validate_mode(compaction::compaction_group_view& t, tasks::task_info info, quarantine_invalid_sstables quarantine_sstables,
+        update_scrub_time update_timestamp = update_scrub_time::no);
     future<> update_static_shares(float shares);
 
     using get_candidates_func = std::function<future<std::vector<sstables::shared_sstable>>()>;
@@ -361,6 +400,13 @@ private:
     bool update_sstable_cleanup_state(compaction_group_view& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);
 
     future<> on_compaction_completion(compaction_group_view& t, compaction_completion_desc desc, sstables::offstrategy offstrategy);
+
+    // Try to submit an sstable form a compaction group view for an automatic scrub.
+    struct automatic_scrub_submission_result {
+        bool done_with_view = false;
+        std::optional<sstables::shared_sstable> sst_to_exclude;
+    };
+    future<automatic_scrub_submission_result> submit_automatic_scrub(compaction_group_view& t, const std::unordered_set<sstables::generation_type>& excluded_sstables = {});
 public:
     // Submit a table to be upgraded and wait for its termination.
     future<> perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, bool exclude_current_version, tasks::task_info info);
@@ -511,6 +557,7 @@ public:
     friend class compaction::regular_compaction_task_executor;
     friend class compaction::offstrategy_compaction_task_executor;
     friend class compaction::rewrite_sstables_compaction_task_executor;
+    friend class compaction::automatic_rewrite_sstables_compaction_task_executor;
     friend class compaction::rewrite_sstables_component_compaction_task_executor;
     friend class compaction::cleanup_sstables_compaction_task_executor;
     friend class compaction::validate_sstables_compaction_task_executor;

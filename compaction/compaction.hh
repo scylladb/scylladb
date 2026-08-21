@@ -119,7 +119,7 @@ public:
     uint64_t get_progress() const;
 
     friend class compaction;
-    friend future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor, compaction_data&, compaction_group_view&, compaction_progress_monitor&);
+    friend future<compaction_result> do_scrub_sstables_validate_mode(compaction_descriptor, compaction_data&, compaction_group_view&, compaction_progress_monitor&);
 };
 
 // Compact a list of N sstables into M sstables.
