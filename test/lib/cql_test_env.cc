@@ -20,6 +20,12 @@
 #include "cql3/functions/functions.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
+#include "cql3/column_specification.hh"
+#include "cql3/result_set.hh"
+#include "db/marshal/type_parser.hh"
+#include "utils/managed_bytes.hh"
+#include "transport/messages/result_message.hh"
+#include "transport/event.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/cql_config.hh"
@@ -232,6 +238,188 @@ private:
         }
         return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit());
     }
+
+    using bounced_client_state = service::client_state::client_state_for_another_shard;
+
+    // The client_state must follow the statement across a bounce: it carries the
+    // protocol extensions and, crucially, _original_shard - the shard the request
+    // entered on, which is what tablet routing (check_locality) keys off. Using
+    // the retry shard's own client_state would answer a different question.
+    // Returns by value so the caller's coroutine frame owns it for as long as the
+    // query_state referencing it lives.
+    std::optional<service::client_state> localize(const std::optional<bounced_client_state>& bounced) {
+        if (!bounced) {
+            return std::nullopt;
+        }
+        return bounced->get(_core_local.local().client_state.get_abort_source_ptr());
+    }
+
+    // A result_message cannot leave the shard that built it: its data_types are
+    // per-shard interned singletons, its metadata is a seastar::shared_ptr with a
+    // non-atomic refcount, and a result_generator points at the producing shard's
+    // cql_stats. So carry plain data across instead, the way transport/server.cc
+    // carries a serialized response.
+    struct bounced_result {
+        struct column {
+            sstring ks_name;
+            sstring cf_name;
+            sstring name;
+            sstring type;
+        };
+        struct schema_change {
+            cql_transport::event::schema_change::change_type change;
+            cql_transport::event::schema_change::target_type target;
+            sstring keyspace;
+            std::vector<sstring> arguments;
+        };
+        enum class kind { void_result, rows, schema_change } kind = kind::void_result;
+        std::optional<schema_change> change;
+        std::vector<column> columns;
+        // Not necessarily columns.size(): a selection may hide columns from the
+        // wire while keeping them in the result set (metadata::value_count()).
+        uint32_t column_count = 0;
+        cql3::metadata::flag_enum_set flags;
+        std::vector<std::vector<bytes_opt>> rows;
+        std::vector<sstring> warnings;
+        std::optional<std::unordered_map<sstring, bytes>> custom_payload;
+    };
+
+    // Runs on the bounce target shard.
+    static bounced_result snapshot_result(const cql_transport::messages::result_message& msg) {
+        bounced_result snap;
+        snap.warnings = msg.warnings();
+        snap.custom_payload = msg.custom_payload();
+
+        if (dynamic_cast<const cql_transport::messages::result_message::void_message*>(&msg)) {
+            snap.kind = bounced_result::kind::void_result;
+            return snap;
+        }
+        if (auto* sc = dynamic_cast<const cql_transport::messages::result_message::schema_change*>(&msg)) {
+            const auto& change = *sc->get_change();
+            snap.kind = bounced_result::kind::schema_change;
+            snap.change = bounced_result::schema_change{change.change, change.target, change.keyspace, change.arguments};
+            return snap;
+        }
+        auto* rows = dynamic_cast<const cql_transport::messages::result_message::rows*>(&msg);
+        if (!rows) {
+            on_internal_error(testlog, "cannot carry a bounced result of this type across shards");
+        }
+
+        const auto& rs = rows->rs().result_set();
+        const auto& meta = rs.get_metadata();
+        if (meta.paging_state()) {
+            on_internal_error(testlog, "bounced result carries a paging state");
+        }
+        snap.kind = bounced_result::kind::rows;
+        snap.flags = meta.flags();
+        snap.column_count = meta.column_count();
+        for (const auto& spec : meta.get_names()) {
+            // abstract_type::name() is safe across shards; the target shard
+            // re-interns the type by name below.
+            snap.columns.emplace_back(spec->ks_name, spec->cf_name, spec->name->text(), spec->type->name());
+        }
+        for (const auto& row : rs.rows()) {
+            std::vector<bytes_opt> plain_row;
+            plain_row.reserve(row.size());
+            for (const auto& cell : row) {
+                plain_row.emplace_back(cell ? bytes_opt(to_bytes(*cell)) : bytes_opt());
+            }
+            snap.rows.emplace_back(std::move(plain_row));
+        }
+        return snap;
+    }
+
+    // Runs on the shard the caller started on.
+    static ::shared_ptr<cql_transport::messages::result_message> rebuild_result(bounced_result snap) {
+        ::shared_ptr<cql_transport::messages::result_message> msg;
+        switch (snap.kind) {
+        case bounced_result::kind::void_result:
+            msg = ::make_shared<cql_transport::messages::result_message::void_message>();
+            break;
+        case bounced_result::kind::schema_change: {
+            auto& c = *snap.change;
+            msg = ::make_shared<cql_transport::messages::result_message::schema_change>(
+                    ::make_shared<cql_transport::event::schema_change>(c.change, c.target, c.keyspace, c.arguments));
+            break;
+        }
+        case bounced_result::kind::rows: {
+            std::vector<lw_shared_ptr<cql3::column_specification>> specs;
+            specs.reserve(snap.columns.size());
+            for (const auto& c : snap.columns) {
+                specs.emplace_back(cql3::make_column_spec(c.ks_name, c.cf_name, c.name,
+                        db::marshal::type_parser::parse(c.type)));
+            }
+            auto meta = ::make_shared<cql3::metadata>(snap.flags, std::move(specs), snap.column_count, nullptr);
+            auto rs = std::make_unique<cql3::result_set>(std::move(meta));
+            for (auto& row : snap.rows) {
+                rs->add_row(std::move(row));
+            }
+            msg = ::make_shared<cql_transport::messages::result_message::rows>(cql3::result(std::move(rs)));
+            break;
+        }
+        }
+        for (auto& w : snap.warnings) {
+            msg->add_warning(std::move(w));
+        }
+        if (snap.custom_payload) {
+            for (auto& [k, v] : *snap.custom_payload) {
+                msg->add_custom_payload(k, std::move(v));
+            }
+        }
+        return msg;
+    }
+
+    // A statement whose target shard isn't the executing one returns a `bounce`
+    // result instead of executing (query_processor::bounce_to_shard): LWT/CAS,
+    // SERIAL reads, strongly consistent tables, and every group0-guarded DDL
+    // (bounced to shard 0). The real CQL server re-executes on the target shard
+    // (transport/server.cc); without this, cql_test_env silently treated the
+    // bounce as a successful, no-op result. `retry` re-issues the same statement,
+    // called on the target shard, with the bounce's cached partition-key function
+    // call results applied.
+    future<::shared_ptr<cql_transport::messages::result_message>> handle_shard_bounce(
+            ::shared_ptr<cql_transport::messages::result_message> msg,
+            service::client_state& cs,
+            std::function<future<::shared_ptr<cql_transport::messages::result_message>>(cql3::computed_function_values, bounced_client_state)> retry) {
+        auto bounce_msg = dynamic_pointer_cast<cql_transport::messages::result_message::bounce>(msg);
+        if (!bounce_msg) {
+            co_return msg;
+        }
+        auto shard = bounce_msg->target_shard();
+        // Snapshot inside the lambda so the retried message is destroyed on the
+        // shard that built it. Nested bounces resolve in the recursion: each hop
+        // snapshots and rebuilds on its own shard.
+        auto snap = co_await smp::submit_to(shard,
+                [retry, cached_fn_calls = bounce_msg->take_cached_pk_function_calls(),
+                        bounced_cs = cs.move_to_other_shard()] () mutable -> future<bounced_result> {
+            auto retried = co_await retry(std::move(cached_fn_calls), bounced_cs);
+            // An exception_ptr is atomically refcounted, so it may cross shards.
+            retried->throw_if_exception();
+            co_return snapshot_result(*retried);
+        });
+        co_return rebuild_result(std::move(snap));
+    }
+
+    future<::shared_ptr<cql_transport::messages::result_message>> do_execute_direct(sstring text, cql3::query_options qo,
+            cql3::computed_function_values cached_fn_calls, std::optional<bounced_client_state> bounced_cs) {
+        // Outlives qs below, which holds a reference to it.
+        auto local_cs = localize(bounced_cs);
+        auto qs = local_cs ? ::make_shared<service::query_state>(*local_cs, empty_service_permit()) : make_query_state();
+        if (!cached_fn_calls.empty()) {
+            qo.set_cached_pk_function_calls(std::move(cached_fn_calls));
+        }
+        // Unlike do_execute_prepared, copy position vs. the merge above doesn't
+        // matter: set_cached_pk_function_calls() overwrites, it doesn't merge.
+        auto qo_for_retry(qo);
+        auto msg = co_await local_qp().execute_direct_without_checking_exception_message(text, *qs, test_dialect(), qo);
+        co_return co_await handle_shard_bounce(std::move(msg), qs->get_client_state(),
+                [this, text, qo = std::move(qo_for_retry)] (cql3::computed_function_values fn_calls, bounced_client_state cs) mutable {
+            // qo crosses shards here; a paging state is a shard-bound
+            // lw_shared_ptr refcount, and bounced statements never page.
+            SCYLLA_ASSERT(!qo.get_paging_state());
+            return do_execute_direct(text, std::move(qo), std::move(fn_calls), std::move(cs));
+        });
+    }
 public:
     single_node_cql_env()
     {
@@ -240,9 +428,7 @@ public:
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(std::string_view text) override {
         testlog.trace("{}(\"{}\")", __FUNCTION__, text);
-        auto qs = make_query_state();
-        auto qo = make_shared<cql3::query_options>(cql3::query_options::DEFAULT);
-        return local_qp().execute_direct_without_checking_exception_message(text, *qs, test_dialect(), *qo).then([qs, qo] (auto msg) {
+        return do_execute_direct(sstring(text), cql3::query_options(cql3::query_options::DEFAULT), {}, std::nullopt).then([] (auto msg) {
             return cql_transport::messages::propagate_exception_as_future(std::move(msg));
         });
     }
@@ -252,9 +438,7 @@ public:
         std::unique_ptr<cql3::query_options> qo) override
     {
         testlog.trace("{}(\"{}\")", __FUNCTION__, text);
-        auto qs = make_query_state();
-        auto& lqo = *qo;
-        return local_qp().execute_direct_without_checking_exception_message(text, *qs, test_dialect(), lqo).then([qs, qo = std::move(qo)] (auto msg) {
+        return do_execute_direct(sstring(text), std::move(*qo), {}, std::nullopt).then([] (auto msg) {
             return cql_transport::messages::propagate_exception_as_future(std::move(msg));
         });
     }
@@ -284,11 +468,15 @@ public:
         return execute_prepared_with_qo(id, std::move(options));
     }
 
-    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared_with_qo(
-        cql3::prepared_cache_key_type id,
-        std::unique_ptr<cql3::query_options> qo) override
-    {
-        auto qs = make_query_state();
+    future<::shared_ptr<cql_transport::messages::result_message>> do_execute_prepared(cql3::prepared_cache_key_type id,
+            cql3::query_options qo, cql3::computed_function_values cached_fn_calls,
+            std::optional<bounced_client_state> bounced_cs) {
+        // Keep a pristine (unprepared) copy for a possible retry: qo.prepare()
+        // below is not idempotent for named bind variables.
+        auto qo_for_retry(qo);
+        // Outlives qs below, which holds a reference to it.
+        auto local_cs = localize(bounced_cs);
+        auto qs = local_cs ? ::make_shared<service::query_state>(*local_cs, empty_service_permit()) : make_query_state();
         bool needs_authorization = false;
         // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
         // look for the prepared statement and then authorize it.
@@ -302,14 +490,29 @@ public:
         }
         auto stmt = prepared->statement;
 
-        SCYLLA_ASSERT(stmt->get_bound_terms() == qo->get_values_count());
-        qo->prepare(prepared->bound_names);
+        SCYLLA_ASSERT(stmt->get_bound_terms() == qo.get_values_count());
+        qo.prepare(prepared->bound_names);
+        if (!cached_fn_calls.empty()) {
+            qo.set_cached_pk_function_calls(std::move(cached_fn_calls));
+        }
 
-        auto& lqo = *qo;
-        return local_qp().execute_prepared_without_checking_exception_message(*qs, std::move(stmt), lqo, std::move(prepared), std::move(id), needs_authorization)
-            .then([qs, qo = std::move(qo)] (auto msg) {
-                return cql_transport::messages::propagate_exception_as_future(std::move(msg));
-            });
+        auto msg = co_await local_qp().execute_prepared_without_checking_exception_message(*qs, std::move(stmt), qo, std::move(prepared), id, needs_authorization);
+        co_return co_await handle_shard_bounce(std::move(msg), qs->get_client_state(),
+                [this, id, qo = std::move(qo_for_retry)] (cql3::computed_function_values fn_calls, bounced_client_state cs) mutable {
+            // qo crosses shards here; a paging state is a shard-bound
+            // lw_shared_ptr refcount, and bounced statements never page.
+            SCYLLA_ASSERT(!qo.get_paging_state());
+            return do_execute_prepared(id, std::move(qo), std::move(fn_calls), std::move(cs));
+        });
+    }
+
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared_with_qo(
+        cql3::prepared_cache_key_type id,
+        std::unique_ptr<cql3::query_options> qo) override
+    {
+        return do_execute_prepared(id, std::move(*qo), {}, std::nullopt).then([] (auto msg) {
+            return cql_transport::messages::propagate_exception_as_future(std::move(msg));
+        });
     }
 
     virtual future<utils::chunked_vector<mutation>> get_modification_mutations(const sstring& text) override {
