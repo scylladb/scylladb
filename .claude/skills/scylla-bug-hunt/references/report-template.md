@@ -4,10 +4,26 @@ The Impact stage must produce exactly this structure for every confirmed
 finding. Keep it tight — this is a triage document for the user to decide
 what to do next with, not a design doc.
 
+Confidence and severity are two different axes and both are required —
+don't collapse them into one rating. Confidence is about the hunt, not the
+bug: how sure this is real and not a misreading of the code, independent of
+how bad it'd be. Severity is about the bug, not the hunt: how bad it is if
+real, independent of how sure anyone is. A low-confidence, critical-severity
+finding and a high-confidence, low-severity one are both valid and belong
+on the report with their ratings kept apart. Severity follows the same
+impact reasoning as the Impact/Risk sections below: `critical` — data loss,
+corruption, or cluster-wide unavailability; `high` — availability/latency
+impact at a single node or shard, or the four scale reference points once
+crossed; `medium` — degraded performance or a narrow correctness edge case
+short of data loss; `low` — cosmetic, or only matters far outside the four
+scale reference points.
+
 ```markdown
 # <short title>
 
 **Category:** logical | performance | scale
+**Confidence:** low | medium | high — how sure the hunt is this is a real bug, not a false positive; justify in one clause (e.g. "high — reproducer fails deterministically on current master")
+**Severity:** critical | high | medium | low — impact if real (see Impact/Risk below for the reasoning; this is the one-word rating)
 **Module / submodule:** <e.g. compaction / ICS>
 **Worktree:** <path under .worktrees/>
 **Branch:** <branch name>

@@ -49,16 +49,55 @@ structure the final writeup must follow.
 2. **Check for a resumable run first.** Look in `runs/` (next to this
    file) for a manifest matching this module whose `status` isn't
    `"completed"`. If one exists, this is a restart after an interruption
-   (ran out of tokens/context, session died, workflow errored) — resume it
-   with the *exact* `scriptPath`/`args` recorded in the manifest plus
-   `resumeFromRunId`, and tell the user you're resuming run `<runId>`
-   rather than starting over. Skip sizing/confirmation in that case; it
-   already happened once. If the user is explicitly asking for a different
-   scope than the stale manifest records — a different module, or an
-   explicit `submodules` list that doesn't match the manifest's recorded
-   `args.submodules` — archive it (rename with a `.stale` suffix, don't
-   delete — it may still hold a useful `runId` to inspect) and proceed as
-   a fresh run.
+   (ran out of tokens/context, session died, workflow errored) — but a
+   `"claiming"`/`"running"` manifest doesn't by itself mean the previous
+   session is gone, so resuming it must transfer ownership, not just read
+   and continue.
+
+   **Owner lease.** Every manifest this session claims or owns carries an
+   `owner` object — `{"pid": <shell PID>, "sessionId": "<random id>",
+   "heartbeat": "<UTC timestamp>"}` — see the JSON example under
+   "Checkpointing across sessions" below. A lease is *expired* once
+   `heartbeat` is more than **4 hours** old (or missing entirely, for a
+   manifest written before this convention existed); otherwise it's
+   *live*. Every place below that says "archive" or "resume" a
+   non-`"completed"` manifest means: re-read the manifest fresh from disk
+   and check its lease first.
+
+   4 hours, not 30 minutes: the heartbeat only refreshes when a candidate's
+   Reproduce/Impact `agent()` call *returns* (see below), and a single call
+   can legitimately run that long (a full scylla build plus a boost/cqlpy
+   run). A short TTL would let another session steal a still-live lease
+   mid-build; there's no way to heartbeat *during* one blocking `agent()`
+   call, so the TTL has to outlast the slowest realistic call instead.
+
+   Before resuming: if the lease is live, another session is plausibly
+   still working it — do not resume silently; surface the conflict to the
+   user and let them decide (wait, or explicitly force a fresh run)
+   instead of racing a live session for the same `runId`. If the lease is
+   expired, the previous owner is presumed dead: atomically rewrite the
+   manifest (temp file + rename in `runs/`, never truncate-in-place) with
+   a fresh `owner` (new pid/sessionId) and a refreshed `heartbeat` —
+   *before* calling `Workflow` — so ownership is actually transferred, not
+   just assumed. Only after that write do you resume with the *exact*
+   `scriptPath`/`args` recorded in the manifest plus `resumeFromRunId`,
+   and tell the user you're resuming run `<runId>` rather than starting
+   over. Skip sizing/confirmation in that case; it already happened once.
+
+   If the user is explicitly asking for a different scope than the stale
+   manifest records — a different module, or an explicit `submodules`
+   list that doesn't match the manifest's recorded `args.submodules` —
+   archive it and proceed as a fresh run, but only once its lease is
+   confirmed expired by the same check above; a scope mismatch against a
+   manifest with a live lease is still a live session's manifest, and
+   archiving it out from under that session is exactly the race this
+   lease exists to prevent — surface the conflict to the user instead.
+   Archiving means an exclusive, fail-if-exists rename to
+   `runs/<key>.json.stale`; if that name is already taken, try `.stale-2`,
+   `.stale-3`, ... and use the first one that doesn't already exist —
+   never overwrite an existing `.stale*` file, since it may still hold a
+   useful `runId` to inspect and a collision means two archives happened
+   at once.
 
    The module name drives the manifest filename everywhere below (this
    step's lookup, the claim below, the resume path) — it's normally a
@@ -92,21 +131,72 @@ structure the final writeup must follow.
    see "no resumable run" for the same module in the same instant, then
    both proceed, and whichever writes `runs/<key>.json` second stomps the
    other's still-running manifest. Close that window right here, before
-   step 3's sizing/confirmation, with an exclusive, fail-if-exists create:
+   step 3's sizing/confirmation, by writing the full placeholder content
+   to a temp file first and only then atomically linking it into place —
+   `ln` fails with the target already existing rather than truncating it,
+   so a kill mid-write can never leave `runs/<key>.json` half-written:
    ```
-   set -o noclobber
+   session_id="${RANDOM:-$$}-$$-$(date +%s)"
+   now="$(date -u +%FT%TZ)"
+   tmp="runs/.${key}.claim.$$"
+   printf '{"status":"claiming","owner":{"pid":%d,"sessionId":"%s","heartbeat":"%s"}}' \
+     "$$" "$session_id" "$now" > "$tmp"
    claimed=1
-   echo '{"status":"claiming"}' > "runs/$key.json" 2>/dev/null || claimed=0
-   set +o noclobber
+   ln "$tmp" "runs/$key.json" 2>/dev/null || claimed=0
+   rm -f "$tmp"
    ```
-   `claimed=0` means another session won the race between your check and
-   now: re-read `runs/$key.json` and go back to the top of this step
-   (resume it if it matches this module/scope, or surface the conflict to
-   the user if it doesn't — never overwrite a manifest you didn't create).
+   The `owner`/`heartbeat` written here establishes this session as the
+   manifest's lease holder from the very first byte on disk — see "Owner
+   lease" above. Refresh the heartbeat (same atomic temp-file-plus-rename
+   write, same `owner.pid`/`sessionId`, just a newer timestamp) whenever
+   this session writes to a manifest it owns for another reason — the
+   step-4 full-manifest overwrite, and, during a long-running Reproduce/
+   Impact stage, at least once per candidate that finishes — so a lease
+   check by another session sees a live heartbeat for as long as this
+   session actually is.
+
+   `claimed=0` means the path was already occupied — re-read
+   `runs/$key.json` before assuming a live competitor. Check its lease
+   (see "Owner lease" above) regardless of `status`: if the heartbeat is
+   expired, the previous owner is presumed dead — treat the manifest as
+   abandoned exactly like a `"completed"` one (step 5 leaves those behind
+   instead of deleting them): archive it with the same exclusive-rename
+   procedure used above for a scope mismatch, then retry the exclusive
+   `ln` claim above against the now-free path, which writes this
+   session's own `owner` so there's no ambiguity about who holds it next.
+   Only a `status` of `"claiming"` or `"running"` *with a live lease*
+   means an actual live race: go back to the top of this step (resume it,
+   transferring ownership per "Owner lease" above, if it matches this
+   module/scope, or surface the conflict to the user if it doesn't — never
+   overwrite or archive a manifest whose lease hasn't expired).
    `claimed=1` means you now own `runs/<key>.json`: from here on, only this
    session may write to it — step 4 overwrites it with the full manifest,
    and step 5 marks it `"completed"` — until it's archived or completed.
-   A session that lost the claim must not touch the file again.
+   A session that lost the claim must not touch the file again. Every
+   write to an owned manifest (the placeholder above, step 4's full
+   manifest, step 5's `"completed"` update) must be atomic: write the new
+   contents to a temp file in `runs/` and rename it over `runs/<key>.json`,
+   never truncate-and-write the existing file in place — a session that
+   dies mid-write must never leave `runs/<key>.json` holding invalid JSON
+   or a truncated manifest.
+
+   **Every release, archive, completion, or overwrite is fenced by the
+   owner token.** A heartbeat can expire while this session is legitimately
+   still waiting on something (step 3's confirmation, a long Reproduce
+   call) — if it does, another session may see the lease as dead and claim
+   `runs/<key>.json` for itself. Before this session deletes, archives, or
+   overwrites *any* manifest at that path, it must re-read the file fresh
+   and check that `owner.sessionId` still equals the `session_id` this
+   session generated when it first claimed the key. If it doesn't match,
+   someone else now legitimately owns that manifest — leave it alone and
+   do not touch it, delete it, or archive it, even if this session
+   "started" that path. Only act on the file when the owner token still
+   matches. To keep that window small, refresh the heartbeat (same atomic
+   temp-file-plus-rename write, same `owner.pid`/`sessionId`, newer
+   timestamp) not just when a candidate finishes, but at the start of
+   step 3's confirmation prompt and periodically while waiting on it or on
+   any other long-running wait state, so a legitimately-active session's
+   lease doesn't go stale out from under it.
 3. **Size the run before starting it** (fresh runs only). This pipeline
    compiles and runs real C++ (boost tests, sometimes a full scylla binary
    for cqlpy). Tell the user roughly how many submodules and how many
@@ -117,6 +207,19 @@ structure the final writeup must follow.
    expensive, build-bound stage, and a wide net there risks exactly the
    "other build on the host fights this one for CPU" contamination the
    user has hit before with perf benchmarking.
+
+   **If the user declines, or this session ends before step 4 calls
+   `Workflow`:** re-read `runs/<key>.json` fresh and check `owner.sessionId`
+   against this session's own `session_id` from step 2 (see "Every
+   release, archive, completion, or overwrite is fenced by the owner
+   token" above) before removing anything — the heartbeat may have expired
+   while waiting on this confirmation and another session may already have
+   claimed the path. Only `rm` the file if the owner token still matches;
+   if it doesn't, another session now owns it and this session must not
+   touch it. Do this from whatever turn actually ends the attempt (a
+   decline, an error, the user changing their mind) so a retry a minute
+   later doesn't read the leftover `"claiming"` placeholder as a live
+   competitor for the rest of the lease duration.
 4. **Run the workflow, and checkpoint it immediately**:
    ```
    Workflow({
@@ -134,14 +237,18 @@ structure the final writeup must follow.
    `runs/<key>.json` — the placeholder you claimed in step 2, now owned by
    this session — with the full manifest, using the sanitized `<key>` from
    step 2 (see "Checkpointing across sessions" below) *before* doing
-   anything else. That write is what makes the run recoverable if this
-   very session ends a moment later.
+   anything else. Write it atomically (temp file + rename, per step 2) —
+   never truncate the claimed file in place. Carry the same `owner`
+   (pid/sessionId) forward from the placeholder and refresh `heartbeat` to
+   now, per "Owner lease" in step 2. That write is what makes the run
+   recoverable if this very session ends a moment later.
 5. **Present the result, then stop.** The workflow returns confirmed bugs
    (each with a worktree path, branch, reproducer, and the impact/risk/
    complexity writeup) plus a short list of what was discarded and why
    (dedup, unreproduced, low-confidence). Summarize this for the user, and
    mark the manifest `"completed"` (or delete it) now that there's nothing
-   left to resume. **Do not start fixing, committing beyond the
+   left to resume — the same atomic temp-file-plus-rename write as step 4,
+   not a truncate-in-place. **Do not start fixing, committing beyond the
    reproducer, pushing, or opening a PR** — this skill's job ends at
    "here's a proven bug and what it costs us," matching the user's
    explicit "we'll then proceed from there." Any of those next actions
@@ -202,7 +309,9 @@ from you:
   the session ends. So immediately after launching (step 4 above),
   overwrite the manifest you claimed at `runs/<key>.json` (`<key>` is the
   sanitized filename from step 2, not the raw module name) with the full
-  contents:
+  contents, written atomically (temp file + rename, per step 2 — never a
+  truncate-in-place, which could leave invalid JSON and lose the `runId`
+  if interrupted mid-write):
 
   ```json
   {
@@ -212,7 +321,12 @@ from you:
     "runId": "wf_...",
     "taskId": "...",
     "status": "running",
-    "started": "<UTC timestamp>"
+    "started": "<UTC timestamp>",
+    "owner": {
+      "pid": 12345,
+      "sessionId": "<random id, e.g. $RANDOM-$$-<epoch seconds>>",
+      "heartbeat": "<UTC timestamp, refreshed on every write to this manifest>"
+    }
   }
   ```
 
