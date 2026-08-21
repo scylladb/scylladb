@@ -1377,14 +1377,17 @@ protected:
     }
 };
 
-future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, sstring endpoint, sstring bucket, sstring prefix, utils::chunked_vector<sstring> manifests) {
-    auto summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, endpoint, bucket, prefix, snap_name, "", std::move(manifests));
+future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations) {
+    if (locations.size() != 1) {
+        throw std::invalid_argument("expected exactly one backup location");
+    }
+    auto& loc = locations.front();
 
-    auto datacenter = _db.local().get_token_metadata().get_topology().get_datacenter();
+    auto summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, loc.endpoint, loc.bucket, loc.prefix, snap_name, "", std::move(loc.manifests));
 
     db::snapshot_table_helper sth(_sys_dist_ks.qp());
     // TODO: update state when all restored...
-    co_await sth.insert_snapshot_remote_location(snap_name, datacenter, endpoint, bucket, prefix, db::snapshot_state::remote);
+    co_await sth.insert_snapshot_remote_location(snap_name, loc.datacenter, loc.endpoint, loc.bucket, loc.prefix, db::snapshot_state::remote);
 
     auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>({}, container(), keyspace, tid, std::move(snap_name), summary);
     co_return task->id();

@@ -578,8 +578,17 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} datacenter={} endpoint={} bucket={} prefix={} manifests_count={}",
                     keyspace, table, snapshot, dc, endpoint, bucket, prefix, manifests.size());
 
+        std::vector<tablet_restore_location> restore_locations;
+        restore_locations.push_back(tablet_restore_location{
+            .datacenter = sstring(dc),
+            .endpoint = sstring(endpoint),
+            .bucket = sstring(bucket),
+            .prefix = sstring(prefix),
+            .manifests = std::move(manifests),
+        });
+
         auto table_id = validate_table(ctx.db.local(), keyspace, table);
-        auto task_id = co_await sst_loader.local().restore_tablets(table_id, keyspace, table, snapshot, sstring(endpoint), sstring(bucket), sstring(prefix), std::move(manifests));
+        auto task_id = co_await sst_loader.local().restore_tablets(table_id, keyspace, table, snapshot, std::move(restore_locations));
         co_return json::json_return_type(fmt::to_string(task_id));
     });
 }
