@@ -4766,6 +4766,18 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
 
             locator::load_stats node_stats;
             if (!_gossiper.is_alive(dst)) {
+                if (is_excluded(dst_server)) {
+                    // An excluded node is one the operator has declared gone for good, and it is
+                    // banned from rejoining, so its stats are never coming back. Counting it as a
+                    // node whose stats are merely missing would invalidate the whole collection
+                    // for as long as it stays in the topology, which is what a coordinator that
+                    // took over after the node died would otherwise do - it has nothing cached to
+                    // fall back on. Leave it out of the aggregate instead: the split-ready
+                    // sequence number is a minimum over the nodes which did report, so the
+                    // survivors alone can carry a resize past a node which will never answer.
+                    rtlogger.debug("raft topology: Not refreshing table load on {} because it is excluded.", dst);
+                    co_return;
+                }
                 if (require == require_live_nodes::no && _load_stats_per_node.contains(dst) &&
                         !utils::get_local_injector().enter("force_down_node_load_stats_invalid")) {
                     node_stats = _load_stats_per_node[dst];
