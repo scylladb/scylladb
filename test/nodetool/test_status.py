@@ -51,7 +51,11 @@ null_ownership_error = ("Non-system keyspaces don't have the same replication se
 def validate_status_output(res, keyspace, nodes, ownership, resolve, effective_ownership_unknown, token_count_unknown,
                            cassandra_nodetool):
     datacenters = sorted(list(set([node.datacenter for node in nodes.values()])))
-    load_multiplier = {"bytes": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
+    if cassandra_nodetool:
+        # the legacy nodetool divides by 1024, but labels the result with base-10 units
+        load_multiplier = {"bytes": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
+    else:
+        load_multiplier = {"bytes": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4}
 
     lines = res.split('\n')
     i = 0
@@ -558,3 +562,42 @@ def test_status_negative_load(request, nodetool):
 
     status_target = StatusQueryTarget(keyspace="ks", table=None, uses_tablets=False)
     _do_test_status(request, nodetool, status_target, nodes)
+
+
+def test_status_load_on_unit_boundary(request, nodetool):
+    # A load which is an exact multiple of the unit has to roll over to that
+    # unit, instead of being reported in the previous one (1 KiB, not 1024 bytes).
+    nodes = [
+        Node(
+            endpoint="127.0.0.1",
+            host_id="78a9c1d0-b341-467e-a076-9eff4cf7ffc6",
+            load=1 << 10,
+            tokens=["-9175818098208185248"],
+            datacenter="datacenter1",
+            rack="rack1",
+            status=NodeStatus.Up,
+            state=NodeState.Normal,
+        ),
+        Node(
+            endpoint="127.0.0.2",
+            host_id="ed341f60-b12a-4fd4-9917-e80977ded0f9",
+            load=1 << 30,
+            tokens=["-1810801828328238220"],
+            datacenter="datacenter1",
+            rack="rack2",
+            status=NodeStatus.Up,
+            state=NodeState.Normal,
+        ),
+        Node(
+            endpoint="127.0.0.3",
+            host_id="1e77eb26-a372-4eb4-aeaa-72f224cf6b4c",
+            load=-(1 << 40),
+            tokens=["3810801828328238220"],
+            datacenter="datacenter1",
+            rack="rack3",
+            status=NodeStatus.Up,
+            state=NodeState.Normal,
+        ),
+    ]
+
+    _do_test_status(request, nodetool, None, nodes)
