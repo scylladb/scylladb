@@ -2588,6 +2588,11 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
                 auto& cg = _t.compaction_group_for_sstable(sst);
                 _cg_desc[&cg].desc.new_sstables.push_back(sst);
             }
+            // Insert all GCed-data sstables into the original compaction group, so
+            // when they're removed, they can be found there.
+            for (auto& sst : _desc.new_gc_sstables) {
+                _cg_desc[&_cg].desc.new_sstables.push_back(sst);
+            }
             // The group that triggered compaction is the only one to have sstables removed from it.
             _cg_desc[&_cg].desc.old_sstables = _desc.old_sstables;
             for (auto& [cg, d] : _cg_desc) {
@@ -2659,6 +2664,57 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
 }
 
 future<>
+<<<<<<< HEAD
+||||||| parent of b65caf79a4 (replica: fix 'Unable to remove input SSTable' crash for GC sstables during tablet merge)
+compaction_group::update_sstable_sets_on_compaction_completion(compaction::compaction_completion_desc desc) {
+    // Keep a copy of the outputs so we can unlink them if they never get attached to the
+    // table. By the time this runs the outputs are unreachable through every other channel
+    // (finish() already moved them out of the compaction, and they are sealed so ~sstable()
+    // won't unlink them either), so a failure here would otherwise leak them on disk forever.
+    auto new_sstables = desc.new_sstables;
+    bool attached = false;
+    std::exception_ptr ex;
+    try {
+        co_await do_update_sstable_sets_on_compaction_completion(std::move(desc), attached);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    if (!attached && !new_sstables.empty()) {
+        table::sstable_list_builder builder(_t, co_await _t.get_sstable_list_permit());
+        co_await builder.delete_sstables_atomically(std::move(new_sstables));
+    }
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+}
+
+future<>
+=======
+compaction_group::update_sstable_sets_on_compaction_completion(compaction::compaction_completion_desc desc) {
+    // Keep a copy of the outputs so we can unlink them if they never get attached to the
+    // table. By the time this runs the outputs are unreachable through every other channel
+    // (finish() already moved them out of the compaction, and they are sealed so ~sstable()
+    // won't unlink them either), so a failure here would otherwise leak them on disk forever.
+    auto new_sstables = desc.new_sstables;
+    std::ranges::copy(desc.new_gc_sstables, std::back_inserter(new_sstables));
+    bool attached = false;
+    std::exception_ptr ex;
+    try {
+        co_await do_update_sstable_sets_on_compaction_completion(std::move(desc), attached);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    if (!attached && !new_sstables.empty()) {
+        table::sstable_list_builder builder(_t, co_await _t.get_sstable_list_permit());
+        co_await builder.delete_sstables_atomically(std::move(new_sstables));
+    }
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+}
+
+future<>
+>>>>>>> b65caf79a4 (replica: fix 'Unable to remove input SSTable' crash for GC sstables during tablet merge)
 table::compact_all_sstables(tasks::task_info info, do_flush do_flush, bool consider_only_existing_data) {
     if (do_flush) {
         co_await flush();
