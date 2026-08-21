@@ -143,6 +143,9 @@ public:
 
     // Create a group with same metadata of base like range, id, but with empty data (sstable & memtable).
     static lw_shared_ptr<compaction_group> make_empty_group(const compaction_group& base);
+    // Like make_empty_group(), but with a token range of its own, for a group which
+    // will only ever hold part of base's range.
+    static lw_shared_ptr<compaction_group> make_empty_group(const compaction_group& base, dht::token_range token_range);
 
     void update_id(size_t id) {
         _group_id = id;
@@ -338,6 +341,16 @@ public:
 
 using compaction_group_ptr = lw_shared_ptr<compaction_group>;
 using const_compaction_group_ptr = lw_shared_ptr<const compaction_group>;
+
+// The two ranges `range` will be split into, or nullopt if it cannot be split:
+// either an end of it is unbounded, so there is nothing to take a midpoint between,
+// or it holds fewer than two tokens, so one side would come out empty.
+//
+// The split point is derived from the range's own bounds the same way
+// locator::tablet_map::get_split_token() derives it, so that these sub-ranges agree
+// with the sides tablet_map::get_tablet_range_side() routes writes to, and with the
+// ranges handle_tablet_split_completion() installs once the split completes.
+std::optional<std::pair<dht::token_range, dht::token_range>> split_token_range(const dht::token_range& range);
 
 // Storage group is responsible for storage that belongs to a single tablet.
 // A storage group can manage 1 or more compaction groups, each of which can be compacted independently.
