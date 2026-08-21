@@ -2142,13 +2142,10 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     // Prepare BM25() calls in SELECT: reject when absent from ORDER BY, or replace
     // with temporary nodes that an external_values_provider fills at execution time.
     expr::temporary_allocator temporaries_allocator;
-    if (prepare_bm25_selectors(prepared_selectors, bm25_ordering_info_opt, temporaries_allocator)) {
-        for (auto& term : bm25_ordering_info_opt->selected_bm25_terms) {
-            expr::fill_prepare_context(term, ctx);
-        }
-    }
+    prepare_bm25_selectors(prepared_selectors, bm25_ordering_info_opt, temporaries_allocator, ctx);
 
-    prepare_ann_selectors(prepared_selectors);
+    // Likewise for ANN(), except that a rescoring index computes the score locally, filling no slot.
+    prepare_ann_selectors(prepared_selectors, ann_ordering_info_opt, temporaries_allocator, db, schema, ctx);
 
     for (auto& ps : prepared_selectors) {
         expr::fill_prepare_context(ps.expr, ctx);
@@ -2160,9 +2157,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     select_statement::ordering_comparator_type ordering_comparator;
     bool hide_last_column = false;
     if (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled) {
-        uint32_t similarity_column_index = add_similarity_function_to_selectors(prepared_selectors, *ann_ordering_info_opt, db, schema);
+        ordering_comparator = rescored_similarity_ordering(prepared_selectors, *ann_ordering_info_opt, db, schema);
         hide_last_column = true;
-        ordering_comparator = get_similarity_ordering_comparator(prepared_selectors, similarity_column_index);
     }
 
     for (auto& ps : prepared_selectors) {
@@ -2340,8 +2336,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 std::move(prepared_attrs));
     } else if (is_ann_query) {
         stmt = vector_indexed_table_select_statement::prepare(db, schema, ctx.bound_variables_size(), _parameters, std::move(selection), std::move(restrictions),
-                std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator), std::move(ann_ordering_info_opt->_prepared_ann_ordering),
-                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, ann_ordering_info_opt->_index, std::move(prepared_attrs));
+                std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator),
+                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, std::move(*ann_ordering_info_opt),
+                std::move(prepared_attrs));
     } else if (is_fts_query) {
         stmt = fulltext_indexed_table_select_statement::prepare(
             db,

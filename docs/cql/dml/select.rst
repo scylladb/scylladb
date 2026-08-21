@@ -401,11 +401,22 @@ in this case ``[0.1, 0.2, 0.3, 0.4]``. Written with the function form, it is::
     SELECT image_id FROM ImageEmbeddings
       ORDER BY ANN(embedding, [0.1, 0.2, 0.3, 0.4]) LIMIT 5;
 
-There's also possibility to return the similarity score along with the results by using the :ref:`similarity functions <vector-similarity-functions>`.
+``ANN()`` may also be used as a selector, to return the similarity score of each row::
+
+    SELECT image_id, ANN(embedding, [0.1, 0.2, 0.3, 0.4]) AS similarity
+      FROM ImageEmbeddings
+      ORDER BY ANN(embedding, [0.1, 0.2, 0.3, 0.4]) LIMIT 5;
+
+It is the score the rows are ranked by, so it is only accepted in a query that already orders by
+an ANN clause, and every occurrence must name the same column and the same query vector as that
+clause.
+
+To score rows against a vector other than the one being searched for, use the
+:ref:`similarity functions <vector-similarity-functions>` directly.
 
 For example::
 
-    SELECT image_id, similarity_cosine(embedding, [0.1, 0.2, 0.3, 0.4])
+    SELECT image_id, similarity_cosine(embedding, [0.9, 0.8, 0.7, 0.6])
       FROM ImageEmbeddings
       ORDER BY embedding ANN OF [0.1, 0.2, 0.3, 0.4] LIMIT 5;
 
@@ -485,14 +496,20 @@ Use bind markers for the query term::
         ORDER BY BM25(body, ?)
         LIMIT 10;
 
+Return the relevance score of each row::
+
+    SELECT title, BM25(body, 'distributed database') AS relevance FROM articles
+        WHERE BM25(body, 'distributed database') > 0
+        ORDER BY BM25(body, 'distributed database')
+        LIMIT 10;
+
+It is the score the rows are ranked by, so it is only accepted in a query that already has the
+required ``WHERE`` and ``ORDER BY`` clauses, and every occurrence must reference the same column
+and the same search term.
+
 The ``BM25()`` operator is not a reserved word. If a user-defined function named
 ``bm25`` exists in a keyspace, unqualified ``BM25()`` becomes ambiguous; qualify
 the built-in operator as ``system.bm25(...)`` to disambiguate it.
-
-.. note::
-
-   ``BM25()`` is only valid in the ``WHERE`` and ``ORDER BY`` clauses.
-   It cannot be used as a selector in the ``SELECT`` clause.
 
 For the full list of query constraints and requirements, see
 :doc:`Full-Text Search </features/fulltext-search>`.
