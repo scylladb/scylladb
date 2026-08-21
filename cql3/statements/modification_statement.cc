@@ -420,7 +420,7 @@ process_forced_rebounce(unsigned shard, query_processor& qp, const query_options
 
     logger.info("Applying forced_bounce_to_shard_counter, re-bouncing to shard {}.", shard);
     co_return co_await make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-        qp.bounce_to_shard(shard, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls())));
+        qp.bounce_to_shard(shard, const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()));
 }
 
 } // namespace
@@ -468,7 +468,7 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     }
     if (!cas_shard.this_shard()) {
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                qp.bounce_to_shard(cas_shard.shard(), std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()))
+                qp.bounce_to_shard(cas_shard.shard(), const_cast<cql3::query_options&>(options).take_cached_pk_function_calls())
             );
     }
 
@@ -645,29 +645,6 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
         }
     }
 
-    // At this point the prepare context instance should have a list of
-    // `function_call` AST nodes corresponding to non-pure functions that
-    // evaluate partition key constraints.
-    //
-    // These calls can affect partition key ranges computation and target shard
-    // selection for LWT statements.
-    // For such cases we need to forward the computed execution result of the
-    // function when redirecting the query execution to another shard.
-    // Otherwise, it's possible that we end up bouncing indefinitely between
-    // various shards when evaluating a non-deterministic function each time on
-    // each shard.
-    //
-    // Prepare context is used to keep track of such AST nodes and also modifies
-    // them to include an id, that will be used for caching the results.
-    // At this point we don't yet know if it's an LWT query or not, because the
-    // prepared statement object is constructed later.
-    //
-    // Since this cache is only meaningful for LWT queries, just clear the ids
-    // if it's not a conditional statement so that the AST nodes don't
-    // participate in the caching mechanism later.
-    if (!prepared_stmt->has_conditions() && prepared_stmt->_restrictions) {
-        ctx.clear_pk_function_calls_cache();
-    }
     prepared_stmt->_may_use_token_aware_routing = ctx.get_partition_key_bind_indexes(*schema).size() != 0;
     return prepared_stmt;
 }

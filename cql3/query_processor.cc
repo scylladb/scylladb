@@ -592,7 +592,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> query_processor::e
         ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options) {
     // execute all statements that need group0 guard on shard0
     if (this_shard_id() != 0) {
-        co_return bounce_to_shard(0, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()), false);
+        co_return bounce_to_shard(0, const_cast<cql3::query_options&>(options).take_cached_pk_function_calls(), false);
     }
 
     auto [remote_, holder] = remote();

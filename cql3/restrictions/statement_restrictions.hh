@@ -237,6 +237,12 @@ private:
     schema_ptr _view_schema;
     std::unique_ptr<secondary_index::index> _idx_opt;
     std::vector<predicate> _idx_column_predicates; ///< Predicates for the chosen index's target column.
+    // Non-pure function calls found in the partition key restrictions, indexed
+    // by the slot of the expr::temporary that replaced them; see
+    // prepare_context::add_pk_function_call(). evaluate_pk_function_calls()
+    // gives them their values.
+    std::vector<expr::expression> _pk_function_calls;
+
     get_partition_key_ranges_fn_t _get_partition_key_ranges_fn;
     get_clustering_bounds_fn_t _get_clustering_bounds_fn;
     get_clustering_bounds_fn_t _get_global_index_clustering_ranges_fn;
@@ -437,6 +443,14 @@ public:
      * @return the specified bound of the partition key
      * @throws InvalidRequestException if the boundary cannot be retrieved
      */
+    // Evaluates the non-pure function calls of the partition key restrictions
+    // that `options` doesn't already have a result for, caching them there for
+    // the temporaries standing in for the calls to read. Every method here that
+    // evaluates restrictions calls it first; anyone evaluating a restriction
+    // expression outside this class (e.g. the filter returned by
+    // get_partition_level_filter()) has to call it too.
+    void evaluate_pk_function_calls(const query_options& options) const;
+
     dht::partition_range_vector get_partition_key_ranges(const query_options& options) const;
 
 
