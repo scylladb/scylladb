@@ -303,6 +303,11 @@ private:
     uint32_t chunk_len = 0;
     uint32_t _full_checksum = 0;
     compressor_ptr _compressor;
+    // Where the array of chunk offsets starts inside CompressionInfo.db, and how
+    // many entries it has. They let a reader fetch any single chunk offset
+    // straight from the file, without an in-memory copy of the whole array.
+    uint64_t _offsets_start_pos = 0;
+    uint32_t _chunk_count = 0;
 public:
     // Set the compressor algorithm, please check the definition of enum compressor.
     void set_compressor(compressor_ptr c);
@@ -360,6 +365,22 @@ public:
 
     void set_full_checksum(uint32_t checksum) {
         _full_checksum = checksum;
+    }
+
+    uint64_t offsets_start_pos() const noexcept {
+        return _offsets_start_pos;
+    }
+
+    void set_offsets_start_pos(uint64_t pos) noexcept {
+        _offsets_start_pos = pos;
+    }
+
+    uint32_t chunk_count() const noexcept {
+        return _chunk_count;
+    }
+
+    void set_chunk_count(uint32_t n) noexcept {
+        _chunk_count = n;
     }
 
     friend class sstable;

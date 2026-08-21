@@ -733,7 +733,7 @@ private:
             unsigned buffer_size);
 
     template <component_type Type, typename T>
-    uint32_t write_simple_with_digest(const T& comp);
+    uint32_t write_simple_with_digest(T& comp);
     uint32_t do_write_simple_with_digest(component_type type,
             noncopyable_function<void (version_types version, file_writer& writer)> write_component,
             unsigned buffer_size);

@@ -587,6 +587,8 @@ void seal_statistics(sstable_version_types, statistics&, metadata_collector&,
 void write(sstable_version_types, file_writer&, const utils::estimated_histogram&);
 void write(sstable_version_types, file_writer&, const utils::streaming_histogram&);
 void write(sstable_version_types, file_writer&, const commitlog_interval&);
-void write(sstable_version_types, file_writer&, const compression&);
+// Non-const: writing the component records where the offset array landed in the
+// file (compression::set_offsets_start_pos()).
+void write(sstable_version_types, file_writer&, compression&);
 
 }

@@ -914,6 +914,10 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
     uint32_t len = 0;
     compression::segmented_offsets::writer offsets = c.offsets.get_writer();
     co_await parse(s, v, in, len);
+    // Remember where the array of offsets starts, so that the offsets can later
+    // be read from the file on demand, without an in-memory copy.
+    c.set_offsets_start_pos(in.offset());
+    c.set_chunk_count(len);
     auto eoarr = [&c, &len] { return c.offsets.size() == len; };
 
     while (!eoarr()) {
@@ -926,10 +930,15 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
     }
 }
 
-void write(sstable_version_types v, file_writer& out, const compression& c) {
+void write(sstable_version_types v, file_writer& out, compression& c) {
     write(v, out, c.name, c.options, c.uncompressed_chunk_length(), c.uncompressed_file_length());
 
     write(v, out, static_cast<uint32_t>(c.offsets.size()));
+
+    // Remember where the array of offsets starts, so that the offsets can later
+    // be read from the file on demand, without an in-memory copy.
+    c.set_offsets_start_pos(out.offset());
+    c.set_chunk_count(c.offsets.size());
 
     std::vector<uint64_t> tmp;
     const size_t per_loop = 100000 / sizeof(uint64_t);
@@ -1273,7 +1282,7 @@ uint32_t sstable::do_write_simple_with_digest(component_type type,
 }
 
 template <component_type Type, typename T>
-uint32_t sstable::write_simple_with_digest(const T& component) {
+uint32_t sstable::write_simple_with_digest(T& component) {
     return do_write_simple_with_digest(Type, [&component] (version_types v, file_writer& w) {
         write(v, w, component);
     }, sstable_buffer_size);
@@ -1283,7 +1292,7 @@ template future<> sstable::read_simple<component_type::Filter>(sstables::filter&
 template void sstable::write_simple<component_type::Filter>(const sstables::filter& f);
 
 template void sstable::write_simple<component_type::Summary>(const sstables::summary_ka&);
-template uint32_t sstable::write_simple_with_digest<component_type::Summary>(const sstables::summary&);
+template uint32_t sstable::write_simple_with_digest<component_type::Summary>(sstables::summary&);
 
 future<> sstable::read_compression() {
      // FIXME: If there is no compression, we should expect a CRC file to be present.
