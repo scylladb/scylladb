@@ -121,30 +121,36 @@ bool is_eligible_for_compaction(const sstables::shared_sstable& sst) noexcept {
 
 logging::logger clogger("compaction");
 
-static const std::unordered_map<compaction_type, sstring> compaction_types = {
-    { compaction_type::Compaction, "COMPACTION" },
-    { compaction_type::Cleanup, "CLEANUP" },
-    { compaction_type::Validation, "VALIDATION" },
-    { compaction_type::Scrub, "SCRUB" },
-    { compaction_type::Index_build, "INDEX_BUILD" },
-    { compaction_type::Reshard, "RESHARD" },
-    { compaction_type::Upgrade, "UPGRADE" },
-    { compaction_type::Reshape, "RESHAPE" },
-    { compaction_type::Split, "SPLIT" },
-    { compaction_type::Major, "MAJOR" },
+struct compaction_names {
+    sstring legacy_name; // used by origin and rest API
+    sstring name;
+};
+
+static const std::unordered_map<compaction_type, compaction_names> compaction_types = {
+    { compaction_type::Compaction, {"COMPACTION", "Compact"} },
+    { compaction_type::Cleanup, {"CLEANUP", "Cleanup"} },
+    { compaction_type::Validation, {"VALIDATION", "Validate"} },
+    { compaction_type::Scrub, {"SCRUB", "Scrub"} },
+    { compaction_type::Index_build, {"INDEX_BUILD", "Index_build"} },
+    { compaction_type::Reshard, {"RESHARD", "Reshard"} },
+    { compaction_type::Upgrade, {"UPGRADE", "Upgrade"} },
+    { compaction_type::Reshape, {"RESHAPE", "Reshape"} },
+    { compaction_type::Split, {"SPLIT", "Split"} },
+    { compaction_type::Major, {"MAJOR", "Major"} },
+    { compaction_type::RewriteComponent, {"REWRITE_COMPONENT", "RewriteComponent"} },
 };
 
 sstring compaction_name(compaction_type type) {
     auto ret = compaction_types.find(type);
     if (ret != compaction_types.end()) {
-        return ret->second;
+        return ret->second.legacy_name;
     }
     throw std::runtime_error("Invalid Compaction Type");
 }
 
 compaction_type to_compaction_type(sstring type_name) {
     for (auto& it : compaction_types) {
-        if (it.second == type_name) {
+        if (it.second.legacy_name == type_name) {
             return it.first;
         }
     }
@@ -152,18 +158,9 @@ compaction_type to_compaction_type(sstring type_name) {
 }
 
 std::string_view to_string(compaction_type type) {
-    switch (type) {
-    case compaction_type::Compaction: return "Compact";
-    case compaction_type::Cleanup: return "Cleanup";
-    case compaction_type::Validation: return "Validate";
-    case compaction_type::Scrub: return "Scrub";
-    case compaction_type::Index_build: return "Index_build";
-    case compaction_type::Reshard: return "Reshard";
-    case compaction_type::Upgrade: return "Upgrade";
-    case compaction_type::Reshape: return "Reshape";
-    case compaction_type::Split: return "Split";
-    case compaction_type::Major: return "Major";
-    case compaction_type::RewriteComponent: return "RewriteComponent";
+    auto ret = compaction_types.find(type);
+    if (ret != compaction_types.end()) {
+        return ret->second.name;
     }
     on_internal_error_noexcept(clogger, format("Invalid compaction type {}", int(type)));
     return "(invalid)";
