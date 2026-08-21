@@ -1604,12 +1604,15 @@ future<> tombstone_purge(test_env& env) {
         // tombstones with far-into-the-future ldts by inserting tombstones
         // with a ldt greater than the date.
         auto deletion_time = gc_clock::from_time_t(sstables::max_deletion_time + 1);
+        // The counter is a process-wide (per-shard) counter that is never
+        // reset, so compare against a snapshot taken before the write.
+        auto capped_before = sstables_stats::get_shard_stats().capped_tombstone_deletion_time;
         auto sst1 = make_sstable_containing(sst_gen,
                                             {make_insert(alpha),
                                              make_delete(alpha, deletion_time)},
                                             validate::no).get();
         auto result = compact({sst1}, {sst1});
-        BOOST_CHECK_EQUAL(1, sstables_stats::get_shard_stats().capped_tombstone_deletion_time);
+        BOOST_CHECK_EQUAL(capped_before + 1, sstables_stats::get_shard_stats().capped_tombstone_deletion_time);
     }
     {
         // Verify that old live data inhibit tombstone_gc of partition tombstone
