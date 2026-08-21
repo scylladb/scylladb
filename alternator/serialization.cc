@@ -600,10 +600,16 @@ rjson::value set_sum(const rjson::value& v1, const rjson::value& v2) {
     }
     // Dedup by pointer into set1/set2 (never mutated here), not by owned copy,
     // so a straddling/repeated duplicate is caught without extra copies or resorting.
-    rjson::value sum = rjson::copy(*set1);
+    // Built up from empty (not seeded with a copy of set1) so a duplicate
+    // already present within set1 itself - e.g. written by the previous
+    // duplicate-producing implementation - is also caught, not just ones
+    // straddling set1/set2 or repeated within set2.
+    rjson::value sum = rjson::empty_array();
     std::set<const rjson::value*, rjson_ptr_comp> seen;
     for (const auto& a : set1->GetArray()) {
-        seen.insert(&a);
+        if (seen.insert(&a).second) {
+            rjson::push_back(sum, rjson::copy(a));
+        }
     }
     for (const auto& a : set2->GetArray()) {
         if (seen.insert(&a).second) {

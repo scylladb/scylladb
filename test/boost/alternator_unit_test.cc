@@ -114,6 +114,29 @@ BOOST_AUTO_TEST_CASE(test_set_sum_no_duplicates_straddling_set1_and_set2) {
     BOOST_REQUIRE_EQUAL(elements[2], "c");
 }
 
+// A duplicate already present within set1 itself - e.g. left behind by the
+// previous duplicate-producing implementation - must also be collapsed, not
+// just ones introduced by this ADD operation's set2 or straddling the two.
+BOOST_AUTO_TEST_CASE(test_set_sum_no_duplicates_preexisting_in_set1) {
+    rjson::value set1 = rjson::parse(R"({"SS": ["a", "a", "b"]})");
+    rjson::value set2 = rjson::parse(R"({"SS": ["c"]})");
+
+    rjson::value sum = alternator::set_sum(set1, set2);
+    const rjson::value* result = alternator::unwrap_set(sum).second;
+    BOOST_REQUIRE(result != nullptr);
+
+    std::vector<std::string> elements;
+    for (auto it = result->Begin(); it != result->End(); ++it) {
+        elements.push_back(rjson::to_string(*it));
+    }
+    std::sort(elements.begin(), elements.end());
+
+    BOOST_REQUIRE_EQUAL(elements.size(), 3u);
+    BOOST_REQUIRE_EQUAL(elements[0], "a");
+    BOOST_REQUIRE_EQUAL(elements[1], "b");
+    BOOST_REQUIRE_EQUAL(elements[2], "c");
+}
+
 BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_wrong_postfix) {
     std::string_view arn = "arn:aws:dynamodb:us-east-1:797456418907:table/dynamodb_streams_verification_table_rc/stream/2025-12-18T17:38:48.952";
 
