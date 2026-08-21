@@ -452,17 +452,19 @@ public:
 
     bool compaction_disabled(compaction::compaction_group_view& t) const;
 
-    // Stops ongoing compaction of a given type.
-    future<> stop_compaction(sstring type, std::function<bool(const compaction_group_view*)> filter = [] (auto) { return true; });
+    // Stops ongoing compactions of the given types, on user request.
+    future<> stop_compaction(compaction_type_set types, std::function<bool(const compaction_group_view*)> filter = [] (auto) { return true; });
 
 private:
     std::vector<shared_ptr<compaction_task_executor>>
-    do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt) noexcept;
-    future<> stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt = {}) noexcept;
+    do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type_set> types_opt) noexcept;
+    future<> stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type_set> types_opt = {}) noexcept;
 
 public:
-    // Stops ongoing compaction of a given table and/or compaction_type.
-    future<> stop_ongoing_compactions(sstring reason, compaction::compaction_group_view* t = nullptr, std::optional<compaction_type> type_opt = {}) noexcept;
+    // Stops ongoing compaction of a given table and/or set of compaction_types.
+    // A disengaged types_opt means: stop compactions of any type.
+    // An empty types_opt (engaged optional containing empty enum set) means: don't stop any compaction.
+    future<> stop_ongoing_compactions(sstring reason, compaction::compaction_group_view* t = nullptr, std::optional<compaction_type_set> types_opt = {}) noexcept;
 
     future<> await_ongoing_compactions(compaction_group_view* t);
 
