@@ -56,9 +56,12 @@ structure the final writeup must follow.
    already happened once. If the user is explicitly asking for a different
    scope than the stale manifest records — a different module, or an
    explicit `submodules` list that doesn't match the manifest's recorded
-   `args.submodules` — archive it (rename with a `.stale` suffix, don't
-   delete — it may still hold a useful `runId` to inspect) and proceed as
-   a fresh run.
+   `args.submodules` — archive it and proceed as a fresh run. Archiving
+   means an exclusive, fail-if-exists rename to `runs/<key>.json.stale`;
+   if that name is already taken, try `.stale-2`, `.stale-3`, ... and use
+   the first one that doesn't already exist — never overwrite an existing
+   `.stale*` file, since it may still hold a useful `runId` to inspect and
+   a collision means two archives happened at once.
 
    The module name drives the manifest filename everywhere below (this
    step's lookup, the claim below, the resume path) — it's normally a
@@ -99,14 +102,26 @@ structure the final writeup must follow.
    echo '{"status":"claiming"}' > "runs/$key.json" 2>/dev/null || claimed=0
    set +o noclobber
    ```
-   `claimed=0` means another session won the race between your check and
-   now: re-read `runs/$key.json` and go back to the top of this step
-   (resume it if it matches this module/scope, or surface the conflict to
-   the user if it doesn't — never overwrite a manifest you didn't create).
+   `claimed=0` means the path was already occupied — re-read
+   `runs/$key.json` before assuming a live competitor. If its `status` is
+   `"completed"` (step 5 left it behind instead of deleting it), it's
+   inert: archive it with the same exclusive-rename procedure used above
+   for a scope mismatch, then retry the exclusive create against the now-
+   free path. Only a `status` of `"claiming"` or `"running"` means an
+   actual live race: go back to the top of this step (resume it if it
+   matches this module/scope, or surface the conflict to the user if it
+   doesn't — never overwrite or archive a manifest another session is
+   actively using).
    `claimed=1` means you now own `runs/<key>.json`: from here on, only this
    session may write to it — step 4 overwrites it with the full manifest,
    and step 5 marks it `"completed"` — until it's archived or completed.
-   A session that lost the claim must not touch the file again.
+   A session that lost the claim must not touch the file again. Every
+   write to an owned manifest (the placeholder above, step 4's full
+   manifest, step 5's `"completed"` update) must be atomic: write the new
+   contents to a temp file in `runs/` and rename it over `runs/<key>.json`,
+   never truncate-and-write the existing file in place — a session that
+   dies mid-write must never leave `runs/<key>.json` holding invalid JSON
+   or a truncated manifest.
 3. **Size the run before starting it** (fresh runs only). This pipeline
    compiles and runs real C++ (boost tests, sometimes a full scylla binary
    for cqlpy). Tell the user roughly how many submodules and how many
@@ -134,14 +149,16 @@ structure the final writeup must follow.
    `runs/<key>.json` — the placeholder you claimed in step 2, now owned by
    this session — with the full manifest, using the sanitized `<key>` from
    step 2 (see "Checkpointing across sessions" below) *before* doing
-   anything else. That write is what makes the run recoverable if this
-   very session ends a moment later.
+   anything else. Write it atomically (temp file + rename, per step 2) —
+   never truncate the claimed file in place. That write is what makes the
+   run recoverable if this very session ends a moment later.
 5. **Present the result, then stop.** The workflow returns confirmed bugs
    (each with a worktree path, branch, reproducer, and the impact/risk/
    complexity writeup) plus a short list of what was discarded and why
    (dedup, unreproduced, low-confidence). Summarize this for the user, and
    mark the manifest `"completed"` (or delete it) now that there's nothing
-   left to resume. **Do not start fixing, committing beyond the
+   left to resume — the same atomic temp-file-plus-rename write as step 4,
+   not a truncate-in-place. **Do not start fixing, committing beyond the
    reproducer, pushing, or opening a PR** — this skill's job ends at
    "here's a proven bug and what it costs us," matching the user's
    explicit "we'll then proceed from there." Any of those next actions
@@ -202,7 +219,9 @@ from you:
   the session ends. So immediately after launching (step 4 above),
   overwrite the manifest you claimed at `runs/<key>.json` (`<key>` is the
   sanitized filename from step 2, not the raw module name) with the full
-  contents:
+  contents, written atomically (temp file + rename, per step 2 — never a
+  truncate-in-place, which could leave invalid JSON and lose the `runId`
+  if interrupted mid-write):
 
   ```json
   {
