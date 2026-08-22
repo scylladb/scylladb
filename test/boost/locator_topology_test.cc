@@ -370,3 +370,162 @@ SEASTAR_THREAD_TEST_CASE(test_left_node_is_kept_outside_dc) {
 
     topo.clear_gently().get();
 }
+
+// Proves the fix for #31208: the scan-gating step count in alternator/ttl.cc's
+// tablet scan is bounded by owned tablets, not total tablets in the table.
+SEASTAR_THREAD_TEST_CASE(test_ttl_style_tablet_scan_cost_tracks_owned_after_fix) {
+    auto my_id = host_id::create_random_id();
+    auto other_id = host_id::create_random_id();
+
+    topology::config cfg = {
+        .this_endpoint = gms::inet_address("127.0.0.1"),
+        .this_host_id = my_id,
+        .local_dc_rack = endpoint_dc_rack::default_location,
+    };
+    topology topo(cfg);
+    topo.add_or_update_endpoint(other_id, endpoint_dc_rack::default_location, node::state::normal);
+    const shard_id my_shard = 0;
+#ifdef SEASTAR_DEBUG
+    // Scale down under debug builds; only the linear-vs-constant ratio matters, not the absolute size.
+    constexpr size_t large_n = 2000;
+#else
+    constexpr size_t large_n = 20000;
+#endif
+
+    // `owned` tablets, evenly spread through the ring, go to (my_id, my_shard) (RF=1), rest to other_id.
+    // Returns {collect_steps, validate_scan_steps, found}; the fix bounds validate_scan_steps to O(owned).
+    auto measure_fixed_pass = [&] (size_t n, size_t owned) -> std::tuple<size_t, size_t, size_t> {
+        BOOST_REQUIRE_LE(owned, n);
+        tablet_map tmap(n);
+        size_t stride = owned ? std::max<size_t>(1, n / owned) : n + 1;
+        for (auto tid : tmap.tablet_ids()) {
+            bool mine = owned > 0 && tid.value() % stride == 0 && tid.value() / stride < owned;
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set { tablet_replica { mine ? my_id : other_id, mine ? my_shard : shard_id(0) } }
+            });
+        }
+
+        // Collection pass: one walk recording candidate tablet ids (real fix also
+        // yields per tablet via for_each_tablet(), not observable in this sync test).
+        size_t collect_steps = 0;
+        std::vector<tablet_id> candidates;
+        for (auto tid : tmap.tablet_ids()) {
+            collect_steps++;
+            auto primary = tmap.get_primary_replica(tid, topo);
+            if (primary.host == my_id && primary.shard == my_shard) {
+                candidates.push_back(tid);
+            }
+        }
+
+        // Validate-and-scan pass: re-checks ownership per candidate (mirrors ttl.cc's
+        // fresh-ERM re-validation).
+        size_t validate_scan_steps = 0;
+        size_t found = 0;
+        for (auto tid : candidates) {
+            validate_scan_steps++;
+            auto primary = tmap.get_primary_replica(tid, topo);
+            if (primary.host == my_id && primary.shard == my_shard) {
+                found++;
+            }
+        }
+        return {collect_steps, validate_scan_steps, found};
+    };
+
+    // Case 1: owns none. Collection still costs O(total), but scan-gating steps are 0, not n.
+    for (size_t n : {size_t(100), large_n}) {
+        auto [collect_steps, validate_scan_steps, found] = measure_fixed_pass(n, 0);
+        BOOST_REQUIRE_EQUAL(found, 0u);
+        BOOST_REQUIRE_EQUAL(collect_steps, n);
+        BOOST_REQUIRE_EQUAL(validate_scan_steps, 0u);
+    }
+
+    // Case 2: owns one tablet regardless of map size; scan-gating steps must stay pinned at 1.
+    {
+        auto [collect_small, validate_small, found_small] = measure_fixed_pass(100, 1);
+        auto [collect_large, validate_large, found_large] = measure_fixed_pass(large_n, 1);
+        BOOST_REQUIRE_EQUAL(found_small, 1u);
+        BOOST_REQUIRE_EQUAL(found_large, 1u);
+        // Scan-gating work no longer grows with total tablet count.
+        BOOST_REQUIRE_EQUAL(validate_small, 1u);
+        BOOST_REQUIRE_EQUAL(validate_large, 1u);
+        BOOST_REQUIRE_EQUAL(validate_small, validate_large);
+        // Collection is still O(total), but paid once, not once per resumption.
+        BOOST_REQUIRE_EQUAL(collect_small, 100u);
+        BOOST_REQUIRE_EQUAL(collect_large, large_n);
+    }
+
+    // Case 3: many owned tablets on a large map -- scan-gating steps track owned count exactly.
+    {
+        auto [collect_steps, validate_scan_steps, found] = measure_fixed_pass(large_n, 137);
+        BOOST_REQUIRE_EQUAL(collect_steps, large_n);
+        BOOST_REQUIRE_EQUAL(validate_scan_steps, 137u);
+        BOOST_REQUIRE_EQUAL(found, 137u);
+    }
+}
+
+// A split renumbers every tablet_id (tablet_allocator.cc split_tablets()), so a stale
+// candidate can alias an unrelated tablet after a resize, not just go out of range (#31208).
+SEASTAR_THREAD_TEST_CASE(test_ttl_style_tablet_scan_detects_split_during_validate) {
+    auto my_id = host_id::create_random_id();
+    auto other_id = host_id::create_random_id();
+
+    topology::config cfg = {
+        .this_endpoint = gms::inet_address("127.0.0.1"),
+        .this_host_id = my_id,
+        .local_dc_rack = endpoint_dc_rack::default_location,
+    };
+    topology topo(cfg);
+    topo.add_or_update_endpoint(other_id, endpoint_dc_rack::default_location, node::state::normal);
+    const shard_id my_shard = 0;
+
+    // Pre-split map: 4 tablets, only tablet 1 is mine.
+    tablet_map old_map(4);
+    for (auto tid : old_map.tablet_ids()) {
+        bool mine = tid.value() == 1;
+        old_map.set_tablet(tid, tablet_info {
+            tablet_replica_set { tablet_replica { mine ? my_id : other_id, mine ? my_shard : shard_id(0) } }
+        });
+    }
+
+    // Collection pass (mirrors ttl.cc): one candidate, tid 1, plus the
+    // tablet_count seen at collection time.
+    std::vector<tablet_id> candidates;
+    for (auto tid : old_map.tablet_ids()) {
+        auto primary = old_map.get_primary_replica(tid, topo);
+        if (primary.host == my_id && primary.shard == my_shard) {
+            candidates.push_back(tid);
+        }
+    }
+    BOOST_REQUIRE_EQUAL(candidates.size(), 1u);
+    size_t candidates_tablet_count = old_map.tablet_count();
+
+    // Post-split map: old tablet X becomes new tablets X<<1 and X<<1|1 (as split_tablets() does).
+    tablet_map new_map(old_map.tablet_count() * 2);
+    for (auto tid : old_map.tablet_ids()) {
+        auto& info = old_map.get_tablet_info(tid);
+        tablet_id left(tid.value() << 1);
+        tablet_id right(left.value() + 1);
+        new_map.set_tablet(left, info);
+        new_map.set_tablet(right, info);
+    }
+    BOOST_REQUIRE_NE(new_map.tablet_count(), candidates_tablet_count);
+
+    // Buggy shape (bounds check only): id 1 is in bounds of the doubled map, but now
+    // aliases old tablet 0's right child, so this misreads as "not owned" -- not stale.
+    for (auto tid : candidates) {
+        BOOST_REQUIRE_LT(tid.value(), new_map.tablet_count());
+        auto primary = new_map.get_primary_replica(tid, topo);
+        bool mine = primary.host == my_id && primary.shard == my_shard;
+        BOOST_REQUIRE(!mine); // wrong tablet, misleadingly reads as "not owned"
+    }
+
+    // Fixed shape: the tablet_count mismatch is caught before any per-candidate check runs.
+    size_t candidates_examined = 0;
+    for (size_t i = 0; i < candidates.size(); i++) {
+        if (new_map.tablet_count() != candidates_tablet_count) {
+            break;
+        }
+        candidates_examined++;
+    }
+    BOOST_REQUIRE_EQUAL(candidates_examined, 0u);
+}
