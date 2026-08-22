@@ -30,7 +30,8 @@ import importlib
 from test import TOP_SRC_DIR, TEST_DIR
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
-from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely, get_xdist_worker_id, scale_timeout_by_mode
+from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely, get_xdist_worker_id, \
+    graceful_stop_timeout, scale_timeout_by_mode
 from test.pylib.driver_utils import safe_driver_shutdown, safe_shutting_down
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
@@ -373,6 +374,7 @@ class ScyllaServer:
                  server_encryption: str) -> None:
         # pylint: disable=too-many-arguments
         self.server_id = ServerNum(ScyllaServer.newid())
+        self.mode = mode
         xdist_worker_id = get_xdist_worker_id()
         # this variable needed to make a cleanup after server is not needed anymore
         self.maintenance_socket_dir = tempfile.TemporaryDirectory(
@@ -1092,17 +1094,18 @@ class ScyllaServer:
         except ProcessLookupError:
             pass
         else:
-            STOP_TIMEOUT_SECONDS = 120
+            stop_timeout = graceful_stop_timeout(self.mode)
             wait_task = self.cmd.wait()
             try:
-                await asyncio.wait_for(wait_task, timeout=STOP_TIMEOUT_SECONDS)
+                await asyncio.wait_for(wait_task, timeout=stop_timeout)
                 if self.cmd.returncode != 0:
                     raise RuntimeError(f"Server {self} exited with non-zero exit code: {self.cmd.returncode}")
             except asyncio.TimeoutError:
                 self.cmd.kill()
                 await self.cmd.wait()
                 raise RuntimeError(
-                    f"Stopping server {self} gracefully took longer than {STOP_TIMEOUT_SECONDS}s")
+                    f"Stopping server {self} gracefully took longer than {stop_timeout}s"
+                    f" ({self.mode} mode)")
         finally:
             if self.cmd:
                 self.logger.info("gracefully stopped %s", self)
