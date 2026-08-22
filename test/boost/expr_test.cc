@@ -4373,6 +4373,13 @@ std::vector<expression> get_invalid_rhs_values(expected_rhs_type expected_rhs) {
         invalid_rhs_vals.push_back(
             collection_constructor{.style = collection_constructor::style_type::list_or_vector, .elements = {}});
     }
+
+    // A bind marker is a valid RHS for the other operators, but IS NOT requires the RHS to be a NULL literal,
+    // so a bind marker is invalid there.
+    if (expected_rhs == expected_rhs_type::is_not_null_rhs) {
+        invalid_rhs_vals.push_back(bind_variable{.bind_index = 0});
+    }
+
     return invalid_rhs_vals;
 }
 
