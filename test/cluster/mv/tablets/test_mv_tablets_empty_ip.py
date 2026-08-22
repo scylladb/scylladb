@@ -12,7 +12,7 @@ import logging
 from cassandra.cluster import ConnectionException, NoHostAvailable  # type: ignore
 
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace
 
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # remote view updates.
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='node replace needs to wait for tablet rebuild, which takes a lot of time in debug mode')
-async def test_mv_tablets_empty_ip(manager: ManagerClient):
+async def test_mv_tablets_empty_ip(manager: ScyllaClusterManager):
     cfg = {'tablets_mode_for_new_keyspaces': 'enabled'}
     servers = await manager.servers_add(4, config = cfg, property_file=[
         {"dc": "dc1", "rack": "r1"},

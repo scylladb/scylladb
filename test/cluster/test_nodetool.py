@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 import subprocess
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_first_completed
 
 pytestmark = pytest.mark.prepare_3_nodes_cluster
@@ -70,7 +70,7 @@ async def validate_status_operation(result: str, live_eps: list, down_eps: list,
     assert lines[i] == ""
 
 
-async def test_zero_token_node_normal(manager: ManagerClient):
+async def test_zero_token_node_normal(manager: ScyllaClusterManager):
     zero_token_nodes = await manager.servers_add(servers_num=2, config={'join_ring': False})
 
     servers = await manager.running_servers()
@@ -115,7 +115,7 @@ async def test_zero_token_node_normal(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_zero_token_node_down_leaving(manager: ManagerClient):
+async def test_zero_token_node_down_leaving(manager: ScyllaClusterManager):
     servers = await manager.running_servers()
     [await manager.api.enable_injection(s.ip_addr, 'delay_node_removal', one_shot=True) for s in servers]
 
@@ -159,7 +159,7 @@ async def test_zero_token_node_down_leaving(manager: ManagerClient):
     await task
 
 
-async def test_zero_token_node_down_normal(manager: ManagerClient):
+async def test_zero_token_node_down_normal(manager: ScyllaClusterManager):
     servers = await manager.running_servers()
 
     zero_token_node = await manager.server_add(config={'join_ring': False})
@@ -195,7 +195,7 @@ async def test_zero_token_node_down_normal(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_regular_node_joining(manager: ManagerClient):
+async def test_regular_node_joining(manager: ScyllaClusterManager):
     servers = await manager.running_servers()
     [await manager.api.enable_injection(s.ip_addr, 'delay_node_bootstrap', one_shot=True) for s in servers]
 

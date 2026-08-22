@@ -21,7 +21,7 @@ from _pytest._code.code import ReprFileLocation
 from scripts import coverage as coverage_script
 from test import DEBUG_MODES, TEST_DIR, TOP_SRC_DIR, path_to
 from test.pylib.runner import BUILD_MODE, RUN_ID, TEST_SUITE
-from test.pylib.scylla_cluster import merge_cmdline_options
+from test.pylib.scylla_server import merge_cmdline_options
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence

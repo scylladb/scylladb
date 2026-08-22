@@ -14,7 +14,7 @@ import pytest
 
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 from test.cluster.util import reconnect_driver
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 
 
@@ -48,7 +48,7 @@ async def create_system_distributed_service_levels(cql):
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injection is disabled in release mode")
-async def test_self_heals_service_levels_v1_after_restart(manager: ManagerClient, scale_timeout: callable):
+async def test_self_heals_service_levels_v1_after_restart(manager: ScyllaClusterManager, scale_timeout: callable):
     """Reproduces a raft-topology cluster created before service levels were initialized as v2."""
 
     service_level_list_query = "LIST ALL SERVICE LEVELS"
@@ -114,7 +114,7 @@ async def _validate_host_service_level_ver(hosts, cql, ver):
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injection is disabled in release mode")
-async def test_self_heal_waits_for_unavailable_replicas(manager: ManagerClient, scale_timeout: callable):
+async def test_self_heal_waits_for_unavailable_replicas(manager: ScyllaClusterManager, scale_timeout: callable):
     """Verify SCYLLADB-3337: service level migration should wait for all nodes to be available"""
 
     config = {

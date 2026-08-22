@@ -11,12 +11,12 @@ from cassandra.cluster import ConsistencyLevel
 
 from test.cluster.dtest.alternator_utils import random_string
 from test.cluster.util import new_test_keyspace
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 logger = logging.getLogger(__name__)
 
 
-async def test_streaming_deadlock_removenode(request, manager: ManagerClient):
+async def test_streaming_deadlock_removenode(request, manager: ScyllaClusterManager):
     # Force removenode to exercise range_streamer and not repair.
     # The bug is in the streaming, and when senders are on different nodes,
     # and receivers are cross-located (B->C, C->B).

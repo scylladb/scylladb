@@ -7,7 +7,7 @@ import pytest
 import time
 import asyncio
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_view
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.cluster.util import trigger_snapshot, wait_for, create_new_test_keyspace
 from cassandra.query import SimpleStatement
@@ -58,7 +58,7 @@ async def wait_for_view_build_status(cql, ks_name, view_name, status, node_count
 # Create a materialized view and check that the view's build status
 # is stored in view_build_status_v2 and all nodes see all the other
 # node's statuses.
-async def test_view_build_status_v2_table(manager: ManagerClient):
+async def test_view_build_status_v2_table(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count)
     cql, hosts = await manager.get_ready_cql(servers)
@@ -77,7 +77,7 @@ async def test_view_build_status_v2_table(manager: ManagerClient):
 # The table system_distributed.view_build_status is set to be a virtual table reading
 # from system.view_build_status_v2, so verify that reading from each of them provides
 # the same output.
-async def test_view_build_status_virtual_table(manager: ManagerClient):
+async def test_view_build_status_virtual_table(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count)
     cql, hosts = await manager.get_ready_cql(servers)
@@ -153,7 +153,7 @@ async def test_view_build_status_virtual_table(manager: ManagerClient):
 # Cluster with 3 nodes.
 # Create materialized views. Start new server and it should get a snapshot on bootstrap.
 # Stop 3 `old` servers and query the new server to validate if it has the same view build status.
-async def test_view_build_status_snapshot(manager: ManagerClient):
+async def test_view_build_status_snapshot(manager: ScyllaClusterManager):
     servers = await manager.servers_add(3)
     cql, _ = await manager.get_ready_cql(servers)
 
@@ -188,7 +188,7 @@ async def test_view_build_status_snapshot(manager: ManagerClient):
 
 # Test that when removing a node from the cluster, we clean its rows from
 # the view build status table.
-async def test_view_build_status_cleanup_on_remove_node(manager: ManagerClient):
+async def test_view_build_status_cleanup_on_remove_node(manager: ScyllaClusterManager):
     node_count = 4
     servers = await manager.servers_add(node_count)
     cql, hosts = await manager.get_ready_cql(servers)
@@ -211,7 +211,7 @@ async def test_view_build_status_cleanup_on_remove_node(manager: ManagerClient):
 
 # Replace a node and verify that the view_build_status has rows for the new node and
 # no rows for the old node
-async def test_view_build_status_with_replace_node(manager: ManagerClient):
+async def test_view_build_status_with_replace_node(manager: ScyllaClusterManager):
     node_count = 4
     servers = await manager.servers_add(node_count)
     cql, hosts = await manager.get_ready_cql(servers)
@@ -253,7 +253,7 @@ async def test_view_build_status_with_replace_node(manager: ManagerClient):
     await wait_for(node_rows_replaced, time.time() + 60)
 
 # Test that when removing the view, its build status is cleaned from the status table
-async def test_view_build_status_cleanup_on_drop_view(manager: ManagerClient):
+async def test_view_build_status_cleanup_on_drop_view(manager: ScyllaClusterManager):
     node_count = 4
     servers = await manager.servers_add(node_count)
     cql, hosts = await manager.get_ready_cql(servers)
@@ -267,7 +267,7 @@ async def test_view_build_status_cleanup_on_drop_view(manager: ManagerClient):
         await wait_for_view_build_status(cql, ks, "vt1", "SUCCESS", 0)
 
 # Test that when removing the view, its build status is cleaned from the status table
-async def test_view_build_status_extended_on_added_node(manager: ManagerClient):
+async def test_view_build_status_extended_on_added_node(manager: ScyllaClusterManager):
     node_count = 4
     servers = await manager.servers_add(node_count)
     cql, hosts = await manager.get_ready_cql(servers)
@@ -282,7 +282,7 @@ async def test_view_build_status_extended_on_added_node(manager: ManagerClient):
 
 # Test that when removing the view, its build status is cleaned from the status table
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_view_build_status_marked_started_on_node_added_during_building(manager: ManagerClient):
+async def test_view_build_status_marked_started_on_node_added_during_building(manager: ScyllaClusterManager):
     node_count = 4
     servers = await manager.servers_add(node_count, cmdline=[
         '--logger-log-level', 'storage_service=debug',

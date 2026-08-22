@@ -9,7 +9,7 @@ Test RPC compression
 from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import ScyllaMetrics
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace
 
 import pytest
@@ -25,7 +25,7 @@ import functools
 
 logger = logging.getLogger(__name__)
 
-async def live_update_config(manager: ManagerClient, servers: list[ServerInfo], key: str, value: str):
+async def live_update_config(manager: ScyllaClusterManager, servers: list[ServerInfo], key: str, value: str):
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, deadline = time.time() + 60)
     await asyncio.gather(*[cql.run_async("UPDATE system.config SET value=%s WHERE name=%s", [value, key], host=host) for host in hosts])
@@ -37,7 +37,7 @@ def compressed_sent(metrics: list[ScyllaMetrics], algo: str) -> float:
 def approximately_equal(a: float, b: float, factor: float) -> bool:
     assert factor < 1.0
     return factor < a / b < (1/factor)
-async def get_metrics(manager: ManagerClient, servers: list[ServerInfo]) -> list[ScyllaMetrics]:
+async def get_metrics(manager: ScyllaClusterManager, servers: list[ServerInfo]) -> list[ScyllaMetrics]:
     return await asyncio.gather(*[manager.metrics.query(s.ip_addr) for s in servers])
 
 async def with_retries(test_once: typing.Callable[[], typing.Awaitable], timeout: float):
@@ -51,7 +51,7 @@ async def with_retries(test_once: typing.Callable[[], typing.Awaitable], timeout
             else:
                 break
 
-async def test_basic(manager: ManagerClient) -> None:
+async def test_basic(manager: ScyllaClusterManager) -> None:
     """Tests basic functionality of internode compression.
     Also, tests that changing internode_compression_zstd_max_cpu_fraction from 0.0 to 1.0 enables zstd as expected.
     """
@@ -91,7 +91,7 @@ async def test_basic(manager: ManagerClient) -> None:
 
         await with_retries(functools.partial(test_algo, "zstd", 0.25), timeout=600)
 
-async def test_dict_training(manager: ManagerClient) -> None:
+async def test_dict_training(manager: ScyllaClusterManager) -> None:
     """Tests population of system.dicts with dicts trained on RPC traffic."""
     training_min_bytes = 128*1024
     cfg = {
@@ -152,7 +152,7 @@ async def test_dict_training(manager: ManagerClient) -> None:
 
         await with_retries(test_once, timeout=600)
 
-async def test_external_dicts(manager: ManagerClient) -> None:
+async def test_external_dicts(manager: ScyllaClusterManager) -> None:
     """Tests internode compression with external dictionaries"""
     cfg = {
         'internode_compression_enable_advanced': True,
@@ -214,7 +214,7 @@ async def test_external_dicts(manager: ManagerClient) -> None:
         await with_retries(functools.partial(test_once, "lz4", 0.5), timeout=600)
 
 # Similar to test_external_dicts, but simpler.
-async def test_external_dicts_sanity(manager: ManagerClient) -> None:
+async def test_external_dicts_sanity(manager: ScyllaClusterManager) -> None:
     """Tests internode compression with external dictionaries, by spamming the same UPDATE statement."""
     cfg = {
         'internode_compression_enable_advanced': True,

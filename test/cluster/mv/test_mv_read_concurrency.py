@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 import asyncio
 import pytest
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # The test fails if any of the reads times out.
 # Reproduces https://github.com/scylladb/scylladb/issues/8873
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
-async def test_mv_read_concurrency(manager: ManagerClient) -> None:
+async def test_mv_read_concurrency(manager: ScyllaClusterManager) -> None:
     node_count = 1
     # Disable cache to make reads use the read concurrency semaphore.
     # Tests remove the rcs multiplier by default, here we use a slightly smaller one (1 instead of default 2) to hit the issue faster.
@@ -90,7 +90,7 @@ async def test_mv_read_concurrency(manager: ManagerClient) -> None:
 # The test fails if Scylla aborts due to using too much memory.
 # Reproduces https://github.com/scylladb/scylladb/issues/15805
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
-async def test_mv_read_memory(manager: ManagerClient) -> None:
+async def test_mv_read_memory(manager: ScyllaClusterManager) -> None:
     node_count = 1
     # Disable cache to make reads use the read concurrency semaphore.
     # Tests remove the rcs multipliers by default, here we set the serialize limit back back to the default used outside tests

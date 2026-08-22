@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 from contextlib import asynccontextmanager
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_base_table, get_tablet_count, get_tablet_info
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, wait_for_view
@@ -51,7 +51,7 @@ async def wait_for_tablet_stage(manager, server, keyspace_name, table_name, toke
 # We create multiple views, some with the same partition key and some not, and
 # check that those views with the same partition key are co-located by reading
 # their tablet map from system.tablets and checking they have base_table set.
-async def test_base_view_colocation(manager: ManagerClient):
+async def test_base_view_colocation(manager: ScyllaClusterManager):
     cfg = {'enable_tablets': True}
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
@@ -97,7 +97,7 @@ async def test_base_view_colocation(manager: ManagerClient):
 # stop the other node, remaining only with the one node that should hold the
 # base and view tablets, and verify we can read both tables from this node.
 @pytest.mark.parametrize("move_table", ["base", "child"])
-async def test_move_tablet(manager: ManagerClient, move_table: str):
+async def test_move_tablet(manager: ScyllaClusterManager, move_table: str):
     cfg = {'enable_tablets': True}
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
@@ -172,7 +172,7 @@ async def test_move_tablet(manager: ManagerClient, move_table: str):
         pytest.param(True, id="with_merge"),
     ],
 )
-async def test_tablet_split_and_merge(manager: ManagerClient, with_merge: bool):
+async def test_tablet_split_and_merge(manager: ScyllaClusterManager, with_merge: bool):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
@@ -298,7 +298,7 @@ async def test_tablet_split_and_merge(manager: ManagerClient, with_merge: bool):
 # migration and verify everything continues to work as expected.
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("wait_stage", [("streaming", "stream_tablet_wait"), ("cleanup", "cleanup_tablet_wait")])
-async def test_create_colocated_table_while_base_is_migrating(manager: ManagerClient, wait_stage):
+async def test_create_colocated_table_while_base_is_migrating(manager: ScyllaClusterManager, wait_stage):
     cfg = {'enable_tablets': True, 'tablet_load_stats_refresh_interval_in_seconds': 1 }
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
@@ -384,7 +384,7 @@ async def test_create_colocated_table_while_base_is_migrating(manager: ManagerCl
 # 4. run tablet repair on the base table
 # 5. verify both the base table and the view contain the missing data on the node that was down
 @pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-362", reason="tablet repair of colocated tables is not supported currently")
-async def test_repair_colocated_base_and_view(manager: ManagerClient):
+async def test_repair_colocated_base_and_view(manager: ScyllaClusterManager):
     cfg = {'enable_tablets': True}
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
@@ -432,7 +432,7 @@ async def test_repair_colocated_base_and_view(manager: ManagerClient):
 
 # Verify the default tombstone GC mode for colocated tables is 'timeout',
 # and that altering it to 'repair' is not allowed.
-async def test_colocated_tables_gc_mode(manager: ManagerClient):
+async def test_colocated_tables_gc_mode(manager: ScyllaClusterManager):
     servers = await manager.servers_add(3, auto_rack_dc="dc1")
     cql = manager.get_cql()
 

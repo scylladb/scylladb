@@ -7,11 +7,11 @@
 import asyncio
 import pytest
 from test.cluster.util import new_test_keyspace, new_test_table
-from test.pylib.manager_client import ManagerClient, safe_driver_shutdown
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.util import wait_for
 from cassandra.connection import UnixSocketEndPoint
 from cassandra.policies import WhiteListRoundRobinPolicy
-from test.cluster.conftest import cluster_con
 from time import time
 import os
 
@@ -21,7 +21,7 @@ import os
 # to 128 * 2^10 bytes.
 #
 # Reproducer for issue scylladb/scylladb#24018.
-async def test_large_create_statement(manager: ManagerClient):
+async def test_large_create_statement(manager: ScyllaClusterManager):
     cmdline = ["--logger-log-level", "describe=trace"]
     srv = await manager.server_add(cmdline=cmdline)
     cql = manager.get_cql()
@@ -53,7 +53,7 @@ async def test_large_create_statement(manager: ManagerClient):
             assert len(matches) == 0
 
 @pytest.mark.parametrize("mode", ["normal", "maintenance"])
-async def test_describe_cluster_sanity(manager: ManagerClient, mode: str):
+async def test_describe_cluster_sanity(manager: ScyllaClusterManager, mode: str):
     """
     Parametrized test that DESCRIBE CLUSTER returns correct cluster information
     in both normal and maintenance modes.
@@ -74,7 +74,7 @@ async def test_describe_cluster_sanity(manager: ManagerClient, mode: str):
             return True if os.path.exists(maintenance_socket_path) else None
         await wait_for(socket_exists, time() + 30)
         socket_endpoint = UnixSocketEndPoint(maintenance_socket_path)
-        cluster = cluster_con([socket_endpoint], load_balancing_policy=WhiteListRoundRobinPolicy([socket_endpoint]))
+        cluster = manager.con_gen([socket_endpoint], load_balancing_policy=WhiteListRoundRobinPolicy([socket_endpoint]))
         cql = cluster.connect()
 
     try:

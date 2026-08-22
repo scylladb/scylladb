@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import get_topology_coordinator, trigger_stepdown, new_test_keyspace, new_test_table
 
 import pytest
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_load_stats_on_coordinator_failover(manager: ManagerClient):
+async def test_load_stats_on_coordinator_failover(manager: ScyllaClusterManager):
     cfg = {
         'data_file_capacity': 7000000,
         'tablet_load_stats_refresh_interval_in_seconds': 1,
@@ -85,7 +85,7 @@ async def test_load_stats_on_coordinator_failover(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_load_stats_refresh_during_shutdown(manager: ManagerClient):
+async def test_load_stats_refresh_during_shutdown(manager: ScyllaClusterManager):
     """Verify that _tablet_load_stats_refresh is properly joined during
     topology coordinator shutdown, even when a schema change notification
     triggers a refresh between run() completing and stop() being called.

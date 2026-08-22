@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.repair import load_tablet_sstables_repaired_at, load_tablet_repair_time, create_table_insert_data_for_repair
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.tasks.task_manager_client import TaskManagerClient
@@ -250,7 +250,7 @@ async def prepare_cluster_for_incremental_repair(manager, nr_keys = 100 , cmdlin
         logs.append(await manager.server_open_log(s.server_id))
     return servers, cql, hosts, ks, table_id, logs, repaired_keys,  unrepaired_keys, current_key, token
 
-async def test_tablet_repair_sstable_skipped_read_metrics(manager: ManagerClient):
+async def test_tablet_repair_sstable_skipped_read_metrics(manager: ScyllaClusterManager):
     servers, cql, hosts, ks, table_id, logs, _, _, _, token = await prepare_cluster_for_incremental_repair(manager)
 
     await insert_keys(cql, ks, 0, 100)
@@ -278,7 +278,7 @@ async def test_tablet_repair_sstable_skipped_read_metrics(manager: ManagerClient
     assert skipped_bytes3 > skipped_bytes2
     assert read_bytes3 > read_bytes2
 
-async def test_tablet_incremental_repair(manager: ManagerClient):
+async def test_tablet_incremental_repair(manager: ScyllaClusterManager):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
     token = -1
     logs = []
@@ -338,7 +338,7 @@ async def test_tablet_incremental_repair(manager: ManagerClient):
         assert len(enable) == 2
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_incremental_repair_error(manager: ManagerClient):
+async def test_tablet_incremental_repair_error(manager: ScyllaClusterManager):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
     token = -1
     map0 = await load_tablet_sstables_repaired_at(manager, cql, servers[0], hosts[0], table_id)
@@ -371,7 +371,7 @@ async def test_tablet_incremental_repair_error(manager: ManagerClient):
     # Check the sstables_repaired_at is not increased
     assert get_sstables_repaired_at(map0, token) == get_sstables_repaired_at(map1, token)
 
-async def do_tablet_incremental_repair_and_ops(manager: ManagerClient, ops: str):
+async def do_tablet_incremental_repair_and_ops(manager: ScyllaClusterManager, ops: str):
     nr_keys = 100
     servers, cql, hosts, ks, table_id, logs, repaired_keys, unrepaired_keys, current_key, token = await prepare_cluster_for_incremental_repair(manager, nr_keys, cmdline=['--logger-log-level', 'compaction=debug'])
     token = -1
@@ -440,22 +440,22 @@ async def do_tablet_incremental_repair_and_ops(manager: ManagerClient, ops: str)
         assert newly_repaired, \
             f"[after second repair] server {srv_id} (first-repair replica) had no newly-repaired sstables"
 
-async def test_tablet_incremental_repair_and_scrubsstables_abort(manager: ManagerClient):
+async def test_tablet_incremental_repair_and_scrubsstables_abort(manager: ScyllaClusterManager):
     await do_tablet_incremental_repair_and_ops(manager, 'scrub_abort')
 
-async def test_tablet_incremental_repair_and_scrubsstables_validate(manager: ManagerClient):
+async def test_tablet_incremental_repair_and_scrubsstables_validate(manager: ScyllaClusterManager):
     await do_tablet_incremental_repair_and_ops(manager, 'scrub_validate')
 
-async def test_tablet_incremental_repair_and_cleanup(manager: ManagerClient):
+async def test_tablet_incremental_repair_and_cleanup(manager: ScyllaClusterManager):
     await do_tablet_incremental_repair_and_ops(manager, 'cleanup')
 
-async def test_tablet_incremental_repair_and_upgradesstables(manager: ManagerClient):
+async def test_tablet_incremental_repair_and_upgradesstables(manager: ScyllaClusterManager):
     await do_tablet_incremental_repair_and_ops(manager, 'upgradesstables')
 
-async def test_tablet_incremental_repair_and_major(manager: ManagerClient):
+async def test_tablet_incremental_repair_and_major(manager: ScyllaClusterManager):
     await do_tablet_incremental_repair_and_ops(manager, 'major')
 
-async def test_tablet_incremental_repair_and_minor(manager: ManagerClient):
+async def test_tablet_incremental_repair_and_minor(manager: ScyllaClusterManager):
     nr_keys = 100
     servers, cql, hosts, ks, table_id, logs, repaired_keys, unrepaired_keys, current_key, token = await prepare_cluster_for_incremental_repair(manager, nr_keys)
 
@@ -548,7 +548,7 @@ async def do_test_tablet_incremental_repair_with_split_and_merge(manager, do_spl
     reason="token_group_based_splitting_mutation_writer - Token group id cannot go backwards, current=0, previous=1",
 )
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_incremental_repair_with_split_and_merge(manager: ManagerClient):
+async def test_tablet_incremental_repair_with_split_and_merge(manager: ScyllaClusterManager):
     await do_test_tablet_incremental_repair_with_split_and_merge(manager, do_split=True, do_merge=True)
 
 @pytest.mark.skip_bug(
@@ -556,14 +556,14 @@ async def test_tablet_incremental_repair_with_split_and_merge(manager: ManagerCl
     reason="token_group_based_splitting_mutation_writer - Token group id cannot go backwards, current=0, previous=1 ",
 )
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_incremental_repair_with_split(manager: ManagerClient):
+async def test_tablet_incremental_repair_with_split(manager: ScyllaClusterManager):
     await do_test_tablet_incremental_repair_with_split_and_merge(manager, do_split=True, do_merge=False)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_incremental_repair_with_merge(manager: ManagerClient):
+async def test_tablet_incremental_repair_with_merge(manager: ScyllaClusterManager):
     await do_test_tablet_incremental_repair_with_split_and_merge(manager, do_split=False, do_merge=True)
 
-async def test_tablet_incremental_repair_existing_and_repair_produced_sstable(manager: ManagerClient):
+async def test_tablet_incremental_repair_existing_and_repair_produced_sstable(manager: ScyllaClusterManager):
     nr_keys = 100
     cmdline = ["--hinted-handoff-enabled", "0"]
     servers, cql, hosts, ks, table_id, logs, repaired_keys, unrepaired_keys, current_key, token = await prepare_cluster_for_incremental_repair(manager, nr_keys, cmdline)
@@ -702,7 +702,7 @@ async def test_tablet_incremental_repair_merge_error_in_merge_finalization(manag
 async def test_tablet_incremental_repair_merge_error_in_merge_completion_fiber(manager):
     await do_test_tablet_incremental_repair_merge_error(manager, 'merge_completion_fiber_error')
 
-async def test_tablet_repair_with_incremental_option(manager: ManagerClient):
+async def test_tablet_repair_with_incremental_option(manager: ScyllaClusterManager):
     servers, cql, hosts, ks, table_id, logs, _, _, _, token = await prepare_cluster_for_incremental_repair(manager)
     token = -1
 
@@ -746,7 +746,7 @@ async def test_tablet_repair_with_incremental_option(manager: ManagerClient):
         assert read1 < read2
     await do_repair_and_check('full', 1, rf'Starting tablet repair by API .* incremental_mode=full.*', check4)
 
-async def test_incremental_repair_tablet_time_metrics(manager: ManagerClient):
+async def test_incremental_repair_tablet_time_metrics(manager: ScyllaClusterManager):
     servers, _, _, ks, _, _, _, _, _, token = await prepare_cluster_for_incremental_repair(manager)
     time1 = 0
     time2 = 0
@@ -882,7 +882,7 @@ async def test_incremental_retry_end_repair_stage(manager):
 # with appending sstables produced by repair to a list work correctly with
 # multishard writer when the shard count is different.
 @pytest.mark.parametrize("use_tablet", [False, True])
-async def test_repair_sigsegv_with_diff_shard_count(manager: ManagerClient, use_tablet):
+async def test_repair_sigsegv_with_diff_shard_count(manager: ScyllaClusterManager, use_tablet):
     cmdline0 = [ '--smp', '2']
     cmdline1 = [ '--smp', '3']
     servers = await manager.servers_add(1, cmdline=cmdline0, auto_rack_dc="dc1")
@@ -928,7 +928,7 @@ async def test_repair_sigsegv_with_diff_shard_count(manager: ManagerClient, use_
 # Reproducer for https://github.com/scylladb/scylladb/issues/27365
 # Incremental repair vs table drop
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_incremental_repair_table_drop_compaction_group_gone(manager: ManagerClient):
+async def test_tablet_incremental_repair_table_drop_compaction_group_gone(manager: ScyllaClusterManager):
     cmdline = ['--logger-log-level', 'repair=debug']
     servers, cql, hosts, ks, table_id, logs, _, _, _, _ = await prepare_cluster_for_incremental_repair(manager, cmdline=cmdline)
 
@@ -1244,7 +1244,7 @@ async def _do_race_window_promotes_unrepaired_data(manager, servers, cql, ks, to
     return current_key
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_incremental_repair_race_window_promotes_unrepaired_data(manager: ManagerClient):
+async def test_incremental_repair_race_window_promotes_unrepaired_data(manager: ScyllaClusterManager):
     cmdline = ['--hinted-handoff-enabled', '0']
     servers, cql, hosts, _, _, _, _, _, _, _ = \
         await prepare_cluster_for_incremental_repair(manager, nr_keys=10, cmdline=cmdline, tablets=2)
@@ -1354,7 +1354,7 @@ async def _assert_key_deleted(cql, ks, key, hosts, *, msg=""):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tombstone_gc_no_resurrection_basic_ordering(manager: ManagerClient):
+async def test_tombstone_gc_no_resurrection_basic_ordering(manager: ScyllaClusterManager):
     """Verify that the ordering guarantee prevents premature tombstone GC.
 
     With propagation_delay=0, gc_before = repair_time.  T.deletion_time (wall-clock
@@ -1401,7 +1401,7 @@ async def test_tombstone_gc_no_resurrection_basic_ordering(manager: ManagerClien
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tombstone_gc_no_resurrection_hints_flush_failure(manager: ManagerClient):
+async def test_tombstone_gc_no_resurrection_hints_flush_failure(manager: ScyllaClusterManager):
     """Verify that repair_time stays at epoch when hints flush fails, so tombstones
     are never GC-eligible after such a repair and data resurrection cannot occur.
 
@@ -1465,7 +1465,7 @@ async def test_tombstone_gc_no_resurrection_hints_flush_failure(manager: Manager
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tombstone_gc_no_resurrection_propagation_delay(manager: ManagerClient):
+async def test_tombstone_gc_no_resurrection_propagation_delay(manager: ScyllaClusterManager):
     """Verify the ordering guarantee when D arrives via hint flush just before repair.
 
     D has an old CQL timestamp (ts_d = now - 2h) simulating a write that was delayed
@@ -1533,7 +1533,7 @@ async def test_tombstone_gc_no_resurrection_propagation_delay(manager: ManagerCl
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tombstone_gc_mv_optimization_safe_via_hints(manager: ManagerClient):
+async def test_tombstone_gc_mv_optimization_safe_via_hints(manager: ScyllaClusterManager):
     """Verify the repaired-only tombstone GC optimization is safe for non-co-located MVs
     when view hints deliver the shadowing row before the MV repair snapshot.
 
@@ -1636,7 +1636,7 @@ async def test_tombstone_gc_mv_optimization_safe_via_hints(manager: ManagerClien
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tombstone_gc_mv_safe_staging_processor_delay(manager: ManagerClient):
+async def test_tombstone_gc_mv_safe_staging_processor_delay(manager: ScyllaClusterManager):
     """Verify no resurrection when the view-update-generator staging processor is delayed
     past the point where T_mv has been GC'd from the repaired set.
 

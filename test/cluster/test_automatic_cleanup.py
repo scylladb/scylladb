@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace, get_topology_version
 from cassandra import WriteFailure
 import pytest
@@ -13,7 +13,7 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 
-async def test_no_cleanup_when_unnecessary(manager: ManagerClient):
+async def test_no_cleanup_when_unnecessary(manager: ScyllaClusterManager):
     """The test runs two bootstraps and checks that there is no cleanup in between.
        Then it runs a decommission and checks that cleanup runs automatically and then
        it runs one more decommission and checks that no cleanup runs again.
@@ -73,7 +73,7 @@ async def test_no_cleanup_when_unnecessary(manager: ManagerClient):
 
 @pytest.mark.skip_mode(mode='debug', reason='dev is enough')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cleanup_waits_for_stale_writes(manager: ManagerClient):
+async def test_cleanup_waits_for_stale_writes(manager: ScyllaClusterManager):
     """Scenario:
        * Start two nodes, a vnodes-based table with an rf=2
        * Run insert while bootstrapping another node, suspend this insert in database_apply injection

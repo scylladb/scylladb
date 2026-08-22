@@ -9,7 +9,7 @@ import pytest
 import logging
 
 from test.pylib.internal_types import IPAddress
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_nodes_cluster
@@ -19,7 +19,7 @@ pytestmark = pytest.mark.prepare_3_nodes_cluster
     link="https://github.com/scylladb/scylladb/issues/28153",
     reason="Test is disabled",
 )
-async def test_start_bootstrapped_with_invalid_seed(manager: ManagerClient):
+async def test_start_bootstrapped_with_invalid_seed(manager: ScyllaClusterManager):
     """
     Issue https://github.com/scylladb/scylladb/issues/14945.
 

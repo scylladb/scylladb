@@ -4,14 +4,14 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 import asyncio
 import pytest
 
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
-async def test_replacing_alive_node_fails(manager: ManagerClient) -> None:
+async def test_replacing_alive_node_fails(manager: ScyllaClusterManager) -> None:
     """Try replacing an alive node and check that it fails"""
     servers = await manager.running_servers()
     await asyncio.gather(*(manager.server_sees_others(srv.server_id, len(servers) - 1) for srv in servers))

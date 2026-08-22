@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
 import pytest
 import logging
@@ -13,7 +13,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-async def test_replace_with_same_ip_twice(manager: ManagerClient, failure_detector_timeout) -> None:
+async def test_replace_with_same_ip_twice(manager: ScyllaClusterManager, failure_detector_timeout) -> None:
     logger.info("starting a cluster with two nodes")
     servers = await manager.servers_add(3, config={'failure_detector_timeout_in_ms': failure_detector_timeout})
     logger.info(f"cluster started {servers}")

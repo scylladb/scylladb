@@ -9,7 +9,7 @@ import asyncio
 import logging
 import pytest
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot, inject_error
 from test.cluster.util import reconnect_driver, new_test_keyspace
 from test.cluster.object_store.conftest import keyspace_options
@@ -57,7 +57,7 @@ async def assert_registry_clean_after_restart(manager, server, table_id):
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_crash_after_compaction_prepare(manager: ManagerClient, object_storage):
+async def test_crash_after_compaction_prepare(manager: ScyllaClusterManager, object_storage):
     """Error injection throws after atomic_delete_prepare marks input sstable
     entries as 'removing' but before any S3 objects are actually deleted.
 
@@ -118,7 +118,7 @@ async def test_crash_after_compaction_prepare(manager: ManagerClient, object_sto
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_crash_after_compaction_unlink(manager: ManagerClient, object_storage):
+async def test_crash_after_compaction_unlink(manager: ScyllaClusterManager, object_storage):
     """Error injection throws after S3 objects have been unlinked but before
     atomic_delete_complete removes the registry entries.
 
@@ -150,7 +150,7 @@ async def test_crash_after_compaction_unlink(manager: ManagerClient, object_stor
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_crash_during_truncate(manager: ManagerClient, object_storage):
+async def test_crash_during_truncate(manager: ScyllaClusterManager, object_storage):
     """Error injection throws in delete_atomically after atomic_delete_prepare
     marks entries as 'removing' but before S3 objects are deleted.
 
@@ -180,7 +180,7 @@ async def test_crash_during_truncate(manager: ManagerClient, object_storage):
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_crash_before_batch_mutation_commits(manager: ManagerClient, object_storage):
+async def test_crash_before_batch_mutation_commits(manager: ScyllaClusterManager, object_storage):
     """Error injection throws inside batch_update_entry_status BEFORE the
     mutation is applied to the commitlog.
 

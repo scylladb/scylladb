@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 import asyncio
 import pytest
@@ -57,7 +57,7 @@ async def insert_with_concurrency(cql, table, value_count, concurrency):
 # replica write if the view update limit is exceeded. If, thanks to throttling, we never
 # exceed the limit, the test will pass
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
-async def test_delete_partition_rows_from_table_with_mv(manager: ManagerClient) -> None:
+async def test_delete_partition_rows_from_table_with_mv(manager: ScyllaClusterManager) -> None:
     node_count = 2
     servers = await manager.servers_add(node_count, config={'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update', 'update_backlog_immediately']})
     cql, hosts = await manager.get_ready_cql(servers)
@@ -84,7 +84,7 @@ async def test_delete_partition_rows_from_table_with_mv(manager: ManagerClient) 
 # the corresponding view partition by a partition tombstone.
 # Reproduces #8199
 @pytest.mark.parametrize("permuted", [False, True])
-async def test_base_partition_deletion_with_metrics(manager: ManagerClient, permuted):
+async def test_base_partition_deletion_with_metrics(manager: ScyllaClusterManager, permuted):
     server = await manager.server_add()
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as test_keyspace:
@@ -132,7 +132,7 @@ async def test_base_partition_deletion_with_metrics(manager: ManagerClient, perm
 # Perform a deletion of a base partition in a batch with deletion of individual rows. Verify the
 # partition is deleted correctly and that a single update is generated for the view for deleting
 # the whole partition, and no view updates for each row.
-async def test_base_partition_deletion_in_batch_with_delete_row_with_metrics(manager: ManagerClient):
+async def test_base_partition_deletion_in_batch_with_delete_row_with_metrics(manager: ScyllaClusterManager):
     server = await manager.server_add()
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as test_keyspace:

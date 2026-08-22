@@ -9,11 +9,11 @@ from aiohttp import ServerDisconnectedError
 import pytest
 
 from test.cluster.util import get_coordinator_host
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_gossiper_race_on_decommission(manager: ManagerClient):
+async def test_gossiper_race_on_decommission(manager: ScyllaClusterManager):
     """
     Test for gossiper race scenario (https://github.com/scylladb/scylladb/issues/25621):
     - Create a cluster with multiple nodes

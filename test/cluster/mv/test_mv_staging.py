@@ -6,7 +6,7 @@
 
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_view
 from test.pylib.internal_types import ServerInfo
 from test.cluster.util import new_test_keyspace, wait_for_cql_and_get_hosts
@@ -26,7 +26,7 @@ async def assert_row_count_on_host(cql, host, ks, table, row_count):
     rows = await cql.run_async(stmt, host=host)
     assert len(rows) == row_count
 
-async def get_table_dir(manager: ManagerClient, server: ServerInfo, ks: str, table: str):
+async def get_table_dir(manager: ScyllaClusterManager, server: ServerInfo, ks: str, table: str):
     workdir = await manager.server_get_workdir(server.server_id)
     ks_dir = os.path.join(workdir, "data", ks)
 
@@ -36,7 +36,7 @@ async def get_table_dir(manager: ManagerClient, server: ServerInfo, ks: str, tab
             if table_pattern.match(d):
                 return os.path.join(root, d)
 
-async def delete_table_sstables(manager: ManagerClient, server: ServerInfo, ks: str, table: str):
+async def delete_table_sstables(manager: ScyllaClusterManager, server: ServerInfo, ks: str, table: str):
     table_dir = await get_table_dir(manager, server, ks, table)
     for root, dirs, files in os.walk(table_dir):
         for file in files:
@@ -45,7 +45,7 @@ async def delete_table_sstables(manager: ManagerClient, server: ServerInfo, ks: 
         break # break unconditionally here to remove only files in `table_dir`
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_staging_backlog_processed_after_restart(manager: ManagerClient):
+async def test_staging_backlog_processed_after_restart(manager: ScyllaClusterManager):
     """
     Verifies that staging sstables are processed after node restart.
     """

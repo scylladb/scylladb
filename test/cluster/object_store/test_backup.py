@@ -16,7 +16,8 @@ import random
 
 from typing import Callable, Awaitable
 from functools import partial
-from test.pylib.manager_client import ManagerClient, ServerInfo
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.internal_types import ServerInfo
 from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace, new_test_table
 from test.pylib.rest_client import read_barrier, HTTPError
 from test.pylib.util import unique_name, wait_all
@@ -56,7 +57,7 @@ async def take_snapshot_on_one_server(ks, server, manager, logger):
 
 
 @pytest.mark.parametrize("move_files", [False, True])
-async def test_simple_backup(manager: ManagerClient, object_storage, move_files):
+async def test_simple_backup(manager: ScyllaClusterManager, object_storage, move_files):
     '''check that backing up a snapshot for a keyspace works'''
 
     objconf = object_storage.create_endpoint_conf()
@@ -101,7 +102,7 @@ async def test_simple_backup(manager: ManagerClient, object_storage, move_files)
 
 
 @pytest.mark.parametrize("ne_parameter", [ "endpoint", "bucket", "snapshot" ])
-async def test_backup_with_non_existing_parameters(manager: ManagerClient, object_storage, ne_parameter):
+async def test_backup_with_non_existing_parameters(manager: ScyllaClusterManager, object_storage, ne_parameter):
     '''backup should fail if either of the parameters does not exist'''
 
     objconf = object_storage.create_endpoint_conf()
@@ -139,7 +140,7 @@ async def test_backup_with_non_existing_parameters(manager: ManagerClient, objec
             assert status['error'] == 'std::invalid_argument (endpoint no-such-endpoint not found)'
 
 
-async def test_backup_endpoint_config_is_live_updateable(manager: ManagerClient, object_storage):
+async def test_backup_endpoint_config_is_live_updateable(manager: ScyllaClusterManager, object_storage):
     '''backup should fail if the endpoint is invalid/inaccessible
        after updating the config, it should succeed'''
 
@@ -180,7 +181,7 @@ async def test_backup_endpoint_config_is_live_updateable(manager: ManagerClient,
         assert status is not None
         assert status['state'] == 'done'
 
-async def do_test_backup_helper(manager: ManagerClient, object_storage,
+async def do_test_backup_helper(manager: ScyllaClusterManager, object_storage,
                                 breakpoint_name, handler, num_servers: int = 1):
     '''helper for backup abort testing'''
 
@@ -211,7 +212,7 @@ async def do_test_backup_helper(manager: ManagerClient, object_storage,
         await manager.api.wait_for_injection_enter(server.ip_addr, breakpoint_name)
         await handler(server, prefix, files, tid)
 
-async def do_test_backup_abort(manager: ManagerClient, object_storage,
+async def do_test_backup_abort(manager: ScyllaClusterManager, object_storage,
                                breakpoint_name, min_files, max_files = None):
     '''helper for backup abort testing'''
 
@@ -240,20 +241,20 @@ async def do_test_backup_abort(manager: ManagerClient, object_storage,
     await do_test_backup_helper(manager, object_storage, breakpoint_name, abort_and_check)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_backup_is_abortable(manager: ManagerClient, object_storage):
+async def test_backup_is_abortable(manager: ScyllaClusterManager, object_storage):
     '''check that backing up a snapshot for a keyspace works'''
     await do_test_backup_abort(manager, object_storage, breakpoint_name="backup_task_pause", min_files=0)
 
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_backup_is_abortable_in_s3_client(manager: ManagerClient, object_storage):
+async def test_backup_is_abortable_in_s3_client(manager: ScyllaClusterManager, object_storage):
     '''check that backing up a snapshot for a keyspace works'''
     await do_test_backup_abort(manager, object_storage, breakpoint_name="backup_task_pre_upload", min_files=0, max_files=1)
 
 
 @pytest.mark.parametrize(("do_encrypt", "do_abort"), [(False, False), (False, True), (True, False)])
-async def test_simple_backup_and_restore(manager: ManagerClient, object_storage, tmpdir, do_encrypt, do_abort):
+async def test_simple_backup_and_restore(manager: ScyllaClusterManager, object_storage, tmpdir, do_encrypt, do_abort):
     '''check that restoring from backed up snapshot for a keyspace:table works'''
 
     objconf = object_storage.create_endpoint_conf()
@@ -366,7 +367,7 @@ async def test_simple_backup_and_restore(manager: ManagerClient, object_storage,
         assert objects == post_objects
 
 
-async def do_abort_restore(manager: ManagerClient, object_storage):
+async def do_abort_restore(manager: ScyllaClusterManager, object_storage):
     # Define configuration for the servers.
     objconf = object_storage.create_endpoint_conf()
     config = {'enable_user_defined_functions': False,
@@ -451,7 +452,7 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
         assert failed, "Expected at least one restore task to fail after aborting"
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_abort_restore_with_rpc_error(manager: ManagerClient, object_storage):
+async def test_abort_restore_with_rpc_error(manager: ScyllaClusterManager, object_storage):
     await do_abort_restore(manager, object_storage)
 
 
@@ -672,12 +673,12 @@ class SSTablesOnObjectStorage:
         topo(rf = 3, nodes = 6, racks = 2, dcs = 1),
         topo(rf = 2, nodes = 8, racks = 4, dcs = 2)
     ])
-async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerClient, object_storage, topology):
+async def test_restore_with_streaming_scopes(build_mode: str, manager: ScyllaClusterManager, object_storage, topology):
     '''Check that restoring of a cluster with stream scopes works'''
     await do_test_streaming_scopes(build_mode, manager, topology, SSTablesOnObjectStorage(object_storage))
 
 
-async def do_test_streaming_scopes(build_mode: str, manager: ManagerClient, topology, sstables_storage):
+async def do_test_streaming_scopes(build_mode: str, manager: ScyllaClusterManager, topology, sstables_storage):
     '''
     This test creates a cluster specified by the topology parameter above,
     configurable number of nodes, tacks, datacenters, and replication factor.
@@ -758,7 +759,7 @@ async def do_test_streaming_scopes(build_mode: str, manager: ManagerClient, topo
         (2, 1),  # multiple tables via a single node
         (2, 2),  # multiple tables dispatched from multiple nodes
     ])
-async def test_restore_tablets(build_mode: str, manager: ManagerClient, object_storage, topology, num_tables, num_restore_nodes):
+async def test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, object_storage, topology, num_tables, num_restore_nodes):
     '''Check that tablet-aware restore works for multiple tables backed up from multiple nodes'''
 
     servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
@@ -810,7 +811,7 @@ async def test_restore_tablets(build_mode: str, manager: ManagerClient, object_s
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_restore_tablets_parallel(build_mode: str, manager: ManagerClient, object_storage):
+async def test_restore_tablets_parallel(build_mode: str, manager: ScyllaClusterManager, object_storage):
     '''Verify that the tablets of a single table are restored in parallel, not one by one.
     Pause one tablet download per node with a one-shot injection and assert that the remaining
     tablets keep downloading (restore progress advances above zero) while those are blocked.
@@ -876,7 +877,7 @@ async def test_restore_tablets_parallel(build_mode: str, manager: ManagerClient,
         await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_restore_tablets_vs_migration(build_mode: str, manager: ManagerClient, object_storage):
+async def test_restore_tablets_vs_migration(build_mode: str, manager: ScyllaClusterManager, object_storage):
     '''Check that restore handles tablets migrating around'''
 
     topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 1)
@@ -928,7 +929,7 @@ async def test_restore_tablets_vs_migration(build_mode: str, manager: ManagerCli
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_restore_tablets_download_failure(build_mode: str, manager: ManagerClient, object_storage):
+async def test_restore_tablets_download_failure(build_mode: str, manager: ScyllaClusterManager, object_storage):
     '''Check that failure to download an sstable propagates back to API'''
 
     topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 1)
@@ -964,7 +965,7 @@ async def test_restore_tablets_download_failure(build_mode: str, manager: Manage
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_restore_tablets_abort(build_mode: str, manager: ManagerClient, object_storage):
+async def test_restore_tablets_abort(build_mode: str, manager: ScyllaClusterManager, object_storage):
     '''Verify that aborting a tablet restore task interrupts in-flight downloads
     without crashing the node.
 
@@ -1047,7 +1048,7 @@ async def test_restore_tablets_abort(build_mode: str, manager: ManagerClient, ob
 
 @pytest.mark.parametrize("target", ['coordinator', 'replica', 'api'])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: ManagerClient, object_storage, target):
+async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: ScyllaClusterManager, object_storage, target):
     '''Check how restore handler node loss in the middle of operation'''
 
     topology = topo(rf = 2, nodes = 4, racks = 2, dcs = 1)
@@ -1101,7 +1102,7 @@ async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: Ma
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_restore_tablets_duplicate_after_failed_api_node(build_mode: str, manager: ManagerClient, object_storage):
+async def test_restore_tablets_duplicate_after_failed_api_node(build_mode: str, manager: ScyllaClusterManager, object_storage):
     '''Check that a new restore request does not hang after a previous restore failed due to API node loss,
     and that a subsequent restore of the same table after a *successful* one is actually executed rather than
     silently skipped.'''
@@ -1155,7 +1156,7 @@ async def test_restore_tablets_duplicate_after_failed_api_node(build_mode: str, 
     (1, 1, 2, 2),
     (4, 4, 2, 2),
 ])
-async def test_restore_tablets_with_different_tablet_hints(build_mode: str, manager: ManagerClient, object_storage,
+async def test_restore_tablets_with_different_tablet_hints(build_mode: str, manager: ScyllaClusterManager, object_storage,
                                                            min_tablet_count_before_backup, max_tablet_count_before_backup,
                                                            min_tablet_count_before_restore, max_tablet_count_before_restore):
     '''This test checks:
@@ -1204,7 +1205,7 @@ async def test_restore_tablets_with_different_tablet_hints(build_mode: str, mana
         assert f"'min_tablet_count': '{min_tablet_count_before_restore}'" in desc, f"Expected min_tablet_count={min_tablet_count_before_restore} in: {desc}"
         assert f"'max_tablet_count': '{max_tablet_count_before_restore}'" in desc, f"Expected max_tablet_count={max_tablet_count_before_restore} in: {desc}"
 
-async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_storage):
+async def test_restore_with_non_existing_sstable(manager: ScyllaClusterManager, object_storage):
     '''Check that restore task fails well when given a non-existing sstable'''
 
     objconf = object_storage.create_endpoint_conf()
@@ -1227,7 +1228,7 @@ async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_
         assert 'error' in status and 'Not Found' in status['error']
 
 
-async def test_backup_broken_streaming(manager: ManagerClient, s3_storage):
+async def test_backup_broken_streaming(manager: ScyllaClusterManager, s3_storage):
     # Define configuration for the servers.
     objconf = s3_storage.create_endpoint_conf()
     config = {
@@ -1309,7 +1310,7 @@ async def test_backup_broken_streaming(manager: ManagerClient, s3_storage):
 
 @pytest.mark.parametrize("domain", ['rack', 'dc'])
 @pytest.mark.parametrize("scope_is_same", [True, False])
-async def test_restore_primary_replica(manager: ManagerClient, object_storage, domain, scope_is_same):
+async def test_restore_primary_replica(manager: ScyllaClusterManager, object_storage, domain, scope_is_same):
     '''Check that restoring with primary_replica_only streams to the correct primary replica(s) depending on scope.
 
     When scope matches the node's own domain (scope_is_same=True):
@@ -1393,7 +1394,7 @@ async def test_restore_primary_replica(manager: ManagerClient, object_storage, d
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_decommision_waits_for_backup(manager: ManagerClient, object_storage):
+async def test_decommision_waits_for_backup(manager: ScyllaClusterManager, object_storage):
     '''check that backing up a snapshot for a keyspace blocks decommission'''
 
     async def decommission_and_check(server: ServerInfo, prefix: str, files, tid):
@@ -1427,7 +1428,7 @@ async def test_decommision_waits_for_backup(manager: ManagerClient, object_stora
 
     await do_test_backup_helper(manager, object_storage, "backup_task_pre_upload", decommission_and_check, 2)
 
-async def test_aborted_decommision_reenables_snapshot(manager: ManagerClient, object_storage):
+async def test_aborted_decommision_reenables_snapshot(manager: ScyllaClusterManager, object_storage):
     """
     Tests that an aborted decommission will still allow snapshots
     """
@@ -1490,7 +1491,7 @@ async def test_aborted_decommision_reenables_snapshot(manager: ManagerClient, ob
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_drop_keyspace_during_tablet_restore(manager: ManagerClient, object_storage):
+async def test_drop_keyspace_during_tablet_restore(manager: ScyllaClusterManager, object_storage):
     """Verify that dropping a keyspace while tablet restore is downloading
     SSTables does not crash the node.
 
@@ -1553,7 +1554,7 @@ async def test_drop_keyspace_during_tablet_restore(manager: ManagerClient, objec
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_drop_table_during_backup(manager: ManagerClient, object_storage):
+async def test_drop_table_during_backup(manager: ScyllaClusterManager, object_storage):
     """Verify that dropping a table while a native backup is running does not
     fail the backup.
     The 'backup_task_before_worker' injection pauses the backup after the
@@ -1606,7 +1607,7 @@ async def test_drop_table_during_backup(manager: ManagerClient, object_storage):
 
 
 @pytest.mark.parametrize("drop", ["table", "keyspace", "table_recreated"])
-async def test_backup_after_schema_dropped(manager: ManagerClient, object_storage, drop):
+async def test_backup_after_schema_dropped(manager: ScyllaClusterManager, object_storage, drop):
     """Verify that a native backup can be started for a snapshot whose table (or
     whole keyspace) was already dropped before the backup was requested.
 
@@ -1676,8 +1677,8 @@ async def prepare_write_workload(cql, table_name, flush=True, n: int = None):
     if flush:
         await nodetool.flush(cql, table_name)
 
-async def do_test_snapshot_on_all_nodes(manager: ManagerClient,
-                                        handle_snapshot: Callable[[ManagerClient, str, str, str, list[ServerInfo]], Awaitable[None]],
+async def do_test_snapshot_on_all_nodes(manager: ScyllaClusterManager,
+                                        handle_snapshot: Callable[[ScyllaClusterManager, str, str, str, list[ServerInfo]], Awaitable[None]],
                                         object_storage = None, 
                                         do_snapshot: bool = True,
                                         do_repair: bool = False):
@@ -1704,7 +1705,7 @@ async def do_test_snapshot_on_all_nodes(manager: ManagerClient,
                 #todo: clear snapshot
                 pass
 
-async def run_cluster_backup(object_storage, prefix: str, manager: ManagerClient, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+async def run_cluster_backup(object_storage, prefix: str, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
     """
     Helper to run a cluster backup
     """
@@ -1757,7 +1758,7 @@ async def run_cluster_backup(object_storage, prefix: str, manager: ManagerClient
     return manifest
 
 @pytest.mark.asyncio
-async def test_cluster_snapshot_backup(manager: ManagerClient, object_storage):
+async def test_cluster_snapshot_backup(manager: ScyllaClusterManager, object_storage):
     """
     Tests a cluster snapshot can be backed up across cluster, and the files
     are where we expect
@@ -1765,13 +1766,13 @@ async def test_cluster_snapshot_backup(manager: ManagerClient, object_storage):
     await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup, object_storage, 'rapunzel'), object_storage)
 
 @pytest.mark.asyncio
-async def test_cluster_backup_with_auto_snapshot(manager: ManagerClient, object_storage):
+async def test_cluster_backup_with_auto_snapshot(manager: ScyllaClusterManager, object_storage):
     """
     Tests a snapshot can be auto generated in backup request
     """
     await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup, object_storage, 'rapunzel'), object_storage, False)
 
-async def run_double_cluster_backup(object_storage, manager: ManagerClient, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+async def run_double_cluster_backup(object_storage, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
     """
     Helper
     """
@@ -1779,14 +1780,14 @@ async def run_double_cluster_backup(object_storage, manager: ManagerClient, snap
     await run_cluster_backup(object_storage, 'ninja2', manager, snapshot_name, ks, cf, servers)
 
 @pytest.mark.asyncio
-async def test_cluster_snapshot_backup_to_new_location(manager: ManagerClient, object_storage):
+async def test_cluster_snapshot_backup_to_new_location(manager: ScyllaClusterManager, object_storage):
     """
     Tests a cluster snapshot can be backed to new location even when already backed up
     """
     await do_test_snapshot_on_all_nodes(manager, partial(run_double_cluster_backup, object_storage), object_storage)
 
 
-async def run_cluster_backup_and_check_redundancy(object_storage, manager: ManagerClient, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+async def run_cluster_backup_and_check_redundancy(object_storage, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
     """
     Helper
     """
@@ -1800,7 +1801,7 @@ async def run_cluster_backup_and_check_redundancy(object_storage, manager: Manag
 
 
 @pytest.mark.asyncio
-async def test_cluster_snapshot_repair_set_unique(manager: ManagerClient, object_storage):
+async def test_cluster_snapshot_repair_set_unique(manager: ScyllaClusterManager, object_storage):
     """
     Tests a cluster snapshot reduces the snapshot sstable set by the current repair set for each tablet
     """

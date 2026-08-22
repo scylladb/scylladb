@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 import asyncio
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 import pytest
 import logging
@@ -18,7 +18,7 @@ from cassandra.cluster import ConsistencyLevel, SimpleStatement
 
 logger = logging.getLogger(__name__)
 
-async def test_broken_bootstrap(manager: ManagerClient):
+async def test_broken_bootstrap(manager: ScyllaClusterManager):
     server_a = await manager.server_add()
     server_b = await manager.server_add(start=False)
 
@@ -50,7 +50,7 @@ async def test_broken_bootstrap(manager: ManagerClient):
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize('reuse_ip', [False, True])
-async def test_full_shutdown_during_replace(manager: ManagerClient, reuse_ip: bool):
+async def test_full_shutdown_during_replace(manager: ScyllaClusterManager, reuse_ip: bool):
     """
     Test that shutting down all live nodes during replace doesn't cause the IP address of the replacing node to be
     missing on restart. After restarts, the test performs requests with the replacing node as a pending replica, which

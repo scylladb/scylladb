@@ -12,7 +12,7 @@ import re
 import uuid
 import pytest
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.object_storage import keyspace_options
 from test.cluster.util import new_test_keyspace, wait_for_no_pending_topology_transition, wait_for_no_running_compactions
 from test.pylib.util import wait_for_cql_and_get_hosts
@@ -21,7 +21,7 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 
 logger = logging.getLogger(__name__)
 
-async def test_scaling(manager: ManagerClient, object_storage):
+async def test_scaling(manager: ScyllaClusterManager, object_storage):
     """Test cluster scaling (add/remove nodes) with tablets on object storage.
 
     Creates a 3-node cluster (one per rack) with a keyspace on object storage,

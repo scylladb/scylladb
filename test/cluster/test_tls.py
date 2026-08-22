@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from cassandra.connection import ConnectionShutdown
 from test.cluster.util import new_test_keyspace
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
-async def test_upgrade_to_ssl(manager: ManagerClient) -> None:
+async def test_upgrade_to_ssl(manager: ScyllaClusterManager) -> None:
     """Tests rolling upgrade/downgrade from non-SSL to SSL and back
     """
 

@@ -11,10 +11,10 @@ from cassandra.protocol import InvalidRequest  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 from test.cluster.util import new_test_keyspace
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
-async def test_sticky_coordinator_enforced(manager: ManagerClient) -> None:
+async def test_sticky_coordinator_enforced(manager: ScyllaClusterManager) -> None:
     await manager.servers_add(2, cmdline=['--logger-log-level', 'paging=trace'], auto_rack_dc="dc1")
 
     cql = manager.get_cql()

@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot
 from test.cluster.util import check_token_ring_and_group0_consistency, new_test_keyspace
 
@@ -14,7 +14,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cleanup_stop(manager: ManagerClient):
+async def test_cleanup_stop(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'compaction_manager=debug',

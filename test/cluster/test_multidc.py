@@ -18,18 +18,17 @@ from cassandra.cluster import NoHostAvailable
 from cassandra.protocol import InvalidRequest, ConfigurationException
 from cassandra.query import SimpleStatement
 from test.pylib.async_cql import _wrap_future
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.random_tables import RandomTables, TextType, Column
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name
-from test.cluster.conftest import cluster_con
 
 logger = logging.getLogger(__name__)
 CONFIG = {"endpoint_snitch": "GossipingPropertyFileSnitch"}
 
 
 # Checks a cluster boot/operations in multi-dc environment with 5 nodes each in a separate DC
-async def test_multidc(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+async def test_multidc(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     logger.info("Creating a new cluster")
     for i in range(5):
         s_info = await manager.server_add(
@@ -52,7 +51,7 @@ cluster_config = [
 # Simple put-get test for 2 DC with a different amount of nodes and different replication factors
 @pytest.mark.parametrize("nodes_list, rf", cluster_config)
 async def test_putget_2dc_with_rf(
-        request: pytest.FixtureRequest, manager: ManagerClient, nodes_list: list[int], rf: int
+        request: pytest.FixtureRequest, manager: ScyllaClusterManager, nodes_list: list[int], rf: int
 ) -> None:
     ks = "test_ks"
     cf = "test_cf"
@@ -112,7 +111,7 @@ async def test_putget_2dc_with_rf(
             assert row[2] == f"value{i}"
 
 
-async def test_read_or_write_to_dc_with_rf_0_fails(request: pytest.FixtureRequest, manager: ManagerClient):
+async def test_read_or_write_to_dc_with_rf_0_fails(request: pytest.FixtureRequest, manager: ScyllaClusterManager):
     """
     Verifies that operations using local consistency levels (LOCAL_QUORUM, LOCAL_ONE) fail
     with a clear, actionable error message when the datacenter has replication factor 0.
@@ -133,9 +132,9 @@ async def test_read_or_write_to_dc_with_rf_0_fails(request: pytest.FixtureReques
             property_file={"dc": f"dc{i}", "rack": "myrack"},
         ))
 
-    dc1_connection = cluster_con([servers[0].ip_addr],
+    dc1_connection = manager.con_gen([servers[0].ip_addr],
                                  load_balancing_policy=WhiteListRoundRobinPolicy([servers[0].ip_addr])).connect()
-    dc2_connection = cluster_con([servers[1].ip_addr],
+    dc2_connection = manager.con_gen([servers[1].ip_addr],
                                  load_balancing_policy=WhiteListRoundRobinPolicy([servers[1].ip_addr])).connect()
 
     random_tables = RandomTables(request.node.name, manager, ks, 1, dc_replication)
@@ -175,7 +174,7 @@ async def test_read_or_write_to_dc_with_rf_0_fails(request: pytest.FixtureReques
         assert_operation_fails_with_rf0_error(cl,
             f"INSERT INTO {ks}.{table_name} ({columns[0].name}, {columns[1].name}) VALUES ('k_fail_{i}', 'value_fail_{i}')")
 
-async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: ManagerClient):
+async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: ScyllaClusterManager):
     """
     This test verifies that creating and altering a keyspace keeps it RF-rack-valid.
     If an operation would make it RF-rack-invalid, it should fail.
@@ -322,7 +321,7 @@ async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: Man
     # RF = 1 is always OK!
     await alter_fail(ks3, [1, 1], 1, 2)
 
-async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
+async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ScyllaClusterManager):
     """
     This test verifies that Scylla rejects RF-rack-invalid keyspaces
     in presence of an arbiter data center.
@@ -399,7 +398,7 @@ async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
         for task in [*valid_keyspaces, *invalid_keyspaces]:
             _ = tg.create_task(task)
 
-async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces(manager: ManagerClient):
+async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces(manager: ScyllaClusterManager):
     """
     This test verifies that starting a Scylla node fails when there's an RF-rack-invalid keyspace.
     We aim to simulate the behavior of a node when upgrading to 2025.*.
@@ -505,7 +504,7 @@ async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces(manager:
     await manager.server_update_config(s1.server_id, "rf_rack_valid_keyspaces", "true")
     await manager.server_start(s1.server_id)
 
-async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces_but_not_enforced(manager: ManagerClient):
+async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces_but_not_enforced(manager: ScyllaClusterManager):
     """
     When the configuration option `rf_rack_valid_keyspaces` is enabled and there is an RF-rack-invalid keyspace,
     starting a node fails. However, when the configuration option is disabled, but there still is a keyspace
@@ -547,7 +546,7 @@ async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces_but_not_
 
     await log.wait_for(expected_pattern)
 
-async def test_restart_with_prefer_local(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+async def test_restart_with_prefer_local(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     logger.info("Creating a new cluster")
     for i in range(3):
         s_info = await manager.server_add(
@@ -559,7 +558,7 @@ async def test_restart_with_prefer_local(request: pytest.FixtureRequest, manager
     await manager.server_stop_gracefully(s_info.server_id)
     await manager.server_start(s_info.server_id)
 
-async def test_warn_create_and_alter_rf_rack_invalid_ks(manager: ManagerClient):
+async def test_warn_create_and_alter_rf_rack_invalid_ks(manager: ScyllaClusterManager):
     """
     When the configuration option `rf_rack_valid_keyspaces` is enabled, the user is not
     allowed to create an RF-rack-invalid keyspace. When the option is disabled, that limitation

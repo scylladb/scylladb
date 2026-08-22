@@ -16,7 +16,7 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.tablets import get_tablet_count, get_all_tablet_replicas
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.internal_types import ServerInfo
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace, reconnect_driver
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 
@@ -119,7 +119,7 @@ def compute_pow2_boundaries(target_pow2: int) -> list[int]:
     return [(i * UINT64_MAX) // target_pow2 + INT64_MIN for i in range(1, target_pow2 + 1)]
 
 
-async def get_target_pow2_tablet_count(manager: ManagerClient, server: ServerInfo, ks: str, table_name: str) -> int:
+async def get_target_pow2_tablet_count(manager: ScyllaClusterManager, server: ServerInfo, ks: str, table_name: str) -> int:
     """Read target_pow2_tablet_count from system.tablets for a given table."""
     host = manager.get_cql().cluster.metadata.get_host(server.ip_addr)
     await read_barrier(manager.api, server.ip_addr)
@@ -131,7 +131,7 @@ async def get_target_pow2_tablet_count(manager: ManagerClient, server: ServerInf
     return rows[0].target_pow2_tablet_count
 
 
-async def verify_tablet_map_boundaries(manager: ManagerClient, server: ServerInfo,
+async def verify_tablet_map_boundaries(manager: ScyllaClusterManager, server: ServerInfo,
                                        ks: str, table_name: str,
                                        vnode_boundaries: list[int]) -> list:
     """Verify the initial tablet map contains exactly the union of vnode boundaries, max token, and pow2 boundaries.
@@ -162,7 +162,7 @@ async def verify_tablet_map_boundaries(manager: ManagerClient, server: ServerInf
     return tablet_replicas
 
 
-async def verify_pow2_layout(manager: ManagerClient, server: ServerInfo,
+async def verify_pow2_layout(manager: ScyllaClusterManager, server: ServerInfo,
                              ks: str, table_name: str):
     """Verify that the tablet map has an exact uniform pow2 layout."""
     tablet_replicas = await get_all_tablet_replicas(manager, server, ks, table_name)
@@ -176,7 +176,7 @@ async def verify_pow2_layout(manager: ManagerClient, server: ServerInfo,
     assert tablet_tokens == expected_tokens
 
 
-async def wait_for_pow2_convergence(manager: ManagerClient, server: ServerInfo,
+async def wait_for_pow2_convergence(manager: ScyllaClusterManager, server: ServerInfo,
                                     ks: str, table_name: str, timeout: float = 120):
     """Wait until pow2 convergence completes and verify the result.
 
@@ -194,7 +194,7 @@ async def wait_for_pow2_convergence(manager: ManagerClient, server: ServerInfo,
     assert False, f"Pow2 convergence for {ks}.{table_name} did not complete within {timeout}s"
 
 
-async def verify_migration_status(manager: ManagerClient, server: ServerInfo,
+async def verify_migration_status(manager: ScyllaClusterManager, server: ServerInfo,
                                   ks: str, expected_status: str,
                                   expected_node_statuses: dict[str, tuple[str, str]],
                                   retries: int = 0, retry_interval: float = 0):
@@ -235,7 +235,7 @@ async def verify_migration_status(manager: ManagerClient, server: ServerInfo,
                 raise
 
 
-async def test_migration(manager: ManagerClient):
+async def test_migration(manager: ScyllaClusterManager):
     """Verify vnodes-to-tablets migration for a single table on a single-node cluster.
 
     Steps:
@@ -364,7 +364,7 @@ async def test_migration(manager: ManagerClient):
         await wait_for_pow2_convergence(manager, server, ks, 'test')
 
 
-async def test_migration_rollback(manager: ManagerClient):
+async def test_migration_rollback(manager: ScyllaClusterManager):
     """Verify rollback of vnodes-to-tablets migration on a single-node cluster.
 
     Same as test_migration(), but after the first restart (which reshards on
@@ -482,7 +482,7 @@ async def test_migration_rollback(manager: ManagerClient):
         await verify_data_integrity(cql, ks, "test", num_keys)
 
 
-async def test_migration_multinode(manager: ManagerClient):
+async def test_migration_multinode(manager: ScyllaClusterManager):
     """Verify vnodes-to-tablets migration for a single table on a multi-node cluster with rolling restarts.
 
     Steps:
@@ -632,7 +632,7 @@ async def test_migration_multinode(manager: ManagerClient):
         await wait_for_pow2_convergence(manager, servers[0], ks, 'test')
 
 
-async def test_migration_multidc(manager: ManagerClient):
+async def test_migration_multidc(manager: ScyllaClusterManager):
     """Verify vnodes-to-tablets migration on a multi-DC cluster with asymmetric RF.
 
     Topology:
@@ -789,7 +789,7 @@ async def test_migration_multidc(manager: ManagerClient):
         await wait_for_pow2_convergence(manager, servers[0], ks, 'test')
 
 
-async def setup_single_node(manager: ManagerClient):
+async def setup_single_node(manager: ScyllaClusterManager):
     """Start a single node with random tokens for migration error tests."""
     cfg = {'num_tokens': 16}
     server = await manager.server_add(cmdline=['--smp', '2'], config=cfg)
@@ -797,7 +797,7 @@ async def setup_single_node(manager: ManagerClient):
     return server, cql
 
 
-async def test_migration_nonexistent_keyspace(manager: ManagerClient):
+async def test_migration_nonexistent_keyspace(manager: ScyllaClusterManager):
     """Verify that migration APIs fail on a non-existent keyspace."""
     server, cql = await setup_single_node(manager)
 
@@ -809,7 +809,7 @@ async def test_migration_nonexistent_keyspace(manager: ManagerClient):
         await manager.api.finalize_vnode_tablet_migration(server.ip_addr, "ks")
 
 
-async def test_migration_already_tablets(manager: ManagerClient):
+async def test_migration_already_tablets(manager: ScyllaClusterManager):
     """Verify that starting migration on a keyspace that already uses tablets fails."""
     server, cql = await setup_single_node(manager)
 
@@ -818,7 +818,7 @@ async def test_migration_already_tablets(manager: ManagerClient):
             await manager.api.create_vnode_tablet_migration(server.ip_addr, ks_tablets)
 
 
-async def test_migration_empty_keyspace(manager: ManagerClient):
+async def test_migration_empty_keyspace(manager: ScyllaClusterManager):
     """Verify that starting migration on a keyspace with no tables fails."""
     server, cql = await setup_single_node(manager)
 
@@ -827,7 +827,7 @@ async def test_migration_empty_keyspace(manager: ManagerClient):
             await manager.api.create_vnode_tablet_migration(server.ip_addr, ks_empty)
 
 
-async def test_migration_finalize_without_migration(manager: ManagerClient):
+async def test_migration_finalize_without_migration(manager: ScyllaClusterManager):
     """Verify that finalizing migration without starting one first fails."""
     server, cql = await setup_single_node(manager)
 
@@ -837,7 +837,7 @@ async def test_migration_finalize_without_migration(manager: ManagerClient):
             await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks_vnodes)
 
 
-async def test_migration_upgrade_without_migration(manager: ManagerClient):
+async def test_migration_upgrade_without_migration(manager: ScyllaClusterManager):
     """Verify that upgrading a node to tablets without an active migration fails."""
     server, cql = await setup_single_node(manager)
 
@@ -845,7 +845,7 @@ async def test_migration_upgrade_without_migration(manager: ManagerClient):
         await manager.api.upgrade_node_to_tablets(server.ip_addr)
 
 
-async def test_migration_overlapping_migrations(manager: ManagerClient):
+async def test_migration_overlapping_migrations(manager: ScyllaClusterManager):
     """Verify that starting a second migration while one is already in progress fails."""
     server, cql = await setup_single_node(manager)
 
@@ -865,7 +865,7 @@ async def test_migration_overlapping_migrations(manager: ManagerClient):
         await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks1)
 
 
-async def test_migration_finalize_before_upgrade(manager: ManagerClient):
+async def test_migration_finalize_before_upgrade(manager: ScyllaClusterManager):
     """Verify that finalizing migration before the node has finished upgrading fails."""
     server, cql = await setup_single_node(manager)
 
@@ -883,7 +883,7 @@ async def test_migration_finalize_before_upgrade(manager: ManagerClient):
         await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
 
 
-async def test_migration_task_not_abortable(manager: ManagerClient):
+async def test_migration_task_not_abortable(manager: ScyllaClusterManager):
     """Verify that aborting a vnodes-to-tablets migration task via the task manager fails."""
     server, cql = await setup_single_node(manager)
 
@@ -908,7 +908,7 @@ async def test_migration_task_not_abortable(manager: ManagerClient):
         await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
 
 
-async def test_migration_wait_task(manager: ManagerClient):
+async def test_migration_wait_task(manager: ScyllaClusterManager):
     """Verify that the task manager "wait" API works for vnodes-to-tablets migration tasks.
 
     Exercises two scenarios:
@@ -982,7 +982,7 @@ async def test_migration_wait_task(manager: ManagerClient):
         assert wait_status.progress_completed == 1, f"Expected 1 upgraded node for completed migration, got {wait_status.progress_completed}"
 
 
-async def test_migration_multiple_keyspaces(manager: ManagerClient):
+async def test_migration_multiple_keyspaces(manager: ScyllaClusterManager):
     """Verify that two keyspaces can be migrated from vnodes to tablets simultaneously."""
     num_shards = 3
     tokens_per_node = 16
@@ -1053,7 +1053,7 @@ async def test_migration_multiple_keyspaces(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-async def test_migration_multiple_tables(manager: ManagerClient):
+async def test_migration_multiple_tables(manager: ScyllaClusterManager):
     """Verify vnodes-to-tablets migration on keyspace with multiple tables.
 
     The test verifies that all tables get correct tablet maps, that resharding
@@ -1107,7 +1107,7 @@ async def test_migration_multiple_tables(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-async def test_tablet_status_in_migration_api(manager: ManagerClient):
+async def test_tablet_status_in_migration_api(manager: ScyllaClusterManager):
     """"Verify the ?include=tablet_status query parameter in the migration API.
 
     When set, the migration API response is extended with a 'tablets' field that
@@ -1219,7 +1219,7 @@ async def test_tablet_status_in_migration_api(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-async def test_pow2_convergence_virtual_task(manager: ManagerClient):
+async def test_pow2_convergence_virtual_task(manager: ScyllaClusterManager):
     """Verify that pow2 convergence is tracked via a virtual task.
 
     Coverage:

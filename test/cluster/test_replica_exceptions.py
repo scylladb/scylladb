@@ -8,7 +8,7 @@ from typing import Any, Callable, NamedTuple
 
 import pytest
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.repair import ServerInfo
 from test.pylib.rest_client import ScyllaMetrics, inject_error
 
@@ -32,14 +32,14 @@ class DB(NamedTuple):
 class Injection(NamedTuple):
     name: str = ""
 
-async def get_metrics(manager: ManagerClient, servers: list[ServerInfo]) -> list[ScyllaMetrics]:
+async def get_metrics(manager: ScyllaClusterManager, servers: list[ServerInfo]) -> list[ScyllaMetrics]:
     return await asyncio.gather(*[manager.metrics.query(s.ip_addr) for s in servers])
 
 def get_metric_count(metrics: list[ScyllaMetrics], metric_name: str) -> int:
     return sum([m.get(metric_name) for m in metrics])
 
 async def _test_impl(
-        manager: ManagerClient,
+        manager: ScyllaClusterManager,
         config: dict[str, Any],
         measurement: Measurement,
         db: DB,
@@ -82,7 +82,7 @@ async def _test_impl(
     assert cpp_exceptions <= measurement.cpp_exception_threshold
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_replica_do_apply_rate_limit_no_cpp_exceptions(manager: ManagerClient):
+async def test_replica_do_apply_rate_limit_no_cpp_exceptions(manager: ScyllaClusterManager):
     measurement = (m := Measurement())._replace(
         metric_name = "scylla_database_total_writes_rate_limited",
         metric_error_threshold = m.run_count * 0.9
@@ -104,7 +104,7 @@ async def test_replica_do_apply_rate_limit_no_cpp_exceptions(manager: ManagerCli
     )
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_replica_query_rate_limit_no_cpp_exceptions(manager: ManagerClient):
+async def test_replica_query_rate_limit_no_cpp_exceptions(manager: ScyllaClusterManager):
     measurement = (m := Measurement())._replace(
         metric_name = "scylla_database_total_reads_rate_limited",
         metric_error_threshold = m.run_count * 0.9
@@ -126,7 +126,7 @@ async def test_replica_query_rate_limit_no_cpp_exceptions(manager: ManagerClient
     )
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_replica_writes_apply_counter_update_timeout(manager: ManagerClient):
+async def test_replica_writes_apply_counter_update_timeout(manager: ScyllaClusterManager):
     measurement = (m := Measurement())._replace(
         cpp_exception_threshold = 20 + m.run_count * 10,
         metric_name = "scylla_database_total_writes_timedout",
@@ -149,7 +149,7 @@ async def test_replica_writes_apply_counter_update_timeout(manager: ManagerClien
     )
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_replica_writes_do_apply_counter_update_timeout(manager: ManagerClient):
+async def test_replica_writes_do_apply_counter_update_timeout(manager: ScyllaClusterManager):
     config = { "counter_write_request_timeout_in_ms": 50 }
 
     measurement = (m := Measurement())._replace(
@@ -174,7 +174,7 @@ async def test_replica_writes_do_apply_counter_update_timeout(manager: ManagerCl
     )
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_replica_database_apply_timeout(manager: ManagerClient):
+async def test_replica_database_apply_timeout(manager: ScyllaClusterManager):
     measurement = (m := Measurement())._replace(
         cpp_exception_threshold = 20 + m.run_count * 10,
         metric_name = "scylla_database_total_writes_timedout",
