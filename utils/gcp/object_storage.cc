@@ -514,11 +514,19 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
     auto end = offset + len;
 
     for (;;) {
-        auto range = fmt::format("bytes {}-{}/{}"
-            , offset // first byte
-            , last // last byte
-            , final ? std::to_string(end) : "*"s
-        );
+        // A zero-length chunk names no bytes, so it must not name a last byte:
+        // "bytes 0-0/0" claims byte 0 exists in an object declared to be empty,
+        // and GCS rejects it with 400. "bytes */<total>" is the documented form
+        // for finalizing a session without sending data. This covers both a
+        // genuinely empty object and the case where earlier writes happened to
+        // drain the buffer exactly, leaving nothing for the final chunk.
+        auto range = len == 0
+            ? fmt::format("bytes */{}", end)
+            : fmt::format("bytes {}-{}/{}"
+                , offset // first byte
+                , last // last byte
+                , final ? std::to_string(end) : "*"s
+            );
 
         try {
             if (_session_path.empty()) {
