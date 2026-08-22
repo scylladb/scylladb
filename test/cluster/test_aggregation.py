@@ -70,7 +70,7 @@ async def test_cancel_mapreduce(manager: ManagerClient):
                     # Make sure that node 2 is preventing its local mapreduce task from finishing.
                     await manager.api.wait_for_injection_enter(s2.ip_addr, "mapreduce_pause_dispatch_to_shards")
                     # Verify that the supercoordinator stops without an issue despite the ongoing mapreduce task.
-                    await manager.server_stop_gracefully(s1.server_id, timeout=120)
+                    await manager.server_stop_gracefully(s1.server_id)
 
                 async with asyncio.TaskGroup() as tg:
                     _ = tg.create_task(do_select())
