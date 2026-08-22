@@ -21,13 +21,12 @@ namespace cql3::statements::strong_consistency {
 static logging::logger logger("sc_batch_statement");
 
 batch_statement::batch_statement(int bound_terms, type type_, std::vector<single_statement> statements, std::unique_ptr<attributes> attrs)
-    : cql_statement(&timeout_config::write_timeout)
+    : cql_statement(batch_write_timeout_info)
     , _bound_terms(bound_terms)
-    , _type(type_)
     , _statements(std::move(statements))
     , _attrs(std::move(attrs))
 {
-    validate();
+    validate(type_);
 }
 
 batch_statement::batch_statement(type type_, std::vector<single_statement> statements, std::unique_ptr<attributes> attrs)
@@ -52,7 +51,7 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
         co_return seastar::make_shared<result_message::void_message>();
     }
 
-    auto timeout = db::timeout_clock::now() + (_attrs->is_timeout_set() ? _attrs->get_timeout(options) : qs.get_client_state().get_timeout_config().write_timeout);
+    auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
 
     // Build partition keys for all statements and validate they all target the same partition
     std::optional<dht::decorated_key> batch_key;
@@ -116,6 +115,12 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
     co_return seastar::make_shared<result_message::void_message>();
 }
 
+// Honor USING TIMEOUT in the reported timeout, keeping the send-queue
+// deadline in sync with the enforced timeout.
+db::timeout_clock::duration batch_statement::get_timeout(const service::client_state& state, const query_options& options) const {
+    return _attrs->is_timeout_set() ? _attrs->get_timeout(options) : cql_statement::get_timeout(state, options);
+}
+
 future<> batch_statement::check_access(query_processor& qp, const service::client_state& state) const {
     return parallel_for_each(_statements.begin(), _statements.end(), [&qp, &state] (auto&& s) {
         if (s.needs_authorization) {
@@ -134,9 +139,18 @@ bool batch_statement::depends_on(std::string_view ks_name, std::optional<std::st
     return std::ranges::any_of(_statements, [&ks_name, &cf_name] (auto&& s) { return s.statement->depends_on(ks_name, cf_name); });
 }
 
-void batch_statement::validate() const {
-    if (_type == type::COUNTER) {
+void batch_statement::validate(type t) const {
+    if (t == type::COUNTER) {
         throw exceptions::invalid_request_exception("Counter batches are not supported with strongly consistent tables");
+    }
+    if (t == type::UNLOGGED) {
+        throw exceptions::invalid_request_exception("Unlogged batches are not supported with strongly consistent tables");
+    }
+    if (_attrs->is_time_to_live_set()) {
+        throw exceptions::invalid_request_exception("Global TTL on the BATCH statement is not supported.");
+    }
+    if (_attrs->is_timestamp_set()) {
+        throw exceptions::invalid_request_exception("Strongly consistent queries don't support user-provided timestamps");
     }
 
     schema_ptr batch_schema;

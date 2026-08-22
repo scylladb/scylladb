@@ -688,17 +688,31 @@ async def test_reject_user_provided_timestamps(manager: ManagerClient):
                 await cql.run_async(f"UPDATE {table} USING TIMESTAMP 23 SET v = 13 WHERE pk = 0")
             with pytest.raises(InvalidRequest, match=error_msg):
                 await cql.run_async(f"DELETE FROM {table} USING TIMESTAMP 23 WHERE pk = 0")
-            # FIXME(SCYLLADB-977):
-            # Add test cases for batches with timestamps. Remember to
-            # handle both whole-batch timestamps, e.g.
-            #   BEGIN BATCH USING TIMESTAMP ts
-            #     ...
-            #   APPLY BATCH
-            # as well as timestamps for individual items, e.g.
-            #   BEGIN BATCH
-            #     INSERT INTO ... USING TIMESTAMP st;
-            #     ...
-            #   APPLY BATCH
+            # A whole-batch timestamp, rejected when the batch statement is prepared.
+            with pytest.raises(InvalidRequest, match=error_msg):
+                await cql.run_async(f"""
+                    BEGIN BATCH USING TIMESTAMP 23
+                        INSERT INTO {table} (pk, v) VALUES (0, 13);
+                        INSERT INTO {table} (pk, v) VALUES (1, 13);
+                    APPLY BATCH
+                """)
+            # Timestamps on individual batch items, rejected when the inner
+            # statements are prepared.
+            with pytest.raises(InvalidRequest, match=error_msg):
+                await cql.run_async(f"""
+                    BEGIN BATCH
+                        INSERT INTO {table} (pk, v) VALUES (0, 13) USING TIMESTAMP 23;
+                        INSERT INTO {table} (pk, v) VALUES (1, 13);
+                    APPLY BATCH
+                """)
+            # A whole-batch TTL is rejected by the same validation, like the
+            # eventually consistent batch rejects it.
+            with pytest.raises(InvalidRequest, match="Global TTL on the BATCH statement is not supported"):
+                await cql.run_async(f"""
+                    BEGIN BATCH USING TTL 100
+                        INSERT INTO {table} (pk, v) VALUES (0, 13);
+                    APPLY BATCH
+                """)
 
 async def test_forward_cql_prepared_with_bound_values(manager: ManagerClient):
     """
@@ -936,7 +950,7 @@ async def test_timed_out_queries(manager: ManagerClient):
             return False
         except Exception as e:
             if isinstance(e, exception_type):
-                assert f"Query timed out for {table}" in str(e)
+                assert f"Query timed out for {table}" in str(e) or "waiting in send queue" in str(e)
                 return True
             pytest.fail(f"Unexpected exception: {e}")
 
@@ -1635,6 +1649,7 @@ async def test_batch(manager: ManagerClient, batch_mode):
     - batch touching multiple tables,
     - batch touching multiple partitions,
     - statement touching multiple partition keys,
+    - unlogged batch,
     - counter batch.
     """
 
@@ -1723,7 +1738,7 @@ async def test_batch(manager: ManagerClient, batch_mode):
             await run_batch([
                 ("update", (99, 1, 1)),
                 ("delete", (1, 3)),
-            ], kind="unlogged")
+            ], kind="logged")
 
             rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 1")
             assert len(rows) == 2
@@ -1734,23 +1749,28 @@ async def test_batch(manager: ManagerClient, batch_mode):
                 await run_batch([
                     ("insert", (1, 1, 10)),
                     ("insert", (2, 1, 20)),
-                ], kind="unlogged")
+                ], kind="logged")
 
             with pytest.raises(InvalidRequest, match="single partition"):
                 await run_batch([
                     ("delete_in", (1, 2, 1)),
+                ], kind="logged")
+
+            with pytest.raises(InvalidRequest, match="Unlogged batches are not supported"):
+                await run_batch([
+                    ("insert", (1, 1, 10)),
                 ], kind="unlogged")
 
             async with new_test_table(manager, ks, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as other_table:
                 with pytest.raises(InvalidRequest, match="same table"):
                     if batch_mode == "prepared":
-                        batch = BatchStatement(batch_type=BatchType.UNLOGGED)
+                        batch = BatchStatement(batch_type=BatchType.LOGGED)
                         batch.add(cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)"), (1, 1, 10))
                         batch.add(cql.prepare(f"INSERT INTO {other_table} (pk, ck, v) VALUES (?, ?, ?)"), (1, 1, 20))
                         await cql.run_async(batch)
                     else:
                         await cql.run_async(f"""
-                            BEGIN UNLOGGED BATCH
+                            BEGIN BATCH
                             INSERT INTO {table} (pk, ck, v) VALUES (1, 1, 10);
                             INSERT INTO {other_table} (pk, ck, v) VALUES (1, 1, 20);
                             APPLY BATCH

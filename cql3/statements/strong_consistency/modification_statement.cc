@@ -22,7 +22,7 @@ namespace cql3::statements::strong_consistency {
 static logging::logger logger("sc_modification_statement");
 
 modification_statement::modification_statement(shared_ptr<base_statement> statement)
-    : cql_statement(&timeout_config::write_timeout)
+    : cql_statement(write_timeout_info)
     , _statement(std::move(statement))
 {
 }
@@ -62,7 +62,7 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
 {
     validate_consistency_level(options.get_consistency());
 
-    auto timeout = db::timeout_clock::now() + _statement->get_timeout(qs.get_client_state(), options);
+    auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
     auto json_cache = base_statement::json_cache_opt{};
     const auto keys = _statement->build_partition_keys(options, json_cache);
     if (keys.size() != 1 || !query::is_single_partition(keys[0])) {
@@ -115,6 +115,12 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
 
 future<> modification_statement::check_access(query_processor& qp, const service::client_state& state) const {
     return _statement->check_access(qp, state);
+}
+
+// Delegate to the wrapped statement so the reported timeout honors USING
+// TIMEOUT, keeping the send-queue deadline in sync with the enforced timeout.
+db::timeout_clock::duration modification_statement::get_timeout(const service::client_state& state, const query_options& options) const {
+    return _statement->get_timeout(state, options);
 }
 
 void modification_statement::validate(query_processor& qp, const service::client_state& state) const {

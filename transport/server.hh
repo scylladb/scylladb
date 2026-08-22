@@ -221,6 +221,8 @@ private:
         uint32_t requests_serving = 0;
         uint64_t requests_blocked_memory = 0;
         uint64_t requests_shed = 0;
+        uint64_t requests_dropped_due_to_timeout = 0;
+        uint64_t requests_sent_after_timeout = 0;
         // forwarding stats
         uint64_t requests_forwarded_successfully = 0;
         uint64_t requests_forwarded_failed = 0;
@@ -285,7 +287,8 @@ private:
     class fmt_visitor;
     friend class connection;
     friend std::unique_ptr<cql_server::response> make_result(int16_t stream, messages::result_message& msg,
-            const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, cql_metadata_id_wrapper&& metadata_id, bool skip_metadata);
+            const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, cql_metadata_id_wrapper&& metadata_id, bool skip_metadata,
+            const service_permit& permit);
 
     static std::unique_ptr<cql_server::response> make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive, const tracing::trace_state_ptr& tr_state);
     static std::unique_ptr<cql_server::response> make_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state);
