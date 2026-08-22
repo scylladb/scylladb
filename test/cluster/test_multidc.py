@@ -13,7 +13,7 @@ import pytest
 from cassandra.policies import WhiteListRoundRobinPolicy
 
 from test.pylib import nodetool
-from cassandra import ConsistencyLevel, Unavailable
+from cassandra import AlreadyExists, ConsistencyLevel, Unavailable
 from cassandra.cluster import NoHostAvailable
 from cassandra.protocol import InvalidRequest, ConfigurationException
 from cassandra.query import SimpleStatement
@@ -194,7 +194,12 @@ async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: Man
         else:
             rep_opts = ", ".join([f"'dc{i + 1}': {rf}" for i, rf in enumerate(rfs)])
         opts = f"replication = {{'class': 'NetworkTopologyStrategy', {rep_opts}}} AND tablets = {{'enabled': true}}"
-        await cql.run_async(f"CREATE KEYSPACE {ks} WITH {opts}")
+        try:
+            await cql.run_async(f"CREATE KEYSPACE {ks} WITH {opts}")
+        except AlreadyExists:
+            # A driver-side retry (triggered by a lost response, e.g. during cluster
+            # bring-up) can hit AlreadyExists even though our own first attempt succeeded.
+            pass
 
     async def create_ok(rfs: Union[List[int], int]) -> str:
         ks = unique_name()
@@ -595,20 +600,31 @@ async def test_warn_create_and_alter_rf_rack_invalid_ks(manager: ManagerClient):
     ###################################################
 
     async def do_create_test(rf1: int, rf2: int, tablets: str, ok: bool):
-        ks = unique_name()
-        warning = f"Keyspace '{ks}' is not RF-rack-valid: the replication factor doesn't match " \
-                   "the rack count in at least one datacenter. A rack failure may reduce availability. " \
-                   "For more context, see: " \
-                   "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace."
+        # A lost first response (e.g. driver control-connection churn while the cluster is
+        # still settling) can make the driver retry this statement on another host even
+        # though it already applied, which surfaces as AlreadyExists on the retry. The
+        # `warnings` we assert on below only come from a genuine response, so a lost
+        # response can't be recovered -- redo the whole scenario with a fresh keyspace name.
+        for attempt in range(2):
+            ks = unique_name()
+            warning = f"Keyspace '{ks}' is not RF-rack-valid: the replication factor doesn't match " \
+                       "the rack count in at least one datacenter. A rack failure may reduce availability. " \
+                       "For more context, see: " \
+                       "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace."
 
-        stmt = f"CREATE KEYSPACE {ks} WITH replication = " \
-               f"{{'class': 'NetworkTopologyStrategy', 'dc1': {rf1}, 'dc2': {rf2}}} AND " \
-               f"tablets = {{'enabled': {tablets}}}"
+            stmt = f"CREATE KEYSPACE {ks} WITH replication = " \
+                   f"{{'class': 'NetworkTopologyStrategy', 'dc1': {rf1}, 'dc2': {rf2}}} AND " \
+                   f"tablets = {{'enabled': {tablets}}}"
 
-        # We have to use `Session::execute_async` here to be able to obtain `warnings`.
-        # It's pretty convoluted, but we have to live with it...
-        result = cql.execute_async(stmt)
-        await _wrap_future(result)
+            # We have to use `Session::execute_async` here to be able to obtain `warnings`.
+            # It's pretty convoluted, but we have to live with it...
+            try:
+                result = cql.execute_async(stmt)
+                await _wrap_future(result)
+                break
+            except AlreadyExists:
+                if attempt == 1:
+                    raise
 
         if ok:
             assert not hasattr(result, "warnings") or result.warnings is None or warning not in result.warnings
@@ -647,9 +663,14 @@ async def test_warn_create_and_alter_rf_rack_invalid_ks(manager: ManagerClient):
                    "For more context, see: " \
                    "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace."
 
-        await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = " \
-                    f"{{'class': 'NetworkTopologyStrategy', 'dc1': 3, 'dc2': 2}} AND " \
-                    f"tablets = {{'enabled': {tablets}}}")
+        try:
+            await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = " \
+                        f"{{'class': 'NetworkTopologyStrategy', 'dc1': 3, 'dc2': 2}} AND " \
+                        f"tablets = {{'enabled': {tablets}}}")
+        except AlreadyExists:
+            # A driver-side retry (triggered by a lost response, e.g. during cluster
+            # bring-up) can hit AlreadyExists even though our own first attempt succeeded.
+            pass
 
         stmt = f"ALTER KEYSPACE {ks} WITH replication = " \
                f"{{'class': 'NetworkTopologyStrategy', 'dc1': {rf1}, 'dc2': {rf2}}} AND " \
