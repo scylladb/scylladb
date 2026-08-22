@@ -293,6 +293,24 @@ SEASTAR_THREAD_TEST_CASE(incremental_compaction_sag_test) {
     with_sag_test(SAG(1.5), TABLE_INITIAL_SA(1));
 }
 
+// compute_space_amplification() guards the SAG cross-tier compaction path against a
+// zero-size largest tier (s0_size == 0), which would otherwise divide by zero.
+// In practice every run reaching this point has already gone through
+// SCYLLA_ASSERT(r.data_size() != 0) in create_run_and_length_pairs(), so s0_size == 0
+// is unreachable via normal bucketing; this tests the guard itself in isolation so it
+// stays correct as defense-in-depth regardless of that upstream invariant.
+BOOST_AUTO_TEST_CASE(incremental_compaction_sag_zero_size_tier_test) {
+    // Largest tier empty: no well-defined SA, must not report a value (and thus never
+    // trigger an unconditional cross-tier compaction of an empty tier).
+    BOOST_REQUIRE(!compaction::incremental_compaction_strategy::compute_space_amplification(0, 0));
+    BOOST_REQUIRE(!compaction::incremental_compaction_strategy::compute_space_amplification(0, 12345));
+
+    // Legitimate non-empty tiers: SA is computed and matches the expected formula.
+    auto sa = compaction::incremental_compaction_strategy::compute_space_amplification(100, 50);
+    BOOST_REQUIRE(sa);
+    BOOST_REQUIRE_CLOSE(*sa, 1.5, 0.0001);
+}
+
 SEASTAR_TEST_CASE(basic_garbage_collection_test) {
     return test_env::do_with_async([] (test_env& env) {
         auto tmp = tmpdir();

@@ -89,6 +89,10 @@ public:
     // Group runs of similar size into buckets.
     static std::vector<std::vector<sstables::frozen_sstable_run>> get_buckets(const std::vector<sstables::frozen_sstable_run>& runs, const incremental_compaction_strategy_options& options);
 
+    // Space amplification of the two largest tiers, SA = (s0_size + s1_size) / s0_size.
+    // Returns nullopt when s0_size is 0 (undefined; would divide by zero) instead of computing.
+    static std::optional<double> compute_space_amplification(uint64_t s0_size, uint64_t s1_size);
+
     virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& t, strategy_control& control) override;
 
     virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& t, std::vector<sstables::shared_sstable> candidates) const override;

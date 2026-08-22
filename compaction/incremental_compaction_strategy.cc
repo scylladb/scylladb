@@ -11,6 +11,7 @@
 #include "compaction_manager.hh"
 #include "incremental_compaction_strategy.hh"
 #include "incremental_backlog_tracker.hh"
+#include "utils/assert.hh"
 #include <ranges>
 
 namespace compaction {
@@ -180,7 +181,7 @@ incremental_compaction_strategy::create_run_and_length_pairs(const std::vector<s
 
     for(auto& r_ptr : runs) {
         auto& r = *r_ptr;
-        assert(r.data_size() != 0);
+        SCYLLA_ASSERT(r.data_size() != 0);
         run_length_pairs.emplace_back(r_ptr, r.data_size());
     }
 
@@ -240,6 +241,14 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
     }
 
     return bucket_list;
+}
+
+std::optional<double>
+incremental_compaction_strategy::compute_space_amplification(uint64_t s0_size, uint64_t s1_size) {
+    if (s0_size == 0) {
+        return std::nullopt;
+    }
+    return double(s0_size + s1_size) / s0_size;
 }
 
 std::vector<sstables::frozen_sstable_run>
@@ -405,11 +414,11 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
 
         auto [s0, s1] = find_two_largest_tiers(std::move(buckets));
         uint64_t s0_size = total_size(s0), s1_size = total_size(s1);
-        double space_amplification = double(s0_size + s1_size) / s0_size;
+        auto space_amplification = compute_space_amplification(s0_size, s1_size);
 
-        if (space_amplification > _space_amplification_goal) {
+        if (space_amplification && *space_amplification > _space_amplification_goal) {
             clogger.debug("ICS: doing cross-tier compaction of two largest tiers, to reduce SA {} to below SAG {}",
-                          space_amplification, *_space_amplification_goal);
+                          *space_amplification, *_space_amplification_goal);
             // Aims at reducing space amplification, to below SAG, by compacting together the two largest tiers
             std::vector<sstables::frozen_sstable_run> cross_tier_input = std::move(s0);
             cross_tier_input.reserve(cross_tier_input.size() + s1.size());
