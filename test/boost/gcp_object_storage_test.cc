@@ -150,6 +150,24 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_large_object, local_gcs_wrappe
     co_await test_read_write_helper(*this, 32*1024*1024 + 357 + 1022*67);
 }
 
+// SCYLLADB-3889: a zero-length object must finalize the resumable upload with
+// "bytes */0". Emitting "bytes 0-0/0" claims a byte that cannot exist in a
+// zero-byte object and real GCS rejects it with 400. Zero-length objects are
+// not exotic here -- every object-storage sstable starts by writing an empty
+// refs/nodes/<host_id>/<gen> marker, so this breaks every memtable flush.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_empty_object, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    co_await test_read_write_helper(*this, 0);
+}
+
+// SCYLLADB-3889: same malformed range, reached from the other direction. The
+// sink only uploads whole multiples of 256k while the stream is open, so an
+// object whose size is an exact multiple of the chunk size leaves nothing
+// buffered at close() and finalizes with a zero-length chunk at a non-zero
+// offset ("bytes N-N/N").
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_chunk_aligned_object, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    co_await test_read_write_helper(*this, 8*1024*1024, 256*1024);
+}
+
 SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_small_object_64kbuf, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
     co_await test_read_write_helper(*this, 618480, 64*1024);
 }
