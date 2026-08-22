@@ -460,10 +460,51 @@ future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_funct
     it->second = make_foreign(std::move(new_map_ptr));
 }
 
+// Bucket tablet-map entries by the shard owning each map, so cross-shard work
+// costs one hop per shard instead of one per table.
+template <typename Entry, typename TabletsMap, typename Project>
+static future<std::vector<std::vector<Entry>>> group_by_owner_shard(TabletsMap& tablets, Project project) {
+    std::vector<std::vector<Entry>> per_shard(this_smp_shard_count());
+    for (auto& e : tablets) {
+        per_shard[e.second.get_owner_shard()].push_back(project(e));
+        co_await coroutine::maybe_yield();
+    }
+    co_return per_shard;
+}
+
+// The copy shares the (immutable) tablet_map objects with the source; replica-side
+// code relies on unchanged tables keeping the same tablet_map pointer across copies.
 future<tablet_metadata> tablet_metadata::copy() const {
     tablet_metadata copy;
-    for (const auto& e : _tablets) {
-        copy._tablets.emplace(e.first, co_await e.second.copy());
+    copy._tablets.reserve(_tablets.size());
+    // The collected pointers are into the source _tablets, which must not be
+    // mutated while copy() is suspended; callers copy from stable snapshots.
+    auto entries_per_shard = co_await group_by_owner_shard<std::pair<table_id, const tablet_map_ptr*>>(_tablets,
+            [] (const auto& e) { return std::pair(e.first, &e.second); });
+    // Bounded batches: keeps the owner shard's transient memory small even when
+    // many shards run copy() concurrently (e.g. cloning to all shards).
+    constexpr size_t max_batch = 1024;
+    for (unsigned shard = 0; shard < entries_per_shard.size(); shard++) {
+        const auto& entries = entries_per_shard[shard];
+        for (size_t begin = 0; begin < entries.size(); begin += max_batch) {
+            const auto count = std::min(max_batch, entries.size() - begin);
+            // Copy the ptrs on their owner shard, but emplace here, so copy._tablets'
+            // nodes and buckets are allocated on the shard that will own the map.
+            auto copies = co_await smp::submit_to(shard, [&entries, begin, count] () -> future<std::vector<std::pair<table_id, tablet_map_ptr>>> {
+                std::vector<std::pair<table_id, tablet_map_ptr>> copies;
+                copies.reserve(count);
+                for (size_t i = begin; i < begin + count; i++) {
+                    const auto& [id, map_ptr] = entries[i];
+                    copies.emplace_back(id, co_await map_ptr->copy());
+                    co_await coroutine::maybe_yield();
+                }
+                co_return copies;
+            });
+            for (auto& [id, map_ptr] : copies) {
+                copy._tablets.emplace(id, std::move(map_ptr));
+                co_await coroutine::maybe_yield();
+            }
+        }
     }
 
     copy._table_groups = _table_groups;
@@ -544,13 +585,10 @@ void tablet_metadata::drop_tablet_map(table_id id) {
 future<> tablet_metadata::clear_gently() {
     tablet_logger.debug("tablet_metadata::clear_gently {}", fmt::ptr(this));
     // First, Sort the tablet maps per shard to avoid destruction of all foreign tablet map ptrs
-    // on this shard. We don't use sharded<> here since it will require a similar 
+    // on this shard. We don't use sharded<> here since it will require a similar
     // submit_to to each shard owner per tablet-map.
-    std::vector<std::vector<tablet_map_ptr>> tablet_maps_per_shard;
-    tablet_maps_per_shard.resize(this_smp_shard_count());
-    for (auto& [_, map_ptr] : _tablets) {
-        tablet_maps_per_shard[map_ptr.get_owner_shard()].emplace_back(std::move(map_ptr));
-    }
+    auto tablet_maps_per_shard = co_await group_by_owner_shard<tablet_map_ptr>(_tablets,
+            [] (auto& e) { return std::move(e.second); });
     _tablets.clear();
 
     // Now destroy the foreign tablet map pointers on each shard.

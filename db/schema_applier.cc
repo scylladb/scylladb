@@ -939,7 +939,7 @@ future<> schema_applier::update_tablets() {
         slogger.info("Tablet metadata changed");
         pending_schema_getter getter{*this};
         _token_metadata_change = co_await _ss.local().prepare_token_metadata_change(
-                _pending_token_metadata.local(), getter);
+                _pending_token_metadata.local(), getter, _tablet_hint);
     }
 }
 

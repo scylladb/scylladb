@@ -528,7 +528,8 @@ public:
     // new tablet replica is allocated).
     virtual void update_effective_replication_map(const locator::effective_replication_map_ptr& old_erm,
                                                   const locator::effective_replication_map& erm,
-                                                  noncopyable_function<void()> refresh_mutation_source) = 0;
+                                                  noncopyable_function<void()> refresh_mutation_source,
+                                                  const std::optional<locator::tablet_metadata_change_hint>& tablet_hint) = 0;
 
     virtual compaction_group& compaction_group_for_token(dht::token token) const = 0;
     virtual compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const = 0;

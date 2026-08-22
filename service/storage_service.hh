@@ -152,6 +152,9 @@ struct token_metadata_change {
     std::vector<std::unordered_map<sstring, locator::static_effective_replication_map_ptr>> pending_effective_replication_maps{this_smp_shard_count()};
     std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_table_erms{this_smp_shard_count()};
     std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_view_erms{this_smp_shard_count()};
+    // nullopt means this change may include schema changes. When present, only
+    // tables in the hint have tablet metadata changes.
+    std::optional<locator::tablet_metadata_change_hint> tablet_hint;
     std::unordered_set<session_id> open_sessions;
 
     future<> destroy();
@@ -364,7 +367,8 @@ private:
     // and appropriate lock it does exactly the same as mutate_token_metadata.
     // Note: prepare_token_metadata_change must be called on shard 0.
     future<token_metadata_change> prepare_token_metadata_change(mutable_token_metadata_ptr tmptr,
-            const schema_getter& loader);
+            const schema_getter& loader,
+            const std::optional<locator::tablet_metadata_change_hint>& tablet_hint = {});
 
     // Commits prepared token metadata changes. Must be called under token_metadata_lock
     // and on all shards.
@@ -652,7 +656,8 @@ private:
     std::optional<locator::endpoint_dc_rack> get_dc_rack_for(locator::host_id endpoint);
 private:
     // Should be serialized under token_metadata_lock.
-    future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;
+    future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr,
+            const std::optional<locator::tablet_metadata_change_hint>& tablet_hint = {}) noexcept;
     sharded<db::system_keyspace>& _sys_ks;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     locator::snitch_signal_slot_t _snitch_reconfigure;
