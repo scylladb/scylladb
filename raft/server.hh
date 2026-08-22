@@ -229,6 +229,10 @@ public:
     virtual future<> read_barrier(seastar::abort_source* as) = 0;
 
     // Initiate leader stepdown process.
+    // If target is specified, the leadership transfer will be attempted to that target only.
+    // The target must be a voting member of the current configuration other than the leader
+    // itself. With any other target the transfer has no one to hand leadership to: it blocks the
+    // group's writes until the timeout expires, then throws raft::timeout_error.
     //
     // Exceptions:
     // raft::timeout_error
@@ -239,7 +243,7 @@ public:
     //     Thrown if there is no other voting member.
     // std::logic_error
     //     Thrown if the stepdown process is already in progress.
-    virtual future<> stepdown(logical_clock::duration timeout) = 0;
+    virtual future<> stepdown(logical_clock::duration timeout, server_id target = {}) = 0;
 
     // Register metrics for this server. Metric are global but their names
     // depend on the server's ID, so it is possible to register metrics
@@ -313,6 +317,12 @@ public:
     virtual void elapse_election() = 0;
     // Server id of this server
     virtual raft::server_id id() const = 0;
+
+    // Number of messages the io_fiber may queue up for the applier before it has to wait for the
+    // applier to catch up. It is what bounds the memory of committed but unapplied entries on a
+    // follower, which has no log limiter of its own.
+    static constexpr size_t default_applier_queue_max_size = 10;
+
     virtual void set_applier_queue_max_size(size_t queue_max_size) = 0;
 
     virtual size_t max_command_size() const = 0;

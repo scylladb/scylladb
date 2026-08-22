@@ -633,6 +633,7 @@ void fsm::tick_leader() {
             leader_state().log_limiter_semaphore->signal(_config.max_log_size);
             state.stepdown.reset();
             state.timeout_now_sent.reset();
+            state.leadership_transfer_target.reset();
             _abort_leadership_transfer = true;
             _sm_events.signal(); // signal to handle aborting of leadership transfer
         } else if (state.timeout_now_sent) {
@@ -750,9 +751,11 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         progress.become_pipeline();
 
         // If a leader is stepping down, transfer the leadership
-        // to a first voting node that has fully replicated log.
+        // to a first voting node that has fully replicated log,
+        // If a transfer target was selected, only accept that node.
         if (leader_state().stepdown && !leader_state().timeout_now_sent &&
-                         progress.can_vote && progress.match_idx == _log.last_idx()) {
+                progress.can_vote && progress.match_idx == _log.last_idx() &&
+                (!leader_state().leadership_transfer_target || *leader_state().leadership_transfer_target == progress.id)) {
             send_timeout_now(progress.id);
             // We may have resigned leadership if a stepdown process completed
             // while the leader is no longer part of the configuration.
@@ -1070,7 +1073,7 @@ bool fsm::apply_snapshot(snapshot_descriptor snp, size_t max_trailing_entries, s
     return true;
 }
 
-void fsm::transfer_leadership(logical_clock::duration timeout) {
+void fsm::transfer_leadership(logical_clock::duration timeout, server_id target) {
     check_is_leader();
     auto leader = leader_state().tracker.find(_my_id);
     if (configuration::voter_count(get_configuration().current) == 1 && leader && leader->can_vote) {
@@ -1079,12 +1082,19 @@ void fsm::transfer_leadership(logical_clock::duration timeout) {
         throw raft::no_other_voting_member();
     }
 
+    if (target) {
+        leader_state().leadership_transfer_target = target;
+    } else {
+        leader_state().leadership_transfer_target.reset();
+    }
+
     leader_state().stepdown = _clock.now() + timeout;
     // Stop new requests from coming in
     leader_state().log_limiter_semaphore->consume(_config.max_log_size);
-    // If there is a fully up-to-date voting replica make it start an election
+    // If there is a fully up-to-date eligible replica make it start an election
     for (auto&& [_, p] : leader_state().tracker) {
-        if (p.id != _my_id && p.can_vote && p.match_idx == _log.last_idx()) {
+        if (p.id != _my_id && p.can_vote && p.match_idx == _log.last_idx()
+                && (!leader_state().leadership_transfer_target || *leader_state().leadership_transfer_target == p.id)) {
             send_timeout_now(p.id);
             break;
         }

@@ -1181,6 +1181,110 @@ BOOST_AUTO_TEST_CASE(test_truncate_rederives_config_indices) {
     BOOST_CHECK(log.last_conf_for(index_t{1}).current == config_from_ids({A, B, C}).current);
 }
 
+// transfer_leadership() with a target picks that target, and does so when every voter is equally
+// up to date and any of them could be picked instead.
+//
+// Which one an untargeted transfer would have picked is not fixed: raft::tracker is a hash map
+// keyed by server ids. That is why test_leader_transfer_to_target_waits_for_target, where only the
+// target may be chosen, is the one which fails if the target stops being honoured.
+BOOST_AUTO_TEST_CASE(test_leader_transfer_to_target) {
+    raft::server_id A_id = id(), B_id = id(), C_id = id();
+    raft::log log(raft::snapshot_descriptor{.idx = raft::index_t{0},
+        .config = config_from_ids({A_id, B_id, C_id})});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    auto C = create_follower(C_id, log);
+
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_REQUIRE(A.is_leader());
+
+    A.transfer_leadership(raft::logical_clock::duration(5), C_id);
+
+    auto output = A.get_output();
+    BOOST_REQUIRE_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK_EQUAL(output.messages.front().first, C_id);
+    BOOST_CHECK(std::holds_alternative<raft::timeout_now>(output.messages.front().second));
+}
+
+BOOST_AUTO_TEST_CASE(test_leader_transfer_to_target_waits_for_target) {
+    raft::server_id A_id = id(), B_id = id(), C_id = id();
+    raft::log log(raft::snapshot_descriptor{.idx = raft::index_t{0},
+        .config = config_from_ids({A_id, B_id, C_id})});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    auto C = create_follower(C_id, log);
+
+    election_timeout(A);
+    communicate(A, B);
+    BOOST_REQUIRE(A.is_leader());
+
+    auto output = A.get_output();
+    BOOST_CHECK(output.messages.empty());
+
+    A.add_entry(raft::log_entry::dummy());
+    const auto idx = A.get_log().last_idx();
+    (void) A.get_output();
+
+    A.transfer_leadership(raft::logical_clock::duration(5), C_id);
+    output = A.get_output();
+    BOOST_CHECK(output.messages.empty());
+
+    // B catches up first. Without the target being honoured, this is where the leadership would
+    // be handed over: B is now a voter with a fully replicated log. The check that nothing is sent
+    // here is what this test is for.
+    A.step(B_id, raft::append_reply{A.get_current_term(), idx, raft::append_reply::accepted{idx}});
+    output = A.get_output();
+    BOOST_CHECK(std::ranges::none_of(output.messages, [] (const auto& m) {
+        return std::holds_alternative<raft::timeout_now>(m.second);
+    }));
+
+    A.step(C_id, raft::append_reply{A.get_current_term(), idx, raft::append_reply::accepted{idx}});
+    output = A.get_output();
+    BOOST_REQUIRE_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK_EQUAL(output.messages.front().first, C_id);
+    BOOST_CHECK(std::holds_alternative<raft::timeout_now>(output.messages.front().second));
+}
+
+// A targeted transfer_leadership() whose target never catches up times out and gives the
+// leadership back to the leader, which can then transfer it to somebody else.
+//
+// The target is forgotten on the way, but that is not what this checks: it cannot be observed from
+// the outside, the target being consulted only while a stepdown is in progress.
+BOOST_AUTO_TEST_CASE(test_leader_transfer_timeout_forgets_target) {
+    raft::server_id A_id = id(), B_id = id(), C_id = id();
+    raft::log log(raft::snapshot_descriptor{.idx = raft::index_t{0},
+        .config = config_from_ids({A_id, B_id, C_id})});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    auto C = create_follower(C_id, log);
+
+    election_timeout(A);
+    // C is left out, so it never catches up with A's log and cannot be transferred to.
+    communicate(A, B);
+    BOOST_REQUIRE(A.is_leader());
+    (void) A.get_output();
+
+    constexpr auto transfer_timeout = raft::logical_clock::duration(5);
+    A.transfer_leadership(transfer_timeout, C_id);
+    auto output = A.get_output();
+    BOOST_CHECK(output.messages.empty());
+
+    for (int i = 0; i <= transfer_timeout.count(); i++) {
+        A.tick();
+    }
+    output = A.get_output();
+    BOOST_CHECK(output.abort_leadership_transfer);
+    BOOST_REQUIRE(A.is_leader());
+
+    // The leadership is transferable again, and to B rather than to the target which timed out.
+    A.transfer_leadership(transfer_timeout);
+    output = A.get_output();
+    BOOST_REQUIRE_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK_EQUAL(output.messages.front().first, B_id);
+    BOOST_CHECK(std::holds_alternative<raft::timeout_now>(output.messages.front().second));
+}
+
 BOOST_AUTO_TEST_CASE(test_empty_configuration) {
     // When a server is joining an existing cluster, its configuration is empty.
     // The leader sends its configuration over in AppendEntries or

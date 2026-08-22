@@ -119,7 +119,7 @@ public:
     void tick() override;
     raft::server_id id() const override;
     void set_applier_queue_max_size(size_t queue_max_size) override;
-    future<> stepdown(logical_clock::duration timeout) override;
+    future<> stepdown(logical_clock::duration timeout, server_id target) override;
     future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) override;
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as);
     void register_metrics() override;
@@ -172,7 +172,8 @@ private:
         snapshot_descriptor,
         removed_from_config,
         trigger_snapshot_msg>;
-    queue<applier_fiber_message> _apply_entries = queue<applier_fiber_message>(10);
+    queue<applier_fiber_message> _apply_entries =
+        queue<applier_fiber_message>(server::default_applier_queue_max_size);
 
     struct stats {
         uint64_t add_command = 0;
@@ -363,6 +364,10 @@ private:
     // iterations to protect against tight loops.
     template <LeaderAction AsyncAction>
     future<> do_on_leader_with_retries(seastar::abort_source* as, AsyncAction&& action);
+
+    // Makes the order in which callers enter add_entry_on_leader() the order in which
+    // their entries are appended to the log.
+    seastar::semaphore _add_entry_admission{1};
 
     future<> override_snapshot_thresholds();
 
@@ -681,6 +686,23 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
 }
 
 future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as) {
+    // Taken before the first await which can reorder callers. For admission order to
+    // equal submission order, add_entry() must not await before reaching here on the
+    // non-forwarding path. See _add_entry_admission.
+    semaphore_units<> admission;
+    try {
+        admission = as
+                ? co_await get_units(_add_entry_admission, 1, *as)
+                : co_await get_units(_add_entry_admission, 1);
+    } catch (semaphore_aborted&) {
+        // Translated like the memory permit below, so that an abort has one shape whichever
+        // of the two waits it interrupts.
+        throw request_aborted(
+                format("Semaphore aborted while waiting for admission for adding entry on leader on server: {}, current term: {}",
+                       _id,
+                       _fsm->get_current_term()));
+    }
+
     // Wait for sufficient memory to become available
     semaphore_units<> memory_permit;
     while (true) {
@@ -1981,12 +2003,12 @@ void server_impl::remove_from_rpc_config(const server_address& srv) {
     _current_rpc_config.erase(srv);
 }
 
-future<> server_impl::stepdown(logical_clock::duration timeout) {
+future<> server_impl::stepdown(logical_clock::duration timeout, server_id target) {
     if (_stepdown_promise) {
         return make_exception_future<>(std::logic_error("Stepdown is already in progress"));
     }
     try {
-        _fsm->transfer_leadership(timeout);
+        _fsm->transfer_leadership(timeout, target);
     } catch (...) {
         return make_exception_future<>(std::current_exception());
     }
