@@ -16,6 +16,7 @@
 #include "test/lib/test_utils.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/future-util.hh>
+#include <seastar/core/smp.hh>
 #include "db/config.hh"
 #include "utils/updateable_value.hh"
 
@@ -971,4 +972,41 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_invalid) {
                            BOOST_CHECK(!cfg.check_experimental(ef::UDF));
                        });
     return make_ready_future();
+}
+
+// One config's broadcast sets the class-wide s_shard_id on every shard; another,
+// never-broadcast config must still not index its shard-0-only values with it.
+SEASTAR_THREAD_TEST_CASE(test_use_on_non_zero_shard_after_broadcast) {
+    if (this_smp_shard_count() == 1) {
+        return;
+    }
+    auto broadcast_cfg = std::make_unique<config>();
+    broadcast_cfg->broadcast_to_all_shards().get();
+
+    smp::submit_to(1, [] {
+        config cfg;
+        cfg.data_file_directories.set({"/tmp/nonexistent"});
+        BOOST_REQUIRE_EQUAL(cfg.data_file_directories().size(), 1);
+    }).get();
+}
+
+// The clamp above must not swallow real per-shard reads of a broadcast config.
+SEASTAR_THREAD_TEST_CASE(test_broadcast_value_is_per_shard) {
+    if (this_smp_shard_count() == 1) {
+        return;
+    }
+    auto cfg = std::make_unique<config>();
+    cfg->data_file_directories.set({"/tmp/shard0"});
+    cfg->broadcast_to_all_shards().get();
+
+    auto* cfg_ptr = cfg.get();
+    smp::submit_to(1, [cfg_ptr] {
+        cfg_ptr->data_file_directories.set({"/tmp/shard1"});
+    }).get();
+
+    // shard 0's copy must be unaffected by shard 1's write
+    BOOST_REQUIRE_EQUAL(cfg->data_file_directories()[0], "/tmp/shard0");
+    smp::submit_to(1, [cfg_ptr] {
+        BOOST_REQUIRE_EQUAL(cfg_ptr->data_file_directories()[0], "/tmp/shard1");
+    }).get();
 }

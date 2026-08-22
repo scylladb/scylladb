@@ -204,7 +204,11 @@ void utils::config_file::named_value<T>::the_value_type::update_from(const any_v
 
 template<typename T>
 utils::updateable_value_source<T>& utils::config_file::named_value<T>::the_value() {
-    any_value* av = _cf->_per_shard_values[_cf->s_shard_id][_per_shard_values_offset].get();
+    // s_shard_id is a class-wide thread_local set by any broadcast_to_all_shards();
+    // a config_file that was never broadcast only has the shard-0 copy.
+    auto& per_shard_values = _cf->_per_shard_values;
+    auto shard = _cf->s_shard_id < per_shard_values.size() ? _cf->s_shard_id : 0;
+    any_value* av = per_shard_values[shard][_per_shard_values_offset].get();
     return static_cast<the_value_type*>(av)->value;
 }
 
