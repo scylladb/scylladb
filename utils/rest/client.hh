@@ -9,6 +9,7 @@
 
 #pragma once
 #include <seastar/core/future.hh>
+#include <seastar/core/shared_ptr.hh>
 #include <seastar/http/url.hh>
 #include <seastar/http/client.hh>
 #include <seastar/http/request.hh>
@@ -62,8 +63,18 @@ public:
     operator const request_type&() const {
         return request();
     }
+    // Body set via the string overload of content() above. request::content
+    // is deprecated with no replacement accessor, so we keep our own copy --
+    // it also doubles as the buffer the write_body() writer streams out
+    // from, so there's no duplicate copy involved. Held via a shared_ptr
+    // (not captured by `this` in the writer) so it stays valid regardless
+    // of whether/where the request_wrapper itself gets moved.
+    std::string_view content() const {
+        return _content ? std::string_view(*_content) : std::string_view();
+    }
 protected:
     request_type _req;
+    seastar::lw_shared_ptr<sstring> _content;
 };
 
 /**
@@ -152,7 +163,7 @@ struct redacted {
     }
 };
 
-using redacted_request_type = redacted<httpclient::request_type, http_log_filter::body_type::request>;
+using redacted_request_type = redacted<request_wrapper, http_log_filter::body_type::request>;
 using redacted_result_type  = redacted<httpclient::result_type, http_log_filter::body_type::response>;
 
 using key_value = std::pair<std::string_view, std::string_view>;
