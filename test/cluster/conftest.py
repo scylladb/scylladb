@@ -216,6 +216,7 @@ async def manager_server(suite_log_dir: Path,
 @pytest.fixture(scope="module")
 async def manager_internal(request: pytest.FixtureRequest,
                            manager_server: tuple[ScyllaClusterManager, asyncio.AbstractEventLoop],
+                           build_mode: str,
                            ) -> Callable[[], ManagerClient]:
     """Module fixture to prepare client object for communicating with the Cluster API.
        Pass a function to create driver connections.
@@ -237,6 +238,7 @@ async def manager_internal(request: pytest.FixtureRequest,
         use_ssl=use_ssl,
         auth_provider=auth_provider,
         con_gen=cluster_con,
+        mode=build_mode,
     )
 
 

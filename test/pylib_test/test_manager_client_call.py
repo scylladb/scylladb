@@ -63,7 +63,7 @@ class StubCluster:
 
 
 @pytest.fixture
-def manager_client() -> Iterator[tuple[ManagerClient, StubCluster, asyncio.AbstractEventLoop]]:
+def manager_client(build_mode: str) -> Iterator[tuple[ManagerClient, StubCluster, asyncio.AbstractEventLoop]]:
     """A ManagerClient wired to a manager running on its own thread and loop.
 
     Mirrors the manager_server fixture in test/cluster/conftest.py: the loop
@@ -97,6 +97,7 @@ def manager_client() -> Iterator[tuple[ManagerClient, StubCluster, asyncio.Abstr
             use_ssl=False,
             auth_provider=None,
             con_gen=lambda *args, **kwargs: None,
+            mode=build_mode,
         )
         try:
             yield client, manager.cluster, loop

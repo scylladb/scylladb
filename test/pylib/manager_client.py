@@ -20,7 +20,8 @@ from time import time
 import logging
 from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import ScyllaRESTAPIClient, ScyllaMetricsClient
-from test.pylib.util import gather_safely, wait_for, wait_for_cql_and_get_hosts, universalasync_typed_wrap, Host
+from test.pylib.util import gather_safely, wait_for, wait_for_cql_and_get_hosts, universalasync_typed_wrap, \
+    Host, graceful_stop_timeout
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaClusterManager, ScyllaServer, ScyllaVersionDescription, bind_to_current_loop
 from test.pylib.driver_utils import safe_driver_shutdown
@@ -47,13 +48,16 @@ class ManagerClient:
         cluster_manager (ScyllaClusterManager): the manager to drive
         manager_loop: the event loop the manager runs on
         con_gen (Callable): generator function for CQL driver connection to a cluster
+        mode (str): test.py build mode, for scaling timeouts to match the manager's
     """
     # pylint: disable=too-many-public-methods
 
     def __init__(self, cluster_manager: ScyllaClusterManager, manager_loop: asyncio.AbstractEventLoop,
                  port: int, use_ssl: bool, auth_provider: Any|None,
-                 con_gen: Callable[[List[IPAddress], int, bool, Any, LoadBalancingPolicy], CassandraCluster]) \
+                 con_gen: Callable[[List[IPAddress], int, bool, Any, LoadBalancingPolicy], CassandraCluster],
+                 mode: str) \
                          -> None:
+        self.mode = mode
         self.port = port
         self.use_ssl = use_ssl
         self.auth_provider = auth_provider
@@ -342,8 +346,14 @@ class ManagerClient:
                 # In some scenarios errors are expected, e.g. when server_stop() is called concurrently on many servers.
                 pass
 
-    async def server_stop_gracefully(self, server_id: ServerNum, timeout: float = 180) -> None:
-        """Stop specified server gracefully"""
+    async def server_stop_gracefully(self, server_id: ServerNum, timeout: float | None = None) -> None:
+        """Stop specified server gracefully
+
+        With no timeout given, outlast the manager's own graceful-stop timeout
+        for this mode, so that a slow stop is reported by the manager -- which
+        knows why it was slow -- instead of timing out here first."""
+        if timeout is None:
+            timeout = graceful_stop_timeout(self.mode) + 60
         logger.debug("ManagerClient stopping gracefully %s", server_id)
         await self._call(self._manager.server_stop_gracefully(server_id), timeout=timeout)
 
