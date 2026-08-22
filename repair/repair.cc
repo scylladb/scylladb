@@ -1246,7 +1246,7 @@ future<> repair::shard_repair_task_impl::run() {
     try {
         co_await do_repair_ranges();
     } catch (...) {
-        _failed_because.emplace(fmt::to_string(std::current_exception()));
+        _failed_because.emplace(fmt::to_string(seastar::formattable(std::current_exception())));
         rlogger.debug("repair[{}]: got error in do_repair_ranges: {}",
             global_repair_id.uuid(), std::current_exception());
     }
