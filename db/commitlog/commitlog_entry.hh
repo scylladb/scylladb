@@ -102,11 +102,24 @@ struct raft_commitlog_entry {
     raft::log_entry_ptr entry;
 };
 
-// The on-disk envelope for variant-format commitlog segments. Each
-// entry contains exactly one of the variant alternatives: a mutation_entry
-// (normal table write) or a raft_commitlog_entry (Raft log entry for
-// strongly-consistent tables).
-using commitlog_entry_variant = std::variant<raft_commitlog_entry, mutation_entry>;
+// Commitlog entry that carries the current commit index of a strongly-consistent
+// raft group. Used to persist the commit index (see raft_commitlog::store_log_entries
+// and raft_groups_storage::store_log_entries).
+struct raft_commit_idx_entry {
+    raft::group_id group_id;
+    raft::index_t commit_idx{0};
+};
+
+// The on-disk envelope for variant-format commitlog segments. Each entry
+// contains exactly one of the variant alternatives: a mutation_entry (normal
+// table write), a raft_commitlog_entry (Raft log entry for a strongly-consistent
+// table), or a raft_commit_idx_entry (per-batch commit_idx entry).
+//
+// NOTE: the variant alternative index is the on-disk discriminator, so new
+// alternatives must only ever be appended at the end. Reordering or inserting
+// in the middle would change the discriminator of existing alternatives and
+// corrupt the reading of previously written segments.
+using commitlog_entry_variant = std::variant<raft_commitlog_entry, mutation_entry, raft_commit_idx_entry>;
 struct commitlog_entry {
     commitlog_entry_variant item;
 };
@@ -178,11 +191,21 @@ public:
     frozen_mutation&& mutation() && { return std::move(_me).mutation(); }
 };
 
-// Writer for Raft log entries to the database commit log using the commitlog_entry format.
+// Writer for Raft-related entries in the database commit log using the
+// commitlog_entry format. Handles both the raft log entry variant
+// (raft_commitlog_entry) and the per-batch commit-index entry
+// (raft_commit_idx_entry); both are produced by raft_commitlog::
+// store_log_entries as part of a single batched commit_log.add_raft_entries().
+//
+// Each writer carries its own cf_id_type so a single batch can contain
+// entries destined for different column families — used to associate the
+// commit_idx entry with system.raft_groups rather than the raft log's target table.
 class commitlog_raft_log_entry_writer {
 public:
+    using item_variant = std::variant<raft_commitlog_entry, raft_commit_idx_entry>;
 protected:
-    raft_commitlog_entry _item;
+    db::cf_id_type _cf_id;
+    item_variant _item;
     std::size_t _size = std::numeric_limits<std::size_t>::max();
 
     template<typename Output>
@@ -190,8 +213,10 @@ protected:
     void compute_size();
 
 public:
-    explicit commitlog_raft_log_entry_writer(raft_commitlog_entry item)
-        : _item(std::move(item)) { compute_size(); }
+    explicit commitlog_raft_log_entry_writer(db::cf_id_type cf_id, raft_commitlog_entry item)
+        : _cf_id(cf_id), _item(std::move(item)) { compute_size(); }
+    explicit commitlog_raft_log_entry_writer(db::cf_id_type cf_id, raft_commit_idx_entry item)
+        : _cf_id(cf_id), _item(std::move(item)) { compute_size(); }
 
     size_t size() const {
         SCYLLA_ASSERT(_size != std::numeric_limits<size_t>::max());
@@ -200,7 +225,22 @@ public:
 
     using ostream = typename seastar::memory_output_stream<detail::sector_split_iterator>;
     void write(ostream& out) const;
-    const raft_commitlog_entry& get_log_entry() const {
+
+    const db::cf_id_type& cf_id() const {
+        return _cf_id;
+    }
+    raft::group_id group_id() const {
+        return std::visit([] (const auto& item) { return item.group_id; }, _item);
+    }
+    // Returns the underlying raft_commitlog_entry when this writer holds one.
+    // Guarded by holds_raft_log_entry(); prefer visiting item() instead.
+    const raft_commitlog_entry& get_raft_log_entry() const {
+        return std::get<raft_commitlog_entry>(_item);
+    }
+    bool holds_raft_log_entry() const {
+        return std::holds_alternative<raft_commitlog_entry>(_item);
+    }
+    const item_variant& item() const {
         return _item;
     }
 };

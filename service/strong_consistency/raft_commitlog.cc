@@ -21,15 +21,38 @@
 namespace service::strong_consistency {
 namespace {
 seastar::logger logger("raft_commitlog");
-}
 
-raft_commitlog::raft_commitlog(raft::group_id group_id, db::commitlog& commitlog, table_id target_table_id, replayed_data_per_group replayed_data)
+// Command entries are the ones state_machine::apply() will consume.
+// Everything else (configuration, dummy) is a "non-command" entry.
+bool is_command_entry(const raft::log_entry& e) {
+    return std::holds_alternative<raft::command>(e.data);
+}
+} // namespace
+
+raft_commitlog::raft_commitlog(raft::group_id group_id, db::commitlog& commitlog, table_id target_table_id,
+        db::cf_id_type raft_groups_table_id, replayed_data_per_group replayed_data)
     : _group_id(group_id)
     , _table_id(target_table_id)
+    , _raft_groups_table_id(raft_groups_table_id)
     , _commit_log(commitlog)
-    , _replay_positions(std::move(replayed_data.replay_positions))
     , _replayed_entries(std::move(replayed_data.entries)) {
-    logger.debug("starting raft_commitlog group_id={}, table_id={}, replayed_entries={}", _group_id, _table_id, _replayed_entries.size());
+    // Classify each replay position as command / non-command by the entry it
+    // belongs to. Replay positions are a subset of the replayed entries (only
+    // uncommitted entries are rewritten to the new commitlog on replay) and
+    // both are in raft-index order, so we match them by index with a single
+    // forward walk over _replayed_entries.
+    auto entry_it = _replayed_entries.begin();
+    for (auto& pos : replayed_data.replay_positions) {
+        while (entry_it != _replayed_entries.end() && (*entry_it)->idx != pos.index) {
+            ++entry_it;
+        }
+        SCYLLA_ASSERT(entry_it != _replayed_entries.end());
+        const bool cmd = is_command_entry(**entry_it);
+        (cmd ? _command_positions : _noncommand_positions).push_back(std::move(pos));
+    }
+    logger.debug("starting raft_commitlog group_id={}, table_id={}, replayed_entries={}, "
+            "command_positions={}, noncommand_positions={}", _group_id, _table_id,
+            _replayed_entries.size(), _command_positions.size(), _noncommand_positions.size());
 }
 
 raft_commitlog::~raft_commitlog() {
@@ -37,31 +60,51 @@ raft_commitlog::~raft_commitlog() {
     // segment dirty counts. This keeps commitlog segments alive after this
     // object is destroyed, ensuring uncommitted raft entries remain
     // available for replay after restart.
-    for (auto& entry : _replay_positions) {
+    for (auto& entry : _command_positions) {
         entry.replay_position_handle.release();
     }
-    logger.debug("released {} replay position handles for group_id={}", _replay_positions.size(), _group_id);
+    for (auto& entry : _noncommand_positions) {
+        entry.replay_position_handle.release();
+    }
+    logger.debug("released {} command + {} non-command replay position handles for group_id={}",
+            _command_positions.size(), _noncommand_positions.size(), _group_id);
 }
 
-seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_list& entries) {
-    logger.debug("store_log_entries: group_id={}, num_entries={}", _group_id, entries.size());
+seastar::future<db::rp_handle> raft_commitlog::store_log_entries(const raft::log_entry_ptr_list& entries, raft::index_t commit_idx) {
+    logger.debug("store_log_entries: group_id={}, num_entries={}, commit_idx={}",
+            _group_id, entries.size(), commit_idx);
 
     utils::chunked_vector<commitlog_raft_log_entry_writer> writers;
-    writers.reserve(entries.size());
+    writers.reserve(entries.size() + 1);
 
     for (const auto& log_entry_ptr : entries) {
         logger.debug("  storing log entry: idx={}, term={}", log_entry_ptr->idx, log_entry_ptr->term);
-        writers.emplace_back(raft_commitlog_entry{.group_id = _group_id, .entry = log_entry_ptr});
+        writers.emplace_back(_table_id, raft_commitlog_entry{.group_id = _group_id, .entry = log_entry_ptr});
     }
+    // Trailing commit_idx entry. Its rp_handle is returned to the caller so
+    // it can be attached to a fake system.raft_groups mutation applied
+    // in-memory. That lets the raft_groups memtable eventually flush commit_idx
+    // to an SSTable via a normal flush without a synchronous CQL write on the
+    // raft io_fiber. The entry's cf_id is _raft_groups_table_id
+    // (system.raft_groups) so segment dirty-count accounting stays consistent
+    // with the memtable that ends up holding the handle.
+    writers.emplace_back(
+            _raft_groups_table_id,
+            raft_commit_idx_entry{.group_id = _group_id, .commit_idx = commit_idx});
 
-    auto replay_handles = co_await _commit_log.add_raft_entries(_table_id, std::move(writers));
+    auto replay_handles = co_await _commit_log.add_raft_entries(std::move(writers));
+    // We passed N raft entries + 1 commit_idx entry; add_raft_entries preserves order.
+    SCYLLA_ASSERT(replay_handles.size() == entries.size() + 1);
 
     for (size_t i = 0; i < entries.size(); ++i) {
         const auto& log_entry_ptr = entries[i];
-        _replay_positions.push_back(
+        auto& target = is_command_entry(*log_entry_ptr) ? _command_positions : _noncommand_positions;
+        target.push_back(
                 index_and_replay_position{.index = log_entry_ptr->idx, .replay_position_handle = std::move(replay_handles[i])});
     }
-    logger.debug("store_log_entries completed: total_entries_in_map={}", _replay_positions.size());
+    logger.debug("store_log_entries completed: total_command={}, total_noncommand={}",
+            _command_positions.size(), _noncommand_positions.size());
+    co_return std::move(replay_handles.back());
 }
 
 raft::log_entries raft_commitlog::load_log() {
@@ -72,9 +115,13 @@ raft::log_entries raft_commitlog::load_log() {
 void raft_commitlog::truncate_log(const raft::index_t idx) {
     logger.debug("truncate_log: group_id={}, idx={}", _group_id, idx);
     // Remove entries with index >= idx (Raft semantics: truncate from idx onward).
-    // The deque is sorted by index, so binary search finds the cut point.
-    auto it = std::ranges::lower_bound(_replay_positions, idx, {}, &index_and_replay_position::index);
-    _replay_positions.erase(it, _replay_positions.end());
+    // Both deques are sorted by index, so binary search finds the cut point.
+    auto trim = [idx] (replay_position_list& l) {
+        auto it = std::ranges::lower_bound(l, idx, {}, &index_and_replay_position::index);
+        l.erase(it, l.end());
+    };
+    trim(_command_positions);
+    trim(_noncommand_positions);
 }
 
 void raft_commitlog::truncate_log_tail(const raft::index_t index) {
@@ -82,39 +129,61 @@ void raft_commitlog::truncate_log_tail(const raft::index_t index) {
     // Remove entries with index <= the given index. The handles are destructed
     // normally, decrementing segment dirty counts and allowing commitlog
     // segments to be reclaimed once no other references hold them.
-    auto it = std::ranges::upper_bound(_replay_positions, index, {}, &index_and_replay_position::index);
-    _replay_positions.erase(_replay_positions.begin(), it);
-    logger.debug("truncate_log_tail completed: remaining_map_size={}", _replay_positions.size());
+    auto it = std::ranges::upper_bound(_command_positions, index, {}, &index_and_replay_position::index);
+    _command_positions.erase(_command_positions.begin(), it);
+    // Non-command handles are trimmed by the same rule; share the impl.
+    release_noncommand_rp_handles(index);
+    logger.debug("truncate_log_tail completed: command={}, noncommand={}",
+            _command_positions.size(), _noncommand_positions.size());
+}
+
+void raft_commitlog::release_noncommand_rp_handles(const raft::index_t index) {
+    auto it = std::ranges::upper_bound(_noncommand_positions, index, {}, &index_and_replay_position::index);
+    _noncommand_positions.erase(_noncommand_positions.begin(), it);
+    logger.debug("release_noncommand_rp_handles: group_id={}, up_to_idx={}, remaining={}",
+            _group_id, index, _noncommand_positions.size());
 }
 
 std::vector<index_and_replay_position> raft_commitlog::acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries) {
-    logger.debug("acquire_replay_position_handles_for: group_id={}, entries_count={}, current_map_size={}", _group_id, entries.size(),
-            _replay_positions.size());
+    logger.debug("acquire_replay_position_handles_for: group_id={}, entries_count={}, current_command_size={}",
+            _group_id, entries.size(), _command_positions.size());
 
-    std::vector<index_and_replay_position> ret;
-    ret.reserve(entries.size());
-
-    // Move replay position handles for requested entries. The entries may not be
-    // contiguous in _replay_positions because non-command entries (configuration,
-    // dummy) are also tracked there but are not passed to state_machine::apply().
-    // We scan forward through _replay_positions, skipping non-matching entries
-    // (which are the non-command items). This is O(n) since both sequences are
-    // sorted by index and we only move forward.
-    auto it = _replay_positions.begin();
-    for (const auto& entry : entries) {
-        // Skip non-command entries that have indices below the one we're looking for.
-        while (it != _replay_positions.end() && it->index < entry->idx) {
-            ++it;
-        }
-        if (it == _replay_positions.end() || it->index != entry->idx) {
-            on_internal_error(logger, fmt::format("missing replay position handle for group_id={}, idx={}", _group_id, entry->idx));
-        }
-        ret.emplace_back(index_and_replay_position{.index = it->index, .replay_position_handle = std::move(it->replay_position_handle)});
-        it = _replay_positions.erase(it);
+    if (entries.empty()) {
+        return {};
     }
 
+    // The raft applier fiber hands us a contiguous, index-ordered prefix of
+    // pending commands. _command_positions holds pending commands in index
+    // order, so the requested range must be _command_positions[0..entries.size()).
+    // Verify every index, not just the endpoints, so a mismatch fails here with
+    // a precise error rather than one frame up in state_machine::apply()'s
+    // per-index assert.
+    if (entries.size() > _command_positions.size()) {
+        on_internal_error(logger, fmt::format(
+                "acquire_replay_position_handles_for: expected contiguous command prefix for group_id={}: "
+                "requested [{}, {}] ({} entries), but only {} pending",
+                _group_id, entries.front()->idx, entries.back()->idx, entries.size(),
+                _command_positions.size()));
+    }
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (_command_positions[i].index != entries[i]->idx) {
+            on_internal_error(logger, fmt::format(
+                    "acquire_replay_position_handles_for: expected contiguous command prefix for group_id={}: "
+                    "requested idx {} at offset {}, pending idx {}",
+                    _group_id, entries[i]->idx, i, _command_positions[i].index));
+        }
+    }
+
+    // Bulk-move the prefix to the result and drop it from _command_positions.
+    std::vector<index_and_replay_position> ret;
+    ret.reserve(entries.size());
+    auto end = _command_positions.begin() + entries.size();
+    std::move(_command_positions.begin(), end, std::back_inserter(ret));
+    _command_positions.erase(_command_positions.begin(), end);
+
     logger.debug(
-            "acquire_replay_position_handles_for completed: returned_count={}, remaining_map_size={}", ret.size(), _replay_positions.size());
+            "acquire_replay_position_handles_for completed: returned_count={}, remaining_command_size={}",
+            ret.size(), _command_positions.size());
     return ret;
 }
 } // namespace service::strong_consistency
