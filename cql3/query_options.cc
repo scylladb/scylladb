@@ -12,6 +12,7 @@
 #include "query_options.hh"
 #include "db/consistency_level_type.hh"
 #include "cql3/column_identifier.hh"
+#include "utils/assert.hh"
 
 namespace cql3 {
 
@@ -22,24 +23,57 @@ thread_local const query_options::specific_options query_options::specific_optio
 
 thread_local query_options query_options::DEFAULT{default_cql_config,
     db::consistency_level::ONE, std::nullopt,
-    std::vector<cql3::raw_value_view>(), false, query_options::specific_options::DEFAULT};
+    cql3::raw_value_view_vector_with_unset(), false, query_options::specific_options::DEFAULT};
+
+query_options::query_options(query_options&& o) noexcept
+    : _cql_config(o._cql_config)
+    , _consistency(o._consistency)
+    , _skip_metadata(o._skip_metadata)
+    , _names(std::move(o._names))
+    , _values(std::move(o._values))
+    , _value_views()
+    , _unset(std::move(o._unset))
+    , _tablet_version_block(std::move(o._tablet_version_block))
+    , _options(std::move(o._options))
+    , _batch_options(std::move(o._batch_options))
+    , _list_append_seq(o._list_append_seq)
+    , _cached_pk_fn_calls(std::move(o._cached_pk_fn_calls))
+{
+    // _value_views may contain views into _values's data. With small_vector,
+    // inline storage moves to a new address, invalidating those views.
+    // If _values is non-empty, re-create views from the new location.
+    // If _values is empty, _value_views was set independently (view-only path)
+    // and can be moved directly since it doesn't reference _values.
+    if (!_values.empty()) {
+        // Rebuilding from _values reproduces the 1:1, in-order view mapping
+        // established by fill_value_views() at construction. This is only valid
+        // while _value_views still mirrors _values one-to-one. prepare() reorders
+        // _value_views (for named bind markers) to a different size/order; moving
+        // such an object would silently rebuild the wrong views, so fail fast if
+        // that invariant was broken. See the analysis in issue #29047.
+        SCYLLA_ASSERT(o._value_views.size() == _values.size());
+        fill_value_views();
+    } else {
+        _value_views = std::move(o._value_views);
+    }
+}
 
 query_options::query_options(const cql_config& cfg,
                            db::consistency_level consistency,
                            std::optional<std::vector<std::string_view>> names,
-                           std::vector<cql3::raw_value> values,
-                           std::vector<cql3::raw_value_view> value_views,
+                           raw_value_vector values,
+                           raw_value_view_vector value_views,
                            cql3::unset_bind_variable_vector unset,
                            bool skip_metadata,
                            specific_options options
                            )
    : _cql_config(cfg)
    , _consistency(consistency)
+   , _skip_metadata(skip_metadata)
    , _names(std::move(names))
    , _values(std::move(values))
-   , _value_views(value_views)
-   , _unset(unset)
-   , _skip_metadata(skip_metadata)
+   , _value_views(std::move(value_views))
+   , _unset(std::move(unset))
    , _options(std::move(options))
 {
 }
@@ -53,11 +87,11 @@ query_options::query_options(const cql_config& cfg,
                              )
     : _cql_config(cfg)
     , _consistency(consistency)
+    , _skip_metadata(skip_metadata)
     , _names(std::move(names))
     , _values(std::move(values.values))
     , _value_views()
     , _unset(std::move(values.unset))
-    , _skip_metadata(skip_metadata)
     , _options(std::move(options))
 {
     fill_value_views();
@@ -72,11 +106,11 @@ query_options::query_options(const cql_config& cfg,
                              )
     : _cql_config(cfg)
     , _consistency(consistency)
+    , _skip_metadata(skip_metadata)
     , _names(std::move(names))
     , _values()
     , _value_views(std::move(value_views.values))
     , _unset(std::move(value_views.unset))
-    , _skip_metadata(skip_metadata)
     , _options(std::move(options))
 {
 }
@@ -95,24 +129,28 @@ query_options::query_options(db::consistency_level cl, cql3::raw_value_vector_wi
 }
 
 query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<service::pager::paging_state> paging_state)
+        // Route through the raw_value_vector_with_unset constructor, which calls fill_value_views()
+        // after _values lands at its final address. Passing _values and _value_views separately to
+        // the 8-arg ctor is wrong for small_vector: its SBO move copies elements to a new address,
+        // invalidating any raw_value_views that pointed into the old inline buffer. The _value_views
+        // taken from *qo still point at the moved-from object's inline storage and become dangling.
+        // Reported by P. Paszkow (PR #30011) -- triggered by read_tablet_metadata()'s 1000-row pages.
         : query_options(qo->_cql_config,
         qo->_consistency,
         std::move(qo->_names),
-        std::move(qo->_values),
-        std::move(qo->_value_views),
-        std::move(qo->_unset),
+        raw_value_vector_with_unset(std::move(qo->_values), std::move(qo->_unset)),
         qo->_skip_metadata,
         query_options::specific_options{qo->_options.page_size, paging_state, qo->_options.serial_consistency, qo->_options.timestamp}) {
 
 }
 
 query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<service::pager::paging_state> paging_state, int32_t page_size)
+        // Same fix as the overload above -- route through raw_value_vector_with_unset to ensure
+        // _value_views is rebuilt from the new _values location via fill_value_views().
         : query_options(qo->_cql_config,
         qo->_consistency,
         std::move(qo->_names),
-        std::move(qo->_values),
-        std::move(qo->_value_views),
-        std::move(qo->_unset),
+        raw_value_vector_with_unset(std::move(qo->_values), std::move(qo->_unset)),
         qo->_skip_metadata,
         query_options::specific_options{page_size, paging_state, qo->_options.serial_consistency, qo->_options.timestamp}) {
 
@@ -130,7 +168,7 @@ void query_options::prepare(const std::vector<lw_shared_ptr<column_specification
     }
 
     auto& names = *_names;
-    std::vector<cql3::raw_value_view> ordered_values;
+    raw_value_view_vector ordered_values;
     ordered_values.reserve(specs.size());
     for (auto&& spec : specs) {
         auto& spec_name = spec->name->text();
