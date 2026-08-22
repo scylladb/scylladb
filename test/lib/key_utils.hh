@@ -39,6 +39,10 @@ std::vector<dht::decorated_key> generate_partition_keys(size_t n, schema_ptr s, 
 dht::decorated_key generate_partition_key(schema_ptr s, std::optional<shard_id> shard = this_shard_id(), std::optional<key_size> size = {});
 dht::decorated_key generate_partition_key(schema_ptr s, local_shard_only lso, std::optional<key_size> size = {});
 
+// Works with both tablets and vnodes. Uses replica::table::shard_for_reads() to match keys against shard.
+std::vector<dht::decorated_key> generate_partition_keys(size_t n, replica::table& tbl, std::optional<shard_id> shard = this_shard_id(), std::optional<key_size> size = {});
+dht::decorated_key generate_partition_key(replica::table& tbl, std::optional<shard_id> shard = this_shard_id(), std::optional<key_size> size = {});
+
 // Generate n clustering keys
 //
 // Returned keys are unique, ordered and never empty.
