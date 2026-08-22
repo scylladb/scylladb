@@ -743,3 +743,85 @@ SEASTAR_TEST_CASE(gc_sstable_no_premature_release_with_overlapping_inputs_test) 
         BOOST_CHECK_MESSAGE(!premature_gc_release, "GC sstable was released while overlapping input sstables were still alive");
     });
 }
+
+// Regression test for the get_buckets() data_size() caching refactor.
+//
+// Runs of identical size must group into a single bucket; this exercises the
+// per-bucket smallest-size cache (bucket_smallest_size_list) that the refactor
+// threads through get_buckets instead of re-invoking the data_size() virtual.
+SEASTAR_THREAD_TEST_CASE(incremental_compaction_get_buckets_cached_size_test) {
+    auto s = schema_builder(this_smp_shard_count(), "tests", "incremental_compaction_test")
+        .with_column("id", utf8_type, column_kind::partition_key)
+        .with_column("value", int32_type).build();
+
+    test_env::do_with_async([&] (test_env& env) {
+        table_for_tests cf = env.make_table_for_tests(s);
+        auto stop_cf = deferred_stop(cf);
+
+        compaction::incremental_compaction_strategy ics(std::map<sstring, sstring>{});
+
+        // Several runs of identical size group into one bucket.
+        static constexpr size_t run_data_size = 10 * 1024 * 1024;
+        static constexpr unsigned num_runs = 6;
+        for (unsigned i = 0; i < num_runs; ++i) {
+            auto sst = env.make_sstable(cf->schema(), "/nowhere/in/particular", env.new_generation(), sstable_version_types::md, big);
+            auto keys = tests::generate_partition_keys(2, cf->schema(), local_shard_only::yes);
+            sstables::test(sst).set_values(keys[0].key(), keys[1].key(), stats_metadata{}, run_data_size);
+            column_family_test(cf).add_sstable(sst).get();
+        }
+        BOOST_REQUIRE(cf->get_sstables()->size() == num_runs);
+
+        auto& table_s = cf.as_compaction_group_view();
+        auto control = make_strategy_control_for_test(false);
+        auto desc = ics.get_sstables_for_compaction(table_s, *control).get();
+
+        // All runs share one size, so ICS picks that single bucket for compaction.
+        BOOST_REQUIRE(!desc.sstables.empty());
+        BOOST_REQUIRE_EQUAL(desc.sstables.size(), num_runs);
+        for (auto& sst : desc.sstables) {
+            BOOST_CHECK_EQUAL(sst->data_size(), run_data_size);
+        }
+    }).get();
+}
+
+// Benchmark: get_buckets() must stay cheap at scale. It now reads the bucket's
+// smallest size from the bucket's cached sstable-list entry instead of calling
+// data_size() (a virtual) on a representative sstable, so its cost is O(N log N)
+// in the run size regardless of how expensive data_size() would be to compute.
+SEASTAR_THREAD_TEST_CASE(incremental_compaction_get_buckets_benchmark_test) {
+    auto s = schema_builder(this_smp_shard_count(), "tests", "ics_get_buckets_bench")
+        .with_column("id", utf8_type, column_kind::partition_key)
+        .with_column("value", int32_type).build();
+
+    test_env::do_with_async([&] (test_env& env) {
+        table_for_tests cf = env.make_table_for_tests(s);
+        auto stop_cf = deferred_stop(cf);
+
+        compaction::incremental_compaction_strategy ics(std::map<sstring, sstring>{});
+
+        static constexpr size_t run_data_size = 10 * 1024 * 1024;
+        static constexpr unsigned num_runs = 500;
+        for (unsigned i = 0; i < num_runs; ++i) {
+            auto sst = env.make_sstable(cf->schema(), "/nowhere/in/particular", env.new_generation(), sstable_version_types::md, big);
+            auto keys = tests::generate_partition_keys(2, cf->schema(), local_shard_only::yes);
+            sstables::test(sst).set_values(keys[0].key(), keys[1].key(), stats_metadata{}, run_data_size);
+            column_family_test(cf).add_sstable(sst).get();
+        }
+
+        auto& table_s = cf.as_compaction_group_view();
+        auto control = make_strategy_control_for_test(false);
+        static constexpr int iters = 10;
+        const auto start = std::chrono::steady_clock::now();
+        size_t total_sstables = 0;
+        for (int i = 0; i < iters; ++i) {
+            auto desc = ics.get_sstables_for_compaction(table_s, *control).get();
+            total_sstables += desc.sstables.size();
+        }
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        const double ms = std::chrono::duration<double, std::milli>(elapsed).count();
+        BOOST_TEST_MESSAGE(fmt::format("ICS get_buckets: {} runs x{} iters = {:.3f} ms ({:.4f} ms/iter, {} sstables selected)",
+            num_runs, iters, ms, ms / iters, total_sstables));
+        // Scale/regression guard: must not hang; timing is printed above.
+        BOOST_REQUIRE(elapsed < std::chrono::seconds(120));
+    }).get();
+}

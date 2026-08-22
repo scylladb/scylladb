@@ -204,6 +204,11 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
     using bucket_type = std::vector<sstables::frozen_sstable_run>;
     std::vector<bucket_type> bucket_list;
     std::vector<double> bucket_average_size_list;
+    // Smallest run's cached data size per bucket. Runs are appended to a bucket in
+    // increasing size order (sorted_runs is sorted ascending by size), so bucket[0]
+    // is always the smallest run and its size is the one recorded when the bucket was
+    // created. Tracking it here avoids re-invoking the data_size() virtual on each run.
+    std::vector<uint64_t> bucket_smallest_size_list;
 
     for (auto& pair : sorted_runs) {
         size_t size = pair.second;
@@ -219,7 +224,7 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
                 auto& bucket = bucket_list.back();
                 auto total_size = bucket.size() * bucket_average_size;
                 auto new_average_size = (total_size + size) / (bucket.size() + 1);
-                auto smallest_run_in_bucket = bucket[0]->data_size();
+                auto smallest_run_in_bucket = bucket_smallest_size_list.back();
 
                 // SSTables are added in increasing size order so the bucket's
                 // average might drift upwards.
@@ -237,6 +242,7 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
         bucket_type new_bucket = {pair.first};
         bucket_list.push_back(std::move(new_bucket));
         bucket_average_size_list.push_back(size);
+        bucket_smallest_size_list.push_back(size);
     }
 
     return bucket_list;
