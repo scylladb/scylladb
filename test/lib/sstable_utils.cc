@@ -73,6 +73,7 @@ static future<sstables::shared_sstable> do_make_sstable_containing(sstables::sha
         reader_concurrency_semaphore::no_limits{}, "make_sstable_containing", reader_concurrency_semaphore::register_metrics::no);
 
     std::exception_ptr ex;
+    std::optional<mutation_reader> scan_rd;
     std::optional<mutation_reader> reader;
     try {
         if (detect_shard && cfg.shard == this_shard_id()) {
@@ -83,11 +84,12 @@ static future<sstables::shared_sstable> do_make_sstable_containing(sstables::sha
             // deliberately write memtables spanning every shard and manage
             // sharding metadata themselves.
             auto scan_permit = sem.make_tracking_only_permit(mt->schema(), "shard_scan", db::no_timeout, {});
-            auto scan_rd = mt->make_mutation_reader(mt->schema(), std::move(scan_permit));
-            if (auto shard = co_await shard_of_first_fragment(scan_rd)) {
+            scan_rd.emplace(mt->make_mutation_reader(mt->schema(), std::move(scan_permit)));
+            if (auto shard = co_await shard_of_first_fragment(*scan_rd)) {
                 cfg.shard = *shard;
             }
-            co_await scan_rd.close();
+            co_await scan_rd->close();
+            scan_rd.reset();
         }
         auto permit = sem.make_tracking_only_permit(mt->schema(), "mt_to_sst", db::no_timeout, {});
         reader.emplace(mt->make_flush_reader(mt->schema(), std::move(permit)));
@@ -96,6 +98,9 @@ static future<sstables::shared_sstable> do_make_sstable_containing(sstables::sha
         co_await sst->write_components(std::move(rd), mt->partition_count(), mt->schema(), cfg, mt->get_encoding_stats());
     } catch (...) {
         ex = std::current_exception();
+    }
+    if (scan_rd) {
+        co_await scan_rd->close();
     }
     if (reader) {
         co_await reader->close();
