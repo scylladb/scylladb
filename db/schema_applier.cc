@@ -720,8 +720,43 @@ future<schema_diff_per_shard> schema_diff_per_shard::copy_from(replica::database
     co_return result;
 }
 
-static future<> notify_tables_and_views(service::migration_notifier& notifier, const affected_tables_and_views& diff) {
-    auto it = diff.tables_and_views.local().columns_changed.cbegin();
+// The properties of an altered table that cached client state depends on:
+// prepared statements are validated against both the column set and the
+// available secondary indexes, and drivers refresh table metadata for both.
+// Other properties (compression, bloom_filter_fp_chance, comment, cdc, ...) can
+// change without either of these changing.
+//
+// Both must be computed from old_schema: by the time notifications are sent, the
+// live column family already carries the new schema. Note that equal_columns()
+// compares column types by data_type identity, so this errs towards reporting a
+// change that isn't one, never the other way around.
+struct client_visible_changes {
+    bool columns;
+    bool indexes;
+};
+
+// Both sides of an altered table's diff are built with the same in-progress
+// types storage, so a column whose type changed through a user type altered in
+// the same merge compares equal in equal_columns(). Detect such columns by the
+// types they reference.
+static bool references_altered_type(const schema& s, const std::vector<user_type>& altered_types) {
+    return std::ranges::any_of(altered_types, [&] (const user_type& t) {
+        return t->_keyspace == s.ks_name() && std::ranges::any_of(s.all_columns(), [&] (const column_definition& def) {
+            return def.type->references_user_type(t->_keyspace, t->_name);
+        });
+    });
+}
+
+static client_visible_changes get_client_visible_changes(const schema_ptr& old_schema, const schema_ptr& new_schema,
+        const std::vector<user_type>& altered_types) {
+    return {
+        .columns = !old_schema->equal_columns(*new_schema) || references_altered_type(*new_schema, altered_types),
+        .indexes = old_schema->all_indices() != new_schema->all_indices(),
+    };
+}
+
+static future<> notify_tables_and_views(service::migration_notifier& notifier, const affected_tables_and_views& diff,
+        const std::vector<user_type>& altered_types) {
     auto notify = [&] (auto& r, auto&& f) -> future<> {
         co_await max_concurrent_for_each(r, max_concurrent, std::move(f));
     };
@@ -739,9 +774,18 @@ static future<> notify_tables_and_views(service::migration_notifier& notifier, c
     co_await notify(cdc.created, [&] (auto&& gs) { return notifier.create_column_family(gs); });
     co_await notify(views.created, [&] (auto&& gs) { return notifier.create_view(view_ptr(gs)); });
     // Table altering is notified first, in case new base columns appear
-    co_await notify(tables.altered, [&] (auto&& altered) { return notifier.update_column_family(altered.new_schema, *it++); });
-    co_await notify(cdc.altered, [&] (auto&& altered) { return notifier.update_column_family(altered.new_schema, *it++); });
-    co_await notify(views.altered, [&] (auto&& altered) { return notifier.update_view(view_ptr(altered.new_schema), *it++); });
+    co_await notify(tables.altered, [&] (auto&& altered) {
+        auto changed = get_client_visible_changes(altered.old_schema, altered.new_schema, altered_types);
+        return notifier.update_column_family(altered.new_schema, changed.columns, changed.indexes);
+    });
+    co_await notify(cdc.altered, [&] (auto&& altered) {
+        auto changed = get_client_visible_changes(altered.old_schema, altered.new_schema, altered_types);
+        return notifier.update_column_family(altered.new_schema, changed.columns, changed.indexes);
+    });
+    co_await notify(views.altered, [&] (auto&& altered) {
+        auto changed = get_client_visible_changes(altered.old_schema, altered.new_schema, altered_types);
+        return notifier.update_view(view_ptr(altered.new_schema), changed.columns, changed.indexes);
+    });
 }
 
 static void drop_cached_func(replica::database& db, const query::result_set_row& row) {
@@ -1002,14 +1046,11 @@ void schema_applier::commit_tables_and_views() {
         db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
     }
 
-    diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + cdc.altered.size() + views.altered.size());
     for (auto&& altered : cdc.altered) {
-        bool changed = db.update_column_family(altered.new_schema);
-        diff.tables_and_views.local().columns_changed.push_back(changed);
+        db.update_column_family(altered.new_schema);
     }
     for (auto&& altered : boost::range::join(tables.altered, views.altered)) {
-        bool changed = db.update_column_family(altered.new_schema);
-        diff.tables_and_views.local().columns_changed.push_back(changed);
+        db.update_column_family(altered.new_schema);
     }
 }
 
@@ -1173,7 +1214,7 @@ future<> schema_applier::post_commit() {
             co_await notifier.drop_user_type(type);
         }
 
-        co_await notify_tables_and_views(notifier, _affected_tables_and_views);
+        co_await notify_tables_and_views(notifier, _affected_tables_and_views, types.altered);
 
         // notify about user functions and aggregates
         for (const auto& func : _functions_batch.local().removed_functions) {

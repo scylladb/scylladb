@@ -114,8 +114,15 @@ void cql_server::event_notifier::on_update_keyspace(const sstring& ks_name)
     }
 }
 
-void cql_server::event_notifier::on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed)
+void cql_server::event_notifier::on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed, bool indexes_changed)
 {
+    // Columns and indexes are what drivers track on a SCHEMA_CHANGE event; an
+    // update that changes neither doesn't require them to refresh anything.
+    if (!columns_changed && !indexes_changed && !_server._config.broadcast_schema_change_events_for_all_updates()) {
+        elogger.debug("Not notifying clients about the update of {}.{}: neither columns nor indexes changed",
+                ks_name, cf_name);
+        return;
+    }
     for (auto&& conn : _schema_change_listeners) {
         using namespace cql_transport;
         if (!conn->_pending_requests_gate.is_closed()) {
@@ -144,9 +151,9 @@ void cql_server::event_notifier::on_update_user_type(const sstring& ks_name, con
     }
 }
 
-void cql_server::event_notifier::on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed)
+void cql_server::event_notifier::on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed, bool indexes_changed)
 {
-    on_update_column_family(ks_name, view_name, columns_changed);
+    on_update_column_family(ks_name, view_name, columns_changed, indexes_changed);
 }
 
 void cql_server::event_notifier::on_update_function(const sstring& ks_name, const sstring& function_name)

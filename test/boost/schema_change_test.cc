@@ -26,6 +26,7 @@
 #include "types/list.hh"
 #include "types/user.hh"
 #include "db/system_keyspace.hh"
+#include "cql3/untyped_result_set.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
@@ -389,6 +390,7 @@ public:
     int update_keyspace_count = 0;
     int update_column_family_count = 0;
     int columns_changed_count = 0;
+    int indexes_changed_count = 0;
     int update_user_type_count = 0;
     int update_function_count = 0;
     int update_aggregate_count = 0;
@@ -407,14 +409,19 @@ public:
     virtual void on_create_aggregate(const sstring&, const sstring&) override { ++create_aggregate_count; }
     virtual void on_create_view(const sstring&, const sstring&) override { ++create_view_count; }
     virtual void on_update_keyspace(const sstring&) override { ++update_keyspace_count; }
-    virtual void on_update_column_family(const sstring&, const sstring&, bool columns_changed) override {
+    virtual void on_update_column_family(const sstring&, const sstring&, bool columns_changed, bool indexes_changed) override {
         ++update_column_family_count;
         columns_changed_count += int(columns_changed);
+        indexes_changed_count += int(indexes_changed);
     }
     virtual void on_update_user_type(const sstring&, const sstring&) override { ++update_user_type_count; }
     virtual void on_update_function(const sstring&, const sstring&) override { ++update_function_count; }
     virtual void on_update_aggregate(const sstring&, const sstring&) override { ++update_aggregate_count; }
-    virtual void on_update_view(const sstring&, const sstring&, bool) override { ++update_view_count; }
+    virtual void on_update_view(const sstring&, const sstring&, bool columns_changed, bool indexes_changed) override {
+        ++update_view_count;
+        columns_changed_count += int(columns_changed);
+        indexes_changed_count += int(indexes_changed);
+    }
     virtual void on_drop_keyspace(const sstring&) override { ++drop_keyspace_count; }
     virtual void on_drop_column_family(const sstring&, const sstring&) override { ++drop_column_family_count; }
     virtual void on_drop_user_type(const sstring&, const sstring&) override { ++drop_user_type_count; }
@@ -440,6 +447,9 @@ SEASTAR_TEST_CASE(test_nested_type_mutation_in_update) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         counting_migration_listener listener;
         e.local_mnotifier().register_listener(&listener);
+        auto listener_lease = defer([&e, &listener] noexcept {
+            e.local_mnotifier().unregister_listener(&listener).get();
+        });
 
         e.execute_cql("CREATE TYPE foo (foo_k int);").get();
         e.execute_cql("CREATE TYPE bar (bar_k frozen<foo>);").get();
@@ -466,13 +476,52 @@ SEASTAR_TEST_CASE(test_nested_type_mutation_in_update) {
     });
 }
 
+// A merge can carry an update of a user type together with an update of a table
+// using it, e.g. when a restarted node catches up on several schema changes at
+// once. The table's before and after schemas are then both built with the new
+// type, so equal_columns() alone cannot see the column change - the update
+// notification must still report the columns as changed.
+SEASTAR_TEST_CASE(test_batched_type_and_table_update_reports_column_change) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        counting_migration_listener listener;
+        e.local_mnotifier().register_listener(&listener);
+        auto listener_lease = defer([&e, &listener] noexcept {
+            e.local_mnotifier().unregister_listener(&listener).get();
+        });
+
+        e.execute_cql("CREATE TYPE tp (a int);").get();
+        e.execute_cql("CREATE TABLE t (pk int primary key, v tp);").get();
+
+        service::migration_manager& mm = e.migration_manager().local();
+        auto group0_guard = mm.start_group0_operation().get();
+        auto ts = group0_guard.write_timestamp();
+        auto&& keyspace = e.db().local().find_keyspace("ks").metadata();
+
+        auto new_type = user_type_impl::get_instance("ks", to_bytes("tp"), {"a", "b"}, {int32_type, int32_type}, true);
+        auto muts = db::schema_tables::make_create_type_mutations(keyspace, new_type, ts);
+
+        auto old_schema = e.db().local().find_schema("ks", "t");
+        auto new_schema = schema_builder(old_schema).set_comment("batched with a type change").build();
+        auto table_muts = db::schema_tables::make_update_table_mutations(mm.get_storage_proxy(), keyspace, old_schema, new_schema, ts);
+        muts.insert(muts.end(), table_muts.begin(), table_muts.end());
+
+        mm.announce(std::move(muts), std::move(group0_guard), "").get();
+
+        BOOST_REQUIRE_EQUAL(listener.update_user_type_count, 1);
+        BOOST_REQUIRE_EQUAL(listener.update_column_family_count, 1);
+        BOOST_REQUIRE_EQUAL(listener.columns_changed_count, 1);
+        BOOST_REQUIRE_EQUAL(listener.indexes_changed_count, 0);
+    });
+}
+
 SEASTAR_TEST_CASE(test_notifications) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
             counting_migration_listener listener;
             e.local_mnotifier().register_listener(&listener);
-            // May throw, but zero probability in a test
-            auto listener_lease = defer([&e, &listener] noexcept { e.local_mnotifier().register_listener(&listener); });
+            auto listener_lease = defer([&e, &listener] noexcept {
+                e.local_mnotifier().unregister_listener(&listener).get();
+            });
 
             e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
 
@@ -498,6 +547,44 @@ SEASTAR_TEST_CASE(test_notifications) {
             BOOST_REQUIRE_EQUAL(listener.update_column_family_count, 3);
             BOOST_REQUIRE_EQUAL(listener.columns_changed_count, 3);
 
+            // Runs `cql` and asserts how many update notifications it produced
+            // and which of the two client-visible properties they reported as
+            // changed. The notification count has to be checked too, or a change
+            // reported as (0, 0) is indistinguishable from no notification.
+            auto check_reported_changes = [&] (const char* cql, int expected_updates,
+                    int expected_columns, int expected_indexes) {
+                auto updates_before = listener.update_column_family_count + listener.update_view_count;
+                auto columns_before = listener.columns_changed_count;
+                auto indexes_before = listener.indexes_changed_count;
+                e.execute_cql(cql).get();
+                BOOST_REQUIRE_EQUAL(listener.update_column_family_count + listener.update_view_count - updates_before,
+                        expected_updates);
+                BOOST_REQUIRE_EQUAL(listener.columns_changed_count - columns_before, expected_columns);
+                BOOST_REQUIRE_EQUAL(listener.indexes_changed_count - indexes_before, expected_indexes);
+            };
+
+            // Properties other than columns and indexes.
+            check_reported_changes("alter table tests.table1 with comment = 'hello';", 1, 0, 0);
+            check_reported_changes("alter table tests.table1 with bloom_filter_fp_chance = 0.1;", 1, 0, 0);
+            check_reported_changes("alter table tests.table1 with default_time_to_live = 100;", 1, 0, 0);
+            check_reported_changes("alter table tests.table1 with compaction = "
+                    "{'class': 'LeveledCompactionStrategy'};", 1, 0, 0);
+
+            // Indexes change without any column changing, and vice versa.
+            check_reported_changes("create index table1_idx on tests.table1 (c1);", 1, 0, 1);
+            check_reported_changes("drop index tests.table1_idx;", 1, 0, 1);
+            check_reported_changes("alter table tests.table1 rename pk to pk2;", 1, 1, 0);
+
+            // Materialized views are notified the same way, and have no indexes
+            // of their own. Altering a view notifies its base table too, so the
+            // property-only change below reports two updates, one per table.
+            e.execute_cql("create materialized view tests.mv1 as select pk2, c1 from tests.table1 "
+                    "where pk2 is not null and c1 is not null primary key (c1, pk2);").get();
+            auto update_view_count_before = listener.update_view_count;
+            check_reported_changes("alter materialized view tests.mv1 with comment = 'hello';", 2, 0, 0);
+            BOOST_REQUIRE_EQUAL(listener.update_view_count - update_view_count_before, 1);
+
+            e.execute_cql("drop materialized view tests.mv1;").get();
             e.execute_cql("drop table tests.table1;").get();
 
             BOOST_REQUIRE_EQUAL(listener.drop_column_family_count, 1);
@@ -572,6 +659,41 @@ SEASTAR_TEST_CASE(test_prepared_statement_is_invalidated_by_schema_change) {
                 // expected
             }
         });
+    });
+}
+
+// A prepared statement keeps the schema_ptr it was prepared with and reads
+// table properties off it at execution time: update_parameters::ttl() falls back
+// to schema::default_time_to_live(), the mutations it builds carry that schema
+// into cdc::needs_cdc_augmentation(), and LWT reads
+// schema::paxos_grace_seconds() from it. Changing such a property therefore has
+// to invalidate the statement, or the ALTER appears to have no effect.
+// See scylladb/scylladb#1255.
+SEASTAR_TEST_CASE(test_prepared_statement_observes_altered_table_properties) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table t (pk int primary key, v int);").get();
+
+        auto insert = [&e] (const cql3::prepared_cache_key_type& id, int32_t pk) {
+            return e.execute_prepared(id, {{cql3::raw_value::make_value(int32_type->decompose(pk)),
+                                            cql3::raw_value::make_value(int32_type->decompose(int32_t(0)))}}).get();
+        };
+        auto has_ttl = [&e] (int32_t pk) {
+            auto msg = e.execute_cql(format("select ttl(v) as ttl_v from t where pk = {};", pk)).get();
+            cql3::untyped_result_set rows(msg);
+            return rows.one().has("ttl_v");
+        };
+
+        auto id = e.prepare("insert into t (pk, v) values (?, ?);").get();
+        insert(id, 1);
+        BOOST_REQUIRE(!has_ttl(1));
+
+        e.execute_cql("alter table t with default_time_to_live = 1000;").get();
+
+        // The statement must have been invalidated...
+        BOOST_REQUIRE_THROW(insert(id, 2), not_prepared_exception);
+        // ...so that re-preparing it picks up the new default TTL.
+        insert(e.prepare("insert into t (pk, v) values (?, ?);").get(), 2);
+        BOOST_REQUIRE(has_ttl(2));
     });
 }
 

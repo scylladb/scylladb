@@ -620,7 +620,7 @@ async def test_no_schema_when_apply_write(manager: ManagerClient):
         await manager.api.enable_injection(servers[2].ip_addr, "disable_raft_drop_append_entries_for_specified_group", one_shot=True)
         await cql.run_async(f"INSERT INTO {ks}.test (pk, c, new_col) VALUES (10, 20, 30)", host=leader_host)
 
-        await s2_log.wait_for(f"Column definitions for {ks}.test changed", timeout=60, from_mark=s2_mark)
+        await s2_log.wait_for(f"Schema for {ks}.test changed", timeout=60, from_mark=s2_mark)
         rows = await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk = 10;", host=hosts[2])
         assert len(rows) == 1
         row = rows[0]

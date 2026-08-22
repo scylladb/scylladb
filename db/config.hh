@@ -478,6 +478,7 @@ public:
     named_value<bool> table_digest_insensitive_to_expiry;
     named_value<bool> enable_dangerous_direct_import_of_cassandra_counters;
     named_value<bool> enable_shard_aware_drivers;
+    named_value<bool> broadcast_schema_change_events_for_all_updates;
     named_value<bool> enable_ipv6_dns_lookup;
     named_value<bool> abort_on_internal_error;
     named_value<bool> abort_on_malformed_sstable_error;

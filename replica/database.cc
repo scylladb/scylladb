@@ -1289,9 +1289,8 @@ future<> database::add_column_family_and_make_directory(schema_ptr schema, is_ne
     co_await make_column_family_directory(schema);
 }
 
-bool database::update_column_family(schema_ptr new_schema) {
+void database::update_column_family(const schema_ptr& new_schema) {
     column_family& cfm = find_column_family(new_schema->id());
-    bool columns_changed = !cfm.schema()->equal_columns(*new_schema);
     auto s = local_schema_registry().learn(new_schema);
     s->registry_entry()->mark_synced();
     cfm.set_schema(s);
@@ -1301,7 +1300,6 @@ bool database::update_column_family(schema_ptr new_schema) {
         find_column_family(s->view_info()->base_id()).add_or_update_view(view_ptr(s));
     }
     cfm.get_index_manager().reload();
-    return columns_changed;
 }
 
 void database::remove(table& cf) noexcept {
