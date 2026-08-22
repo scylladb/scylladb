@@ -19,6 +19,9 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "mutation/mutation_fragment.hh"
+#include "mutation/mutation_fragment_v2.hh"
+#include "mutation/mutation_rebuilder.hh"
+#include "schema/schema_registry.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/sharder.hh"
@@ -56,6 +59,7 @@
 #include "readers/queue.hh"
 #include "readers/filtering.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
+#include "readers/from_mutations.hh"
 #include "repair/hash.hh"
 #include "repair/decorated_key_with_hash.hh"
 #include "repair/row.hh"
@@ -548,6 +552,153 @@ sharder_helper get_sharder_helper(replica::table& t, const schema& s, service::f
     }
 }
 
+class logstor_direct_writer_queue_impl : public mutation_fragment_queue::impl {
+    schema_ptr _schema;
+    sharded<replica::database>& _db;
+    service::frozen_topology_guard _topo_guard;
+    sharder_helper _sharder;
+    db::timeout_clock::time_point _timeout;
+    std::optional<mutation_rebuilder_v2> _rebuilder;
+    std::exception_ptr _aborted;
+
+private:
+    future<> apply_rebuilt_partition(mutation m) {
+        auto shards = _sharder.sharder.shard_for_writes(m.token());
+        if (shards.empty()) {
+            return make_exception_future<>(std::runtime_error(format("No local shards for token {} of {}.{}",
+                    m.token(), _schema->ks_name(), _schema->cf_name())));
+        }
+
+        rlogger.debug("logstor repair writer: applying rebuilt partition table={}.{} token={} shards={} clustered_rows_empty={}",
+                _schema->ks_name(), _schema->cf_name(), m.token(), shards,
+                m.partition().clustered_rows().empty());
+
+        return parallel_for_each(shards, [&db = _db, fm = freeze(m), gs = global_schema_ptr(_schema), topo_guard = _topo_guard, timeout = _timeout] (shard_id shard) mutable {
+            return db.invoke_on(shard, [fm, gs, topo_guard, timeout] (replica::database& db) mutable -> future<> {
+                service::topology_guard guard(topo_guard);
+                guard.check();
+                schema_ptr schema = gs.get();
+                auto& table = db.find_column_family(schema->id());
+                auto stream_op = table.stream_in_progress();
+                rlogger.debug("logstor repair writer: applying rebuilt partition on shard={} table={}.{}",
+                        this_shard_id(), schema->ks_name(), schema->cf_name());
+                co_await table.apply(fm, schema, db::rp_handle(), timeout, db::noop_large_data_guardrail::instance());
+            });
+        });
+    }
+
+    future<> rebuild(mutation_fragment_v2 mf) {
+        if (mf.is_partition_start()) {
+            if (_rebuilder) {
+                // The same lost partition_end that push_end_of_stream() reports,
+                // just detected earlier. Starting a new rebuilder here would
+                // silently drop the partition opened by the previous one.
+                on_internal_error(rlogger, format("Logstor repair writer: partition start with an open partition, table={}.{}",
+                        _schema->ks_name(), _schema->cf_name()));
+            }
+            auto ps = std::move(mf).as_partition_start();
+            rlogger.debug("logstor repair writer: start partition table={}.{} key={}",
+                    _schema->ks_name(), _schema->cf_name(), ps.key());
+            _rebuilder.emplace(_schema);
+            _rebuilder->consume_new_partition(ps.key());
+            (void)_rebuilder->consume(ps.partition_tombstone());
+            return make_ready_future<>();
+        }
+
+        if (!_rebuilder) {
+            return make_exception_future<>(std::runtime_error("Logstor repair writer got non-partition-start fragment without an active rebuilder"));
+        }
+
+        if (mf.is_end_of_partition()) {
+            (void)_rebuilder->consume(std::move(mf));
+            auto mut = _rebuilder->consume_end_of_stream();
+            _rebuilder.reset();
+            if (!mut) {
+                return make_exception_future<>(std::runtime_error("Logstor repair writer ended a partition without a rebuilt mutation"));
+            }
+            rlogger.debug("logstor repair writer: finished rebuilding partition table={}.{} token={}",
+                    _schema->ks_name(), _schema->cf_name(), mut->token());
+            return apply_rebuilt_partition(std::move(*mut));
+        }
+
+        (void)_rebuilder->consume(std::move(mf));
+        return make_ready_future<>();
+    }
+
+public:
+    logstor_direct_writer_queue_impl(schema_ptr schema, sharded<replica::database>& db, service::frozen_topology_guard topo_guard,
+            db::timeout_clock::time_point timeout)
+        : _schema(std::move(schema))
+        , _db(db)
+        , _topo_guard(topo_guard)
+        , _sharder(get_sharder_helper(_db.local().find_column_family(_schema->id()), *_schema, _topo_guard))
+        , _timeout(timeout) {
+    }
+
+    virtual future<> push(mutation_fragment_v2 mf) override {
+        if (_aborted) {
+            co_await coroutine::return_exception_ptr(_aborted);
+        }
+        std::exception_ptr ep;
+        try {
+            co_await rebuild(std::move(mf));
+            co_return;
+        } catch (...) {
+            ep = std::current_exception();
+        }
+        // The partition being rebuilt is incomplete now, and a logstor write
+        // replaces the whole partition, so it must never be applied. Drop it and
+        // fail every later push, which also keeps push_end_of_stream() from
+        // reporting the dropped partition as an error of its own and masking
+        // the failure that repair actually propagates.
+        this->abort(ep);
+        co_await coroutine::return_exception_ptr(std::move(ep));
+    }
+
+    virtual void abort(std::exception_ptr ep) override {
+        _aborted = std::move(ep);
+        // Drop any partially rebuilt partition so it can never be applied.
+        _rebuilder.reset();
+    }
+
+    virtual void push_end_of_stream() override {
+        // repair_writer closes the open partition before signaling end of
+        // stream, so a live rebuilder here means a partition_end was lost. A
+        // failed push cannot land here: it aborts the queue, which drops the
+        // rebuilder, so this never masks an earlier failure.
+        if (_rebuilder) {
+            on_internal_error(rlogger, format("Logstor repair writer: end of stream with an open partition, table={}.{}",
+                    _schema->ks_name(), _schema->cf_name()));
+        }
+    }
+};
+
+class logstor_repair_writer_impl : public repair_writer::impl {
+    mutation_fragment_queue _mq;
+
+    static mutation_fragment_queue make_queue(schema_ptr schema, reader_permit permit, sharded<replica::database>& db,
+            service::frozen_topology_guard topo_guard) {
+        auto timeout = permit.timeout();
+        return mutation_fragment_queue(schema, std::move(permit), seastar::shared_ptr<mutation_fragment_queue::impl>(
+                seastar::make_shared<logstor_direct_writer_queue_impl>(schema, db, topo_guard, timeout)));
+    }
+public:
+    logstor_repair_writer_impl(schema_ptr schema, reader_permit permit, sharded<replica::database>& db, service::frozen_topology_guard topo_guard)
+        : _mq(make_queue(schema, std::move(permit), db, topo_guard)) {
+    }
+
+    virtual mutation_fragment_queue& queue() override {
+        return _mq;
+    }
+
+    virtual future<> wait_for_writer_done() override {
+        return make_ready_future<>();
+    }
+
+    virtual void create_writer(lw_shared_ptr<repair_writer>) override {
+    }
+};
+
 void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
     if (_writer_done) {
         return;
@@ -596,9 +747,14 @@ lw_shared_ptr<repair_writer> make_repair_writer(
             db::view::view_builder& view_builder,
             sharded<db::view::view_building_worker>& view_building_worker,
             service::frozen_topology_guard topo_guard) {
-    auto [queue_reader, queue_handle] = make_queue_reader(schema, permit);
-    auto queue = make_mutation_fragment_queue(schema, permit, std::move(queue_handle));
-    auto i = std::make_unique<repair_writer_impl>(schema, repaired_at, permit, db, view_builder, view_building_worker, reason, std::move(queue), std::move(queue_reader), topo_guard);
+    std::unique_ptr<repair_writer::impl> i;
+    if (schema->logstor_enabled()) {
+        i = std::make_unique<logstor_repair_writer_impl>(schema, permit, db, topo_guard);
+    } else {
+        auto [queue_reader, queue_handle] = make_queue_reader(schema, permit);
+        auto queue = make_mutation_fragment_queue(schema, permit, std::move(queue_handle));
+        i = std::make_unique<repair_writer_impl>(schema, repaired_at, permit, db, view_builder, view_building_worker, reason, std::move(queue), std::move(queue_reader), topo_guard);
+    }
     return make_lw_shared<repair_writer>(schema, permit, std::move(i));
 }
 
@@ -817,6 +973,7 @@ private:
     repair_hasher _repair_hasher;
     gc_clock::time_point _compaction_time;
     bool _is_tablet;
+    bool _uses_logstor;
     reader_concurrency_semaphore::inactive_read_handle _fake_inactive_read_handle;
     std::unique_ptr<const locator::token_metadata> _small_table_optimization_tm;
     seastar::semaphore _small_table_optimization_tm_sem{1};
@@ -950,6 +1107,7 @@ public:
             , _repair_hasher(_seed, _schema)
             , _compaction_time(compaction_time)
             , _is_tablet(cf.uses_tablets())
+            , _uses_logstor(cf.uses_logstor())
             , _frozen_topology_guard(topo_guard)
             , _topology_guard(_frozen_topology_guard)
             , _is_eligible_to_repair_rejection(cf.is_eligible_to_write_rejection_on_critical_disk_utilization())
@@ -1342,7 +1500,13 @@ private:
                 bool(_rs.get_config().repair_multishard_reader_enable_read_ahead()));
         }
         try {
-            while (cur_size < _max_row_buf_size) {
+            // Logstor replaces whole partitions on write, so the whole-partition
+            // convergence in repair requires that a sync window never splits a
+            // partition. Keep reading past the byte budget until the current
+            // partition is complete (its partition_end clears the current dk).
+            // Logstor partitions are small (at most a partition tombstone plus
+            // one row), so the overrun is bounded.
+            while (cur_size < _max_row_buf_size || (_uses_logstor && _repair_reader->get_current_dk())) {
                 _gate.check();
                 mutation_fragment_opt mfopt = co_await _repair_reader->read_mutation_fragment();
                 if (!mfopt) {
@@ -1394,6 +1558,19 @@ private:
         std::optional<repair_sync_boundary> sb_max;
         if (!_row_buf.empty()) {
             sb_max = _row_buf.back().boundary();
+            if (_uses_logstor) {
+                if (_repair_reader->get_current_dk()) {
+                    on_internal_error(rlogger, format("Repair row buffer ends inside a partition, table={}.{} range={}",
+                            _schema->ks_name(), _schema->cf_name(), _range));
+                }
+                // The buffer ends at a partition boundary (see read_rows_from_disk),
+                // but the last row's own position may lie inside the partition (e.g.
+                // a partition tombstone at the partition-start position). Report the
+                // boundary at the end of the partition instead, so the common sync
+                // boundary chosen by the master never cuts inside a partition on any
+                // replica.
+                sb_max->position = position_in_partition::after_all_clustered_rows();
+            }
         }
         rlogger.debug("get_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
                       new_rows_nr, sb_max, row_buf_bytes, row_buf_combined_hash, skipped_sync_boundary);
@@ -1476,6 +1653,42 @@ private:
         co_return rows;
     }
 
+    // Copy every row of each partition that has at least one row in set_diff.
+    // Used when sending to logstor followers: logstor replaces whole partitions
+    // on write, so a follower must receive the complete converged partition
+    // rather than only the rows it is missing. Otherwise a partial partition
+    // could overwrite (or be overwritten relative to) the follower's version and
+    // lose data.
+    //
+    // The selection is by partition, not by hash, which also makes it immune to
+    // repair_hash collisions: a collision can only pull in an extra whole
+    // partition, which is harmless, and can never truncate a partition the way
+    // filtering rows by hash membership could. _working_row_buf is ordered by
+    // (partition, position), so rows of a partition are contiguous.
+    future<std::list<repair_row>>
+    copy_partitions_from_working_row_buf_within_set_diff(const repair_hash_set& set_diff) {
+        std::list<repair_row> rows;
+        auto it = _working_row_buf.begin();
+        while (it != _working_row_buf.end()) {
+            const dht::decorated_key& dk = it->get_dk_with_hash()->dk;
+            auto group_end = it;
+            bool touched = false;
+            while (group_end != _working_row_buf.end() && group_end->get_dk_with_hash()->dk.equal(*_schema, dk)) {
+                touched = touched || set_diff.contains(group_end->hash());
+                ++group_end;
+            }
+            if (touched) {
+                for (auto r = it; r != group_end; ++r) {
+                    rows.push_back(*r);
+                    co_await coroutine::maybe_yield();
+                }
+            }
+            it = group_end;
+            co_await coroutine::maybe_yield();
+        }
+        co_return rows;
+    }
+
     // Return rows in the _working_row_buf with hash within the given sef_diff
     // Give a set of row hashes, return the corresponding rows
     // If needs_all_rows is set, return all the rows in _working_row_buf, ignore the set_diff
@@ -1545,7 +1758,161 @@ private:
         // Clear gently to avoid stalls
         utils::clear_gently(row_diff).get();
     }
+
+private:
+    // Merge all versions/fragments of a single partition (the master's own rows
+    // plus the rows pulled from the followers) into one logical mutation using
+    // cell-level last-writer-wins semantics.
+    future<mutation> merge_partition_versions_for_logstor(const dht::decorated_key& dk, std::list<repair_row>& group) {
+        mutation_rebuilder rb(_schema);
+        rb.consume_new_partition(dk);
+        for (repair_row& r : group) {
+            mutation_fragment mf = r.get_frozen_mutation().unfreeze(*_schema, _permit);
+            if (mf.is_partition_start()) {
+                rb.consume(std::move(mf).as_partition_start().partition_tombstone());
+            } else if (mf.is_static_row()) {
+                rb.consume(std::move(mf).as_static_row());
+            } else if (mf.is_clustering_row()) {
+                rb.consume(std::move(mf).as_clustering_row());
+            } else if (mf.is_range_tombstone()) {
+                rb.consume(std::move(mf).as_range_tombstone());
+            } else {
+                // handle_mutation_fragment() and to_repair_rows_list() never put
+                // any other fragment kind in the row buffers. Silently dropping
+                // one here would lose data, so report it instead.
+                on_internal_error(rlogger, format("Logstor repair converge: unexpected fragment kind={} table={}.{} key={}",
+                        mf.mutation_fragment_kind(), _schema->ks_name(), _schema->cf_name(), dk));
+            }
+            co_await coroutine::maybe_yield();
+        }
+        rb.consume_end_of_partition();
+        mutation_opt m = rb.consume_end_of_stream();
+        if (!m) {
+            throw std::runtime_error(format("Logstor repair converge: failed to rebuild partition table={}.{} key={}",
+                    _schema->ks_name(), _schema->cf_name(), dk));
+        }
+        co_return std::move(*m);
+    }
+
+    // Split a converged partition mutation back into repair rows, following the
+    // same fragment selection as read_rows_from_disk (skip empty partition_start
+    // and partition_end). The resulting rows are marked dirty so the master flush
+    // rewrites the whole converged partition and Step C sends it to the followers.
+    future<std::list<repair_row>> refragment_partition_for_logstor(const dht::decorated_key& dk, mutation m) {
+        auto dk_with_hash = make_lw_shared<const decorated_key_with_hash>(*_schema, dk, _seed);
+        std::list<repair_row> rows;
+        auto rd = mutation_fragment_v1_stream(make_mutation_reader_from_mutations(_schema, _permit, std::move(m)));
+        std::exception_ptr ex;
+        try {
+            while (mutation_fragment_opt mfopt = co_await rd()) {
+                mutation_fragment& mf = *mfopt;
+                if (mf.is_partition_start()) {
+                    if (!mf.as_partition_start().partition_tombstone()) {
+                        continue;
+                    }
+                } else if (mf.is_end_of_partition()) {
+                    continue;
+                }
+                auto hash = _repair_hasher.do_hash_for_mf(*dk_with_hash, mf);
+                auto fm = freeze(*_schema, mf);
+                auto pos = position_in_partition(mf.position());
+                auto mf_ptr = make_lw_shared<mutation_fragment>(std::move(mf));
+                rows.push_back(repair_row(std::move(fm), std::move(pos), dk_with_hash, std::move(hash),
+                        is_dirty_on_master::yes, std::move(mf_ptr)));
+                co_await coroutine::maybe_yield();
+            }
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await rd.close();
+        if (ex) {
+            std::rethrow_exception(ex);
+        }
+        co_return std::move(rows);
+    }
+
 public:
+    // For logstor tables, reconcile _working_row_buf so that every partition
+    // touched by repair is represented by its complete, converged value.
+    //
+    // Row-level repair reconciles at row-hash granularity and normally relies on
+    // the storage engine to merge overlapping rows at read time (cell-level LWW).
+    // Logstor has no such merge: a write replaces the whole partition, keeping the
+    // record with the highest record timestamp. Sending or flushing only the
+    // differing rows would therefore drop the cells that live in the other
+    // versions. To avoid that, merge all versions of each touched partition into a
+    // single mutation and re-expand it into repair rows. The master flush then
+    // stores the converged partition locally, and Step C sends the converged
+    // partition to the followers.
+    //
+    // Must run inside a seastar thread.
+    void converge_working_row_buf_for_logstor() {
+        if (!_uses_logstor || _working_row_buf.empty()) {
+            return;
+        }
+        std::list<repair_row> converged;
+        // The rows of a partition are moved out of _working_row_buf while they
+        // are merged, so a merge that throws would leave them, and every
+        // partition converged so far, owned by locals that the unwind destroys.
+        // Hand the rows back unconditionally instead: a throw fails the repair
+        // round and the range is retried, but _working_row_buf stays complete
+        // for clear_gently() in stop().
+        auto restore = defer([&] noexcept {
+            converged.splice(converged.end(), _working_row_buf);
+            _working_row_buf = std::move(converged);
+        });
+        bool converged_any = false;
+        auto it = _working_row_buf.begin();
+        while (it != _working_row_buf.end()) {
+            const dht::decorated_key& dk = it->get_dk_with_hash()->dk;
+            auto group_end = it;
+            bool any_dirty = false;
+            while (group_end != _working_row_buf.end() && group_end->get_dk_with_hash()->dk.equal(*_schema, dk)) {
+                any_dirty = any_dirty || bool(group_end->dirty_on_master());
+                ++group_end;
+            }
+            std::list<repair_row> group;
+            group.splice(group.end(), _working_row_buf, it, group_end);
+            it = group_end;
+
+            // A partition is only at risk when repair pulled a differing version
+            // into it (any_dirty) and there is more than one version to merge.
+            // Otherwise the single row already is the complete partition value.
+            if (!any_dirty || group.size() < 2) {
+                converged.splice(converged.end(), group);
+                thread::maybe_yield();
+                continue;
+            }
+
+            try {
+                auto merged = merge_partition_versions_for_logstor(dk, group).get();
+                thread::maybe_yield();
+                auto rebuilt = refragment_partition_for_logstor(dk, std::move(merged)).get();
+                converged.splice(converged.end(), rebuilt);
+            } catch (...) {
+                // Put the unconverged rows back where they came from, so that
+                // the restore above reassembles the buffer without losing them.
+                _working_row_buf.splice(_working_row_buf.begin(), group);
+                throw;
+            }
+            converged_any = true;
+            thread::maybe_yield();
+        }
+        restore.cancel();
+        _working_row_buf = std::move(converged);
+        if (!converged_any) {
+            // Nothing was merged, so the rows and their hashes are unchanged.
+            return;
+        }
+        // The merge changed the rows, so recompute the combined hash to keep it
+        // consistent with the converged working row buffer.
+        _working_row_buf_combined_hash.clear();
+        for (const repair_row& r : _working_row_buf) {
+            _working_row_buf_combined_hash.add(r.hash());
+            thread::maybe_yield();
+        }
+    }
+
     future<const locator::token_metadata*> get_tm_for_small_table_optimization_check(const locator::token_metadata* tm) {
         auto sem_units = co_await get_units(_small_table_optimization_tm_sem, 1);
         if (!tm) {
@@ -2057,11 +2424,18 @@ public:
             if (remote_node == myhostid()) {
                 co_return;
             }
-            size_t sz = set_diff.size();
-            std::list<repair_row> row_diff = co_await get_row_diff(std::move(set_diff), needs_all_rows);
-            if (row_diff.size() != sz) {
-                rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
-                        _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
+            std::list<repair_row> row_diff;
+            if (_uses_logstor && !needs_all_rows) {
+                // Logstor replaces whole partitions, so send the complete converged
+                // partition for every partition that differs, not only the delta rows.
+                row_diff = co_await copy_partitions_from_working_row_buf_within_set_diff(set_diff);
+            } else {
+                size_t sz = set_diff.size();
+                row_diff = co_await get_row_diff(std::move(set_diff), needs_all_rows);
+                if (row_diff.size() != sz) {
+                    rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
+                            _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
+                }
             }
             size_t row_bytes = co_await get_repair_rows_size(row_diff);
             stats().tx_row_nr += row_diff.size();
@@ -2129,12 +2503,18 @@ public:
         if (remote_node == myhostid()) {
             co_return;
         }
-        size_t sz = set_diff.size();
-
-        std::list<repair_row> row_diff = co_await get_row_diff(std::move(set_diff), needs_all_rows);
-        if (row_diff.size() != sz) {
-            rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
-                    _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
+        std::list<repair_row> row_diff;
+        if (_uses_logstor && !needs_all_rows) {
+            // Logstor replaces whole partitions, so send the complete converged
+            // partition for every partition that differs, not only the delta rows.
+            row_diff = co_await copy_partitions_from_working_row_buf_within_set_diff(set_diff);
+        } else {
+            size_t sz = set_diff.size();
+            row_diff = co_await get_row_diff(std::move(set_diff), needs_all_rows);
+            if (row_diff.size() != sz) {
+                rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
+                        _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
+            }
         }
         if (small_table_optimization) {
             auto& strat = small_table_optimization->erm->get_replication_strategy();
@@ -3119,6 +3499,10 @@ private:
             // For small table optimization, we reduce the buffer size to reduce memory consumption.
             size /= _all_live_peer_nodes.size();
         }
+        utils::get_local_injector().inject("repair_tiny_max_row_buf_size", [&size] {
+            // Force many small sync windows to exercise window-boundary handling.
+            size = 100;
+        });
         return size;
     }
 
@@ -3328,6 +3712,10 @@ private:
             throw;
           }
         }
+        // For logstor tables, merge every touched partition into its complete
+        // converged value before flushing it locally and sending it to followers,
+        // because logstor replaces whole partitions instead of merging rows.
+        master.converge_working_row_buf_for_logstor();
         master.flush_rows_in_working_row_buf(_small_table_optimization ? std::make_optional(small_table_optimization_params{ .erm = get_erm() }) : std::nullopt);
         return op_status::next_step;
     }
@@ -3469,7 +3857,8 @@ public:
             bool enable_incremental_repair = _shard_task.db.local().features().tablet_incremental_repair && _is_tablet &&
                                               _shard_task.sched_info.incremental_mode != locator::tablet_repair_incremental_mode::disabled &&
                                              _shard_task.sched_info.sched_by_scheduler &&
-                                             !_shard_task.sched_info.for_tablet_rebuild;
+                                             !_shard_task.sched_info.for_tablet_rebuild &&
+                                             !s->logstor_enabled();
             if (enable_incremental_repair) {
                 auto& table = _shard_task.db.local().find_column_family(_table_id);
                 auto erm = table.get_effective_replication_map();

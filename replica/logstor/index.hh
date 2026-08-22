@@ -308,6 +308,43 @@ public:
         return _partitions.upper_bound(key, dht::ring_position_comparator(*_schema));
     }
 
+    future<uint64_t> count_keys_in_token_range(dht::token_range tr) const {
+        static constexpr size_t chunk_size = 1024;
+        dht::ring_position_comparator cmp(*_schema);
+
+        std::optional<dht::ring_position> start_pos;
+        if (tr.start()) {
+            start_pos = tr.start()->is_inclusive()
+                    ? dht::ring_position::starting_at(tr.start()->value())
+                    : dht::ring_position::ending_at(tr.start()->value());
+        }
+        std::optional<dht::ring_position> end_pos;
+        if (tr.end()) {
+            end_pos = tr.end()->is_inclusive()
+                    ? dht::ring_position::ending_at(tr.end()->value())
+                    : dht::ring_position::starting_at(tr.end()->value());
+        }
+
+        uint64_t count = 0;
+        auto it = start_pos ? _partitions.lower_bound(*start_pos, cmp) : _partitions.begin();
+        while (true) {
+            auto end = end_pos ? _partitions.lower_bound(*end_pos, cmp) : _partitions.end();
+            for (size_t i = 0; i < chunk_size; ++i) {
+                if (it == end) {
+                    co_return count;
+                }
+                ++it;
+                ++count;
+            }
+            if (it == end) {
+                co_return count;
+            }
+            auto next_key = it->key();
+            co_await coroutine::maybe_yield();
+            it = _partitions.lower_bound(next_key, cmp);
+        }
+    }
+
 };
 
 }

@@ -317,6 +317,15 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
                            gc_clock::time_point compaction_time) const {
     auto& slice = s->full_slice();
 
+    if (_logstor) {
+        auto source = mutation_source([this] (schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& slice,
+                                          tracing::trace_state_ptr trace_state, streamed_mutation::forwarding, mutation_reader::forwarding) {
+            return _logstor->make_reader(std::move(s), logstor_index(), std::move(permit), range, slice, std::move(trace_state));
+        });
+
+        return make_multi_range_reader(s, std::move(permit), std::move(source), ranges, slice, nullptr, mutation_reader::forwarding::no);
+    }
+
     auto source = mutation_source([this] (schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& slice,
                                       tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
         std::vector<mutation_reader> readers;
@@ -340,6 +349,10 @@ mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit pe
         const query::partition_slice& slice, mutation_reader::forwarding fwd_mr, gc_clock::time_point compaction_time) const {
     auto trace_state = tracing::trace_state_ptr();
     const auto fwd = streamed_mutation::forwarding::no;
+
+    if (_logstor) {
+        return _logstor->make_reader(std::move(schema), logstor_index(), std::move(permit), range, slice, std::move(trace_state));
+    }
 
     std::vector<mutation_reader> readers;
     add_memtables_to_reader_list(readers, schema, permit, range, slice, trace_state, fwd, fwd_mr, [&] (size_t memtable_count) {
@@ -5789,6 +5802,10 @@ dht::shard_replica_set table::shard_for_writes(dht::token t) const {
 }
 
 future<uint64_t> table::estimated_partitions_in_range(dht::token_range tr) const {
+    if (_logstor) {
+        co_return co_await logstor_index().count_keys_in_token_range(std::move(tr));
+    }
+
     // FIXME: use a better estimation for the set than a simple sum of individual estimations for each sstable.
     //
     // If sstables can be grouped by token range,

@@ -133,6 +133,9 @@ public:
 
     uint64_t get_segment_size() const noexcept;
 
+    // Returns the path of the file holding the given segment (for debug/introspection).
+    sstring get_segment_file_path(log_segment_id) const;
+
     future<> discard_segments(segment_set&);
 
     size_t get_memory_usage() const;

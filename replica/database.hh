@@ -902,6 +902,10 @@ public:
         return _logstor != nullptr;
     }
 
+    logstor::logstor& get_logstor() noexcept {
+        return *_logstor;
+    }
+
     logstor::primary_index& logstor_index() noexcept {
         return *_logstor_index;
     }
