@@ -16,6 +16,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "sstables/sstables.hh"
+#include "sstables/sstable_set.hh"
 #include "compaction/incremental_compaction_strategy.hh"
 #include "schema/schema.hh"
 #include "replica/database.hh"
@@ -780,6 +781,64 @@ SEASTAR_THREAD_TEST_CASE(incremental_compaction_get_buckets_cached_size_test) {
         BOOST_REQUIRE_EQUAL(desc.sstables.size(), num_runs);
         for (auto& sst : desc.sstables) {
             BOOST_CHECK_EQUAL(sst->data_size(), run_data_size);
+        }
+    }).get();
+}
+
+// Regression test for the get_buckets() data_size() caching refactor, using a
+// scenario that actually discriminates a correct smallest-size cache from a
+// broken one (unlike the identical-size test above, where any cached value
+// equals the real one trivially).
+//
+// Bucketization compares a bucket's *smallest* run (bucket[0], recorded when
+// the bucket is created) against the bucket's drifting average, to decide
+// whether the bucket has grown too far above its smallest member and must be
+// split. A caching bug that tracks the *last appended* run's size instead of
+// the true smallest would, for runs added in increasing size order, always
+// see a larger (or equal) value than the correct smallest, making the "has
+// the bucket outgrown its smallest member" check less likely to fire. This
+// exact effect is exploited below: run sizes are chosen so the correct
+// smallest-size cache splits off the last run into its own bucket, while a
+// last-appended-size cache would incorrectly keep it in the growing bucket.
+SEASTAR_THREAD_TEST_CASE(incremental_compaction_get_buckets_varying_size_test) {
+    auto s = schema_builder(this_smp_shard_count(), "tests", "ics_get_buckets_varying_size")
+        .with_column("id", utf8_type, column_kind::partition_key)
+        .with_column("value", int32_type).build();
+
+    test_env::do_with_async([&] (test_env& env) {
+        // Sizes in MiB, strictly increasing, all above min_sstable_size (50MB)
+        // so the "tiny sstable" bypass never applies. This particular sequence
+        // is not arbitrary: it was chosen (see comment above) so a bucket
+        // formed at 170 grows across several appends (217, 271, 302) and then
+        // must split off 327 into a new bucket under the correct algorithm,
+        // while a smallest-size cache that tracked the last-added run instead
+        // of the true first-run-in-bucket would wrongly keep 327 in the same
+        // bucket.
+        static const std::vector<uint64_t> sizes_mib = {100, 127, 170, 217, 271, 302, 327};
+        // Expected bucketization under the correct (bucket[0]-tracking) cache.
+        static const std::vector<std::vector<uint64_t>> expected_buckets_mib = {
+            {100, 127},
+            {170, 217, 271, 302},
+            {327},
+        };
+
+        std::vector<sstables::frozen_sstable_run> runs;
+        for (auto size_mib : sizes_mib) {
+            auto sst = env.make_sstable(s, "/nowhere/in/particular", env.new_generation(), sstable_version_types::md, big);
+            auto keys = tests::generate_partition_keys(2, s, local_shard_only::yes);
+            sstables::test(sst).set_values(keys[0].key(), keys[1].key(), stats_metadata{}, size_mib * 1024 * 1024);
+            runs.push_back(make_lw_shared<const sstables::sstable_run>(sst));
+        }
+
+        compaction::incremental_compaction_strategy_options options;
+        auto buckets = compaction::incremental_compaction_strategy::get_buckets(runs, options);
+
+        BOOST_REQUIRE_EQUAL(buckets.size(), expected_buckets_mib.size());
+        for (size_t i = 0; i < buckets.size(); ++i) {
+            BOOST_REQUIRE_EQUAL(buckets[i].size(), expected_buckets_mib[i].size());
+            for (size_t j = 0; j < buckets[i].size(); ++j) {
+                BOOST_CHECK_EQUAL(buckets[i][j]->data_size(), expected_buckets_mib[i][j] * 1024 * 1024);
+            }
         }
     }).get();
 }
