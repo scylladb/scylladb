@@ -3443,7 +3443,7 @@ bool uses_legacy_dk_order(sstable_version_types v) {
 // positions of rows and partitions. An uncompressed sstable always holds logical
 // positions.
 bool index_holds_physical_positions(sstable_version_types v) {
-    return false;
+    return v == sstable_version_types::mu;
 }
 
 // Physically indexed formats put the compressed length in a header and a footer
