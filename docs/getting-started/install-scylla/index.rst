@@ -8,6 +8,7 @@ Install ScyllaDB |CURRENT_VERSION|
    /getting-started/install-scylla/launch-on-aws
    /getting-started/install-scylla/launch-on-gcp
    /getting-started/install-scylla/launch-on-azure
+   /getting-started/install-scylla/launch-on-oci
    /getting-started/installation-common/scylla-web-installer
    /getting-started/install-scylla/install-on-linux
    /getting-started/install-scylla/run-in-docker
@@ -26,6 +27,7 @@ Keep your versions up-to-date. The two latest versions are supported. Also, alwa
   * :doc:`Launch ScyllaDB on AWS </getting-started/install-scylla/launch-on-aws>`
   * :doc:`Launch ScyllaDB on GCP </getting-started/install-scylla/launch-on-gcp>`
   * :doc:`Launch ScyllaDB on Azure </getting-started/install-scylla/launch-on-azure>`
+  * :doc:`Launch ScyllaDB on OCI </getting-started/install-scylla/launch-on-oci>`
 
 
 .. panel-box::
