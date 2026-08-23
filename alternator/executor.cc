@@ -1467,10 +1467,15 @@ static bool has_vector_index_on_attribute(const schema& s, std::string_view attr
 // parameter is used in error messages.
 static int get_dimensions(const rjson::value& json, std::string_view index_name) {
     const rjson::value* dimensions_v = rjson::find(json, "Dimensions");
-    if (!dimensions_v || !dimensions_v->IsInt() || dimensions_v->GetInt() <= 0 || (vector_dimension_t)dimensions_v->GetInt() > cql3::cql3_type::MAX_VECTOR_DIMENSION) {
+    // Interestingly, although Dimensions is expected to be an integer,
+    // DynamoDB's implementation allows floating point numbers and truncates
+    // them to an integer (e.g., 6.7 is accepted as 6). So we'll do the same
+    // by using IsNumber() and GetDouble() instead of IsInt() and GetInt().
+    double dims_d = dimensions_v && dimensions_v->IsNumber() ? dimensions_v->GetDouble() : 0;
+    if (dims_d < 1 || dims_d > cql3::cql3_type::MAX_VECTOR_DIMENSION) {
         throw api_error::validation(fmt::format("Vector index '{}': Dimensions must be an integer between 1 and {}.", index_name, cql3::cql3_type::MAX_VECTOR_DIMENSION));
     }
-    return dimensions_v->GetInt();
+    return static_cast<int>(dims_d);
 }
 
 // As noted in issue #5052, in Alternator the CreateTable and UpdateTable are
