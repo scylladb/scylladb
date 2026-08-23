@@ -1462,6 +1462,33 @@ static bool has_vector_index_on_attribute(const schema& s, std::string_view attr
     return false;
 }
 
+// Returns the Dimensions of an existing vector index on the given attribute
+// name in the schema, if one exists. Multiple vector indexes on the same
+// attribute (e.g., with different DistanceFunction) are allowed, but they
+// must all agree on Dimensions - this is enforced when they are created, so
+// it's enough to look at the first one found.
+static std::optional<int> get_vector_index_dimensions_on_attribute(const schema& s, std::string_view attribute_name) {
+    for (const index_metadata& im : s.indices()) {
+        const auto& opts = im.options();
+        auto target_it = opts.find(cql3::statements::index_target::target_option_name);
+        if (target_it == opts.end() || target_it->second != attribute_name) {
+            continue;
+        }
+        auto dims_it = opts.find("dimensions");
+        if (dims_it == opts.end()) {
+            continue;
+        }
+        try {
+            return std::stoi(dims_it->second);
+        } catch (const std::logic_error&) {
+            // This should never happen, because the dimensions option
+            // is validated on index creation
+            on_internal_error(elogger, fmt::format("Unexpected non-integer dimensions value '{}' for vector index '{}'", dims_it->second, im.name()));
+        }
+    }
+    return std::nullopt;
+}
+
 // Returns the validated "Dimensions" value from a vector index creation JSON
 // object or throws api_error::validation if invalid. The "index_name"
 // parameter is used in error messages.
@@ -1745,7 +1772,11 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         if (!vector_indexes->IsArray()) {
             co_return api_error::validation("VectorIndexes must be an array.");
         }
-        std::unordered_set<std::string> seen_attribute_names;
+        // Maps an attribute name to the Dimensions of the vector index(es)
+        // already seen on it in this request. Multiple vector indexes on
+        // the same attribute are fine (e.g., with different DistanceFunction),
+        // as long as they all agree on Dimensions.
+        std::unordered_map<std::string, int> attribute_dimensions;
         for (const rjson::value& v : vector_indexes->GetArray()) {
             const rjson::value* index_name_v = rjson::find(v, "IndexName");
             if (!index_name_v || !index_name_v->IsString()) {
@@ -1770,9 +1801,6 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             }
             std::string_view attribute_name = rjson::to_string_view(*attribute_name_v);
             validate_attr_name_length("VectorIndexes", attribute_name.size(), /*is_key=*/false, "AttributeName ");
-            if (!seen_attribute_names.emplace(attribute_name).second) {
-                co_return api_error::validation(fmt::format("Duplicate vector index on the same AttributeName '{}'", attribute_name));
-            }
             // attribute_name must not be one of the key columns of the base
             // or GSIs or LSIs, because those have mandatory types (defined in
             // AttributeDefinitions) which will never be a vector.
@@ -1783,6 +1811,12 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
                 }
             }
             int dimensions = get_dimensions(v, index_name);
+            auto [dimensions_it, inserted] = attribute_dimensions.emplace(attribute_name, dimensions);
+            if (!inserted && dimensions_it->second != dimensions) {
+                co_return api_error::validation(fmt::format(
+                    "Vector indexes on the same AttributeName '{}' must all have the same Dimensions ({} vs {})",
+                    attribute_name, dimensions_it->second, dimensions));
+            }
             std::string distance_function = get_distance_function(v, index_name);
             validate_projection(v, index_name);
             // Add a vector index metadata entry to the base table schema.
@@ -2203,13 +2237,17 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                             }
                         }
                     }
-                    // attribute_name must not already be the target of an
-                    // existing vector index.
-                    if (has_vector_index_on_attribute(*tab, attribute_name)) {
-                        co_return api_error::validation(fmt::format(
-                            "VectorIndexUpdates AttributeName '{}' is already the target of an existing vector index.", attribute_name));
-                    }
                     int dimensions = get_dimensions(it->value, index_name);
+                    // If attribute_name is already the target of an existing
+                    // vector index (e.g., with a different DistanceFunction),
+                    // the new one must agree with it on Dimensions.
+                    if (auto existing_dimensions = get_vector_index_dimensions_on_attribute(*tab, attribute_name)) {
+                        if (*existing_dimensions != dimensions) {
+                            co_return api_error::validation(fmt::format(
+                                "VectorIndexUpdates AttributeName '{}' already has a vector index with Dimensions {}, cannot add one with Dimensions {}",
+                                attribute_name, *existing_dimensions, dimensions));
+                        }
+                    }
                     std::string distance_function = get_distance_function(it->value, index_name);
                     validate_projection(it->value, index_name);
                     // A vector index will use CDC on this table, so the CDC
