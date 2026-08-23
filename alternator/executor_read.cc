@@ -1774,23 +1774,6 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
         }
     }
 
-    // ReturnScores: if set to SIMILARITY, the response will
-    // include a Scores[] array parallel to Items[], containing the
-    // similarity score for each returned item. Defaults to NONE.
-    bool return_scores = false;
-    if (const rjson::value* rsv = rjson::find(request, "ReturnScores")) {
-        if (!rsv->IsString()) {
-            co_return api_error::validation("VectorSearch ReturnScores must be a string");
-        }
-        std::string_view rsv_str = rjson::to_string_view(*rsv);
-        if (rsv_str == "SIMILARITY") {
-            return_scores = true;
-        } else if (rsv_str != "NONE") {
-            co_return api_error::validation(
-                "VectorSearch ReturnScores must be NONE or SIMILARITY");
-        }
-    }
-
     std::unordered_set<std::string> used_attribute_names;
     std::unordered_set<std::string> used_attribute_values;
     // Parse the Select parameter and determine which attributes to return.
@@ -1800,11 +1783,13 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     // base-table data. Currently only the primary key attributes are projected
     // but in the future we'll implement projecting additional attributes into
     // the vector index - these additional attributes will also be usable for
-    // filtering). COUNT returns only the count without items.
+    // filtering).
+    // We don't plan to support Select=COUNT: The SearchVectors response has
+    // no fields for result counts, and it's usually not interesting to do a
+    // top K nearest neighbor search only to learn there are K results :-)
     select_type select = parse_select(request, table_or_view_type::vector_index);
-    if (return_scores && select == select_type::count) {
-        co_return api_error::validation(
-            "VectorSearch ReturnScores=SIMILARITY is not supported with Select=COUNT");
+    if (select == select_type::count) {
+        co_return api_error::validation("SearchVectors does not support Select=COUNT");
     }
     std::optional<alternator::attrs_to_get> attrs_to_get_opt;
     if (select == select_type::projection) {
@@ -1867,24 +1852,12 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     _stats.vector_search.items_from_vs += pkeys.size();
     per_table_stats->vector_search.items_from_vs += pkeys.size();
 
-    // For SELECT=COUNT with no filter: skip fetching from the base table and
-    // just return the count of candidates returned by the vector store.
-    // If a filter is present, fall through to the base-table fetch to apply it.
-    if (select == select_type::count && !flt) {
-        rjson::value response = rjson::empty_object();
-        rjson::add(response, "Count", rjson::value(static_cast<int>(pkeys.size())));
-        rjson::add(response, "ScannedCount", rjson::value(static_cast<int>(pkeys.size())));
-        mark_latency();
-        co_return rjson::print(std::move(response));
-    }
-
     // For SELECT=ALL_PROJECTED_ATTRIBUTES with no filter: skip fetching from
     // the base table and build items directly from the key columns returned by
     // the vector store. If a filter is present, fall through to the base-table
     // fetch to apply it.
     if (select == select_type::projection && !flt) {
-        rjson::value items_json = rjson::empty_array();
-        rjson::value scores_json = rjson::empty_array();
+        rjson::value search_results = rjson::empty_array();
         for (const auto& pkey : pkeys) {
             rjson::value item = rjson::empty_object();
             std::vector<bytes> exploded_pk = pkey.partition.key().explode();
@@ -1905,25 +1878,20 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
                     ++exploded_ck_it;
                 }
             }
-            rjson::push_back(items_json, std::move(item));
-            if (return_scores) {
-                rjson::push_back(scores_json, similarity_to_json(pkey.similarity));
-            }
+            rjson::value entry = rjson::empty_object();
+            rjson::add(entry, "Item", std::move(item));
+            rjson::add(entry, "Score", similarity_to_json(pkey.similarity));
+            rjson::push_back(search_results, std::move(entry));
         }
-        rjson::value response = rjson::empty_object();
-        auto count = static_cast<int>(items_json.Size());
-        rjson::add(response, "Count", rjson::value(count));
+        auto count = static_cast<int>(search_results.Size());
         _stats.vector_search.returned_items += count;
         per_table_stats->vector_search.returned_items += count;
         _stats.returned_items += count;
         _stats.returned_items_histogram.add(count);
         per_table_stats->returned_items += count;
         per_table_stats->returned_items_histogram.add(count);
-        rjson::add(response, "ScannedCount", rjson::value(static_cast<int>(pkeys.size())));
-        rjson::add(response, "Items", std::move(items_json));
-        if (return_scores) {
-            rjson::add(response, "Scores", std::move(scores_json));
-        }
+        rjson::value response = rjson::empty_object();
+        rjson::add(response, "SearchResults", std::move(search_results));
         mark_latency();
         co_return rjson::print(std::move(response));
     }
@@ -1944,9 +1912,7 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     auto attrs_to_get = ::make_shared<const std::optional<alternator::attrs_to_get>>(
         flt ? std::nullopt : std::move(attrs_to_get_opt));
 
-    rjson::value items_json = rjson::empty_array();
-    rjson::value scores_json = rjson::empty_array();
-    int matched_count = 0;
+    rjson::value search_results = rjson::empty_array();
 
     // Query each primary key individually, in the order returned by the
     // vector store, to preserve vector-distance ordering in the response.
@@ -1977,77 +1943,67 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
         auto opt_item = describe_single_item(base_schema, partition_slice,
                 *selection, *qr.query_result, *attrs_to_get);
         if (opt_item && (!flt || flt.check(*opt_item))) {
-            ++matched_count;
-            if (return_scores) {
-                rjson::push_back(scores_json, similarity_to_json(pkey.similarity));
-            }
-            if (select != select_type::count) {
-                if (select == select_type::projection) {
-                    // A filter caused us to fall through here instead of
-                    // taking the projection early-exit above. Reconstruct
-                    // the key-only item from the full item we fetched.
-                    rjson::value key_item = rjson::empty_object();
-                    for (const column_definition& cdef : base_schema->partition_key_columns()) {
-                        if (const rjson::value* v = rjson::find(*opt_item, cdef.name_as_text())) {
-                            rjson::add_with_string_name(key_item, cdef.name_as_text(), rjson::copy(*v));
-                        }
+            rjson::value item;
+            if (select == select_type::projection) {
+                // A filter caused us to fall through here instead of
+                // taking the projection early-exit above. Reconstruct
+                // the key-only item from the full item we fetched.
+                rjson::value key_item = rjson::empty_object();
+                for (const column_definition& cdef : base_schema->partition_key_columns()) {
+                    if (const rjson::value* v = rjson::find(*opt_item, cdef.name_as_text())) {
+                        rjson::add_with_string_name(key_item, cdef.name_as_text(), rjson::copy(*v));
                     }
-                    for (const column_definition& cdef : base_schema->clustering_key_columns()) {
-                        if (const rjson::value* v = rjson::find(*opt_item, cdef.name_as_text())) {
-                            rjson::add_with_string_name(key_item, cdef.name_as_text(), rjson::copy(*v));
-                        }
+                }
+                for (const column_definition& cdef : base_schema->clustering_key_columns()) {
+                    if (const rjson::value* v = rjson::find(*opt_item, cdef.name_as_text())) {
+                        rjson::add_with_string_name(key_item, cdef.name_as_text(), rjson::copy(*v));
                     }
-                    rjson::push_back(items_json, std::move(key_item));
-                } else {
-                    // When a filter caused us to fetch the full item, apply the
-                    // requested projection (attrs_to_get_opt) before returning it.
-                    // This mirrors describe_items_visitor::end_row() which removes
-                    // extra filter attributes from the returned item.
-                    if (flt && attrs_to_get_opt) {
-                        for (const auto& [attr_name, subpath] : *attrs_to_get_opt) {
-                            if (!subpath.has_value()) {
-                                if (rjson::value* toplevel = rjson::find(*opt_item, attr_name)) {
-                                    if (!hierarchy_filter(*toplevel, subpath)) {
-                                        rjson::remove_member(*opt_item, attr_name);
-                                    }
+                }
+                item = std::move(key_item);
+            } else {
+                // When a filter caused us to fetch the full item, apply the
+                // requested projection (attrs_to_get_opt) before returning it.
+                // This mirrors describe_items_visitor::end_row() which removes
+                // extra filter attributes from the returned item.
+                if (flt && attrs_to_get_opt) {
+                    for (const auto& [attr_name, subpath] : *attrs_to_get_opt) {
+                        if (!subpath.has_value()) {
+                            if (rjson::value* toplevel = rjson::find(*opt_item, attr_name)) {
+                                if (!hierarchy_filter(*toplevel, subpath)) {
+                                    rjson::remove_member(*opt_item, attr_name);
                                 }
                             }
                         }
-                        std::vector<std::string> to_remove;
-                        for (auto it = opt_item->MemberBegin(); it != opt_item->MemberEnd(); ++it) {
-                            std::string key(it->name.GetString(), it->name.GetStringLength());
-                            if (!attrs_to_get_opt->contains(key)) {
-                                to_remove.push_back(std::move(key));
-                            }
-                        }
-                        for (const auto& key : to_remove) {
-                            rjson::remove_member(*opt_item, key);
+                    }
+                    std::vector<std::string> to_remove;
+                    for (auto it = opt_item->MemberBegin(); it != opt_item->MemberEnd(); ++it) {
+                        std::string key(it->name.GetString(), it->name.GetStringLength());
+                        if (!attrs_to_get_opt->contains(key)) {
+                            to_remove.push_back(std::move(key));
                         }
                     }
-                    rjson::push_back(items_json, std::move(*opt_item));
+                    for (const auto& key : to_remove) {
+                        rjson::remove_member(*opt_item, key);
+                    }
                 }
+                item = std::move(*opt_item);
             }
+            rjson::value entry = rjson::empty_object();
+            rjson::add(entry, "Item", std::move(item));
+            rjson::add(entry, "Score", similarity_to_json(pkey.similarity));
+            rjson::push_back(search_results, std::move(entry));
         }
     }
 
+    auto count = static_cast<int>(search_results.Size());
+    _stats.vector_search.returned_items += count;
+    per_table_stats->vector_search.returned_items += count;
+    _stats.returned_items += count;
+    _stats.returned_items_histogram.add(count);
+    per_table_stats->returned_items += count;
+    per_table_stats->returned_items_histogram.add(count);
     rjson::value response = rjson::empty_object();
-    if (select == select_type::count) {
-        rjson::add(response, "Count", rjson::value(matched_count));
-    } else {
-        auto count = static_cast<int>(items_json.Size());
-        rjson::add(response, "Count", rjson::value(count));
-        _stats.vector_search.returned_items += count;
-        per_table_stats->vector_search.returned_items += count;
-        _stats.returned_items += count;
-        _stats.returned_items_histogram.add(count);
-        per_table_stats->returned_items += count;
-        per_table_stats->returned_items_histogram.add(count);
-        rjson::add(response, "Items", std::move(items_json));
-        if (return_scores) {
-            rjson::add(response, "Scores", std::move(scores_json));
-        }
-    }
-    rjson::add(response, "ScannedCount", rjson::value(static_cast<int>(pkeys.size())));
+    rjson::add(response, "SearchResults", std::move(search_results));
     mark_latency();
     co_return rjson::print(std::move(response));
 }
