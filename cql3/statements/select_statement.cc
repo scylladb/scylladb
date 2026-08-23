@@ -428,7 +428,10 @@ select_statement::do_execute(query_processor& qp,
                           service::query_state& state,
                           const query_options& options) const
 {
-    (void)validation::validate_column_family(qp.db(), keyspace(), column_family());
+    if (!qp.db().try_find_table(_schema->id())) {
+        return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(
+                exceptions::invalid_request_exception(format("unconfigured table {}", column_family())));
+    }
 
     tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
 

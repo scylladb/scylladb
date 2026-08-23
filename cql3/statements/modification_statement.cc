@@ -268,7 +268,11 @@ modification_statement::execute_without_checking_exception_message(query_process
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
-    (void)validation::validate_column_family(qp.db(), keyspace(), column_family());
+    if (!qp.db().try_find_table(s->id())) {
+        co_return coroutine::exception(
+                std::make_exception_ptr(exceptions::invalid_request_exception(
+                        format("unconfigured table {}", column_family()))));
+    }
 
     tracing::add_table_name(qs.get_trace_state(), keyspace(), column_family());
 

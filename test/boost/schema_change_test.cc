@@ -19,7 +19,11 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "service/migration_manager.hh"
+#include "service/query_state.hh"
 #include "service/storage_proxy.hh"
+#include "cql3/dialect.hh"
+#include "cql3/query_options.hh"
+#include "cql3/statements/prepared_statement.hh"
 #include "schema/schema_builder.hh"
 #include "schema/schema_registry.hh"
 #include "db/schema_tables.hh"
@@ -572,6 +576,46 @@ SEASTAR_TEST_CASE(test_prepared_statement_is_invalidated_by_schema_change) {
                 // expected
             }
         });
+    });
+}
+
+// A prepared statement captures the table's schema, and with it the table's id.
+// Dropping the table and recreating it under the same name produces a different
+// table with a different id, so a statement prepared before the drop refers to a
+// table which no longer exists and must be rejected. Validating by name instead
+// would find the recreated table, let the query proceed against the stale id, and
+// fail deeper down with a server error (or, for some read paths, silently return
+// an empty result).
+//
+// The statements are obtained through get_statement() rather than prepare() on
+// purpose: prepare() registers them in the prepared statements cache, where the
+// drop would evict them, so a client would be told to re-prepare and would never
+// reach the validation under test. Holding the statement directly is what an
+// in-flight request does when the drop lands while it is already executing.
+SEASTAR_TEST_CASE(test_statement_prepared_before_table_recreation_is_rejected) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table ks.tbl (pk int primary key, v int);").get();
+
+        service::query_state qs(service::client_state::for_internal_calls(), empty_service_permit());
+        auto& qp = e.local_qp();
+
+        auto select_stmt = qp.get_statement("select * from ks.tbl where pk = 0;",
+                qs.get_client_state(), cql3::internal_dialect())->statement;
+        auto insert_stmt = qp.get_statement("insert into ks.tbl (pk, v) values (0, 0);",
+                qs.get_client_state(), cql3::internal_dialect())->statement;
+
+        e.execute_cql("drop table ks.tbl;").get();
+        e.execute_cql("create table ks.tbl (pk int primary key, v int);").get();
+
+        auto& options = cql3::query_options::DEFAULT;
+        BOOST_REQUIRE_EXCEPTION(
+                select_stmt->execute(qp, qs, options, std::nullopt).get(),
+                exceptions::invalid_request_exception,
+                exception_predicate::message_contains("unconfigured table tbl"));
+        BOOST_REQUIRE_EXCEPTION(
+                insert_stmt->execute(qp, qs, options, std::nullopt).get(),
+                exceptions::invalid_request_exception,
+                exception_predicate::message_contains("unconfigured table tbl"));
     });
 }
 
