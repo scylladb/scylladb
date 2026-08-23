@@ -14,6 +14,6 @@ ScyllaDB Requirements
    
 * :doc:`System Requirements</getting-started/system-requirements/>`
 * `OS Support by Platform and Version <https://docs.scylladb.com/stable/versioning/os-support-per-version.html>`_
-* :doc:`Cloud Instance Recommendations AWS, GCP, and Azure </getting-started/cloud-instance-recommendations>`
+* :doc:`Cloud Instance Recommendations AWS, GCP, Azure, and OCI </getting-started/cloud-instance-recommendations>`
 * :doc:`Running ScyllaDB in a Shared Environment </getting-started/scylla-in-a-shared-environment>`
 
