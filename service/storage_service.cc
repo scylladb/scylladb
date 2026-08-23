@@ -5027,6 +5027,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 parent_info.id, streaming::stream_reason::decommission, _decommission_result, [this] (this auto) -> future<> {
                             co_await utils::get_local_injector().inject("streaming_task_impl_decommission_run", utils::wait_for_message(60s));
                             co_await unbootstrap();
+                            co_await utils::get_local_injector().inject("streaming_task_impl_decommission_done_wait", utils::wait_for_message(5min));
                         });
                         co_await task->done();
                         result.status = raft_topology_cmd_result::command_status::success;
