@@ -1595,6 +1595,48 @@ static rjson::value similarity_to_json(float s) {
     return rjson::value(s);
 }
 
+// DynamoDB has the same three "distance functions" as ScyllaDB's vector store,
+// but the numeric values that we get back as "similarity" from the vector
+// store (see vector_search::primary_key::similarity) is different from the
+// "distance" that DynamoDB's SearchVectors defines. It's quite easy to convert
+// between the two, but there is a different conversion function for each
+// similarity function:
+static float score_from_similarity_cosine(float similarity) {
+    // score is the cosine distance 1-cos_sim, in [0, 2].
+    // similarity == (1+cos_sim)/2, so score == 2*(1-similarity).
+    return 2.0f * (1.0f - similarity);
+}
+static float score_from_similarity_euclidean(float similarity) {
+    // score is the raw (non-squared) L2 distance.
+    // similarity == 1/(1+score^2), so score == sqrt(1/similarity - 1).
+    // If for some reason similarity is slightly above 1.0 (can't happen
+    // realistically...) 1.0f / similarity - 1.0f will be slightly negative
+    // and sqrt() will return NaN - but this is a case of maximual similarity
+    // where we prefer to return minimal distance (0), not NaN. So just
+    // in case, we clamp the sqrt argument at 0.0f.
+    return std::sqrt(std::max(0.0f, 1.0f / similarity - 1.0f));
+}
+static float score_from_similarity_dot_product(float similarity) {
+    // Score is the raw dot product (higher = more similar, unlike
+    // the other two DistanceFunctions).
+    // similarity == (1+dot_product)/2, so dot_product == 2*similarity - 1.
+    return 2.0f * similarity - 1.0f;
+}
+
+// Picks, once per request, which of the above conversion functions to use
+// for a given index's DistanceFunction - so we don't need to compare the
+// DistanceFunction string again for every single result.
+using score_from_similarity_fn = float (*)(float);
+static score_from_similarity_fn pick_score_from_similarity(std::string_view distance_function) {
+    if (distance_function == "EUCLIDEAN") {
+        return score_from_similarity_euclidean;
+    } else if (distance_function == "DOT_PRODUCT") {
+        return score_from_similarity_dot_product;
+    } else {
+        return score_from_similarity_cosine;
+    }
+}
+
 future<executor::request_return_type> executor::query(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.query++;
     elogger.trace("Querying {}", request);
@@ -1709,6 +1751,7 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     std::string_view index_name = rjson::to_string_view(*index_name_v);
     int dimensions = 0;
     bool is_vector = false;
+    score_from_similarity_fn score_from_similarity = nullptr;
     for (const index_metadata& im : base_schema->indices()) {
         if (im.name() == index_name) {
             const auto& opts = im.options();
@@ -1725,6 +1768,11 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
                 } catch (std::logic_error&) {}
             }
             throwing_assert(dimensions > 0);
+            it = opts.find("similarity_function");
+            if (it != opts.end()) {
+                score_from_similarity = pick_score_from_similarity(it->second);
+            }
+            throwing_assert(score_from_similarity);
             is_vector = true;
             break;
         }
@@ -1880,7 +1928,7 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
             }
             rjson::value entry = rjson::empty_object();
             rjson::add(entry, "Item", std::move(item));
-            rjson::add(entry, "Score", similarity_to_json(pkey.similarity));
+            rjson::add(entry, "Score", similarity_to_json(score_from_similarity(pkey.similarity)));
             rjson::push_back(search_results, std::move(entry));
         }
         auto count = static_cast<int>(search_results.Size());
@@ -1990,7 +2038,7 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
             }
             rjson::value entry = rjson::empty_object();
             rjson::add(entry, "Item", std::move(item));
-            rjson::add(entry, "Score", similarity_to_json(pkey.similarity));
+            rjson::add(entry, "Score", similarity_to_json(score_from_similarity(pkey.similarity)));
             rjson::push_back(search_results, std::move(entry));
         }
     }
