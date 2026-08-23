@@ -50,6 +50,7 @@ struct segment_manager_config {
     utils::updateable_value<double> trigger_compaction_threshold{0.05};
     seastar::scheduling_group compaction_sg;
     utils::updateable_value<float> compaction_static_shares;
+    utils::updateable_value<float> compaction_max_shares;
     seastar::scheduling_group separator_sg;
     seastar::scheduling_group split_compaction_sg;
 };

@@ -331,6 +331,7 @@ logstor_config make_test_logstor_config(const std::filesystem::path& base_dir) {
             .max_segments_per_compaction = 8,
             .compaction_sg = seastar::current_scheduling_group(),
             .compaction_static_shares = utils::updateable_value<float>(0.0f),
+            .compaction_max_shares = utils::updateable_value<float>(2000.0f),
             .separator_sg = seastar::current_scheduling_group(),
             .split_compaction_sg = seastar::current_scheduling_group(),
         },
