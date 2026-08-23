@@ -1449,11 +1449,11 @@ future<> database::legacy_drop_table_on_all_shards(sharded<database>& sharded_db
 }
 
 table_id database::find_uuid(std::string_view ks, std::string_view cf) const {
-    try {
-        return _tables_metadata.get_table_id(std::make_pair(ks, cf));
-    } catch (std::out_of_range&) {
+    auto id = _tables_metadata.get_table_id_if_exists(std::make_pair(ks, cf));
+    if (!id) {
         throw no_such_column_family(ks, cf);
     }
+    return id;
 }
 
 table_id database::find_uuid(const schema_ptr& schema) const {
@@ -3614,10 +3614,6 @@ void database::tables_metadata::remove_table(database& db, table& cf) noexcept {
 
 table& database::tables_metadata::get_table(table_id id) const {
     return *_column_families.at(id);
-}
-
-table_id database::tables_metadata::get_table_id(const std::pair<std::string_view, std::string_view>& kscf) const {
-    return _ks_cf_to_uuid.at(ks_cf_t{kscf});
 }
 
 lw_shared_ptr<table> database::tables_metadata::get_table_if_exists(table_id id) const {
