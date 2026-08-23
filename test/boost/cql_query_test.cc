@@ -7180,4 +7180,60 @@ SEASTAR_TEST_CASE(test_a_parsed_statement_gets_only_the_markers_of_its_text) {
     });
 }
 
+// Reproduces a bug in which TWCS sstable sets filtered sstables by clustering key
+// using the query-schema (reversed) ranges, which `sstable::may_contain_rows()`
+// interprets as table-schema ranges. Both the optimized TWCS read path
+// (`time_series_sstable_set::create_single_key_sstable_reader()`) and the regular
+// path (`filter_sstable_for_reader_by_ck()`) had the bug, so we exercise both,
+// switching between them with the `enable_optimized_twcs_queries` option.
+static void test_twcs_reversed_restricted_query(bool enable_optimized_twcs_queries) {
+    do_with_cql_env_thread([enable_optimized_twcs_queries] (cql_test_env& e) {
+        e.execute_cql(
+                format("CREATE TABLE tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck))"
+                " WITH compaction = {{"
+                "   'compaction_window_size': '1',"
+                "   'compaction_window_unit': 'MINUTES',"
+                "   'enable_optimized_twcs_queries': '{}',"
+                // Compactions would merge the sstables together, defeating the
+                // purpose of the test.
+                "   'enabled': 'false',"
+                "   'class': 'org.apache.cassandra.db.compaction.TimeWindowCompactionStrategy'"
+                "}}", enable_optimized_twcs_queries ? "true" : "false")).get();
+
+        // One sstable per clustering key, so that each sstable has a narrow
+        // min/max clustering position range.
+        constexpr int n = 10;
+        for (int i = 0; i < n; ++i) {
+            e.execute_cql(format("INSERT INTO tbl (pk, ck, v) VALUES (0, {}, {})", i, i)).get();
+            e.db().invoke_on_all([] (replica::database& db) {
+                return db.flush_all_memtables();
+            }).get();
+        }
+
+        auto count = [&e] (const sstring& q) {
+            auto msg = e.execute_cql(q).get();
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+            BOOST_REQUIRE(rows);
+            return rows->rs().result_set().size();
+        };
+
+        BOOST_CHECK_EQUAL(count("SELECT * FROM tbl WHERE pk = 0 BYPASS CACHE"), n);
+        BOOST_CHECK_EQUAL(count("SELECT * FROM tbl WHERE pk = 0 ORDER BY ck DESC BYPASS CACHE"), n);
+        BOOST_CHECK_EQUAL(count("SELECT * FROM tbl WHERE pk = 0 AND ck >= 5 BYPASS CACHE"), n - 5);
+        BOOST_CHECK_EQUAL(count("SELECT * FROM tbl WHERE pk = 0 AND ck >= 5 ORDER BY ck DESC BYPASS CACHE"), n - 5);
+        BOOST_CHECK_EQUAL(count("SELECT * FROM tbl WHERE pk = 0 AND ck < 5 BYPASS CACHE"), 5);
+        BOOST_CHECK_EQUAL(count("SELECT * FROM tbl WHERE pk = 0 AND ck < 5 ORDER BY ck DESC BYPASS CACHE"), 5);
+        BOOST_CHECK_EQUAL(count("SELECT * FROM tbl WHERE pk = 0 AND ck >= 3 AND ck <= 6 BYPASS CACHE"), 4);
+        BOOST_CHECK_EQUAL(count("SELECT * FROM tbl WHERE pk = 0 AND ck >= 3 AND ck <= 6 ORDER BY ck DESC BYPASS CACHE"), 4);
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_twcs_reversed_restricted_query_optimized) {
+    test_twcs_reversed_restricted_query(true);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_twcs_reversed_restricted_query_regular) {
+    test_twcs_reversed_restricted_query(false);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
