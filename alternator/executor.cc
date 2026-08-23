@@ -619,6 +619,7 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
             }
             rjson::value entry = rjson::empty_object();
             rjson::add(entry, "IndexName", rjson::from_string(im.name()));
+            rjson::add(entry, "IndexArn", generate_arn_for_index(*schema, im.name()));
             rjson::value vector_attribute = rjson::empty_object();
             auto target_it = opts.find(cql3::statements::index_target::target_option_name);
             if (target_it != opts.end()) {
