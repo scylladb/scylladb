@@ -627,7 +627,7 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
             auto dims_it = opts.find("dimensions");
             if (dims_it != opts.end()) {
                 try {
-                    rjson::add(vector_attribute, "Dimensions", std::stoi(dims_it->second));
+                    rjson::add(entry, "Dimensions", std::stoi(dims_it->second));
                 } catch (const std::logic_error&) {
                     // This should never happen, because the dimensions option
                     // is validated on index creation
@@ -1462,13 +1462,13 @@ static bool has_vector_index_on_attribute(const schema& s, std::string_view attr
     return false;
 }
 
-// Returns the validated "Dimensions" value from a VectorAttribute JSON object
-// or throws api_error::validation if invalid. The "source" parameter is used
-// in error messages (e.g., "VectorIndexes" or "VectorIndexUpdates").
-static int get_dimensions(const rjson::value& vector_attribute, std::string_view source) {
-    const rjson::value* dimensions_v = rjson::find(vector_attribute, "Dimensions");
+// Returns the validated "Dimensions" value from a vector index creation JSON
+// object or throws api_error::validation if invalid. The "index_name"
+// parameter is used in error messages.
+static int get_dimensions(const rjson::value& json, std::string_view index_name) {
+    const rjson::value* dimensions_v = rjson::find(json, "Dimensions");
     if (!dimensions_v || !dimensions_v->IsInt() || dimensions_v->GetInt() <= 0 || (vector_dimension_t)dimensions_v->GetInt() > cql3::cql3_type::MAX_VECTOR_DIMENSION) {
-        throw api_error::validation(fmt::format("{} Dimensions must be an integer between 1 and {}.", source, cql3::cql3_type::MAX_VECTOR_DIMENSION));
+        throw api_error::validation(fmt::format("Vector index '{}': Dimensions must be an integer between 1 and {}.", index_name, cql3::cql3_type::MAX_VECTOR_DIMENSION));
     }
     return dimensions_v->GetInt();
 }
@@ -1753,7 +1753,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
                         "VectorIndexes AttributeName '{}' is a key column of type {} so cannot be used as a vector index target.", attribute_name, rjson::to_string_view((*it)["AttributeType"])));
                 }
             }
-            int dimensions = get_dimensions(*vector_attribute_v, "VectorIndexes");
+            int dimensions = get_dimensions(v, index_name);
             std::string similarity_function = get_similarity_function(v, "VectorIndexes");
             // The optional Projection parameter is only supported with
             // ProjectionType=KEYS_ONLY. Other values are not yet supported.
@@ -2192,7 +2192,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         co_return api_error::validation(fmt::format(
                             "VectorIndexUpdates AttributeName '{}' is already the target of an existing vector index.", attribute_name));
                     }
-                    int dimensions = get_dimensions(*vector_attribute_v, "VectorIndexUpdates");
+                    int dimensions = get_dimensions(it->value, index_name);
                     std::string similarity_function = get_similarity_function(it->value, "VectorIndexUpdates");
                     // The optional Projection parameter is only supported with
                     // ProjectionType=KEYS_ONLY. Other values are not yet supported.
