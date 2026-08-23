@@ -642,7 +642,7 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
             rjson::add(entry, "Projection", std::move(projection));
             auto sf_it = opts.find("similarity_function");
             if (sf_it != opts.end()) {
-                rjson::add(entry, "SimilarityFunction", rjson::from_string(sf_it->second));
+                rjson::add(entry, "DistanceFunction", rjson::from_string(sf_it->second));
             }
             // Report IndexStatus and Backfilling based on the vector store's
             // reported state: SERVING -> ACTIVE, BOOTSTRAPPING -> CREATING+Backfilling,
@@ -1500,18 +1500,23 @@ static future<> wait_for_schema_agreement_after_ddl(service::migration_manager& 
     }
 }
 
-// Parses an optional SimilarityFunction field from a VectorIndexes or
-// VectorIndexUpdates entry. Returns the value or the default "COSINE" if
-// the field is absent. The "source" parameter is used in error messages.
-static std::string get_similarity_function(const rjson::value& vector_index, std::string_view source) {
-    std::string sf = get_string_attribute(vector_index, "SimilarityFunction", "COSINE");
-    static constexpr std::array<std::string_view, 3> valid_sf = {"EUCLIDEAN", "COSINE", "DOT_PRODUCT"};
-    if (!std::ranges::contains(valid_sf, std::string_view(sf))) {
-        throw api_error::validation(fmt::format(
-            "{} SimilarityFunction '{}' is not valid. Valid values are: EUCLIDEAN, COSINE, DOT_PRODUCT.",
-            source, sf));
+// Parses a mandatory DistanceFunction field from a VectorIndexes or
+// VectorIndexUpdates entry. The index_name is used in error messages.
+static std::string get_distance_function(const rjson::value& json, std::string_view index_name) {
+    static constexpr std::array<std::string_view, 3> valid_df = {"EUCLIDEAN", "COSINE", "DOT_PRODUCT"};
+    const rjson::value* attribute_value = rjson::find(json, "DistanceFunction");
+    if (!attribute_value)
+        throw api_error::validation(fmt::format("Missing DistanceFunction for vector index {}", index_name));
+    if (!attribute_value->IsString()) {
+        throw api_error::validation(fmt::format("DistanceFunction for vector index {}  must be a string", index_name));
     }
-    return sf;
+    std::string_view df = rjson::to_string_view(*attribute_value);
+    if (!std::ranges::contains(valid_df, df)) {
+        throw api_error::validation(fmt::format(
+            "DistanceFunction '{}' is not valid for vector index {}. Valid values are: EUCLIDEAN, COSINE, DOT_PRODUCT.",
+            df, index_name));
+    }
+    return std::string(df);
 }
 
 // Record how many of the view's leading clustering columns are genuine,
@@ -1754,7 +1759,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
                 }
             }
             int dimensions = get_dimensions(v, index_name);
-            std::string similarity_function = get_similarity_function(v, "VectorIndexes");
+            std::string distance_function = get_distance_function(v, index_name);
             // The optional Projection parameter is only supported with
             // ProjectionType=KEYS_ONLY. Other values are not yet supported.
             const rjson::value* projection_v = rjson::find(v, "Projection");
@@ -1773,7 +1778,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             index_options[db::index::secondary_index::custom_class_option_name] = "vector_index";
             index_options[cql3::statements::index_target::target_option_name] = sstring(attribute_name);
             index_options["dimensions"] = std::to_string(dimensions);
-            index_options["similarity_function"] = similarity_function;
+            index_options["similarity_function"] = distance_function;
             builder.with_index(index_metadata{sstring(index_name), index_options,
                     index_metadata_kind::custom, index_metadata::is_local_index(false)});
         }
@@ -2193,7 +2198,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                             "VectorIndexUpdates AttributeName '{}' is already the target of an existing vector index.", attribute_name));
                     }
                     int dimensions = get_dimensions(it->value, index_name);
-                    std::string similarity_function = get_similarity_function(it->value, "VectorIndexUpdates");
+                    std::string distance_function = get_distance_function(it->value, index_name);
                     // The optional Projection parameter is only supported with
                     // ProjectionType=KEYS_ONLY. Other values are not yet supported.
                     const rjson::value* projection_v = rjson::find(it->value, "Projection");
@@ -2214,7 +2219,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                     index_options[db::index::secondary_index::custom_class_option_name] = "vector_index";
                     index_options[cql3::statements::index_target::target_option_name] = sstring(attribute_name);
                     index_options["dimensions"] = std::to_string(dimensions);
-                    index_options["similarity_function"] = similarity_function;
+                    index_options["similarity_function"] = distance_function;
                     builder.with_index(index_metadata{index_name, index_options,
                             index_metadata_kind::custom, index_metadata::is_local_index(false)});
                 } else if (op == "Delete") {
