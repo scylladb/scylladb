@@ -441,6 +441,10 @@ std::optional<tablet_replica> get_leaving_replica(const tablet_info&, const tabl
 // where we clean up the tablet on the given replica.
 bool is_post_cleanup(tablet_replica replica, const tablet_info& tinfo, const tablet_transition_info& trinfo);
 
+// True if replica is the tablet's leaving replica, reads have moved off it
+// (stage is write_both_read_new or later), but real cleanup hasn't run yet.
+bool is_leaving_replica_pending_early_cache_invalidation(tablet_replica replica, const tablet_info& tinfo, const tablet_transition_info& trinfo);
+
 /// Represents intention to move a single tablet replica from src to dst.
 struct tablet_migration_info {
     locator::tablet_transition_kind kind;

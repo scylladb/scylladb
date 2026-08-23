@@ -812,6 +812,9 @@ class tablet_storage_group_manager final : public storage_group_manager {
     // Holds compaction reenabler which disables compaction temporarily during tablet merge
     std::vector<background_merge_guard> _compaction_reenablers_for_merging;
     std::vector<logstor::compaction_reenabler> _compaction_reenablers_for_logstor_merging;
+    // Tablets whose leaving-replica cache range was already invalidated early
+    // (ahead of real cleanup). Dedupes repeated invalidation across ERM updates.
+    std::unordered_set<size_t> _early_invalidated_leaving_tablets;
 private:
     const schema_ptr& schema() const {
         return _t.schema();
@@ -3903,6 +3906,7 @@ void tablet_storage_group_manager::update_effective_replication_map(
         if (!_storage_groups.contains(tid.value()) && tablet_migrates_in(transition_info)) {
             auto range = new_tablet_map->get_token_range(tid);
             _storage_groups[tid.value()] = allocate_storage_group(*new_tablet_map, tid, std::move(range));
+            _early_invalidated_leaving_tablets.erase(tid.value());
             tablet_migrating_in = true;
         } else if (_storage_groups.contains(tid.value()) && locator::is_post_cleanup(this_replica, new_tablet_map->get_tablet_info(tid), transition_info)) {
             // The storage group should be cleaned up and stopped at this point usually by the tablet cleanup stage,
@@ -3912,10 +3916,27 @@ void tablet_storage_group_manager::update_effective_replication_map(
             auto sg = _storage_groups[tid.value()];
 
             remove_storage_group(tid.value());
+            _early_invalidated_leaving_tablets.erase(tid.value());
 
             (void) with_gate(_t.async_gate(), [sg] {
                 return sg->stop("tablet post-cleanup").then([sg] {});
             });
+        } else if (_storage_groups.contains(tid.value())
+                   && locator::is_leaving_replica_pending_early_cache_invalidation(this_replica, new_tablet_map->get_tablet_info(tid), transition_info)
+                   && _early_invalidated_leaving_tablets.insert(tid.value()).second) {
+            // Reads already moved off this replica; sstables stay untouched until real
+            // cleanup, so a rollback can still repopulate the cache from disk.
+            auto range = new_tablet_map->get_token_range(tid);
+            auto p_range = dht::to_partition_range(range);
+            tlogger.debug("Invalidating range {} for tablet {} of table {}.{} early (leaving replica, stage={})",
+                          p_range, tid, schema()->ks_name(), schema()->cf_name(), transition_info.stage);
+            (void) with_gate(_t.async_gate(), [&t = _t, p_range = std::move(p_range)] {
+                return t.get_row_cache().invalidate(row_cache::external_updater([] {}), p_range);
+            });
+        } else if (_storage_groups.contains(tid.value()) && transition_info.stage == locator::tablet_transition_stage::revert_migration) {
+            // Migration was rolled back before cleanup; clear the dedup entry so a future
+            // retry of this tablet can early-invalidate the cache again.
+            _early_invalidated_leaving_tablets.erase(tid.value());
         }
     }
 

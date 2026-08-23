@@ -528,6 +528,80 @@ async def test_tablet_back_and_forth_migration(manager: ScyllaClusterManager, fe
         await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({3}, {3});")
         await assert_rows(3)
 
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_migration_invalidates_leaving_cache_early(manager: ManagerClient):
+    """Verifies that the leaving replica's row-cache range for a migrating tablet is
+       invalidated as soon as the transition reaches write_both_read_new (when reads stop
+       being routed to it), rather than only later at the `cleanup` stage. This is checked
+       via the scylla_cache_partitions metric on the leaving replica's shard.
+    """
+    logger.info("Bootstrapping cluster")
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
+
+    servers = [await manager.server_add(config=cfg)]
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        servers.append(await manager.server_add(config=cfg))
+        host_ids = [await manager.get_host_id(s.server_id) for s in servers]
+
+        keys = range(100)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+        # Flush to sstables, then populate the row cache on the current
+        # (soon to be leaving) replica by reading everything back.
+        await manager.api.flush_keyspace(servers[0].ip_addr, ks)
+        rows = await cql.run_async(f"SELECT * FROM {ks}.test")
+        assert len(rows) == len(keys)
+
+        replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        assert len(replicas) == 1 and len(replicas[0].replicas) == 1
+        old_replica = replicas[0].replicas[0]
+        assert old_replica[0] == host_ids[0]
+        old_server = servers[0]
+        last_token = replicas[0].last_token
+        new_replica = (host_ids[1], 0)
+
+        async def cache_partitions():
+            metrics = await manager.metrics.query(old_server.ip_addr)
+            return metrics.get('scylla_cache_partitions', {'shard': str(old_replica[1])})
+
+        before = await cache_partitions()
+        logger.info(f"Cached partitions on leaving replica before migration: {before}")
+        assert before is not None and before > 0
+
+        # Pause the migration right after the leaving replica observes write_both_read_new,
+        # before the coordinator ever reaches the `cleanup` stage.
+        await manager.api.enable_injection(old_server.ip_addr, "raft_topology_barrier_and_drain_fail", one_shot=False,
+                parameters={'keyspace': ks, 'table': 'test', 'last_token': last_token, 'stage': 'write_both_read_new'})
+        log = await manager.server_open_log(old_server.server_id)
+        mark = await log.mark()
+
+        migration_task = asyncio.create_task(
+            manager.api.move_tablet(servers[0].ip_addr, ks, "test", old_replica[0], old_replica[1],
+                                     new_replica[0], new_replica[1], 0))
+
+        await log.wait_for('raft_topology_cmd: barrier handler waits', from_mark=mark)
+
+        async def cache_dropped():
+            after = await cache_partitions()
+            return True if (after is None or after < before) else None
+
+        await wait_for(cache_dropped, time.time() + 30, label='leaving_replica_cache_dropped')
+
+        await manager.api.message_injection(old_server.ip_addr, "raft_topology_barrier_and_drain_fail")
+        await manager.api.disable_injection(old_server.ip_addr, "raft_topology_barrier_and_drain_fail")
+        await migration_task
+
+        # Migration completed normally (real `cleanup` ran on top of the already-invalidated
+        # cache) and the data is still fully readable from the new replica.
+        rows = await cql.run_async(f"SELECT * FROM {ks}.test")
+        assert len(rows) == len(keys)
+
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")

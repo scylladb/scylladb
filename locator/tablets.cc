@@ -26,6 +26,7 @@
 #include <flat_set>
 #include <iterator>
 #include <chrono>
+#include <utility>
 
 #include <fmt/ranges.h>
 
@@ -347,6 +348,16 @@ bool is_post_cleanup(tablet_replica replica, const tablet_info& tinfo, const tab
         return trinfo.stage == locator::tablet_transition_stage::revert_migration;
     }
     return false;
+}
+
+bool is_leaving_replica_pending_early_cache_invalidation(tablet_replica replica, const tablet_info& tinfo, const tablet_transition_info& trinfo) {
+    if (replica != locator::get_leaving_replica(tinfo, trinfo)) {
+        return false;
+    }
+    // Stage ordinals increase along the migration path, so this also excludes
+    // the repair/restore stages, which have no leaving replica anyway.
+    return std::to_underlying(trinfo.stage) >= std::to_underlying(locator::tablet_transition_stage::write_both_read_new)
+        && std::to_underlying(trinfo.stage) < std::to_underlying(locator::tablet_transition_stage::cleanup);
 }
 
 tablet_replica_set get_new_replicas(const tablet_info& tinfo, const tablet_migration_info& mig) {
