@@ -910,6 +910,13 @@ SEASTAR_THREAD_TEST_CASE(ics_reshaping_distinct_run_count_test) {
             return sst;
         };
 
+        // Scenario 0: no sstables at all, so no runs.
+        {
+            std::vector<sstables::shared_sstable> sstables;
+            auto ret = cs.get_reshaping_job(sstables, s, compaction::reshape_config{.mode = compaction::reshape_mode::strict});
+            BOOST_REQUIRE(ret.sstables.empty());
+        }
+
         // Scenario 1: every sstable belongs to the same run.
         // There is a single distinct run, so reshaping must report nothing to do.
         {
@@ -969,7 +976,9 @@ SEASTAR_THREAD_TEST_CASE(incremental_compaction_reshaping_run_count_benchmark_te
         run_ids.push_back(run_id::create_random_id());
     }
 
-    static constexpr int iters = 50;
+    // Timing is informational only now (not asserted), so a single pass over
+    // `num` ids is enough for both the message and the correctness check.
+    static constexpr int iters = 1;
 
     // Optimized path: copy, sort, erase duplicates (mirrors get_reshaping_job).
     const auto t0 = std::chrono::steady_clock::now();
