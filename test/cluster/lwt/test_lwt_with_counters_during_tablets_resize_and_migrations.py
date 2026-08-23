@@ -15,7 +15,7 @@ from test.cluster.lwt.lwt_common import (
     DEFAULT_NUM_KEYS,
     wait_for_tablet_count
 )
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, FeatureConfig
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError
 from test.pylib.tablets import get_tablet_count
@@ -293,13 +293,19 @@ async def run_random_resizes(
     }
 
 @pytest.mark.no_parallel
-async def test_multi_column_lwt_migrate_and_random_resizes(manager: ScyllaClusterManager, scale_timeout):
+@pytest.mark.skip_storage('s3', reason='S3 flavor of this test is extremely slow (9m+), deeper '
+                                       'investigation is needed')
+@pytest.mark.skip_storage('gs', reason='GCS flavor fails the LWT counter writes with WriteFailure at '
+                                       'LOCAL_QUORUM, the signature of SCYLLADB-3191; deeper '
+                                       'investigation is needed')
+async def test_multi_column_lwt_migrate_and_random_resizes(manager: ScyllaClusterManager, scale_timeout,
+                                                           storage_config: FeatureConfig):
 
-    cfg = {
+    cfg = storage_config.get_cluster_cfg({
         "enable_tablets": True,
         "tablet_load_stats_refresh_interval_in_seconds": 1,
         "target-tablet-size-in-bytes": 1024 * 16,
-    }
+    })
 
     properties = [
         {"dc": "dc1", "rack": "r1"},
@@ -318,8 +324,9 @@ async def test_multi_column_lwt_migrate_and_random_resizes(manager: ScyllaCluste
     
     async with new_test_keyspace(
         manager,
-        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
-        "AND tablets = {'initial': 1}",
+        storage_config.get_keyspace_opts(
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+            "AND tablets = {'initial': 1}"),
     ) as ks:
         stop_event_ = asyncio.Event()
         table = "lwt_split_merge_table"

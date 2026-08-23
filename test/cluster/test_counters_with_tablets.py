@@ -5,7 +5,7 @@
 #
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, FeatureConfig
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.rest_client import read_barrier
 
@@ -18,7 +18,8 @@ import pytest
 logger = logging.getLogger(__name__)
 
 @pytest.mark.parametrize("migration_type", ["internode", "intranode"])
-async def test_counter_updates_during_tablet_migration(manager: ScyllaClusterManager, migration_type: str):
+async def test_counter_updates_during_tablet_migration(manager: ScyllaClusterManager, migration_type: str,
+                                                       storage_config: FeatureConfig):
     """
     Test that counter updates remain consistent during tablet migrations.
 
@@ -38,11 +39,14 @@ async def test_counter_updates_during_tablet_migration(manager: ScyllaClusterMan
 
     cmdline = ['--smp', '2', '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'storage_service=debug']
 
-    servers = await manager.servers_add(node_count, cmdline=cmdline)
+    cfg = storage_config.get_cluster_cfg({})
+    servers = await manager.servers_add(node_count, config=cfg, cmdline=cmdline)
     cql = manager.get_cql()
     await manager.disable_tablet_balancing()
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.counters (pk int PRIMARY KEY, c counter)")
 
         stop_event = asyncio.Event()
@@ -93,7 +97,7 @@ async def test_counter_updates_during_tablet_migration(manager: ScyllaClusterMan
 
         assert actual_count == total_updates, f"Counter value mismatch: expected {total_updates}, got {actual_count}"
 
-async def test_counter_ids_reuse_in_single_rack(manager: ScyllaClusterManager):
+async def test_counter_ids_reuse_in_single_rack(manager: ScyllaClusterManager, storage_config: FeatureConfig):
     """
     Migrate a single counter tablet between 3 nodes in a single rack, performing counter updates on each node,
     and verify the updates use at most 2 different counter IDs.
@@ -101,7 +105,8 @@ async def test_counter_ids_reuse_in_single_rack(manager: ScyllaClusterManager):
     may be used.
     """
     cmdline = ['--smp', '1', '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'storage_service=debug']
-    servers = await manager.servers_add(3, cmdline=cmdline, property_file=[
+    cfg = storage_config.get_cluster_cfg({})
+    servers = await manager.servers_add(3, config=cfg, cmdline=cmdline, property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack1'}
@@ -109,7 +114,9 @@ async def test_counter_ids_reuse_in_single_rack(manager: ScyllaClusterManager):
     cql, hosts = await manager.get_ready_cql(servers)
     await manager.disable_tablet_balancing()
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.counters (pk int PRIMARY KEY, c counter)")
 
         pk = 1  # Single partition key for all updates
@@ -166,13 +173,14 @@ async def test_counter_ids_reuse_in_single_rack(manager: ScyllaClusterManager):
         assert len(counter_ids) >= 1, f"Expected at least 1 counter ID, but found none"
         assert len(counter_ids) <= 2, f"Expected at most 2 counter IDs, but found {len(counter_ids)}: {counter_ids}"
 
-async def test_counter_ids_multi_rack(manager: ScyllaClusterManager):
+async def test_counter_ids_multi_rack(manager: ScyllaClusterManager, storage_config: FeatureConfig):
     """
     Test counter IDs with 3 nodes in 3 different racks with RF=3.
     Each rack should use a different counter ID.
     """
     cmdline = ['--smp', '1', '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'storage_service=debug']
-    servers = await manager.servers_add(3, cmdline=cmdline, property_file=[
+    cfg = storage_config.get_cluster_cfg({})
+    servers = await manager.servers_add(3, config=cfg, cmdline=cmdline, property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack2'},
         {'dc': 'dc1', 'rack': 'rack3'}
@@ -180,7 +188,9 @@ async def test_counter_ids_multi_rack(manager: ScyllaClusterManager):
     cql, hosts = await manager.get_ready_cql(servers)
     await manager.disable_tablet_balancing()
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets={'initial': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets={'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.counters (pk int PRIMARY KEY, c counter)")
 
         pk = 1  # Single partition key for all updates
