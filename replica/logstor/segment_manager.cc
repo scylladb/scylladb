@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <system_error>
 #include <linux/if_link.h>
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
@@ -46,6 +47,7 @@
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/exception.hh>
 #include "replica/logstor/write_buffer.hh"
+#include "utils/checked-file-impl.hh"
 #include "utils/dynamic_bitset.hh"
 #include "utils/serialized_action.hh"
 #include "utils/lister.hh"
@@ -233,6 +235,13 @@ future<> writeable_segment::do_write(log_location loc, bytes_view data) {
         throw std::runtime_error("segment write failed by injection");
     });
 
+    utils::get_local_injector().inject("logstor_segment_write_io_error", [] {
+        // Simulates a device error reported by the file layer: the handler fires the logstor
+        // disk error signal, which isolates the node, and turns it into a storage_io_error.
+        logstor_error_handler(std::make_exception_ptr(std::system_error(EIO, std::system_category(),
+                "segment write I/O error by injection")));
+    });
+
     const auto alignment = _file.disk_write_dma_alignment();
     const uint64_t total = data.size();
     auto base_offset = absolute_offset(loc.offset);
@@ -339,6 +348,9 @@ future<> file_manager::stop() {
     co_await _async_gate.close();
 }
 
+// Formatting a new file grows the store, so its I/O deliberately does not go through
+// logstor_error_handler: failing to grow (e.g. ENOSPC) only stops further allocation and
+// must not isolate the node, while writes to already formatted files keep working.
 future<> file_manager::format_file(file_id_t file_id) {
     auto file_path = get_file_path(file_id).string();
     bool file_exists = co_await seastar::file_exists(file_path);
@@ -398,7 +410,9 @@ future<> file_manager::remove_file(file_id_t file_id) {
         }
         _open_read_files.pop_back();
     }
-    co_await seastar::remove_file(get_file_path(file_id).string());
+    co_await do_io_check(logstor_error_handler, [this, file_id] {
+        return seastar::remove_file(get_file_path(file_id).string());
+    });
     _max_files.actual--;
 }
 
@@ -441,7 +455,7 @@ future<seastar::file> file_manager::get_file_for_write(file_id_t file_id) {
     }
 
     auto file_path = get_file_path(file_id).string();
-    auto file = co_await seastar::open_file_dma(file_path,
+    auto file = co_await open_checked_file_dma(logstor_error_handler, file_path,
             seastar::open_flags::rw | seastar::open_flags::create | seastar::open_flags::dsync);
 
     if (!_open_read_files[file_id]) {
@@ -461,7 +475,7 @@ future<seastar::file> file_manager::get_file_for_read(file_id_t file_id) {
         co_return cached_file;
     }
 
-    auto file = co_await seastar::open_file_dma(
+    auto file = co_await open_checked_file_dma(logstor_error_handler,
         get_file_path(file_id).string(),
         seastar::open_flags::ro
     );

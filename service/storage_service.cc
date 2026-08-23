@@ -268,6 +268,7 @@ storage_service::storage_service(abort_source& abort_source,
     _listeners.emplace_back(make_lw_shared(bs2::scoped_connection(sstable_write_error.connect([this] { do_isolate_on_error(disk_error::regular); }))));
     _listeners.emplace_back(make_lw_shared(bs2::scoped_connection(general_disk_error.connect([this] { do_isolate_on_error(disk_error::regular); }))));
     _listeners.emplace_back(make_lw_shared(bs2::scoped_connection(commit_error.connect([this] { do_isolate_on_error(disk_error::commit); }))));
+    _listeners.emplace_back(make_lw_shared(bs2::scoped_connection(logstor_error.connect([this] { do_isolate_on_error(disk_error::logstor); }))));
 
     if (_snitch.local_is_initialized()) {
         _listeners.emplace_back(make_lw_shared(_snitch.local()->when_reconfigured(_snitch_reconfigure)));
@@ -6996,10 +6997,22 @@ future<> storage_service::uninit_messaging_service() {
     ).discard_result();
 }
 
+static const char* disk_error_to_string(disk_error type) {
+    switch (type) {
+    case disk_error::commit:
+        return "Commitlog";
+    case disk_error::logstor:
+        return "Logstor";
+    case disk_error::regular:
+        break;
+    }
+    return "Disk";
+}
+
 void storage_service::do_isolate_on_error(disk_error type)
 {
     if (!std::exchange(_isolated, true)) {
-        slogger.error("Shutting down communications due to I/O errors until operator intervention: {} error: {}", type == disk_error::commit ? "Commitlog" : "Disk", std::current_exception());
+        slogger.error("Shutting down communications due to I/O errors until operator intervention: {} error: {}", disk_error_to_string(type), std::current_exception());
         // isolated protect us against multiple stops on _this_ shard
         //FIXME: discarded future.
         (void)isolate();

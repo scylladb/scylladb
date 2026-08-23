@@ -36,7 +36,9 @@
 #include <seastar/core/simple-stream.hh>
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/tmpdir.hh"
+#include "utils/disk-error-handler.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 
 using namespace replica::logstor;
 
@@ -1908,6 +1910,39 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_flush_failure_fails_all_wr
 
     BOOST_REQUIRE_EQUAL(flush_ctl.started_count, 1u);
     BOOST_REQUIRE(flush_ctl.flushed_buffers.empty());
+}
+
+// A device error reported by the file layer on a segment write must fire the logstor disk error
+// signal, on top of failing the write. The signal is what makes the node isolate itself instead of
+// staying in the ring with a store it can no longer write to.
+SEASTAR_THREAD_TEST_CASE(test_logstor_segment_write_io_error_signals_disk_error) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    ls.do_recovery_for_test().get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    test_compaction_group_handle cg(schema, ls);
+
+    unsigned signalled = 0;
+    boost::signals2::scoped_connection conn = logstor_error.connect([&signalled] { ++signalled; });
+
+    utils::get_local_injector().enable("logstor_segment_write_io_error", true /* one shot */);
+    auto m = make_kv_mutation(schema, "pk0", "io-error-value");
+    BOOST_REQUIRE_THROW(ls.write(m, write_target(&cg, {}), db::no_timeout).get(), storage_io_error);
+    BOOST_REQUIRE_EQUAL(signalled, 1u);
+
+    // The failed write only retired its segment, so a write to a new segment still succeeds and
+    // does not signal again.
+    write_and_flush_segment(ls, cg, make_kv_mutation(schema, "pk1", "value-after-io-error"));
+    BOOST_REQUIRE_EQUAL(signalled, 1u);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_write_and_separator_flush) {
