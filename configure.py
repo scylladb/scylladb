@@ -689,6 +689,7 @@ scylla_tests = set([
     'test/manual/sstable_scan_footprint_test',
     'test/perf/memory_footprint_test',
     'test/perf/perf_cache_eviction',
+    'test/perf/perf_canonical_mutation',
     'test/perf/perf_commitlog',
     'test/perf/perf_cql_parser',
     'test/perf/perf_hash',
@@ -1648,6 +1649,7 @@ tests_not_using_seastar_test_framework = set([
     'test/manual/message',
     'test/perf/memory_footprint_test',
     'test/perf/perf_cache_eviction',
+    'test/perf/perf_canonical_mutation',
     'test/perf/perf_cql_parser',
     'test/perf/perf_hash',
     'test/perf/perf_mutation',
@@ -1806,6 +1808,7 @@ deps['test/boost/rolling_max_tracker_test'] = ['test/boost/rolling_max_tracker_t
 deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_test.cc']
 deps['test/boost/summary_test'] = ['test/boost/summary_test.cc']
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
+deps['test/perf/perf_canonical_mutation'] += ['seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_commitlog'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_row_cache_reads'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
 deps['test/boost/reusable_buffer_test'] = [
