@@ -157,7 +157,6 @@ adjust_bin() {
 export GNUTLS_SYSTEM_PRIORITY_FILE="\${GNUTLS_SYSTEM_PRIORITY_FILE-$prefix/libreloc/gnutls.config}"
 export LD_LIBRARY_PATH="$prefix/libreloc"
 export UBSAN_OPTIONS="${UBSAN_OPTIONS:+$UBSAN_OPTIONS:}suppressions=$prefix/libexec/ubsan-suppressions.supp"
-export ASAN_OPTIONS="\${ASAN_OPTIONS:+\$ASAN_OPTIONS:}fast_unwind_on_malloc=0:symbolize=1"
 export LSAN_OPTIONS="${LSAN_OPTIONS:+$LSAN_OPTIONS:}suppressions=$prefix/libexec/lsan-suppressions.supp"
 ${p11_trust_paths:+export SCYLLA_P11_TRUST_PATHS="$p11_trust_paths"}
 exec -a "\$0" "$prefix/libexec/$bin" "\$@"
