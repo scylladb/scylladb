@@ -1541,6 +1541,25 @@ static std::map<sstring, sstring> make_gsi_tags(
     return tags;
 }
 
+// Validates the mandatory "Projection" field from a VectorIndexes or
+// VectorIndexUpdates entry. Currently only ProjectionType=KEYS_ONLY is
+// supported. The index_name is used in error messages.
+static void validate_projection(const rjson::value& json, std::string_view index_name) {
+    const rjson::value* projection_v = rjson::find(json, "Projection");
+    if (!projection_v) {
+        throw api_error::validation(fmt::format("Missing Projection for vector index {}", index_name));
+    }
+    if (!projection_v->IsObject()) {
+        throw api_error::validation(fmt::format("Projection for vector index {} must be an object.", index_name));
+    }
+    const rjson::value* projection_type_v = rjson::find(*projection_v, "ProjectionType");
+    if (!projection_type_v || !projection_type_v->IsString() ||
+            rjson::to_string_view(*projection_type_v) != "KEYS_ONLY") {
+        throw api_error::validation(fmt::format(
+            "Projection for vector index {}: only ProjectionType=KEYS_ONLY is currently supported.", index_name));
+    }
+}
+
 future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization,
             const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     throwing_assert(this_shard_id() == 0);
@@ -1760,19 +1779,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             }
             int dimensions = get_dimensions(v, index_name);
             std::string distance_function = get_distance_function(v, index_name);
-            // The optional Projection parameter is only supported with
-            // ProjectionType=KEYS_ONLY. Other values are not yet supported.
-            const rjson::value* projection_v = rjson::find(v, "Projection");
-            if (projection_v) {
-                if (!projection_v->IsObject()) {
-                    co_return api_error::validation("VectorIndexes Projection must be an object.");
-                }
-                const rjson::value* projection_type_v = rjson::find(*projection_v, "ProjectionType");
-                if (!projection_type_v || !projection_type_v->IsString() ||
-                        rjson::to_string_view(*projection_type_v) != "KEYS_ONLY") {
-                    co_return api_error::validation("VectorIndexes Projection: only ProjectionType=KEYS_ONLY is currently supported.");
-                }
-            }
+            validate_projection(v, index_name);
             // Add a vector index metadata entry to the base table schema.
             index_options_map index_options;
             index_options[db::index::secondary_index::custom_class_option_name] = "vector_index";
@@ -2199,19 +2206,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                     }
                     int dimensions = get_dimensions(it->value, index_name);
                     std::string distance_function = get_distance_function(it->value, index_name);
-                    // The optional Projection parameter is only supported with
-                    // ProjectionType=KEYS_ONLY. Other values are not yet supported.
-                    const rjson::value* projection_v = rjson::find(it->value, "Projection");
-                    if (projection_v) {
-                        if (!projection_v->IsObject()) {
-                            co_return api_error::validation("VectorIndexUpdates Projection must be an object.");
-                        }
-                        const rjson::value* projection_type_v = rjson::find(*projection_v, "ProjectionType");
-                        if (!projection_type_v || !projection_type_v->IsString() ||
-                                rjson::to_string_view(*projection_type_v) != "KEYS_ONLY") {
-                            co_return api_error::validation("VectorIndexUpdates Projection: only ProjectionType=KEYS_ONLY is currently supported.");
-                        }
-                    }
+                    validate_projection(it->value, index_name);
                     // A vector index will use CDC on this table, so the CDC
                     // log table name will need to fit our length limits
                     validate_cdc_log_name_length(builder.cf_name());
