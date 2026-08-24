@@ -1727,6 +1727,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         // We should perform TRUNCATE only if the session is still valid. It could be cleared if a previous truncate
         // handler performed the truncate and cleared the session, but crashed before finalizing the request
         if (_topo_sm._topology.session) {
+            // Read the session under the guard. Once it's released below, a new coordinator
+            // may install a session of its own, and sending the RPC with someone else's
+            // session would execute this operation outside of the scope its guard bounds.
+            const session_id session = _topo_sm._topology.session;
             const auto topology_requests_entry = co_await _sys_ks.get_topology_request_entry(global_request_id, true);
             const table_id& table_id = topology_requests_entry.truncate_table_id;
             lw_shared_ptr<replica::table> table = _db.get_tables_metadata().get_table_if_exists(table_id);
@@ -1765,8 +1769,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
                 }
 
+                // The guard was released above, so we may have been deposed since. Don't
+                // touch the replicas if this operation is no longer the current one.
+                if (_term != _raft.get_current_term() || _topo_sm._topology.session != session) {
+                    rtlogger.info("TRUNCATE TABLE for {}.{} is no longer the current operation, not sending the RPCs", ks_name, cf_name);
+                    throw term_changed_error{};
+                }
+
                 // Send the RPC to all replicas
-                const service::frozen_topology_guard frozen_guard { _topo_sm._topology.session };
+                const service::frozen_topology_guard frozen_guard { session };
                 co_await coroutine::parallel_for_each(replica_hosts, [&] (const locator::host_id& host_id) -> future<> {
                     co_await ser::storage_proxy_rpc_verbs::send_truncate_with_tablets(&_messaging, host_id, ks_name, cf_name, frozen_guard);
                 });
