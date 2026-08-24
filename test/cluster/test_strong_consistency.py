@@ -2428,3 +2428,163 @@ async def test_leader_not_among_tablet_replicas(manager: ScyllaClusterManager):
             rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 17")
             assert len(rows) == 1
             assert rows[0].v == 7
+
+
+async def test_raft_group_torn_down_before_tablet_cleanup(manager: ScyllaClusterManager):
+    """A migrated-away tablet's raft group must be torn down before its storage is
+    cleaned up.
+
+    Tablet cleanup stops the tablet's compaction groups, and a raft entry applied
+    after that kills the raft server's applier fiber, which is a fatal background
+    error. The teardown therefore has to complete first - see
+    test_late_raft_apply_after_tablet_cleanup for the failure it prevents.
+    """
+    logger.info("Bootstrapping cluster")
+    cmdline = DEFAULT_CMDLINE + ['--logger-log-level', 'raft_topology=debug']
+    servers = await manager.servers_add(4, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+    ])
+    cql, _ = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+                                         "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            tablet_token = tablets[0].last_token
+
+            for i in range(10):
+                await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({i}, {i + 1})")
+
+            # Both nodes of rack3 can hold the replica without changing the rack
+            # distribution, so the replica can move from one to the other.
+            rack3 = [host_ids[2], host_ids[3]]
+            src_host_id, src_shard = next((h, s) for h, s in tablets[0].replicas if h in rack3)
+            dst_host_id = next(h for h in rack3 if h != src_host_id)
+            src_server = next(s for s, h in zip(servers, host_ids) if h == src_host_id)
+
+            src_log = await manager.server_open_log(src_server.server_id)
+            mark = await src_log.mark()
+
+            logger.info(f"Migrating replica from {src_host_id}:{src_shard} to {dst_host_id}:0")
+            await manager.api.move_tablet(servers[0].ip_addr, ks, table_name,
+                                          src_host_id, src_shard, dst_host_id, 0, tablet_token)
+            await manager.api.quiesce_topology(servers[0].ip_addr)
+
+            # Both events happen on the leaving replica, so their order in its log is
+            # the order they happened in.
+            matches = await src_log.grep(f"raft server for group id {group_id} is destroyed"
+                                         f"|Cleaned up tablet .* of table {ks}.{table_name} successfully",
+                                         from_mark=mark)
+            assert len(matches) == 2, f"Expected a teardown and a cleanup on {src_host_id}, got {[m[0] for m in matches]}"
+            assert "is destroyed" in matches[0][0], \
+                f"The raft group was torn down after the tablet cleanup: {[m[0] for m in matches]}"
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_late_raft_apply_after_tablet_cleanup(manager: ScyllaClusterManager):
+    """A raft entry that the leaving replica hasn't applied yet must not be applied
+    after the tablet cleanup of the migration that removed it.
+
+    The entry is committed, so the group makes progress and the migration completes
+    while the leaving replica's applier is parked. Once it resumes, the tablet's
+    compaction groups must still be there - which means the raft group has to be gone
+    before the cleanup ran, so that aborting the raft server drains the applier first.
+    Otherwise the apply fails, killing the applier fiber, and the resulting background
+    error kills the node.
+    """
+    logger.info("Bootstrapping cluster")
+    cmdline = DEFAULT_CMDLINE + [
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'debug_error_injection=debug',
+    ]
+    servers = await manager.servers_add(6, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+    ])
+    cql, _ = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    await manager.disable_tablet_balancing()
+
+    wait_before_apply_injection = "strong_consistency_state_machine_wait_before_apply"
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+                                         "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            tablet_token = tablets[0].last_token
+
+            for i in range(10):
+                await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({i}, {i + 1})")
+
+            # The leaving replica must not be the leader: parking the leader's applier
+            # would stall the read barriers the migration itself needs. Only a replica
+            # of the group knows who its leader is.
+            replica_server = next(s for s, h in zip(servers, host_ids) if h == tablets[0].replicas[0][0])
+            leader_host_id = await wait_for_leader(manager, replica_server, group_id)
+            racks = [[host_ids[0], host_ids[1]], [host_ids[2], host_ids[3]], [host_ids[4], host_ids[5]]]
+            src_host_id, src_shard = next((h, s) for h, s in tablets[0].replicas if h != leader_host_id)
+            src_rack = next(rack for rack in racks if src_host_id in rack)
+            dst_host_id = next(h for h in src_rack if h != src_host_id)
+            src_server = next(s for s, h in zip(servers, host_ids) if h == src_host_id)
+
+            logger.info(f"Parking the applier of the leaving replica {src_host_id}")
+            await manager.api.enable_injection(src_server.ip_addr, wait_before_apply_injection, one_shot=True)
+            src_log = await manager.server_open_log(src_server.server_id)
+            mark = await src_log.mark()
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (100, 101)")
+            await src_log.wait_for(f"{wait_before_apply_injection}: waiting for message", from_mark=mark, timeout=60)
+
+            logger.info(f"Migrating replica from {src_host_id}:{src_shard} to {dst_host_id}:0")
+            move_task = asyncio.create_task(
+                manager.api.move_tablet(servers[0].ip_addr, ks, table_name,
+                                        src_host_id, src_shard, dst_host_id, 0, tablet_token)
+            )
+
+            # Wait until the leaving replica's raft group is being torn down. Without
+            # the teardown ordering this happens only at the end of the migration, by
+            # which time the tablet cleanup already stopped the tablet's storage, and
+            # releasing the applier below kills the node.
+            await src_log.wait_for(f"schedule_raft_group_deletion\\(\\): group id {group_id}: scheduling",
+                                   from_mark=mark, timeout=120)
+
+            logger.info("Releasing the parked applier")
+            await manager.api.message_injection(src_server.ip_addr, wait_before_apply_injection)
+
+            await move_task
+            await manager.api.quiesce_topology(servers[0].ip_addr)
+
+            replicas = (await get_all_tablet_replicas(manager, servers[0], ks, table_name))[0].replicas
+            assert (dst_host_id, 0) in replicas, f"Expected {dst_host_id} among replicas, got {replicas}"
+            assert not any(h == src_host_id for h, _ in replicas), \
+                f"Expected {src_host_id} to be gone from replicas, got {replicas}"
+
+            # The node that was migrated away from must still be running: a failed
+            # apply kills the applier fiber, and the resulting background error is
+            # fatal.
+            assert await manager.api.get_host_id(src_server.ip_addr) == src_host_id, \
+                f"The leaving replica {src_host_id} is not responding after the migration"
+
+            for i in list(range(10)) + [100]:
+                expected = i + 1
+                rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = {i}")
+                assert len(rows) == 1, f"Expected 1 row for pk={i}, got {len(rows)}"
+                assert rows[0].c == expected, f"Expected c={expected} for pk={i}, got {rows[0].c}"
