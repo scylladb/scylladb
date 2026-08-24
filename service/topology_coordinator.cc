@@ -4813,7 +4813,7 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
     // vnodes-to-tablets migration, and finalization needs to observe that.
     for (auto& [dc, nodes] : tm->get_topology().get_datacenter_nodes()) {
         locator::load_stats dc_stats;
-        bool dc_has_token_owners = false;
+        bool dc_stats_aggregated = false;
         rtlogger.debug("raft topology: Refreshing table load stats for DC {} that has {} node(s)", dc, nodes.size());
         co_await coroutine::parallel_for_each(nodes, [&] (const auto& node) -> future<> {
             auto dst = node.get().host_id();
@@ -4826,8 +4826,6 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
             if (!is_token_owner && !_topo_sm._topology.normal_nodes.contains(dst_server)) {
                 co_return;
             }
-
-            dc_has_token_owners |= is_token_owner;
 
             _as.check();
 
@@ -4846,6 +4844,14 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
 
             locator::load_stats node_stats;
             if (!_gossiper.is_alive(dst)) {
+                if (is_excluded(dst_server)) {
+                    // An excluded node is banned from rejoining, so its stats are never coming back
+                    // and waiting for them only keeps the collection invalid. The split-ready
+                    // sequence number is a minimum over the nodes which did report, so the
+                    // survivors alone can carry a resize past a node which will never answer.
+                    rtlogger.debug("raft topology: Not refreshing table load on {} because it is excluded.", dst);
+                    co_return;
+                }
                 if (require == require_live_nodes::no && _load_stats_per_node.contains(dst) &&
                         !utils::get_local_injector().enter("force_down_node_load_stats_invalid")) {
                     node_stats = _load_stats_per_node[dst];
@@ -4872,15 +4878,16 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
             _load_stats_per_node[dst] = node_stats;
             if (is_token_owner) {
                 dc_stats += node_stats;
+                dc_stats_aggregated = true;
             }
         });
 
-        // A DC with no token owners holds no replicas of any table, so dc_stats was never
-        // merged into and is still the identity element. `stats += dc_stats` would not be a
+        // A DC which contributed nothing - it has no token owners, or all of them are
+        // excluded - leaves dc_stats as the identity element. `stats += dc_stats` would not be a
         // no-op for it: load_stats::operator+= invalidates split readiness for every table
         // the source does not report, and decides whether to do so from the destination's
         // _aggregated flag rather than the source's. So skip such a DC entirely.
-        if (!dc_has_token_owners) {
+        if (!dc_stats_aggregated) {
             continue;
         }
 
@@ -4898,7 +4905,11 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
         size_t reporting_replicas = 0;
         for (const auto& tinfo : tmap.tablets()) {
             co_await coroutine::maybe_yield();
-            reporting_replicas += tinfo.replicas.size();
+            for (const auto& r : tinfo.replicas) {
+                if (!is_excluded(raft::server_id(r.host.uuid()))) {
+                    ++reporting_replicas;
+                }
+            }
         }
         if (!reporting_replicas) {
             continue;
