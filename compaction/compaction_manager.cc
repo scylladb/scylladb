@@ -2948,6 +2948,7 @@ future<> compaction_manager::remove(compaction_group_view& t, sstring reason) no
     // and prevent new tasks from entering the gate.
     if (!c_state.gate.is_closed()) {
         auto close_gate = c_state.gate.close();
+        utils::get_local_injector().enter("compaction_manager_remove_wait_for_tasks");
         co_await stop_ongoing_compactions(reason, &t);
         // Wait for users of incremental repair lock (can be either repair itself or maintenance compactions).
         co_await c_state.incremental_repair_lock.write_lock();
