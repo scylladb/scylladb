@@ -261,6 +261,7 @@ void test_index_files(
         sstable_position::from_logical(data_db_size),
         bti_ver,
         s,
+        sstables::trie::bti_position_encoding::logical(),
         env.make_reader_permit(),
         trace_state
     );

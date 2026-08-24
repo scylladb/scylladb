@@ -65,12 +65,12 @@
 #include "tools/scylla-sstable/scylla-sstable.hh"
 #include "tools/scylla-sstable/scylla-sstable-layout.hh"
 #include "tools/utils.hh"
-#include "types/json_utils.hh"
 #include "locator/host_id.hh"
 #include "mutation_writer/token_group_based_splitting_writer.hh"
 #include "dht/token-sharding.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/pretty_printers.hh"
+#include "sstables/exceptions.hh"
 
 using namespace seastar;
 using namespace sstables;
@@ -1229,6 +1229,7 @@ void write_index_component(schema_ptr schema, reader_permit permit, const sstabl
     auto close_idx_reader = deferred_close(*idx_reader);
 
     writer.StartArray();
+
     while (!idx_reader->eof()) {
         idx_reader->read_partition_data().get();
         auto pos = idx_reader->sstable_positions().start;
@@ -1240,7 +1241,22 @@ void write_index_component(schema_ptr schema, reader_permit permit, const sstabl
             writer.DataKey(*schema, *pkey);
         }
         writer.Key("pos");
-        writer.Uint64(pos.to_logical());
+        if (pos.is_physical()) {
+            // Physical positions (used by compressed sstables) are a
+            // (chunk_position, extent_hint, offset_within_chunk) tuple rather
+            // than a single logical offset, so emit them as an object.
+            auto ph = pos.as_physical();
+            writer.StartObject();
+            writer.Key("chunk_position");
+            writer.Uint64(ph.chunk_position);
+            writer.Key("extent_hint");
+            writer.Uint64(ph.extent_hint);
+            writer.Key("offset_within_chunk");
+            writer.Uint64(ph.offset_within_chunk);
+            writer.EndObject();
+        } else {
+            writer.Uint64(pos.to_logical());
+        }
         writer.EndObject();
 
         idx_reader->advance_to_next_partition().get();
