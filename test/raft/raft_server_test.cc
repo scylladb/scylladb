@@ -4,6 +4,7 @@
 #include "utils/error_injection.hh"
 #include "test/lib/error_injection.hh"
 #include <seastar/util/defer.hh>
+#include <seastar/core/with_timeout.hh>
 
 #ifdef SEASTAR_DEBUG
 // Increase tick time to allow debug to process messages
@@ -526,4 +527,45 @@ SEASTAR_THREAD_TEST_CASE(test_commit_waiter_dropped_before_notifying_above_snaps
     // included in the snapshot.
     BOOST_CHECK_NO_THROW(fut.get());
 #endif
+}
+
+// Reproducer: abort() fails every other pending waiter but never touches
+// _stepdown_promise, leaving stepdown()'s future unresolved forever.
+SEASTAR_THREAD_TEST_CASE(test_abort_resolves_pending_stepdown) {
+    auto cluster = get_default_cluster(test_case{ .nodes = 2 });
+    cluster.start_all().get();
+    // The is_alive() guard avoids double-aborting node 0 on the happy path
+    // while still stopping it if an assertion unwinds before the stop below.
+    auto stop = defer([&cluster] noexcept {
+        if (cluster.get_server(0).is_alive()) {
+            cluster.stop_server(0).get();
+        }
+        cluster.stop_server(1).get();
+    });
+
+    auto& leader = cluster.get_server(0);
+    BOOST_REQUIRE(leader.is_leader());
+
+    // No ticks and no timeout_now delivery: the transfer can neither
+    // complete nor time out, so node 0 deterministically stays leader.
+    cluster.pause_tickers();
+    cluster.block_receive(1, 0);
+
+    auto stepdown_fut = leader.stepdown(raft::logical_clock::duration{1000});
+
+    // Park the io_fiber while node 0 is still leader: a woken one would run
+    // process_fsm_output() once more and resolve the promise with success.
+    // Two sleeps: a starved reactor could defer the wake-up past one window.
+    seastar::sleep(50ms).get();
+    seastar::sleep(50ms).get();
+    BOOST_REQUIRE(leader.is_leader());
+
+    cluster.stop_server(0, "test abort during stepdown").get();
+
+    // The bug: stepdown_fut is left unresolved; bound the wait.
+    auto bounded = with_timeout(std::chrono::steady_clock::now() + 5s, std::move(stepdown_fut));
+    BOOST_CHECK_EXCEPTION(bounded.get(), raft::stopped_error,
+            [] (const raft::stopped_error& e) {
+        return sstring(e.what()) == sstring("Raft instance is stopped, reason: \"test abort during stepdown\"");
+    });
 }
