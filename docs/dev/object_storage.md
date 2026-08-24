@@ -302,6 +302,76 @@ The `sstables` member is a list containing metadata about the SSTables in the sn
 The optional `files` member may contain a list of non-SSTable files included in the snapshot directory, not including the manifest.json file and schema.cql.
 ```
 
+#### Cluster level manifest
+
+A manifest for a cluster level snapshot backup differs from the per-node ones on a few points:
+
+```
+{
+  "manifest": {
+    "version": "1.0",
+    "scope": "dc"
+  },
+  "nodes" : {
+      "node": {
+        "host_id": "<UUID>",
+        "datacenter": "mydc",
+        "rack": "myrack"
+        "first_token" : <token>,
+        "last_token" : <token>
+      },
+      ...
+  },
+  "snapshot": {
+    "name": "snapshot name",
+    "created_at": seconds_since_epoch,
+    "expires_at": seconds_since_epoch | null,
+  },
+  "table": {
+    "keyspace_name": "my_keyspace",
+    "table_name": "my_table",
+    "table_id": "<UUID>",
+    "tablets_type": "none|powof2",
+    "tablet_count": N
+  },
+  "tablets" : {
+    "tablet" : {
+        "first_token": <token>,
+        "last_token": <token>,
+        "repair_time": <int64_t>,
+        "repaired_at": <int64_t>
+    }, 
+    ...
+  }
+  "sstables": [
+    {
+      "id": "67e35000-d8c6-11f0-9599-060de9f3bd1b",
+      "toc_name": "me-3gw7_0ndy_3wlq829wcsddgwha1n-big-TOC.txt",
+      "data_size": 75,
+      "index_size": 8,
+      "first_token": -8629266958227979430,
+      "last_token": 9168982884335614769,
+      "tablet_id": <tablet>,
+      "node": <node>
+    },
+    ...
+  ],
+  "files": [ ... ]
+}
+```
+
+The `scope`of the manifest is "dc" (note: technically, it can span multiple dcs), and instead of a top-level `node` attribute it has an array called `nodes` containing each node present in the backup.
+
+Each node has an optional first and last token attribute, from where which tablets belong on which node(s) can be determined.
+
+The manifest also contains the set of tablets at the point of snapshot.
+
+Each sstable entry points out owning node and tablet.
+
+Note: cluster level backups utilize sstable de-duplication of the repair set. Thus, any sstables which fall into the repaired set of data will only be included from one of the replicas in the snapshot.
+
+When restoring, the repair times and token ranges of sstables, tablets and nodes can be used to recreate the proper replication.
+
 3. `CREATE KEYSPACE` with S3/GS storage
 
 When creating a keyspace with S3/GS storage, the data is stored under the bucket passed as argument to the `CREATE KEYSPACE` statement.
