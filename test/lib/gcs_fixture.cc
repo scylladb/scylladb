@@ -8,6 +8,8 @@
 
 #include <string>
 #include <memory>
+#include <regex>
+#include <iostream>
 
 #include <seastar/core/with_timeout.hh>
 #include <seastar/core/reactor.hh>
@@ -63,9 +65,62 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_gcs_server(const 
     );
 }
 
+// fake-gcs-server accepts any Content-Range at all -- it stores the body and
+// derives the object size from it -- so protocol level upload bugs are invisible
+// when testing against it (SCYLLADB-3889). Put a validator in front of it that
+// tracks each upload session and rejects ranges real GCS would reject.
+static future<std::tuple<tp::process_fixture, int>> start_upload_validator(int upstream_port) {
+    auto pyexec = tp::find_file_in_path("python");
+
+    promise<int> port_promise;
+    auto port_future = port_promise.get_future();
+
+    auto python = co_await tp::process_fixture::create(pyexec
+        , { // args
+            pyexec.string(),
+            "test/pylib/gcs_upload_validator.py",
+            "--upstream-port", std::to_string(upstream_port),
+        }
+        , {} // env
+        , tp::process_fixture::create_copy_handler(std::cout) // stdout
+        , [port_promise = std::move(port_promise), matched = false](std::string_view line) mutable -> future<consumption_result<char>> {
+            static std::regex port_ex(R"foo(Starting GCS upload validator on \('[^']+', (\d+)\))foo");
+
+            std::match_results<typename std::string_view::const_iterator> m;
+            if (!matched && std::regex_search(line.begin(), line.end(), m, port_ex)) {
+                port_promise.set_value(std::stoi(m[1].str()));
+                matched = true;
+            } else {
+                // surface rejections in the test log, they explain the failure
+                BOOST_TEST_MESSAGE(std::string(line));
+            }
+            co_return continue_consuming{};
+        }
+    );
+
+    auto port = co_await with_timeout(std::chrono::steady_clock::now() + 20s, std::move(port_future));
+    if (port <= 0) {
+        throw std::runtime_error("Invalid upload validator port");
+    }
+
+    for (size_t retry = 0; retry < 5; ++retry) {
+        try {
+            auto c = co_await with_timeout(std::chrono::steady_clock::now() + 20s
+                , seastar::connect(socket_address(net::inet_address("127.0.0.1"), port)));
+            c.shutdown_output();
+            break;
+        } catch (...) {
+        }
+        co_await sleep(100ms);
+    }
+
+    co_return std::make_tuple(std::move(python), port);
+}
+
 class gcs_fixture::impl {
 public:
     std::optional<tp::process_fixture> fake_gcs_server;
+    std::optional<tp::process_fixture> upload_validator;
     std::optional<google_credentials> creds;
 
     std::vector<std::string> objects_to_delete;
@@ -104,6 +159,16 @@ seastar::future<> gcs_fixture::impl::setup() {
         auto [proc, port] = co_await start_fake_gcs_server(tmp);
         fake_gcs_server.emplace(std::move(proc));
         endpoint = "http://127.0.0.1:" + std::to_string(port);
+
+        // Unless explicitly disabled, talk to the mock through a validator that
+        // enforces the resumable upload rules the mock itself ignores.
+        if (getenv_or_default("GCP_STORAGE_SKIP_UPLOAD_VALIDATOR").empty()) {
+            auto [vproc, vport] = co_await start_upload_validator(port);
+            upload_validator.emplace(std::move(vproc));
+            endpoint = "http://127.0.0.1:" + std::to_string(vport);
+            BOOST_TEST_MESSAGE(fmt::format("Validating uploads to fake gcs server on port {}", port));
+        }
+
         BOOST_TEST_MESSAGE(fmt::format("Test server endpoint {}", endpoint));
         user_1_creds = "none";
     } else {
@@ -160,6 +225,11 @@ seastar::future<> gcs_fixture::impl::teardown() {
                 BOOST_TEST_MESSAGE(fmt::format("Warning: could not delete bucket: {}", bucket, std::current_exception()));
             }
         }
+    }
+
+    if (upload_validator) {
+        upload_validator->terminate();
+        co_await upload_validator->wait();
     }
 
     if (fake_gcs_server) {
