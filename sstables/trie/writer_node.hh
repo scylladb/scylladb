@@ -364,9 +364,9 @@ struct trie_payload {
     // We store the payload in a std::array + size pair,
     // since it makes managing allocations slightly easier.
     //
-    // 20 bytes is the biggest maximum possible payload in the BTI index format,
-    // so we don't need more.
-    constexpr static int MAX_PAYLOAD_SIZE = 20;
+    // The biggest possible payload is the compact `mu` row index payload:
+    // up to 15 bytes of position fields plus an optional tombstone (8 + 4 bytes).
+    constexpr static int MAX_PAYLOAD_SIZE = 27;
     std::array<std::byte, MAX_PAYLOAD_SIZE> _payload_buf = {};
     // For the writer, the meaning of the "bits" is opaque,
     // we just store an explicit size of the "bytes".
