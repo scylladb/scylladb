@@ -151,11 +151,16 @@ auto ck_from_json(rjson::value const& item, std::size_t idx, schema_ptr const& s
     return clustering_key_prefix::from_exploded(raw_ck);
 }
 
-auto write_ann_json(vs_vector vs_vector, limit limit, const rjson::value& filter) -> json_content {
+auto write_ann_json(vs_vector vs_vector, limit limit, const rjson::value& filter, bool routing) -> json_content {
+    // Omit "routing" entirely rather than sending "routing":true, so the
+    // request stays wire-compatible with a vector store that only ever
+    // routed by default (routing is currently the common case, needed by
+    // CQL, and its absence in the request must mean "route as before").
+    auto routing_suffix = routing ? "" : R"(,"routing":false)";
     if (filter.ObjectEmpty()) {
-        return seastar::format(R"({{"vector":[{}],"limit":{}}})", fmt::join(vs_vector, ","), limit);
+        return seastar::format(R"({{"vector":[{}],"limit":{}{}}})", fmt::join(vs_vector, ","), limit, routing_suffix);
     }
-    return seastar::format(R"({{"vector":[{}],"limit":{},"filter":{}}})", fmt::join(vs_vector, ","), limit, rjson::print(filter));
+    return seastar::format(R"({{"vector":[{}],"limit":{},"filter":{}{}}})", fmt::join(vs_vector, ","), limit, rjson::print(filter), routing_suffix);
 }
 
 auto read_scored_primary_keys_json(rjson::value const& json, schema_ptr const& schema, std::string_view score_field_name)
@@ -370,15 +375,15 @@ struct vector_store_client::impl {
         }
     }
 
-    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as)
-            -> future<std::expected<primary_keys, ann_error>> {
+    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as,
+            bool routing) -> future<std::expected<primary_keys, ann_error>> {
         if (is_disabled()) {
             vslogger.error("Disabled Vector Store while calling ann");
             co_return std::unexpected{disabled{}};
         }
 
         auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
-        auto content = write_ann_json(std::move(vs_vector), limit, filter);
+        auto content = write_ann_json(std::move(vs_vector), limit, filter, routing);
 
         auto resp = co_await request(operation_type::POST, std::move(path), std::move(content), as);
         if (!resp) {
@@ -488,8 +493,8 @@ auto vector_store_client::get_index_status(keyspace_name keyspace, index_name na
 }
 
 auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter,
-        abort_source& as) -> future<std::expected<primary_keys, ann_error>> {
-    return _impl->ann(std::move(keyspace), std::move(name), schema, std::move(vs_vector), limit, filter, as);
+        abort_source& as, bool routing) -> future<std::expected<primary_keys, ann_error>> {
+    return _impl->ann(std::move(keyspace), std::move(name), schema, std::move(vs_vector), limit, filter, as, routing);
 }
 
 auto vector_store_client::bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, abort_source& as)

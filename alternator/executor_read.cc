@@ -1852,9 +1852,13 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     // Query the vector store for the approximate nearest neighbors.
     auto timeout = executor::default_timeout();
     abort_on_expiry aoe(timeout);
+    // Note that we need routing=false so that the vector store will use
+    // the specific index_name chosen by the user, and not route the request
+    // to a different index on the same column just because it's newer
+    // (which is what CQL wants).
     auto pkeys_result = co_await _vsc.ann(
             base_schema->ks_name(), std::string(index_name), base_schema,
-            std::move(search_vec), topk, pre_filter, aoe.abort_source());
+            std::move(search_vec), topk, pre_filter, aoe.abort_source(), /*routing=*/false);
     if (!pkeys_result.has_value()) {
         const sstring error_msg = std::visit(vector_search::error_visitor{}, pkeys_result.error());
         co_return api_error::validation(error_msg);

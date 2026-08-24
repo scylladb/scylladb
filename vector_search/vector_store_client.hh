@@ -107,8 +107,16 @@ public:
     /// the similarity score returned by the vector store, which sorts the
     /// results in decreasing similarity order (higher similarity score = more
     /// similar).
-    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as)
-            -> future<std::expected<primary_keys, ann_error>>;
+    ///
+    /// If `routing` is true (the default), the vector store may serve the
+    /// request from a different, better-matching index on the same column
+    /// than the one named by `name` - this is what CQL relies on, since it
+    /// has no way to pick between several indexes on the same column. Pass
+    /// `false` when the caller (e.g. Alternator, which lets the user name
+    /// the exact index to query) must not have its choice of index
+    /// second-guessed.
+    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as,
+            bool routing = true) -> future<std::expected<primary_keys, ann_error>>;
 
     /// Request the vector store service for the primary keys of the top
     /// full-text search results. Each returned primary_key has its similarity
