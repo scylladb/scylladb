@@ -693,6 +693,94 @@ async def test_tablet_split(manager: ManagerClient, injection_error: str):
         await s1_log.wait_for(f"{injection_error}: released", from_mark=s1_mark)
         await compaction_task
 
+# A node which is down invalidates the whole load stats collection, so no table has an average
+# tablet size and none of them is put in a resize plan. That is right for a node which will answer
+# again, and wrong for one which has been excluded, since excluding declares it gone for good and
+# bans it from rejoining.
+#
+# What hides the difference most of the time is the coordinator falling back on the answer it
+# collected from that node earlier. So kill the coordinator, which leaves the cluster with one that
+# has nothing cached for the dead node - the state an operator reaches excludenode in - and check
+# that the split goes through once the exclusion lands.
+#
+# Both moments at which the node can be lost are covered, because they differ in what being stuck
+# costs. Before the decision is emitted, nothing is planned and the table merely keeps tablets which
+# are larger than they should be. After it, the replicas have put every storage group of the table
+# in split mode - two extra compaction groups apiece, which only applying the split takes back down
+# - so a split which can never be finalized leaves them carrying that for good.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize("split_in_flight", [False, True])
+async def test_tablet_split_with_excluded_node(manager: ManagerClient, split_in_flight: bool):
+    logger.info("Bootstrapping cluster")
+    cmdline = ['--logger-log-level', 'storage_service=debug']
+    servers = await manager.servers_add(3, config={'tablet_load_stats_refresh_interval_in_seconds': 1},
+                                        cmdline=cmdline, auto_rack_dc='dc1')
+    cql = manager.get_cql()
+    host_ids = await asyncio.gather(*[manager.get_host_id(s.server_id) for s in servers])
+    injection = 'tablet_resize_finalization_postpone'
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
+            " AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        keys = range(256)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+        for s in servers:
+            await manager.api.flush_keyspace(s.ip_addr, ks)
+
+        coordinator_host_id = await get_topology_coordinator(manager)
+        victim = [s for s, hid in zip(servers, host_ids) if str(hid) == str(coordinator_host_id)][0]
+        victim_host_id = [hid for s, hid in zip(servers, host_ids) if s.server_id == victim.server_id][0]
+        survivors = [s for s in servers if s.server_id != victim.server_id]
+        logs = [await manager.server_open_log(s.server_id) for s in survivors]
+        marks = [await log.mark() for log in logs]
+
+        if split_in_flight:
+            # Holds the finalization alone, so the decision is emitted and the replicas do their
+            # split work for it before the kill lands.
+            for s in servers:
+                await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
+        else:
+            # Holds the whole balancer, so its first look at the table is the one which already has
+            # to plan around the excluded node.
+            await manager.disable_tablet_balancing()
+
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 2}}")
+
+        if split_in_flight:
+            for log, mark in zip(logs, marks):
+                await log.wait_for("are split ready", from_mark=mark)
+
+        logger.info(f"Killing the topology coordinator {victim.server_id}")
+        await manager.server_stop(victim.server_id, convict=True)
+        for s in survivors:
+            await manager.server_not_sees_other_server(s.ip_addr, victim.ip_addr)
+
+        async def surviving_coordinator():
+            try:
+                hid = await get_topology_coordinator(manager)
+            except Exception as e:
+                logger.info(f"Still no coordinator to ask: {e}")
+                return None
+            return hid if str(hid) != str(victim_host_id) else None
+        await wait_for(surviving_coordinator, time.time() + 120)
+
+        # Let the balancer run again. It still cannot get anywhere, since the node it is missing
+        # stats for is only dead so far, not excluded.
+        if split_in_flight:
+            for s in survivors:
+                await manager.api.disable_injection(s.ip_addr, injection)
+        else:
+            await manager.enable_tablet_balancing()
+        assert await get_tablet_count(manager, survivors[0], ks, 'test') == 1
+
+        logger.info(f"Excluding {victim.server_id}")
+        await manager.api.exclude_node(survivors[0].ip_addr, [victim_host_id])
+
+        async def split_done():
+            return True if await get_tablet_count(manager, survivors[0], ks, 'test') == 2 else None
+        await wait_for(split_done, time.time() + 300)
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_correctness_of_tablet_split_finalization_after_restart(manager: ManagerClient):
     logger.info("Bootstrapping cluster")

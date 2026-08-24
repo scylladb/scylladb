@@ -4765,6 +4765,14 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
 
             locator::load_stats node_stats;
             if (!_gossiper.is_alive(dst)) {
+                if (is_excluded(dst_server)) {
+                    // An excluded node is banned from rejoining, so its stats are never coming back
+                    // and waiting for them only keeps the collection invalid. The split-ready
+                    // sequence number is a minimum over the nodes which did report, so the
+                    // survivors alone can carry a resize past a node which will never answer.
+                    rtlogger.debug("raft topology: Not refreshing table load on {} because it is excluded.", dst);
+                    co_return;
+                }
                 if (require == require_live_nodes::no && _load_stats_per_node.contains(dst) &&
                         !utils::get_local_injector().enter("force_down_node_load_stats_invalid")) {
                     node_stats = _load_stats_per_node[dst];
@@ -4804,7 +4812,11 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
         size_t reporting_replicas = 0;
         for (const auto& tinfo : tmap.tablets()) {
             co_await coroutine::maybe_yield();
-            reporting_replicas += tinfo.replicas.size();
+            for (const auto& r : tinfo.replicas) {
+                if (!is_excluded(raft::server_id(r.host.uuid()))) {
+                    ++reporting_replicas;
+                }
+            }
         }
         if (!reporting_replicas) {
             continue;
