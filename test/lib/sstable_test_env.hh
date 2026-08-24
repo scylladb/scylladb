@@ -111,6 +111,12 @@ public:
     void set_scrub_period(std::chrono::seconds period);
 
     void trigger_auto_scrub_timer();
+    std::optional<lowres_clock::time_point> next_automatic_scrub() const;
+    void set_automatic_scrub_timer_expiration(lowres_clock::time_point timestamp);
+
+    std::unordered_map<compaction::compaction_group_view*, compaction::compaction_state>& get_compaction_state() {
+        return _cm._compaction_state;
+    }
 };
 
 struct test_env_config {
