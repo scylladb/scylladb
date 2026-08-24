@@ -659,11 +659,25 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
             // Add SearchSchema attribute types to AttributeDefinitions
             // just like base-table and GSI/LSI key attribute types above:
             key_attribute_types.insert(ss_info.attribute_types.begin(), ss_info.attribute_types.end());
-            // Always return a Projection. Currently only KEYS_ONLY is
-            // supported, so we always return that.
+            // Recover exact "Projection" (ProjectionType and NonKeyAttributes)
+            // requested at index creation time, from the index's option
+            // "alternator_non_key_attributes".
             rjson::value projection = rjson::empty_object();
-            rjson::add(projection, "ProjectionType", "KEYS_ONLY");
+            std::optional<std::vector<std::string>> non_key_attributes = get_vector_index_non_key_attributes(im);
+            if (!non_key_attributes) {
+                rjson::add(projection, "ProjectionType", "KEYS_ONLY");
+            } else if (non_key_attributes->empty()) {
+                rjson::add(projection, "ProjectionType", "ALL");
+            } else {
+                rjson::add(projection, "ProjectionType", "INCLUDE");
+                rjson::value non_key_attributes_json = rjson::empty_array();
+                for (const std::string& attr : *non_key_attributes) {
+                    rjson::push_back(non_key_attributes_json, rjson::from_string(attr));
+                }
+                rjson::add(projection, "NonKeyAttributes", std::move(non_key_attributes_json));
+            }
             rjson::add(entry, "Projection", std::move(projection));
+
             auto sf_it = opts.find("similarity_function");
             if (sf_it != opts.end()) {
                 rjson::add(entry, "DistanceFunction", rjson::from_string(sf_it->second));
@@ -1598,9 +1612,30 @@ static std::map<sstring, sstring> make_gsi_tags(
 }
 
 // Validates the mandatory "Projection" field from a VectorIndexes or
-// VectorIndexUpdates entry. Currently only ProjectionType=KEYS_ONLY is
-// supported. The index_name is used in error messages.
-static void validate_projection(const rjson::value& json, std::string_view index_name) {
+// VectorIndexUpdates entry. ProjectionType must be one of KEYS_ONLY, ALL or
+// INCLUDE (case-sensitive). NonKeyAttributes is only allowed - and
+// mandatory - when ProjectionType is INCLUDE: it lists additional
+// attributes to project, must be a non-empty array of legal attribute
+// names, and (excluding the base table's key columns, which are always
+// projected regardless of whether they are listed).
+// Despite the name "NonKeyAttributes", key columns are not forbidden in
+// this list (but will be projected in any case). Similarly, attributes
+// already in SearchSchema may or may not be listed in NonKeyAttributes,
+// they will be projected in any case. However, duplicate attribute names in
+// NonKeyAttributes itself are forbidden.
+//
+// Alternator does *not* enforce DynamoDB's limit on the number of these
+// attributes: DynamoDB's limit is 20 total projected attributes, but the
+// vector attribute itself (despite not really being projected) is counted
+// so the actual limit is 19. The number 19 does not include key columns.
+//
+// The return value encodes the validated ProjectionType together with
+// NonKeyAttributes (if any), in the same nullopt/empty/non-empty
+// convention used by build_vector_index_non_key_attributes() and
+// get_vector_index_non_key_attributes(): nullopt means KEYS_ONLY, an empty
+// vector means ALL, and a non-empty vector means INCLUDE with these
+// NonKeyAttributes.
+static std::optional<std::vector<std::string>> validate_projection(const rjson::value& json, std::string_view index_name) {
     const rjson::value* projection_v = rjson::find(json, "Projection");
     if (!projection_v) {
         throw api_error::validation(fmt::format("Missing Projection for vector index {}", index_name));
@@ -1609,11 +1644,50 @@ static void validate_projection(const rjson::value& json, std::string_view index
         throw api_error::validation(fmt::format("Projection for vector index {} must be an object.", index_name));
     }
     const rjson::value* projection_type_v = rjson::find(*projection_v, "ProjectionType");
-    if (!projection_type_v || !projection_type_v->IsString() ||
-            rjson::to_string_view(*projection_type_v) != "KEYS_ONLY") {
-        throw api_error::validation(fmt::format(
-            "Projection for vector index {}: only ProjectionType=KEYS_ONLY is currently supported.", index_name));
+    if (!projection_type_v || !projection_type_v->IsString()) {
+        throw api_error::validation(fmt::format("Missing ProjectionType for vector index {}", index_name));
     }
+    std::string_view projection_type = rjson::to_string_view(*projection_type_v);
+    const rjson::value* non_key_attributes_v = rjson::find(*projection_v, "NonKeyAttributes");
+    if (projection_type != "INCLUDE") {
+        if (non_key_attributes_v) {
+            throw api_error::validation(fmt::format(
+                "NonKeyAttributes for vector index {} is only allowed when ProjectionType is INCLUDE.", index_name));
+        }
+        if (projection_type == "ALL") {
+            return std::vector<std::string>(); // ALL, nothing more to validate
+        }
+        if (projection_type != "KEYS_ONLY") {
+            throw api_error::validation(fmt::format(
+                "ProjectionType '{}' is not valid for vector index {}. Valid values are: KEYS_ONLY, ALL, INCLUDE.",
+                projection_type, index_name));
+        }
+        return std::nullopt; // KEYS_ONLY, nothing more to validate
+    }
+    // Continue validation for INCLUDE
+    if (!non_key_attributes_v) {
+        throw api_error::validation(fmt::format(
+            "Missing NonKeyAttributes for vector index {} with ProjectionType=INCLUDE.", index_name));
+    }
+    if (!non_key_attributes_v->IsArray() || non_key_attributes_v->Empty()) {
+        throw api_error::validation(fmt::format(
+            "NonKeyAttributes for vector index {} must be a non-empty array.", index_name));
+    }
+    std::vector<std::string> non_key_attributes;
+    for (const rjson::value& attr : non_key_attributes_v->GetArray()) {
+        if (!attr.IsString()) {
+            throw api_error::validation(fmt::format(
+                "NonKeyAttributes for vector index {} must have string elements.", index_name));
+        }
+        std::string_view attr_name = rjson::to_string_view(attr);
+        validate_attr_name_length("NonKeyAttributes", attr_name.size(), /*is_key=*/false);
+        if (std::ranges::contains(non_key_attributes, attr_name)) {
+            throw api_error::validation(fmt::format(
+                "Duplicate NonKeyAttributes attribute '{}' for vector index {}.", attr_name, index_name));
+        }
+        non_key_attributes.emplace_back(attr_name);
+    }
+    return non_key_attributes;
 }
 
 // Validates the optional "SearchSchema" field of a VectorIndexes
@@ -1643,6 +1717,7 @@ static search_schema_info validate_search_schema(
         throw api_error::validation(fmt::format(
             "SearchSchema for vector index {} must be a non-empty array.", index_name));
     }
+    std::unordered_set<std::string_view> seen_attributes;
     for (const rjson::value& elem : search_schema_v->GetArray()) {
         if (!elem.IsObject()) {
             throw api_error::validation(fmt::format(
@@ -1655,6 +1730,10 @@ static search_schema_info validate_search_schema(
         }
         std::string_view attribute_name = rjson::to_string_view(*attribute_name_v);
         validate_attr_name_length(index_name, attribute_name.size(), /*is_key=*/true, "AttributeName ");
+        if (!seen_attributes.insert(attribute_name).second) {
+            throw api_error::validation(fmt::format(
+                "Duplicate SearchSchema attribute '{}' for vector index {}.", attribute_name, index_name));
+        }
         const rjson::value* type_v = rjson::find(elem, "SearchSchemaElementType");
         if (!type_v || !type_v->IsString()) {
             throw api_error::validation(fmt::format(
@@ -1701,31 +1780,46 @@ static search_schema_info validate_search_schema(
 // Builds the value of a vector index's "target" index-option (the same
 // option, and the same JSON encoding, used by CQL vector indexes - see
 // secondary_index::vector_index::serialize_targets()) out of the vector
-// attribute's name and a search_schema_info gathered by
-// validate_search_schema() above. This "target" is what tells the vector
-// store which attribute is the vector column ("tc"), which one (if any)
-// is this local index's key - SearchSchema's HASH attribute ("pk") - and
-// which ones are usable for filtering - SearchSchema's INLINE_FILTER
-// attributes ("fc").
-// The function get_search_schema_info() parses what this function and
-// build_vector_index_alternator_attribute_types() below write.
-static std::string build_vector_index_target(std::string_view vector_attribute, const search_schema_info& info) {
-    if (!info.hash_attribute && info.inline_filter_attributes.empty()) {
-        // When there is no HASH or INLINE_FILTER attribute at all, keep the
-        // simple plain-string encoding (just the vector attribute's name) that
-        // vector indexes without a SearchSchema have always used.
+// attribute's name, the SearchSchema (search_schema_info parsed by
+// validate_search_schema()) and the Projection (extra_fc_attributes
+// returned by compute_extra_fc_attributes()).
+//
+// The "target" that we return is JSON with three components which tell
+// the vector store what to index:
+//  "tc" - which attribute is the vector column
+//  "pk" - which one (if any) is this local index's key, i.e., SearchSchema's
+//         HASH attribute ("pk")
+//  "fc" - which attributes are usable for filtering (SearchSchema's
+//         INLINE_FILTER) or projection (Projection's NonKeyAttributes).
+//
+// extra_fc_attributes are additional attribute names to add to "fc" beyond
+// SearchSchema's own INLINE_FILTER attributes - attributes that the user
+// asked to be projected but not filterable.
+static std::string build_vector_index_target(std::string_view vector_attribute,
+        const search_schema_info& info,
+        const std::vector<std::string>& extra_fc_attributes = {}) {
+    if (!info.hash_attribute && info.inline_filter_attributes.empty() && extra_fc_attributes.empty()) {
+        // When there are no projected attributes at all, we can use a simple
+        // plain-string encoding (just the vector attribute's name) instead
+        // of JSON.
         return std::string(vector_attribute);
     }
+    // If we do need to encode pk or fc, we do need to use the JSON format:
     rjson::value target = rjson::empty_object();
     rjson::add(target, "tc", rjson::from_string(vector_attribute));
     if (info.hash_attribute) {
+        // DynamoDB allows just a single hash_attribute, but the vector
+        // store still expects "pk" to be an array.
         rjson::value pk = rjson::empty_array();
         rjson::push_back(pk, rjson::from_string(*info.hash_attribute));
         rjson::add(target, "pk", std::move(pk));
     }
-    if (!info.inline_filter_attributes.empty()) {
+    if (!info.inline_filter_attributes.empty() || !extra_fc_attributes.empty()) {
         rjson::value fc = rjson::empty_array();
         for (const std::string& attr : info.inline_filter_attributes) {
+            rjson::push_back(fc, rjson::from_string(attr));
+        }
+        for (const std::string& attr : extra_fc_attributes) {
             rjson::push_back(fc, rjson::from_string(attr));
         }
         rjson::add(target, "fc", std::move(fc));
@@ -1733,19 +1827,61 @@ static std::string build_vector_index_target(std::string_view vector_attribute, 
     return rjson::print(target);
 }
 
+// Compute the extra "fc" (filtering columns) entries to add to a vector
+// index's "target" for the sake of its Projection, on top of SearchSchema's
+// own HASH/INLINE_FILTER attributes: every NonKeyAttributes name (from an
+// INCLUDE projection) not already covered by SearchSchema or by the base
+// table's key columns.
+// Adding these to "fc" makes the vector store store the value of these
+// attributes alongside the vector, so they can be included into SearchVectors
+// results without needing to look them up in the base table.
+//
+// ProjectionType=ALL is not handled here - it has no finite list of attribute
+// names to add here (an item can contain arbitrary attributes), so if we
+// want the vector store to store *ALL* attributes of each item, we'll need
+// to invent a different way to communicate this - right now this is not
+// implemented. Instead, currently SearchVectors works, but *inefficiently*,
+// when ProjectionType=ALL - it gets only the key attributes from the vector
+// index, and uses them to read the full items from the base table
+static std::vector<std::string> compute_extra_fc_attributes(
+        const std::optional<std::vector<std::string>>& projection,
+        const search_schema_info& ss_info,
+        std::string_view hash_key,
+        std::string_view range_key) {
+    std::vector<std::string> extra;
+    if (!projection) {
+        return extra;
+    }
+    for (const std::string& attr : *projection) {
+        if (attr == hash_key || (!range_key.empty() && attr == range_key)) {
+            continue;
+        }
+        if (ss_info.hash_attribute && *ss_info.hash_attribute == attr) {
+            continue;
+        }
+        if (std::ranges::contains(ss_info.inline_filter_attributes, attr)) {
+            continue;
+        }
+        extra.push_back(attr);
+    }
+    return extra;
+}
+
 // Encode in the vector index's "alternator_attribute_types" index option a map
 // (encoded in JSON) from each of its SearchSchema attributes (HASH and
 // INLINE_FILTER combined) to its declared AttributeType (S, N or B), out of
 // a search_schema_info gathered by validate_search_schema() above.
 // This is an Alternator-only option - it has no equivalent in CQL vector
-// indexes. There are three reasons why we need to save this information
-// in the index:
-// 1. The DynamoDB API requires that we be able to recover this information
+// indexes - but the vector store needs it: There are three reasons why we
+// need to save this information in the index:
+// 1. The vector store holds a typed array of the values of each filterable
+//    columns, so needs to know this type when creating the index. In CQL,
+//    the vector store gets this type from the CQL schema of the table.
+//    This search_schema_info is the alternative.
+// 2. The DynamoDB API requires that we be able to recover this information
 //    on DescribeTable.
-// 2. The DynamoDB API also wants us to reject writes with the wrong type in
+// 3. The DynamoDB API also wants us to reject writes with the wrong type in
 //    SearchSchema attributes.
-// 3. The vector store holds a typed array of the values of each filterable
-//    columns, so needs to know this type when creating the index.
 // Returns an empty string if there is no SearchSchema at all.
 static std::string build_vector_index_alternator_attribute_types(const search_schema_info& info) {
     if (info.attribute_types.empty()) {
@@ -1756,6 +1892,26 @@ static std::string build_vector_index_alternator_attribute_types(const search_sc
         rjson::add_with_string_name(types, name, rjson::from_string(type));
     }
     return rjson::print(types);
+}
+
+// Encode in the vector index's "alternator_non_key_attributes" index option
+// the information needed to recover its Projection at DescribeTable time,
+// out of the value returned by validate_projection() above: nullopt (for
+// ProjectionType=KEYS_ONLY) doesn't set this option all. An empty vector
+// (ProjectionType=ALL) or non-empty vector (ProjectionType=INCLUDE) is
+// encoded as a JSON array, stored exactly as given - it is not deduplicated
+// against SearchSchema or key attributes, since DynamoDB doesn't do that
+// either. This is an Alternator-only option: unlike "target" and
+// "alternator_attribute_types", the vector store never needs to read it.
+static std::optional<std::string> build_vector_index_non_key_attributes(const std::optional<std::vector<std::string>>& projection) {
+    if (!projection) {
+        return std::nullopt;
+    }
+    rjson::value arr = rjson::empty_array();
+    for (const std::string& attr : *projection) {
+        rjson::push_back(arr, rjson::from_string(attr));
+    }
+    return rjson::print(arr);
 }
 
 future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization,
@@ -1978,15 +2134,19 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
                     attribute_name, dimensions_it->second, dimensions));
             }
             std::string distance_function = get_distance_function(v, index_name);
-            validate_projection(v, index_name);
+            std::optional<std::vector<std::string>> projection = validate_projection(v, index_name);
             search_schema_info ss_info = validate_search_schema(v, index_name, *attribute_definitions, unused_attribute_definitions);
+            std::vector<std::string> extra_fc_attributes = compute_extra_fc_attributes(projection, ss_info, hash_key, range_key);
             // Add a vector index metadata entry to the base table schema.
             index_options_map index_options;
             index_options[db::index::secondary_index::custom_class_option_name] = "vector_index";
-            index_options[cql3::statements::index_target::target_option_name] = build_vector_index_target(attribute_name, ss_info);
+            index_options[cql3::statements::index_target::target_option_name] = build_vector_index_target(attribute_name, ss_info, extra_fc_attributes);
             std::string alternator_attribute_types = build_vector_index_alternator_attribute_types(ss_info);
             if (!alternator_attribute_types.empty()) {
                 index_options["alternator_attribute_types"] = alternator_attribute_types;
+            }
+            if (std::optional<std::string> non_key_attributes = build_vector_index_non_key_attributes(projection)) {
+                index_options["alternator_non_key_attributes"] = std::move(*non_key_attributes);
             }
             index_options["dimensions"] = std::to_string(dimensions);
             index_options["similarity_function"] = distance_function;
@@ -2476,7 +2636,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         }
                     }
                     std::string distance_function = get_distance_function(it->value, index_name);
-                    validate_projection(it->value, index_name);
+                    std::optional<std::vector<std::string>> projection = validate_projection(it->value, index_name);
                     // Validate an optional SearchSchema, just like in
                     // CreateTable's VectorIndexes. If present, the attributes
                     // it references must be declared in a top-level
@@ -2504,12 +2664,22 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                     // A vector index will use CDC on this table, so the CDC
                     // log table name will need to fit our length limits
                     validate_cdc_log_name_length(builder.cf_name());
+                    // An Alternator base table always has exactly one
+                    // partition-key (hash) column and at most one
+                    // clustering-key (range) column:
+                    std::string_view hash_key = tab->partition_key_columns().front().name_as_text();
+                    std::string_view range_key = tab->clustering_key_size() > 0 ?
+                        std::string_view(tab->clustering_key_columns().front().name_as_text()) : std::string_view();
+                    std::vector<std::string> extra_fc_attributes = compute_extra_fc_attributes(projection, ss_info, hash_key, range_key);
                     index_options_map index_options;
                     index_options[db::index::secondary_index::custom_class_option_name] = "vector_index";
-                    index_options[cql3::statements::index_target::target_option_name] = build_vector_index_target(attribute_name, ss_info);
+                    index_options[cql3::statements::index_target::target_option_name] = build_vector_index_target(attribute_name, ss_info, extra_fc_attributes);
                     std::string alternator_attribute_types = build_vector_index_alternator_attribute_types(ss_info);
                     if (!alternator_attribute_types.empty()) {
                         index_options["alternator_attribute_types"] = alternator_attribute_types;
+                    }
+                    if (std::optional<std::string> non_key_attributes = build_vector_index_non_key_attributes(projection)) {
+                        index_options["alternator_non_key_attributes"] = std::move(*non_key_attributes);
                     }
                     index_options["dimensions"] = std::to_string(dimensions);
                     index_options["similarity_function"] = distance_function;
