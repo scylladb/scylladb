@@ -9,10 +9,12 @@
 #pragma once
 
 #include <memory>
+#include <variant>
 #include <seastar/core/shared_ptr.hh>
 #include "sstables/abstract_index_reader.hh"
 #include "sstables/framed_chunk.hh"
 #include "utils/assert.hh"
+#include "sstables/sstable_position.hh"
 
 namespace sstables {
     class file_writer;
@@ -57,6 +59,39 @@ struct bti_partitions_db_footer {
     sstables::key last_key;
     uint64_t partition_count;
     uint64_t trie_root_position;
+};
+
+// A position within Rows.db, pointing at a partition's row index header.
+// Unlike a Data.db position, it has no logical/physical distinction and no chunk
+// coordinates -- it is a plain offset into Rows.db -- so it is its own named type
+// rather than an sstable_position.
+struct rows_db_position {
+    uint64_t value;
+};
+
+// The location a BTI partition index entry points to. It is either the partition
+// itself in Data.db (an sstable_position), or the partition's row index
+// header in Rows.db (a rows_db_position), when the partition has an intra-partition
+// index.
+//
+// On disk the two cases are distinguished by the sign of the serialized position:
+// Data.db positions are serialized bit-negated. That negation is purely a
+// serialization detail applied by `bti_partition_index_writer`; the positions here
+// hold the plain, non-negated coordinate.
+struct bti_partition_index_target {
+    bti_partition_index_target(sstable_position pos) noexcept : _value(pos) {}
+    bti_partition_index_target(rows_db_position pos) noexcept : _value(pos) {}
+
+    // The partition start in Data.db, or nullptr if the target is in Rows.db.
+    const sstable_position* data_db() const noexcept {
+        return std::get_if<sstable_position>(&_value);
+    }
+    // The row index header in Rows.db, or nullptr if the target is in Data.db.
+    const rows_db_position* rows_db() const noexcept {
+        return std::get_if<rows_db_position>(&_value);
+    }
+private:
+    std::variant<sstable_position, rows_db_position> _value;
 };
 
 // The bit layout of the packed (block count, offset within chunk) fields in
@@ -147,7 +182,7 @@ public:
     ~bti_partition_index_writer() noexcept;
     explicit operator bool() const noexcept { return bool(_impl); }
     // Add a new partition key to the index.
-    void add(const schema&, dht::decorated_key, const utils::hashed_key&, int64_t data_or_rowsdb_file_pos);
+    void add(const schema&, dht::decorated_key, const utils::hashed_key&, bti_partition_index_target pos);
     // Flushes all remaining contents, and returns the position of the root node in the output stream.
     // If add() was never called, returns -1.
     // The writer mustn't be used again after this.
@@ -171,7 +206,7 @@ public:
     // The trie will be written to the given file writer.
     // Note: the file doesn't have to be empty,
     // and it can be extended later.
-    explicit bti_row_index_writer(sstables::file_writer&);
+    explicit bti_row_index_writer(sstable_version_types, sstables::file_writer&);
     bti_row_index_writer(bti_row_index_writer&&) noexcept;
     bti_row_index_writer& operator=(bti_row_index_writer&&) noexcept;
     explicit operator bool() const noexcept { return bool(_impl); }
@@ -182,7 +217,7 @@ public:
         const schema& s,
         const sstables::clustering_info& first_ck,
         const sstables::clustering_info& last_ck,
-        uint64_t offset_from_partition_start,
+        sstable_position_offset offset_from_partition_start,
         const sstables::deletion_time& range_tombstone_before_first_ck);
     // Flushes all remaining contents, and returns the position of the root node in the output stream.
     // If add() was never called, returns -1.
@@ -198,11 +233,10 @@ public:
     // `partition_data_end` is the position of the END_OF_PARTITION flag byte in Data.db,
     // which lies 1 byte before the start of the next partition.
     // So `partition_data_end` is *NOT* the start position of the next partition.
-    int64_t finish(
-        sstable_version_types,
+    bti_partition_index_target finish(
         const schema&,
-        int64_t partition_data_start,
-        int64_t partition_data_end,
+        sstable_position partition_data_start,
+        sstable_position partition_data_end,
         const sstables::key&,
         const sstables::deletion_time& partition_tombstone);
 };
@@ -221,3 +255,14 @@ std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
     tracing::trace_state_ptr);
 
 } // namespace sstables::trie
+
+template <>
+struct fmt::formatter<sstables::trie::bti_partition_index_target> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const sstables::trie::bti_partition_index_target& t, fmt::format_context& ctx) const {
+        if (auto* rows_pos = t.rows_db()) {
+            return fmt::format_to(ctx.out(), "rows_db:{}", rows_pos->value);
+        }
+        return fmt::format_to(ctx.out(), "data_db:{}", *t.data_db());
+    }
+};

@@ -37,7 +37,8 @@ struct row_index_header_parser : public data_consumer::continuous_data_consumer<
     using processing_result = data_consumer::processing_result;
     using proceed = data_consumer::proceed;
 
-    row_index_header _result;
+    // do_process_state() sets data_file_position before parsing can finish.
+    row_index_header _result{.data_file_position = sstable_position::from_logical(0)};
     bool _finished = false;
     temporary_buffer<char> _pk;
     temporary_buffer<char>* _processing_data = nullptr;
@@ -70,8 +71,8 @@ struct row_index_header_parser : public data_consumer::continuous_data_consumer<
         uint64_t trie_root_delta_base = this->position().to_logical() - (*_processing_data).size();
         expensive_log("row_index_header_parser: reading unsigned vint for data file offset, delta_base={}", trie_root_delta_base);
         co_yield this->read_unsigned_vint(*_processing_data);
-        _result.data_file_offset = this->_u64;
-        expensive_log("row_index_header_parser: read data file offset={}", _result.data_file_offset);
+        _result.data_file_position = sstable_position::from_logical(this->_u64);
+        expensive_log("row_index_header_parser: read data file offset={}", _result.data_file_position);
 
         // This vint is the offset from the root of the intra-partition index
         // to the start of the previous vint.
@@ -146,7 +147,7 @@ future<row_index_header> read_row_index_header(input_stream<char>&& input, uint6
     try {
         co_await ctx.consume_input();
         co_await ctx.close();
-        expensive_log("read_row_index_header result={}", ctx._result.data_file_offset);
+        expensive_log("read_row_index_header result={}", ctx._result.data_file_position);
         co_return std::move(ctx._result);
     } catch (...) {
         ex = std::current_exception();
@@ -603,11 +604,11 @@ uint64_t index_cursor::data_file_pos(uint64_t file_size) const {
     expensive_assert(_partition_cursor.initialized());
     if (_partition_metadata) {
         if (!_row_cursor.initialized()) {
-            expensive_log("index_cursor::data_file_pos this={} from empty row cursor: {}", fmt::ptr(this), _partition_metadata->data_file_offset);
-            return _partition_metadata->data_file_offset;
+            expensive_log("index_cursor::data_file_pos this={} from empty row cursor: {}", fmt::ptr(this), _partition_metadata->data_file_position);
+            return _partition_metadata->data_file_position.to_logical();
         }
         const auto p = _row_cursor.payload();
-        auto res = _partition_metadata->data_file_offset + row_payload_to_offset(p);
+        auto res = _partition_metadata->data_file_position.to_logical() + row_payload_to_offset(p);
         expensive_log("index_cursor::data_file_pos this={} from row cursor: {} bytes={} bits={}", fmt::ptr(this), res, fmt_hex(p.bytes), p.bits & 0x7);
         return res;
     }

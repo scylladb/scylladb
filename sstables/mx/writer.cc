@@ -1015,7 +1015,7 @@ void writer::init_file_writers() {
     if (_sst.has_component(component_type::Partitions) && _sst.has_component(component_type::Rows)) {
         out = _sst._storage->make_data_or_index_sink(_sst, component_type::Rows).get();
         _rows_writer = std::make_unique<crc32_digest_file_writer>(std::move(out), _sst.sstable_buffer_size, component_name(_sst, component_type::Rows));
-        _bti_row_index_writer = trie::bti_row_index_writer(*_rows_writer);
+        _bti_row_index_writer = trie::bti_row_index_writer(_sst.get_version(), *_rows_writer);
         out = _sst._storage->make_data_or_index_sink(_sst, component_type::Partitions).get();
         _partitions_writer = std::make_unique<crc32_digest_file_writer>(std::move(out), _sst.sstable_buffer_size, component_name(_sst, component_type::Partitions));
         _bti_partition_index_writer = trie::bti_partition_index_writer(_sst.get_version(), *_partitions_writer);
@@ -1675,7 +1675,7 @@ void writer::write_pi_block(const pi_block& block) {
             _schema,
             block.first,
             block.last,
-            block.offset,
+            sstable_position_offset::from_logical(block.offset),
             to_deletion_time(block.preceding_range_tombstone)
         );
     }
@@ -1763,10 +1763,9 @@ stop_iteration writer::consume_end_of_partition() {
 
     if (_bti_partition_index_writer) {
         auto partitions_db_payload = _bti_row_index_writer->finish(
-            _sst.get_version(),
             _schema,
-            _current_partition_position,
-            end_of_partition_position,
+            sstable_position::from_logical(_current_partition_position),
+            sstable_position::from_logical(end_of_partition_position),
             *_partition_key,
             _pi_write_m.partition_tombstone
         );
