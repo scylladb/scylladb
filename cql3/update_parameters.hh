@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include <unordered_map>
+
 #include "gc_clock.hh"
 #include "mutation/timestamp.hh"
 #include "schema/schema_fwd.hh"
@@ -20,6 +22,7 @@
 #include "cql3/selection/selection.hh"
 #include "query/query-request.hh"
 #include "query/query-result.hh"
+#include "utils/hash.hh"
 
 namespace cql3 {
 
@@ -40,26 +43,28 @@ public:
     // 3) rows of CAS result set.
     struct prefetch_data {
         using key = std::pair<partition_key, clustering_key>;
-        using key_view = std::pair<const partition_key&, const clustering_key&>;
-        struct key_less {
-            partition_key::tri_compare pk_cmp;
-            clustering_key::tri_compare ck_cmp;
+        struct key_hash {
+            partition_key::hashing pk_hash;
+            clustering_key::hashing ck_hash;
 
-            key_less(const schema& s)
-                : pk_cmp(s)
-                , ck_cmp(s)
+            key_hash(const schema& s)
+                : pk_hash(s)
+                , ck_hash(s)
             { }
-            std::strong_ordering tri_compare(const partition_key& pk1, const clustering_key& ck1,
-                    const partition_key& pk2, const clustering_key& ck2) const {
-
-                std::strong_ordering rc = pk_cmp(pk1, pk2);
-                return rc != 0 ? rc : ck_cmp(ck1, ck2);
+            size_t operator()(const key& k) const {
+                return utils::hash_combine(pk_hash(k.first), ck_hash(k.second));
             }
-            // Allow mixing std::pair<partition_key, clustering_key> and
-            // std::pair<const partition_key&, const clustering_key&> during lookup
-            template <typename Pair1, typename Pair2>
-            bool operator()(const Pair1& k1, const Pair2& k2) const {
-                return  tri_compare(k1.first, k1.second, k2.first, k2.second) < 0;
+        };
+        struct key_equal {
+            partition_key::equality pk_eq;
+            clustering_key::equality ck_eq;
+
+            key_equal(const schema& s)
+                : pk_eq(s)
+                , ck_eq(s)
+            { }
+            bool operator()(const key& k1, const key& k2) const {
+                return pk_eq(k1.first, k2.first) && ck_eq(k1.second, k2.second);
             }
         };
     public:
@@ -72,9 +77,11 @@ public:
                 return has_static;
             }
         };
-        // Use an ordered map since CAS result set must be naturally ordered
-        // when returned to the client.
-        std::map<key, row, key_less> rows;
+        // Rows are only ever looked up by their exact full primary key
+        // (see find_row()), the container is never iterated, so an unordered
+        // map is enough. Note that the CAS result set is ordered by iterating
+        // the statements of the CAS request, not this map.
+        std::unordered_map<key, row, key_hash, key_equal> rows;
         schema_ptr schema;
         shared_ptr<cql3::selection::selection> selection;
     public:
