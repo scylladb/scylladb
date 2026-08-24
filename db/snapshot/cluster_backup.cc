@@ -524,7 +524,7 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
                     }
                 } catch (...) {
                     error = true; // we might have written parts
-                    snap_log.error("Error uploading {}: {}", component_name.native(), std::current_exception());
+                    snap_log.error("Error uploading {}: {:t}", component_name.native(), std::current_exception());
                     if (!p) {
                         p = std::current_exception();
                     }
@@ -537,7 +537,7 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
                     try {
                         co_await remove_file(component_name.native());
                     } catch (...) {
-                        snap_log.warn("Failed to remove {}: {}", component_name, std::current_exception());
+                        snap_log.warn("Failed to remove {}: {:t}", component_name, std::current_exception());
                     }
                 }
                 co_await utils::get_local_injector().inject("backup_task_pause", utils::wait_for_message(std::chrono::minutes(2)));
@@ -558,7 +558,7 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
                 info.sstable.state = use_move ? db::snapshot_state::remote : db::snapshot_state::remote_and_local;
                 co_await sth.insert_snapshot_sstables(tag, ksname, cfname, local.dc, local.rack, { info.sstable });
             } catch (...) {
-                snap_log.error("Error marking {} as uploaded: {}", id, std::current_exception());
+                snap_log.error("Error marking {} as uploaded: {:t}", id, std::current_exception());
             }
         });
 

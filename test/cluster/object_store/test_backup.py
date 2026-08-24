@@ -139,7 +139,7 @@ async def test_backup_with_non_existing_parameters(manager: ScyllaClusterManager
         assert status is not None
         assert status['state'] == 'failed'
         if ne_parameter == 'endpoint':
-            assert status['error'] == 'std::invalid_argument (endpoint no-such-endpoint not found)'
+            assert status['error'] == 'std::invalid_argument: endpoint no-such-endpoint not found'
 
 
 async def test_backup_endpoint_config_is_live_updateable(manager: ScyllaClusterManager, object_storage):
@@ -164,7 +164,7 @@ async def test_backup_endpoint_config_is_live_updateable(manager: ScyllaClusterM
         status = await manager.api.wait_task(server.ip_addr, tid)
         assert status is not None
         assert status['state'] == 'failed'
-        assert status['error'] == f'std::invalid_argument (endpoint {object_storage.address} not found)'
+        assert status['error'] == f'std::invalid_argument: endpoint {object_storage.address} not found'
 
         objconf = object_storage.create_endpoint_conf()
         await manager.server_update_config(server.server_id, 'object_storage_endpoints', objconf)
@@ -225,7 +225,7 @@ async def do_test_backup_abort(manager: ScyllaClusterManager, object_storage,
         status = await manager.api.wait_task(server.ip_addr, tid)
         print(f'Status: {status}')
         assert (status is not None) and (status['state'] == 'failed')
-        assert "seastar::abort_requested_exception (abort requested)" in status['error']
+        assert "seastar::abort_requested_exception: abort requested" in status['error']
 
         objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
         uploaded_count = 0

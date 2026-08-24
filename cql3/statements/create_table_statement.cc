@@ -466,7 +466,7 @@ create_table_statement::execute(query_processor& qp, service::query_state& state
         try {
             co_await qp.wait_for_table_raft_groups_on_all_hosts(cf.schema()->id(), lowres_clock::now() + state.get_client_state().get_timeout_config().other_timeout);
         } catch (...) {
-            result->add_warning(format("Failed to wait for raft groups of {}.{} to start on all hosts: {}", keyspace(), column_family(), std::current_exception()));
+            result->add_warning(format("Failed to wait for raft groups of {}.{} to start on all hosts: {:t}", keyspace(), column_family(), std::current_exception()));
         }
     }
 

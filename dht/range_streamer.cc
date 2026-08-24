@@ -309,7 +309,7 @@ future<> range_streamer::stream_async() {
                     }
                 } catch (...) {
                     auto t = std::chrono::duration_cast<std::chrono::duration<float>>(lowres_clock::now() - start_time).count();
-                    logger.warn("{} with {} for keyspace={} failed, took {} seconds: {}", description, source, keyspace, t, std::current_exception());
+                    logger.warn("{} with {} for keyspace={} failed, took {} seconds: {:t}", description, source, keyspace, t, std::current_exception());
                     throw;
                 }
                 auto t = std::chrono::duration_cast<std::chrono::duration<float>>(lowres_clock::now() - start_time).count();

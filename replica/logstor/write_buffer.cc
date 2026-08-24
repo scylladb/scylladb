@@ -416,7 +416,7 @@ void write_buffer_pool::return_buffer(write_buffer* wb, seastar::semaphore_units
         buf->reset();
         _free.push_back(std::move(buf));
     } catch (...) {
-        logstor_logger.error("Failed to return a write buffer, dropping it from the pool: {}", std::current_exception());
+        logstor_logger.error("Failed to return a write buffer, dropping it from the pool: {:t}", std::current_exception());
         drop_buffer(std::move(buf), pool_units);
     }
 }
@@ -814,7 +814,7 @@ future<> buffered_writer::consumer_loop() {
             co_await coroutine::maybe_yield();
         }
     } catch (...) {
-        on_internal_error(logstor_logger, format("buffered_writer consumer loop aborted unexpectedly: {}", std::current_exception()));
+        on_internal_error(logstor_logger, format("buffered_writer consumer loop aborted unexpectedly: {:t}", std::current_exception()));
     }
 }
 

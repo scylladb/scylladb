@@ -812,7 +812,7 @@ future<> shard_reader::close() noexcept {
             });
         });
     } catch (...) {
-        mrlog.error("shard_reader::close(): failed to stop reader on shard {}: {}", _shard, std::current_exception());
+        mrlog.error("shard_reader::close(): failed to stop reader on shard {}: {:t}", _shard, std::current_exception());
     }
 }
 

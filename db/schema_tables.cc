@@ -2147,7 +2147,7 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
                     }
                     continue;
                 } catch (...) {
-                    slogger.warn("Error parsing extension {}: {}", p.first, std::current_exception());
+                    slogger.warn("Error parsing extension {}: {:t}", p.first, std::current_exception());
                 }
             }
 

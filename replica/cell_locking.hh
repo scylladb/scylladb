@@ -248,7 +248,7 @@ private:
                     _cells.rehash(cells_type::bucket_traits(buckets.get(), new_bucket_count));
                     _buckets = std::move(buckets);
                 } catch (const std::bad_alloc&) {
-                    cell_locker_log.warn("Could not rehash cell_locker partition cells set: bucket_count={} new_bucket_count={}: {}", _cells.bucket_count(), new_bucket_count, std::current_exception());
+                    cell_locker_log.warn("Could not rehash cell_locker partition cells set: bucket_count={} new_bucket_count={}: {:t}", _cells.bucket_count(), new_bucket_count, std::current_exception());
                 }
                 // Attempt rehash at the new size in both success and failure paths.
                 // On failure, we don't want to retry too soon since it may take some time
@@ -349,7 +349,7 @@ private:
                 _partitions.rehash(partitions_type::bucket_traits(buckets.get(), new_bucket_count));
                 _buckets = std::move(buckets);
             } catch (const std::bad_alloc&) {
-                cell_locker_log.warn("Could not rehash cell_locker partitions set: bucket_count={} new_bucket_count={}: {}", _partitions.bucket_count(), new_bucket_count, std::current_exception());
+                cell_locker_log.warn("Could not rehash cell_locker partitions set: bucket_count={} new_bucket_count={}: {:t}", _partitions.bucket_count(), new_bucket_count, std::current_exception());
             }
             // Attempt rehash at the new size in both success and failure paths.
             // On failure, we don't want to retry too soon since it may take some time

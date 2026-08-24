@@ -151,7 +151,7 @@ future<> controller::start_server() {
             try {
                 utils::configure_tls_creds_builder(creds.value(), std::move(opts)).get();
             } catch(...) {
-                logger.error("Failed to set up Alternator TLS credentials: {}", std::current_exception());
+                logger.error("Failed to set up Alternator TLS credentials: {:t}", std::current_exception());
                 stop_server().get();
                 std::throw_with_nested(std::runtime_error("Failed to set up Alternator TLS credentials"));
             }

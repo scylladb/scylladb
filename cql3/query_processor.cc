@@ -728,7 +728,7 @@ query_processor::do_execute_prepared(
         try {
             co_await _authorized_prepared_cache.insert(*query_state.get_client_state().user(), std::move(cache_key), std::move(prepared));
         } catch (...) {
-            log.error("failed to cache the entry: {}", std::current_exception());
+            log.error("failed to cache the entry: {:t}", std::current_exception());
         }
     }
 
@@ -1140,7 +1140,7 @@ query_processor::execute_batch_without_checking_exception_message(
             try {
                 co_await _authorized_prepared_cache.insert(*query_state.get_client_state().user(), e.first, std::move(e.second));
             } catch (...) {
-                log.error("failed to cache the entry: {}", std::current_exception());
+                log.error("failed to cache the entry: {:t}", std::current_exception());
             }
     });
     _stats.queries_by_cl[size_t(options.get_consistency())] += batch_size;

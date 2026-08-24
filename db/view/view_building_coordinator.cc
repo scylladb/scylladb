@@ -99,7 +99,7 @@ void view_building_coordinator::handle_coordinator_error(std::exception_ptr eptr
     } catch (raft::commit_status_unknown&) {
         vbc_logger.warn("view building coordinator got raft::commit_status_unknown");
     } catch (...) {
-        vbc_logger.error("view building coordinator got error: {}", std::current_exception());
+        vbc_logger.error("view building coordinator got error: {:t}", std::current_exception());
     }
 }
 
@@ -144,7 +144,7 @@ future<> view_building_coordinator::run() {
                 vbc_logger.debug("Sleeping after exception.");
                 co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
             } catch (...) {
-                vbc_logger.warn("sleep failed: {}", std::current_exception());
+                vbc_logger.warn("sleep failed: {:t}", std::current_exception());
             }
         }
     }
@@ -170,7 +170,7 @@ future<> view_building_coordinator::finished_task_gc_fiber() {
         } catch (raft::commit_status_unknown&) {
             vbc_logger.warn("view_building_coordinator::finished_task_gc_fiber got raft::commit_status_unknown");
         } catch (...) {
-            vbc_logger.error("view_building_coordinator::finished_task_gc_fiber got error: {}", std::current_exception());
+            vbc_logger.error("view_building_coordinator::finished_task_gc_fiber got error: {:t}", std::current_exception());
         }
     }
 }

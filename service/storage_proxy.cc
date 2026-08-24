@@ -655,7 +655,7 @@ private:
                             // database's total_writes_timedout, total_writes_rate_limited or total_writes_rejected_due_to_large_partition counter was incremented.
                             l = seastar::log_level::debug;
                         }
-                        slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to_host_id, shard, eptr);
+                        slogger.log(l, "Failed to apply mutation from {}#{}: {:t}", reply_to_host_id, shard, eptr);
                     }
                 },
                 [&] {
@@ -2356,7 +2356,7 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
             try {
                 co_await std::move(f);
             } catch(...) {
-                paxos::paxos_state::logger.debug("CAS[{}] Failure during commit repair {}", _id, std::current_exception());
+                paxos::paxos_state::logger.debug("CAS[{}] Failure during commit repair {:t}", _id, std::current_exception());
             }
             continue;
         }
@@ -2762,10 +2762,10 @@ void paxos_response_handler::prune(utils::UUID ballot) {
             tracing::trace(tr_state, "prune failed: connection closed");
         } catch (const mutation_write_timeout_exception& ex) {
             tracing::trace(tr_state, "prune failed: write timeout; received {:d} of {:d} required replies", ex.received, ex.block_for);
-            paxos::paxos_state::logger.debug("CAS[{}] prune: failed {}", h->_id, std::current_exception());
+            paxos::paxos_state::logger.debug("CAS[{}] prune: failed {:t}", h->_id, std::current_exception());
         } catch (...) {
-            tracing::trace(tr_state, "prune failed: {}", std::current_exception());
-            paxos::paxos_state::logger.error("CAS[{}] prune: failed {}", h->_id, std::current_exception());
+            tracing::trace(tr_state, "prune failed: {:t}", std::current_exception());
+            paxos::paxos_state::logger.error("CAS[{}] prune: failed {:t}", h->_id, std::current_exception());
         }
     });
 }
@@ -3279,7 +3279,7 @@ inline uint64_t& storage_proxy_stats::split_stats::get_ep_stat(const locator::to
         return _dc_stats[dc].val;
     } catch (...) {
         static thread_local uint64_t dummy_stat;
-        slogger.error("Failed to obtain stats ({}), fall-back to dummy", std::current_exception());
+        slogger.error("Failed to obtain stats ({:t}), fall-back to dummy", std::current_exception());
         return dummy_stat;
     }
 }
@@ -4854,7 +4854,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             } else if (auto* e = try_catch<replica::large_data_exception>(eptr)) {
                 msg = e->message();
             } else {
-                slogger.error("exception during mutation write to {}.{} on {}: {}",
+                slogger.error("exception during mutation write to {}.{} on {}: {:t}",
                     schema->ks_name(), schema->cf_name(), coordinator, eptr);
             }
             p->got_failure_response(response_id, coordinator, forward_size + 1, std::nullopt, err, std::move(msg));
@@ -4962,7 +4962,7 @@ public:
             // it.
             slogger.warn("Exception when communicating with {}, to read from {}.{}: {}", ep, _schema->ks_name(), _schema->cf_name(), ex->what());
         } else {
-            slogger.error("Exception when communicating with {}, to read from {}.{}: {}", ep, _schema->ks_name(), _schema->cf_name(), eptr);
+            slogger.error("Exception when communicating with {}, to read from {}.{}: {:t}", ep, _schema->ks_name(), _schema->cf_name(), eptr);
         }
 
         if (!_request_failed) { // request may fail only once.

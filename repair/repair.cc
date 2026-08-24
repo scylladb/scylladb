@@ -254,7 +254,7 @@ static const replica::column_family* find_column_family_if_exists(const replica:
         return &db.find_column_family(uuid);
     } catch (replica::no_such_column_family&) {
         if (warn) {
-            rlogger.warn("{}", std::current_exception());
+            rlogger.warn("{:t}", std::current_exception());
         }
         return nullptr;
     }
@@ -265,7 +265,7 @@ static const replica::column_family* find_column_family_if_exists(const replica:
         return &db.find_column_family(uuid);
     } catch (...) {
         if (warn) {
-            rlogger.warn("{}", std::current_exception());
+            rlogger.warn("{:t}", std::current_exception());
         }
         return nullptr;
     }
@@ -1271,9 +1271,14 @@ future<> repair::shard_repair_task_impl::run() {
     try {
         co_await do_repair_ranges();
     } catch (...) {
-        _failed_because.emplace(fmt::to_string(std::current_exception()));
+        // formattable(), not a plain "{}": do_repair_ranges() reports a rejected
+        // write as a seastar::nested_exception, and only formattable() descends
+        // into it. {fmt}'s own exception_ptr formatter recurses through
+        // std::nested_exception, which seastar::nested_exception is not, so it
+        // would print the bare type name and drop the reason for the failure.
+        _failed_because.emplace(fmt::to_string(seastar::formattable(std::current_exception())));
         rlogger.debug("repair[{}]: got error in do_repair_ranges: {}",
-            global_repair_id.uuid(), std::current_exception());
+            global_repair_id.uuid(), seastar::formattable(std::current_exception()));
     }
     check_failed_ranges();
     co_return;
@@ -1535,7 +1540,7 @@ future<> repair::user_requested_repair_task_impl::run() {
                 off_strategy_updater.get();
             } catch (const seastar::sleep_aborted& ignored) {
             } catch (...) {
-                rlogger.warn("repair[{}]: Found error in off-strategy compaction updater: {}", uuid, std::current_exception());
+                rlogger.warn("repair[{}]: Found error in off-strategy compaction updater: {:t}", uuid, std::current_exception());
             }
             rlogger.info("repair[{}]: Finished to shutdown off-strategy compaction updater", uuid);
         });
@@ -1544,7 +1549,7 @@ future<> repair::user_requested_repair_task_impl::run() {
             try {
                 rs.cleanup_history(tasks::task_id{uuid.uuid()}).get();
             } catch (...) {
-                rlogger.warn("repair[{}]: Failed to cleanup history: {}", uuid, std::current_exception());
+                rlogger.warn("repair[{}]: Failed to cleanup history: {:t}", uuid, std::current_exception());
             }
         });
 
@@ -2581,7 +2586,7 @@ future<> repair::tablet_repair_task_impl::run() {
                 off_strategy_updater.get();
             } catch (const seastar::sleep_aborted& ignored) {
             } catch (...) {
-                rlogger.warn("repair[{}]: Found error in off-strategy compaction updater: {}", uuid, std::current_exception());
+                rlogger.warn("repair[{}]: Found error in off-strategy compaction updater: {:t}", uuid, std::current_exception());
             }
             rlogger.info("repair[{}]: Finished to shutdown off-strategy compaction updater", uuid);
         });
@@ -2590,7 +2595,7 @@ future<> repair::tablet_repair_task_impl::run() {
             try {
                 rs.cleanup_history(tasks::task_id{uuid.uuid()}).get();
             } catch (...) {
-                rlogger.warn("repair[{}]: Failed to cleanup history: {}", uuid, std::current_exception());
+                rlogger.warn("repair[{}]: Failed to cleanup history: {:t}", uuid, std::current_exception());
             }
         });
 
@@ -2653,7 +2658,7 @@ future<> repair::tablet_repair_task_impl::run() {
                         ignore_msg = format("{} does not exist any more, ignoring it, ",
                                 rs.get_db().local().has_keyspace(m.keyspace_name) ? "table" : "keyspace");
                     }
-                    rlogger.warn("repair[{}]: Repair tablet for table={}.{} range={} status=failed: {}{}",
+                    rlogger.warn("repair[{}]: Repair tablet for table={}.{} range={} status=failed: {}{:t}",
                             id.uuid(), m.keyspace_name, m.table_name, m.range, ignore_msg, ep);
                     if (!ignore) {
                         error = std::move(ep);

@@ -1112,7 +1112,7 @@ class CQLAuditTester(AuditTester):
          check node not started
         """
         audit_settings = {"audit": "invalid", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
-        expected_error = r"Startup failed: audit::audit_exception \(Bad configuration: invalid 'audit': invalid\)"
+        expected_error = r"Startup failed: audit::audit_exception: Bad configuration: invalid 'audit': invalid"
 
         servers = await self.manager.running_servers()
         if not servers:
@@ -1129,7 +1129,7 @@ class CQLAuditTester(AuditTester):
          check node not started
         """
         audit_settings = {"audit": "table,syslog,invalid", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
-        expected_error = r"Startup failed: audit::audit_exception \(Bad configuration: invalid 'audit': invalid\)"
+        expected_error = r"Startup failed: audit::audit_exception: Bad configuration: invalid 'audit': invalid"
 
         servers = await self.manager.running_servers()
         if not servers:
@@ -1173,7 +1173,7 @@ class CQLAuditTester(AuditTester):
         check node not started
         """
         audit_settings = {"audit": "table", "audit_categories": "INVALID", "audit_keyspaces": "ks"}
-        expected_error = r"Startup failed: audit::audit_exception \(Bad configuration: invalid 'audit_categories': INVALID\)"
+        expected_error = r"Startup failed: audit::audit_exception: Bad configuration: invalid 'audit_categories': INVALID"
 
         servers = await self.manager.running_servers()
         if not servers:

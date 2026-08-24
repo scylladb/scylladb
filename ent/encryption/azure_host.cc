@@ -192,7 +192,7 @@ static future<T> wrap_exceptions(const std::string& context, Callable&& func) {
     } catch (const rjson::malformed_value& e) {
         std::throw_with_nested(malformed_response_error(fmt::format("{}: {}", context, e.what())));
     } catch (...) {
-        std::throw_with_nested(service_error(fmt::format("{}: {}", context, std::current_exception())));
+        std::throw_with_nested(service_error(fmt::format("{}: {:t}", context, std::current_exception())));
     }
 }
 
@@ -438,7 +438,7 @@ future<azure_host::key_and_id_type> azure_host::impl::create_key(const attr_cach
     try {
         resp = co_await send_request_with_retry(host, port, scheme == "https", path, body, filter);
     } catch (...) {
-        azlog.error("[{}] Failed to wrap key {} with master_key={}: {}", _log_prefix, info, k.master_key, std::current_exception());
+        azlog.error("[{}] Failed to wrap key {} with master_key={}: {:t}", _log_prefix, info, k.master_key, std::current_exception());
         throw;
     }
     auto key_id = rjson::get<std::string>(resp, "kid");
@@ -497,7 +497,7 @@ future<bytes> azure_host::impl::find_key(const id_cache_key& k) {
     try {
         resp = co_await send_request_with_retry(host, port, scheme == "https", path, body, filter);
     } catch (...) {
-        azlog.error("[{}] Failed to unwrap key {}: {}", _log_prefix, k.id, std::current_exception());
+        azlog.error("[{}] Failed to unwrap key {}: {:t}", _log_prefix, k.id, std::current_exception());
         throw;
     }
     auto data = base64url_decode(rjson::get<std::string>(resp, "value"));

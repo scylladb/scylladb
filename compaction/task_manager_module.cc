@@ -215,7 +215,7 @@ future<> run_on_table(sstring op, replica::database& db, std::string keyspace, t
         tasks::tmlogger.warn("Skipping {} of {}.{}: {}", op, keyspace, ti.name, e.what());
     } catch (...) {
         ex = std::current_exception();
-        tasks::tmlogger.error("Failed {} of {}.{}: {}", op, keyspace, ti.name, ex);
+        tasks::tmlogger.error("Failed {} of {}.{}: {:t}", op, keyspace, ti.name, ex);
     }
     if (ex) {
         co_await coroutine::return_exception_ptr(std::move(ex));
@@ -893,7 +893,7 @@ future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compacti
             dblog.info("Table {}.{} with compaction strategy {} had reshape successfully aborted.", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name());
             throw;
         } catch (...) {
-            dblog.info("Reshape failed for Table {}.{} with compaction strategy {} due to {}", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name(), std::current_exception());
+            dblog.info("Reshape failed for Table {}.{} with compaction strategy {} due to {:t}", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name(), std::current_exception());
             break;
         }
 

@@ -1040,7 +1040,7 @@ public:
             ++_segment_manager->totals.flush_count;
             clogger.trace("{} synced to {}", *this, _flush_pos);
         } catch (...) {
-            clogger.error("Failed to flush commits to disk: {}", std::current_exception());
+            clogger.error("Failed to flush commits to disk: {:t}", std::current_exception());
             throw;
         }
 
@@ -1234,7 +1234,7 @@ public:
                     // TODO: retry/ignore/fail/stop - optional behaviour in origin.
                     // we fast-fail the whole commit.
                 } catch (...) {
-                    clogger.error("Failed to persist commits to disk for {}: {}", *this, std::current_exception());
+                    clogger.error("Failed to persist commits to disk for {}: {:t}", *this, std::current_exception());
                     throw;
                 }
             }
@@ -1294,7 +1294,7 @@ public:
     void background_cycle() {
         //FIXME: discarded future
         (void)cycle().discard_result().handle_exception([] (auto ex) {
-            clogger.error("Failed to flush commits to disk: {}", ex);
+            clogger.error("Failed to flush commits to disk: {:t}", ex);
         });
     }
 
@@ -2032,7 +2032,7 @@ future<> db::commitlog::segment_manager::replenish_reserve() {
         } catch (shutdown_marker&) {
             break;
         } catch (...) {
-            clogger.warn("Exception in segment reservation: {}", std::current_exception());
+            clogger.warn("Exception in segment reservation: {:t}", std::current_exception());
         }
         co_await sleep(100ms);
     }
@@ -2266,7 +2266,7 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
             try {
                 f(id, hp);
             } catch (...) {
-                clogger.error("Exception during flush request {}/{}: {} ({})", id, hp, high, std::current_exception());
+                clogger.error("Exception during flush request {}/{}: {} ({:t})", id, hp, high, std::current_exception());
             }
         }
     }
@@ -2338,7 +2338,7 @@ void db::commitlog::segment_manager::check_no_data_older_than_allowed() {
                 try {
                     f(id, *high);
                 } catch (...) {
-                    clogger.error("Exception during flush request {}/{}: {}", id, *high, std::current_exception());
+                    clogger.error("Exception during flush request {}/{}: {:t}", id, *high, std::current_exception());
                 }
             }
         }
@@ -2495,7 +2495,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             } catch (shutdown_marker&) {
                 throw;
             } catch (...) {
-                clogger.warn("Exception while waiting for segments {}. Will retry allocation...", std::current_exception());
+                clogger.warn("Exception while waiting for segments {:t}. Will retry allocation...", std::current_exception());
             }
             continue;
         }
@@ -2722,7 +2722,7 @@ future<> db::commitlog::segment_manager::shutdown() {
         try {
             co_await sync_all_segments();
         } catch (...) {
-            clogger.error("Syncing all segments failed during shutdown: {}. Aborting.", std::current_exception());
+            clogger.error("Syncing all segments failed during shutdown: {:t}. Aborting.", std::current_exception());
             abort();
         }
 
@@ -2752,7 +2752,7 @@ future<> db::commitlog::segment_manager::shutdown() {
             try {
                 co_await shutdown_all_segments();
             } catch (...) {
-                clogger.error("Shutting down all segments failed during shutdown: {}. Aborting.", std::current_exception());
+                clogger.error("Shutting down all segments failed during shutdown: {:t}. Aborting.", std::current_exception());
                 abort();
             }
         } catch (...) {
@@ -2915,7 +2915,7 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
                     SCYLLA_ASSERT(b); // we set this to max_size_t so...
                     continue;
                 } catch (...) {
-                    clogger.error("Could not recycle segment {}: {}", f.name(), std::current_exception());
+                    clogger.error("Could not recycle segment {}: {:t}", f.name(), std::current_exception());
                     recycle_error = std::current_exception();
                     // fallthrough
                 }
@@ -2925,7 +2925,7 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
             // last resort.
             co_await f.remove_file();
         } catch (...) {
-            clogger.error("Could not delete segment {}: {}", f.name(), std::current_exception());
+            clogger.error("Could not delete segment {}: {:t}", f.name(), std::current_exception());
         }
         // if we get here, we either successfully deleted the file,
         // or had such an exception that we consider the file dead

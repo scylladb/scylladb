@@ -167,7 +167,7 @@ std::optional<std::chrono::seconds> validate_ttl(const std::string& value) {
     try {
         res = std::stoi(match[1].str());
     } catch (...) {
-        throw bad_param_exception(fmt::format("Parsing TTL value '{}' failed: {}", value, std::current_exception()));
+        throw bad_param_exception(fmt::format("Parsing TTL value '{}' failed: {:t}", value, std::current_exception()));
     }
 
     auto suffix = match[2].str();
@@ -890,7 +890,7 @@ rest_remove_node(sharded<service::storage_service>& ss, std::unique_ptr<http::re
                 }
                 ignore_nodes.push_back(std::move(hoep));
             } catch (...) {
-                throw std::runtime_error(fmt::format("Failed to parse ignore_nodes parameter: ignore_nodes={}, node={}: {}", ignore_nodes_strs, n, std::current_exception()));
+                throw std::runtime_error(fmt::format("Failed to parse ignore_nodes parameter: ignore_nodes={}, node={}: {:t}", ignore_nodes_strs, n, std::current_exception()));
             }
         }
         return ss.local().removenode(host_id, std::move(ignore_nodes)).then([] {
@@ -1881,7 +1881,7 @@ rest_drop_quarantined_sstables(http_context& ctx, sharded<service::storage_servi
             });
         }
     } catch (...) {
-        apilog.error("drop_quarantined_sstables: failed with exception: {}", std::current_exception());
+        apilog.error("drop_quarantined_sstables: failed with exception: {:t}", std::current_exception());
         throw;
     }
 
@@ -2194,7 +2194,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         } catch (const data_dictionary::no_such_column_family& e) {
             throw httpd::bad_param_exception(e.what());
         } catch (...) {
-            apilog.error("take_snapshot failed: {}", std::current_exception());
+            apilog.error("take_snapshot failed: {:t}", std::current_exception());
             throw;
         }
     });
@@ -2215,7 +2215,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             co_await snap_ctl.local().take_cluster_column_family_snapshot(keynames, column_families, tag, opts);
             co_return json_void();
         } catch (...) {
-            apilog.error("take_cluster_snapshot failed: {}", std::current_exception());
+            apilog.error("take_cluster_snapshot failed: {:t}", std::current_exception());
             throw;
         }
     });
@@ -2232,7 +2232,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         } catch (const data_dictionary::no_such_column_family& e) {
             throw httpd::bad_param_exception(e.what());
         } catch (...) {
-            apilog.error("del_snapshot failed: {}", std::current_exception());
+            apilog.error("del_snapshot failed: {:t}", std::current_exception());
             throw;
         }
     });
@@ -2263,7 +2263,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         } catch (const compaction::compaction_aborted_exception&) {
             co_return json::json_return_type(static_cast<int>(scrub_status::aborted));
         } catch (...) {
-            apilog.error("scrub keyspace={} tables={} failed: {}", info.keyspace, info.column_families, std::current_exception());
+            apilog.error("scrub keyspace={} tables={} failed: {:t}", info.keyspace, info.column_families, std::current_exception());
             throw;
         }
 

@@ -77,7 +77,7 @@ future<> atomic_deletion::execute() noexcept {
         co_await _impl->finalize();
     } catch (...) {
         // After commit(), the SSTables will be deleted even after a crash.
-        smlogger.warn("SSTables deletion failed after commit: {}. Will be retried on restart.", std::current_exception());
+        smlogger.warn("SSTables deletion failed after commit: {:t}. Will be retried on restart.", std::current_exception());
     }
 }
 
@@ -404,7 +404,7 @@ future<> sstables_manager::maybe_reload_components() {
             co_await sstable_ptr->reload_reclaimed_components();
         } catch (...) {
             // reload failed due to some reason
-            sstlog.warn("Failed to reload reclaimed SSTable components : {}", std::current_exception());
+            sstlog.warn("Failed to reload reclaimed SSTable components : {:t}", std::current_exception());
             // revert back changes made before the reload
             _total_reclaimable_memory -= reclaimed_memory;
             _reclaimed.insert(*sstable_to_reload);

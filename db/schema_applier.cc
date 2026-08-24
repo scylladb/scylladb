@@ -1204,7 +1204,7 @@ static future<> execute_do_merge_schema(sharded<service::storage_proxy>& proxy, 
     } catch (...) {
         // We have no good way to recover from partial commit and continuing
         // would mean that schema is in inconsistent state.
-        on_fatal_internal_error(slogger, format("schema commit failed: {}", std::current_exception()));
+        on_fatal_internal_error(slogger, format("schema commit failed: {:t}", std::current_exception()));
     }
     co_await ap.post_commit();
 }

@@ -149,7 +149,7 @@ future<> sstable_dict_autotrainer::run() {
         } catch (const raft::stopped_error&) {
             alogger.debug("sstable_dict_autotrainer::run(): exiting via raft::stopped_error");
         } catch (...) {
-            alogger.debug("sstable_dict_autotrainer::run(): tick() failed with: {}", std::current_exception());
+            alogger.debug("sstable_dict_autotrainer::run(): tick() failed with: {:t}", std::current_exception());
         }
     }
 }

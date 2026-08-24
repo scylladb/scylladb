@@ -2117,7 +2117,7 @@ future<> view_update_generator::mutate_MV(
                     ++cf_stats.total_view_updates_failed_local;
                     auto ep = f.get_exception();
                     tracing::trace(tr_state, "Failed to apply local view update for {}", my_address);
-                    vlogger.error("Error applying view update to {} (view: {}.{}, base token: {}, view token: {}): {}",
+                    vlogger.error("Error applying view update to {} (view: {}.{}, base token: {}, view token: {}): {:t}",
                             my_address, s->ks_name(), s->cf_name(), base_token, view_token, ep);
                     return make_exception_future<>(std::move(ep));
                 }
@@ -2160,7 +2160,7 @@ future<> view_update_generator::mutate_MV(
                     // Printing an error on every failed view mutation would cause log spam, so a rate limit is needed.
                     static thread_local logger::rate_limit view_update_error_rate_limit(std::chrono::seconds(4));
                     vlogger.log(log_level::warn, view_update_error_rate_limit,
-                        "Error applying view update to {} (view: {}.{}, base token: {}, view token: {}): {}",
+                        "Error applying view update to {} (view: {}.{}, base token: {}, view token: {}): {:t}",
                         *target_endpoint, s->ks_name(), s->cf_name(), base_token, view_token, ep);
                     return apply_update_synchronously ? make_exception_future<>(std::move(ep)) : make_ready_future<>();
                 }
@@ -2523,7 +2523,7 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
     });
     auto bookkeeping_fut = co_await coroutine::as_future(seastar::when_all_succeed(vbi.bookkeeping_ops.begin(), vbi.bookkeeping_ops.end()));
     if (bookkeeping_fut.failed()) {
-        vlogger.warn("Failed to update materialized view bookkeeping while synchronizing view builds on all shards ({}), continuing anyway.", bookkeeping_fut.get_exception());
+        vlogger.warn("Failed to update materialized view bookkeeping while synchronizing view builds on all shards ({:t}), continuing anyway.", bookkeeping_fut.get_exception());
     }
 }
 
@@ -2695,7 +2695,7 @@ future<> view_builder::handle_create_view_local(const sstring& ks_name, const ss
     } catch (raft::request_aborted&) {
         vlogger.debug("Aborted while setting up view for building {}.{}", view->ks_name(), view->cf_name());
     } catch (...) {
-        vlogger.error("Error setting up view for building {}.{}: {}", view->ks_name(), view->cf_name(), std::current_exception());
+        vlogger.error("Error setting up view for building {}.{}: {:t}", view->ks_name(), view->cf_name(), std::current_exception());
     }
 
     _build_step.signal();
@@ -2800,7 +2800,7 @@ future<> view_builder::handle_drop_view_global_cleanup(const sstring& ks_name, c
             [this, &ks_name, &view_name] -> future<>  {
                 co_await remove_view_build_status(ks_name, view_name); });
     } catch (...) {
-        vlogger.warn("Failed to cleanup view {}.{}: {}", ks_name, view_name, std::current_exception());
+        vlogger.warn("Failed to cleanup view {}.{}: {:t}", ks_name, view_name, std::current_exception());
     }
 }
 
@@ -2837,7 +2837,7 @@ future<> view_builder::run_in_background() {
                 ++_current_step->second.base->cf_stats()->view_building_paused;
                 ++_stats.steps_failed;
                 auto base = _current_step->second.base->schema();
-                vlogger.warn("Error executing build step for base {}.{}: {}", base->ks_name(), base->cf_name(), std::current_exception());
+                vlogger.warn("Error executing build step for base {}.{}: {:t}", base->ks_name(), base->cf_name(), std::current_exception());
                 r.retry(_as).get();
                 initialize_reader_at_current_token(_current_step->second).get();
             }
@@ -3167,7 +3167,7 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
         }
     }
     seastar::when_all_succeed(bookkeeping_ops.begin(), bookkeeping_ops.end()).handle_exception([] (std::exception_ptr ep) {
-        vlogger.warn("Failed to update materialized view bookkeeping ({}), continuing anyway.", ep);
+        vlogger.warn("Failed to update materialized view bookkeeping ({:t}), continuing anyway.", ep);
     }).get();
     utils::get_local_injector().inject("delay_finishing_build_step", utils::wait_for_message(60s)).get();
 }
@@ -3366,7 +3366,7 @@ void view_updating_consumer::do_flush_buffer() {
         try {
             auto lock_holder = _view_update_pusher(std::move(_buffer.front())).get();
         } catch (...) {
-            vlogger.warn("Failed to push replica updates for table {}.{}: {}", _schema->ks_name(), _schema->cf_name(), std::current_exception());
+            vlogger.warn("Failed to push replica updates for table {}.{}: {:t}", _schema->ks_name(), _schema->cf_name(), std::current_exception());
         }
         _buffer.pop_front();
     }

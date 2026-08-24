@@ -682,7 +682,7 @@ future<sstring> sstable_directory::create_pending_deletion_log(opened_directory&
             base_dir.sync(general_disk_error_handler).get();
             dirlog.debug("{} written successfully.", pending_delete_log);
         } catch (...) {
-            dirlog.warn("Error creating {}: {}.", pending_delete_log, std::current_exception());
+            dirlog.warn("Error creating {}: {:t}.", pending_delete_log, std::current_exception());
             throw;
         }
 
@@ -711,7 +711,7 @@ future<> sstable_directory::filesystem_components_lister::replay_pending_delete_
         dirlog.debug("Replayed {}, removing", pending_delete_log);
         co_await remove_file(pending_delete_log.native());
     } catch (...) {
-        dirlog.warn("Error replaying {}: {}. Ignoring.", pending_delete_log, std::current_exception());
+        dirlog.warn("Error replaying {}: {:t}. Ignoring.", pending_delete_log, std::current_exception());
     }
 }
 

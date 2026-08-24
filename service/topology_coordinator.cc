@@ -482,7 +482,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
         if (f.failed()) {
             co_await coroutine::return_exception(std::runtime_error(
-                ::format("raft topology: exec_global_command({}) failed with {}",
+                ::format("raft topology: exec_global_command({}) failed with {:t}",
                     cmd.cmd, f.get_exception())));
         }
     };
@@ -595,7 +595,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     on_internal_error(rtlogger, ::format(
                         "make_new_cdc_generation_data: get_sharding_info:"
                         " can't get sharding info for node {}, owner of token {}."
-                        " Reason: {}", *ep, end, std::current_exception()));
+                        " Reason: {:t}", *ep, end, std::current_exception()));
                 }
             }
         };
@@ -818,14 +818,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             } catch (term_changed_error&) {
                 rtlogger.debug("CDC generation publisher fiber notices term change {} -> {}", _term, _raft.get_current_term());
             } catch (...) {
-                rtlogger.error("CDC generation publisher fiber got error {}", std::current_exception());
+                rtlogger.error("CDC generation publisher fiber got error {:t}", std::current_exception());
                 sleep = true;
             }
             if (sleep) {
                 try {
                     co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
                 } catch (...) {
-                    rtlogger.debug("CDC generation publisher: sleep failed: {}", std::current_exception());
+                    rtlogger.debug("CDC generation publisher: sleep failed: {:t}", std::current_exception());
                 }
             }
             co_await coroutine::maybe_yield();
@@ -854,7 +854,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 rtlogger.debug("CDC streams GC fiber aborted");
                 sleep = false;
             } catch (...) {
-                rtlogger.warn("CDC streams GC fiber got error {}", std::current_exception());
+                rtlogger.warn("CDC streams GC fiber got error {:t}", std::current_exception());
             }
             auto refresh_interval = utils::get_local_injector().is_enabled("short_cdc_streams_gc_refresh_interval") ?
                     std::chrono::seconds(1) : cdc_streams_gc_refresh_interval;
@@ -862,7 +862,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 try {
                     co_await seastar::sleep_abortable(refresh_interval, _as);
                 } catch (...) {
-                    rtlogger.debug("CDC streams GC: sleep failed: {}", std::current_exception());
+                    rtlogger.debug("CDC streams GC: sleep failed: {:t}", std::current_exception());
                 }
             }
         }
@@ -925,12 +925,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             } catch (term_changed_error&) {
                 rtlogger.debug("gossiper orphan remover fiber notices term change {} -> {}", _term, _raft.get_current_term());
             } catch (...) {
-                rtlogger.error("gossiper orphan remover fiber got error {}", std::current_exception());
+                rtlogger.error("gossiper orphan remover fiber got error {:t}", std::current_exception());
             }
             try {
                 co_await seastar::sleep_abortable(do_speedup_fiber ? std::chrono::milliseconds(1) : std::chrono::seconds(10), _as);
             } catch (...) {
-                rtlogger.debug("gossiper orphan remover: sleep failed: {}", std::current_exception());
+                rtlogger.debug("gossiper orphan remover: sleep failed: {:t}", std::current_exception());
             }
             co_await coroutine::maybe_yield();
         }
@@ -975,7 +975,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 rtlogger.debug("group0 voters refresh fiber notices term change {} -> {}", _term, _raft.get_current_term());
                 break; // exit the loop immediately (term change means we're not the coordinator anymore)
             } catch (...) {
-                rtlogger.error("group0 voters refresh fiber got error {}", std::current_exception());
+                rtlogger.error("group0 voters refresh fiber got error {:t}", std::current_exception());
             }
         }
     }
@@ -1274,7 +1274,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
                 }
             } catch (...) {
-                error = fmt::format("quiesce request failed: {}", std::current_exception());
+                error = fmt::format("quiesce request failed: {:t}", std::current_exception());
                 updates.clear();
             }
 
@@ -1505,7 +1505,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         .build());
             } catch (const std::exception& e) {
                 error = e.what();
-                rtlogger.error("Couldn't set up restore transitions for table {}: {}", tid, std::current_exception());
+                rtlogger.error("Couldn't set up restore transitions for table {}: {:t}", tid, std::current_exception());
                 updates.clear();
 
                 topology_mutation_builder builder(guard.write_timestamp());
@@ -1584,7 +1584,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         try {
             guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier_and_drain, exclude_nodes, drop_guard_and_retake::yes);
         } catch (...) {
-            rtlogger.warn("drain rpc failed, proceed to fence old writes: {}", std::current_exception());
+            rtlogger.warn("drain rpc failed, proceed to fence old writes: {:t}", std::current_exception());
             if (drain_all_nodes) {
                 throw;
             }
@@ -1694,7 +1694,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             holder = futurize_invoke(action).then_wrapped([this, gid, name] (future<> f) {
                 if (f.failed()) {
                     auto ep = f.get_exception();
-                    rtlogger.warn("{} for tablet {} failed: {}", name, gid, ep);
+                    rtlogger.warn("{} for tablet {} failed: {:t}", name, gid, ep);
                     return seastar::sleep_abortable(std::chrono::seconds(1), _as).then([ep] () mutable {
                         std::rethrow_exception(ep);
                     });
@@ -2555,7 +2555,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         if (auto it = restore_request_for_table.find(gid.table); it != restore_request_for_table.end()) {
                             updates.add(
                                 topology_request_tracking_mutation_builder(it->second)
-                                    .set("error", format("Restore failed for tablet {}: {}", gid, ep))
+                                    .set("error", format("Restore failed for tablet {}: {:t}", gid, ep))
                                     .build());
                         }
                         break;
@@ -3112,7 +3112,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     void trigger_load_stats_refresh() {
         (void)_tablet_load_stats_refresh.trigger().handle_exception([] (auto ep) {
-            rtlogger.warn("Error during tablet load stats refresh: {}", ep);
+            rtlogger.warn("Error during tablet load stats refresh: {:t}", ep);
         });
     }
 
@@ -3158,7 +3158,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     try {
                         co_await wait_for_gossiper(id, _gossiper, _as);
                     } catch (...) {
-                        rtlogger.warn("wait_for_ip failed during cancellation: {}", std::current_exception());
+                        rtlogger.warn("wait_for_ip failed during cancellation: {:t}", std::current_exception());
                     }
                 }
                 break;
@@ -3322,7 +3322,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         try {
                             bootstrap_tokens = dht::boot_strapper::get_bootstrap_tokens(tmptr, tokens_string, num_tokens, dht::check_token_endpoint::yes);
                         } catch (...) {
-                            _rollback = fmt::format("Failed to assign tokens: {}", std::current_exception());
+                            _rollback = fmt::format("Failed to assign tokens: {:t}", std::current_exception());
                             break;
                         }
 
@@ -3430,8 +3430,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     throw;
                 } catch (...) {
                     rtlogger.error("transition_state::commit_cdc_generation, "
-                                    "raft_topology_cmd::command::barrier failed, error {}", std::current_exception());
-                    _rollback = fmt::format("Failed to commit cdc generation: {}", std::current_exception());
+                                    "raft_topology_cmd::command::barrier failed, error {:t}", std::current_exception());
+                    _rollback = fmt::format("Failed to commit cdc generation: {:t}", std::current_exception());
                 }
 
                 if (_rollback) {
@@ -3525,8 +3525,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 } catch (seastar::abort_requested_exception&) {
                     throw;
                 } catch (...) {
-                    rtlogger.error("tablets draining failed with {}. Aborting the topology operation", std::current_exception());
-                    _rollback = fmt::format("Failed to drain tablets: {}", std::current_exception());
+                    rtlogger.error("tablets draining failed with {:t}. Aborting the topology operation", std::current_exception());
+                    _rollback = fmt::format("Failed to drain tablets: {:t}", std::current_exception());
                 }
                 break;
             case topology::transition_state::write_both_read_old: {
@@ -3551,7 +3551,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     rtlogger.error("transition_state::write_both_read_old, "
                                     "global_token_metadata_barrier failed, error {}",
                                     std::current_exception());
-                    _rollback = fmt::format("global_token_metadata_barrier failed in write_both_read_old state {}", std::current_exception());
+                    _rollback = fmt::format("global_token_metadata_barrier failed in write_both_read_old state {:t}", std::current_exception());
                     break;
                 }
 
@@ -3612,8 +3612,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     throw;
                 } catch (...) {
                     rtlogger.error("send_raft_topology_cmd(stream_ranges) failed with exception"
-                                    " (node state is {}): {}", state, std::current_exception());
-                    _rollback = fmt::format("Failed stream ranges: {}", std::current_exception());
+                                    " (node state is {}): {:t}", state, std::current_exception());
+                    _rollback = fmt::format("Failed stream ranges: {:t}", std::current_exception());
                     break;
                 }
 
@@ -4205,12 +4205,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     throw;
                 } catch (const std::exception& e) {
                     rtlogger.error("send_raft_topology_cmd(stream_ranges) failed with exception"
-                                    " (node state is rebuilding): {}", e);
+                                    " (node state is rebuilding): {:t}", e);
                     rtbuilder.done(e.what());
                     retake = true;
                 } catch (...) {
                     rtlogger.error("send_raft_topology_cmd(stream_ranges) failed with exception"
-                                    " (node state is rebuilding): {}", std::current_exception());
+                                    " (node state is rebuilding): {:t}", std::current_exception());
                     rtbuilder.done("unknown error");
                     retake = true;
                 }
@@ -4461,7 +4461,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         try {
             co_await _vb_coordinator->run();
         } catch (...) {
-            on_fatal_internal_error(rtlogger, format("unhandled exception in view_building_coordinator::run(): {}", std::current_exception()));
+            on_fatal_internal_error(rtlogger, format("unhandled exception in view_building_coordinator::run(): {:t}", std::current_exception()));
         }
         co_await _lifecycle_notifier.unregister_subscriber(_vb_coordinator.get());
     }
@@ -4874,14 +4874,14 @@ future<> topology_coordinator::start_tablet_load_stats_refresher() {
             rtlogger.debug("raft topology: Tablet load stats refresher aborted");
             sleep = false;
         } catch (...) {
-            rtlogger.warn("Found error while refreshing load stats for tablets: {}, retrying...", std::current_exception());
+            rtlogger.warn("Found error while refreshing load stats for tablets: {:t}, retrying...", std::current_exception());
         }
         auto refresh_interval = std::chrono::seconds(_tablet_load_stats_refresh_interval_in_seconds.get());
         if (sleep && can_proceed()) {
             try {
                 co_await seastar::sleep_abortable(refresh_interval, _as);
             } catch (...) {
-                rtlogger.debug("raft topology: Tablet load stats refresher: sleep failed: {}", std::current_exception());
+                rtlogger.debug("raft topology: Tablet load stats refresher: sleep failed: {:t}", std::current_exception());
             }
         }
     }
@@ -4919,7 +4919,7 @@ future<> topology_coordinator::fence_previous_coordinator() {
             rtlogger.debug("request to fence previous coordinator was aborted");
             break;
         } catch (...) {
-            rtlogger.error("failed to fence previous coordinator {}", std::current_exception());
+            rtlogger.error("failed to fence previous coordinator {:t}", std::current_exception());
         }
         try {
             co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
@@ -4927,7 +4927,7 @@ future<> topology_coordinator::fence_previous_coordinator() {
             // Abort was requested. Break the loop
             break;
         } catch (...) {
-            rtlogger.debug("sleep failed while fencing previous coordinator: {}", std::current_exception());
+            rtlogger.debug("sleep failed while fencing previous coordinator: {:t}", std::current_exception());
         }
     }
 }
@@ -4998,10 +4998,10 @@ bool topology_coordinator::handle_topology_coordinator_error(std::exception_ptr 
         // Term changed. We may no longer be a leader
         rtlogger.debug("topology change coordinator fiber notices term change {} -> {}", _term, _raft.get_current_term());
     } catch (seastar::rpc::remote_verb_error&) {
-        rtlogger.warn("topology change coordinator fiber got rpc::remote_verb_error {}", std::current_exception());
+        rtlogger.warn("topology change coordinator fiber got rpc::remote_verb_error {:t}", std::current_exception());
         return true;
     } catch (...) {
-        rtlogger.error("topology change coordinator fiber got error {}", std::current_exception());
+        rtlogger.error("topology change coordinator fiber got error {:t}", std::current_exception());
         return true;
     }
     return false;
@@ -5064,7 +5064,7 @@ future<> topology_coordinator::run() {
             try {
                 co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
             } catch (...) {
-                rtlogger.debug("sleep failed: {}", std::current_exception());
+                rtlogger.debug("sleep failed: {:t}", std::current_exception());
             }
         }
         co_await coroutine::maybe_yield();
@@ -5162,14 +5162,14 @@ future<> run_topology_coordinator(
     if (ex) {
         try {
             if (raft.is_leader()) {
-                rtlogger.warn("unhandled exception in topology_coordinator::run: {}; stepping down as a leader", ex);
+                rtlogger.warn("unhandled exception in topology_coordinator::run: {:t}; stepping down as a leader", ex);
                 const auto stepdown_timeout_ticks = std::chrono::seconds(5) / raft_tick_interval;
                 co_await raft.stepdown(raft::logical_clock::duration(stepdown_timeout_ticks));
             }
         } catch (...) {
-            rtlogger.error("failed to step down before aborting: {}", std::current_exception());
+            rtlogger.error("failed to step down before aborting: {:t}", std::current_exception());
         }
-        on_fatal_internal_error(rtlogger, format("unhandled exception in topology_coordinator::run: {}", ex));
+        on_fatal_internal_error(rtlogger, format("unhandled exception in topology_coordinator::run: {:t}", ex));
     }
     co_await utils::get_local_injector().inject("topology_coordinator_pause_before_stop", utils::wait_for_message(5min));
     co_await coordinator.stop();

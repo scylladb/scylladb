@@ -821,7 +821,7 @@ do_parse_schema_tables(sharded<service::storage_proxy>& proxy, const sstring cf_
         try {
             co_await func(v);
         } catch (...) {
-            dblog.error("Skipping: {}. Exception occurred when loading system table {}: {}", v.first, cf_name, std::current_exception());
+            dblog.error("Skipping: {}. Exception occurred when loading system table {}: {:t}", v.first, cf_name, std::current_exception());
         }
     });
 }
@@ -3603,7 +3603,7 @@ void database::tables_metadata::remove_table(database& db, table& cf) noexcept {
         auto& ks = db.find_keyspace(s->ks_name());
         remove_table_helper(db, ks, cf, s);
     } catch (...) {
-        on_fatal_internal_error(dblog, format("tables_metadata::remove_cf: {}", std::current_exception()));
+        on_fatal_internal_error(dblog, format("tables_metadata::remove_cf: {:t}", std::current_exception()));
     }
 }
 

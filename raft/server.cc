@@ -1076,7 +1076,7 @@ void server_impl::send_message(server_id id, Message m) {
                 try {
                     co_await server->_rpc->send_append_entries(id, m);
                 } catch(...) {
-                    logger.debug("[{}] io_fiber failed to send a message to {}: {}", server->_tag, id, std::current_exception());
+                    logger.debug("[{}] io_fiber failed to send a message to {}: {:t}", server->_tag, id, std::current_exception());
                 }
                 server->_append_request_status[id].count--;
                 if (server->_append_request_status[id].count == 0) {
@@ -1225,7 +1225,7 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
             send_message(m.first, std::move(m.second));
         } catch(...) {
             // Not being able to send a message is not a critical error
-            logger.debug("[{}] io_fiber failed to send a message to {}: {}", _tag, m.first, std::current_exception());
+            logger.debug("[{}] io_fiber failed to send a message to {}: {:t}", _tag, m.first, std::current_exception());
         }
     }
 
@@ -1414,7 +1414,7 @@ future<snapshot_reply> server_impl::apply_snapshot(server_id from, install_snaps
         try {
             reply = co_await _snapshot_application_done[from].get_future();
         } catch (...) {
-            logger.error("apply_snapshot[{}] failed with {}", _tag, std::current_exception());
+            logger.error("apply_snapshot[{}] failed with {:t}", _tag, std::current_exception());
         }
     }
     co_return reply;

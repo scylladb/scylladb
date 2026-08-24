@@ -257,7 +257,7 @@ ber_slen_t ldap_connection::sbi_read(Sockbuf_IO_Desc* sid, void* buffer, ber_len
     try {
         return connection(sid)->read(reinterpret_cast<char*>(buffer), size);
     } catch (...) {
-        mylog.error("Unexpected error while reading: {}", std::current_exception());
+        mylog.error("Unexpected error while reading: {:t}", std::current_exception());
         return failure_code;
     }
 }
@@ -267,7 +267,7 @@ ber_slen_t ldap_connection::sbi_write(Sockbuf_IO_Desc* sid, void* buffer, ber_le
     try {
         return connection(sid)->write(reinterpret_cast<const char*>(buffer), size);
     } catch (...) {
-        mylog.error("Unexpected error while writing: {}", std::current_exception());
+        mylog.error("Unexpected error while writing: {:t}", std::current_exception());
         return failure_code;
     }
 }

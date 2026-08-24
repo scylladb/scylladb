@@ -293,7 +293,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
     try {
         raw_statements = cql3::query_processor::parse_statements(schema_str, cql3::internal_dialect());
     } catch (...) {
-        throw std::runtime_error(format("tools:do_load_schemas(): failed to parse CQL statements: {}", std::current_exception()));
+        throw std::runtime_error(format("tools:do_load_schemas(): failed to parse CQL statements: {:t}", std::current_exception()));
     }
     for (auto& raw_statement : raw_statements) {
         if (raw_statement->get_prepare_context().bound_variables_size()) {

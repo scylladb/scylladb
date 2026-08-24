@@ -278,7 +278,7 @@ future<> filesystem_storage::remove_temp_dir() {
     try {
         co_await remove_file(_temp_dir->native());
     } catch (...) {
-        sstlog.error("Could not remove temporary directory: {}", std::current_exception());
+        sstlog.error("Could not remove temporary directory: {:t}", std::current_exception());
         throw;
     }
 
@@ -582,7 +582,7 @@ future<> filesystem_storage::wipe(sstable& sst, const atomic_deletion* deletion)
         // b. in the future sstables_manager is planned to handle sstables deletion.
         // c. Eventually we may want to record these failures in a system table
         //    and notify the administrator about that for manual handling (rather than aborting).
-        sstlog.warn("Failed to delete {}: {}. Ignoring.", name, std::current_exception());
+        sstlog.warn("Failed to delete {}: {:t}. Ignoring.", name, std::current_exception());
     }
 
     if (_temp_dir) {
@@ -590,7 +590,7 @@ future<> filesystem_storage::wipe(sstable& sst, const atomic_deletion* deletion)
             co_await recursive_remove_directory(*_temp_dir);
             _temp_dir.reset();
         } catch (...) {
-            sstlog.warn("Exception when deleting temporary sstable directory {}: {}", *_temp_dir, std::current_exception());
+            sstlog.warn("Exception when deleting temporary sstable directory {}: {:t}", *_temp_dir, std::current_exception());
         }
     }
 }
@@ -627,7 +627,7 @@ public:
             co_await remove_file(_pending_delete_log);
             sstlog.debug("{} removed.", _pending_delete_log);
         } catch (...) {
-            sstlog.warn("Error removing {}: {}. Ignoring.", _pending_delete_log, std::current_exception());
+            sstlog.warn("Error removing {}: {:t}. Ignoring.", _pending_delete_log, std::current_exception());
         }
     }
 };
@@ -661,7 +661,7 @@ future<> filesystem_storage::unlink_component(const sstable& sst, component_type
         // b. in the future sstables_manager is planned to handle sstables deletion.
         // c. Eventually we may want to record these failures in a system table
         //    and notify the administrator about that for manual handling (rather than aborting).
-        sstlog.warn("Failed to delete {}: {}. Ignoring.", name, std::current_exception());
+        sstlog.warn("Failed to delete {}: {:t}. Ignoring.", name, std::current_exception());
     }
 }
 
@@ -828,7 +828,7 @@ future<object_storage_reference_names> list_object_storage_references(object_sto
             return collect_lister_entries(lister, refs);
         });
     } catch (...) {
-        throw std::runtime_error(fmt::format("Failed to list references: prefix={} sstable_id={}: {}", prefix, sid, std::current_exception()));
+        throw std::runtime_error(fmt::format("Failed to list references: prefix={} sstable_id={}: {:t}", prefix, sid, std::current_exception()));
     }
     co_return refs;
 }
@@ -855,7 +855,7 @@ future<> object_storage_base::delete_components(sstable_version_types version, s
             if (!log_errors) {
                 throw;
             }
-            sstlog.warn("Failed to delete {} object {} for sstable_id={}: {}", _type, component, sid, std::current_exception());
+            sstlog.warn("Failed to delete {} object {} for sstable_id={}: {:t}", _type, component, sid, std::current_exception());
         }
     };
 
@@ -1066,7 +1066,7 @@ future<> object_storage_base::destroy(const sstable& sst) {
         }
         co_await sst.manager().sstables_registry().delete_entry(owner(), node_owner, sst.generation());
     } catch (...) {
-        sstlog.warn("Failed to delete registry entry for {}: {}", sst.toc_filename(), std::current_exception());
+        sstlog.warn("Failed to delete registry entry for {}: {:t}", sst.toc_filename(), std::current_exception());
     }
     sstlog.debug("Deleted reference {} remaining_refs={}", ref_name.str(), remaining_refs);
 }
@@ -1144,7 +1144,7 @@ future<> object_storage_base::unlink_component(const sstable& sst, component_typ
     try {
         co_await _client->delete_object(name);
     } catch (...) {
-        sstlog.warn("Failed to delete {}: {}. Ignoring.", name, std::current_exception());
+        sstlog.warn("Failed to delete {}: {:t}. Ignoring.", name, std::current_exception());
     }
 }
 

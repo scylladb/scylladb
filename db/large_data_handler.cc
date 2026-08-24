@@ -484,7 +484,7 @@ void large_data_cache_tracker::on_collection_merged(const column_definition& cde
         // collection may slip past the guardrail until the next SSTable flush.
         large_data_logger.warn("Failed to record collection size for memtable-level "
             "large-collection cache; large collections may slip past the guardrail "
-            "until the next SSTable flush: {}", std::current_exception());
+            "until the next SSTable flush: {:t}", std::current_exception());
     }
 }
 

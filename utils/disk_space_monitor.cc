@@ -126,7 +126,7 @@ future<> disk_space_monitor::poll() {
     } catch (const sleep_aborted&) {
     } catch (const abort_requested_exception&) {
     } catch (...) {
-        dsmlog.error("poll loop exited with error: {}", std::current_exception());
+        dsmlog.error("poll loop exited with error: {:t}", std::current_exception());
     }
 }
 

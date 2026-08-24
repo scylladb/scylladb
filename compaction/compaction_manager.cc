@@ -291,7 +291,7 @@ void compaction_manager::register_compacting_sstables(const Range& sstables) {
     try {
         _compacting_sstables.insert(std::ranges::begin(sstables), std::ranges::end(sstables));
     } catch (...) {
-        cmlog.error("Unexpected error when registering compacting SSTables: {}. Ignored...", std::current_exception());
+        cmlog.error("Unexpected error when registering compacting SSTables: {:t}. Ignored...", std::current_exception());
     }
 }
 
@@ -356,7 +356,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
         do_stop();
         throw;
     } catch (...) {
-        cmlog.error("{}: failed, reason {}: stopping", *task, std::current_exception());
+        cmlog.error("{}: failed, reason {:t}: stopping", *task, std::current_exception());
         _stats.errors++;
         throw;
     }
@@ -784,7 +784,7 @@ future<> compaction_manager::await_ongoing_compactions(compaction_group_view* t)
         co_await await_tasks(std::move(tasks), task_stopped);
         cmlog.debug("Awaiting ongoing unrepaired compactions table={} tasks={} done", name, sz);
     } catch (...) {
-        cmlog.error("Awaiting ongoing unrepaired compactions table={} failed: {}", name, std::current_exception());
+        cmlog.error("Awaiting ongoing unrepaired compactions table={} failed: {:t}", name, std::current_exception());
         throw;
     }
 }
@@ -831,7 +831,7 @@ compaction_manager::stop_and_disable_compaction_no_wait(compaction_group_view& t
     try {
         do_stop_ongoing_compactions(std::move(reason), [&t] (const compaction_group_view* x) { return x == &t; } , {});
     } catch (...) {
-        cmlog.error("Stopping ongoing compactions failed: {}.  Ignored", std::current_exception());
+        cmlog.error("Stopping ongoing compactions failed: {:t}.  Ignored", std::current_exception());
     }
     return cre;
 }
@@ -1282,7 +1282,7 @@ future<> compaction_manager::await_tasks(std::vector<shared_ptr<compaction_task_
             // as it happens with reshard and reshape.
         } catch (...) {
             // just log any other errors as the callers have nothing to do with them.
-            cmlog.debug("Awaiting {}: task returned error: {}", *task, std::current_exception());
+            cmlog.debug("Awaiting {}: task returned error: {:t}", *task, std::current_exception());
             co_return;
         }
         cmlog.debug("Awaiting {}: done", *task);
@@ -1330,7 +1330,7 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason, std::funct
         bool task_stopped = true;
         co_await await_tasks(std::move(tasks), task_stopped);
     } catch (...) {
-        cmlog.error("Stopping ongoing compactions failed: {}.  Ignored", std::current_exception());
+        cmlog.error("Stopping ongoing compactions failed: {:t}.  Ignored", std::current_exception());
     }
     co_return;
 }
@@ -1421,7 +1421,7 @@ void compaction_manager::do_stop() noexcept {
         _state = state::stopped;
         _stop_future = really_do_stop();
     } catch (...) {
-        cmlog.error("Failed to stop the manager: {}", std::current_exception());
+        cmlog.error("Failed to stop the manager: {:t}", std::current_exception());
     }
 }
 
@@ -2157,7 +2157,7 @@ private:
             // expected, just continue with the other sstables when seeing
             // one.
             _cm._stats.errors++;
-            cmlog.error("Scrubbing in validate mode {} failed due to {}, continuing.", sst->get_filename(), std::current_exception());
+            cmlog.error("Scrubbing in validate mode {} failed due to {:t}, continuing.", sst->get_filename(), std::current_exception());
         }
 
         co_return compaction_result{};
@@ -2679,7 +2679,7 @@ future<> compaction_manager::stop_compaction(sstring type, std::function<bool(co
     try {
         target_type = to_compaction_type(type);
     } catch (...) {
-        throw std::runtime_error(format("Compaction of type {} cannot be stopped by compaction manager: {}", type.c_str(), std::current_exception()));
+        throw std::runtime_error(format("Compaction of type {} cannot be stopped by compaction manager: {:t}", type.c_str(), std::current_exception()));
     }
     switch (target_type) {
     case compaction_type::Validation:
@@ -2745,7 +2745,7 @@ void compaction_backlog_tracker::replace_sstables(const std::vector<sstables::sh
     try {
         _impl->replace_sstables(filter_and_revert_charges(old_ssts), filter_and_revert_charges(new_ssts));
     } catch (...) {
-        cmlog.error("Disabling backlog tracker due to exception {}", std::current_exception());
+        cmlog.error("Disabling backlog tracker due to exception {:t}", std::current_exception());
         // FIXME: tracker should be able to recover from a failure, e.g. OOM, by having its state reset. More details on https://github.com/scylladb/scylla/issues/10297.
         disable();
     }
@@ -2766,7 +2766,7 @@ void compaction_backlog_tracker::register_partially_written_sstable(sstables::sh
         // ends. The backlog will just be temporarily wrong. If we are are suffering from something
         // more serious like memory exhaustion we will soon fail again in either add / remove and
         // then we'll disable the tracker. For now, try our best.
-        cmlog.warn("backlog tracker couldn't register partially written SSTable to exception {}", std::current_exception());
+        cmlog.warn("backlog tracker couldn't register partially written SSTable to exception {:t}", std::current_exception());
     }
 }
 
@@ -2778,7 +2778,7 @@ void compaction_backlog_tracker::register_compacting_sstable(sstables::shared_ss
     try {
         _ongoing_compactions.emplace(sst, &rp);
     } catch (...) {
-        cmlog.warn("backlog tracker couldn't register partially compacting SSTable to exception {}", std::current_exception());
+        cmlog.warn("backlog tracker couldn't register partially compacting SSTable to exception {:t}", std::current_exception());
     }
 }
 

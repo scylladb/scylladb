@@ -241,7 +241,7 @@ future<> view_building_worker::run_staging_sstables_registrator() {
         } catch (raft::request_aborted&) {
             vbw_logger.warn("Got raft::request_aborted while creating staging sstable tasks");
         } catch (...) {
-            vbw_logger.error("Exception while creating staging sstable tasks: {}", std::current_exception());
+            vbw_logger.error("Exception while creating staging sstable tasks: {:t}", std::current_exception());
             sleep = true;
         }
 
@@ -467,7 +467,7 @@ future<> view_building_worker::run_view_building_state_observer() {
         } catch (abort_requested_exception&) {
         } catch (broken_condition_variable&) {
         } catch (...) {
-            vbw_logger.warn("view_building_state_observer failed with: {}", std::current_exception());
+            vbw_logger.warn("view_building_state_observer failed with: {:t}", std::current_exception());
             sleep = true;
         }
 
@@ -476,7 +476,7 @@ future<> view_building_worker::run_view_building_state_observer() {
                 vbw_logger.debug("Sleeping after exception.");
                 co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
             } catch (...) {
-                vbw_logger.warn("view_building_state_observer sleep failed: {}", std::current_exception());
+                vbw_logger.warn("view_building_state_observer sleep failed: {:t}", std::current_exception());
             }
         }
     }

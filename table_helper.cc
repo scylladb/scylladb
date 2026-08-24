@@ -132,7 +132,7 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::migr
             co_return co_await table_helper::setup_table(qp, mm.local(), create_cql);
         });
     } catch (...) {
-        tlogger.debug("Failed to create {}.{} table in best-effort recovery path: {}", _keyspace, _name, std::current_exception());
+        tlogger.debug("Failed to create {}.{} table in best-effort recovery path: {:t}", _keyspace, _name, std::current_exception());
     }
 
     // We throw the bad_column_family exception because the caller

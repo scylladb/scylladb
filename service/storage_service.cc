@@ -158,7 +158,7 @@ namespace {
         try {
             resulting_node_list.emplace_back(n);
         } catch (...) {
-            throw std::runtime_error(::format("Failed to parse node list: {}: invalid node={}: {}", src_node_strings, n, std::current_exception()));
+            throw std::runtime_error(::format("Failed to parse node list: {}: invalid node={}: {:t}", src_node_strings, n, std::current_exception()));
         }
     }
     return resulting_node_list;
@@ -1095,7 +1095,7 @@ future<> storage_service::sstable_vnodes_cleanup_fiber(raft::server& server, gat
                         co_await task->done();
                         rtlogger.info("vnodes_cleanup {} finished", ks_name);
                     } catch (...) {
-                        rtlogger.error("vnodes_cleanup failed keyspace={} tables={} failed: {}", task->get_status().keyspace, table_infos, std::current_exception());
+                        rtlogger.error("vnodes_cleanup failed keyspace={} tables={} failed: {:t}", task->get_status().keyspace, table_infos, std::current_exception());
                         throw;
                     }
                 });
@@ -1130,7 +1130,7 @@ future<> storage_service::sstable_vnodes_cleanup_fiber(raft::server& server, gat
              rtlogger.info("vnodes_cleanup fiber aborted");
              break;
         } catch (...) {
-             rtlogger.error("vnodes_cleanup fiber got an error: {}", std::current_exception());
+             rtlogger.error("vnodes_cleanup fiber got an error: {:t}", std::current_exception());
              err = true;
         }
         if (err) {
@@ -1155,7 +1155,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     try {
                         _tablet_allocator.local().on_leadership_lost();
                     } catch (...) {
-                        rtlogger.error("tablet_allocator::on_leadership_lost() failed: {}", std::current_exception());
+                        rtlogger.error("tablet_allocator::on_leadership_lost() failed: {:t}", std::current_exception());
                     }
                 }
             }
@@ -1175,7 +1175,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     _topology_cmd_rpc_tracker);
         }
     } catch (...) {
-        rtlogger.info("raft_state_monitor_fiber aborted with {}", std::current_exception());
+        rtlogger.info("raft_state_monitor_fiber aborted with {:t}", std::current_exception());
     }
     if (as) {
         as->request_abort(); // abort current coordinator if running
@@ -2241,7 +2241,7 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(mut
                 co_await utils::clear_gently(view_erms);
             });
         } catch (...) {
-            slogger.warn("Failure to reset pending token_metadata in cleanup path: {}. Ignored.", std::current_exception());
+            slogger.warn("Failure to reset pending token_metadata in cleanup path: {:t}. Ignored.", std::current_exception());
         }
 
         std::rethrow_exception(std::move(ex));
@@ -2303,7 +2303,7 @@ void storage_service::commit_token_metadata_change(token_metadata_change& change
     } catch (...) {
         // applying the changes on all shards should never fail
         // it will end up in an inconsistent state that we can't recover from.
-        slogger.error("Failed to apply token_metadata changes: {}. Aborting.", std::current_exception());
+        slogger.error("Failed to apply token_metadata changes: {:t}. Aborting.", std::current_exception());
         abort();
     }
 }
@@ -2389,7 +2389,7 @@ future<> storage_service::remove_endpoint(inet_address endpoint, gms::permit_id 
     try {
         co_await _sys_ks.local().remove_endpoint(endpoint);
     } catch (...) {
-        slogger.error("fail to remove endpoint={}: {}", endpoint, std::current_exception());
+        slogger.error("fail to remove endpoint={}: {:t}", endpoint, std::current_exception());
     }
 }
 
@@ -3785,7 +3785,7 @@ future<> storage_service::unbootstrap() {
         try {
             co_await std::move(stream_success);
         } catch (...) {
-            slogger.warn("unbootstrap fails to stream : {}", std::current_exception());
+            slogger.warn("unbootstrap fails to stream : {:t}", std::current_exception());
             throw;
         }
         slogger.debug("stream acks all received.");
@@ -3838,7 +3838,7 @@ future<> storage_service::removenode_with_stream(locator::host_id leaving_node,
         try {
             streamer->stream_async().get();
         } catch (...) {
-            slogger.warn("removenode_with_stream: stream failed: {}", std::current_exception());
+            slogger.warn("removenode_with_stream: stream failed: {:t}", std::current_exception());
             throw;
         }
     });
@@ -4736,22 +4736,22 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
                 co_await split_all_compaction_groups();
             }
         } catch (const locator::no_such_tablet_map& ex) {
-            slogger.warn("Failed to complete splitting of table {} due to {}", table, ex);
+            slogger.warn("Failed to complete splitting of table {} due to {:t}", table, ex);
             break;
         } catch (const replica::no_such_column_family& ex) {
-            slogger.warn("Failed to complete splitting of table {} due to {}", table, ex);
+            slogger.warn("Failed to complete splitting of table {} due to {:t}", table, ex);
             break;
         } catch (const seastar::abort_requested_exception& ex) {
-            slogger.warn("Failed to complete splitting of table {} due to {}", table, ex);
+            slogger.warn("Failed to complete splitting of table {} due to {:t}", table, ex);
             break;
         } catch (raft::request_aborted& ex) {
-            slogger.warn("Failed to complete splitting of table {} due to {}", table, ex);
+            slogger.warn("Failed to complete splitting of table {} due to {:t}", table, ex);
             break;
         } catch (seastar::gate_closed_exception& ex) {
-            slogger.warn("Failed to complete splitting of table {} due to {}", table, ex);
+            slogger.warn("Failed to complete splitting of table {} due to {:t}", table, ex);
             break;
         } catch (...) {
-            slogger.error("Failed to complete splitting of table {} due to {}, retrying after {} seconds",
+            slogger.error("Failed to complete splitting of table {} due to {:t}, retrying after {} seconds",
                           table, std::current_exception(), split_retry.sleep_time());
             sleep = true;
         }
@@ -4759,7 +4759,7 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
             try {
                 co_await split_retry.retry(_group0_as);
             } catch (...) {
-                slogger.warn("Sleep in split monitor failed with {}", std::current_exception());
+                slogger.warn("Sleep in split monitor failed with {:t}", std::current_exception());
             }
         }
     }
@@ -4775,7 +4775,7 @@ void storage_service::register_tablet_split_candidate(table_id table) noexcept {
             _tablet_split_monitor_event.signal();
         }
     } catch (...) {
-        slogger.error("Unable to register table {} as candidate for tablet splitting, due to {}", table, std::current_exception());
+        slogger.error("Unable to register table {} as candidate for tablet splitting, due to {:t}", table, std::current_exception());
     }
 }
 
@@ -5246,13 +5246,13 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
             }
         }
     } catch (const raft::request_aborted& e) {
-        rtlogger.warn("raft_topology_cmd {} failed with: {}", cmd.cmd, e);
+        rtlogger.warn("raft_topology_cmd {} failed with: {:t}", cmd.cmd, e);
         result.error_message = e.what();
     } catch (const std::exception& e) {
-        rtlogger.error("raft_topology_cmd {} failed with: {}", cmd.cmd, e);
+        rtlogger.error("raft_topology_cmd {} failed with: {:t}", cmd.cmd, e);
         result.error_message = e.what();
     } catch (...) {
-        rtlogger.error("raft_topology_cmd {} failed with: {}", cmd.cmd, std::current_exception());
+        rtlogger.error("raft_topology_cmd {} failed with: {:t}", cmd.cmd, std::current_exception());
         result.error_message = "unknown error";
     }
 
@@ -5352,7 +5352,7 @@ future<tablet_operation_result> storage_service::do_tablet_operation(locator::gl
         co_return result;
     } catch (...) {
         p.set_exception(std::current_exception());
-        rtlogger.warn("{} for tablet migration of {} failed: {}", op_name, tablet, std::current_exception());
+        rtlogger.warn("{} for tablet migration of {} failed: {:t}", op_name, tablet, std::current_exception());
         throw;
     }
 }
@@ -5568,7 +5568,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                     slogger.info("stream_sstables[{}] Streaming for tablet migration of {} finished table={}.{} range={} stream_bytes={} stream_time={} stream_bw={}",
                             ops_id, tablet, table.schema()->ks_name(), table.schema()->cf_name(), range, stream_bytes, duration, bw);
                 } catch (...) {
-                    slogger.warn("stream_sstables[{}] Streaming for tablet migration of {} from {} failed: {}", ops_id, tablet, leaving_replica, std::current_exception());
+                    slogger.warn("stream_sstables[{}] Streaming for tablet migration of {} from {} failed: {:t}", ops_id, tablet, leaving_replica, std::current_exception());
                     throw;
                 }
             }
@@ -7118,7 +7118,7 @@ static const char* disk_error_to_string(disk_error type) {
 void storage_service::do_isolate_on_error(disk_error type)
 {
     if (!std::exchange(_isolated, true)) {
-        slogger.error("Shutting down communications due to I/O errors until operator intervention: {} error: {}", disk_error_to_string(type), std::current_exception());
+        slogger.error("Shutting down communications due to I/O errors until operator intervention: {} error: {:t}", disk_error_to_string(type), std::current_exception());
         // isolated protect us against multiple stops on _this_ shard
         //FIXME: discarded future.
         (void)isolate();
@@ -7189,7 +7189,7 @@ future<> endpoint_lifecycle_notifier::notify_down(gms::inet_address endpoint, lo
             try {
                 subscriber->on_down(endpoint, hid);
             } catch (...) {
-                slogger.warn("Down notification failed {}/{}: {}", endpoint, hid, std::current_exception());
+                slogger.warn("Down notification failed {}/{}: {:t}", endpoint, hid, std::current_exception());
             }
         });
     });
@@ -7209,7 +7209,7 @@ future<> endpoint_lifecycle_notifier::notify_left(gms::inet_address endpoint, lo
             try {
                 subscriber->on_leave_cluster(endpoint, hid);
             } catch (...) {
-                slogger.warn("Leave cluster notification failed {}/{}: {}", endpoint, hid, std::current_exception());
+                slogger.warn("Leave cluster notification failed {}/{}: {:t}", endpoint, hid, std::current_exception());
             }
         });
     });
@@ -7221,7 +7221,7 @@ future<> endpoint_lifecycle_notifier::notify_released(locator::host_id hid) {
             try {
                 subscriber->on_released(hid);
             } catch (...) {
-                slogger.warn("Node released notification failed {}: {}", hid, std::current_exception());
+                slogger.warn("Node released notification failed {}: {:t}", hid, std::current_exception());
             }
         });
     });
@@ -7247,7 +7247,7 @@ future<> endpoint_lifecycle_notifier::notify_up(gms::inet_address endpoint, loca
             try {
                 subscriber->on_up(endpoint, hid);
             } catch (...) {
-                slogger.warn("Up notification failed {}/{}: {}", endpoint, hid, std::current_exception());
+                slogger.warn("Up notification failed {}/{}: {:t}", endpoint, hid, std::current_exception());
             }
         });
     });
@@ -7269,7 +7269,7 @@ future<> endpoint_lifecycle_notifier::notify_joined(gms::inet_address endpoint, 
             try {
                 subscriber->on_join_cluster(endpoint, hid);
             } catch (...) {
-                slogger.warn("Join cluster notification failed {}/{}: {}", endpoint, hid,std::current_exception());
+                slogger.warn("Join cluster notification failed {}/{}: {:t}", endpoint, hid,std::current_exception());
             }
         });
     });
@@ -7281,7 +7281,7 @@ future<> endpoint_lifecycle_notifier::notify_client_routes_change(const client_r
             try {
                 subscriber->on_client_routes_change(client_route_keys);
             } catch (...) {
-                slogger.warn("Client routes notification failed: {}", std::current_exception());
+                slogger.warn("Client routes notification failed: {:t}", std::current_exception());
             }
         });
     });

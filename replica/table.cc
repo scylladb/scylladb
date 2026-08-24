@@ -1815,13 +1815,13 @@ table::add_new_sstable_and_update_cache(sstables::shared_sstable new_sst,
     if (ex) {
         // on failed split, input sstable is unlinked here.
         if (new_sst) {
-            tlogger.log(failure_log_level, "Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", new_sst->get_filename(), new_sst->get_origin(), ex);
+            tlogger.log(failure_log_level, "Failed to load SSTable {} of origin {} due to {:t}, it will be unlinked...", new_sst->get_filename(), new_sst->get_origin(), ex);
             co_await new_sst->unlink();
         }
         // on failure after successful split, sstables not attached yet will be unlinked
         co_await coroutine::parallel_for_each(ssts, [&ex, failure_log_level] (sstables::shared_sstable sst) -> future<> {
             if (sst) {
-                tlogger.log(failure_log_level, "Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", sst->get_filename(), sst->get_origin(), ex);
+                tlogger.log(failure_log_level, "Failed to load SSTable {} of origin {} due to {:t}, it will be unlinked...", sst->get_filename(), sst->get_origin(), ex);
                 co_await sst->unlink();
             }
         });
@@ -1855,7 +1855,7 @@ table::add_new_sstables_and_update_cache(std::vector<sstables::shared_sstable> n
     if (ex) {
         co_await coroutine::parallel_for_each(new_ssts, [&ex, failure_log_level] (sstables::shared_sstable sst) -> future<> {
             if (sst) {
-                tlogger.log(failure_log_level, "Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", sst->get_filename(), sst->get_origin(), ex);
+                tlogger.log(failure_log_level, "Failed to load SSTable {} of origin {} due to {:t}, it will be unlinked...", sst->get_filename(), sst->get_origin(), ex);
                 co_await sst->unlink();
             }
         });
@@ -2468,7 +2468,7 @@ table::delete_sstables_atomically(const sstable_list_permit&, std::vector<sstabl
     } catch (...) {
         // There is nothing more we can do here.
         // Any remaining SSTables will eventually be re-compacted and re-deleted.
-        tlogger.error("SSTables deletion failed: {}. Ignored.", std::current_exception());
+        tlogger.error("SSTables deletion failed: {:t}. Ignored.", std::current_exception());
     }
 }
 
@@ -2781,7 +2781,7 @@ void table::try_trigger_compaction(compaction_group& cg) noexcept {
     try {
         cg.trigger_compaction();
     } catch (...) {
-        tlogger.error("Failed to trigger compaction: {}", std::current_exception());
+        tlogger.error("Failed to trigger compaction: {:t}", std::current_exception());
     }
 }
 
@@ -5350,7 +5350,7 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
                 add_sstable_to_backlog_tracker(cg.get_backlog_tracker(), sst);
             }
         } catch (...) {
-            tlogger.warn("Failed to move sstable {} from staging: {}", sst->get_filename(), std::current_exception());
+            tlogger.warn("Failed to move sstable {} from staging: {:t}", sst->get_filename(), std::current_exception());
             throw;
         }
     }

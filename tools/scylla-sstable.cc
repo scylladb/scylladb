@@ -261,7 +261,7 @@ std::optional<schema_with_source> try_load_schema_from_user_provided_source(cons
                 .obtained_from = "--sstable-schema parameter"};
         }
     } catch (...) {
-        fmt::print(std::cerr, "error processing arguments: could not load schema via {}: {}\n", schema_source_opt, std::current_exception());
+        fmt::print(std::cerr, "error processing arguments: could not load schema via {}: {:t}\n", schema_source_opt, std::current_exception());
         return {};
     }
     // Should not happen, but if it does (we all know it will), let's at least have a message printed.
@@ -277,7 +277,7 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
             .path = schema_file_path,
             .obtained_from = "--schema-file parameters (default value)"};
     } catch (...) {
-        sst_log.debug("Trying to read schema file from default location failed: {}", std::current_exception());
+        sst_log.debug("Trying to read schema file from default location failed: {:t}", std::current_exception());
     }
 
     if (app_config.count("sstables")) {
@@ -288,7 +288,7 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
                 .path = info.data_dir_path,
                 .obtained_from = format("sstable path ({})", info.sstable_path)};
         } catch (...) {
-            sst_log.debug("Trying to find scylla data dir based on the sstable path failed: {}", std::current_exception());
+            sst_log.debug("Trying to find scylla data dir based on the sstable path failed: {:t}", std::current_exception());
         }
     } else {
         sst_log.debug("Trying to find scylla data dir based on sstable path failed: no sstable argument provided");
@@ -302,7 +302,7 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
             .path = data_dir_path,
             .obtained_from = "data dir"};
     } catch (...) {
-        sst_log.debug("Trying to locate data dir failed: {}", std::current_exception());
+        sst_log.debug("Trying to locate data dir failed: {:t}", std::current_exception());
     }
 
     try {
@@ -322,7 +322,7 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
             .source = "sstable's serialization header",
             .obtained_from = sst_path};
     } catch (...) {
-        sst_log.debug("Trying to load schema from the sstable itself failed: {}", std::current_exception());
+        sst_log.debug("Trying to load schema from the sstable itself failed: {:t}", std::current_exception());
     }
 
     fmt::print(std::cerr, "Failed to autodetect and load schema, try again with --logger-log-level scylla-sstable=debug to learn more or provide the schema source manually\n");
@@ -388,7 +388,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
             // Print each individual error here since parallel_for_each
             // will propagate only one of them up the stack.
             auto msg = fmt::format("Could not load SSTable: {}", sst->get_filename());
-            fmt::print(std::cerr, "{}: {}\n", msg, std::current_exception());
+            fmt::print(std::cerr, "{}: {:t}\n", msg, std::current_exception());
             throw_with_nested(std::runtime_error(msg));
         }
 
@@ -1859,7 +1859,7 @@ validate_and_prepare_query(std::string_view query, std::string_view table_name, 
     try {
         raw_statements = cql3::query_processor::parse_statements(query, cql3::dialect{});
     } catch (...) {
-        throw std::invalid_argument(seastar::format("failed to parse query: {}", std::current_exception()));
+        throw std::invalid_argument(seastar::format("failed to parse query: {:t}", std::current_exception()));
     }
     if (raw_statements.size() != 1) {
         throw std::invalid_argument(seastar::format("expected exactly 1 query, got {}", raw_statements.size()));
@@ -1887,7 +1887,7 @@ validate_and_prepare_query(std::string_view query, std::string_view table_name, 
         auto prepared_statement = raw_statement->prepare(db, cql_stats, cql3::default_cql_config);
         return std::move(prepared_statement->statement);
     } catch (...) {
-        throw std::invalid_argument(seastar::format("failed to prepare query: {}", std::current_exception()));
+        throw std::invalid_argument(seastar::format("failed to prepare query: {:t}", std::current_exception()));
     }
 }
 
@@ -3199,7 +3199,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             try {
                 sstables = load_sstables(schema, sst_man, sstm.local(), sstable_names);
             } catch (...) {
-                fmt::print(std::cerr, "error loading sstables: {}\n", std::current_exception());
+                fmt::print(std::cerr, "error loading sstables: {:t}\n", std::current_exception());
                 return 1;
             }
         }
@@ -3215,7 +3215,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
             return 1;
         } catch (...) {
-            fmt::print(std::cerr, "error running operation: {}\n", std::current_exception());
+            fmt::print(std::cerr, "error running operation: {:t}\n", std::current_exception());
             return 2;
         }
 

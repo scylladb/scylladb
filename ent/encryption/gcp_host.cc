@@ -206,7 +206,7 @@ future<std::tuple<shared_ptr<encryption::symmetric_key>, encryption::gcp_host::i
     } catch (rjson::malformed_value& e) {
         std::throw_with_nested(malformed_response_error(fmt::format("get_or_create_key: {}", e.what())));
     } catch (...) {
-        std::throw_with_nested(service_error(fmt::format("get_or_create_key: {}", std::current_exception())));
+        std::throw_with_nested(service_error(fmt::format("get_or_create_key: {:t}", std::current_exception())));
     }
 }
 
@@ -232,7 +232,7 @@ future<shared_ptr<encryption::symmetric_key>> encryption::gcp_host::impl::get_ke
     } catch (rjson::malformed_value& e) {
         std::throw_with_nested(malformed_response_error(fmt::format("get_or_create_key: {}", e.what())));
     } catch (...) {
-        std::throw_with_nested(service_error(fmt::format("get_key_by_id: {}", std::current_exception())));
+        std::throw_with_nested(service_error(fmt::format("get_key_by_id: {:t}", std::current_exception())));
     }
 }
 
@@ -257,7 +257,7 @@ future<rjson::value> encryption::gcp_host::impl::gcp_auth_post_with_retry(std::s
             }
             i = _cached_credentials.emplace(src, std::move(c)).first;
         } catch (...) {
-            gcp_log.warn("Error resolving credentials for {}: {}", src, std::current_exception());
+            gcp_log.warn("Error resolving credentials for {}: {:t}", src, std::current_exception());
             throw;
         }
     }

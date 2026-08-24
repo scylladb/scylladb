@@ -617,7 +617,7 @@ def test_scylla_sstable_write_temp_dir(cql, scylla_path, scylla_data_dir):
 
         assert res.returncode == 2
         assert res.stdout == ""
-        assert res.stderr.endswith(f"error running operation: std::filesystem::__cxx11::filesystem_error (error generic:20, filesystem error: temp_directory_path: Not a directory [{f.name}])\n")
+        assert res.stderr.endswith(f"error running operation: std::filesystem::filesystem_error: filesystem error: temp_directory_path: Not a directory [{f.name}]\n")
 
 
 @pytest.mark.parametrize("table_factory", [
@@ -1201,7 +1201,7 @@ class TestScyllaSsstableSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
                 scylla_path,
                 ["--schema-tables", "--scylla-yaml-file", scylla_yaml_file, "--keyspace", "non-existent-keyspace", "--table", self.table],
                 ext_sstable,
-                error_msg="error processing arguments: could not load schema via schema-tables: std::runtime_error (Failed to find non-existent-keyspace.scylla_local in schema tables)")
+                error_msg="error processing arguments: could not load schema via schema-tables: std::runtime_error: Failed to find non-existent-keyspace.scylla_local in schema tables")
 
     def test_fail_nonexistent_table(self, scylla_path, system_scylla_local_sstable_prepared, temp_workdir, scylla_home_dir):
         ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
@@ -1210,7 +1210,7 @@ class TestScyllaSsstableSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
                 scylla_path,
                 ["--schema-tables", "--scylla-yaml-file", scylla_yaml_file, "--keyspace", self.keyspace, "--table", "non-existent-table"],
                 ext_sstable,
-                error_msg="error processing arguments: could not load schema via schema-tables: std::runtime_error (Failed to find system.non-existent-table in schema tables)")
+                error_msg="error processing arguments: could not load schema via schema-tables: std::runtime_error: Failed to find system.non-existent-table in schema tables")
 
 
 @pytest.fixture(scope="class")
@@ -1490,7 +1490,7 @@ def test_scrub_abort_mode(scylla_path, scrub_workdir, scrub_schema_file, scrub_g
         check_scrub_output_dir(tmp_dir, 1)
 
     with tempfile.TemporaryDirectory(prefix="test_scrub_abort_mode", dir=scrub_workdir) as tmp_dir:
-        subprocess_check_error([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "abort", "--output-dir", tmp_dir, scrub_bad_sstable], "compaction_aborted_exception \\(Compaction for ks/tbl was aborted due to: scrub compaction found invalid data\\)")
+        subprocess_check_error([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "abort", "--output-dir", tmp_dir, scrub_bad_sstable], "compaction_aborted_exception: Compaction for ks/tbl was aborted due to: scrub compaction found invalid data")
         check_scrub_output_dir(tmp_dir, 0)
 
 
@@ -2079,7 +2079,7 @@ def test_scylla_sstable_query_temp_dir(cql, scylla_path, scylla_data_dir):
 
         assert res.returncode == 2
         assert res.stdout == ""
-        assert res.stderr.endswith(f"error running operation: std::filesystem::__cxx11::filesystem_error (error generic:20, filesystem error: temp_directory_path: Not a directory [{f.name}])\n")
+        assert res.stderr.endswith(f"error running operation: std::filesystem::filesystem_error: filesystem error: temp_directory_path: Not a directory [{f.name}]\n")
 
 
 def test_scylla_sstable_query_null_data(cql, test_keyspace, scylla_path, scylla_data_dir):

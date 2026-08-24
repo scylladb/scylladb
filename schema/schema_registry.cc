@@ -47,7 +47,7 @@ schema_registry_entry::schema_registry_entry(table_schema_version v, schema_regi
         try {
             _registry._entries.erase(_version);
         } catch (...) {
-            slogger.error("Failed to erase schema version {}: {}", _version, std::current_exception());
+            slogger.error("Failed to erase schema version {}: {:t}", _version, std::current_exception());
         }
     });
 }
@@ -232,7 +232,7 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
                 std::throw_with_nested(schema_version_loading_failed(_version));
             }
         } catch (...) {
-            slogger.debug("Loading of {} failed: {}", _version, std::current_exception());
+            slogger.debug("Loading of {} failed: {:t}", _version, std::current_exception());
             _schema_promise.set_exception(std::current_exception());
             _registry._entries.erase(_version);
         }

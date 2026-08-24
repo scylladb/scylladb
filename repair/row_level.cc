@@ -3516,7 +3516,7 @@ private:
                 (void)resp;  // nothing to do with the response yet
                 rlogger.debug("repair[{}]: Finished to update system.repair_history table of node {}", _shard_task.global_repair_id.uuid(), node);
             } catch (...) {
-                rlogger.warn("repair[{}]: Failed to update system.repair_history table of node {}: {}", _shard_task.global_repair_id.uuid(), node, std::current_exception());
+                rlogger.warn("repair[{}]: Failed to update system.repair_history table of node {}: {:t}", _shard_task.global_repair_id.uuid(), node, std::current_exception());
             }
         });
         co_return;
@@ -3736,7 +3736,7 @@ public:
             });
             rlogger.debug("Finished to remove row level repair on all shards for node {}", node);
         } catch(...) {
-            rlogger.warn("Failed to remove row level repair for node {}: {}", node, std::current_exception());
+            rlogger.warn("Failed to remove row level repair for node {}: {:t}", node, std::current_exception());
         }
     }
     virtual future<> on_dead(
@@ -3828,7 +3828,7 @@ future<> repair_service::stop() {
     _state = state::stopped;
     rlogger.info("Stopped repair_service");
   } catch (...) {
-    on_fatal_internal_error(rlogger, format("Failed stopping repair_service: {}", std::current_exception()));
+    on_fatal_internal_error(rlogger, format("Failed stopping repair_service: {:t}", std::current_exception()));
   }
 }
 
@@ -3927,7 +3927,7 @@ future<> repair_service::load_history() {
                     gc_state.batch_update_repair_time(table_uuid, updates);
                 });
             } catch (...) {
-                rlogger.warn("Failed to update repair history time for table_uuid={}: {}", table_uuid, std::current_exception());
+                rlogger.warn("Failed to update repair history time for table_uuid={}: {:t}", table_uuid, std::current_exception());
             }
             updates.clear();
         };
@@ -3951,7 +3951,7 @@ future<> repair_service::load_history() {
   } catch (const abort_requested_exception&) {
     // Ignore
   } catch (...) {
-    rlogger.warn("Failed to update repair history time: {}.  Ignored", std::current_exception());
+    rlogger.warn("Failed to update repair history time: {:t}.  Ignored", std::current_exception());
   }
 }
 

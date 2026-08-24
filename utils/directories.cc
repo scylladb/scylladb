@@ -24,7 +24,7 @@ static future<> disk_sanity(fs::path path, bool developer_mode) {
     try {
         co_await check_direct_io_support(path.native());
     } catch (...) {
-        startlog.error("Coould not access {}: {}", path, std::current_exception());
+        startlog.error("Coould not access {}: {:t}", path, std::current_exception());
         throw;
     }
 };
@@ -47,7 +47,7 @@ static future<file_lock> touch_and_lock(fs::path path) {
                 }
             });
         } catch (...) {
-            startlog.error("Directory '{}' cannot be initialized. Tried to do it but failed with: {}", path, std::current_exception());
+            startlog.error("Directory '{}' cannot be initialized. Tried to do it but failed with: {:t}", path, std::current_exception());
             throw;
         }
     });
@@ -89,7 +89,7 @@ future<> directories::create_and_verify(directories::set dir_set, recursive recu
         try {
             co_await directories::verify_owner_and_mode(path, recursive);
         } catch (...) {
-            startlog.error("Failed owner and mode verification: {}", std::current_exception());
+            startlog.error("Failed owner and mode verification: {:t}", std::current_exception());
             throw;
         }
     });

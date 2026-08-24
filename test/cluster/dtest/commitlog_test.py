@@ -40,10 +40,10 @@ class TestCommitLog(Tester):
     @pytest.fixture(autouse=True)
     def fixture_add_additional_log_patterns(self, fixture_dtest_setup):
         fixture_dtest_setup.ignore_log_patterns += [
-            r"commitlog - Exception in segment reservation: storage_io_error \(Storage I/O error: 13: filesystem error: open failed",
+            r"commitlog - Exception in segment reservation: storage_io_error: Storage I/O error: 13: filesystem error: open failed",
             "Shutting down communications due to I/O errors until operator intervention",
-            r"commitlog - Failed to (flush|persist) commits to disk.*storage_io_error \(Storage I/O error: 28: No space left on device\)",
-            r"storage_proxy - .*\(Could not write mutation .* to commitlog\): storage_io_error \(Storage I/O error: 28: No space left on device\)",
+            r"commitlog - Failed to (flush|persist) commits to disk.*storage_io_error: Storage I/O error: 28: No space left on device",
+            r"storage_proxy - .*Could not write mutation .* to commitlog: storage_io_error: Storage I/O error: 28: No space left on device",
         ]
 
     @pytest.fixture(autouse=True)

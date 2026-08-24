@@ -99,8 +99,8 @@ bool hint_endpoint_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_
             return do_store_hint(std::move(s), std::move(fm), tr_state);
         });
     } catch (...) {
-        manager_logger.trace("hint_endpoint_manager[{}]:store_hint: Failed to store a hint: {}", end_point_key(), std::current_exception());
-        tracing::trace(tr_state, "Failed to store a hint to {}: {}", end_point_key(), std::current_exception());
+        manager_logger.trace("hint_endpoint_manager[{}]:store_hint: Failed to store a hint: {:t}", end_point_key(), std::current_exception());
+        tracing::trace(tr_state, "Failed to store a hint to {}: {:t}", end_point_key(), std::current_exception());
 
         ++shard_stats().dropped;
         return false;

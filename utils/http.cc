@@ -109,7 +109,7 @@ future<connected_socket> utils::http::dns_connection_factory::make(abort_source*
         co_return co_await connect(address);
     } catch (...) {
         // On failure, forcefully renew address resolution and try again
-        _logger.debug("Connection failed, resetting address provider and retrying: {}", std::current_exception());
+        _logger.debug("Connection failed, resetting address provider and retrying: {:t}", std::current_exception());
     }
     _addr_list.reset();
     auto address = co_await get_address();

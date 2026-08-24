@@ -5718,7 +5718,7 @@ For more information, see: {})";
             fmt::print(std::cerr, "error running operation: failed assert on JSON data: {}\nAPI requests: {}\n", e.what(), fmt::join(client->request_history(), "\n    "));
             return 2;
         } catch (...) {
-            fmt::print(std::cerr, "error running operation: {}\n", std::current_exception());
+            fmt::print(std::cerr, "error running operation: {:t}\n", std::current_exception());
             return 2;
         }
 

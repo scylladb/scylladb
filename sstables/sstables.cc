@@ -729,7 +729,7 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
     } catch (const malformed_sstable_exception&) {
         throw;
     } catch (...) {
-        throw_malformed_sstable_exception(fmt::format("Statistics file is malformed: {}", std::current_exception()));
+        throw_malformed_sstable_exception(fmt::format("Statistics file is malformed: {:t}", std::current_exception()));
     }
 }
 
@@ -1019,7 +1019,7 @@ file_writer::~file_writer() {
         // so auto-close the output_stream so it won't be destructed while open.
         _out.close().get();
     } catch (...) {
-        sstlog.warn("Error while auto-closing {}: {}. Ignored.", _component, std::current_exception());
+        sstlog.warn("Error while auto-closing {}: {:t}. Ignored.", _component, std::current_exception());
     }
 }
 
@@ -2016,7 +2016,7 @@ void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
         try {
             index_file.close().get();
         } catch (...) {
-            sstlog.warn("sstable close index_file failed: {}", std::current_exception());
+            sstlog.warn("sstable close index_file failed: {:t}", std::current_exception());
             general_disk_error();
         }
     });
@@ -2036,7 +2036,7 @@ void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
     try {
         consumer_ctx.consume_input().get();
     } catch (...) {
-        sstlog.warn("Failed to rebuild bloom filter {} : {}. Existing bloom filter will be written to disk.", filename(component_type::Filter), std::current_exception());
+        sstlog.warn("Failed to rebuild bloom filter {} : {:t}. Existing bloom filter will be written to disk.", filename(component_type::Filter), std::current_exception());
         return;
     }
 
@@ -2850,7 +2850,7 @@ future<> sstable::generate_summary() {
     try {
         co_await index_file.close();
     } catch (...) {
-        sstlog.warn("sstable close index_file failed: {}", std::current_exception());
+        sstlog.warn("sstable close index_file failed: {:t}", std::current_exception());
         general_disk_error();
     }
 
@@ -3724,7 +3724,7 @@ future<> sstable::close_files() {
                             }
                         }));
         } catch (...) {
-            sstlog.warn("Exception when deleting sstable file: {}", std::current_exception());
+            sstlog.warn("Exception when deleting sstable file: {:t}", std::current_exception());
         }
     }
 
@@ -3998,7 +3998,7 @@ sstable::unlink(const atomic_deletion* deletion) noexcept {
         memory::scoped_critical_alloc_section _;
         // Just log and ignore failures to delete large data entries.
         // They are not critical to the operation of the database.
-        sstlog.warn("Failed to delete large data entry for {}: {}. Ignoring.", toc_filename(), std::current_exception());
+        sstlog.warn("Failed to delete large data entry for {}: {:t}. Ignoring.", toc_filename(), std::current_exception());
     }
 
     co_await std::move(remove_fut);

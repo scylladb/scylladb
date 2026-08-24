@@ -272,7 +272,7 @@ private:
         try {
             fn();
         } catch (...) {
-            logger.error("Internal error, disabling the sanitizer: {}", std::current_exception());
+            logger.error("Internal error, disabling the sanitizer: {:t}", std::current_exception());
             _broken = true;
             _allocations.clear();
         }

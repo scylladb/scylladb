@@ -60,7 +60,7 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
         _abort_source.check();
         co_await streamer->stream_async();
     } catch (...) {
-        blogger.warn("Error during bootstrap: {}", std::current_exception());
+        blogger.warn("Error during bootstrap: {:t}", std::current_exception());
         throw;
     }
 }

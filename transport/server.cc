@@ -960,7 +960,7 @@ std::unique_ptr<cql_server::response> cql_server::handle_exception(int16_t strea
         try {
             std::rethrow_if_nested(*exp);
         } catch (...) {
-            msg = seastar::format("{}: {}", msg, std::current_exception());
+            msg = seastar::format("{}: {:t}", msg, std::current_exception());
         }
         return make_error(stream, exceptions::exception_code::SERVER_ERROR, msg, trace_state);
     } else {

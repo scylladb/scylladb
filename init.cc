@@ -34,7 +34,7 @@ std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg,
                 seeds.emplace(gms::inet_address::lookup(seed, family, preferred).get());
             } catch (...) {
                 if (fail_on_lookup_error) {
-                    startlog.error("Bad configuration: invalid value in 'seeds': '{}': {}", seed, std::current_exception());
+                    startlog.error("Bad configuration: invalid value in 'seeds': '{}': {:t}", seed, std::current_exception());
                     throw bad_configuration_error();
                 }
                 startlog.warn("Bad configuration: invalid value in 'seeds': '{}': {}. Node will continue booting since already bootstrapped.",

@@ -445,7 +445,7 @@ future<> raft_group_registry::do_abort_server(raft::group_id gid, raft_server_fo
         });
         co_await s.server->abort(std::move(reason));
     } catch (...) {
-        rslog.warn("Failed to abort raft group server {}: {}", gid, std::current_exception());
+        rslog.warn("Failed to abort raft group server {}: {:t}", gid, std::current_exception());
     }
 }
 

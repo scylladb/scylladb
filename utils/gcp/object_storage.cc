@@ -626,7 +626,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
 
             throw storage_io_error{EIO, format("GCP request failed with ({})", status)};
         } catch (...) {
-            throw storage_io_error{EIO, format("GCP error ({})", std::current_exception())};
+            throw storage_io_error{EIO, format("GCP error ({:t})", std::current_exception())};
         }
     }
 }

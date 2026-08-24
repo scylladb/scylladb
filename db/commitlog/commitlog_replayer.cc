@@ -319,7 +319,7 @@ future<> db::commitlog_replayer::impl::process(
                     } catch (...) {
                         s->invalid_mutations++;
                         // TODO: write mutation to file like origin.
-                        rlogger.warn("error replaying: {}", std::current_exception());
+                        rlogger.warn("error replaying: {:t}", std::current_exception());
                     }
                 });
             };
@@ -338,7 +338,7 @@ future<> db::commitlog_replayer::impl::process(
     } catch (...) {
         s->invalid_mutations++;
         // TODO: write mutation to file like origin.
-        rlogger.warn("error replaying: {}", std::current_exception());
+        rlogger.warn("error replaying: {:t}", std::current_exception());
     }
 }
 

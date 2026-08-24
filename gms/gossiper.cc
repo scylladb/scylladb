@@ -449,7 +449,7 @@ future<> gossiper::handle_echo_msg(locator::host_id from_hid, seastar::rpc::opt_
                     co_await sleep_abortable(std::chrono::milliseconds(100), g._abort_source);
                 }
             } catch(...) {
-                logger.warn("handle_echo_msg: UP notification from {} failed with {}", from_hid, std::current_exception());
+                logger.warn("handle_echo_msg: UP notification from {} failed with {:t}", from_hid, std::current_exception());
             }
         });
     }
@@ -858,7 +858,7 @@ future<> gossiper::force_remove_endpoint(locator::host_id id, permit_id pid) {
             co_await gossiper.evict_from_membership(id, pid);
             logger.info("Finished to force remove node {}", id);
         } catch (...) {
-            logger.warn("Failed to force remove node {}: {}", id, std::current_exception());
+            logger.warn("Failed to force remove node {}: {:t}", id, std::current_exception());
         }
     });
 }
@@ -876,7 +876,7 @@ future<> gossiper::remove_endpoint(locator::host_id endpoint, permit_id pid) {
             return subscriber->on_remove(ip, endpoint, pid);
         });
     } catch (...) {
-        logger.warn("Fail to call on_remove callback: {}", std::current_exception());
+        logger.warn("Fail to call on_remove callback: {:t}", std::current_exception());
     }
 
     if (!state) {
@@ -907,7 +907,7 @@ future<> gossiper::remove_endpoint(locator::host_id endpoint, permit_id pid) {
             logger.info("InetAddress {}/{} is now DOWN, status = {}", host_id, ip, get_node_status(host_id));
             co_await do_on_dead_notifications(ip, std::move(state), pid);
         } catch (...) {
-            logger.warn("Fail to call on_dead callback: {}", std::current_exception());
+            logger.warn("Fail to call on_dead callback: {:t}", std::current_exception());
         }
     }
 }
@@ -1096,7 +1096,7 @@ future<> gossiper::failure_detector_loop_for_node(locator::host_id host_id, gene
             logger.debug("failure_detector_loop: Send echo to node {}/{}, status = ok", host_id, node);
         } catch (...) {
             failed = true;
-            logger.warn("failure_detector_loop: Send echo to node {}/{}, status = failed: {}", host_id, node, std::current_exception());
+            logger.warn("failure_detector_loop: Send echo to node {}/{}, status = failed: {:t}", host_id, node, std::current_exception());
         }
         auto now = gossiper::clk::now();
         diff = now - last;
@@ -1279,7 +1279,7 @@ void gossiper::run() {
             _nr_run++;
             logger.trace("=== Gossip round OK");
         } catch (...) {
-            logger.warn("=== Gossip round FAIL: {}", std::current_exception());
+            logger.warn("=== Gossip round FAIL: {:t}", std::current_exception());
         }
 
         if (logger.is_enabled(logging::log_level::trace)) {
@@ -1444,7 +1444,7 @@ future<> gossiper::replicate(endpoint_state es, permit_id pid) {
             g._endpoint_state_map[hid] = std::move(eps);
         });
     } catch (...) {
-        on_fatal_internal_error(logger, fmt::format("Failed to replicate endpoint_state: {}", std::current_exception()));
+        on_fatal_internal_error(logger, fmt::format("Failed to replicate endpoint_state: {:t}", std::current_exception()));
     }
 }
 
@@ -1677,7 +1677,7 @@ future<> gossiper::notify_nodes_on_up(std::unordered_set<locator::host_id> dsts)
                 auto generation = my_endpoint_state().get_heart_beat_state().get_generation();
                 co_await send_echo(dst, std::chrono::seconds(10), generation.value(), true);
             } catch (...) {
-                logger.warn("Failed to notify node {} that I am UP: {}", dst, std::current_exception());
+                logger.warn("Failed to notify node {} that I am UP: {:t}", dst, std::current_exception());
             }
         }
     });
@@ -1903,7 +1903,7 @@ future<> gossiper::apply_new_states(endpoint_state local_state, const endpoint_s
     try {
         co_await do_on_change_notifications(addr, host_id, changed, pid);
     } catch (...) {
-        auto msg = format("Gossip change listener failed: {}", std::current_exception());
+        auto msg = format("Gossip change listener failed: {:t}", std::current_exception());
         if (_abort_source.abort_requested()) {
             logger.warn("{}. Ignored", msg);
         } else {
@@ -2251,7 +2251,7 @@ future<> gossiper::add_local_application_state(application_state_map states) {
             co_await gossiper.do_on_change_notifications(ep_addr, gossiper.my_host_id(), states, permit.id());
         });
     } catch (...) {
-        logger.warn("Fail to apply application_state: {}", std::current_exception());
+        logger.warn("Fail to apply application_state: {:t}", std::current_exception());
     }
 }
 
@@ -2287,7 +2287,7 @@ future<> gossiper::do_stop_gossiping() {
                 co_await ser::gossip_rpc_verbs::send_gossip_shutdown(&_messaging, id, get_broadcast_address(), local_generation.value());
                 logger.trace("Got GossipShutdown Reply");
             } catch (...) {
-                logger.warn("Fail to send GossipShutdown to {}: {}", id, std::current_exception());
+                logger.warn("Fail to send GossipShutdown to {}: {:t}", id, std::current_exception());
             }
         });
         co_await sleep(std::chrono::milliseconds(_gcfg.shutdown_announce_ms));

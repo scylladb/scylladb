@@ -105,7 +105,7 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
                 co_return minimal_sst_info{shards.front(), gen, descriptor.version, descriptor.format};
             }
         } catch (...) {
-            logger.info("Error downloading SSTable component {}. Reason: {}", it->first, std::current_exception());
+            logger.info("Error downloading SSTable component {}. Reason: {:t}", it->first, std::current_exception());
             throw;
         }
     }

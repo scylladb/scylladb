@@ -33,7 +33,7 @@ target_parser::target_info target_parser::parse(schema_ptr schema, const index_m
     try {
         return parse(schema, target);
     } catch (...) {
-        throw exceptions::configuration_exception(format("Unable to parse targets for index {} ({}): {}", im.name(), target, std::current_exception()));
+        throw exceptions::configuration_exception(format("Unable to parse targets for index {} ({}): {:t}", im.name(), target, std::current_exception()));
     }
 }
 

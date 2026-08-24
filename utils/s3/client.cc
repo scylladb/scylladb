@@ -143,7 +143,7 @@ void client::update_config_sync(std::string region, std::string ira) {
             _credentials = {};
             _creds_update_timer.rearm(lowres_clock::now());
         } catch (...) {
-            s3l.error("Failed to refresh credentials during config update: {}", std::current_exception());
+            s3l.error("Failed to refresh credentials during config update: {:t}", std::current_exception());
         }
     });
 }
@@ -411,7 +411,7 @@ future<> client::rebalance_connections() {
         throw storage_io_error {EIO, format("S3 request failed with ({})", status)};
     } catch (...) {
         auto e = std::current_exception();
-        throw storage_io_error {EIO, format("S3 error ({})", e)};
+        throw storage_io_error {EIO, format("S3 error ({:t})", e)};
     }
 }
 
