@@ -165,6 +165,7 @@ static std::string to_hex(const memory_data_sink_buffers& bufs) {
 // does, and returns their contents in hex.
 static index_files_hex write_index_for_payload_test(
     sstables::sstable_version_types sst_ver,
+    const sstables::trie::bti_position_encoding& encoding,
     const std::vector<payload_test_partition>& partitions
 ) {
     auto s = schema_builder(this_smp_shard_count(), "ks", "t")
@@ -183,15 +184,15 @@ static index_files_hex write_index_for_payload_test(
         sstables::file_writer rows_db_writer(data_sink(std::make_unique<memory_data_sink>(rows_bufs)));
         auto close_partitions_db = defer([&] noexcept { partitions_db_writer.close(); });
         auto close_rows_db = defer([&] noexcept { rows_db_writer.close(); });
-        auto partition_index_writer = sstables::trie::bti_partition_index_writer(sst_ver, partitions_db_writer);
-        auto row_index_writer = sstables::trie::bti_row_index_writer(sst_ver, rows_db_writer);
+        auto partition_index_writer = sstables::trie::bti_partition_index_writer(sst_ver, partitions_db_writer, encoding);
+        auto row_index_writer = sstables::trie::bti_row_index_writer(sst_ver, rows_db_writer, encoding);
         std::vector<sstables::key> keys;
         for (const auto& p : partitions) {
             auto pk = partition_key::from_deeply_exploded(*s, {data_value(p.token)});
             auto dk = dht::decorated_key(dht::token::from_int64(p.token), pk);
             auto key = sstables::key::from_partition_key(*s, pk);
             for (const auto& b : p.blocks) {
-                row_index_writer.add(*s, make_ck(b.first_ck), make_ck(b.last_ck), b.start - p.start, b.range_tombstone_before_first_ck);
+                row_index_writer.add(*s, make_ck(b.first_ck), make_ck(b.last_ck), p.start, b.start, b.range_tombstone_before_first_ck);
             }
             auto target = row_index_writer.finish(*s, p.start, p.end, key, p.partition_tombstone);
             partition_index_writer.add(*s, dk, utils::make_hashed_key(bytes_view(key)), target);
@@ -220,6 +221,7 @@ SEASTAR_THREAD_TEST_CASE(test_mt_index_payload_encoding) {
     };
     auto files = write_index_for_payload_test(
         sstables::sstable_version_types::mt,
+        sstables::trie::bti_position_encoding::logical(),
         partitions);
     // Each payload node starts with a byte holding the node type (high 4 bits)
     // and the payload field (low 4 bits). A partition payload field is
@@ -257,6 +259,64 @@ SEASTAR_THREAD_TEST_CASE(test_mt_index_payload_encoding) {
         // previous field (-8) as a signed vint, the block count, and the
         // partition tombstone.
         "0002" "0002" "80c8" "0f" "02" "00000000000003f3" "00000315");
+}
+
+// Checks the exact bytes of the BTI index files of a compressed `mu` sstable.
+// The names C, N, O, LO, delta_C, T, P, and V are from
+// docs/architecture/sstable/sstable3/sstable-mu-format.rst.
+SEASTAR_THREAD_TEST_CASE(test_mu_index_payload_encoding) {
+    auto pos = [] (uint64_t chunk_position, uint64_t extent_hint, uint64_t offset_within_chunk) {
+        return sstables::sstable_position::from_physical(chunk_position, extent_hint, offset_within_chunk);
+    };
+    const auto live = sstables::deletion_time::make_live();
+    const auto partitions = std::vector<payload_test_partition>{
+        {.token = 1, .start = pos(0, 100, 0), .end = pos(0, 100, 23), .partition_tombstone = live},
+        {.token = 2, .start = pos(1000, 700, 50), .end = pos(2300, 900, 2000), .partition_tombstone = {789, 1011}, .blocks = {
+            {.first_ck = 1, .last_ck = 2, .start = pos(1000, 700, 300), .range_tombstone_before_first_ck = live},
+            {.first_ck = 3, .last_ck = 4, .start = pos(1700, 600, 10), .range_tombstone_before_first_ck = {123, 456}},
+        }},
+        {.token = 3, .start = pos(0x123456789a, 1500, 4095), .end = pos(0x123456789a + 1500, 1000, 50), .partition_tombstone = live},
+    };
+    // With L = 4096, LO has W_N = 4 bits of N - 1 and W_O = 12 bits of O.
+    auto files = write_index_for_payload_test(
+        sstables::sstable_version_types::mu,
+        sstables::trie::bti_position_encoding::physical(sstables::framed_chunk_codec::for_framed_chunks(4096)),
+        partitions);
+    // The payload field of a partition payload is the payload size.
+    BOOST_CHECK_EQUAL(files.partitions_db,
+        // Partition 1: (C, N, O) = (0, 1, 0).
+        // The payload is the hash byte, then V: the top bit, C and LO, in 3 bytes.
+        "04" "44" "800000"
+        // Partition 2: Rows.db position 36. The top bit of V is clear.
+        "02" "c1" "24"
+        // Partition 3: (C, N, O) = (0x123456789a, 4, 4095).
+        "08" "9f" "923456789a3fff"
+        // The trie nodes for the token bytes, from the leaves to the root.
+        "50" "03" "010203" "110c09"
+        "1800" "1200" "1200" "1200" "1200" "1200" "1280" "1240"
+        // The footer: the first and last keys, the footer position,
+        // the partition count, and the root position.
+        "0002" "0001" "0002" "0003" "0000000000000029" "0000000000000003" "0000000000000027");
+    // The payload field of a row payload is P.
+    BOOST_CHECK_EQUAL(files.rows_db,
+        // Partition 2, block 2: (C, N, O) = (1700, 2, 10), so delta_C = 700, and T = 1.
+        // Then the range tombstone: marked_for_delete_at and local_deletion_time.
+        "04" "05782015" "00000000000001c8" "0000007b"
+        // Partition 2, the end of the partition: (C, N, O) = (2300, 3, 2000),
+        // so delta_C = 1300, and T = 0.
+        "04" "0a284fa0"
+        // The trie nodes for the separators.
+        "50" "02" "0305" "1605"
+        "1680"
+        // The root is a SINGLE_8 node with a payload: the transition byte,
+        // the child offset, then the payload of block 1:
+        // (C, N, O) = (1000, 3, 300), so delta_C = 0, and T = 0.
+        "23" "40" "02" "004258"
+        // The row index header of partition 2, at Rows.db position 36: the key,
+        // C = 1000 as a vint, LO for (N, O) = (3, 50) in 2 bytes, the root
+        // position relative to the C field (-10) as a signed vint, the block
+        // count, and the partition tombstone.
+        "0002" "0002" "83e8" "2032" "13" "02" "00000000000003f3" "00000315");
 }
 
 struct clustering_index_entry {
@@ -1179,8 +1239,8 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
         auto close_partitions_db = defer([&] noexcept { partitions_db_writer.close(); });
         auto close_rows_db = defer([&] noexcept { rows_db_writer.close(); });
 
-        auto partition_index_writer = sstables::trie::bti_partition_index_writer(sst_ver, partitions_db_writer);
-        auto row_index_writer = sstables::trie::bti_row_index_writer(sst_ver, rows_db_writer);
+        auto partition_index_writer = sstables::trie::bti_partition_index_writer(sst_ver, partitions_db_writer, sstables::trie::bti_position_encoding::logical());
+        auto row_index_writer = sstables::trie::bti_row_index_writer(sst_ver, rows_db_writer, sstables::trie::bti_position_encoding::logical());
 
         std::optional<partition_index_entry> last_partition_entry;
         std::optional<partition_end_entry> last_partition_end_entry;
@@ -1211,7 +1271,8 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
                         *the_schema,
                         e.first_ck,
                         e.last_ck,
-                        sstables::sstable_position_offset::from_logical(e.data_file_offset - last_partition_entry.value().data_file_offset),
+                        sstables::sstable_position::from_logical(last_partition_entry.value().data_file_offset),
+                        sstables::sstable_position::from_logical(e.data_file_offset),
                         e.range_tombstone_before_first_ck);
                 },
                 [&](const partition_end_entry& e) {
@@ -1337,12 +1398,13 @@ SEASTAR_THREAD_TEST_CASE(test_read_row_index_header) {
     memory_data_sink_buffers bufs;
     {
         sstables::file_writer fw(data_sink(std::make_unique<memory_data_sink>(bufs)));
-        auto close_fw = defer([&] noexcept{ fw.close(); });
+        auto close_fw = defer([&] noexcept { fw.close(); });
         sstables::trie::write_row_index_header(
             sstables::sstable_version_types::mt,
             fw,
             pk,
             sstables::sstable_position::from_logical(partition_data_start),
+            sstables::trie::bti_position_encoding::logical(),
             number_of_blocks,
             root_pos,
             tomb

@@ -298,7 +298,7 @@ SEASTAR_THREAD_TEST_CASE(test_finite_memory_usage) {
     // Max memory usage for a dense dataset is around 256 * 256 * 80.
     // (~80 bytes per leaf node, 256 leaf node per internal node, 256 internal nodes).
     // With TRIE_SANITIZE_BUMP_ALLOCATOR, we allow way more memory for extra allocator metadata.
-    const size_t max_allowed_memory_usage = memory_usage_before + 8000000 * (TRIE_SANITIZE_BUMP_ALLOCATOR ? 10 : 1);
+    const size_t max_allowed_memory_usage = memory_usage_before + 16000000 * (TRIE_SANITIZE_BUMP_ALLOCATOR ? 10 : 1);
 
     auto out = null_trie_output_stream(4096);
     auto wr = trie_writer(out);

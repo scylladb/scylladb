@@ -9,6 +9,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <variant>
 #include <seastar/core/shared_ptr.hh>
 #include "sstables/abstract_index_reader.hh"
@@ -74,8 +75,9 @@ struct rows_db_position {
 // header in Rows.db (a rows_db_position), when the partition has an intra-partition
 // index.
 //
-// On disk the two cases are distinguished by the sign of the serialized position:
-// Data.db positions are serialized bit-negated. That negation is purely a
+// On disk the two cases are distinguished by the top bit of the serialized
+// position. In `ms`/`mt`, Data.db positions are serialized bit-negated, so the top
+// bit is the sign. In `mu`, the top bit is a separate flag. This is purely a
 // serialization detail applied by `bti_partition_index_writer`; the positions here
 // hold the plain, non-negated coordinate.
 struct bti_partition_index_target {
@@ -160,6 +162,39 @@ public:
     }
 };
 
+// How a BTI index stores Data.db positions.
+// - Logical: pre-compression offsets. Used by `ms`, `mt` and uncompressed `mu`.
+// - Physical: chunk coordinates, with (N, O) packed by a bti_physical_layout.
+//   Used by compressed `mu`.
+// The encoding is a property of the whole sstable. Every Data.db position that a
+// writer receives, or that a reader is given, has the kind of the encoding.
+class bti_position_encoding {
+    std::optional<bti_physical_layout> _physical;
+    explicit bti_position_encoding(std::optional<bti_physical_layout> physical) noexcept
+        : _physical(std::move(physical))
+    {}
+public:
+    static bti_position_encoding logical() noexcept {
+        return bti_position_encoding(std::nullopt);
+    }
+    // See bti_physical_layout's constructor for the requirements on `codec`.
+    static bti_position_encoding physical(const framed_chunk_codec& codec) {
+        return bti_position_encoding(bti_physical_layout(codec));
+    }
+    bool is_physical() const noexcept {
+        return _physical.has_value();
+    }
+    // Only valid for the physical encoding.
+    const bti_physical_layout& layout() const noexcept {
+        SCYLLA_ASSERT(_physical);
+        return *_physical;
+    }
+    // Asserts that `pos` has the position kind of this encoding.
+    void check_kind(const sstable_position& pos) const noexcept {
+        SCYLLA_ASSERT(pos.is_physical() == is_physical());
+    }
+};
+
 // Transforms a stream of (partition key, offset in Data.db, hash bits) tuples
 // into a stream of trie nodes fed into bti_trie_sink.
 // Used to populate the Partitions.db file of the BTI format
@@ -176,7 +211,9 @@ public:
     // but it mustn't be extended after `finish()`,
     // because `finish()` writes a footer which is used by the reader
     // to find the root of the trie.
-    explicit bti_partition_index_writer(sstable_version_types, sstables::file_writer&);
+    // The encoding selects the on-disk payload format. It must match the
+    // position kind of the `sstable_position`s passed to `add()`.
+    explicit bti_partition_index_writer(sstable_version_types, sstables::file_writer&, bti_position_encoding);
     bti_partition_index_writer(bti_partition_index_writer&&) noexcept;
     bti_partition_index_writer& operator=(bti_partition_index_writer&&) noexcept;
     ~bti_partition_index_writer() noexcept;
@@ -206,18 +243,26 @@ public:
     // The trie will be written to the given file writer.
     // Note: the file doesn't have to be empty,
     // and it can be extended later.
-    explicit bti_row_index_writer(sstable_version_types, sstables::file_writer&);
+    // The encoding selects the on-disk payload format. It must match the
+    // position kind of the `sstable_position`s passed to `add()` and `finish()`.
+    explicit bti_row_index_writer(sstable_version_types, sstables::file_writer&, bti_position_encoding);
     bti_row_index_writer(bti_row_index_writer&&) noexcept;
     bti_row_index_writer& operator=(bti_row_index_writer&&) noexcept;
     explicit operator bool() const noexcept { return bool(_impl); }
     // Add a new row index entry.
     // Must be called in ascending order.
     // (`first_ck` must be strictly greater than the previous `last_ck`).
+    //
+    // `partition_data_start` is the start of the partition in Data.db, the same
+    // one that is later passed to finish(). `block_start` is the start of the
+    // block in Data.db. The index stores the block's position relative to the
+    // partition start.
     void add(
         const schema& s,
         const sstables::clustering_info& first_ck,
         const sstables::clustering_info& last_ck,
-        sstable_position_offset offset_from_partition_start,
+        sstable_position partition_data_start,
+        sstable_position block_start,
         const sstables::deletion_time& range_tombstone_before_first_ck);
     // Flushes all remaining contents, and returns the position of the root node in the output stream.
     // If add() was never called, returns -1.

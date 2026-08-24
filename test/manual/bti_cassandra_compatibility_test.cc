@@ -503,8 +503,10 @@ void do_test(const test_config& cfg) {
             auto close_rows_db = defer([&] () noexcept { rows_db_writer.close(); });
 
             // Construct BTI index writers on top of the `file_writer`s.
-            auto bti_partition_index_writer = sstables::trie::bti_partition_index_writer(bti_version, partitions_db_writer);
-            auto bti_row_index_writer = sstables::trie::bti_row_index_writer(bti_version, rows_db_writer);
+            // This test uses the `mt` (logical) format, so the payloads use the legacy
+            // (non-physical) serialization.
+            auto bti_partition_index_writer = sstables::trie::bti_partition_index_writer(bti_version, partitions_db_writer, sstables::trie::bti_position_encoding::logical());
+            auto bti_row_index_writer = sstables::trie::bti_row_index_writer(bti_version, rows_db_writer, sstables::trie::bti_position_encoding::logical());
 
             struct current_partition_data {
                 uint64_t data_file_offset;
@@ -529,7 +531,8 @@ void do_test(const test_config& cfg) {
                     *adjusted_schema,
                     clustering_info_from_pip(current_clustering_block->first_ckp),
                     clustering_info_from_pip(current_clustering_block->last_ckp),
-                    sstables::sstable_position_offset::from_logical(current_clustering_block->first_data_file_offset - current_partition->data_file_offset),
+                    sstables::sstable_position::from_logical(current_partition->data_file_offset),
+                    sstables::sstable_position::from_logical(current_clustering_block->first_data_file_offset),
                     sstable_deletion_time_from_tombstone(current_clustering_block->preceding_range_tombstone));
                 current_clustering_block.reset();
             };

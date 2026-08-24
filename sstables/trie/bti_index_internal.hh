@@ -11,6 +11,7 @@
 #include <bit>
 #include <utility>
 #include "bti_index.hh"
+#include "common.hh"
 #include "utils/div_ceil.hh"
 
 // This file contains some declarations which aren't needed by users of BTI readers/writers,
@@ -43,6 +44,15 @@ inline int64_t bti_extent_hint_from_block_count(int64_t chunk_position, int64_t 
     return block_count * sstable_compressed_block_size - misalignment;
 }
 
+// Writes the `width` least-significant bytes of `v` to `it`, big-endian.
+// Returns the end of the written bytes.
+inline std::byte* write_fixed_be(std::byte* it, unsigned __int128 v, size_t width) {
+    for (size_t i = 0; i < width; ++i) {
+        it[i] = std::byte(v >> (8 * (width - 1 - i)));
+    }
+    return it + width;
+}
+
 // FIXME: we calculate the murmur hash when inserting or reading keys
 // from bloom filters.
 // It's a waste of work to hash the key again.
@@ -57,7 +67,10 @@ struct row_index_header {
     sstables::key partition_key = bytes();
     // The global position of the root node of this partition's row index within Rows.db.
     uint64_t trie_root;
-    // The position of the partition inside Data.db.
+    // The position of the partition inside Data.db, in the sstable's position kind:
+    // a logical (uncompressed) position, or a physical one carrying the full chunk
+    // coordinates that locate the partition start in the compressed (on-disk) file
+    // so the physical cursor can navigate to it directly.
     sstables::sstable_position data_file_position;
     // The partition tombstone of this partition.
     sstables::deletion_time partition_tombstone;
@@ -76,6 +89,7 @@ void write_row_index_header(
     sstables::file_writer& fw,
     const sstables::key& pk,
     sstable_position partition_data_start,
+    const bti_position_encoding& encoding,
     uint64_t added_blocks,
     uint64_t root_pos,
     const sstables::deletion_time& partition_tombstone
