@@ -53,6 +53,15 @@ inline std::byte* write_fixed_be(std::byte* it, unsigned __int128 v, size_t widt
     return it + width;
 }
 
+// Reads a `width`-byte big-endian unsigned integer from `bytes`, starting at `offset`.
+inline unsigned __int128 read_fixed_be_u128(const_bytes bytes, size_t offset, size_t width) {
+    unsigned __int128 v = 0;
+    for (size_t i = 0; i < width; ++i) {
+        v = (v << 8) | std::to_integer<uint8_t>(bytes[offset + i]);
+    }
+    return v;
+}
+
 // FIXME: we calculate the murmur hash when inserting or reading keys
 // from bloom filters.
 // It's a waste of work to hash the key again.
@@ -78,6 +87,7 @@ struct row_index_header {
 };
 
 future<row_index_header> read_row_index_header(
+    const bti_position_encoding& encoding,
     input_stream<char>&& input,
     uint64_t start,
     uint64_t maxlen,
