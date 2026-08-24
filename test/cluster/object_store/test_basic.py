@@ -17,7 +17,6 @@ from test.cqlpy.rest_api import scylla_inject_error
 from test.cluster.test_config import wait_for_config
 from test.cluster.util import new_test_keyspace
 from test.pylib.tablets import get_all_tablet_replicas
-from test.pylib.skip_types import skip_bug
 
 logger = logging.getLogger(__name__)
 
@@ -340,7 +339,6 @@ async def test_create_keyspace_after_config_update(manager: ManagerClient, objec
     else:
         updated_ep['credentials_file'] = ''
         updated_expected_conf = f'{{ "type": "gs", "credentials_file": "{updated_ep["credentials_file"]}" }}'
-        skip_bug("https://scylladb.atlassian.net/browse/SCYLLADB-1559")
 
     await manager.server_update_config(server.server_id, 'object_storage_endpoints', updated_objconf)
     await wait_for_config(manager, server, 'object_storage_endpoints', {updated_ep['name']: updated_expected_conf})
