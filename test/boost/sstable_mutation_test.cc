@@ -1178,6 +1178,18 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
             testlog.trace("count = {}", count);
             testlog.trace("est = {}", max_est);
 
+            // Logically indexed sstables know the exact uncompressed offset of
+            // every index entry, so the estimate for a range is an upper bound on
+            // the number of keys in it. Physically indexed ones (`mu`) only know
+            // which compression chunk an entry lives in, and not where that chunk
+            // begins in the uncompressed stream; the estimate converts chunk
+            // positions with the file's average compression ratio. That is accurate
+            // to a fraction of a percent, but it is no longer an upper bound, so
+            // allow a small undershoot for those.
+            const auto min_est = [&] (uint64_t keys_in_range) -> uint64_t {
+                return sst->uses_physical_positions() ? keys_in_range * 0.95 : keys_in_range;
+            };
+
             {
                 auto est = sst->estimated_keys_for_range(dht::token_range::make_open_ended_both_sides()).get();
                 testlog.trace("est([-inf; +inf]) = {}", est);
@@ -1188,7 +1200,7 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
                 auto r = dht::token_range::make(pks[0].token(), pks[size - 1].token());
                 auto est = sst->estimated_keys_for_range(r).get();
                 testlog.trace("est([0; {}] = {}", size - 1, est);
-                BOOST_REQUIRE_GE(est, size);
+                BOOST_REQUIRE_GE(est, min_est(size));
                 BOOST_REQUIRE_LE(est, max_est);
             }
 
@@ -1198,7 +1210,7 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
                 auto r = dht::token_range::make(pks[lower].token(), pks[upper].token());
                 auto est = sst->estimated_keys_for_range(r).get();
                 testlog.trace("est([{}; {}]) = {}", lower, upper, est);
-                BOOST_REQUIRE_GE(est, upper - lower + 1);
+                BOOST_REQUIRE_GE(est, min_est(upper - lower + 1));
                 BOOST_REQUIRE_LE(est, max_est);
             }
 

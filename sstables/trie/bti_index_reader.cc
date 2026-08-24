@@ -17,6 +17,7 @@
 #include <seastar/core/fstream.hh>
 #include <fmt/format.h>
 #include <fmt/std.h>
+#include <limits>
 
 template <>
 struct fmt::formatter<sstables::trie::trail_entry> : fmt::formatter<string_view> {
@@ -27,6 +28,32 @@ struct fmt::formatter<sstables::trie::trail_entry> : fmt::formatter<string_view>
 };
 
 namespace sstables::trie {
+
+// Index files have no checksum, so the decoders of physical positions check
+// each field before they use it. A corrupt field then gives a malformed
+// sstable error, not undefined behaviour or a read at a wild position.
+
+// Like bti_physical_layout::unpack(), but rejects values that pack() never
+// produces.
+static bti_physical_layout::unpacked checked_unpack(const bti_physical_layout& layout, uint64_t packed) {
+    const auto u = layout.unpack(packed);
+    if (u.block_count > layout.max_block_count() || u.offset_within_chunk >= layout.uncompressed_chunk_length()) {
+        throw_malformed_sstable_exception(fmt::format(
+                "Invalid physical position in BTI index: block count {} (max {}), offset within chunk {} (chunk length {})",
+                u.block_count, layout.max_block_count(), u.offset_within_chunk, layout.uncompressed_chunk_length()));
+    }
+    return u;
+}
+
+// Rejects a chunk position whose chunk end, the position plus the extent
+// hint, does not fit in int64_t.
+static void check_chunk_position(unsigned __int128 chunk_position, const bti_physical_layout& layout) {
+    const uint64_t max_chunk_position = std::numeric_limits<int64_t>::max()
+            - layout.max_block_count() * sstable_compressed_block_size;
+    if (chunk_position > max_chunk_position) {
+        throw_malformed_sstable_exception(fmt::format("Chunk position in BTI index exceeds {}", max_chunk_position));
+    }
+}
 
 // A partitions entry in Rows.db contains the full partition key.
 // This means that the entry has variable size, and can span multiple pages.
@@ -42,10 +69,14 @@ struct row_index_header_parser : public data_consumer::continuous_data_consumer<
     bool _finished = false;
     temporary_buffer<char> _pk;
     temporary_buffer<char>* _processing_data = nullptr;
+    // Whether the data file position in the header is physical (full chunk
+    // coordinates) or logical. Chosen by the caller, not derived from the version.
+    bti_position_encoding _encoding;
     processing_result_generator _gen;
 
-    row_index_header_parser(reader_permit rp, input_stream<char>&& input, uint64_t start, uint64_t maxlen)
+    row_index_header_parser(const bti_position_encoding& encoding, reader_permit rp, input_stream<char>&& input, uint64_t start, uint64_t maxlen)
         : continuous_data_consumer(std::move(rp), std::move(input), sstable_position::from_logical(start), sstable_position::from_logical(start + maxlen))
+        , _encoding(encoding)
         , _gen(do_process_state())
     {}
     void verify_end_state() {
@@ -69,10 +100,32 @@ struct row_index_header_parser : public data_consumer::continuous_data_consumer<
         // The start of of this vint is used as a reference point
         // for the delta encoded in the next vint.
         uint64_t trie_root_delta_base = this->position().to_logical() - (*_processing_data).size();
-        expensive_log("row_index_header_parser: reading unsigned vint for data file offset, delta_base={}", trie_root_delta_base);
-        co_yield this->read_unsigned_vint(*_processing_data);
-        _result.data_file_position = sstable_position::from_logical(this->_u64);
-        expensive_log("row_index_header_parser: read data file offset={}", _result.data_file_position);
+        if (!_encoding.is_physical()) {
+            expensive_log("row_index_header_parser: reading unsigned vint for data file offset, delta_base={}", trie_root_delta_base);
+            co_yield this->read_unsigned_vint(*_processing_data);
+            uint64_t data_file_uncompressed = this->_u64;
+            _result.data_file_position = sstable_position::from_logical(data_file_uncompressed);
+            expensive_log("row_index_header_parser: read data file offset={}", data_file_uncompressed);
+        } else {
+            // For `mu`, chunk coordinates that locate the partition start in the compressed file.
+            expensive_log("row_index_header_parser: reading chunk_start vint");
+            co_yield this->read_unsigned_vint(*_processing_data);
+            uint64_t chunk_start = this->_u64;
+            expensive_log("row_index_header_parser: reading packed block count and offset_within_chunk");
+            const auto packed_width = _encoding.layout().packed_bytes();
+            uint64_t packed = 0;
+            for (size_t i = 0; i < packed_width; ++i) {
+                co_yield this->read_8(*_processing_data);
+                packed = (packed << 8) | this->_u8;
+            }
+            check_chunk_position(chunk_start, _encoding.layout());
+            auto [block_count, offset_within_chunk] = checked_unpack(_encoding.layout(), packed);
+            // The index stores the extent as a block count; recover an upper bound of the extent.
+            const auto extent_hint = bti_extent_hint_from_block_count(chunk_start, block_count);
+            _result.data_file_position = sstable_position::from_physical(
+                chunk_start, extent_hint, offset_within_chunk);
+            expensive_log("row_index_header_parser: read data file position={}", _result.data_file_position);
+        }
 
         // This vint is the offset from the root of the intra-partition index
         // to the start of the previous vint.
@@ -134,11 +187,12 @@ struct row_index_header_parser : public data_consumer::continuous_data_consumer<
     }
 };
 
-future<row_index_header> read_row_index_header(input_stream<char>&& input, uint64_t start, uint64_t maxlen, reader_permit rp) {
+future<row_index_header> read_row_index_header(const bti_position_encoding& encoding, input_stream<char>&& input, uint64_t start, uint64_t maxlen, reader_permit rp) {
     // TODO: Should there be a fast path for the case where the entire
     // parse fits into the current page?
     // We're involving so much code in parsing something that's usually just several bytes long...
     auto ctx = row_index_header_parser(
+        encoding,
         std::move(rp),
         std::move(input),
         start,
@@ -156,7 +210,7 @@ future<row_index_header> read_row_index_header(input_stream<char>&& input, uint6
     std::rethrow_exception(ex);
 }
 
-static future<row_index_header> read_row_index_header(cached_file& file, uint64_t pos, reader_permit rp, tracing::trace_state_ptr trace_state) {
+static future<row_index_header> read_row_index_header(const bti_position_encoding& encoding, cached_file& file, uint64_t pos, reader_permit rp, tracing::trace_state_ptr trace_state) {
     struct cached_file_data_source_impl : data_source_impl {
         cached_file& _file;
         cached_file::stream _stream;
@@ -179,6 +233,7 @@ static future<row_index_header> read_row_index_header(cached_file& file, uint64_
         std::make_unique<cached_file_data_source_impl>(file, pos, rp, std::move(trace_state))
     ));
     return read_row_index_header(
+        encoding,
         std::move(is),
         pos,
         file.size() - pos,
@@ -307,13 +362,17 @@ class index_cursor {
     reader_permit _permit;
     tracing::trace_state_ptr _trace_state;
     uint64_t _par_root;
+    // Whether this sstable's positions are physical (full chunk coordinates) or
+    // logical. Chosen by the caller, not derived from the version. Selects the
+    // payload/header decoding.
+    bti_position_encoding _encoding;
 private:
     // If the current partition has a row index, reads its header.
     future<> maybe_read_metadata();
     // The colder part of set_after_row, just to hint at inlining the hotter part.
     future<> set_after_row_cold(lazy_comparable_bytes_from_clustering_position&);
 public:
-    index_cursor(uint64_t par_root, bti_node_reader par, bti_node_reader row, reader_permit, tracing::trace_state_ptr);
+    index_cursor(uint64_t par_root, bti_node_reader par, bti_node_reader row, const bti_position_encoding&, reader_permit, tracing::trace_state_ptr);
     index_cursor& operator=(const index_cursor&) = default;
     // Returns the data file position of the cursor. Can only be called after the cursor is set.
     //
@@ -322,7 +381,8 @@ public:
     // Otherwise, if the partition cursor is set to EOF, returns `end_position`.
     //
     // `end_position` is the data file's end-of-data sentinel, supplied from above
-    // (Partitions.db doesn't store it).
+    // (Partitions.db doesn't store it). The returned position uses the sstable's
+    // position kind (logical or physical), the same as `end_position`.
     sstables::sstable_position data_file_pos(sstables::sstable_position end_position) const;
     // If the row index is set to a clustering key block, returns the range tombstone active at the start of the block.
     // Otherwise returns an empty tombstone.
@@ -374,6 +434,8 @@ public:
     // Return the offset to the last clustering block
     // (i.e. the offset of the second-to-last payloaded node in the row index)
     // in the current partition, if a row index exists.
+    //
+    // For `ms`/`mt` the returned offset is logical; for `mu` it is physical.
     future<std::optional<sstables::sstable_position_offset>> last_block_offset() const;
     // Return the hash byte (if present) of the partition entry.
     std::optional<std::byte> partition_hash() const;
@@ -397,7 +459,11 @@ class bti_index_reader : public sstables::abstract_index_reader {
     index_cursor _upper;
     // Partitions.db doesn't store the bounds of Data.db, so the cursor doesn't know
     // by itself what Data.db position to return at the very start (before it is set
-    // to a partition) or at EOF. We pass both from above.
+    // to a partition) or at EOF. We pass both from above, in the sstable's position
+    // kind. When they are physical, they carry the chunk coordinates (which the index
+    // reader can't compute itself - they come from the compression component) of the
+    // first chunk and of the end-of-data sentinel respectively. Their kind must
+    // match the position encoding of the index.
     sstables::sstable_position _start_position;
     sstables::sstable_position _end_position;
 
@@ -434,6 +500,7 @@ public:
         sstables::sstable_position end_position,
         sstable_version_types sst_ver,
         schema_ptr,
+        const bti_position_encoding&,
         reader_permit,
         tracing::trace_state_ptr);
     // Implementation of the `abstract_index_reader` interface.
@@ -517,13 +584,14 @@ const ancestor_trail& trie_cursor::trail() const {
     return _trail;
 }
 
-index_cursor::index_cursor(uint64_t par_root, bti_node_reader par, bti_node_reader row, reader_permit permit, tracing::trace_state_ptr trace_state)
+index_cursor::index_cursor(uint64_t par_root, bti_node_reader par, bti_node_reader row, const bti_position_encoding& encoding, reader_permit permit, tracing::trace_state_ptr trace_state)
     : _partition_cursor(par)
     , _row_cursor(row)
     , _in_row(row)
     , _permit(std::move(permit))
     , _trace_state(std::move(trace_state))
     , _par_root(par_root)
+    , _encoding(encoding)
 {}
 
 bool index_cursor::row_cursor_set() const {
@@ -550,13 +618,140 @@ static int64_t partition_payload_to_pos(const payload_result& p) {
     return result;
 }
 
-static int64_t row_payload_to_offset(const payload_result& p) {
+// A decoded row index payload.
+struct row_payload {
+    // The position of the block relative to the partition start.
+    sstables::sstable_position_offset offset;
+    // The range tombstone open before the block's first clustering key.
+    tombstone open_tombstone;
+};
+
+// Reads the optional tombstone that follows the position in a row index payload.
+static tombstone row_payload_tombstone(const payload_result& p, bool has_tombstone, uint64_t tombstone_offset) {
+    if (!has_tombstone) {
+        return tombstone();
+    }
+    auto marked = seastar::be_to_cpu(read_unaligned<int64_t>(p.bytes.data() + tombstone_offset));
+    auto deletion_time = seastar::be_to_cpu(read_unaligned<int32_t>(p.bytes.data() + tombstone_offset + 8));
+    return tombstone(marked, gc_clock::time_point(gc_clock::duration(deletion_time)));
+}
+
+// Decodes the legacy (`ms`/`mt`) row index payload. The low payload bits carry the
+// byte width of the offset, and the 0x8 bit flags a tombstone that follows it.
+static row_payload row_payload_to_logical(const payload_result& p) {
     constexpr uint8_t TOMBSTONE_FLAG = 0x8;
     uint64_t bits = p.bits & ~TOMBSTONE_FLAG;
     uint64_t be_result = 0;
     std::memcpy(&be_result, p.bytes.data(), bits);
-    auto result = seastar::be_to_cpu(be_result) >> 8*(8 - bits);
-    return result;
+    auto offset = seastar::be_to_cpu(be_result) >> 8*(8 - bits);
+    return row_payload{
+        .offset = sstables::sstable_position_offset::from_logical(offset),
+        .open_tombstone = row_payload_tombstone(p, p.bits & TOMBSTONE_FLAG, bits),
+    };
+}
+
+// Decodes the `mu` partition index payload. The hash byte comes first. It is
+// followed by a flag bit and a position. If the flag is clear, the position is a
+// Rows.db offset. If the flag is set, the position is a Data.db chunk position,
+// followed by the packed block count and offset fields.
+static bti_partition_index_target partition_payload_to_physical_target(const payload_result& p, const bti_physical_layout& layout) {
+    const auto payload_size = p.bits;
+    if (payload_size < 2) {
+        throw_malformed_sstable_exception(fmt::format("Invalid partition payload size {} in BTI index", payload_size));
+    }
+    const auto packed_bytes = static_cast<unsigned>(payload_size - 1);
+    const auto packed_bits = packed_bytes * 8;
+    auto packed = read_fixed_be_u128(p.bytes, 1, packed_bytes);
+
+    const auto flag = static_cast<unsigned __int128>(1) << (packed_bits - 1);
+    if (!(packed & flag)) {
+        constexpr uint64_t max_rows_position = std::numeric_limits<int64_t>::max();
+        if (packed > max_rows_position) {
+            throw_malformed_sstable_exception(fmt::format("Rows.db position in BTI index exceeds {}", max_rows_position));
+        }
+        return rows_db_position{static_cast<uint64_t>(packed)};
+    }
+    packed &= ~flag;
+
+    const auto component_bits = layout.packed_bits();
+    if (packed_bits <= component_bits) {
+        throw_malformed_sstable_exception(fmt::format("Invalid partition payload size {} in BTI index", payload_size));
+    }
+    // unpack() ignores the position bits above the packed fields.
+    auto [block_count, offset_within_chunk] = checked_unpack(layout, static_cast<uint64_t>(packed));
+    check_chunk_position(packed >> component_bits, layout);
+    const auto chunk_position = static_cast<int64_t>(packed >> component_bits);
+    // The index stores the extent as a block count; recover an upper bound of the extent.
+    const auto extent_hint = bti_extent_hint_from_block_count(chunk_position, static_cast<int64_t>(block_count));
+    return sstables::sstable_position::from_physical(chunk_position, extent_hint, offset_within_chunk);
+}
+
+// Decodes the partition index payload of either position encoding.
+static bti_partition_index_target partition_payload_to_target(const payload_result& p, const bti_position_encoding& encoding) {
+    if (encoding.is_physical()) {
+        return partition_payload_to_physical_target(p, encoding.layout());
+    }
+    const auto pos = partition_payload_to_pos(p);
+    if (pos >= 0) {
+        return rows_db_position{static_cast<uint64_t>(pos)};
+    }
+    // Data.db positions are stored bit-negated.
+    return sstables::sstable_position::from_logical(~pos);
+}
+
+// Returns the hash byte of the partition index payload of either position encoding.
+static std::optional<std::byte> partition_payload_hash(const payload_result& p, const bti_position_encoding& encoding) {
+    if (encoding.is_physical()) {
+        // The physical payload always stores the hash byte at the front.
+        return p.bytes[0];
+    }
+    // In the logical payload, the 0x8 bit signals the presence of a leading hash byte.
+    if (p.bits & 0x8) {
+        return p.bytes[0];
+    }
+    return std::nullopt;
+}
+
+// Decodes the `mu` row index payload. The payload bits carry the byte width of
+// the packed fields, and the optional tombstone follows them. The low bit of the
+// packed fields is the tombstone flag; above it are the offset-within-chunk,
+// the block count of the extent, and the unsigned chunk position. The decoded chunk position is *relative* to the partition start's
+// chunk (the caller composes it with the partition start to recover an absolute
+// position). The block count is decoded against the absolute chunk
+// position, which is `partition_chunk_position` plus the relative one, matching
+// how the writer encoded it.
+static row_payload row_payload_to_physical(const payload_result& p, const bti_physical_layout& layout, int64_t partition_chunk_position) {
+    const auto packed_bytes = static_cast<unsigned>(p.bits);
+    const auto packed_bits = packed_bytes * 8;
+    const auto component_bits = layout.packed_bits() + 1;
+    if (packed_bits < component_bits) {
+        throw_malformed_sstable_exception(fmt::format("Invalid row payload size {} in BTI index", packed_bytes));
+    }
+    auto packed = read_fixed_be_u128(p.bytes, 0, packed_bytes);
+
+    const auto has_tombstone = (packed & 1) != 0;
+    packed >>= 1;
+    // unpack() ignores the position bits above the packed fields.
+    auto [block_count, offset_within_chunk] = checked_unpack(layout, static_cast<uint64_t>(packed));
+    const auto chunk_start = packed >> layout.packed_bits();
+    // The partition's chunk position was checked when its header was read.
+    check_chunk_position(static_cast<unsigned __int128>(partition_chunk_position) + chunk_start, layout);
+
+    // The index stores the extent as a block count; recover an upper bound of the extent.
+    const auto extent_hint = bti_extent_hint_from_block_count(partition_chunk_position + static_cast<int64_t>(chunk_start), block_count);
+    return row_payload{
+        .offset = sstables::sstable_position_offset::from_physical(static_cast<int64_t>(chunk_start), extent_hint, offset_within_chunk),
+        .open_tombstone = row_payload_tombstone(p, has_tombstone, packed_bytes),
+    };
+}
+
+// Decodes the row index payload of either position encoding.
+// `partition_start` is the Data.db position of the partition the row index belongs to.
+static row_payload decode_row_payload(const payload_result& p, const bti_position_encoding& encoding, const sstables::sstable_position& partition_start) {
+    if (!encoding.is_physical()) {
+        return row_payload_to_logical(p);
+    }
+    return row_payload_to_physical(p, encoding.layout(), partition_start.as_physical().chunk_position);
 }
 
 static inline auto single_fragment_generator(std::span<const std::byte> only_frag) {
@@ -591,41 +786,47 @@ future<std::optional<sstables::sstable_position_offset>> index_cursor::last_bloc
     co_await cur.step_back(_permit, _trace_state);
     co_await cur.step_back(_permit, _trace_state);
 
-    auto result = row_payload_to_offset(cur.payload());
+    auto result = decode_row_payload(cur.payload(), _encoding, _partition_metadata->data_file_position).offset;
     expensive_log("last_block_offset: {}", result);
-    co_return sstables::sstable_position_offset::from_logical(result);
+    co_return result;
 }
 
 std::optional<std::byte> index_cursor::partition_hash() const {
-    auto p = _partition_cursor.payload();
-    if (p.bits & 0x8) {
-        return p.bytes[0];
-    }
-    return std::nullopt;
+    return partition_payload_hash(_partition_cursor.payload(), _encoding);
 }
 
 sstables::sstable_position index_cursor::data_file_pos(sstables::sstable_position end_position) const {
     expensive_log("index_cursor::data_file_pos this={} initialized={}", fmt::ptr(this), _partition_cursor.initialized());
     expensive_assert(_partition_cursor.initialized());
+
     if (_partition_metadata) {
         if (!_row_cursor.initialized()) {
-            expensive_log("index_cursor::data_file_pos this={} from empty row cursor: {}", fmt::ptr(this), _partition_metadata->data_file_position);
+            // The position is the start of the partition in Data.db, which the
+            // partition's row index header stores in full, in the caller's position
+            // kind (logical, or physical chunk coordinates).
             return _partition_metadata->data_file_position;
         }
-        const auto p = _row_cursor.payload();
-        auto offset = row_payload_to_offset(p);
-        expensive_log("index_cursor::data_file_pos this={} from row cursor: {} bytes={} bits={}", fmt::ptr(this), offset, fmt_hex(p.bytes), p.bits & 0x7);
-        return _partition_metadata->data_file_position + sstables::sstable_position_offset::from_logical(offset);
+        // Inside the partition. The row index payload stores the block's offset
+        // relative to the partition start: for logical positions a plain uncompressed
+        // delta; for physical positions a relative chunk position (plus the block's
+        // own extent hint and offset-within-chunk). Either way we recover
+        // the absolute position by composing it with the partition start.
+        const auto& partition_start = _partition_metadata->data_file_position;
+        return partition_start + decode_row_payload(_row_cursor.payload(), _encoding, partition_start).offset;
     }
+
     if (!_partition_cursor.eof()) {
-        auto res = partition_payload_to_pos(_partition_cursor.payload());
-        expensive_assert(res < 0);
-        expensive_log("index_cursor::data_file_pos this={} from partition cursor: {}", fmt::ptr(this), ~res);
-        return sstables::sstable_position::from_logical(~res);
+        // No row index for this partition: the partition payload points directly
+        // into Data.db.
+        const auto target = partition_payload_to_target(_partition_cursor.payload(), _encoding);
+        expensive_assert(target.data_db());
+        return *target.data_db();
     }
+
     // EOF: the partition cursor walked past the last partition. The position is the
-    // end-of-data sentinel, which the caller supplied as `end_position`.
-    expensive_log("index_cursor::data_file_pos this={} from eof: {}", fmt::ptr(this), end_position);
+    // end-of-data sentinel, which the caller supplied as `end_position`. Return it
+    // verbatim so the sentinel's chunk coordinates (for `mu`) come from a single
+    // source of truth.
     return end_position;
 }
 
@@ -641,19 +842,9 @@ tombstone index_cursor::open_tombstone() const {
         expensive_log("index_cursor::open_tombstone this={} from eof: {}", fmt::ptr(this), tombstone());
         return res;
     } else {
-        const auto p = _row_cursor.payload();
-        constexpr uint8_t TOMBSTONE_FLAG = 0x8;
-        if (p.bits & TOMBSTONE_FLAG) {
-            uint64_t bits = p.bits & ~TOMBSTONE_FLAG;
-            auto marked = seastar::be_to_cpu(read_unaligned<int64_t>(p.bytes.data() + bits));
-            auto deletion_time = seastar::be_to_cpu(read_unaligned<int32_t>(p.bytes.data() + bits + 8));
-            auto result = tombstone(marked, gc_clock::time_point(gc_clock::duration(deletion_time)));
-            expensive_log("index_cursor::open_tombstone this={} from payload: {}", fmt::ptr(this), result);
-            return result;
-        } else {
-            expensive_log("index_cursor::open_tombstone this={} from empty payload: {}", fmt::ptr(this), tombstone());
-            return tombstone();
-        }
+        auto result = decode_row_payload(_row_cursor.payload(), _encoding, _partition_metadata->data_file_position).open_tombstone;
+        expensive_log("index_cursor::open_tombstone this={} from payload: {}", fmt::ptr(this), result);
+        return result;
     }
 }
 
@@ -665,8 +856,11 @@ future<> index_cursor::maybe_read_metadata() {
     if (_partition_cursor.eof()) {
         return make_ready_future<>();
     }
-    if (auto res = partition_payload_to_pos(_partition_cursor.payload()); res >= 0) {
-        return read_row_index_header(_in_row._file.get(), res, _permit, _trace_state).then([this] (auto result) {
+    // The partition payload points at a Rows.db row index header (which we read
+    // here), or directly into Data.db.
+    const auto target = partition_payload_to_target(_partition_cursor.payload(), _encoding);
+    if (const auto* rows_pos = target.rows_db()) {
+        return read_row_index_header(_encoding, _in_row._file.get(), rows_pos->value, _permit, _trace_state).then([this] (auto result) {
             _partition_metadata = result;
         });
     }
@@ -758,7 +952,8 @@ future<> index_cursor::set_after_row(lazy_comparable_bytes_from_clustering_posit
 
 sstables::sstable_positions_range bti_index_reader::sstable_positions() const {
     // Before the lower cursor is set to a partition, the lower bound is the very
-    // start of Data.db, supplied from above.
+    // start of Data.db, supplied from above (it carries the first chunk's
+    // coordinates for `mu`, which the index reader can't compute itself).
     auto lo = _lower.partition_cursor_set() ? _lower.data_file_pos(_end_position) : _start_position;
     std::optional<sstables::sstable_position> hi;
     if (_upper.partition_cursor_set()) {
@@ -785,6 +980,7 @@ bti_index_reader::bti_index_reader(
     sstables::sstable_position end_position,
     sstable_version_types sst_ver,
     schema_ptr s,
+    const bti_position_encoding& encoding,
     reader_permit rp,
     tracing::trace_state_ptr trace_state
 )
@@ -799,11 +995,13 @@ bti_index_reader::bti_index_reader(
     // not a reference to some shared one, because `bti_node_reader`
     // holds the currently-active page, and each bound might be in a different page.
     // (And both are needed to read lower and upper Data.db bounds).
-    , _lower(root_offset, partitions_db, rows_db, _permit, _trace_state)
-    , _upper(root_offset, partitions_db, rows_db, _permit, _trace_state)
+    , _lower(root_offset, partitions_db, rows_db, encoding, _permit, _trace_state)
+    , _upper(root_offset, partitions_db, rows_db, encoding, _permit, _trace_state)
     , _start_position(start_position)
     , _end_position(end_position)
 {
+    encoding.check_kind(start_position);
+    encoding.check_kind(end_position);
     trie_logger.debug("bti_index_reader::constructor: this={} root_offset={} start_position={} end_position={} table={}.{}",
         fmt::ptr(this), root_offset, start_position, end_position, _s->ks_name(), _s->cf_name());
 }
@@ -960,7 +1158,10 @@ bool bti_index_reader::eof() const {
         // (There's an assumption that the data file is non empty).
         return false;
     }
-    // The cursor is at EOF once its data position reaches the end of data.
+    // The cursor is at EOF once its data position reaches the end of data. We
+    // compare full positions via their own ordering, so this works for both the
+    // logical (`ms`/`mt`) and physical (`mu`) flavors without assuming that an
+    // uncompressed component exists.
     return _lower.data_file_pos(_end_position) >= _end_position;
 }
 
@@ -1007,6 +1208,7 @@ std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
     sstables::sstable_position end_position,
     sstable_version_types sst_ver,
     schema_ptr s,
+    bti_position_encoding encoding,
     reader_permit permit,
     tracing::trace_state_ptr trace_state
 ) {
@@ -1023,6 +1225,7 @@ std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
         end_position,
         sst_ver,
         std::move(s),
+        encoding,
         std::move(permit),
         std::move(trace_state)
     );

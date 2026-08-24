@@ -288,6 +288,8 @@ public:
 // Creates a BTI index reader over the Partitions.db file and the matching Rows.db file.
 // `partitions_db_root_pos` should have been read from the Partitions.db footer beforehand.
 // (As we don't want to repeat that for every query).
+// The encoding must match the one the index was written with, and the position
+// kind of `start_position` and `end_position`.
 std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
     seastar::shared_ptr<cached_file> partitions_db,
     seastar::shared_ptr<cached_file> rows_db,
@@ -296,6 +298,7 @@ std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
     sstables::sstable_position end_position,
     sstable_version_types,
     schema_ptr,
+    bti_position_encoding,
     reader_permit,
     tracing::trace_state_ptr);
 

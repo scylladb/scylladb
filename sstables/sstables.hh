@@ -391,9 +391,19 @@ public:
     uint64_t data_size() const;
     // Returns on-disk size of data component.
     uint64_t ondisk_data_size() const;
+    // Whether positions in this sstable's data component are physical, i.e.
+    // chunk coordinates in the compressed file. Only compressed `mu` sstables
+    // use physical positions. All other sstables, including uncompressed `mu`
+    // ones, use logical positions.
+    bool uses_physical_positions() const;
     // The codec of the chunks of the compressed data component. Only valid for
     // a compressed sstable.
     framed_chunk_codec get_chunk_codec() const;
+    // How the BTI index of this sstable stores data positions. Physical
+    // positions go with framed chunks: both follow from get_chunk_codec().
+    // Throws malformed_sstable_exception if the chunk length doesn't allow
+    // physical positions.
+    trie::bti_position_encoding get_bti_position_encoding() const;
     // Start/end positions of the data component, expressed as sstable_positions.
     sstable_position start_position() const;
     sstable_position end_position() const;

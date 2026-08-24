@@ -2973,8 +2973,19 @@ uint64_t sstable::ondisk_data_size() const {
     return _data_file_size;
 }
 
+bool sstable::uses_physical_positions() const {
+    return index_holds_physical_positions(_version) && has_component(component_type::CompressionInfo);
+}
+
 framed_chunk_codec sstable::get_chunk_codec() const {
     return framed_chunk_codec(_version, get_compression().uncompressed_chunk_length());
+}
+
+trie::bti_position_encoding sstable::get_bti_position_encoding() const {
+    if (uses_physical_positions()) {
+        return trie::bti_position_encoding::physical(get_chunk_codec());
+    }
+    return trie::bti_position_encoding::logical();
 }
 
 sstable_position sstable::start_position() const {
@@ -3007,7 +3018,45 @@ disk_read_range sstable::disk_read_range_from_logical_range(uint64_t begin, uint
 double sstable::approximate_file_fraction(sstable_positions_range range) const {
     auto start = range.start;
     auto end = range.end.value_or(end_position());
-    return static_cast<double>(end.to_logical() - start.to_logical()) / data_size();
+    if (!start.is_physical()) {
+        return static_cast<double>(end.to_logical() - start.to_logical()) / data_size();
+    }
+    if (start == end) {
+        return 0;
+    }
+    const auto& physical_start = start.as_physical();
+    const auto& physical_end = end.as_physical();
+    // A physical position only names the chunk it falls into, so measuring the
+    // range in whole chunks (from the start of the first one to the end of the
+    // last one) rounds it up by up to two chunks. That granularity is far too
+    // coarse for a small table, where a range covering a fraction of a single
+    // chunk gets rounded up to that whole chunk, inflating the estimate several
+    // times over.
+    //
+    // Refine both bounds by mapping them to approximate uncompressed positions.
+    // The chunk part is scaled by the file-wide compression ratio: a chunk that
+    // starts at on-disk position P is preceded by roughly P / ondisk_data_size of
+    // the file's chunks, hence by that fraction of its uncompressed bytes. The
+    // offset within the chunk is already an uncompressed byte count, so it is
+    // added as is. Note that `extent_hint` deliberately plays no part here:
+    // the index stores it rounded up to whole 512-byte blocks, which for the small
+    // chunks of a small table is a bias of a factor of two or more.
+    auto ondisk_size = ondisk_data_size();
+    if (!ondisk_size) {
+        return 0;
+    }
+    auto compression_ratio = static_cast<double>(data_size()) / ondisk_size;
+    auto approximate_logical_position = [compression_ratio] (const auto& pos) {
+        return pos.chunk_position * compression_ratio + pos.offset_within_chunk;
+    };
+    auto logical_end = approximate_logical_position(physical_end);
+    // Chunks vary in size, so the scaled bounds can cross over for a range covering
+    // a sliver of the file. The range is non-empty (`start == end` returned above),
+    // so hold the start below the end and keep the estimate non-empty too, rather
+    // than reporting nothing.
+    auto logical_start = std::min(approximate_logical_position(physical_start), logical_end - 1);
+    auto fraction = (logical_end - logical_start) / data_size();
+    return std::clamp<double>(fraction, 0.0, 1.0);
 }
 
 utils::file_size_stats sstable::get_file_size_stats() const {
@@ -4582,6 +4631,7 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
             end_position(),
             _version,
             _schema,
+            get_bti_position_encoding(),
             std::move(permit),
             std::move(trace_state)
         );
