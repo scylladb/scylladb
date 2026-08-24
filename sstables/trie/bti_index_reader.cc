@@ -319,8 +319,11 @@ public:
     //
     // If the row cursor is set, returns the position of the pointed-to clustering key block.
     // Otherwise, if the partition cursor is set to a partition, returns the position of the partition.
-    // Otherwise, if the partition cursor is set to EOF, returns `file_size`.
-    uint64_t data_file_pos(uint64_t file_size) const;
+    // Otherwise, if the partition cursor is set to EOF, returns `end_position`.
+    //
+    // `end_position` is the data file's end-of-data sentinel, supplied from above
+    // (Partitions.db doesn't store it).
+    sstables::sstable_position data_file_pos(sstables::sstable_position end_position) const;
     // If the row index is set to a clustering key block, returns the range tombstone active at the start of the block.
     // Otherwise returns an empty tombstone.
     tombstone open_tombstone() const;
@@ -371,7 +374,7 @@ public:
     // Return the offset to the last clustering block
     // (i.e. the offset of the second-to-last payloaded node in the row index)
     // in the current partition, if a row index exists.
-    future<std::optional<uint64_t>> last_block_offset() const;
+    future<std::optional<sstables::sstable_position_offset>> last_block_offset() const;
     // Return the hash byte (if present) of the partition entry.
     std::optional<std::byte> partition_hash() const;
 };
@@ -392,10 +395,11 @@ class bti_index_reader : public sstables::abstract_index_reader {
     // The index is, in essence, a pair of cursors.
     index_cursor _lower;
     index_cursor _upper;
-    // Partitions.db doesn't store the size of Data.db, so the cursor doesn't know by itself
-    // what Data.db position to return when its position is EOF. We need to pass the file size
-    // from the above.
-    uint64_t _total_file_size;
+    // Partitions.db doesn't store the bounds of Data.db, so the cursor doesn't know
+    // by itself what Data.db position to return at the very start (before it is set
+    // to a partition) or at EOF. We pass both from above.
+    sstables::sstable_position _start_position;
+    sstables::sstable_position _end_position;
 
     // FIXME: by contract, the index reader is immediately initialized to position 0
     // after construction.
@@ -426,15 +430,16 @@ public:
         bti_node_reader partitions_db,
         bti_node_reader rows_db,
         uint64_t root_pos,
-        uint64_t total_file_size,
+        sstables::sstable_position start_position,
+        sstables::sstable_position end_position,
         sstable_version_types sst_ver,
         schema_ptr,
         reader_permit,
         tracing::trace_state_ptr);
     // Implementation of the `abstract_index_reader` interface.
     virtual future<> close() noexcept override;
-    virtual sstables::data_file_positions_range data_file_positions() const override;
-    virtual future<std::optional<uint64_t>> last_block_offset() override;
+    virtual sstables::sstable_positions_range sstable_positions() const override;
+    virtual future<std::optional<sstables::sstable_position_offset>> last_block_offset() override;
     virtual future<bool> advance_lower_and_check_if_present(dht::ring_position_view key) override;
     virtual future<bool> advance_lower_and_check_if_present(dht::ring_position_view key, const utils::hashed_key&) override;
     virtual future<> advance_to_next_partition() override;
@@ -571,7 +576,7 @@ static inline auto single_fragment_generator(std::span<const std::byte> only_fra
     return iterator{only_frag};
 }
 
-future<std::optional<uint64_t>> index_cursor::last_block_offset() const {
+future<std::optional<sstables::sstable_position_offset>> index_cursor::last_block_offset() const {
     if (!_partition_metadata) {
         expensive_log("last_block_offset: no partition metadata");
         co_return std::nullopt;
@@ -588,7 +593,7 @@ future<std::optional<uint64_t>> index_cursor::last_block_offset() const {
 
     auto result = row_payload_to_offset(cur.payload());
     expensive_log("last_block_offset: {}", result);
-    co_return result;
+    co_return sstables::sstable_position_offset::from_logical(result);
 }
 
 std::optional<std::byte> index_cursor::partition_hash() const {
@@ -599,27 +604,29 @@ std::optional<std::byte> index_cursor::partition_hash() const {
     return std::nullopt;
 }
 
-uint64_t index_cursor::data_file_pos(uint64_t file_size) const {
+sstables::sstable_position index_cursor::data_file_pos(sstables::sstable_position end_position) const {
     expensive_log("index_cursor::data_file_pos this={} initialized={}", fmt::ptr(this), _partition_cursor.initialized());
     expensive_assert(_partition_cursor.initialized());
     if (_partition_metadata) {
         if (!_row_cursor.initialized()) {
             expensive_log("index_cursor::data_file_pos this={} from empty row cursor: {}", fmt::ptr(this), _partition_metadata->data_file_position);
-            return _partition_metadata->data_file_position.to_logical();
+            return _partition_metadata->data_file_position;
         }
         const auto p = _row_cursor.payload();
-        auto res = _partition_metadata->data_file_position.to_logical() + row_payload_to_offset(p);
-        expensive_log("index_cursor::data_file_pos this={} from row cursor: {} bytes={} bits={}", fmt::ptr(this), res, fmt_hex(p.bytes), p.bits & 0x7);
-        return res;
+        auto offset = row_payload_to_offset(p);
+        expensive_log("index_cursor::data_file_pos this={} from row cursor: {} bytes={} bits={}", fmt::ptr(this), offset, fmt_hex(p.bytes), p.bits & 0x7);
+        return _partition_metadata->data_file_position + sstables::sstable_position_offset::from_logical(offset);
     }
     if (!_partition_cursor.eof()) {
         auto res = partition_payload_to_pos(_partition_cursor.payload());
         expensive_assert(res < 0);
         expensive_log("index_cursor::data_file_pos this={} from partition cursor: {}", fmt::ptr(this), ~res);
-        return ~res;
+        return sstables::sstable_position::from_logical(~res);
     }
-    expensive_log("index_cursor::data_file_pos this={} from eof: {}", fmt::ptr(this), file_size);
-    return file_size;
+    // EOF: the partition cursor walked past the last partition. The position is the
+    // end-of-data sentinel, which the caller supplied as `end_position`.
+    expensive_log("index_cursor::data_file_pos this={} from eof: {}", fmt::ptr(this), end_position);
+    return end_position;
 }
 
 tombstone index_cursor::open_tombstone() const {
@@ -749,16 +756,18 @@ future<> index_cursor::set_after_row(lazy_comparable_bytes_from_clustering_posit
     return set_after_row_cold(key);
 }
 
-sstables::data_file_positions_range bti_index_reader::data_file_positions() const {
-    auto lo = _lower.partition_cursor_set() ? _lower.data_file_pos(_total_file_size) : 0;
-    std::optional<uint64_t> hi;
+sstables::sstable_positions_range bti_index_reader::sstable_positions() const {
+    // Before the lower cursor is set to a partition, the lower bound is the very
+    // start of Data.db, supplied from above.
+    auto lo = _lower.partition_cursor_set() ? _lower.data_file_pos(_end_position) : _start_position;
+    std::optional<sstables::sstable_position> hi;
     if (_upper.partition_cursor_set()) {
-        hi = _upper.data_file_pos(_total_file_size);
+        hi = _upper.data_file_pos(_end_position);
     }
-    trie_logger.debug("bti_index_reader::data_file_positions this={} result=({}, {})", fmt::ptr(this), lo, hi);
+    trie_logger.debug("bti_index_reader::sstable_positions this={} result=({}, {})", fmt::ptr(this), lo, hi);
     return {lo, hi};
 }
-future<std::optional<uint64_t>> bti_index_reader::last_block_offset() {
+future<std::optional<sstables::sstable_position_offset>> bti_index_reader::last_block_offset() {
     trie_logger.debug("bti_index_reader::last_block_offset this={}", fmt::ptr(this));
     return _lower.last_block_offset();
 }
@@ -772,7 +781,8 @@ bti_index_reader::bti_index_reader(
     bti_node_reader partitions_db,
     bti_node_reader rows_db,
     uint64_t root_offset,
-    uint64_t total_file_size,
+    sstables::sstable_position start_position,
+    sstables::sstable_position end_position,
     sstable_version_types sst_ver,
     schema_ptr s,
     reader_permit rp,
@@ -791,10 +801,11 @@ bti_index_reader::bti_index_reader(
     // (And both are needed to read lower and upper Data.db bounds).
     , _lower(root_offset, partitions_db, rows_db, _permit, _trace_state)
     , _upper(root_offset, partitions_db, rows_db, _permit, _trace_state)
-    , _total_file_size(total_file_size)
+    , _start_position(start_position)
+    , _end_position(end_position)
 {
-    trie_logger.debug("bti_index_reader::constructor: this={} root_offset={} total_file_size={} table={}.{}",
-        fmt::ptr(this), root_offset, total_file_size, _s->ks_name(), _s->cf_name());
+    trie_logger.debug("bti_index_reader::constructor: this={} root_offset={} start_position={} end_position={} table={}.{}",
+        fmt::ptr(this), root_offset, start_position, end_position, _s->ks_name(), _s->cf_name());
 }
 
 future<bool> bti_index_reader::advance_lower_and_check_if_present(dht::ring_position_view key) {
@@ -949,7 +960,8 @@ bool bti_index_reader::eof() const {
         // (There's an assumption that the data file is non empty).
         return false;
     }
-    return _lower.data_file_pos(_total_file_size) >= _total_file_size;
+    // The cursor is at EOF once its data position reaches the end of data.
+    return _lower.data_file_pos(_end_position) >= _end_position;
 }
 
 future<> bti_index_reader::prefetch_lower_bound(position_in_partition_view pos) {
@@ -991,7 +1003,8 @@ std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
     seastar::shared_ptr<cached_file> partitions_db,
     seastar::shared_ptr<cached_file> rows_db,
     uint64_t partitions_db_root_pos,
-    uint64_t total_data_db_file_size,
+    sstables::sstable_position start_position,
+    sstables::sstable_position end_position,
     sstable_version_types sst_ver,
     schema_ptr s,
     reader_permit permit,
@@ -1006,7 +1019,8 @@ std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
         bti_node_reader(*partitions_db),
         bti_node_reader(*rows_db),
         partitions_db_root_pos,
-        total_data_db_file_size,
+        start_position,
+        end_position,
         sst_ver,
         std::move(s),
         std::move(permit),

@@ -15,7 +15,6 @@
 #include "sstables/abstract_index_reader.hh"
 #include "sstables/framed_chunk.hh"
 #include "utils/assert.hh"
-#include "sstables/sstable_position.hh"
 
 namespace sstables {
     class file_writer;
@@ -293,7 +292,8 @@ std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
     seastar::shared_ptr<cached_file> partitions_db,
     seastar::shared_ptr<cached_file> rows_db,
     uint64_t partitions_db_root_pos,
-    uint64_t total_data_db_file_size,
+    sstables::sstable_position start_position,
+    sstables::sstable_position end_position,
     sstable_version_types,
     schema_ptr,
     reader_permit,

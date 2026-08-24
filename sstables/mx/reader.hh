@@ -12,7 +12,7 @@
 #include "readers/mutation_reader.hh"
 #include "sstables/progress_monitor.hh"
 #include "sstables/types_fwd.hh"
-#include "sstables/index_reader.hh"
+#include "sstables/abstract_index_reader.hh"
 
 namespace sstables {
 namespace mx {

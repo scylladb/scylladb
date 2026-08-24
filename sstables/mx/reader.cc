@@ -14,7 +14,6 @@
 #include "sstables/m_format_read_helpers.hh"
 #include "sstables/sstable_mutation_reader.hh"
 #include "sstables/processing_result_generator.hh"
-#include "utils/to_string.hh"
 #include "utils/value_or_reference.hh"
 
 namespace sstables {
@@ -1352,7 +1351,7 @@ private:
                 : get_index_reader().advance_past_definitely_present_partition(*_current_partition_key))
         .then([this] {
             _index_in_current_partition = true;
-            auto [start, end] = _index_reader->data_file_positions();
+            auto [start, end] = _index_reader->sstable_positions();
             if (end && start > *end) {
                 _read_enabled = false;
                 return make_ready_future<>();
@@ -1473,8 +1472,8 @@ private:
                     // from which it prepares the data given to us.
 
                     parse_assert(_reversed_read_sstable_position, _sst->get_filename());
-                    auto ip = _index_reader->data_file_positions();
-                    if (ip.end && sstable_position::from_logical(*ip.end) >= *_reversed_read_sstable_position) {
+                    auto ip = _index_reader->sstable_positions();
+                    if (ip.end && *ip.end >= *_reversed_read_sstable_position) {
                         // The reversing data source was already ahead (in reverse - its position was smaller)
                         // than the index. We must not update the current range tombstone in this case
                         // or reset the context since all fragments up to the new position of the index
@@ -1495,8 +1494,8 @@ private:
             } else {
                 return get_index_reader().advance_to(pos).then([this] {
                     abstract_index_reader& idx = *_index_reader;
-                    auto index_position = idx.data_file_positions();
-                    if (sstable_position::from_logical(index_position.start) <= _context->position()) {
+                    auto index_position = idx.sstable_positions();
+                    if (index_position.start <= _context->position()) {
                         return make_ready_future<>();
                     }
                     return skip_to(idx.element_kind(), index_position.start).then([this, &idx] {
@@ -1566,7 +1565,7 @@ private:
             co_await get_index_reader().advance_to(_pr);
         }
 
-        auto [begin, end] = _index_reader->data_file_positions();
+        auto [begin, end] = _index_reader->sstable_positions();
         parse_assert(bool(end), _sst->get_filename());
 
         sstlog.trace("sstable_reader: {}: data file range [{}, {})", fmt::ptr(this), begin, *end);
@@ -1575,7 +1574,7 @@ private:
             // Caller must retain a reference to checksum component while in use by the stream.
             _checksum = co_await _sst->read_checksum();
             // The stream checks the digest only if the read range covers all data.
-            if (begin == 0 && *end == _sst->data_size()) {
+            if (begin == _sst->start_position() && *end == _sst->end_position()) {
                 co_await _sst->read_digest();
             }
         }
@@ -1587,16 +1586,14 @@ private:
                     on_internal_error(sstlog, "mx reader: integrity checking not supported for single-partition reversed reads");
                 }
                 auto reversed_context = data_consume_reversed_partition<DataConsumeRowsContext>(
-                        *_schema, _sst, *_index_reader, _consumer,
-                        { sstable_position::from_logical(begin), sstable_position::from_logical(*end) });
+                        *_schema, _sst, *_index_reader, _consumer, { begin, *end });
                 _context = std::move(reversed_context.the_context);
                 _reversed_read_sstable_position = &reversed_context.current_position_in_sstable;
             } else {
-                _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer,
-                        { sstable_position::from_logical(begin), sstable_position::from_logical(*end) }, _integrity);
+                _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, _integrity);
             }
         } else {
-            sstable::disk_read_range drr{sstable_position::from_logical(begin), sstable_position::from_logical(*end)};
+            sstable::disk_read_range drr{begin, *end};
             auto last_end = _fwd_mr ? _sst->end_position() : drr.end;
             _read_enabled = bool(drr);
             _context = co_await data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, _integrity);
@@ -1606,8 +1603,7 @@ private:
         _index_in_current_partition = true;
         co_return true;
     }
-    future<> skip_to(indexable_element el, uint64_t begin_raw) {
-        auto begin = sstable_position::from_logical(begin_raw);
+    future<> skip_to(indexable_element el, sstable_position begin) {
         sstlog.trace("sstable_reader: {}: skip_to({} -> {}, el={})", fmt::ptr(_context.get()), _context->position(), begin, static_cast<int>(el));
         if (begin <= _context->position()) {
             return make_ready_future<>();
@@ -1631,8 +1627,8 @@ public:
     // which hasn't been crossed by the Data file parser yet.
     future<> advance_index_until_unseen_partition() {
         while (true) {
-            auto [start, end] = _index_reader->data_file_positions();
-            if (sstable_position::from_logical(start) >= _context->position()) {
+            auto [start, end] = _index_reader->sstable_positions();
+            if (start >= _context->position()) {
                 sstlog.trace("mp_row_consumer_reader_mx {}: advance_index_until_unseen_partition(): advanced to {}", fmt::ptr(this), start);
                 co_return;
             } else {
@@ -1660,10 +1656,10 @@ public:
                 parse_assert(bool(_index_reader), _sst->get_filename());
                 auto f1 = _index_reader->advance_to(pr);
                 return f1.then([this] {
-                    auto [start, end] = _index_reader->data_file_positions();
+                    auto [start, end] = _index_reader->sstable_positions();
                     parse_assert(bool(end), _sst->get_filename());
                     sstlog.trace("mp_row_consumer_reader_mx {}: fast_forward_to({}), index returned range [{}, {}), parser currently at {}", fmt::ptr(this), _pr.get(), start, *end, _context->position());
-                    if (sstable_position::from_logical(start) < _context->position()) {
+                    if (start < _context->position()) {
                         sstlog.trace("mp_row_consumer_reader_mx {}: _saved_partition_tombstone={}", fmt::ptr(this), _saved_partition_tombstone);
                         // If we got here, the index returned a Data start which precedes
                         // the data parser's position.
@@ -1689,9 +1685,9 @@ public:
                         _index_in_current_partition = false;
                         if (_saved_partition_tombstone) {
                             // Case 1 from the comment above.
-                            if (sstable_position::from_logical(*end) >= _context->position()) {
+                            if (*end >= _context->position()) {
                                 _read_enabled = true;
-                                return _context->fast_forward_to(_context->position(), sstable_position::from_logical(*end));
+                                return _context->fast_forward_to(_context->position(), *end);
                             } else {
                                 _read_enabled = false;
                                 return make_ready_future<>();
@@ -1699,10 +1695,10 @@ public:
                         } else {
                             // Case 2 from the comment above.
                             return advance_index_until_unseen_partition().then([this] {
-                                auto [start, end] = _index_reader->data_file_positions();
+                                auto [start, end] = _index_reader->sstable_positions();
                                 _read_enabled = true;
                                 _context->reset(indexable_element::partition);
-                                return _context->fast_forward_to(sstable_position::from_logical(start), sstable_position::from_logical(*end));
+                                return _context->fast_forward_to(start, *end);
                             });
                         }
                     }
@@ -1711,7 +1707,7 @@ public:
                         _index_in_current_partition = true;
                         _saved_partition_tombstone.reset();
                         _context->reset(indexable_element::partition);
-                        return _context->fast_forward_to(sstable_position::from_logical(start), sstable_position::from_logical(*end));
+                        return _context->fast_forward_to(start, *end);
                     }
                     _index_in_current_partition = false;
                     _read_enabled = false;
@@ -2265,7 +2261,7 @@ future<uint64_t> validate(
     try {
         monitor.on_read_started(context->reader_position());
         while (!context->eof() && !abort.abort_requested()) {
-            uint64_t current_partition_pos = 0;
+            std::optional<sstable_position> current_partition_pos;
             clustered_index_cursor* idx_cursor = nullptr;
 
             if (idx_reader && idx_reader->eof()) {
@@ -2284,8 +2280,8 @@ future<uint64_t> validate(
                     idx_cursor = big_index_reader->current_clustered_cursor();
                 }
 
-                const auto index_pos = idx_reader->data_file_positions().start;
-                const uint64_t data_pos = context->position().to_logical();
+                const auto index_pos = idx_reader->sstable_positions().start;
+                const auto data_pos = context->position();
                 auto pk = idx_reader->get_partition_key();
 
                 if (pk) {
@@ -2316,9 +2312,9 @@ future<uint64_t> validate(
                     // The mx format always has position-in-partition in the variant.
                     const auto start = std::get<position_in_partition_view>(current_pi_block->start);
                     const auto end = std::get<position_in_partition_view>(current_pi_block->end);
-                    const auto index_pos = current_partition_pos + current_pi_block->offset;
-                    const uint64_t data_pos = context->position().to_logical();
-                    sstlog.trace("validate(): index-data position check for clustering block (first={}) [{}, {}]: {} == {}, partition starts at {}", first_block, start, end, index_pos, data_pos, current_partition_pos);
+                    const auto index_pos = *current_partition_pos + sstable_position_offset::from_logical(current_pi_block->offset);
+                    const auto data_pos = context->position();
+                    sstlog.trace("validate(): index-data position check for clustering block (first={}) [{}, {}]: {} == {}, partition starts at {}", first_block, start, end, index_pos, data_pos, *current_partition_pos);
                     // We cannot reliably position the parser at the start of
                     // the first block, because there is no way to check what
                     // the next element is (static row or clustering row)

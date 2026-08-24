@@ -758,13 +758,7 @@ public:
             }
             co_return header_buf;
         }
-        // The index reader still reports logical (uint64) data-file positions; wrap
-        // them as logical sstable_positions here. (The typed index-reader interface
-        // arrives in a later commit.)
-        auto ir_end_raw = _ir.data_file_positions().end;
-        std::optional<sstable_position> ir_end = ir_end_raw
-                ? std::optional<sstable_position>(sstable_position::from_logical(*ir_end_raw))
-                : std::nullopt;
+        auto ir_end = _ir.sstable_positions().end;
         if (ir_end && *ir_end < _row_start) {
             // we can skip at least one row
             _row_start = *ir_end;
@@ -800,9 +794,8 @@ public:
             }
             if (look_in_last_block) {
                 if (auto offset = co_await _ir.last_block_offset()) {
-                    // there was a promoted index block in the partition, read from its beginning to find the last row.
-                    // last_block_offset() still reports a logical (uint64) byte offset; wrap it.
-                    _row_start = _partition_start + sstable_position_offset::from_logical(*offset);
+                    // there was a promoted index block in the partition, read from its beginning to find the last row
+                    _row_start = _partition_start + offset.value();
                 } else {
                     // no promoted index blocks in the partition, read from the beginning
                     _row_start = *_clustering_range_start;

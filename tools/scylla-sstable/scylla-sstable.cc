@@ -1205,7 +1205,7 @@ void write_index_component(schema_ptr schema, reader_permit permit, const sstabl
     writer.StartArray();
     while (!idx_reader->eof()) {
         idx_reader->read_partition_data().get();
-        auto pos = idx_reader->data_file_positions().start;
+        auto pos = idx_reader->sstable_positions().start;
         auto pkey = idx_reader->get_partition_key();
 
         writer.StartObject();
@@ -1214,7 +1214,7 @@ void write_index_component(schema_ptr schema, reader_permit permit, const sstabl
             writer.DataKey(*schema, *pkey);
         }
         writer.Key("pos");
-        writer.Uint64(pos);
+        writer.Uint64(pos.to_logical());
         writer.EndObject();
 
         idx_reader->advance_to_next_partition().get();

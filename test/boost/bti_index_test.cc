@@ -612,7 +612,7 @@ struct reference_index {
     std::vector<entry_idx> _present_dk_indices;
     // `_data_file_offsets[i]` is the `_entries[i].data_file_offset`.
     // (Extracted for convenience, because `_entries[i]` is a variant).
-    std::vector<uint64_t> _data_file_offsets;
+    std::vector<sstables::sstable_position> _data_file_offsets;
 
     // The mutable state of this index reader.
     // An index reader is expected to behave like a (lower bound, upper bound) pair,
@@ -629,7 +629,7 @@ struct reference_index {
     {
         for (const auto& e : _entries) {
             std::visit([this](const auto& entry) {
-                _data_file_offsets.push_back(entry.data_file_offset);
+                _data_file_offsets.push_back(sstables::sstable_position::from_logical(entry.data_file_offset));
             }, e);
         }
         {
@@ -659,7 +659,7 @@ struct reference_index {
         }
     }
 
-    entry_idx entry_idx_from_data_position(uint64_t data_position) const {
+    entry_idx entry_idx_from_data_position(sstables::sstable_position data_position) const {
         auto it = std::find(_data_file_offsets.begin(), _data_file_offsets.end(), data_position);
         if (it != _data_file_offsets.end()) {
             return static_cast<entry_idx>(std::distance(_data_file_offsets.begin(), it));
@@ -682,7 +682,7 @@ struct reference_index {
         return get_partition_of_entry(_lower);
     }
 
-    void recalibrate(sstables::data_file_positions_range r) {
+    void recalibrate(sstables::sstable_positions_range r) {
         _lower = entry_idx_from_data_position(r.start);
         if (r.end) {
             _upper = entry_idx_from_data_position(*r.end);
@@ -883,15 +883,15 @@ struct reference_index {
         }
         return std::nullopt;
     }
-    sstables::data_file_positions_range data_file_positions() const {
+    sstables::sstable_positions_range sstable_positions() const {
         auto lo = _data_file_offsets[_lower];
-        std::optional<uint64_t> hi;
+        std::optional<sstables::sstable_position> hi;
         if (_upper) {
             hi = _data_file_offsets[*_upper];
         }
         return {lo, hi};
     }
-    std::optional<uint64_t> last_block_offset() {
+    std::optional<sstables::sstable_position_offset> last_block_offset() {
         auto curpar = get_current_partition();
         if (std::holds_alternative<eof_index_entry>(_entries[curpar])) {
             return std::nullopt;
@@ -901,7 +901,8 @@ struct reference_index {
         }
         for (uint64_t idx = curpar + 1; idx < _entries.size(); ++idx) {
             if (std::holds_alternative<partition_end_entry>(_entries[idx + 1])) {
-                return _data_file_offsets[idx] - _data_file_offsets[curpar];
+                return sstables::sstable_position_offset::from_logical(
+                    _data_file_offsets[idx].to_logical() - _data_file_offsets[curpar].to_logical());
             }
         }
         abort();
@@ -916,7 +917,7 @@ struct reference_index {
     sstables::indexable_element element_kind() const {
         return element_kind_for_entry(_lower);
     }
-    sstables::indexable_element element_kind_for_position(std::optional<uint64_t> pos) const {
+    sstables::indexable_element element_kind_for_position(std::optional<sstables::sstable_position> pos) const {
         if (!pos) {
             return sstables::indexable_element::partition;
         }
@@ -1007,8 +1008,8 @@ void test_index(const index_entry_dataset& dataset, std::function<std::unique_pt
         auto reader = reader_factory();
         ri.reset();
         auto check_integrity = [&] {
-            testlog.debug("check_integrity: reader->data_file_positions()={},{}", reader->data_file_positions().start, reader->data_file_positions().end);
-            auto positions = reader->data_file_positions();
+            testlog.debug("check_integrity: reader->sstable_positions()={},{}", reader->sstable_positions().start, reader->sstable_positions().end);
+            auto positions = reader->sstable_positions();
             // Adjust the reference index to match the reader's positions exactly.
             // (Before this call, the positions may be different, because the real
             // reader is allowed some degree of inexactness/suboptimality after some method calls).
@@ -1016,8 +1017,8 @@ void test_index(const index_entry_dataset& dataset, std::function<std::unique_pt
             if (ri.partition_data_ready()) {
                 SCYLLA_ASSERT(reader->partition_data_ready());
             }
-            SCYLLA_ASSERT(ri.data_file_positions().start == positions.start);
-            SCYLLA_ASSERT(ri.data_file_positions().end == positions.end);
+            SCYLLA_ASSERT(ri.sstable_positions().start == positions.start);
+            SCYLLA_ASSERT(ri.sstable_positions().end == positions.end);
             SCYLLA_ASSERT(ri.element_kind() == reader->element_kind());
             SCYLLA_ASSERT(ri.eof() == reader->eof());
             auto get_tombstone = [] (const sstables::open_rt_marker& marker) {
@@ -1026,7 +1027,11 @@ void test_index(const index_entry_dataset& dataset, std::function<std::unique_pt
             SCYLLA_ASSERT(ri.end_open_marker().transform(get_tombstone) == reader->end_open_marker().transform(get_tombstone));
             SCYLLA_ASSERT(ri.reverse_end_open_marker().transform(get_tombstone) == reader->reverse_end_open_marker().transform(get_tombstone));
             if (reader->partition_data_ready()) {
-                SCYLLA_ASSERT(ri.last_block_offset() == reader->last_block_offset().get());
+                // This test uses logical positions only.
+                auto to_logical = [] (const sstables::sstable_position_offset& off) {
+                    return off.to_logical();
+                };
+                SCYLLA_ASSERT(ri.last_block_offset().transform(to_logical) == reader->last_block_offset().get().transform(to_logical));
                 if (ri.has_row_index()) {
                     SCYLLA_ASSERT(reader->partition_tombstone());
                     SCYLLA_ASSERT(reader->get_partition_key());
@@ -1042,13 +1047,13 @@ void test_index(const index_entry_dataset& dataset, std::function<std::unique_pt
         check_integrity();
         for (int op = 0; op < max_ops; ++op) {
             testlog.debug("op={}, start={}, end={}",
-                op, reader->data_file_positions().start, reader->data_file_positions().end);
+                op, reader->sstable_positions().start, reader->sstable_positions().end);
             if (auto vt = ri.valid_targets_for_advance_lower_and_check_if_present(); !vt.empty() && !ndcs.choose_bool()) {
                 auto target = ndcs.choose_up_to(vt.size() - 1);
                 auto rp = vt[target];
                 testlog.debug("advance_lower_and_check_if_present(rp={})", rp);
                 
-                auto upper_before = reader->data_file_positions().end;
+                auto upper_before = reader->sstable_positions().end;
                 auto possible_match = reader->advance_lower_and_check_if_present(rp).get();
                 auto reference_match = ri.advance_lower_and_check_if_present(rp);
                 if (!possible_match) {
@@ -1059,36 +1064,36 @@ void test_index(const index_entry_dataset& dataset, std::function<std::unique_pt
                     break;
                 }
                 SCYLLA_ASSERT(reader->element_kind() == sstables::indexable_element::partition);
-                testlog.debug("reader->data_file_positions()={},{}, ri.data_file_positions()={},{}, upper_before={}",
-                    reader->data_file_positions().start,
-                    reader->data_file_positions().end,
-                    ri.data_file_positions().start,
-                    ri.data_file_positions().end,
+                testlog.debug("reader->sstable_positions()={},{}, ri.sstable_positions()={},{}, upper_before={}",
+                    reader->sstable_positions().start,
+                    reader->sstable_positions().end,
+                    ri.sstable_positions().start,
+                    ri.sstable_positions().end,
                     upper_before);
-                SCYLLA_ASSERT(reader->data_file_positions().start <= ri.data_file_positions().start);
+                SCYLLA_ASSERT(reader->sstable_positions().start <= ri.sstable_positions().start);
                 if (reference_match) {
                     SCYLLA_ASSERT(possible_match);
-                    SCYLLA_ASSERT(reader->data_file_positions().start == ri.data_file_positions().start);
+                    SCYLLA_ASSERT(reader->sstable_positions().start == ri.sstable_positions().start);
                 }
-                SCYLLA_ASSERT(reader->data_file_positions().end == upper_before);
+                SCYLLA_ASSERT(reader->sstable_positions().end == upper_before);
             } else if (auto vt = ri.valid_targets_for_advance_past_definitely_present_partition(); !vt.empty() && !ndcs.choose_bool()) {
                 auto target = ndcs.choose_up_to(vt.size() - 1);
                 auto dk = vt[target];
-                auto upper_before = reader->data_file_positions().end;
+                auto upper_before = reader->sstable_positions().end;
                 testlog.debug("advance_to_definitely_present_partition(dk={})", dk);
                 reader->advance_to_definitely_present_partition(dk).get();
                 ri.advance_to_definitely_present_partition(dk);
-                SCYLLA_ASSERT(reader->data_file_positions().start == ri.data_file_positions().start);
-                SCYLLA_ASSERT(reader->data_file_positions().end == upper_before);
+                SCYLLA_ASSERT(reader->sstable_positions().start == ri.sstable_positions().start);
+                SCYLLA_ASSERT(reader->sstable_positions().end == upper_before);
             } else if (auto vt = ri.valid_targets_for_advance_past_definitely_present_partition(); !vt.empty() && !ndcs.choose_bool()) {
                 auto target = ndcs.choose_up_to(vt.size() - 1);
                 auto dk = vt[target];
-                auto upper_before = reader->data_file_positions().end;
+                auto upper_before = reader->sstable_positions().end;
                 testlog.debug("advance_past_definitely_present_partition(dk={})", dk);
                 reader->advance_past_definitely_present_partition(dk).get();
                 ri.advance_past_definitely_present_partition(dk);
-                SCYLLA_ASSERT(reader->data_file_positions().start == ri.data_file_positions().start);
-                SCYLLA_ASSERT(reader->data_file_positions().end == upper_before);
+                SCYLLA_ASSERT(reader->sstable_positions().start == ri.sstable_positions().start);
+                SCYLLA_ASSERT(reader->sstable_positions().end == upper_before);
             } else if (!ndcs.choose_bool()) {
                 std::optional<dht::partition_range::bound> lb;
                 if (auto vt = ri.valid_lb_targets_for_advance_to(); !vt.empty() && !ndcs.choose_bool()) {
@@ -1115,12 +1120,12 @@ void test_index(const index_entry_dataset& dataset, std::function<std::unique_pt
                 testlog.debug("advance_to(pr={})", pr);
                 reader->advance_to(pr).get();
                 ri.advance_to(pr);
-                auto positions = reader->data_file_positions();
+                auto positions = reader->sstable_positions();
                 SCYLLA_ASSERT(reader->element_kind() == sstables::indexable_element::partition);
-                SCYLLA_ASSERT(positions.start <= ri.data_file_positions().start);
-                if (ri.data_file_positions().end) {
+                SCYLLA_ASSERT(positions.start <= ri.sstable_positions().start);
+                if (ri.sstable_positions().end) {
                     SCYLLA_ASSERT(positions.end);
-                    SCYLLA_ASSERT(*positions.end >= *ri.data_file_positions().end);
+                    SCYLLA_ASSERT(*positions.end >= *ri.sstable_positions().end);
                 } else {
                     SCYLLA_ASSERT(!positions.end);
                 }
@@ -1128,45 +1133,45 @@ void test_index(const index_entry_dataset& dataset, std::function<std::unique_pt
                 testlog.debug("advance_to_next_partition()");
                 reader->advance_to_next_partition().get();
                 ri.advance_to_next_partition();
-                SCYLLA_ASSERT(reader->data_file_positions().start == ri.data_file_positions().start);
-                SCYLLA_ASSERT(reader->data_file_positions().end == ri.data_file_positions().end);
+                SCYLLA_ASSERT(reader->sstable_positions().start == ri.sstable_positions().start);
+                SCYLLA_ASSERT(reader->sstable_positions().end == ri.sstable_positions().end);
             } else if (!ndcs.choose_bool()) {
                 testlog.debug("advance_reverse_to_next_partition()");
                 reader->advance_reverse_to_next_partition().get();
                 ri.advance_reverse_to_next_partition();
-                SCYLLA_ASSERT(reader->data_file_positions().start == ri.data_file_positions().start);
-                SCYLLA_ASSERT(reader->data_file_positions().end == ri.data_file_positions().end);
+                SCYLLA_ASSERT(reader->sstable_positions().start == ri.sstable_positions().start);
+                SCYLLA_ASSERT(reader->sstable_positions().end == ri.sstable_positions().end);
             } else if (auto vt = ri.valid_targets_for_advance_to_pip(); !reader->eof() && !vt.empty() && !ndcs.choose_bool()) {
                 auto target = ndcs.choose_up_to(vt.size() - 1);
                 const auto& pos = vt[target];
                 testlog.debug("advance_to({})", pos);
                 reader->advance_to(pos).get();
                 ri.advance_to(pos);
-                SCYLLA_ASSERT(reader->data_file_positions().start <= ri.data_file_positions().start);
-                SCYLLA_ASSERT(reader->data_file_positions().end == ri.data_file_positions().end);
+                SCYLLA_ASSERT(reader->sstable_positions().start <= ri.sstable_positions().start);
+                SCYLLA_ASSERT(reader->sstable_positions().end == ri.sstable_positions().end);
             } else if (auto vt = ri.valid_targets_for_advance_to_pip(); !reader->eof() && !vt.empty() && !ndcs.choose_bool()) {
                 auto target = ndcs.choose_up_to(vt.size() - 1);
                 const auto& pos = vt[target];
                 testlog.debug("advance_upper_past({})", pos);
                 reader->advance_upper_past(pos).get();
                 ri.advance_upper_past(pos);
-                SCYLLA_ASSERT(reader->data_file_positions().end.value() >= ri.data_file_positions().end.value());
-                SCYLLA_ASSERT(reader->data_file_positions().start == ri.data_file_positions().start);
+                SCYLLA_ASSERT(reader->sstable_positions().end.value() >= ri.sstable_positions().end.value());
+                SCYLLA_ASSERT(reader->sstable_positions().start == ri.sstable_positions().start);
             } else if (auto vt = ri.valid_targets_for_advance_reverse(); !reader->eof() && !vt.empty() && !ndcs.choose_bool()) {
                 auto target = ndcs.choose_up_to(vt.size() - 1);
                 const auto& pos = vt[target];
                 testlog.debug("advance_upper_past({})", pos);
                 reader->advance_reverse(pos).get();
                 ri.advance_reverse(pos);
-                SCYLLA_ASSERT(reader->data_file_positions().end.value() >= ri.data_file_positions().end.value());
-                SCYLLA_ASSERT(reader->data_file_positions().start == ri.data_file_positions().start);
+                SCYLLA_ASSERT(reader->sstable_positions().end.value() >= ri.sstable_positions().end.value());
+                SCYLLA_ASSERT(reader->sstable_positions().start == ri.sstable_positions().start);
             } else {
                 testlog.debug("read_partition_data()");
-                auto positions_before = reader->data_file_positions();
+                auto positions_before = reader->sstable_positions();
                 reader->read_partition_data().get();
                 ri.read_partition_data();
                 SCYLLA_ASSERT(reader->partition_data_ready());
-                auto positions_after = reader->data_file_positions();
+                auto positions_after = reader->sstable_positions();
                 SCYLLA_ASSERT(positions_before.start == positions_after.start);
                 SCYLLA_ASSERT(positions_before.end == positions_after.end);
             }
@@ -1239,8 +1244,16 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
         auto close_partitions_db = defer([&] noexcept { partitions_db_writer.close(); });
         auto close_rows_db = defer([&] noexcept { rows_db_writer.close(); });
 
+        // This test uses the `mt` (logical) format, so the payloads use the legacy
+        // (non-physical) serialization.
         auto partition_index_writer = sstables::trie::bti_partition_index_writer(sst_ver, partitions_db_writer, sstables::trie::bti_position_encoding::logical());
         auto row_index_writer = sstables::trie::bti_row_index_writer(sst_ver, rows_db_writer, sstables::trie::bti_position_encoding::logical());
+
+        // This test uses the `mt` (logical) format, so the positions are logical;
+        // the post-compression (physical) position isn't exercised here.
+        auto pos = [] (int64_t uncompressed) {
+            return sstables::sstable_position::from_logical(uncompressed);
+        };
 
         std::optional<partition_index_entry> last_partition_entry;
         std::optional<partition_end_entry> last_partition_end_entry;
@@ -1251,8 +1264,8 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
                 auto hash = utils::make_hashed_key(bytes_view(pk));
                 auto payload = row_index_writer.finish(
                     *the_schema,
-                    sstables::sstable_position::from_logical(last.data_file_offset),
-                    sstables::sstable_position::from_logical(last_partition_end_entry.value().data_file_offset),
+                    pos(last.data_file_offset),
+                    pos(last_partition_end_entry.value().data_file_offset),
                     pk,
                     last.partition_tombstone);
                 partition_index_writer.add(*the_schema, last.dk, hash, payload);
@@ -1271,8 +1284,8 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
                         *the_schema,
                         e.first_ck,
                         e.last_ck,
-                        sstables::sstable_position::from_logical(last_partition_entry.value().data_file_offset),
-                        sstables::sstable_position::from_logical(e.data_file_offset),
+                        pos(last_partition_entry.value().data_file_offset),
+                        pos(e.data_file_offset),
                         e.range_tombstone_before_first_ck);
                 },
                 [&](const partition_end_entry& e) {
@@ -1314,7 +1327,8 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
                 partitions_db_cached,
                 rows_db_cached,
                 partitions_db_root_pos,
-                std::get<eof_index_entry>(dataset.entries.back()).data_file_offset,
+                sstables::sstable_position::from_logical(0),
+                sstables::sstable_position::from_logical(std::get<eof_index_entry>(dataset.entries.back()).data_file_offset),
                 sst_ver,
                 the_schema,
                 semaphore.make_permit(),

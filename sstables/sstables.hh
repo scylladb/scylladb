@@ -30,6 +30,7 @@
 #include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
 #include "component_type.hh"
+#include "sstables/abstract_index_reader.hh"
 #include "column_translation.hh"
 #include "stats.hh"
 #include "utils/observable.hh"
@@ -397,6 +398,7 @@ public:
     sstable_position start_position() const;
     sstable_position end_position() const;
 
+    double approximate_file_fraction(sstable_positions_range range) const;
     sstable_position sstable_position_from_logical_position(uint64_t logical_position) const;
     disk_read_range disk_read_range_from_logical_range(uint64_t begin, uint64_t end) const;
 
