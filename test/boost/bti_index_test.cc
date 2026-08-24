@@ -56,6 +56,28 @@ BOOST_AUTO_TEST_CASE(test_bti_extent_block_count_roundtrip) {
     }
 }
 
+BOOST_AUTO_TEST_CASE(test_bti_partition_index_target_roundtrip) {
+    using namespace sstables::trie;
+    for (uint64_t v : {uint64_t{0}, uint64_t{1}, uint64_t{1} << 40, std::numeric_limits<uint64_t>::max()}) {
+        const auto rows = bti_partition_index_target(rows_db_position{v});
+        BOOST_REQUIRE(rows.rows_db());
+        BOOST_CHECK_EQUAL(rows.rows_db()->value, v);
+        BOOST_CHECK(!rows.data_db());
+
+        const auto logical = bti_partition_index_target(sstables::sstable_position::from_logical(v));
+        BOOST_CHECK(!logical.rows_db());
+        BOOST_REQUIRE(logical.data_db());
+        BOOST_CHECK_EQUAL(logical.data_db()->to_logical(), v);
+
+        const auto physical = bti_partition_index_target(sstables::sstable_position::from_physical(v, 512, 7));
+        BOOST_CHECK(!physical.rows_db());
+        BOOST_REQUIRE(physical.data_db());
+        BOOST_CHECK_EQUAL(physical.data_db()->as_physical().chunk_position, v);
+        BOOST_CHECK_EQUAL(physical.data_db()->as_physical().extent_hint, 512u);
+        BOOST_CHECK_EQUAL(physical.data_db()->as_physical().offset_within_chunk, 7u);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(test_bti_pack_unpack_length_and_offset_roundtrip) {
     using namespace sstables::trie;
     for (uint32_t uncompressed_chunk_length : {uint32_t{4096}, uint32_t{16384}, uint32_t{65536}}) {
@@ -135,14 +157,14 @@ struct payload_test_partition {
     struct block {
         int16_t first_ck;
         int16_t last_ck;
-        uint64_t start;
+        sstables::sstable_position start;
         sstables::deletion_time range_tombstone_before_first_ck;
     };
     // Also the value of the partition key.
     int16_t token;
-    uint64_t start;
+    sstables::sstable_position start;
     // The position of the END_OF_PARTITION byte.
-    uint64_t end;
+    sstables::sstable_position end;
     sstables::deletion_time partition_tombstone;
     // Partitions with no blocks have no row index.
     std::vector<block> blocks;
@@ -184,7 +206,7 @@ static index_files_hex write_index_for_payload_test(
         auto close_partitions_db = defer([&] noexcept { partitions_db_writer.close(); });
         auto close_rows_db = defer([&] noexcept { rows_db_writer.close(); });
         auto partition_index_writer = sstables::trie::bti_partition_index_writer(sst_ver, partitions_db_writer);
-        auto row_index_writer = sstables::trie::bti_row_index_writer(rows_db_writer);
+        auto row_index_writer = sstables::trie::bti_row_index_writer(sst_ver, rows_db_writer);
         std::vector<sstables::key> keys;
         for (const auto& p : partitions) {
             auto pk = partition_key::from_deeply_exploded(*s, {data_value(p.token)});
@@ -193,7 +215,7 @@ static index_files_hex write_index_for_payload_test(
             for (const auto& b : p.blocks) {
                 row_index_writer.add(*s, make_ck(b.first_ck), make_ck(b.last_ck), b.start - p.start, b.range_tombstone_before_first_ck);
             }
-            auto target = row_index_writer.finish(sst_ver, *s, p.start, p.end, key, p.partition_tombstone);
+            auto target = row_index_writer.finish(*s, p.start, p.end, key, p.partition_tombstone);
             partition_index_writer.add(*s, dk, utils::make_hashed_key(bytes_view(key)), target);
             keys.push_back(std::move(key));
         }
@@ -208,14 +230,15 @@ static index_files_hex write_index_for_payload_test(
 // Checks the exact bytes of the BTI index files of `mt`.
 // A change in these bytes is a change of the on-disk format.
 SEASTAR_THREAD_TEST_CASE(test_mt_index_payload_encoding) {
+    auto pos = [] (uint64_t p) { return sstables::sstable_position::from_logical(p); };
     const auto live = sstables::deletion_time::make_live();
     const auto partitions = std::vector<payload_test_partition>{
-        {.token = 1, .start = 127, .end = 150, .partition_tombstone = live},
-        {.token = 2, .start = 200, .end = 1199, .partition_tombstone = {789, 1011}, .blocks = {
-            {.first_ck = 1, .last_ck = 2, .start = 210, .range_tombstone_before_first_ck = live},
-            {.first_ck = 3, .last_ck = 4, .start = 500, .range_tombstone_before_first_ck = {123, 456}},
+        {.token = 1, .start = pos(127), .end = pos(150), .partition_tombstone = live},
+        {.token = 2, .start = pos(200), .end = pos(1199), .partition_tombstone = {789, 1011}, .blocks = {
+            {.first_ck = 1, .last_ck = 2, .start = pos(210), .range_tombstone_before_first_ck = live},
+            {.first_ck = 3, .last_ck = 4, .start = pos(500), .range_tombstone_before_first_ck = {123, 456}},
         }},
-        {.token = 3, .start = 0x123456789a, .end = 0x12345678ff, .partition_tombstone = live},
+        {.token = 3, .start = pos(0x123456789a), .end = pos(0x12345678ff), .partition_tombstone = live},
     };
     auto files = write_index_for_payload_test(
         sstables::sstable_version_types::mt,
@@ -1179,7 +1202,7 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
         auto close_rows_db = defer([&] noexcept { rows_db_writer.close(); });
 
         auto partition_index_writer = sstables::trie::bti_partition_index_writer(sst_ver, partitions_db_writer);
-        auto row_index_writer = sstables::trie::bti_row_index_writer(rows_db_writer);
+        auto row_index_writer = sstables::trie::bti_row_index_writer(sst_ver, rows_db_writer);
 
         std::optional<partition_index_entry> last_partition_entry;
         std::optional<partition_end_entry> last_partition_end_entry;
@@ -1189,10 +1212,9 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
                 auto pk = sstables::key::from_partition_key(*the_schema, last.dk.key());
                 auto hash = utils::make_hashed_key(bytes_view(pk));
                 auto payload = row_index_writer.finish(
-                    sst_ver,
                     *the_schema,
-                    last.data_file_offset,
-                    last_partition_end_entry.value().data_file_offset,
+                    sstables::sstable_position::from_logical(last.data_file_offset),
+                    sstables::sstable_position::from_logical(last_partition_end_entry.value().data_file_offset),
                     pk,
                     last.partition_tombstone);
                 partition_index_writer.add(*the_schema, last.dk, hash, payload);
@@ -1211,7 +1233,7 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
                         *the_schema,
                         e.first_ck,
                         e.last_ck,
-                        e.data_file_offset - last_partition_entry.value().data_file_offset,
+                        sstables::sstable_position_offset::from_logical(e.data_file_offset - last_partition_entry.value().data_file_offset),
                         e.range_tombstone_before_first_ck);
                 },
                 [&](const partition_end_entry& e) {
@@ -1342,7 +1364,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_row_index_header) {
             sstables::sstable_version_types::mt,
             fw,
             pk,
-            partition_data_start,
+            sstables::sstable_position::from_logical(partition_data_start),
             number_of_blocks,
             root_pos,
             tomb
@@ -1359,7 +1381,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_row_index_header) {
         auto semaphore = tests::reader_concurrency_semaphore_wrapper();
         auto result = sstables::trie::read_row_index_header(std::move(in), 0, stream_size, semaphore.make_permit()).get();
         SCYLLA_ASSERT(bytes_view(result.partition_key) == bytes_view(pk));
-        SCYLLA_ASSERT(result.data_file_offset == partition_data_start);
+        SCYLLA_ASSERT(result.data_file_position == sstables::sstable_position::from_logical(partition_data_start));
         SCYLLA_ASSERT(result.number_of_blocks == number_of_blocks);
         SCYLLA_ASSERT(result.trie_root == root_pos);
         SCYLLA_ASSERT(result.partition_tombstone == tomb);  
