@@ -640,6 +640,18 @@ public:
         _current_partition_limit = std::min(_row_limit, _partition_row_limit);
         _query_time = query_time;
         _stats = {};
+        // A page which continues a partition started on a previous page will
+        // not see the partition-start fragment of said partition, so
+        // consume_new_partition() -- which accounts for the partition in the
+        // page's stats -- will not be called for it. Account for it here
+        // instead, otherwise live_partitions can exceed total_partitions and
+        // dead_partitions() underflows.
+        // A page starting at the partition-end will not emit anything from the
+        // partition, so it is not counted, to avoid misreporting it as a dead
+        // partition.
+        if (next_fragment_region == partition_region::static_row || next_fragment_region == partition_region::clustered) {
+            ++_stats.total_partitions;
+        }
         _stop = stop_iteration::no;
 
         noop_compacted_fragments_consumer nc;

@@ -3713,6 +3713,83 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
     }
 }
 
+// Reproduces the underflow of compaction_stats::dead_partitions() on pages
+// which continue a partition started on a previous page: such pages don't see
+// a partition-start fragment, so total_partitions is not incremented, while
+// live_partitions is (from the first emitted row), resulting in
+// dead_partitions() == total_partitions - live_partitions underflowing.
+SEASTAR_THREAD_TEST_CASE(test_compactor_partition_stats_of_partition_spanning_many_pages) {
+    simple_schema ss;
+    auto pk = ss.make_pkey();
+    auto s = ss.schema();
+
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+
+    auto permit = semaphore.make_permit();
+
+    const auto marker_ts = ss.new_timestamp();
+    const auto row_ts = ss.new_timestamp();
+
+    const uint32_t rows = 10;
+
+    auto make_frags = [&] {
+        std::deque<mutation_fragment_v2> frags;
+
+        frags.emplace_back(*s, permit, partition_start(pk, {}));
+
+        const auto& v_def = *s->get_column_definition(to_bytes("v"));
+
+        for (uint32_t ck = 0; ck < rows; ++ck) {
+            auto row = clustering_row(ss.make_ckey(ck));
+            row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, row_ts, serialized("v")));
+            row.marker() = row_marker(marker_ts);
+            frags.emplace_back(mutation_fragment_v2(*s, permit, std::move(row)));
+        }
+
+        frags.emplace_back(*s, permit, partition_end{});
+
+        return frags;
+    };
+
+    const auto query_time = gc_clock::now();
+    const auto max_rows = std::numeric_limits<uint64_t>::max();
+    const auto max_partitions = std::numeric_limits<uint32_t>::max();
+    const uint64_t rows_per_page = 2;
+
+    auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(),
+            max_rows, max_partitions, tombstone_gc_state::no_gc());
+    auto reader = make_mutation_reader_from_fragments(s, permit, make_frags());
+    auto close_reader = deferred_close(reader);
+
+    unsigned pages = 0;
+    unsigned pages_with_rows = 0;
+    while (!reader.is_buffer_empty() || !reader.is_end_of_stream()) {
+        noop_compacted_fragments_consumer c;
+        compaction_state->start_new_page(rows_per_page, max_partitions, query_time, reader.peek().get()->position().region(), c);
+        reader.consume(compact_for_query<noop_compacted_fragments_consumer>(compaction_state, c)).get();
+
+        const auto& stats = compaction_state->stats();
+        testlog.info("page {}: {} partition(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead)", pages,
+                stats.total_partitions, stats.live_partitions, stats.dead_partitions(),
+                stats.clustering_rows.total(), stats.clustering_rows.live, stats.clustering_rows.dead);
+
+        // The partition is live on every page it has rows on, be it the page
+        // it was started on or a page continuing it.
+        if (stats.clustering_rows.total()) {
+            BOOST_REQUIRE_EQUAL(stats.live_partitions, 1);
+            BOOST_REQUIRE_EQUAL(stats.total_partitions, 1);
+            ++pages_with_rows;
+        }
+        // A partition can never be live without being counted in the total.
+        BOOST_REQUIRE_LE(stats.live_partitions, stats.total_partitions);
+        BOOST_REQUIRE_EQUAL(stats.dead_partitions(), 0);
+
+        ++pages;
+    }
+
+    BOOST_REQUIRE_EQUAL(pages_with_rows, rows / rows_per_page);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_compactor_detach_state) {
     simple_schema ss;
     auto pk = ss.make_pkey();
