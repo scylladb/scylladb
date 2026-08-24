@@ -250,7 +250,8 @@ async def test_cql_optional_client_cert(manager: ScyllaClusterManager, tmp_path)
         # server may close the connection prematurely and the driver reports a
         # generic connection closed message instead. Accept that too.
         # The important thing is that the connection failed.
-        assert any('SSL' in t or 'tls' in t.lower() or 'certificate' in t.lower() or 'Broken pipe' in t or 'already closed' in t.lower() for t in error_texts), \
+        assert any('SSL' in t or 'tls' in t.lower() or 'certificate' in t.lower() or 'Broken pipe' in t
+                   or 'Connection reset' in t or 'already closed' in t.lower() for t in error_texts), \
             f"Expected an SSL/TLS error for untrusted cert, got: {error_texts}"
     finally:
         safe_driver_shutdown(cluster_bad_cert)
