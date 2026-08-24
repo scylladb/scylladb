@@ -649,6 +649,9 @@ future<> groups_manager::run_config_sync(raft_group_state& state, global_tablet_
     // topology coordinator, and converge_group_config() is what reports back to it.
     abort_on_expiry aoe(lowres_clock::now() + config_sync_timeout);
     try {
+        if (utils::get_local_injector().enter("sc_config_sync_fail")) {
+            throw std::runtime_error("sc_config_sync_fail injection");
+        }
         co_await state.server->modify_config(std::move(work.to_add), std::move(work.to_del),
                 &aoe.abort_source());
         logger.debug("run_config_sync({}-{}): applied, current config: {}",
@@ -732,6 +735,12 @@ future<> groups_manager::converge_group_config(global_tablet_id tablet, raft::gr
     auto retry = exponential_backoff_retry(10ms, 1s);
 
     while (true) {
+        if (state.gate->is_closed()) {
+            // The table was dropped or the node is shutting down. Nothing can converge
+            // anymore, so fail now instead of spinning until the deadline.
+            throw std::runtime_error(format("converge_group_config({}-{}): raft group is being deleted", tablet, gid));
+        }
+
         // Re-driving the change is coupled to this loop rather than to the next token
         // metadata update, so a barrier retried by the coordinator on an otherwise
         // quiet cluster makes progress.
@@ -754,9 +763,10 @@ future<> groups_manager::converge_group_config(global_tablet_id tablet, raft::gr
         }
 
         // Only the leader can repair the configuration. A replica the stage doesn't
-        // expect to be a voter has nothing to attest to either, so it is done: a
-        // member that raft never told about its own removal simply keeps failing this
-        // check until the group is deleted, without holding anything up.
+        // expect to be a voter has nothing to attest to either, so it is done. This is
+        // also what keeps a replica that raft never told about its own removal - raft
+        // deliberately stops replicating to a removed member - from holding up the
+        // barrier: the stage doesn't expect it, so it doesn't participate.
         const bool is_leader = state.server->is_leader();
         if (!is_leader && !work.expected_voter) {
             co_return;

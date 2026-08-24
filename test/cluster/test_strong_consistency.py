@@ -2171,3 +2171,223 @@ async def test_rf_change(manager: ScyllaClusterManager):
                 rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = {i}", host=leader_host)
                 assert len(rows) == 1, f"Expected 1 row for pk={i}, got {len(rows)}"
                 assert rows[0].c == i, f"Expected c={i}, got {rows[0].c}"
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_tablet_migration_config_change_retried(manager: ScyllaClusterManager):
+    """A raft configuration change that fails once must be re-driven.
+
+    Re-driving is the barrier's job. If it were coupled to the next token
+    metadata change instead, a failed attempt on an otherwise quiet cluster
+    would leave the coordinator failing the same barrier forever.
+    """
+    logger.info("Bootstrapping cluster")
+    cmdline = DEFAULT_CMDLINE + [
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'debug_error_injection=debug',
+    ]
+    servers = await manager.servers_add(6, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+    ])
+    cql, _ = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+                                         "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            tablet_token = tablets[0].last_token
+            assert len(tablets[0].replicas) == 3, f"Expected 3 replicas, got {len(tablets[0].replicas)}"
+
+            for i in range(10):
+                await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({i}, {i + 1})")
+
+            async def check():
+                for i in range(10):
+                    rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = {i}")
+                    assert len(rows) == 1, f"Expected 1 row for pk={i}, got {len(rows)}"
+                    assert rows[0].c == i + 1, f"Expected c={i + 1} for pk={i}, got {rows[0].c}"
+
+            await check()
+
+            # Each rack holds two nodes, so a replica can move within its rack
+            # without changing the rack distribution. Every migration below picks a
+            # destination that never hosted this raft group before.
+            racks = [[host_ids[0], host_ids[1]], [host_ids[2], host_ids[3]], [host_ids[4], host_ids[5]]]
+
+            async def migrate_within_rack(rack, fail_first_config_change):
+                replicas = (await get_all_tablet_replicas(manager, servers[0], ks, table_name))[0].replicas
+                src_host_id, src_shard = next((h, s) for h, s in replicas if h in rack)
+                dst_host_id = next(h for h in rack if h != src_host_id)
+                if fail_first_config_change:
+                    # Fail the first attempt on every node, so that whichever replica
+                    # is the group leader fails its first attempt.
+                    for server in servers:
+                        await manager.api.enable_injection(server.ip_addr, "sc_config_sync_fail", one_shot=True)
+
+                logger.info(f"Migrating replica from {src_host_id}:{src_shard} to {dst_host_id}:0")
+                await manager.api.move_tablet(servers[0].ip_addr, ks, table_name,
+                                              src_host_id, src_shard, dst_host_id, 0, tablet_token)
+                await manager.api.quiesce_topology(servers[0].ip_addr)
+
+                replicas = (await get_all_tablet_replicas(manager, servers[0], ks, table_name))[0].replicas
+                assert (dst_host_id, 0) in replicas, f"Expected {dst_host_id} among replicas, got {replicas}"
+                assert not any(h == src_host_id for h, _ in replicas), \
+                    f"Expected {src_host_id} to be gone from replicas, got {replicas}"
+
+            await migrate_within_rack(racks[0], fail_first_config_change=True)
+            await check()
+
+            # The topology state machine must still be responsive after the failed
+            # attempt, so migrate another replica, this time without any injection.
+            await migrate_within_rack(racks[1], fail_first_config_change=False)
+            await check()
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_tablet_migration_rollback_from_sc_become_voter(manager: ScyllaClusterManager):
+    """Rolling back from sc_become_voter must not require completing the change
+    being rolled back.
+
+    The coordinator enters sc_rollback with a plain transition, so the rollback
+    is reachable even though the forward configuration change can't complete -
+    here because attempts keep failing and the pending replica is dead. The
+    sc_rollback exit barrier is what repairs the group back to the old replica
+    set before anything is acknowledged.
+    """
+    logger.info("Bootstrapping cluster")
+    cmdline = DEFAULT_CMDLINE + [
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'debug_error_injection=debug',
+    ]
+    servers = await manager.servers_add(4, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+    ])
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    def host_by_host_id(host_id):
+        for hid, host in zip(host_ids, hosts):
+            if hid == host_id:
+                return host
+        raise RuntimeError(f"Can't find host for host_id {host_id}")
+
+    def server_by_host_id(host_id):
+        for server, hid in zip(servers, host_ids):
+            if hid == host_id:
+                return server
+        raise RuntimeError(f"Can't find server for host_id {host_id}")
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+                                         "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            tablet_token = tablets[0].last_token
+            original_replicas = tablets[0].replicas
+            assert len(original_replicas) == 3, f"Expected 3 replicas, got {len(original_replicas)}"
+
+            for i in range(10):
+                await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({i}, {i + 1})")
+
+            async def check():
+                for i in range(10):
+                    rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = {i}")
+                    assert len(rows) == 1, f"Expected 1 row for pk={i}, got {len(rows)}"
+                    assert rows[0].c == i + 1, f"Expected c={i + 1} for pk={i}, got {rows[0].c}"
+
+            await check()
+
+            rack3 = [host_ids[2], host_ids[3]]
+            src_host_id, src_shard = next((h, s) for h, s in original_replicas if h in rack3)
+            dst_host_id = next(h for h in rack3 if h != src_host_id)
+            dst_server = server_by_host_id(dst_host_id)
+
+            # Park the migration in sc_snapshot_transfer, by which point the
+            # pending replica has already been added to the group as a non-voter.
+            await manager.api.enable_injection(dst_server.ip_addr, "sc_wait_for_snapshot_transfer", one_shot=True)
+            dst_log = await manager.server_open_log(dst_server.server_id)
+            mark = await dst_log.mark()
+
+            logger.info(f"Migrating replica from {src_host_id}:{src_shard} to {dst_host_id}:0")
+            move_task = asyncio.create_task(
+                manager.api.move_tablet(servers[0].ip_addr, ks, table_name,
+                                        src_host_id, src_shard, dst_host_id, 0, tablet_token)
+            )
+            await dst_log.wait_for("sc_wait_for_snapshot_transfer: waiting for message", from_mark=mark, timeout=60)
+
+            # From now on every configuration change attempt fails, so the
+            # sc_become_voter barrier can't pass and the migration parks there.
+            logger.info("Making all further configuration change attempts fail")
+            for server in servers:
+                await manager.api.enable_injection(server.ip_addr, "sc_config_sync_fail", one_shot=False)
+
+            await manager.api.message_injection(dst_server.ip_addr, "sc_wait_for_snapshot_transfer")
+
+            async def stage_is(stage):
+                tablet_info = await get_tablet_info(manager, servers[0], ks, table_name, tablet_token)
+                return True if tablet_info is not None and tablet_info.stage == stage else None
+
+            logger.info("Waiting for the migration to reach sc_become_voter")
+            await wait_for(lambda: stage_is("write_both_read_new"), time.time() + 120)
+
+            logger.info(f"Stopping and excluding the pending replica {dst_host_id}")
+            await manager.server_stop(dst_server.server_id, convict=True)
+            await manager.server_not_sees_other_server(servers[0].ip_addr, dst_server.ip_addr)
+            await manager.api.exclude_node(servers[0].ip_addr, [dst_host_id])
+
+            logger.info("Waiting for the coordinator to enter sc_rollback")
+            await wait_for(lambda: stage_is("sc_rollback"), time.time() + 120)
+
+            # The rollback's own configuration change has to be able to complete.
+            logger.info("Letting configuration changes succeed again")
+            for server in servers:
+                if server.server_id != dst_server.server_id:
+                    await manager.api.disable_injection(server.ip_addr, "sc_config_sync_fail")
+
+            try:
+                await move_task
+            except Exception as exc:
+                logger.info("move_tablet failed while the migration rolled back as expected: %s", exc)
+
+            async def rollback_finished():
+                tablet_info = await get_tablet_info(manager, servers[0], ks, table_name, tablet_token)
+                return True if tablet_info is not None and tablet_info.stage is None else None
+
+            await wait_for(rollback_finished, time.time() + 120)
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            assert tablets[0].replicas == original_replicas, \
+                f"Expected replicas to roll back to {original_replicas}, got {tablets[0].replicas}"
+
+            # The group must be usable again: the old replica set is back as the
+            # configuration, so it can elect a leader and accept writes.
+            live_replica_server = server_by_host_id(tablets[0].replicas[0][0])
+            leader_host_id = await wait_for_leader(manager, live_replica_server, group_id)
+            leader_host = host_by_host_id(leader_host_id)
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (100, 101)", host=leader_host)
+
+            await check()
+            rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 100")
+            assert len(rows) == 1
+            assert rows[0].c == 101
