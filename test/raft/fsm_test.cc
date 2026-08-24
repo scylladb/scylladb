@@ -128,6 +128,25 @@ BOOST_AUTO_TEST_CASE(test_votes) {
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
 }
 
+// Reproducer: tally_votes() masks a decisive LOST in the new config as
+// UNKNOWN while the old config is pending. See commit message.
+BOOST_AUTO_TEST_CASE(test_joint_consensus_reports_lost_in_new_config_while_old_pending) {
+    auto id1 = id(), id2 = id(); // new/current config {id1, id2}, majority 2
+    auto id3 = id(), id4 = id(); // previous config {id3, id4}, majority 2
+
+    raft::votes votes(raft::configuration(config_set({id1, id2}), config_set({id3, id4})));
+
+    // A majority of the new config votes "no": decisive LOST for _current.
+    votes.register_vote(id1, false);
+    votes.register_vote(id2, false);
+
+    // Pins ctor argument order: has_responded() consults _current only.
+    BOOST_CHECK(votes.has_responded(id1) && votes.has_responded(id2));
+
+    // The bug: _previous is UNKNOWN and masks _current's decisive LOST.
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
+}
+
 BOOST_AUTO_TEST_CASE(test_tracker) {
     auto id1 = id();
     raft::tracker tracker;
@@ -624,6 +643,67 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes_prevote) {
     BOOST_CHECK(msg.current_term == term_t{4} && msg.vote_granted);
     // But fsm current term stays the same
     BOOST_CHECK_EQUAL(fsm.get_current_term(), term_t{3});
+}
+
+// Reproducer: maybe_resend_vote_request() stamps a prevote resend with the
+// raw _current_term, one lower than the original. See commit message.
+BOOST_AUTO_TEST_CASE(test_prevote_resend_carries_campaign_term) {
+    server_id A_id = id(), B_id = id();
+    raft::configuration cfg = config_from_ids({A_id, B_id});
+    raft::log log(raft::snapshot_descriptor{.config = cfg});
+
+    fsm_debug A(A_id, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg_pre);
+
+    // A prevote candidate does not bump its real term.
+    election_timeout(A);
+    BOOST_CHECK(A.is_prevote_candidate());
+    BOOST_CHECK_EQUAL(A.get_current_term(), term_t{0});
+
+    // Consume the original prevote request (simulating it being lost).
+    auto output = A.get_output();
+    BOOST_REQUIRE_EQUAL(output.messages.size(), 1);
+    auto original = std::get<raft::vote_request>(output.messages.back().second);
+    BOOST_CHECK(original.is_prevote);
+    BOOST_CHECK_EQUAL(original.current_term, term_t{1});
+
+    // A ping-style append_reply at A's own term triggers the resend path.
+    A.step(B_id, raft::append_reply{term_t{0}, index_t{0},
+            raft::append_reply::rejected{index_t{0}, index_t{0}}});
+
+    output = A.get_output();
+    bool found_resend = false;
+    for (auto& [to, msg] : output.messages) {
+        if (auto* vr = std::get_if<raft::vote_request>(&msg)) {
+            BOOST_CHECK_EQUAL(to, B_id);
+            BOOST_CHECK(vr->is_prevote);
+            // The bug: the resend must carry the original campaign term.
+            BOOST_CHECK_EQUAL(vr->current_term, original.current_term);
+            found_resend = true;
+        }
+    }
+    BOOST_CHECK(found_resend);
+
+    // Control: for a *real* candidate the raw _current_term is the correct
+    // stamp -- guards against a "fix" that adds 1 unconditionally.
+    A.step(B_id, raft::vote_reply{original.current_term, true, true});
+    BOOST_CHECK(A.is_candidate() && !A.is_prevote_candidate());
+    BOOST_CHECK_EQUAL(A.get_current_term(), term_t{1});
+    (void)A.get_output(); // consume the real-vote request
+
+    A.step(B_id, raft::append_reply{term_t{0}, index_t{0},
+            raft::append_reply::rejected{index_t{0}, index_t{0}}});
+
+    output = A.get_output();
+    found_resend = false;
+    for (auto& [to, msg] : output.messages) {
+        if (auto* vr = std::get_if<raft::vote_request>(&msg)) {
+            BOOST_CHECK_EQUAL(to, B_id);
+            BOOST_CHECK(!vr->is_prevote);
+            BOOST_CHECK_EQUAL(vr->current_term, term_t{1});
+            found_resend = true;
+        }
+    }
+    BOOST_CHECK(found_resend);
 }
 
 BOOST_AUTO_TEST_CASE(test_election_four_nodes_prevote) {
