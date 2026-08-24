@@ -14,6 +14,7 @@
 #include "dht/token.hh"
 #include "sstables/generation_type.hh"
 #include "sstables/shared_sstable.hh"
+#include "sstables/types.hh"
 #include "sstables/version.hh"
 #include "utils/log.hh"
 
@@ -29,6 +30,13 @@ struct minimal_sst_info {
     sstables::generation_type generation;
     sstables::sstable_version_types version;
     sstables::sstable_format_types format;
+    // sstable_id of the restored copy; for object storage the sstable_id is the
+    // prefix of the component object keys
+    sstables::sstable_id sid;
+    // sstable_id of the backup sstable the copy was made from; keys the rows in
+    // system_distributed.snapshot_sstables which record what a restore already
+    // downloaded
+    sstables::sstable_id source_sid;
 };
 
 future<minimal_sst_info> download_sstable(replica::database& db, replica::table& table, sstables::shared_sstable sstable, logging::logger& logger);

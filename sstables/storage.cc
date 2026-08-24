@@ -96,6 +96,7 @@ public:
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
+    virtual future<> open_for_stream(sstable&) override { return make_ready_future<>(); }
     virtual future<> wipe(sstable& sst, const atomic_deletion* deletion = nullptr) noexcept override;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
@@ -687,6 +688,10 @@ protected:
         return object_name(_bucket, prefix(), sid, fmt::format("refs/nodes/{}/{}", host_id, gen));
     }
 
+    // Code shared by object_storage_base::open() and
+    // object_storage_base::open_for_stream().
+    future<> create_registry_entry_and_reference(sstable& sst);
+
     table_id owner() const {
         if (_uses_foreign_location) {
             on_internal_error(sstlog, format("Storage holds '{}' prefix, but registry owner is expected", prefix()));
@@ -715,6 +720,7 @@ public:
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     void open(sstable& sst) override;
+    future<> open_for_stream(sstable& sst) override;
     future<> wipe(sstable& sst, const atomic_deletion* deletion = nullptr) noexcept override;
     future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
@@ -869,14 +875,19 @@ future<> object_storage_base::delete_components(sstable_version_types version, s
     co_await delete_component(sstable_version_constants::TOC_SUFFIX);
 }
 
-void object_storage_base::open(sstable& sst) {
+future<> object_storage_base::create_registry_entry_and_reference(sstable& sst) {
     auto sid = get_sstable_identifier(sst);
     entry_descriptor desc(sst._generation, sid, sst._version, sst._format, component_type::TOC);
     auto host_id = sst.manager().get_local_host_id();
-    sst.manager().sstables_registry().create_entry(owner(), host_id, status_creating, sst._state, std::move(desc)).get();
+    co_await sst.manager().sstables_registry().create_entry(owner(), host_id, status_creating, sst._state, std::move(desc));
 
     auto ref_name = make_ref_object_name(sid, sst.generation(), host_id);
-    put_object(ref_name, memory_data_sink_buffers()).get();
+    co_await put_object(ref_name, memory_data_sink_buffers());
+    sstlog.debug("Created reference {}: {}", sst.get_filename(), ref_name);
+}
+
+void object_storage_base::open(sstable& sst) {
+    create_registry_entry_and_reference(sst).get();
 
     memory_data_sink_buffers bufs;
     auto out = data_sink(std::make_unique<memory_data_sink>(bufs));
@@ -884,7 +895,16 @@ void object_storage_base::open(sstable& sst) {
 
     sst.write_toc(std::move(w));
     put_object(make_object_name(sst, component_type::TOC), std::move(bufs)).get();
-    sstlog.debug("Created reference {}: {}", sst.get_filename(), ref_name);
+}
+
+future<> object_storage_base::open_for_stream(sstable& sst) {
+    // Create the system.sstables entry and the node reference object before the
+    // first component object is uploaded, so that an sstable whose upload is
+    // interrupted always owns an entry with a status other than "sealed".
+    // sstable_directory::sstables_registry_components_lister::garbage_collect()
+    // removes such an entry together with the component objects on the next boot.
+    // Changing the status to "sealed" is left to the caller.
+    return create_registry_entry_and_reference(sst);
 }
 
 future<file> object_storage_base::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {

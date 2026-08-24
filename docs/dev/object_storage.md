@@ -273,6 +273,7 @@ The `manifest` member contains the following attributes:
 - `version` - representing the version of the manifest itself. It is incremented when members are added or removed from the manifest.
 - `scope` - the scope of metadata stored in this manifest file.  The following scopes are supported:
     - `node` - the manifest describes all SSTables owned by this node in this snapshot.
+    - `dc` - the manifest describes all SSTables backed up from one datacenter. Written by cluster backup.
 
 The `node` member contains metadata about this node that enables datacenter- or rack-aware restore.
 - `host_id` - is the node's unique host_id (a UUID).
@@ -369,6 +370,14 @@ Object-storage SSTable lifecycle:
 - Final cleanup: component objects are deleted only after no reference objects remain for the `sstable_id`. This prevents one node from deleting shared data still referenced by another node.
 
 The `status` and `state` fields in `system.sstables` describe the local SSTable entry lifecycle. They do not describe a global lifecycle state for the object-storage component set identified by `sstable_id`.
+
+### Restore into object-storage tables
+
+Tablet-aware restore, the `/storage_service/tablets/restore` API, writes the downloaded components through the storage of the destination table, so a table which uses object storage receives them as objects of its own bucket.
+
+A restore is a copy, so every restored SSTable receives a fresh `sstable_id` derived from its new generation, the same way a newly written SSTable does. The component objects of a table are named `sstables/{sstable_id}/{component}`, and every object-storage table of a bucket shares that prefix. Reusing the `sstable_id` of the backup SSTable would therefore make the copies which different replicas create of it overwrite each other, and would overwrite the objects of the table the backup was taken from, if that table still uses the bucket.
+
+A copy is created like any other new SSTable: a `system.sstables` entry with the `creating` status and a `refs/nodes/{host_id}/{generation}` reference object are created before the first component object is uploaded, and the status is changed to `sealed` once the SSTable is attached to the table. A restore which fails or is aborted therefore leaves behind entries whose status is not `sealed`, which boot time garbage collection removes together with their component objects on the next start of the node.
 
 ## Downloading, deleting, uploading SSTables
 
