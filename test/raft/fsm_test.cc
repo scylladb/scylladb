@@ -364,7 +364,7 @@ void test_election_single_node_helper(raft::fsm_config fcfg) {
     if (output.log_entries.size()) {
         BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
     }
-    BOOST_CHECK(output.committed.empty());
+    BOOST_CHECK(output.committed.ids.empty());
     // The leader does not become candidate simply because
     // a timeout has elapsed, i.e. there are no spurious
     // elections.
@@ -375,9 +375,10 @@ void test_election_single_node_helper(raft::fsm_config fcfg) {
     BOOST_CHECK(output.messages.empty());
     BOOST_CHECK(output.log_entries.empty());
     // Dummy entry is now committed
-    BOOST_CHECK_EQUAL(output.committed.size(), 1);
-    if (output.committed.size()) {
-        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.committed[0]->data));
+    BOOST_CHECK_EQUAL(output.committed.ids.size(), 1);
+    if (output.committed.ids.size()) {
+        const auto& committed_entry = fsm.get_log()[output.committed.ids.first_idx().value()];
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(committed_entry->data));
     }
 }
 
@@ -753,7 +754,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
     if (output.log_entries.size()) {
         BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
     }
-    BOOST_CHECK(output.committed.empty());
+    BOOST_CHECK(output.committed.ids.empty());
     // accept dummy entry, otherwise no more entries will be sent
     BOOST_CHECK_EQUAL(output.messages.size(), 1);
     auto msg = std::get<raft::append_request>(output.messages.back().second);
@@ -924,7 +925,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
     if (output.log_entries.size()) {
         BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
     }
-    BOOST_CHECK(output.committed.empty());
+    BOOST_CHECK(output.committed.ids.empty());
     // accept dummy entry, otherwise no more entries will be sent
     BOOST_CHECK_EQUAL(output.messages.size(), 2);
     auto msg = std::get<raft::append_request>(output.messages.back().second);
@@ -2750,10 +2751,10 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_deferred_commit) {
     // commit, but the commit is deferred while the deposed leader's lease (entry
     // 1) is still less than delta old.
     (void)fsm.get_output();
-    BOOST_CHECK(fsm.get_output().committed.empty());
+    BOOST_CHECK(fsm.get_output().committed.ids.empty());
     for (int i = 0; i < 5; i++) {
         fsm.tick();
-        BOOST_CHECK(fsm.get_output().committed.empty());
+        BOOST_CHECK(fsm.get_output().committed.ids.empty());
     }
 
     // Once the lease is more than delta old, a tick commits the deferred,
@@ -2761,7 +2762,7 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_deferred_commit) {
     clock.set(lease_t0 + lease_delta + 1s, lease_err);
     fsm.tick();
     const auto output = fsm.get_output();
-    BOOST_CHECK(!output.committed.empty());
+    BOOST_CHECK(!output.committed.ids.empty());
     BOOST_CHECK(output.messages.empty());
 }
 
@@ -2788,7 +2789,7 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_deferred_commit_unsynchronized) {
     (void)fsm.get_output();
     for (int i = 0; i < 5; i++) {
         fsm.tick();
-        BOOST_CHECK(fsm.get_output().committed.empty());
+        BOOST_CHECK(fsm.get_output().committed.ids.empty());
     }
 
     // Elapsed time just short of the threshold (delta plus the safety margin)
@@ -2796,13 +2797,13 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_deferred_commit_unsynchronized) {
     clock.advance_monotonic(lease_mono_wait - 1ms);
     for (int i = 0; i < 5; i++) {
         fsm.tick();
-        BOOST_CHECK(fsm.get_output().committed.empty());
+        BOOST_CHECK(fsm.get_output().committed.ids.empty());
     }
 
     // Clock recovers and enough time has passed: commit proceeds.
     clock.set(lease_t0 + lease_delta + 1s, lease_err);
     fsm.tick();
-    BOOST_CHECK(!fsm.get_output().committed.empty());
+    BOOST_CHECK(!fsm.get_output().committed.ids.empty());
 }
 
 // A leader holding a valid lease serves reads locally, with no read_quorum
@@ -2883,21 +2884,21 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_commits_after_delta_without_clock) {
     // No elapsed time yet: the commit is deferred, but the node keeps leading.
     for (int i = 0; i < 3 * 10; i++) {
         fsm1.tick();
-        BOOST_CHECK(fsm1.get_output().committed.empty());
+        BOOST_CHECK(fsm1.get_output().committed.ids.empty());
         BOOST_REQUIRE(fsm1.is_leader());
     }
 
     // One millisecond short of the threshold: still nothing.
     clock.advance_monotonic(lease_mono_wait - 1ms);
     fsm1.tick();
-    BOOST_CHECK(fsm1.get_output().committed.empty());
+    BOOST_CHECK(fsm1.get_output().committed.ids.empty());
     BOOST_REQUIRE(fsm1.is_leader());
 
     // Past it: the deferred, already-replicated entries commit, with the clock
     // still reporting nothing.
     clock.advance_monotonic(2ms);
     fsm1.tick();
-    BOOST_CHECK(!fsm1.get_output().committed.empty());
+    BOOST_CHECK(!fsm1.get_output().committed.ids.empty());
     BOOST_CHECK(fsm1.is_leader());
     BOOST_CHECK(!clock.interval_now());
 }

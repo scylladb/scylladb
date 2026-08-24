@@ -7,6 +7,8 @@
  */
 #pragma once
 
+#include <ranges>
+
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "utils/assert.hh"
@@ -17,6 +19,52 @@
 #include "log.hh"
 
 namespace raft {
+
+// The ids (index and term) of a contiguous run of log entries,
+// [first_idx(), last_idx]. The terms are stored run-length encoded: one
+// (first index, term) pair per stretch of equal terms, in index order.
+// Nearly always a single pair.
+struct entry_id_range {
+    index_t last_idx = index_t{0};
+    utils::small_vector<std::pair<index_t, term_t>, 1> terms;
+
+    bool empty() const {
+        return terms.empty();
+    }
+    index_t first_idx() const {
+        return terms.front().first;
+    }
+    size_t size() const {
+        return empty() ? 0 : (last_idx - first_idx()).value() + 1;
+    }
+    // Appends the id of the entry right after last_idx (or of the first
+    // entry, when empty).
+    void append(index_t idx, term_t term) {
+        SCYLLA_ASSERT(empty() || idx == last_idx + index_t{1});
+        if (terms.empty() || terms.back().second != term) {
+            terms.emplace_back(idx, term);
+        }
+        last_idx = idx;
+    }
+    // Extends the range with `next`, which must start right after
+    // last_idx.
+    void append(const entry_id_range& next) {
+        SCYLLA_ASSERT(!next.empty() && (empty() || next.first_idx() == last_idx + index_t{1}));
+        for (const auto& run : next.terms) {
+            if (terms.empty() || terms.back().second != run.second) {
+                terms.push_back(run);
+            }
+        }
+        last_idx = next.last_idx;
+    }
+};
+
+// The entries that became committed with one fsm output.
+struct committed_batch {
+    entry_id_range ids;
+    // A non-joint configuration entry is among them.
+    bool non_joint_conf_committed = false;
+};
 
 // State of the FSM that needs logging & sending.
 struct fsm_output {
@@ -30,8 +78,11 @@ struct fsm_output {
     std::optional<std::pair<term_t, server_id>> term_and_vote;
     log_entry_ptr_list log_entries;
     utils::chunked_vector<std::pair<server_id, rpc_message>> messages;
-    // Entries to apply.
-    log_entry_ptr_list committed;
+    // Empty when the commit index did not advance. Only the entry ids are
+    // reported: the entries themselves stay in the log, the consumer reads
+    // them from there while the log still holds them, and the terms let it
+    // resolve the waiters even after a snapshot has replaced the entries.
+    committed_batch committed;
     std::optional<applied_snapshot> snp;
     // In a typical scenario contains only one item, occasionally more.
     utils::small_vector<snapshot_id, 1> snps_to_drop;
@@ -614,6 +665,13 @@ public:
     size_t log_memory_usage() const {
         return _log.memory_usage();
     };
+
+    // Returns the log entry at the given index, which must be present in
+    // the log: above the last snapshot index and at most the last index
+    // (it is a programming error otherwise, the function will abort).
+    const log_entry_ptr& log_entry_at(index_t idx) {
+        return _log[idx.value()];
+    }
 
     server_id id() const { return _my_id; }
 
