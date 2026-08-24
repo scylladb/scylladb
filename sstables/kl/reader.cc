@@ -15,7 +15,6 @@
 #include "keys/clustering_key_filter.hh"
 #include "keys/clustering_ranges_walker.hh"
 #include "types/concrete_types.hh"
-#include "utils/to_string.hh"
 #include "utils/value_or_reference.hh"
 
 namespace sstables {
@@ -1311,7 +1310,7 @@ private:
             return get_index_reader().advance_to(*pos).then([this] {
                 index_reader& idx = *_index_reader;
                 auto index_position = idx.data_file_positions();
-                if (sstable_position::from_logical(index_position.start) <= _context->position()) {
+                if (sstables::sstable_position::from_logical(index_position.start) <= _context->position()) {
                     return make_ready_future<>();
                 }
                 return skip_to(idx.element_kind(), index_position.start).then([this] {
@@ -1343,15 +1342,14 @@ private:
             co_await get_index_reader().advance_to(_pr);
         }
 
-        auto [begin, end] = _index_reader->data_file_positions();
+        auto [begin, end] = _index_reader->sstable_positions();
         parse_assert(bool(end), _sst->get_filename());
 
         if (_single_partition_read) {
             _read_enabled = (begin != *end);
-            _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer,
-                    { sstable_position::from_logical(begin), sstable_position::from_logical(*end) }, integrity_check::no);
+            _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, integrity_check::no);
         } else {
-            sstable::disk_read_range drr{sstable_position::from_logical(begin), sstable_position::from_logical(*end)};
+            sstable::disk_read_range drr{begin, *end};
             auto last_end = _fwd_mr ? _sst->end_position() : drr.end;
             _read_enabled = bool(drr);
             _context = co_await data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, integrity_check::no);

@@ -17,8 +17,8 @@
 
 // Return the positions of all clustering key blocks (known to the index)
 // in the Data file.
-std::vector<uint64_t> get_ck_positions(shared_sstable sst, reader_permit permit) {
-    std::vector<uint64_t> result;
+std::vector<sstables::sstable_position> get_ck_positions(shared_sstable sst, reader_permit permit) {
+    std::vector<sstables::sstable_position> result;
     auto abstract_r = sst->make_index_reader(permit, nullptr, use_caching::no, false);
     auto& r = dynamic_cast<index_reader&>(*abstract_r);
     r.advance_to(dht::partition_range::make_open_ended_both_sides()).get();
@@ -26,10 +26,10 @@ std::vector<uint64_t> get_ck_positions(shared_sstable sst, reader_permit permit)
     auto close_ir = deferred_close(r);
 
     while (!r.eof()) {
-        auto partition_pos = r.data_file_positions().start;
+        auto partition_pos = r.sstable_positions().start;
         sstables::clustered_index_cursor* cur = r.current_clustered_cursor();
         while (auto ei_opt = cur->next_entry().get()) {
-            result.push_back(ei_opt.value().offset + partition_pos);
+            result.push_back(sstables::sstable_position::from_logical(ei_opt.value().offset + partition_pos.to_logical()));
         }
         r.advance_to_next_partition().get();
     }
@@ -37,15 +37,15 @@ std::vector<uint64_t> get_ck_positions(shared_sstable sst, reader_permit permit)
 }
 
 // Return the positions of all partitions in the Data file.
-std::vector<uint64_t> get_partition_positions(shared_sstable sst, reader_permit permit) {
-    std::vector<uint64_t> result;
+std::vector<sstables::sstable_position> get_partition_positions(shared_sstable sst, reader_permit permit) {
+    std::vector<sstables::sstable_position> result;
     {
         auto ir = sst->make_index_reader(permit, nullptr, use_caching::no, false);
         ir->advance_to(dht::partition_range::make_open_ended_both_sides()).get();
         ir->read_partition_data().get();
         auto close_ir = deferred_close(*ir);
         while (!ir->eof()) {
-            result.push_back(ir->data_file_positions().start);
+            result.push_back(ir->sstable_positions().start);
             ir->advance_to_next_partition().get();
         }
     }
@@ -64,9 +64,9 @@ std::vector<uint64_t> get_partition_positions(shared_sstable sst, reader_permit 
 // This allows for checking if the reader correctly handles either case.
 struct inexact_partition_index : abstract_index_reader {
     nondeterministic_choice_stack& _ncs;
-    std::vector<uint64_t> _positions;
-    std::span<const uint64_t> _pk_positions;
-    std::span<const uint64_t> _ck_positions;
+    std::vector<sstables::sstable_position> _positions;
+    std::span<const sstables::sstable_position> _pk_positions;
+    std::span<const sstables::sstable_position> _ck_positions;
     std::span<const dht::decorated_key> _pks;
     std::span<const clustering_key> _cks;
     schema_ptr _s;
@@ -76,8 +76,8 @@ struct inexact_partition_index : abstract_index_reader {
 
     inexact_partition_index(
         nondeterministic_choice_stack& ncs,
-        std::span<const uint64_t> pk_positions,
-        std::span<const uint64_t> ck_positions,
+        std::span<const sstables::sstable_position> pk_positions,
+        std::span<const sstables::sstable_position> ck_positions,
         std::span<const dht::decorated_key> pks,
         std::span<const clustering_key> cks,
         schema_ptr s)
@@ -96,10 +96,10 @@ struct inexact_partition_index : abstract_index_reader {
     future<> close() noexcept override {
         return make_ready_future<>();
     }
-    data_file_positions_range data_file_positions() const override {
+    sstable_positions_range sstable_positions() const override {
         return {_positions[_lower], _positions[_upper]};
     }
-    future<std::optional<uint64_t>> last_block_offset() override {
+    future<std::optional<sstable_position_offset>> last_block_offset() override {
         abort();
     }
     future<bool> advance_lower_and_check_if_present(dht::ring_position_view rpv) override {
@@ -312,9 +312,9 @@ SEASTAR_TEST_CASE(test_inexact_partition_index_range_query) {
         auto sst = make_sstable_containing(env.make_sstable(table.schema(), sstable_version_types::me), muts).get();
 
         // Use the index to find key positions.
-        std::vector<uint64_t> partition_positions = get_partition_positions(sst, permit);
-        std::vector<uint64_t> ck_positions = get_ck_positions(sst, permit);
-        partition_positions.push_back(sst->data_size());
+        std::vector<sstables::sstable_position> partition_positions = get_partition_positions(sst, permit);
+        std::vector<sstables::sstable_position> ck_positions = get_ck_positions(sst, permit);
+        partition_positions.push_back(sstables::sstable_position::from_logical(sst->data_size()));
         {
             testlog.debug("Sstable initialized with:");
             size_t i = 0;
@@ -482,11 +482,11 @@ SEASTAR_TEST_CASE(test_inexact_partition_index_singular_query) {
         }
 
         // Generate the sstable.
-        auto sst = make_sstable_containing(env.make_sstable(table.schema()), muts).get();
+        auto sst = make_sstable_containing(env.make_sstable(table.schema(), sstable_version_types::me), muts).get();
 
         // Use the index to find key positions.
-        std::vector<uint64_t> partition_positions = get_partition_positions(sst, permit);
-        partition_positions.push_back(sst->data_size());
+        std::vector<sstables::sstable_position> partition_positions = get_partition_positions(sst, permit);
+        partition_positions.push_back(sstables::sstable_position::from_logical(sst->data_size()));
         {
             testlog.debug("Sstable initialized with:");
             size_t i = 0;
@@ -517,7 +517,7 @@ SEASTAR_TEST_CASE(test_inexact_partition_index_singular_query) {
                 std::make_unique<inexact_partition_index>(
                     ncs,
                     partition_positions,
-                    std::span<uint64_t>(),
+                    std::span<sstables::sstable_position>(),
                     present_dks,
                     std::span<clustering_key>(),
                     table.schema()),
