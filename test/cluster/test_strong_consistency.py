@@ -2391,3 +2391,40 @@ async def test_tablet_migration_rollback_from_sc_become_voter(manager: ScyllaClu
             rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 100")
             assert len(rows) == 1
             assert rows[0].c == 101
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_leader_not_among_tablet_replicas(manager: ScyllaClusterManager):
+    """A leader reported by the local raft server that isn't a tablet replica must not
+    be treated as an internal error.
+
+    current_leader() on a follower is the last leader it heard from, so a replica that
+    a tablet migration has just removed from the raft group keeps being reported until
+    the follower's election timeout fires. There is nowhere to redirect the request to,
+    but the condition is transient: the request waits for a new leader and, if none
+    arrives before its deadline, times out. The error injection emulates the condition
+    directly, because the real window closes as soon as the group elects a new leader.
+    """
+    servers = await manager.servers_add(1, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                                         "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13)")
+
+            await manager.api.enable_injection(servers[0].ip_addr, "sc_report_stale_leader", one_shot=False)
+
+            with pytest.raises(WriteTimeout, match=f"Query timed out for {table}"):
+                await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (7, 23) USING TIMEOUT 100ms")
+
+            with pytest.raises(ReadTimeout, match=f"Query timed out for {table}"):
+                await cql.run_async(f"SELECT * FROM {table} WHERE pk = 0 USING TIMEOUT 100ms")
+
+            await manager.api.disable_injection(servers[0].ip_addr, "sc_report_stale_leader")
+
+            # Sanity check: nothing broke and the table is still usable.
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (17, 7)")
+            rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 17")
+            assert len(rows) == 1
+            assert rows[0].v == 7
