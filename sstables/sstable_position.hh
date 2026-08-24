@@ -20,10 +20,17 @@ namespace sstables {
 
 class sstable_position_offset;
 
+namespace trie {
+class bti_partition_index_target;
+}
+
 namespace sstable_position_detail {
 
 // The extent_hint of an encoded logical position or offset. See sstable_position.
 constexpr uint32_t logical_marker = std::numeric_limits<uint32_t>::max();
+// The extent_hint of a Rows.db position stored in an sstable_position. See
+// trie::bti_partition_index_target.
+constexpr uint32_t rows_db_marker = logical_marker - 1;
 
 // Kind checks are compiled out of release builds. These operations are on the
 // hot path of the sstable reader.
@@ -54,8 +61,9 @@ inline void debug_check_position_kind([[maybe_unused]] bool ok) noexcept {
 // position (chunk_position=v, extent_hint=logical_marker, offset_within_chunk=0).
 // With this encoding, the physical ordering and arithmetic are also correct for
 // logical positions. logical_marker is the largest uint32_t value. A physical
-// extent_hint is bounded by the size of a chunk, so it never equals the marker.
-// The checks that use it run only in debug builds.
+// extent_hint is bounded by the size of a chunk, so it never equals the marker,
+// or rows_db_marker below it. The checks that use the markers run only in debug
+// builds.
 class sstable_position {
     // Used by physically indexed compressed sstables.
     struct physical {
@@ -116,7 +124,7 @@ public:
         return sstable_position(physical{v, sstable_position_detail::logical_marker, 0});
     }
     static sstable_position from_physical(uint64_t chunk_position, uint32_t extent_hint, uint32_t offset_within_chunk) noexcept {
-        sstable_position_detail::debug_check_position_kind(extent_hint != sstable_position_detail::logical_marker);
+        sstable_position_detail::debug_check_position_kind(extent_hint < sstable_position_detail::rows_db_marker);
         return sstable_position(physical{chunk_position, extent_hint, offset_within_chunk});
     }
 
@@ -139,6 +147,7 @@ public:
     friend sstable_position operator+(sstable_position pos, sstable_position_offset off) noexcept;
     friend sstable_position_offset operator-(sstable_position a, sstable_position b) noexcept;
     friend struct fmt::formatter<sstable_position>;
+    friend class trie::bti_partition_index_target;
 };
 
 struct disk_read_range {
@@ -186,7 +195,7 @@ public:
         return sstable_position_offset(physical{v, sstable_position_detail::logical_marker, 0});
     }
     static sstable_position_offset from_physical(uint64_t chunk_position, uint32_t extent_hint, uint32_t offset_within_chunk) noexcept {
-        sstable_position_detail::debug_check_position_kind(extent_hint != sstable_position_detail::logical_marker);
+        sstable_position_detail::debug_check_position_kind(extent_hint < sstable_position_detail::rows_db_marker);
         return sstable_position_offset(physical{chunk_position, extent_hint, offset_within_chunk});
     }
     uint64_t to_logical() const noexcept {
