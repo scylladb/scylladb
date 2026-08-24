@@ -29,7 +29,7 @@ import threading
 import random
 import re
 
-from test.cluster.util import get_replication
+from test.cluster.util import get_replication, get_replica_count
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for
 from test.pylib.rest_client import inject_error
@@ -2084,4 +2084,57 @@ async def test_alternator_mtls_and_plain_http(manager: ManagerClient, tmp_path):
         alternator_bad.meta.client.list_tables()
 
 
+@pytest.mark.asyncio
+async def test_alternator_multidc_two_racks_three_racks(manager: ManagerClient):
+    """Verify that Alternator works correctly on a multi-DC cluster with
+       different number of racks in each DC. In this test we set up two DCs:
+       - DC1 has 2 nodes on 2 different racks
+       - DC2 has 3 nodes on 3 different racks
+    Create a table, write a bunch of rows, and read them back.
+    """
+    servers = await manager.servers_add(5, config=alternator_config, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc2', 'rack': 'rack1'},
+        {'dc': 'dc2', 'rack': 'rack2'},
+        {'dc': 'dc2', 'rack': 'rack3'},
+    ])
 
+    alternator = get_alternator(servers[0].ip_addr)
+
+    table = alternator.create_table(
+        TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[
+            {'AttributeName': 'p', 'KeyType': 'HASH'},
+            {'AttributeName': 'c', 'KeyType': 'RANGE'},
+        ],
+        AttributeDefinitions=[
+            {'AttributeName': 'p', 'AttributeType': 'N'},
+            {'AttributeName': 'c', 'AttributeType': 'N'},
+        ])
+    table.meta.client.get_waiter('table_exists').wait(TableName=table.name)
+
+    try:
+        # Sanity check: verify the keyspace replication matches what we think it
+        # should be. In DC2 we can use RF=3 but in DC1 we can only use RF=2
+        ks = f'alternator_{table.name}'
+        repl = get_replication(manager.get_cql(), ks)
+        assert get_replica_count(repl['dc1']) == 2
+        assert get_replica_count(repl['dc2']) == 3
+
+        # Try to read and write a bunch of different partitions to verify that
+        # the cluster is working correctly.
+        N = 100
+        with table.batch_writer() as batch:
+            for i in range(N):
+                batch.put_item(Item={'p': i, 'c': i, 'val': f'value{i}'})
+
+        # Read back every row and verify the value
+        for i in range(N):
+            response = table.get_item(Key={'p': i, 'c': i}, ConsistentRead=True)
+            assert 'Item' in response
+            assert response['Item']['val'] == f'value{i}'
+    finally:
+        table.delete()
+        table.meta.client.get_waiter('table_not_exists').wait(TableName=table.name)
