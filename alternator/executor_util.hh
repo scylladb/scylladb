@@ -230,6 +230,14 @@ search_schema_info get_search_schema_info(const index_metadata& index);
 /// name. Such a target is a bug, so we'd rather catch it.
 std::string get_vector_index_target_column(std::string_view target);
 
+/// Recover a vector index's Projection.NonKeyAttributes from its stored
+/// "alternator_non_key_attributes" index option, which was written when the
+/// index was created by build_vector_index_non_key_attributes().
+/// Projection.ProjectionType can be recovered from the returned value too:
+///   * ProjectionType=KEYS_ONLY - when nullopt is returned.
+///   * ProjectionType=ALL - when an empty vector is returned.
+///   * ProjectionType=INCLUDE - when a non-empty vector is returned.
+std::optional<std::vector<std::string>> get_vector_index_non_key_attributes(const index_metadata& index);
 
 /// is_big() checks approximately if the given JSON value is "bigger" than
 /// the given big_size number of bytes. The goal is to *quickly* detect
