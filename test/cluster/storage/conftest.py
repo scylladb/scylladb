@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 
 from test.cluster.conftest import PHASE_REPORT_KEY
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import gather_safely
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ def volumes_factory(pytestconfig, build_mode, request):
 
 
 @asynccontextmanager
-async def space_limited_servers(manager: ManagerClient, volumes_factory: Callable, sizes: list[str], property_file=None, **server_args):
+async def space_limited_servers(manager: ScyllaClusterManager, volumes_factory: Callable, sizes: list[str], property_file=None, **server_args):
     servers = []
     cmdline = server_args.pop("cmdline", [])
     with volumes_factory(sizes) as volumes:

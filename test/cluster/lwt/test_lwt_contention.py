@@ -25,7 +25,7 @@ from cassandra.query import SimpleStatement, PreparedStatement
 
 from test.cluster.lwt.lwt_common import BaseLWTTester, is_uncertainty_timeout
 from test.cluster.util import new_test_keyspace
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +134,7 @@ class ContentionLWTTester(BaseLWTTester):
     single shared static column via batch LWT.
     """
 
-    def __init__(self, manager: ManagerClient, ks: str, tbl: str,
+    def __init__(self, manager: ScyllaClusterManager, ks: str, tbl: str,
                  num_workers: int, iterations: int, max_retries_per_iteration: int, *,
                  scale_timeout):
         super().__init__(
@@ -212,7 +212,7 @@ class ContentionLWTTester(BaseLWTTester):
 
 @pytest.mark.tier2
 @pytest.mark.parametrize("tablets_enabled", [True, False], ids=["tablets", "vnodes"])
-async def test_lwt_contention_many_workers(manager: ManagerClient, scale_timeout, tablets_enabled):
+async def test_lwt_contention_many_workers(manager: ScyllaClusterManager, scale_timeout, tablets_enabled):
     """
     Test many async workers repeatedly contending on the same row via LWT.
 

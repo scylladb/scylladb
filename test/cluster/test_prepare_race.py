@@ -8,12 +8,12 @@ import asyncio
 import pytest
 
 from test.cluster.util import new_test_keyspace, new_test_table
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-async def test_prepare_fails_if_cached_statement_is_invalidated_mid_prepare(manager: ManagerClient):
+async def test_prepare_fails_if_cached_statement_is_invalidated_mid_prepare(manager: ScyllaClusterManager):
     server = await manager.server_add()
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};") as ks:

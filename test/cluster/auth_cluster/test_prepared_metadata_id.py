@@ -19,7 +19,8 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.protocol import ResultMessage
 
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
-from test.pylib.manager_client import ManagerClient, safe_driver_shutdown
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.util import unique_name
 
 
@@ -141,7 +142,7 @@ def _prepare_and_execute(host: str, query: str) -> tuple[bytes, bool, int]:
             safe_driver_shutdown(cluster)
 
 
-async def test_prepared_list_metadata_ids(manager: ManagerClient) -> None:
+async def test_prepared_list_metadata_ids(manager: ScyllaClusterManager) -> None:
     servers = await manager.running_servers()
     if servers:
         server = servers[0]

@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.cluster.util import create_new_test_keyspace
 from cassandra.query import SimpleStatement, ConsistencyLevel
@@ -19,7 +19,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-async def test_validate_truncate_with_concurrent_writes(manager: ManagerClient):
+async def test_validate_truncate_with_concurrent_writes(manager: ScyllaClusterManager):
 
     # This test validates that all the data before a truncate started has been deleted,
     # and that none of the data after truncate ended has been deleted

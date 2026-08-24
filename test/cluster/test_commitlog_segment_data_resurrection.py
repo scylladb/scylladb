@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace
 
 import pytest
@@ -21,7 +21,7 @@ from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 logger = logging.getLogger(__name__)
 
 
-async def test_pinned_cl_segment_doesnt_resurrect_data(manager: ManagerClient):
+async def test_pinned_cl_segment_doesnt_resurrect_data(manager: ScyllaClusterManager):
     """
         The tested scenario is as follows:
         * Two tables, ks1.tbl1 and ks2.tbl2.
@@ -138,7 +138,7 @@ async def test_pinned_cl_segment_doesnt_resurrect_data(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-async def test_pinned_cl_segment_doesnt_resurrect_data_but_repair_ensures_tombstone_gc(manager: ManagerClient):
+async def test_pinned_cl_segment_doesnt_resurrect_data_but_repair_ensures_tombstone_gc(manager: ScyllaClusterManager):
     """
     """
     cfg = {

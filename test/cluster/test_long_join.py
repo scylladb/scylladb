@@ -9,13 +9,13 @@ import pytest
 import logging
 import asyncio
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError
 from test.pylib.util import wait_for
 
 logger = logging.getLogger(__name__)
 
-async def test_long_join(manager: ManagerClient) -> None:
+async def test_long_join(manager: ScyllaClusterManager) -> None:
     """The test checks that join works even if expiring entries are dropped
        between placement of the join request and its processing"""
     s1 = await manager.server_add()
@@ -28,7 +28,7 @@ async def test_long_join(manager: ManagerClient) -> None:
     await manager.api.message_injection(s1.ip_addr, inj)
     await asyncio.gather(task)
 
-async def test_long_join_drop_entries_on_bootstrapping(manager: ManagerClient) -> None:
+async def test_long_join_drop_entries_on_bootstrapping(manager: ScyllaClusterManager) -> None:
     """The test checks that join works even if expiring entries are dropped
        on the joining node between placement of the join request and its processing"""
     servers = await manager.servers_add(2)

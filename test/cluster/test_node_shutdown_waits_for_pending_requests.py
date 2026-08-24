@@ -3,7 +3,7 @@ import pytest
 import logging
 import time
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot
 from cassandra.query import SimpleStatement # type: ignore
 from cassandra.cluster import ConsistencyLevel # type: ignore
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_node_shutdown_waits_for_pending_requests(manager: ManagerClient) -> None:
+async def test_node_shutdown_waits_for_pending_requests(manager: ScyllaClusterManager) -> None:
     """Reproducer for #16382"""
 
     logger.info('start two nodes')

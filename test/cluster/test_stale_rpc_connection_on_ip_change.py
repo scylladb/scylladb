@@ -11,7 +11,7 @@ import logging
 import time
 
 import pytest
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ class BlackholeServer:
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.asyncio
-async def test_stale_client_id_evicted(manager: ManagerClient):
+async def test_stale_client_id_evicted(manager: ScyllaClusterManager):
     """Tests the case where a stale CLIENT_ID (old IP, low generation) is
     processed AFTER the address_map already has a newer IP. The handler
     should detect that the map rejected the stale update and evict the
@@ -132,7 +132,7 @@ async def test_stale_client_id_evicted(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-async def test_direct_fd_recovers_after_ip_change(manager: ManagerClient):
+async def test_direct_fd_recovers_after_ip_change(manager: ScyllaClusterManager):
     """Reproduces SCYLLADB-2127: when a node restarts with a new IP (e.g. K8s
     pod rescheduling), the other nodes' direct_failure_detector should recover
     within a reasonable time, not get stuck on stale cached RPC connections.

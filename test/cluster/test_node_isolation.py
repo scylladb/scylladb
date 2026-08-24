@@ -12,7 +12,7 @@ from cassandra.cluster import Cluster  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import read_barrier
 from test.cluster.util import create_new_test_keyspace
 
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.tier2
-async def test_banned_node_notification(manager: ManagerClient, failure_detector_timeout) -> None:
+async def test_banned_node_notification(manager: ScyllaClusterManager, failure_detector_timeout) -> None:
     """Test that a node banned from the cluster get notification about been banned"""
     # Decrease the failure detector threshold so we don't have to wait for too long.
     config = {

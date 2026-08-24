@@ -16,7 +16,7 @@ from test.cluster.lwt.lwt_common import (
     wait_for_tablet_count
 )
 from test.cluster.util import new_test_keyspace
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError
 from test.pylib.tablets import get_tablet_count
 from test.pylib.tablets import get_tablet_replicas
@@ -81,7 +81,7 @@ async def _move_tablet_with_retry(manager, src_server, ks, tbl,
 
 async def tablet_migration_ops(
     stop_event: asyncio.Event,
-    manager: ManagerClient,
+    manager: ScyllaClusterManager,
     servers,
     tester: BaseLWTTester,
     table: str,
@@ -185,7 +185,7 @@ def powers_of_two_in_range(lo: int, hi: int):
 
 async def run_random_resizes(
     stop_event_: asyncio.Event,
-    manager: ManagerClient,
+    manager: ScyllaClusterManager,
     servers,
     tester: BaseLWTTester,
     ks: str,
@@ -293,7 +293,7 @@ async def run_random_resizes(
     }
 
 @pytest.mark.no_parallel
-async def test_multi_column_lwt_migrate_and_random_resizes(manager: ManagerClient, scale_timeout):
+async def test_multi_column_lwt_migrate_and_random_resizes(manager: ScyllaClusterManager, scale_timeout):
 
     cfg = {
         "enable_tablets": True,

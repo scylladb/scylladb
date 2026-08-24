@@ -13,10 +13,9 @@ import pytest
 from cassandra.policies import WhiteListRoundRobinPolicy
 
 from test.pylib.internal_types import ServerInfo
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import scale_timeout_by_mode, wait_for
-from test.cluster.conftest import cluster_con
 from test.cluster.util import (get_coordinator_host_ids, get_current_group0_config,
                                 ensure_group0_leader_on)
 
@@ -24,7 +23,7 @@ from test.cluster.util import (get_coordinator_host_ids, get_current_group0_conf
 GROUP0_VOTERS_LIMIT = 5
 
 
-async def get_number_of_voters(manager: ManagerClient, srv: ServerInfo):
+async def get_number_of_voters(manager: ScyllaClusterManager, srv: ServerInfo):
     group0_members = await get_current_group0_config(manager, srv)
     return len([m for m in group0_members if m[1]])
 
@@ -39,7 +38,7 @@ async def get_number_of_voters(manager: ManagerClient, srv: ServerInfo):
 ])
 @pytest.mark.parametrize('stop_gracefully', [True, False])
 async def test_raft_voters_multidc_kill_dc(
-        manager: ManagerClient, dc1_nodes: int, dc2_nodes: int, dc3_nodes: int, stop_gracefully: bool):
+        manager: ScyllaClusterManager, dc1_nodes: int, dc2_nodes: int, dc3_nodes: int, stop_gracefully: bool):
     """
     Test the basic functionality of limited voters in a multi-DC cluster.
 
@@ -89,8 +88,8 @@ async def test_raft_voters_multidc_kill_dc(
     logging.info('Creating connections to all DCs')
     dc_cqls = []
     for servers in dc_servers:
-        dc_cqls.append(cluster_con([servers[0].ip_addr],
-                                   load_balancing_policy=WhiteListRoundRobinPolicy([servers[0].ip_addr])).connect())
+        dc_cqls.append(manager.con_gen([servers[0].ip_addr],
+                                       load_balancing_policy=WhiteListRoundRobinPolicy([servers[0].ip_addr])).connect())
 
     assert len(dc_cqls) == len(dc_servers)
 
@@ -108,7 +107,7 @@ async def test_raft_voters_multidc_kill_dc(
     await read_barrier(manager.api, dc_servers[1][0].ip_addr)
 
 
-async def test_raft_limited_voters_retain_coordinator(manager: ManagerClient):
+async def test_raft_limited_voters_retain_coordinator(manager: ScyllaClusterManager):
     """
     Test that the topology coordinator is retained as a voter when possible.
 
@@ -165,7 +164,7 @@ async def test_raft_limited_voters_retain_coordinator(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_raft_voters_stop_leader_keeps_quorum(manager: ManagerClient, build_mode: str):
+async def test_raft_voters_stop_leader_keeps_quorum(manager: ScyllaClusterManager, build_mode: str):
     """
     Gracefully stopping the group0 leader must not leave the cluster without
     quorum (SCYLLADB-3026).

@@ -6,17 +6,19 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import sys
 import threading
 import time
 import asyncio
+import concurrent.futures
 import logging
 import os
 import random
 import string
 from collections.abc import Awaitable, Callable, Coroutine
-from functools import cache
+from functools import cache, partial
 from typing import Optional, TypeVar, Any, cast
 
 import colorama
@@ -31,6 +33,14 @@ from test import BUILD_DIR, TOP_SRC_DIR, MODES_TIMEOUT_FACTOR
 from test.pylib.internal_types import ServerInfo
 
 logger = logging.getLogger(__name__)
+
+
+io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
+
+
+async def async_rmtree(directory, *args, **kwargs):
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(io_executor, partial(shutil.rmtree, directory, *args, **kwargs))
 
 
 class LogPrefixAdapter(logging.LoggerAdapter):

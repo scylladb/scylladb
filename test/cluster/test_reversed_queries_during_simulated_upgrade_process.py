@@ -6,7 +6,7 @@ import pytest
 from itertools import zip_longest
 
 from cassandra.query import SimpleStatement, ConsistencyLevel
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace
 
 
@@ -19,7 +19,7 @@ def verify_data(response, expected_data):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_reversed_queries_during_upgrade(manager: ManagerClient) -> None:
+async def test_reversed_queries_during_upgrade(manager: ScyllaClusterManager) -> None:
     """
     Use `suppress_features` error injection to simulate cluster upgrade process
     in order to test both native and legacy reversed formats.

@@ -13,7 +13,7 @@ from cassandra.cluster import NoHostAvailable  # type: ignore
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.pylib.internal_types import IPAddress
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import ScyllaMetricsClient, TCPRESTClient, inject_error
 from test.pylib.tablets import get_tablet_replicas
 from test.pylib.scylla_cluster import ReplaceConfig
@@ -49,7 +49,7 @@ async def await_sync_point(client: TCPRESTClient, server_ip: IPAddress, sync_poi
             pytest.fail(f"Unexpected response from the server: {response}")
 
 # Write with RF=1 and CL=ANY to a dead node should write hints and succeed
-async def test_write_cl_any_to_dead_node_generates_hints(manager: ManagerClient):
+async def test_write_cl_any_to_dead_node_generates_hints(manager: ScyllaClusterManager):
     node_count = 2
     cmdline = ["--logger-log-level", "hints_manager=trace"]
     servers = await manager.servers_add(node_count, cmdline=cmdline)
@@ -88,7 +88,7 @@ async def test_write_cl_any_to_dead_node_generates_hints(manager: ManagerClient)
             # For dropping the keyspace
             await manager.server_start(servers[1].server_id)
 
-async def test_limited_concurrency_of_writes(manager: ManagerClient):
+async def test_limited_concurrency_of_writes(manager: ScyllaClusterManager):
     """
     We want to verify that Scylla correctly limits the concurrency of writing hints to disk.
     To do that, we leverage error injections decreasing the threshold when hints should start
@@ -118,7 +118,7 @@ async def test_limited_concurrency_of_writes(manager: ManagerClient):
         # For dropping the keyspace
         await manager.server_start(node2.server_id)
 
-async def test_sync_point(manager: ManagerClient):
+async def test_sync_point(manager: ScyllaClusterManager):
     """
     We want to verify that the sync point API is compliant with its design.
     This test concerns one particular aspect of it: Scylla should create a sync point
@@ -172,7 +172,7 @@ async def test_sync_point(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
-async def test_hints_consistency_during_decommission(manager: ManagerClient):
+async def test_hints_consistency_during_decommission(manager: ScyllaClusterManager):
     """
     This test reproduces the failure observed in scylladb/scylla-dtest#4582
     in a more reliable way than the test_hintedhandoff_decom dtest.
@@ -256,7 +256,7 @@ async def test_hints_consistency_during_decommission(manager: ManagerClient):
         for i in range(100):
             assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = {i}")) == [(i + 1,)]
 
-async def test_hints_consistency_during_replace(manager: ManagerClient):
+async def test_hints_consistency_during_replace(manager: ScyllaClusterManager):
     """
     Reproducer for https://github.com/scylladb/scylladb/issues/24980
     In this test, we stop a node, then write some data with CL=ANY and RF=1
@@ -299,7 +299,7 @@ async def test_hints_consistency_during_replace(manager: ManagerClient):
         for i in range(100):
             assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = {i}")) == [(i + 1,)]
 
-async def test_draining_hints(manager: ManagerClient):
+async def test_draining_hints(manager: ScyllaClusterManager):
     """
     This test verifies that all hints are drained when a node is being decommissioned.
     """
@@ -328,7 +328,7 @@ async def test_draining_hints(manager: ManagerClient):
         _ = tg.create_task(await_sync_point(manager.api.client, s1.ip_addr, sync_point, 60))
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_canceling_hint_draining(manager: ManagerClient):
+async def test_canceling_hint_draining(manager: ScyllaClusterManager):
     """
     This test verifies that draining hints is canceled as soon as we issue a shutdown,
     but it's resumed after starting the node again.
@@ -374,7 +374,7 @@ async def test_canceling_hint_draining(manager: ManagerClient):
     await s1_log.wait_for(f"Removed hint directory for {host_id2}")
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_hint_to_pending(manager: ManagerClient):
+async def test_hint_to_pending(manager: ScyllaClusterManager):
     """
     This test reproduces the scenario where sending a hint to a pending replica is needed
     for consistency as in https://github.com/scylladb/scylladb/issues/19835.
@@ -432,7 +432,7 @@ async def test_hint_to_pending(manager: ManagerClient):
         assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = 0")) == [(0,)]
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_hint_to_leaving_when_reducing_rf(manager: ManagerClient):
+async def test_hint_to_leaving_when_reducing_rf(manager: ScyllaClusterManager):
     '''
     This test checks if hint_sender sends a mutation to a leaving replica if the mutation
     belongs to a tablet which is being removed due to RF--. This is needed to improve

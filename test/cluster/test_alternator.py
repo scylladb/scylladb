@@ -30,7 +30,7 @@ import random
 import re
 
 from test.cluster.util import get_replication
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
 from test.pylib.rest_client import inject_error
 from test.pylib.tablets import get_all_tablet_replicas
@@ -88,7 +88,7 @@ def unique_table_name():
 unique_table_name.last_ms = 0
 
 
-async def test_alternator_ttl_scheduling_group(manager: ManagerClient):
+async def test_alternator_ttl_scheduling_group(manager: ScyllaClusterManager):
     """A reproducer for issue #18719: The expiration scans and deletions
        initiated by the Alternator TTL feature are supposed to run entirely in
        the "streaming" scheduling group. But because of a bug in inheritance
@@ -191,7 +191,7 @@ async def test_alternator_ttl_scheduling_group(manager: ManagerClient):
     table.delete()
 
 @pytest.mark.parametrize("with_down_node", [False, True], ids=["all_nodes_up", "one_node_down"])
-async def test_alternator_ttl_multinode_expiration(manager: ManagerClient, with_down_node):
+async def test_alternator_ttl_multinode_expiration(manager: ScyllaClusterManager, with_down_node):
     """When the cluster has multiple nodes, different nodes are responsible
        for checking expiration in different token ranges - each node is
        responsible for its "primary ranges". Let's check that this expiration
@@ -256,7 +256,7 @@ async def test_alternator_ttl_multinode_expiration(manager: ManagerClient, with_
         time.sleep(0.1)
     assert items == 0
 
-async def test_localnodes_broadcast_rpc_address(manager: ManagerClient):
+async def test_localnodes_broadcast_rpc_address(manager: ScyllaClusterManager):
     """Test that if the "broadcast_rpc_address" of a node is set, the
        "/localnodes" request returns not the node's internal IP address,
        but rather the one set in broadcast_rpc_address as passed between
@@ -294,7 +294,7 @@ async def test_localnodes_broadcast_rpc_address(manager: ManagerClient):
                 break # done
             await asyncio.sleep(0.1)
 
-async def test_localnodes_drained_node(manager: ManagerClient):
+async def test_localnodes_drained_node(manager: ScyllaClusterManager):
     """Test that if in a cluster one node is brought down with "nodetool drain"
        a "/localnodes" request should NOT return that node. This test does
        NOT reproduce issue #19694 - a DRAINED node is not considered is_alive()
@@ -335,7 +335,7 @@ async def test_localnodes_drained_node(manager: ManagerClient):
     assert await wait_for(check_localnodes_one, time.time() + 60)
 
 
-async def test_localnodes_down_normal_node(manager: ManagerClient):
+async def test_localnodes_down_normal_node(manager: ScyllaClusterManager):
     """Test that if in a cluster one node reaches "normal" state and then
        brought down (so is now in "DN" state), a "/localnodes" request
        should NOT return that node. Reproduces issue #21538.
@@ -379,7 +379,7 @@ async def test_localnodes_down_normal_node(manager: ManagerClient):
 
 @pytest.mark.tier2
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_localnodes_joining_nodes(manager: ManagerClient):
+async def test_localnodes_joining_nodes(manager: ScyllaClusterManager):
     """Test that if a cluster is being enlarged and a node is coming up but
        not yet responsive, a "/localnodes" request should NOT return that node.
        Reproduces issue #19694.
@@ -432,7 +432,7 @@ async def test_localnodes_joining_nodes(manager: ManagerClient):
     except Exception as e:
         assert 'Failed to add server' in str(e)
 
-async def test_localnodes_multi_dc_multi_rack(manager: ManagerClient):
+async def test_localnodes_multi_dc_multi_rack(manager: ScyllaClusterManager):
     """A test for /localnodes on a more general setup, with multiple DCs and
        multiple racks - an 8-node setup with two DCs, two racks in each, and
        two nodes in each rack.
@@ -517,7 +517,7 @@ async def test_localnodes_multi_dc_multi_rack(manager: ManagerClient):
 # same one-node cluster with authentication and authorization enabled.
 # Here in this file we have the opportunity to create clusters with different
 # configurations, so we can check how these configuration settings affect RBAC.
-async def test_alternator_enforce_authorization_false(manager: ManagerClient):
+async def test_alternator_enforce_authorization_false(manager: ScyllaClusterManager):
     """A basic test for how Alternator authentication and authorization
        work when alternator_enfore_authorization is *false* (and CQL's
        authenticator/authorizer options are also unset):
@@ -538,7 +538,7 @@ async def test_alternator_enforce_authorization_false(manager: ManagerClient):
     table.get_item(Key={'p': 42})
     table.delete()
 
-async def test_alternator_enforce_authorization_false2(manager: ManagerClient):
+async def test_alternator_enforce_authorization_false2(manager: ScyllaClusterManager):
     """A variant of the above test for alternator_enforce_authorization=false
        Here we check what happens when CQL's authenticator/authorizer are
        enabled (in the previous test they were disabled).
@@ -592,7 +592,7 @@ async def get_secret_key(cql, user):
         deadline=time.time() + 60,
         label=f"secret key for role {user}")
 
-async def test_alternator_enforce_authorization_true(manager: ManagerClient):
+async def test_alternator_enforce_authorization_true(manager: ScyllaClusterManager):
     """A basic test for how Alternator authentication and authorization
        work when authentication and authorization is enabled in CQL, and
        additionally alternator_enfore_authorization is *true*:
@@ -641,7 +641,7 @@ async def test_alternator_enforce_authorization_true(manager: ManagerClient):
     # We could further test how GRANT works, but this would be unnecessary
     # repeating of the tests in test/alternator/test_cql_rbac.py.
 
-async def test_index_in_rf_rack_valid_keyspace_does_not_require_rf_rack_flag(manager: ManagerClient):
+async def test_index_in_rf_rack_valid_keyspace_does_not_require_rf_rack_flag(manager: ScyllaClusterManager):
     """
     Verify that creating a table with GSI or LSI and adding GSI to an existing table works
     when the keyspace is RF-rack-valid, even if rf_rack_valid_keyspaces=False.
@@ -740,7 +740,7 @@ async def test_index_in_rf_rack_valid_keyspace_does_not_require_rf_rack_flag(man
     )
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_index_requires_rf_rack_valid_keyspace(manager: ManagerClient):
+async def test_index_requires_rf_rack_valid_keyspace(manager: ScyllaClusterManager):
     """
     Verify that creating a table with GSI or LSI and adding GSI to an existing table fails if
     the keyspace is not RF-rack-valid.
@@ -844,7 +844,7 @@ async def test_index_requires_rf_rack_valid_keyspace(manager: ManagerClient):
         )
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_rf_rack_flag_enforces_rf_rack_validity(manager: ManagerClient):
+async def test_rf_rack_flag_enforces_rf_rack_validity(manager: ScyllaClusterManager):
     """
     Verify that the flag `rf_rack_valid_keyspaces` enforces RF-rack-validity.
     Create a cluster with 4 racks, and try to create a table. By default the
@@ -914,7 +914,7 @@ class ThreadWrapper(threading.Thread):
 # serializes its own schema modifications. This is why these tests must
 # be here, in test/cluster, and not in the single-node test/alternator.
 
-async def test_concurrent_createtable(manager: ManagerClient):
+async def test_concurrent_createtable(manager: ScyllaClusterManager):
     """A reproducer for issue #13152 for the CreateTable operation:
        concurrent CreateTable operations shouldn't fail "due to concurrent
        "modification".
@@ -980,7 +980,7 @@ async def test_concurrent_createtable(manager: ManagerClient):
                         break
                     raise
 
-async def test_concurrent_deletetable(manager: ManagerClient):
+async def test_concurrent_deletetable(manager: ScyllaClusterManager):
     """A reproducer for issue #13152 for the DeleteTable operation:
        concurrent DeleteTable operations shouldn't fail "due to concurrent
        "modification".
@@ -1029,7 +1029,7 @@ async def test_concurrent_deletetable(manager: ManagerClient):
             if not 'ResourceNotFoundException' in str(e):
                 raise
 
-async def test_concurrent_updatetable(manager: ManagerClient):
+async def test_concurrent_updatetable(manager: ScyllaClusterManager):
     """A reproducer for issue #13152 for the UpdateTable operation:
        concurrent UpdateTable operations shouldn't fail "due to concurrent
        "modification".
@@ -1081,7 +1081,7 @@ async def test_concurrent_updatetable(manager: ManagerClient):
                 raise
 
 @pytest.mark.parametrize('op', ['TagResource', 'UntagResource', 'UpdateTimeToLive'])
-async def test_concurrent_modify_tags(manager: ManagerClient, op):
+async def test_concurrent_modify_tags(manager: ScyllaClusterManager, op):
     """A reproducer for issue #13152 for the TagResource, UntagResource
        and UpdateTimeToLive operation (each one in a separate parametrization
        of the test). Concurrent operations shouldn't fail "due to concurrent
@@ -1217,7 +1217,7 @@ async def test_zero_token_node_load_balancer(manager, tablets):
     table.delete()
 
 @pytest.mark.xfail(reason="#16261", strict=False)
-async def test_alternator_concurrent_rmw_same_partition_different_server(manager: ManagerClient):
+async def test_alternator_concurrent_rmw_same_partition_different_server(manager: ScyllaClusterManager):
     """A reproducer for issue #16261: When sending RMW (read-modify-write)
        operations to the same partition (different item) on different server
        nodes (coordinators), our LWT implementation can reach an
@@ -1281,7 +1281,7 @@ async def test_alternator_concurrent_rmw_same_partition_different_server(manager
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_alternator_invalid_shard_for_lwt(manager: ManagerClient):
+async def test_alternator_invalid_shard_for_lwt(manager: ScyllaClusterManager):
     """
     Reproducer for issue #27353.
 
@@ -1396,7 +1396,7 @@ async def test_alternator_invalid_shard_for_lwt(manager: ManagerClient):
     t.join()
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_deferred_stream_enablement_on_tablets(manager: ManagerClient):
+async def test_deferred_stream_enablement_on_tablets(manager: ScyllaClusterManager):
     """Test that enabling Alternator Streams on a tablet table uses deferred
        enablement: the table goes through an ENABLING state (where the intent
        is stored but CDC is not yet active) before the topology coordinator
@@ -1559,7 +1559,7 @@ def make_client_cert(tmp_path, name, cn=None, *, subj=None, ca='ca', extfile=Non
               f'-CA "{tmp_path}/{ca}.crt" -CAkey "{tmp_path}/{ca}.key" '
               f'-out "{tmp_path}/{name}.crt" 2>/dev/null')
 
-async def test_alternator_mtls(manager: ManagerClient, tmp_path):
+async def test_alternator_mtls(manager: ScyllaClusterManager, tmp_path):
     """A regression test for mTLS (mutual TLS) authentication in Alternator.
     We create an Alternator instance configured with require_client_auth=true,
     providing a CA certificate as the truststore. We then verify that:
@@ -1684,7 +1684,7 @@ async def test_alternator_mtls(manager: ManagerClient, tmp_path):
     # exists - see https://github.com/scylladb/seastar/issues/3521.
 
 
-async def test_alternator_mtls_optional(manager: ManagerClient, tmp_path):
+async def test_alternator_mtls_optional(manager: ScyllaClusterManager, tmp_path):
     """Test Alternator over HTTPS with require_client_auth=optional, which allows both
        mTLS and SigV4 authentication to coexist on the same port.
        With require_client_auth=optional, Seastar uses optional (not required) client
@@ -1779,7 +1779,7 @@ async def test_alternator_mtls_optional(manager: ManagerClient, tmp_path):
         alternator_no_auth.meta.client.list_tables()
 
 
-async def test_alternator_mtls_authorization(manager: ManagerClient, tmp_path):
+async def test_alternator_mtls_authorization(manager: ScyllaClusterManager, tmp_path):
     """Test that when mTLS is active, the CN of the client certificate is used
        as the CQL role name for Alternator authorization. A cert whose CN names
        a role with limited privileges should succeed for unprivileged operations
@@ -1843,7 +1843,7 @@ async def test_alternator_mtls_authorization(manager: ManagerClient, tmp_path):
         table.delete()
 
 
-async def test_alternator_mtls_role_checks(manager: ManagerClient, tmp_path):
+async def test_alternator_mtls_role_checks(manager: ScyllaClusterManager, tmp_path):
     """Test that mTLS authentication in Alternator validates the role given
     by the certificate's CN - it must be a valid CQL role with LOGIN=TRUE.
     Three failure cases are tested:
@@ -1937,7 +1937,7 @@ async def test_alternator_mtls_role_checks(manager: ManagerClient, tmp_path):
         get_alternator_mtls_and_sigv4('no_cn').meta.client.list_tables()
 
 
-async def test_alternator_mtls_san(manager: ManagerClient, tmp_path):
+async def test_alternator_mtls_san(manager: ScyllaClusterManager, tmp_path):
     """Test that mTLS authentication in Alternator can extract the role name
     from a Subject Alternative Name (SAN) instead of the subject DN, using
     auth_certificate_role_queries with source: ALTNAME.
@@ -2020,7 +2020,7 @@ async def test_alternator_mtls_san(manager: ManagerClient, tmp_path):
         get_alternator_mtls('no_san_client').meta.client.list_tables()
 
 
-async def test_alternator_mtls_and_plain_http(manager: ManagerClient, tmp_path):
+async def test_alternator_mtls_and_plain_http(manager: ScyllaClusterManager, tmp_path):
     """Test that require_client_auth=true, configured for the Alternator
     HTTPS port, has no effect on a separate, plain HTTP Alternator port
     enabled at the same time.

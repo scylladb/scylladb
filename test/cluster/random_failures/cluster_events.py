@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, AsyncIterator
 
     from test.pylib.random_tables import RandomTables
-    from test.pylib.manager_client import ManagerClient
+    from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
 TOPOLOGY_TIMEOUT = 300  # default topology timeout is too big for these tests
@@ -35,7 +35,7 @@ LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     ClusterEventType: TypeAlias = Callable[
-        [ManagerClient, RandomTables, str],
+        [ScyllaClusterManager, RandomTables, str],
         AsyncIterator[None],
     ]
     P = ParamSpec("P")
@@ -112,7 +112,7 @@ def select_viable_rack(servers):
 #       >>> await anext(cluster_event, None)
 
 
-async def sleep_for_30_seconds(manager: ManagerClient,
+async def sleep_for_30_seconds(manager: ScyllaClusterManager,
                                random_tables: RandomTables,
                                error_injection: str) -> AsyncIterator[None]:
     yield
@@ -123,7 +123,7 @@ async def sleep_for_30_seconds(manager: ManagerClient,
     yield
 
 
-async def add_new_table(manager: ManagerClient,
+async def add_new_table(manager: ScyllaClusterManager,
                         random_tables: RandomTables,
                         error_injection: str) -> AsyncIterator[None]:
     yield
@@ -137,7 +137,7 @@ async def add_new_table(manager: ManagerClient,
     await random_tables.drop_table(table=table)
 
 
-async def drop_table(manager: ManagerClient,
+async def drop_table(manager: ScyllaClusterManager,
                      random_tables: RandomTables,
                      error_injection: str) -> AsyncIterator[None]:
     table_name = "test_random_failures_table_to_drop"
@@ -156,7 +156,7 @@ async def drop_table(manager: ManagerClient,
     await random_tables.add_table(ncolumns=5, name=table_name)
 
 
-async def add_index(manager: ManagerClient,
+async def add_index(manager: ScyllaClusterManager,
                     random_tables: RandomTables,
                     error_injection: str) -> AsyncIterator[None]:
     yield
@@ -170,7 +170,7 @@ async def add_index(manager: ManagerClient,
     await random_tables[0].drop_index(name=index_name)
 
 
-async def drop_index(manager: ManagerClient,
+async def drop_index(manager: ScyllaClusterManager,
                      random_tables: RandomTables,
                      error_injection: str) -> AsyncIterator[None]:
     index_name = "test_random_failures_index_to_drop"
@@ -189,7 +189,7 @@ async def drop_index(manager: ManagerClient,
     await random_tables[0].add_index(column=random_tables[0].columns[-2], name=index_name)
 
 
-async def add_new_keyspace(manager: ManagerClient,
+async def add_new_keyspace(manager: ScyllaClusterManager,
                            random_tables: RandomTables,
                            error_injection: str) -> AsyncIterator[None]:
     ks_name = "test_random_failures_new_ks"
@@ -208,7 +208,7 @@ async def add_new_keyspace(manager: ManagerClient,
     await manager.cql.run_async(f"DROP KEYSPACE {ks_name}")
 
 
-async def drop_keyspace(manager: ManagerClient,
+async def drop_keyspace(manager: ScyllaClusterManager,
                         random_tables: RandomTables,
                         error_injection: str) -> AsyncIterator[None]:
     ks_name = "test_random_failures_ks_to_drop"
@@ -233,7 +233,7 @@ async def drop_keyspace(manager: ManagerClient,
     )
 
 
-async def add_cdc(manager: ManagerClient,
+async def add_cdc(manager: ScyllaClusterManager,
                   random_tables: RandomTables,
                   error_injection: str) -> AsyncIterator[None]:
     table_name = "test_random_failures_table_with_cdc"
@@ -248,7 +248,7 @@ async def add_cdc(manager: ManagerClient,
     yield
 
 
-async def drop_cdc(manager: ManagerClient,
+async def drop_cdc(manager: ScyllaClusterManager,
                    random_tables: RandomTables,
                    error_injection: str) -> AsyncIterator[None]:
     table_name = "test_random_failures_table_with_cdc"
@@ -267,7 +267,7 @@ async def drop_cdc(manager: ManagerClient,
     yield
 
 
-async def add_new_udt(manager: ManagerClient,
+async def add_new_udt(manager: ScyllaClusterManager,
                       random_tables: RandomTables,
                       error_injection: str) -> AsyncIterator[None]:
     udt_name = "test_random_failures_new_udt"
@@ -283,7 +283,7 @@ async def add_new_udt(manager: ManagerClient,
     await random_tables.drop_udt(name=udt_name)
 
 
-async def drop_udt(manager: ManagerClient,
+async def drop_udt(manager: ScyllaClusterManager,
                    random_tables: RandomTables,
                    error_injection: str) -> AsyncIterator[None]:
     udt_name = "test_random_failures_udt_to_drop"
@@ -302,7 +302,7 @@ async def drop_udt(manager: ManagerClient,
     await random_tables.add_udt(name=udt_name, cmd="(a text, b int)")
 
 
-async def insert_records(manager: ManagerClient,
+async def insert_records(manager: ScyllaClusterManager,
                          random_tables: RandomTables,
                          error_injection: str) -> AsyncIterator[None]:
     yield
@@ -313,7 +313,7 @@ async def insert_records(manager: ManagerClient,
     yield
 
 
-async def update_record(manager: ManagerClient,
+async def update_record(manager: ScyllaClusterManager,
                         random_tables: RandomTables,
                         error_injection: str) -> AsyncIterator[None]:
     LOGGER.info("Add a record to the table")
@@ -336,7 +336,7 @@ async def update_record(manager: ManagerClient,
     yield
 
 
-async def execute_lwt_transaction(manager: ManagerClient,
+async def execute_lwt_transaction(manager: ScyllaClusterManager,
                                   random_tables: RandomTables,
                                   error_injection: str) -> AsyncIterator[None]:
     LOGGER.info("Add a record to the table")
@@ -379,7 +379,7 @@ async def execute_lwt_transaction(manager: ManagerClient,
     ],
     reason="See https://github.com/scylladb/scylladb/issues/23302 (could not get host_id for endpoint)",
 )
-async def init_tablet_transfer(manager: ManagerClient,
+async def init_tablet_transfer(manager: ScyllaClusterManager,
                                random_tables: RandomTables,
                                error_injection: str) -> AsyncIterator[None]:
     servers = await manager.running_servers()
@@ -468,7 +468,7 @@ async def init_tablet_transfer(manager: ManagerClient,
     # TODO: remove this skip when #20751 will be resolved.
     reason="test_random_failures: remove_data_dir_of_dead_node cluster event is incorrect (causes test flakiness). See issue #20751",
 )
-async def remove_data_dir_of_dead_node(manager: ManagerClient,
+async def remove_data_dir_of_dead_node(manager: ScyllaClusterManager,
                                        random_tables: RandomTables,
                                        error_injection: str) -> AsyncIterator[None]:
     running_servers = await manager.running_servers()
@@ -507,7 +507,7 @@ async def remove_data_dir_of_dead_node(manager: ManagerClient,
     ],
     reason="See https://github.com/scylladb/scylladb/issues/23302 (could not get host_id for endpoint)",
 )
-async def add_new_node(manager: ManagerClient,
+async def add_new_node(manager: ScyllaClusterManager,
                        random_tables: RandomTables,
                        error_injection: str) -> AsyncIterator[None]:
     yield
@@ -537,7 +537,7 @@ async def add_new_node(manager: ManagerClient,
     ],
     reason="See https://github.com/scylladb/scylladb/issues/23302 (could not get host_id for endpoint)",
 )
-async def decommission_node(manager: ManagerClient,
+async def decommission_node(manager: ScyllaClusterManager,
                             random_tables: RandomTables,
                             error_injection: str) -> AsyncIterator[None]:
     yield
@@ -583,7 +583,7 @@ async def decommission_node(manager: ManagerClient,
     ],
     reason="See https://github.com/scylladb/scylladb/issues/23302 (could not get host_id for endpoint)",
 )
-async def remove_node(manager: ManagerClient,
+async def remove_node(manager: ScyllaClusterManager,
                       random_tables: RandomTables,
                       error_injection: str) -> AsyncIterator[None]:
     running_servers = await manager.running_servers()
@@ -622,7 +622,7 @@ async def remove_node(manager: ManagerClient,
     yield
 
 
-async def restart_non_coordinator_node(manager: ManagerClient,
+async def restart_non_coordinator_node(manager: ScyllaClusterManager,
                                        random_tables: RandomTables,
                                        error_injection: str) -> AsyncIterator[None]:
     yield
@@ -633,7 +633,7 @@ async def restart_non_coordinator_node(manager: ManagerClient,
     yield
 
 
-async def restart_coordinator_node(manager: ManagerClient,
+async def restart_coordinator_node(manager: ScyllaClusterManager,
                                    random_tables: RandomTables,
                                    error_injection: str) -> AsyncIterator[None]:
     yield
@@ -643,7 +643,7 @@ async def restart_coordinator_node(manager: ManagerClient,
 
     yield
 
-async def stop_non_coordinator_node_gracefully(manager: ManagerClient,
+async def stop_non_coordinator_node_gracefully(manager: ScyllaClusterManager,
                                                random_tables: RandomTables,
                                                error_injection: str) -> AsyncIterator[None]:
     yield
@@ -654,7 +654,7 @@ async def stop_non_coordinator_node_gracefully(manager: ManagerClient,
     yield
 
 
-async def stop_coordinator_node_gracefully(manager: ManagerClient,
+async def stop_coordinator_node_gracefully(manager: ScyllaClusterManager,
                                            random_tables: RandomTables,
                                            error_injection: str) -> AsyncIterator[None]:
     yield
@@ -666,7 +666,7 @@ async def stop_coordinator_node_gracefully(manager: ManagerClient,
     yield
 
 
-async def kill_non_coordinator_node(manager: ManagerClient,
+async def kill_non_coordinator_node(manager: ScyllaClusterManager,
                                     random_tables: RandomTables,
                                     error_injection: str) -> AsyncIterator[None]:
     yield
@@ -680,7 +680,7 @@ async def kill_non_coordinator_node(manager: ManagerClient,
     yield
 
 
-async def kill_coordinator_node(manager: ManagerClient,
+async def kill_coordinator_node(manager: ScyllaClusterManager,
                                 random_tables: RandomTables,
                                 error_injection: str) -> AsyncIterator[None]:
     yield

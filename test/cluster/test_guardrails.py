@@ -13,8 +13,8 @@ from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.query import SimpleStatement
 
 from test.pylib.async_cql import _wrap_future
-from test.pylib.manager_client import ManagerClient, wait_for_cql_and_get_hosts
-from test.pylib.util import unique_name
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.cluster.util import new_test_keyspace
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ async def assert_creating_ks_fails(cql, query, ks_name):
         await cql.run_async(f"USE {ks_name}")
 
 
-async def test_default_rf(manager: ManagerClient):
+async def test_default_rf(manager: ScyllaClusterManager):
     """
     As of now, the only RF guardrail enabled is a soft limit checking that RF >= 3. Not complying to this soft limit
     results in a CQL query being executed, but with a warning. Also, whatever the guardrails' values, RF = 0 is always OK.
@@ -63,7 +63,7 @@ async def test_default_rf(manager: ManagerClient):
     await create_ks_and_assert_warning(cql, query, ks_name, ["warn", "min", "replication", "factor", "3", "dc1", "2"])
 
 
-async def test_all_rf_limits(manager: ManagerClient):
+async def test_all_rf_limits(manager: ScyllaClusterManager):
     """
     There are 4 limits for RF: soft/hard min and soft/hard max limits. Breaking soft limits issues a warning,
     breaking the hard limits prevents the query from being executed.
@@ -101,7 +101,7 @@ async def test_all_rf_limits(manager: ManagerClient):
             await create_ks_and_assert_warning(cql, query, ks_name, [])
 
 
-async def test_invalid_write_cl_guardrail_config(manager: ManagerClient):
+async def test_invalid_write_cl_guardrail_config(manager: ScyllaClusterManager):
     """A node configured with invalid values for write_consistency_levels_warned
     and write_consistency_levels_disallowed should still start and respond to
     CQL queries. The invalid values cause yaml-cpp conversion errors logged
@@ -123,7 +123,7 @@ async def test_invalid_write_cl_guardrail_config(manager: ManagerClient):
     rows = await cql.run_async("SELECT * FROM system.local")
     assert len(rows) == 1
 
-async def test_write_cl_default(manager: ManagerClient):
+async def test_write_cl_default(manager: ScyllaClusterManager):
     """Test checks that the current implementation doesn't cause
     any warning nor failure for the default configuration."""
 

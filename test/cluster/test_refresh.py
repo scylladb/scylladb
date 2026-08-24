@@ -18,7 +18,7 @@ from collections import defaultdict
 
 from cassandra.cluster import ConsistencyLevel
 from test.pylib.minio_server import MinioServer
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.object_storage import format_tuples
 from test.cluster.object_store.test_backup import topo, take_snapshot, do_test_streaming_scopes
 from test.cluster.util import new_test_keyspace
@@ -97,12 +97,12 @@ class SSTablesOnLocalStorage:
         topo(rf = 3, nodes = 6, racks = 2, dcs = 1),
         topo(rf = 2, nodes = 8, racks = 4, dcs = 2)
     ])
-async def test_refresh_with_streaming_scopes(build_mode: str, manager: ManagerClient, topology):
+async def test_refresh_with_streaming_scopes(build_mode: str, manager: ScyllaClusterManager, topology):
     '''Check that refreshing of a cluster with stream scopes works'''
     await do_test_streaming_scopes(build_mode, manager, topology, SSTablesOnLocalStorage())
 
 
-async def test_refresh_deletes_uploaded_sstables(manager: ManagerClient):
+async def test_refresh_deletes_uploaded_sstables(manager: ScyllaClusterManager):
     '''
     Check that refreshing a cluster deletes the sstable files from the upload directory after loading
     '''

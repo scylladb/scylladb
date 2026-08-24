@@ -13,7 +13,7 @@ import uuid
 from test.pylib.minio_server import MinioServer
 from cassandra.protocol import ConfigurationException
 from cassandra.query import SimpleStatement, ConsistencyLevel
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.cluster.util import reconnect_driver
 from test.pylib.object_storage import format_tuples, keyspace_options
@@ -90,7 +90,7 @@ async def get_registry_entries(cql, table_id, node_owner, host):
 
 @pytest.mark.parametrize('replication_factor', [1, 3])
 @pytest.mark.parametrize('mode', ['normal', 'encrypted'])
-async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode, replication_factor):
+async def test_basic(manager: ScyllaClusterManager, object_storage, tmp_path, mode, replication_factor):
     '''verify ownership table is updated, and tables written to object storage can be read after scylla restarts.
     Parametrized over replication_factor to also verify RF=3 with multiple servers.'''
 
@@ -165,7 +165,7 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode, rep
         have_res = {x.name: x.value for x in res}
         assert have_res == rows, f'Unexpected table content: {have_res}'
 
-async def test_garbage_collect(manager: ManagerClient, object_storage):
+async def test_garbage_collect(manager: ScyllaClusterManager, object_storage):
     '''verify ownership table is garbage-collected on boot'''
 
     sstable_entries = []
@@ -209,7 +209,7 @@ async def test_garbage_collect(manager: ManagerClient, object_storage):
                 assert not o.key.startswith(str(ent[2])), f'Sstable object not cleaned, found {o.key}'
 
 
-async def test_populate_from_quarantine(manager: ManagerClient, object_storage):
+async def test_populate_from_quarantine(manager: ScyllaClusterManager, object_storage):
     '''verify sstables are populated from quarantine state'''
 
     objconf = object_storage.create_endpoint_conf()
@@ -246,7 +246,7 @@ async def test_populate_from_quarantine(manager: ManagerClient, object_storage):
         assert have_res == rows, f'Unexpected table content: {have_res}'
 
 
-async def test_misconfigured_storage(manager: ManagerClient, object_storage):
+async def test_misconfigured_storage(manager: ScyllaClusterManager, object_storage):
     '''creating keyspace with unknown endpoint is not allowed'''
     # scylladb/scylladb#15074
     objconf = object_storage.create_endpoint_conf()
@@ -267,7 +267,7 @@ async def test_misconfigured_storage(manager: ManagerClient, object_storage):
                       f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
 
 
-async def test_storage_type_endpoint_mismatch(manager: ManagerClient, s3_storage, gs_storage):
+async def test_storage_type_endpoint_mismatch(manager: ScyllaClusterManager, s3_storage, gs_storage):
     '''creating a keyspace whose STORAGE type doesn't match the configured type of the
     given endpoint (S3 endpoint used with type GS, or vice versa) must not be allowed,
     even though the endpoint name itself is known.'''
@@ -294,7 +294,7 @@ async def test_storage_type_endpoint_mismatch(manager: ManagerClient, s3_storage
                       f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
 
 
-async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_storage):
+async def test_memtable_flush_retries(manager: ScyllaClusterManager, tmpdir, object_storage):
     '''verify that memtable flush doesn't crash in case storage access keys are incorrect'''
 
     print('Spoof the object-store config')
@@ -337,7 +337,7 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
         assert have_res == dict(rows), f'Unexpected table content: {have_res}'
 
 @pytest.mark.parametrize('config_with_full_url', [True, False])
-async def test_get_object_store_endpoints(manager: ManagerClient, config_with_full_url):
+async def test_get_object_store_endpoints(manager: ScyllaClusterManager, config_with_full_url):
     if config_with_full_url:
         objconf = MinioServer.create_conf('http://a:123', 'region')
     else:
@@ -366,7 +366,7 @@ async def test_get_object_store_endpoints(manager: ManagerClient, config_with_fu
     assert json.loads(res[name]) == objconf[0]
 
 
-async def test_create_keyspace_after_config_update(manager: ManagerClient, object_storage):
+async def test_create_keyspace_after_config_update(manager: ScyllaClusterManager, object_storage):
     print('Trying to create a keyspace with an endpoint not configured in object_storage_endpoints should trip storage_manager::is_known_endpoint()')
     server = await manager.server_add()
     cql = manager.get_cql()
@@ -429,7 +429,7 @@ async def test_create_keyspace_after_config_update(manager: ManagerClient, objec
     assert rows == {'test_key': 123, 'after_reconfig': 456}, f'Unexpected table content: {rows}'
 
 
-async def test_tablet_move_updates_registry(manager: ManagerClient, s3_storage):
+async def test_tablet_move_updates_registry(manager: ScyllaClusterManager, s3_storage):
     """
     Verify that moving a tablet from one node to another correctly
     updates the (node-local) sstables registry: the destination node
@@ -518,7 +518,7 @@ async def test_tablet_move_updates_registry(manager: ManagerClient, s3_storage):
         logger.info("Source registry entries cleaned up successfully")
 
 
-async def test_decommission_migrates_registry(manager: ManagerClient, s3_storage):
+async def test_decommission_migrates_registry(manager: ScyllaClusterManager, s3_storage):
     """
     Verify registry behavior around decommission.
     This test checks that the tablet owned by the decommissioned node is migrated to the surviving node,
@@ -599,7 +599,7 @@ async def test_decommission_migrates_registry(manager: ManagerClient, s3_storage
         assert len(rows) == 10, f"Expected 10 rows, got {len(rows)}"
 
 
-async def test_repair_creates_registry_entries(manager: ManagerClient, s3_storage):
+async def test_repair_creates_registry_entries(manager: ScyllaClusterManager, s3_storage):
     """
     Verify that non-incremental (tablet) repair on an object-storage keyspace
     creates sstables registry entries on the repaired node via streaming.
@@ -708,7 +708,7 @@ async def test_repair_creates_registry_entries(manager: ManagerClient, s3_storag
 
 
 @pytest.mark.parametrize('operation', ['truncate', 'drop_table', 'drop_keyspace'])
-async def test_registry_cleanup_on_all_nodes(manager: ManagerClient, object_storage, operation):
+async def test_registry_cleanup_on_all_nodes(manager: ScyllaClusterManager, object_storage, operation):
     """
     Verify that TRUNCATE, DROP TABLE and DROP KEYSPACE on an object-storage
     backed table clean up the sstables registry entries on all nodes.
@@ -749,7 +749,7 @@ async def test_registry_cleanup_on_all_nodes(manager: ManagerClient, object_stor
 
 
 @pytest.mark.asyncio
-async def test_stream_sink_abort_on_object_storage(manager: ManagerClient, object_storage):
+async def test_stream_sink_abort_on_object_storage(manager: ScyllaClusterManager, object_storage):
     """Verify that aborting a blob stream on object storage cleans up
     partial SSTable components instead of leaving orphaned S3 objects.
 

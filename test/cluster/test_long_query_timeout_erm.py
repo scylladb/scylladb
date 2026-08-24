@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 from cassandra.policies import WhiteListRoundRobinPolicy
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.random_tables import RandomTables, Column, IntType
 from test.pylib.rest_client import inject_error_one_shot
 from test.pylib.util import wait_for_first_completed
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
     ("SELECT_COUNT", False, False),
     ("SELECT_COUNT_WHERE", True, False),
 ])
-async def test_long_query_timeout_erm(request, manager: ManagerClient, query_type, should_wait_for_timeout, shutdown_nodes):
+async def test_long_query_timeout_erm(request, manager: ScyllaClusterManager, query_type, should_wait_for_timeout, shutdown_nodes):
     """
     Test verifies that a query with long timeout doesn't block ERM on failure.
 
@@ -134,7 +134,7 @@ async def test_long_query_timeout_erm(request, manager: ManagerClient, query_typ
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("enable_tablets", [True, False])
-async def test_long_query_timeout_without_failure_erm(request, manager: ManagerClient, enable_tablets):
+async def test_long_query_timeout_without_failure_erm(request, manager: ScyllaClusterManager, enable_tablets):
     """
     Test verifies that a long mapreduce query does not block ERM.
     The query is long because it is blocked by an injected error

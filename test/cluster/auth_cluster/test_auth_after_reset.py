@@ -9,7 +9,7 @@ import logging
 import asyncio
 import time
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 from cassandra.auth import PlainTextAuthProvider
 from test.pylib.util import wait_for
@@ -27,7 +27,7 @@ async def repeat_until_success(f):
 """
 Test if superuser is recreated after manual sstable delete (password reset procedure).
 """
-async def test_auth_after_reset(manager: ManagerClient) -> None:
+async def test_auth_after_reset(manager: ScyllaClusterManager) -> None:
     servers = await manager.servers_add(3, config=auth_config, auto_rack_dc="dc1")
     cql, _ = await manager.get_ready_cql(servers)
     await cql.run_async("ALTER ROLE cassandra WITH PASSWORD = 'forgotten_pwd'")

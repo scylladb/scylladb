@@ -10,7 +10,7 @@ import time
 
 from cassandra import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import new_test_keyspace
 
@@ -18,7 +18,7 @@ from test.cluster.util import new_test_keyspace
 logger = logging.getLogger(__name__)
 
 
-async def test_read_repair_with_conflicting_hash_keys(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+async def test_read_repair_with_conflicting_hash_keys(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     """
     Test that conflicting hash keys are handled correctly during read repair.
     Issue https://github.com/scylladb/scylladb/issues/19101

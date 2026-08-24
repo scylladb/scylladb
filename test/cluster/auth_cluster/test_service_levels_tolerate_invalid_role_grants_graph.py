@@ -5,10 +5,10 @@
 #
 
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
-async def test_tolerating_cycles_in_auth(manager: ManagerClient):
+async def test_tolerating_cycles_in_auth(manager: ScyllaClusterManager):
     """
     Verify that the service levels logic in group0 gracefully handles cycles
     in the roles graph (i.e. an edge is created by GRANT role1 TO role2).
@@ -44,7 +44,7 @@ async def test_tolerating_cycles_in_auth(manager: ManagerClient):
     await log.wait_for("Cycle detected in the system.role_members table: (a -> b -> a|b -> a -> b)")
 
 
-async def test_invalid_graph_with_edges_to_non_existing_members(manager: ManagerClient):
+async def test_invalid_graph_with_edges_to_non_existing_members(manager: ScyllaClusterManager):
     """
     Verify that the service levels logic gracefully handles invalid graphs of roles
     with roles being assigned to roles that no longer exist (e.g. GRANT role1

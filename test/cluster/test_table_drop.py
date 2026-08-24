@@ -3,13 +3,13 @@ import logging
 import os
 import shutil
 from test.cluster.util import new_test_keyspace, FeatureConfig, feature_configs, FeatureConfigurations
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import unique_name
 import pytest
 
 logger = logging.getLogger(__name__)
 
-async def test_drop_table_during_streaming_receiver_side(manager: ManagerClient):
+async def test_drop_table_during_streaming_receiver_side(manager: ScyllaClusterManager):
     servers = [await manager.server_add(config={
         'error_injections_at_startup': ['stream_mutation_fragments_table_dropped'],
         'enable_repair_based_node_ops': False,
@@ -21,7 +21,7 @@ async def test_drop_table_during_streaming_receiver_side(manager: ManagerClient)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
     FeatureConfigurations.STRONG_CONSISTENCY, FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY,
     FeatureConfigurations.LOGSTOR_STRONG_CONSISTENCY))
-async def test_drop_table_during_flush(manager: ManagerClient, feature_config: FeatureConfig):
+async def test_drop_table_during_flush(manager: ScyllaClusterManager, feature_config: FeatureConfig):
     servers = [await manager.server_add(config=feature_config.get_cluster_cfg({})) for _ in range(2)]
 
     await manager.api.enable_injection(servers[0].ip_addr, "flush_tables_on_all_shards_table_drop", True)
@@ -39,7 +39,7 @@ async def test_drop_table_during_flush(manager: ManagerClient, feature_config: F
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
     FeatureConfigurations.STRONG_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_drop_table_during_load_and_stream(manager: ManagerClient, feature_config: FeatureConfig):
+async def test_drop_table_during_load_and_stream(manager: ScyllaClusterManager, feature_config: FeatureConfig):
     """Verify that dropping a table while load_and_stream is in progress
     does not crash.  The stream_in_progress() phaser guard acquired in
     sstables_loader::load_and_stream keeps the table object alive until
