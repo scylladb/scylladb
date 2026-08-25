@@ -130,8 +130,8 @@ def generate_coverage_report(path="testlog/coverage/coverage", build_path="build
         profraw_files = []
         # Cluster-based suites (topology, cql, alternator, ...) exercise the
         # scylla server binary itself rather than a per-suite binary under
-        # build_path, and name their raw profiles after the LLVM %m pool
-        # token (see runner.py:create_cluster_factory), not a test name.
+        # build_path, and name their raw profiles after LLVM_PROFILE_FILE's
+        # "%m" placeholder (a value unique to the binary), not a test name.
         scylla_exe = os.path.join(os.path.dirname(os.path.normpath(build_path)), "scylla")
         # Walk the raw-profile tree itself (one subdirectory per suite that
         # actually ran), not build_path: a suite with no dedicated binary
@@ -169,7 +169,11 @@ def generate_coverage_report(path="testlog/coverage/coverage", build_path="build
         maybe_print(f"Found {len(profraw_files)} input files")
 
     if not profraw_files:
-        sys.exit("Error: couldn't find any raw profiling data files, can't generate coverage report")
+        # Not a fatal error: test.py calls this in-process after every
+        # coverage-mode run, and a run may legitimately produce no raw
+        # profiles (e.g. only cluster-based suites ran without --coverage).
+        print("Warning: couldn't find any raw profiling data files, skipping coverage report generation")
+        return
 
     test_executables = list(dict.fromkeys(test_executables))  # de-dup, preserve order
 

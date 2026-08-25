@@ -195,8 +195,24 @@ class LcovRecord(metaclass = MakeLcovRouter):
 
     def add_end_of_record(self, fields: List[str]) -> bool:
         self.sealed = True
-        self.validate_integrity()
+        # llvm-cov can emit FN/BRDA entries for lines that have no DA record
+        # (e.g. branches inside macro expansions) -- a known family of
+        # lcov-export line-attribution bugs, see e.g.
+        #   https://github.com/llvm/llvm-project/issues/120071
+        #   https://github.com/llvm/llvm-project/issues/78751
+        # genhtml likewise rejects such records ("branch on non-executable
+        # line") unless run with --filter branch, which drops them. Do the
+        # same here so the record satisfies the line-based invariant
+        # validate_integrity() checks; line coverage is unaffected.
+        lines = set(self.line_hits.keys())
+        self.function_hits = {
+            key: hits for key, hits in self.function_hits.items() if key[0] in lines
+        }
+        self.branch_hits = {
+            key: hits for key, hits in self.branch_hits.items() if key[0] in lines
+        }
         self._refresh_functions_to_lines()
+        self.validate_integrity()
         return True
 
     def remove_lines(self, line_numbers: List[int]):
