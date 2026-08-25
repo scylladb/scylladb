@@ -1269,6 +1269,29 @@ class CQLAuditTester(AuditTester):
                 error = next(iter(errors))
                 assert isinstance(error, AuthenticationFailed)
 
+    async def _test_negative_audit_records_auth_no_login(self):
+        """
+        Test that a valid password on a role that is not permitted to log in is
+        audited as a failed AUTH attempt (SCYLLADB-3964).
+        """
+        session = await self.prepare(user="cassandra", password="cassandra", create_keyspace=False)
+        session.execute("CREATE ROLE no_login_role WITH PASSWORD = 'no_login_role' AND LOGIN = false")
+
+        expected_entry = AuditEntry(category="AUTH", statement="LOGIN", table="", ks="", user="no_login_role", cl="", error=True)
+        with self.assert_entries_were_added(session, [expected_entry], filter_out_cassandra_auth=True):
+            try:
+                servers = await self.manager.running_servers()
+                no_login_auth = PlainTextAuthProvider(username="no_login_role", password="no_login_role")
+                await self.manager.get_cql_exclusive(servers[0], auth_provider=no_login_auth)
+                pytest.fail()
+            except NoHostAvailable as e:
+                errors = e.errors.values()
+                assert len(errors) == 1
+                error = next(iter(errors))
+                assert isinstance(error, AuthenticationFailed)
+
+        session.execute("DROP ROLE IF EXISTS no_login_role")
+
     async def _test_negative_audit_records_admin(self):
         """
         Test that failed ADMIN statements are audited.
@@ -2542,6 +2565,7 @@ async def test_audit_table_auth(manager: ScyllaClusterManager, rules_mode: bool)
     t = CQLAuditTester(manager, rules_mode=rules_mode)
     await t._test_user_password_masking(AuditBackendTable)
     await t._test_negative_audit_records_auth()
+    await t._test_negative_audit_records_auth_no_login()
     await t._test_negative_audit_records_admin()
     await t._test_negative_audit_records_dml()
     await t._test_negative_audit_records_dcl()
