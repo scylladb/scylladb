@@ -225,6 +225,10 @@ size_tiered_backlog_tracker::compacted_backlog(const compaction_backlog_tracker:
         if (!_contrib.sstables.contains(crp.first)) {
             continue;
         }
+        // Ci is left untaxed on purpose: the fixed cost belongs to the sstable existing,
+        // not to the compaction reading it, so it's only retired once the sstable leaves
+        // the set. Taxing Ci would cancel the tax added to Si for every sstable being
+        // compacted, and prorating it would only decay it earlier.
         auto compacted = crp.second->compacted();
         in.total_bytes += compacted;
         in.contribution += compacted * log4(crp.first->data_size());
@@ -253,7 +257,10 @@ size_tiered_backlog_tracker::sstables_backlog_contribution size_tiered_backlog_t
             continue;
         }
         contrib.value += std::ranges::fold_left(bucket | std::views::transform([] (const sstables::shared_sstable& sst) -> double {
-            return sst->data_size() * log4(sst->data_size());
+            // Si is taxed with the fixed per-sstable cost where it weighs the work, but
+            // not inside the log. See sstable_backlog_fixed_cost.
+            auto data_size = sst->data_size();
+            return effective_backlog_size(data_size) * log4(data_size);
         }), double(0.0f), std::plus{});
         // Controller is disabled if exception is caught during add / remove calls, so not making any effort to make this exception safe
         contrib.sstables.insert(bucket.begin(), bucket.end());
@@ -265,7 +272,9 @@ size_tiered_backlog_tracker::sstables_backlog_contribution size_tiered_backlog_t
 double size_tiered_backlog_tracker::backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const {
     inflight_component compacted = compacted_backlog(oc);
 
-    auto total_backlog_bytes = std::ranges::fold_left(_contrib.sstables | std::views::transform(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0), std::plus{});
+    auto total_backlog_bytes = std::ranges::fold_left(_contrib.sstables | std::views::transform([] (const sstables::shared_sstable& sst) {
+        return effective_backlog_size(sst->data_size());
+    }), uint64_t(0), std::plus{});
 
     // Bail out if effective backlog is zero, which happens in a small window where ongoing compaction exhausted
     // input files but is still sealing output files or doing managerial stuff like updating history table

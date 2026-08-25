@@ -19,6 +19,29 @@ namespace compaction {
 
 class compaction_backlog_manager;
 
+// Fixed cost, in bytes, that each sstable adds to the backlog on top of its own size.
+//
+// The backlog of an sstable is (Si - Ci) * log4(T / Si), so tiny sstables barely move
+// the needle, even though log4(T / Si) is large for them. That worked well until
+// tablets, where commitlog driven flush can produce a tiny sstable per replica in a
+// shard. Read amplification suffers badly, as each sstable being read has a fixed
+// memory overhead, but the controller sees almost no backlog and won't apply pressure
+// to compact them away.
+//
+// The tax reflects the cost we pay per sstable regardless of its size. It's applied to
+// Si where it weighs the work, but not inside log4(T / Si), which estimates write
+// amplification and should be left alone. Taxing the log too would shrink the estimate
+// for exactly the sstables we want to make visible.
+//
+// 1M is a conservative starting point, well below the size of a full memtable flush.
+static constexpr uint64_t sstable_backlog_fixed_cost = 1UL * 1024 * 1024;
+
+// Size used to weigh the backlog of an sstable, or of a run of sstables, whose data
+// size is data_size. Empty objects contribute nothing.
+static inline uint64_t effective_backlog_size(uint64_t data_size, size_t sstables = 1) {
+    return data_size == 0 ? 0 : data_size + sstables * sstable_backlog_fixed_cost;
+}
+
 // Read and write progress are provided by structures present in progress_manager.hh
 // However, we don't want to be tied to their lifetimes and for that reason we will not
 // manipulate them directly in the backlog manager.
