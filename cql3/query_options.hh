@@ -74,7 +74,7 @@ public:
         static thread_local const specific_options DEFAULT;
 
         const int32_t page_size;
-        const lw_shared_ptr<service::pager::paging_state> state;
+        const lw_shared_ptr<const service::pager::paging_state> state;
         const std::optional<db::consistency_level> serial_consistency;
         const api::timestamp_type timestamp;
         const service::node_local_only node_local_only;
@@ -166,8 +166,8 @@ public:
     // forInternalUse
     explicit query_options(raw_value_vector_with_unset values);
     explicit query_options(db::consistency_level, raw_value_vector_with_unset values, specific_options options = specific_options::DEFAULT);
-    explicit query_options(std::unique_ptr<query_options>, lw_shared_ptr<service::pager::paging_state> paging_state);
-    explicit query_options(std::unique_ptr<query_options>, lw_shared_ptr<service::pager::paging_state> paging_state, int32_t page_size);
+    explicit query_options(std::unique_ptr<query_options>, lw_shared_ptr<const service::pager::paging_state> paging_state);
+    explicit query_options(std::unique_ptr<query_options>, lw_shared_ptr<const service::pager::paging_state> paging_state, int32_t page_size);
 
     db::consistency_level get_consistency() const {
         return _consistency;
@@ -197,7 +197,7 @@ public:
     }
 
     /** The paging state for this query, or null if not relevant. */
-    lw_shared_ptr<service::pager::paging_state> get_paging_state() const {
+    lw_shared_ptr<const service::pager::paging_state> get_paging_state() const {
         return get_specific_options().state;
     }
 

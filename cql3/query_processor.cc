@@ -434,6 +434,11 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
                             sm::description("Counts the number of parallelized aggregation SELECT query executions.")).set_skip_when_empty(),
 
                     sm::make_counter(
+                            "select_paging_plan_rederivations",
+                            _cql_stats.select_paging_plan_rederivations,
+                            sm::description("Counts the pages of a prepared SELECT re-derived, each paying a re-parse, because the paging state pinned another query plan.")).set_skip_when_empty(),
+
+                    sm::make_counter(
                             "authorized_prepared_statements_cache_evictions",
                             [] { return authorized_prepared_statements_cache::shard_stats().authorized_prepared_statements_cache_evictions; },
                             sm::description("Counts the number of authenticated prepared statements cache entries evictions."))(basic_level).set_skip_when_empty(),
@@ -625,11 +630,24 @@ query_processor::execute_maybe_with_guard(service::query_state& query_state, ::s
     return execute_with_guard(std::bind_front(exec, std::ref(*this), std::forward<Args>(args)...), std::move(statement), query_state, options);
 }
 
+std::optional<service::pager::query_plan> query_processor::pinned_plan_from_paging_state(
+        const lw_shared_ptr<const service::pager::paging_state>& paging_state) {
+    if (!paging_state) {
+        return std::nullopt;
+    }
+    // Pretend an older Scylla version wrote this state, to test resuming from
+    // one during a rolling upgrade.
+    if (utils::get_local_injector().enter("paging_state_without_query_plan")) {
+        return std::nullopt;
+    }
+    return paging_state->get_query_plan();
+}
+
 future<::shared_ptr<result_message>>
 query_processor::execute_direct_without_checking_exception_message(utils::chunked_string_view query_string, service::query_state& query_state, dialect d, query_options& options) {
     log.trace("execute_direct: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
-    auto p = get_statement(query_string, query_state.get_client_state(), d);
+    auto p = get_statement(query_string, query_state.get_client_state(), d, pinned_plan_from_paging_state(options.get_paging_state()));
     return execute_direct_statement_without_checking_exception_message(std::move(p), query_state, options);
 }
 
@@ -788,7 +806,7 @@ prepared_cache_key_type query_processor::compute_id(
 }
 
 std::unique_ptr<prepared_statement>
-query_processor::get_statement(utils::chunked_string_view query, const service::client_state& client_state, dialect d) {
+query_processor::get_statement(utils::chunked_string_view query, const service::client_state& client_state, dialect d, std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
     // Measuring allocation cost requires that no yield points exist
     // between bytes_before and bytes_after. It needs fixing if this
     // function is ever futurized.
@@ -798,7 +816,16 @@ query_processor::get_statement(utils::chunked_string_view query, const service::
     // Set keyspace for statement that require login
     auto cf_stmt = dynamic_cast<raw::cf_statement*>(statement.get());
     if (cf_stmt) {
-        cf_stmt->prepare_keyspace(client_state);
+        // A re-derived statement keeps the keyspace it was prepared with; the
+        // connection's own may have changed since PREPARE.
+        if (forced_keyspace) {
+            cf_stmt->prepare_keyspace(*forced_keyspace);
+        } else {
+            cf_stmt->prepare_keyspace(client_state);
+        }
+        if (pinned_plan) {
+            cf_stmt->set_pinned_plan(std::move(pinned_plan));
+        }
     }
     ++_stats.prepare_invocations;
     auto p = statement->prepare(_db, _cql_stats, _cql_config);
@@ -984,9 +1011,9 @@ query_processor::execute_paged_internal(internal_query_state& state) {
                 if (done) {
                     _state.more_results = false;
                 } else {
-                    const service::pager::paging_state& st = *rs.get_metadata().paging_state();
-                    lw_shared_ptr<service::pager::paging_state> shrd = make_lw_shared<service::pager::paging_state>(st);
-                    _state.opts = std::make_unique<query_options>(std::move(_state.opts), shrd);
+                    _state.opts = std::make_unique<query_options>(std::move(_state.opts), rs.get_metadata().paging_state());
+                    // Carries a recorded plan forward without pinning it, safe
+                    // only because the cache hands back the same statement.
                     _state.p = _qp.prepare_internal(_state.query_string);
                 }
             } else {

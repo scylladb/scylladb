@@ -80,6 +80,7 @@ struct cql_stats {
     int64_t select_partition_range_scan = 0;
     int64_t select_partition_range_scan_no_bypass_cache = 0;
     int64_t select_parallelized = 0;
+    int64_t select_paging_plan_rederivations = 0;
 
     uint64_t minimum_replication_factor_fail_violations = 0;
     uint64_t minimum_replication_factor_warn_violations = 0;

@@ -173,13 +173,9 @@ struct enormous_virtual_reader {
 };
 
 
-static lw_shared_ptr<service::pager::paging_state> extract_paging_state(::shared_ptr<cql_transport::messages::result_message> res) {
+static lw_shared_ptr<const service::pager::paging_state> extract_paging_state(::shared_ptr<cql_transport::messages::result_message> res) {
     auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
-    auto paging_state = rows->rs().get_metadata().paging_state();
-    if (!paging_state) {
-        return nullptr;
-    }
-    return make_lw_shared<service::pager::paging_state>(*paging_state);
+    return rows->rs().get_metadata().paging_state();
 };
 
 static size_t count_rows_fetched(::shared_ptr<cql_transport::messages::result_message> res) {
@@ -206,7 +202,7 @@ SEASTAR_TEST_CASE(scan_enormous_table_test) {
 
         uint64_t rows_fetched = 0;
         shared_ptr<cql_transport::messages::result_message> msg;
-        lw_shared_ptr<service::pager::paging_state> paging_state;
+        lw_shared_ptr<const service::pager::paging_state> paging_state;
         std::unique_ptr<cql3::query_options> qo;
         uint64_t fetched_rows_log_counter = 1e7;
         do {

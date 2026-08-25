@@ -506,6 +506,32 @@ SEASTAR_TEST_CASE(index_selection) {
     });
 }
 
+// Illegal combinations are reported by throwing. Where clang brackets a call
+// with its own stack adjustment instead of reserving the argument space in the
+// prologue - as it does for the loop below in debug builds - the instruction
+// that gives that space back runs only on the normal return path, so a throw
+// leaves the stack pointer lowered until the frame returns. Catching in the
+// loop would lose that space on every rejection, megabytes over 32768
+// combinations; do not inline this into the loop.
+[[gnu::noinline]]
+static shared_ptr<const restrictions::statement_restrictions> try_analyze_restrictions(
+        cql_test_env& e, schema_ptr schema, const expr::expression& where_expr, prepare_context& ctx) {
+    try {
+        return restrictions::analyze_statement_restrictions(
+                e.data_dictionary(),
+                schema,
+                statements::statement_type::SELECT,
+                where_expr,
+                ctx,
+                /*contains_only_static_columns=*/false,
+                /*for_view=*/false,
+                /*allow_filtering=*/true,
+                restrictions::check_indexes::yes);
+    } catch (const exceptions::invalid_request_exception&) {
+        return nullptr;
+    }
+}
+
 // Exhaustive combinatorial test: iterates over all 2^N subsets of N restriction
 // fragments and, for each subset, verifies a broad set of statement_restrictions
 // public APIs. This catches any refactoring that accidentally changes observable
@@ -528,12 +554,6 @@ SEASTAR_TEST_CASE(index_selection) {
 //   bit 13: m3[19] = 'beta'      (global index comb_m3_entries, target: keys_and_values)
 //   bit 14: fs = {20, 21}        (global index comb_fs, target: full — frozen collection)
 SEASTAR_TEST_CASE(combinatorial_restrictions) {
-    // ASAN's fake-stack shadow buffer for the large lambda below is ~248 KiB;
-    // bump the thread stack so it doesn't overflow under sanitized builds.
-    seastar::thread_attributes tattr;
-#if defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer)
-    tattr.stack_size = 2 * 1024 * 1024;
-#endif
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "CREATE TABLE ks.comb ("
                          "    pk1 int, pk2 int,"
@@ -657,20 +677,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
                 ? expr::expression(expr::conjunction{})
                 : cql3::util::where_clause_to_relations(where_clause, cql3::dialect{});
 
-            shared_ptr<const restrictions::statement_restrictions> sr;
-            try {
-                sr = restrictions::analyze_statement_restrictions(
-                        e.data_dictionary(),
-                        schema,
-                        statements::statement_type::SELECT,
-                        where_expr,
-                        ctx,
-                        /*contains_only_static_columns=*/false,
-                        /*for_view=*/false,
-                        /*allow_filtering=*/true,
-                        restrictions::check_indexes::yes);
-            } catch (const exceptions::invalid_request_exception&) {
-            }
+            auto sr = try_analyze_restrictions(e, schema, where_expr, ctx);
 
             if (is_illegal) {
                 BOOST_CHECK_MESSAGE(!sr,
@@ -1150,7 +1157,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
 
         BOOST_TEST_MESSAGE(fmt::format("Tested {} restriction combinations ({} legal, {} illegal, 2^{} = {} total)",
                                        total_tested, total_tested - total_illegal, total_illegal, N_FRAG, FRAG_TOTAL));
-    }, {}, tattr);
+    });
 }
 
 /// Helper to get statement_restrictions from a parsed WHERE clause string.

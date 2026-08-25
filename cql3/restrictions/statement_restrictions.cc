@@ -708,14 +708,19 @@ struct index_search_group {
 
 // Like index_supports_some_column, but operates on per-column predicate vectors
 // instead of walking per-column expression trees.
+// pinned_index_name, when set, hides every other index. See #18992.
 static bool index_supports_some_column(
         const single_column_predicate_vectors& per_column_predicates,
         const secondary_index::secondary_index_manager& index_manager,
-        allow_local_index allow_local) {
+        allow_local_index allow_local,
+        const std::optional<sstring>& pinned_index_name) {
     using namespace secondary_index;
     for (auto& [col, preds] : per_column_predicates) {
         for (const auto& idx : index_manager.list_indexes()) {
             if (!allow_local && idx.metadata().local()) {
+                continue;
+            }
+            if (pinned_index_name && idx.metadata().name() != *pinned_index_name) {
                 continue;
             }
             if (preds.empty()) {
@@ -743,9 +748,13 @@ static bool index_supports_some_column(
 static bool multi_column_predicates_have_supporting_index(
         const std::vector<predicate>& mc_preds,
         const secondary_index::secondary_index_manager& index_manager,
-        allow_local_index allow_local) {
+        allow_local_index allow_local,
+        const std::optional<sstring>& pinned_index_name) {
     for (const auto& idx : index_manager.list_indexes()) {
         if (!allow_local && idx.metadata().local()) {
+            continue;
+        }
+        if (pinned_index_name && idx.metadata().name() != *pinned_index_name) {
             continue;
         }
         for (const auto& pred : mc_preds) {
@@ -791,7 +800,46 @@ static do_find_idx_result do_find_idx(
         bool uses_secondary_indexing,
         const secondary_index::secondary_index_manager& sim,
         std::span<const index_search_group> search_groups,
-        allow_local_index allow_local);
+        allow_local_index allow_local,
+        std::optional<sstring> pinned_index_name);
+
+// The pinned plan is a view id naming no index of this table: it was dropped or
+// recreated, this node has not learned of it yet, or the state belongs to
+// another query. A view id has no name left to report either way. See #18992.
+[[noreturn]] static void throw_pinned_plan_gone() {
+    throw exceptions::invalid_request_exception(
+            "Cannot continue paged query: the secondary index used by this "
+            "query is no longer available - it was dropped or recreated, or "
+            "this node does not know it yet. Please retry the query from the "
+            "beginning.");
+}
+
+// The pinned plan is still available - the base table, or an index that is still
+// there - it just cannot serve the query it was handed to, which is not
+// something retrying could fix. See #18992.
+[[noreturn]] static void throw_pinned_plan_foreign() {
+    throw exceptions::invalid_request_exception(
+            "Cannot continue paged query: the paging state was produced by a "
+            "query plan that cannot serve this one. Paging state can only be "
+            "used to continue the query that produced it.");
+}
+
+// Id of the view backing an index - what identifies it across DROP/CREATE.
+// std::nullopt for indexes with no view, which are never pinned this way.
+static std::optional<table_id> index_view_id(
+        data_dictionary::database db,
+        const schema& base_schema,
+        const secondary_index::index& idx) {
+    const auto& im = idx.metadata();
+    if (!db::schema_tables::view_should_exist(im)) {
+        return std::nullopt;
+    }
+    auto view = db.try_find_table(base_schema.ks_name(), secondary_index::index_table_name(im.name()));
+    if (!view) {
+        return std::nullopt;
+    }
+    return view->schema()->id();
+}
 
 
 bool is_empty_restriction(const expression& e) {
@@ -816,7 +864,8 @@ statement_restrictions::statement_restrictions(private_tag,
         bool selects_only_static_columns,
         bool for_view,
         bool allow_filtering,
-        check_indexes do_check_indexes)
+        check_indexes do_check_indexes,
+        pinned_plan_opt pinned_plan)
     : statement_restrictions(private_tag{}, schema, allow_filtering)
 {
     _check_indexes = do_check_indexes;
@@ -1118,25 +1167,75 @@ statement_restrictions::statement_restrictions(private_tag,
     _ck_is_all_eq = ck_is_all_eq;
     _pk_is_all_eq = pk_is_all_eq;
     _pk_has_slice_or_needs_filtering = pk_has_slice_or_needs_filtering;
+    std::optional<sstring> pinned_index_name;
+    bool force_base_plan = false;
+    std::optional<table_id> pinned_view_id;
+    if (pinned_plan) {
+        std::visit(overloaded_functor{
+                [&] (const service::pager::primary_index_plan&) { force_base_plan = true; },
+                [&] (const service::pager::index_plan& plan) { pinned_view_id = plan.view_id; },
+        }, *pinned_plan);
+    }
     if (_check_indexes) {
         auto cf = db.find_column_family(schema);
         auto& sim = cf.get_index_manager();
         const expr::allow_local_index allow_local(
                 !has_partition_key_unrestricted_components()
                 && partition_key_restrictions_is_all_eq());
-        if (!_has_multi_column) {
-            _has_queriable_ck_index = index_supports_some_column(sc_ck_pred_vectors, sim, allow_local)
-                    && !type.is_delete();
+        // Resolve the pinned view id to the index it names, so the plan search
+        // below can filter by it. An id naming no live index means it is gone.
+        if (pinned_view_id) {
+            for (const auto& idx : sim.list_indexes()) {
+                if (index_view_id(db, *schema, idx) == *pinned_view_id) {
+                    pinned_index_name = idx.metadata().name();
+                    break;
+                }
+            }
+            if (!pinned_index_name) {
+                throw_pinned_plan_gone();
+            }
+        }
+        // Hide every index the pinned plan did not use, so the analysis below
+        // reaches the conclusions the page that saved the position reached.
+        if (force_base_plan) {
+            _has_queriable_ck_index = false;
+            _has_queriable_pk_index = false;
+            _has_queriable_regular_index = false;
+            // A query needing an index cannot have saved a base-table position,
+            // so the state came from another query. Mirrors the check below.
+            // Only regular-column restrictions are looked at: a query needing an
+            // index on a key column is rejected a few steps down by the ordinary
+            // filtering validation instead, and reported as that.
+            if (!allow_filtering && !type.is_delete() && !type.is_update()
+                    && !is_empty_restriction(_nonprimary_key_restrictions)) {
+                throw_pinned_plan_foreign();
+            }
         } else {
-            _has_queriable_ck_index = multi_column_predicates_have_supporting_index(mc_ck_preds, sim, allow_local)
+            if (!_has_multi_column) {
+                _has_queriable_ck_index = index_supports_some_column(sc_ck_pred_vectors, sim, allow_local, pinned_index_name)
+                        && !type.is_delete();
+            } else {
+                _has_queriable_ck_index = multi_column_predicates_have_supporting_index(mc_ck_preds, sim, allow_local, pinned_index_name)
+                        && !type.is_delete();
+            }
+            _has_queriable_pk_index = !has_token
+                    && index_supports_some_column(sc_pk_pred_vectors, sim, allow_local, pinned_index_name)
+                    && !type.is_delete();
+            _has_queriable_regular_index = index_supports_some_column(sc_nonpk_pred_vectors, sim, allow_local, pinned_index_name)
                     && !type.is_delete();
         }
-        _has_queriable_pk_index = !has_token
-                && index_supports_some_column(sc_pk_pred_vectors, sim, allow_local)
-                && !type.is_delete();
-        _has_queriable_regular_index = index_supports_some_column(sc_nonpk_pred_vectors, sim, allow_local)
-                && !type.is_delete();
+        // The pinned index cannot serve this query, so the state came from
+        // another one. Caught here, before ALLOW FILTERING is complained about.
+        if (pinned_index_name
+                && !_has_queriable_ck_index && !_has_queriable_pk_index && !_has_queriable_regular_index) {
+            throw_pinned_plan_foreign();
+        }
     } else {
+        // No index manager here, so a pin on an index view cannot be honoured -
+        // and must not be ignored, or its position is read against the base.
+        if (pinned_view_id) {
+            throw_pinned_plan_foreign();
+        }
         _has_queriable_ck_index = false;
         _has_queriable_pk_index = false;
         _has_queriable_regular_index = false;
@@ -1211,7 +1310,7 @@ statement_restrictions::statement_restrictions(private_tag,
                 !has_partition_key_unrestricted_components()
                 && partition_key_restrictions_is_all_eq());
         auto idx_result = do_find_idx(
-                _uses_secondary_indexing, sim, search_groups, allow_local_for_idx);
+                _uses_secondary_indexing, sim, search_groups, allow_local_for_idx, std::move(pinned_index_name));
         if (idx_result.index) {
             _idx_opt = std::make_unique<secondary_index::index>(std::move(*idx_result.index));
         }
@@ -1374,8 +1473,18 @@ static do_find_idx_result do_find_idx(
         bool uses_secondary_indexing,
         const secondary_index::secondary_index_manager& sim,
         std::span<const index_search_group> search_groups,
-        allow_local_index allow_local) {
+        allow_local_index allow_local,
+        std::optional<sstring> pinned_index_name) {
+    // The caller resolved the pinned plan's table id to this name, so matching
+    // by name here can't pick up an index recreated under the same name.
+    const bool has_pinned_index = pinned_index_name.has_value();
+
     if (!uses_secondary_indexing) {
+        // The pinned index is there but yields no plan for this query; refuse
+        // rather than fall back to the base table and misread the saved position.
+        if (has_pinned_index) {
+            throw_pinned_plan_foreign();
+        }
         return {std::nullopt, expr::conjunction({}), {}};
     }
 
@@ -1415,6 +1524,9 @@ static do_find_idx_result do_find_idx(
             }
             const auto& [col, preds] = *it;
             for (const auto& index : sim.list_indexes()) {
+                if (has_pinned_index && index.metadata().name() != *pinned_index_name) {
+                    continue;
+                }
                 if (col->name_as_text() == index.target_column() &&
                         are_predicates_supported_by(preds, index) &&
                         index_score(index) > chosen_index_score) {
@@ -1425,6 +1537,9 @@ static do_find_idx_result do_find_idx(
                 }
             }
         });
+    }
+    if (has_pinned_index && !chosen_index) {
+        throw_pinned_plan_foreign();
     }
     return {chosen_index, chosen_index_restrictions, std::move(chosen_index_predicates)};
 }
@@ -2768,8 +2883,9 @@ analyze_statement_restrictions(
         bool selects_only_static_columns,
         bool for_view,
         bool allow_filtering,
-        check_indexes do_check_indexes) {
-    return make_shared<statement_restrictions>(statement_restrictions::private_tag{}, db, std::move(schema), type, where_clause, ctx, selects_only_static_columns, for_view, allow_filtering, do_check_indexes);
+        check_indexes do_check_indexes,
+        pinned_plan_opt pinned_plan) {
+    return seastar::make_shared<statement_restrictions>(statement_restrictions::private_tag{}, db, std::move(schema), type, where_clause, ctx, selects_only_static_columns, for_view, allow_filtering, do_check_indexes, std::move(pinned_plan));
 }
 
 shared_ptr<const statement_restrictions>
