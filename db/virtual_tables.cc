@@ -646,6 +646,7 @@ class db_config_table final : public streaming_virtual_table {
             .with_column("name", utf8_type, column_kind::partition_key)
             .with_column("type", utf8_type)
             .with_column("source", utf8_type)
+            .with_column("status", utf8_type)
             .with_column("value", utf8_type)
             .with_hash_version()
             .build();
@@ -656,6 +657,7 @@ class db_config_table final : public streaming_virtual_table {
             dht::decorated_key key;
             std::string_view type;
             sstring source;
+            std::string_view status;
             sstring value;
         };
 
@@ -664,7 +666,7 @@ class db_config_table final : public streaming_virtual_table {
             auto&& c = cfg_ref.get();
             dht::decorated_key dk = dht::decorate_key(*_s, partition_key::from_single_value(*_s, data_value(c.name()).serialize_nonnull()));
             if (this_shard_owns(dk)) {
-                cfg.emplace_back(config_entry{ std::move(dk), c.type_name(), c.source_name(), c.value_as_json()._res });
+                cfg.emplace_back(config_entry{ std::move(dk), c.type_name(), c.source_name(), c.status_name(), c.value_as_json()._res });
             }
         }
 
@@ -676,6 +678,7 @@ class db_config_table final : public streaming_virtual_table {
             clustering_row cr(clustering_key::make_empty());
             set_cell(cr.cells(), "type", c.type);
             set_cell(cr.cells(), "source", c.source);
+            set_cell(cr.cells(), "status", c.status);
             set_cell(cr.cells(), "value", c.value);
             co_await result.emit_row(std::move(cr));
             co_await result.emit_partition_end();
@@ -706,6 +709,10 @@ class db_config_table final : public streaming_virtual_table {
 
         if (rs.row(0).cells().contains("source")) {
             return make_exception_future<>(virtual_table_update_exception("option source is not updateable"));
+        }
+
+        if (rs.row(0).cells().contains("status")) {
+            return make_exception_future<>(virtual_table_update_exception("option status is not updateable"));
         }
 
         return smp::submit_to(0, [&cfg = _cfg, name = std::move(*name), value = std::move(*value)] () mutable -> future<> {

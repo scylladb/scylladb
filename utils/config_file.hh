@@ -158,6 +158,7 @@ public:
         virtual value_status status() const noexcept = 0;
         virtual config_source source() const noexcept = 0;
         sstring source_name() const noexcept;
+        std::string_view status_name() const noexcept;
         json::json_return_type value_as_json() const;
     };
 

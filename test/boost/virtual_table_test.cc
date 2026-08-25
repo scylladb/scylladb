@@ -69,8 +69,18 @@ SEASTAR_THREAD_TEST_CASE(test_system_config_table_read) {
         assert_that(res).is_rows().with_size(1).with_row({
             { utf8_type->decompose(sstring("partitioner")) },
             { utf8_type->decompose(sstring("default")) },
+            { utf8_type->decompose(sstring("used")) },
             { utf8_type->decompose(sstring("string")) },
             { utf8_type->decompose(format("\"{}\"", env.local_db().get_config().partitioner())) }
+        });
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_system_config_table_status) {
+    do_with_cql_env_thread([] (cql_test_env& env) {
+        auto res = env.execute_cql("SELECT status FROM system.config WHERE name = 'commitlog_use_hard_size_limit';").get();
+        assert_that(res).is_rows().with_size(1).with_row({
+            { utf8_type->decompose(sstring("deprecated")) },
         });
     }).get();
 }

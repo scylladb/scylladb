@@ -447,3 +447,17 @@ sstring utils::config_file::config_src::source_name() const noexcept {
 
     __builtin_unreachable();
 }
+
+std::string_view utils::config_file::config_src::status_name() const noexcept {
+    switch (status()) {
+    case utils::config_file::value_status::Used:
+        return "used";
+    case utils::config_file::value_status::Unused:
+        return "unused";
+    case utils::config_file::value_status::Invalid:
+        return "invalid";
+    case utils::config_file::value_status::Deprecated:
+        return "deprecated";
+    }
+    __builtin_unreachable();
+}
