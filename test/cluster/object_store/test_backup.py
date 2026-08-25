@@ -15,6 +15,7 @@ import time
 import random
 
 from typing import Callable, Awaitable
+from dataclasses import dataclass
 from functools import partial
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
@@ -1208,6 +1209,79 @@ async def test_restore_tablets_with_different_tablet_hints(build_mode: str, mana
         desc = (await cql.run_async(f"DESC TABLE {ks}.test"))[0].create_statement
         assert f"'min_tablet_count': '{min_tablet_count_before_restore}'" in desc, f"Expected min_tablet_count={min_tablet_count_before_restore} in: {desc}"
         assert f"'max_tablet_count': '{max_tablet_count_before_restore}'" in desc, f"Expected max_tablet_count={max_tablet_count_before_restore} in: {desc}"
+
+# The keyspace and table parameters of both restore APIs name the destination, while the source is
+# addressed by the bucket prefix together with the sstable list (plain restore) or by the manifests
+# (tablet-aware restore). Nothing ties the two together, so a backup can be restored under a
+# different name. The tests below cover that, including the case that motivates it: restoring a
+# snapshot into a temporary table to cherry-pick rows that were deleted by accident, which is
+# worthless unless the live table stays untouched.
+# Refs https://scylladb.atlassian.net/browse/SCYLLADB-3739
+
+RF_1 = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}"
+TABLETS_4 = "WITH tablets = {'min_tablet_count': 4}"
+
+@dataclass
+class restore_target:
+    '''A source and a destination for a restore of one table into a differently named one.
+
+    The ks_opts are appended to the keyspace CREATE statement of the respective side and the
+    cf_opts to its table's. extra_col names an int column the destination declares on top of the
+    backed up ones, which the sstables do not carry and which therefore stays null.'''
+    name: str
+    src_ks_opts: str = ''
+    src_cf_opts: str = TABLETS_4
+    dst_ks_opts: str = ''
+    dst_cf_opts: str = TABLETS_4
+    extra_col: str = ''
+
+RESTORE_TARGETS = [
+    restore_target('same_schema'),
+    restore_target('extra_column', extra_col='extra'),
+]
+
+@pytest.mark.parametrize("target", RESTORE_TARGETS, ids=lambda t: t.name)
+async def test_restore_into_renamed_target(manager: ScyllaClusterManager, object_storage, target):
+    '''Check that a backup of one keyspace:table can be restored into another one'''
+
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'object_storage_endpoints': objconf, 'task_ttl_in_seconds': 300}
+    cmd = ['--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=debug:sstable=debug:api=info']
+    server = await manager.server_add(config=cfg, cmdline=cmd)
+
+    cql = manager.get_cql()
+
+    cols = 'name text primary key, value text'
+    rows = {'0': 'zero', '1': 'one', '2': 'two'}
+
+    async with new_test_keyspace(manager, f'{RF_1} {target.src_ks_opts}') as src_ks:
+        await cql.run_async(f"CREATE TABLE {src_ks}.cf1 ( {cols} ) {target.src_cf_opts};")
+        await asyncio.gather(*(cql.run_async(f"INSERT INTO {src_ks}.cf1 ( name, value ) VALUES ('{name}', '{value}');") for name, value in rows.items()))
+
+        snap_name, toc_names = await take_snapshot_on_one_server(src_ks, server, manager, logger)
+        prefix = f'cf1/{snap_name}'
+        await do_backup(server, snap_name, prefix, src_ks, 'cf1', object_storage, manager, logger)
+
+        # The destination differs from the source in both the keyspace and the table name
+        async with new_test_keyspace(manager, f'{RF_1} {target.dst_ks_opts}') as dst_ks:
+            dst_cols = f'{cols}, {target.extra_col} int' if target.extra_col else cols
+            await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 ( {dst_cols} ) {target.dst_cf_opts};")
+            assert not await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;"), f'{dst_ks}.cf2 is not empty before the restore'
+
+            logger.info(f'Restore {src_ks}.cf1 into {dst_ks}.cf2')
+            tid = await manager.api.restore(server.ip_addr, dst_ks, 'cf2', object_storage.address, object_storage.bucket_name, prefix, toc_names)
+            status = await manager.api.wait_task(server.ip_addr, tid)
+            assert (status is not None) and (status['state'] == 'done'), f'Restore into {dst_ks}.cf2 failed: {status}'
+
+            res = await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;")
+            restored = {x.name: x.value for x in res}
+            assert restored == rows, f'Unexpected contents of {dst_ks}.cf2 after restore: {restored}'
+            if target.extra_col:
+                assert all(getattr(x, target.extra_col) is None for x in res), f'{dst_ks}.cf2 has a non-null {target.extra_col} after restore'
+
+            kept = {x.name: x.value for x in await cql.run_async(f"SELECT * FROM {src_ks}.cf1;")}
+            assert kept == rows, f'Restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {kept}'
+
 
 async def test_restore_with_non_existing_sstable(manager: ScyllaClusterManager, object_storage):
     '''Check that restore task fails well when given a non-existing sstable'''
