@@ -6362,6 +6362,63 @@ SEASTAR_TEST_CASE(test_perform_component_rewrite_single_sstable_without_backup) 
     return test_perform_component_rewrite_single_sstable(sstables::update_sstable_id::no);
 }
 
+void do_test_component_rewrite_failure(test_env& env) {
+    simple_schema ss;
+    auto s = ss.schema();
+    auto pk = ss.make_pkey();
+
+    auto mut1 = mutation(s, pk);
+    mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+    auto sst = make_sstable_containing(env.make_sstable(s), {mut1}).get();
+
+    auto table = env.make_table_for_tests(s);
+    auto close_table = deferred_stop(table);
+
+    table->add_sstable_and_update_cache(sst).get();
+
+    auto all_sstables = table->get_sstables();
+    BOOST_REQUIRE(all_sstables->size() == 1);
+    BOOST_REQUIRE(all_sstables->contains(sst));
+
+    auto modifier = [] (sstables::sstable& sst) {
+        sst.update_repaired_at(1);
+    };
+
+    scoped_error_injection abort_retry_wait{"compaction_task_executor_compaction_retry_sleep_aborted"};
+    table->perform_component_rewrite(
+        dht::token_range::make_open_ended_both_sides(),
+        tasks::task_info{},
+        [] (const auto&) { return true; },
+        sstables::component_type::Statistics,
+        std::move(modifier)
+    ).get();
+
+    auto res = sstables::validate_checksums_and_digests(sst, env.make_reader_permit()).get();
+    BOOST_REQUIRE(res.status == sstables::validate_checksums_status::valid);
+}
+
+SEASTAR_TEST_CASE(test_component_rewrite_replacer_failure) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future();
+#endif
+    return test_env::do_with_async([] (test_env& env) {
+        scoped_error_injection replacer_error{"update_sstable_sets_on_compaction_completion_fail"};
+        do_test_component_rewrite_failure(env);
+    });
+}
+
+SEASTAR_TEST_CASE(test_component_rewrite_failure) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future();
+#endif
+    return test_env::do_with_async([] (test_env& env) {
+        scoped_error_injection rewrite_error{"link_with_rewritten_component_fail"};
+        do_test_component_rewrite_failure(env);
+    });
+}
+
 static void object_storage_perform_component_rewrite_single_sstable_fn(test_env& env) {
     // Regression test for SCYLLADB-3420.
     //
