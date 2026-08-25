@@ -6,11 +6,6 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-// This is a template consumed by utils/s3/gen_aws_service_errors.py.
-// The build system expands the @SCYLLA_AWS_ERRORS_*@ tags below and writes
-// the result to <build-dir>/utils/s3/aws_error_definitions_generated.cc.
-// Do not edit the generated file — edit this template instead.
-
 #include "aws_error.hh"
 
 
@@ -90,10 +85,43 @@ const aws_errors& aws_error::get_errors() {
         {"HTTP_GATEWAY_TIMEOUT", aws_error(aws_error_type::HTTP_GATEWAY_TIMEOUT, retryable::yes)},
         {"HTTP_NETWORK_CONNECT_TIMEOUT", aws_error(aws_error_type::HTTP_NETWORK_CONNECT_TIMEOUT, retryable::yes)},
         {"HTTP_NETWORK_READ_TIMEOUT", aws_error(aws_error_type::HTTP_NETWORK_READ_TIMEOUT, retryable::yes)},
-        // S3-specific wire-code → aws_error entries are substituted here at build time.
-        // @SCYLLA_AWS_ERRORS_S3@
-        // STS-specific wire-code → aws_error entries are substituted here at build time.
-        // @SCYLLA_AWS_ERRORS_STS@
+        // Service-specific entries below are generated from the AWS c2j
+        // models by scripts/gen_aws_service_errors.py. Do not edit by hand.
+        // @SCYLLA_AWS_ERRORS_BEGIN@
+        // S3
+        {"AnnotationLimitExceeded", aws_error(aws_error_type::ANNOTATION_LIMIT_EXCEEDED, retryable::no)},
+        {"AnnotationNameTooLong", aws_error(aws_error_type::ANNOTATION_NAME_TOO_LONG, retryable::no)},
+        {"BucketAlreadyExists", aws_error(aws_error_type::BUCKET_ALREADY_EXISTS, retryable::no)},
+        {"BucketAlreadyOwnedByYou", aws_error(aws_error_type::BUCKET_ALREADY_OWNED_BY_YOU, retryable::no)},
+        {"EncryptionTypeMismatch", aws_error(aws_error_type::ENCRYPTION_TYPE_MISMATCH, retryable::no)},
+        {"IdempotencyParameterMismatch", aws_error(aws_error_type::IDEMPOTENCY_PARAMETER_MISMATCH, retryable::no)},
+        {"InvalidAnnotationName", aws_error(aws_error_type::INVALID_ANNOTATION_NAME, retryable::no)},
+        {"InvalidObjectState", aws_error(aws_error_type::INVALID_OBJECT_STATE, retryable::no)},
+        {"InvalidPrefix", aws_error(aws_error_type::INVALID_PREFIX, retryable::no)},
+        {"InvalidRequest", aws_error(aws_error_type::INVALID_REQUEST, retryable::no)},
+        {"InvalidWriteOffset", aws_error(aws_error_type::INVALID_WRITE_OFFSET, retryable::no)},
+        {"NoSuchAnnotation", aws_error(aws_error_type::NO_SUCH_ANNOTATION, retryable::no)},
+        {"NoSuchBucket", aws_error(aws_error_type::NO_SUCH_BUCKET, retryable::no)},
+        {"NoSuchKey", aws_error(aws_error_type::NO_SUCH_KEY, retryable::no)},
+        {"NoSuchUpload", aws_error(aws_error_type::NO_SUCH_UPLOAD, retryable::no)},
+        {"ObjectAlreadyInActiveTierError", aws_error(aws_error_type::OBJECT_ALREADY_IN_ACTIVE_TIER, retryable::no)},
+        {"ObjectNotInActiveTierError", aws_error(aws_error_type::OBJECT_NOT_IN_ACTIVE_TIER, retryable::no)},
+        {"TooManyParts", aws_error(aws_error_type::TOO_MANY_PARTS, retryable::no)},
+        {"UnsupportedMediaType", aws_error(aws_error_type::UNSUPPORTED_MEDIA_TYPE, retryable::no)},
+        // STS
+        {"ExpiredTokenException", aws_error(aws_error_type::EXPIRED_TOKEN, retryable::no)},
+        {"ExpiredTradeInTokenException", aws_error(aws_error_type::EXPIRED_TRADE_IN_TOKEN, retryable::no)},
+        {"InvalidAuthorizationMessageException", aws_error(aws_error_type::INVALID_AUTHORIZATION_MESSAGE, retryable::no)},
+        {"InvalidIdentityToken", aws_error(aws_error_type::INVALID_IDENTITY_TOKEN, retryable::no)},
+        {"IDPCommunicationError", aws_error(aws_error_type::I_D_P_COMMUNICATION_ERROR, retryable::yes)},
+        {"IDPRejectedClaim", aws_error(aws_error_type::I_D_P_REJECTED_CLAIM, retryable::no)},
+        {"JWTPayloadSizeExceededException", aws_error(aws_error_type::J_W_T_PAYLOAD_SIZE_EXCEEDED, retryable::no)},
+        {"MalformedPolicyDocument", aws_error(aws_error_type::MALFORMED_POLICY_DOCUMENT, retryable::no)},
+        {"OutboundWebIdentityFederationDisabledException", aws_error(aws_error_type::OUTBOUND_WEB_IDENTITY_FEDERATION_DISABLED, retryable::no)},
+        {"PackedPolicyTooLarge", aws_error(aws_error_type::PACKED_POLICY_TOO_LARGE, retryable::no)},
+        {"RegionDisabledException", aws_error(aws_error_type::REGION_DISABLED, retryable::no)},
+        {"SessionDurationEscalationException", aws_error(aws_error_type::SESSION_DURATION_ESCALATION, retryable::no)},
+        // @SCYLLA_AWS_ERRORS_END@
     };
     return aws_error_map;
 }
