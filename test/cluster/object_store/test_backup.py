@@ -1460,6 +1460,52 @@ async def test_restore_tablets_into_vnodes_table(manager: ScyllaClusterManager, 
             assert kept == expected, f'Failed restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {len(kept)} rows'
 
 
+async def test_restore_tablets_vnodes_backup_into_tablets_table(manager: ScyllaClusterManager, object_storage):
+    '''Check that tablet-aware restore of a vnodes-based backup is rejected.
+
+    The manifests are parsed before the restore task is created, so the rejection comes out of the
+    request itself rather than as a failed task.'''
+
+    topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 1)
+
+    # A vnodes-based backup records a tablet count of 0 in its manifest, which the tablet-aware
+    # restore reports through on_internal_error. The nodes are started with
+    # --abort-on-internal-error, which takes the node down instead, and the command line wins over
+    # the yaml file, so the flag has to be turned off there.
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage,
+                                             extra_cmdline=['--abort-on-internal-error', '0'])
+
+    cql = manager.get_cql()
+
+    num_keys = 20
+    expected = {str(i): i for i in range(num_keys)}
+    rf = f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}"
+
+    async with new_test_keyspace(manager, f'{rf} {NO_TABLETS}') as src_ks:
+        snap_name, manifests = await populate_and_backup(manager, cql, servers, object_storage, src_ks, 'cf1', '', num_keys)
+
+        async with new_test_keyspace(manager, rf) as dst_ks:
+            await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 ( pk text primary key, value int ) {TABLETS_4};")
+
+            log = await manager.server_open_log(servers[1].server_id)
+            mark = await log.mark()
+
+            logger.info(f'Restore vnodes-based {src_ks}.cf1 into tablet-based {dst_ks}.cf2')
+            with pytest.raises(HTTPError) as excinfo:
+                await manager.api.restore_tablets(servers[1].ip_addr, dst_ks, 'cf2', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+            assert excinfo.value.code == 500, f'Unexpected status for a restore of a vnodes-based backup: {excinfo.value}'
+
+            # the response carries no body, the reason is only in the log
+            assert await log.grep('Invalid tablet_count 0 in manifest', from_mark=mark), \
+                    f'{servers[1].ip_addr} did not report the tablet count of the vnodes-based manifest'
+
+            res = await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;")
+            assert not res, f'{dst_ks}.cf2 returned {len(res)} rows after a restore that failed'
+
+            kept = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {src_ks}.cf1;")}
+            assert kept == expected, f'Failed restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {len(kept)} rows'
+
+
 async def test_restore_with_non_existing_sstable(manager: ScyllaClusterManager, object_storage):
     '''Check that restore task fails well when given a non-existing sstable'''
 
