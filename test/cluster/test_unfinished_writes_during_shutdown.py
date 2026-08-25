@@ -18,7 +18,7 @@ from test.cluster.util import check_token_ring_and_group0_consistency, new_test_
 from test.pylib.util import wait_for
 from test.cluster.test_tablets2 import inject_error_on
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.cluster.util import get_topology_coordinator
+from test.cluster.util import get_topology_coordinator, quiesce_and_disable_tablet_balancing
 from cassandra.cluster import ConnectionException, NoHostAvailable  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -171,6 +171,9 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
         running = await manager.running_servers()
         cql, hosts = await manager.get_ready_cql(running)
         await cql.run_async(f"CREATE TABLE {ks}.t (pk int primary key, v int)")
+        # Let auto-RF extend the system keyspaces over both racks and the balancer finish
+        # moving their tablets, then keep it off: the barriers paused below must be the join's.
+        await quiesce_and_disable_tablet_balancing(manager, running[0].ip_addr)
         target_server = await pick_target(is_coordinator=False)
         logger.info(f"=== Run 1: target={target_server} (non-coordinator) ===")
         new_server = await do_test(target_server)
