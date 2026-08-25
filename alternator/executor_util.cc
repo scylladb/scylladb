@@ -12,9 +12,11 @@
 #include "auth/resource.hh"
 #include "auth/service.hh"
 #include "cdc/log.hh"
+#include "cql3/statements/index_target.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/tags/utils.hh"
 #include "replica/database.hh"
+#include "schema/schema.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/result_set.hh"
 #include "serialization.hh"
@@ -200,6 +202,35 @@ void describe_key_schema(rjson::value& parent, const schema& schema, std::unorde
         }
     }
     rjson::add(parent, "KeySchema", std::move(key_schema));
+}
+
+search_schema_info get_search_schema_info(const index_metadata& index) {
+    search_schema_info info;
+    const index_options_map& opts = index.options();
+    // "alternator_attribute_types" is unset if the vector index doesn't have a
+    // SearchSchema, so we can return quickly, skipping the rest of the code.
+    auto types_it = opts.find("alternator_attribute_types");
+    if (types_it == opts.end()) {
+        return info;
+    }
+    if (auto target_it = opts.find(cql3::statements::index_target::target_option_name); target_it != opts.end()) {
+        if (std::optional<rjson::value> json_value = rjson::try_parse(target_it->second); json_value && json_value->IsObject()) {
+            if (const rjson::value* pk = rjson::find(*json_value, "pk"); pk && pk->IsArray() && !pk->Empty()) {
+                info.hash_attribute = rjson::to_string((*pk)[0]);
+            }
+            if (const rjson::value* fc = rjson::find(*json_value, "fc"); fc && fc->IsArray()) {
+                for (const rjson::value& attr : fc->GetArray()) {
+                    info.inline_filter_attributes.emplace_back(rjson::to_string(attr));
+                }
+            }
+        }
+    }
+    if (std::optional<rjson::value> types_json = rjson::try_parse(types_it->second); types_json && types_json->IsObject()) {
+        for (const auto& m : types_json->GetObject()) {
+            info.attribute_types[rjson::to_string(m.name)] = rjson::to_string(m.value);
+        }
+    }
+    return info;
 }
 
 // Check if the given string has valid characters for a table name, i.e. only

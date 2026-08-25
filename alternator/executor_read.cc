@@ -1338,28 +1338,25 @@ static std::vector<float> parse_vector(const rjson::value& value, int dimensions
 
 // Converts a DynamoDB typed value (e.g. {"S": "hello"} or {"N": "42"}) to a
 // JSON value in the format expected by the vector store pre-filter.
-// If cdef is non-null, the value's DynamoDB type tag must match the declared
-// type of the column; a mismatch triggers a ValidationException.  When cdef
-// is null (e.g. for projected non-key columns whose type is not declared),
-// the type check is skipped.  Only the types S (string) and N (number) are
-// supported; any other type (L, M, SS, NS, BS, BOOL, NULL, B, ...) triggers
-// a ValidationException.
-static rjson::value value_to_prefilter_json(const rjson::value& value, const column_definition* cdef) {
+// The value's DynamoDB type tag must match expected_type (the SearchSchema
+// attribute's declared AttributeType); a mismatch triggers a
+// ValidationException. Only the types S (string), N (number) and B (binary) -
+// the three types allowed by validate_search_schema() for a SearchSchema
+// HASH or INLINE_FILTER attribute - are supported; any other type (L, M, SS,
+// NS, BS, BOOL, NULL, ...) triggers a ValidationException.
+static rjson::value value_to_prefilter_json(const rjson::value& value, const std::string& attribute_name, const std::string& expected_type) {
     if (!value.IsObject() || value.MemberCount() != 1) {
         throw api_error::validation(
-            "value in VectorSearch KeyConditionExpression must be a typed DynamoDB value");
+            "value in SearchConditionExpression must be a typed DynamoDB value");
     }
     auto it = value.MemberBegin();
     std::string_view type_tag = rjson::to_string_view(it->name);
     const rjson::value& inner = it->value;
-    if (cdef) {
-        std::string expected_type = type_to_string(cdef->type);
-        if (type_tag != expected_type) {
-            throw api_error::validation(fmt::format(
-                "Type mismatch in VectorSearch KeyConditionExpression: "
-                "expected type {} for attribute {}, got type {}",
-                expected_type, cdef->name_as_text(), type_tag));
-        }
+    if (type_tag != expected_type) {
+        throw api_error::validation(fmt::format(
+            "Type mismatch in SearchConditionExpression: "
+            "expected type {} for attribute {}, got type {}",
+            expected_type, attribute_name, type_tag));
     }
     if (type_tag == "S") {
         if (!inner.IsString()) {
@@ -1374,46 +1371,60 @@ static rjson::value value_to_prefilter_json(const rjson::value& value, const col
         // precision and range, not 64-bit double. The vector store will
         // parse this string as BigDecimal.
         return rjson::copy(inner);
+    } else if (type_tag == "B") {
+        if (!inner.IsString()) {
+            throw api_error::validation("B type value must be a string");
+        }
+        // Decode the DynamoDB-style base64 value into raw bytes, then
+        // re-encode as the "0x"-prefixed hex string the vector store expects
+        // for a Blob filter value - the same convention already used (in
+        // reverse) by decode_fc_column_value() below to decode a B-typed
+        // filtering column coming back from the vector store.
+        bytes raw_bytes = *unwrap_bytes(inner, true);
+        return rjson::from_string(fmt::format("0x{}", to_hex(raw_bytes)));
     }
     throw api_error::validation(format(
-        "Type '{}' is not supported in VectorSearch KeyConditionExpression; "
-        "only S (string) and N (number) are supported", type_tag));
+        "Type '{}' is not supported in SearchConditionExpression; "
+        "only S (string), N (number) and B (binary) are supported", type_tag));
 }
 
-// Converts a single primitive condition from a parsed KeyConditionExpression
-// to vector store pre-filter JSON restriction(s), appended to restrictions_arr.
-// projected_cols maps projected attribute names to their column definitions;
-// any attribute not in this map triggers a ValidationException.
+// Converts a single primitive condition from a parsed SearchConditionExpression
+// to the vector store's pre-filter JSON format, appended to restrictions_arr.
+// attribute_types maps the vector index's SearchSchema attribute names to
+// their declared AttributeType (see search_schema_info::attribute_types);
+// any attribute not in this map at all (i.e. not declared in SearchSchema)
+// triggers a ValidationException.
 static void primitive_condition_to_prefilter(
         const parsed::primitive_condition& cond,
-        const std::unordered_map<std::string, const column_definition*>& projected_cols,
+        const std::unordered_map<std::string, std::string>& attribute_types,
         rjson::value& restrictions_arr)
 {
     using ctype = parsed::primitive_condition::type;
 
-    // Return the column_definition for a parsed::value that must be a top-level
-    // attribute path referencing a projected column.
-    auto require_projected_col = [&](const parsed::value& v) -> const column_definition& {
+    // Return the attribute name and declared AttributeType for a
+    // parsed::value that must be a top-level attribute path referencing a
+    // SearchSchema attribute of the vector index.
+    auto require_search_schema_col = [&](const parsed::value& v) -> std::pair<const std::string&, const std::string&> {
         const parsed::path& path = std::get<parsed::path>(v._value);
         if (path.has_operators()) {
             throw api_error::validation(
-                "VectorSearch KeyConditionExpression does not support nested attribute paths");
+                "SearchConditionExpression does not support nested attribute paths");
         }
-        auto it = projected_cols.find(path.root());
-        if (it == projected_cols.end()) {
+        auto it = attribute_types.find(path.root());
+        if (it == attribute_types.end()) {
             throw api_error::validation(format(
-                "VectorSearch KeyConditionExpression references attribute '{}' which is not a projected "
-                "attribute of the vector index; only projected attributes can "
-                "be used for pre-filtering", path.root()));
+                "SearchConditionExpression references attribute '{}' which is not declared in the "
+                "vector index's SearchSchema; only SearchSchema attributes can "
+                "be used for filtering", path.root()));
         }
-        return *it->second;
+        return {it->first, it->second};
     };
 
     // Extract the resolved DynamoDB JSON value from a parsed::constant literal.
     auto require_resolved_val = [](const parsed::value& v) -> const rjson::value& {
         if (!v.is_constant()) {
             throw api_error::validation(
-                "value in VectorSearch KeyConditionExpression must be a constant");
+                "value in SearchConditionExpression must be a constant");
         }
         const parsed::constant& c = std::get<parsed::constant>(v._value);
         // We're after resolve_condition_expression(), so only literals remain
@@ -1422,129 +1433,63 @@ static void primitive_condition_to_prefilter(
         return *std::get<parsed::constant::literal>(c._value);
     };
 
-    if (cond._op == ctype::EQ || cond._op == ctype::LT || cond._op == ctype::LE ||
-            cond._op == ctype::GT || cond._op == ctype::GE) {
-        // Binary comparison: one operand is a column path, the other a constant.
-        throwing_assert(cond._values.size() == 2);
-        bool col_left = cond._values[0].is_path();
-        bool col_right = cond._values[1].is_path();
-        if ((!col_left && !col_right) || (col_left && col_right)) {
-            throw api_error::validation(
-                "VectorSearch KeyConditionExpression comparison must compare an attribute to a constant");
-        }
-        const parsed::value& col_v   = col_left ? cond._values[0] : cond._values[1];
-        const parsed::value& const_v = col_left ? cond._values[1] : cond._values[0];
-        const column_definition& cdef = require_projected_col(col_v);
-
-        // The vector store only supports comparisons of the form
-        // "col OP const" where the column name is on the left, so we need to
-        // rewrite "const < col" to "col > const", flipping the comparison
-        // direction.
-        const char* op_str;
-        if (col_left) {
-            switch (cond._op) {
-            case ctype::EQ: op_str = "=="; break;
-            case ctype::LT: op_str = "<";  break;
-            case ctype::LE: op_str = "<="; break;
-            case ctype::GT: op_str = ">";  break;
-            case ctype::GE: op_str = ">="; break;
-            // The outer "if" guarantees cond._op is one of EQ/LT/LE/GT/GE;
-            // the default cases below are unreachable by construction.
-            default: on_internal_error(elogger, "can't happen");
-            }
-        } else {
-            switch (cond._op) {
-            case ctype::EQ: op_str = "=="; break;
-            case ctype::LT: op_str = ">";  break; // const < col -> col > const
-            case ctype::LE: op_str = ">="; break; // const <= col -> col >= const
-            case ctype::GT: op_str = "<";  break; // const > col -> col < const
-            case ctype::GE: op_str = "<="; break; // const >= col -> col <= const
-            default: on_internal_error(elogger, "can't happen");
-            }
-        }
-        auto rhs_json = value_to_prefilter_json(require_resolved_val(const_v), &cdef);
-        auto restriction = rjson::empty_object();
-        rjson::add(restriction, "type", rjson::from_string(op_str));
-        rjson::add(restriction, "lhs", rjson::from_string(cdef.name_as_text()));
-        rjson::add(restriction, "rhs", std::move(rhs_json));
-        rjson::push_back(restrictions_arr, std::move(restriction));
-
-    } else if (cond._op == ctype::IN) {
-        // IN operator: first value is the column, the remaining are constants.
-        if (cond._values.empty() || !cond._values[0].is_path()) {
-            throw api_error::validation(
-                "VectorSearch KeyConditionExpression IN must have an attribute name as its first operand");
-        }
-        const column_definition& cdef = require_projected_col(cond._values[0]);
-        auto rhs_arr = rjson::empty_array();
-        for (size_t i = 1; i < cond._values.size(); ++i) {
-            rjson::push_back(rhs_arr, value_to_prefilter_json(
-                    require_resolved_val(cond._values[i]), &cdef));
-        }
-        auto restriction = rjson::empty_object();
-        rjson::add(restriction, "type", rjson::from_string("IN"));
-        rjson::add(restriction, "lhs", rjson::from_string(cdef.name_as_text()));
-        rjson::add(restriction, "rhs", std::move(rhs_arr));
-        rjson::push_back(restrictions_arr, std::move(restriction));
-
-    } else if (cond._op == ctype::BETWEEN) {
-        // a BETWEEN b AND c is expanded to two restrictions: a >= b AND a <= c.
-        if (cond._values.size() != 3 || !cond._values[0].is_path() ||
-                !cond._values[1].is_constant() || !cond._values[2].is_constant()) {
-            throw api_error::validation(
-                "VectorSearch KeyConditionExpression BETWEEN must have an attribute and two constant bounds");
-        }
-        const column_definition& cdef = require_projected_col(cond._values[0]);
-        auto lower_json = value_to_prefilter_json(require_resolved_val(cond._values[1]), &cdef);
-        auto upper_json = value_to_prefilter_json(require_resolved_val(cond._values[2]), &cdef);
-        auto col_json = rjson::from_string(cdef.name_as_text());
-
-        auto restr_ge = rjson::empty_object();
-        rjson::add(restr_ge, "type", rjson::from_string(">="));
-        rjson::add(restr_ge, "lhs", rjson::copy(col_json));
-        rjson::add(restr_ge, "rhs", std::move(lower_json));
-        rjson::push_back(restrictions_arr, std::move(restr_ge));
-
-        auto restr_le = rjson::empty_object();
-        rjson::add(restr_le, "type", rjson::from_string("<="));
-        rjson::add(restr_le, "lhs", std::move(col_json));
-        rjson::add(restr_le, "rhs", std::move(upper_json));
-        rjson::push_back(restrictions_arr, std::move(restr_le));
-
-    } else {
+    // The DynamoDB Vector Search API only allows the "=" comparator in
+    // SearchConditionExpression - unlike KeyConditionExpression/
+    // FilterExpression, it has no support for <, <=, >, >=, IN or BETWEEN,
+    // even though the vector store could technically evaluate some of these
+    // for INLINE_FILTER attributes.
+    if (cond._op != ctype::EQ) {
         throw api_error::validation(
-            "VectorSearch KeyConditionExpression uses an unsupported operator for vector search "
-            "pre-filtering; supported operators are =, <, <=, >, >=, IN, BETWEEN");
+            "SearchConditionExpression only supports the \"=\" comparator");
     }
+    // Binary comparison: one operand is a column path, the other a constant.
+    throwing_assert(cond._values.size() == 2);
+    bool col_left = cond._values[0].is_path();
+    bool col_right = cond._values[1].is_path();
+    if ((!col_left && !col_right) || (col_left && col_right)) {
+        throw api_error::validation(
+            "SearchConditionExpression comparison must compare an attribute to a constant");
+    }
+    const parsed::value& col_v   = col_left ? cond._values[0] : cond._values[1];
+    const parsed::value& const_v = col_left ? cond._values[1] : cond._values[0];
+    auto [col_name, expected_type] = require_search_schema_col(col_v);
+
+    auto rhs_json = value_to_prefilter_json(require_resolved_val(const_v), col_name, expected_type);
+    auto restriction = rjson::empty_object();
+    rjson::add(restriction, "type", rjson::from_string("=="));
+    rjson::add(restriction, "lhs", rjson::from_string(col_name));
+    rjson::add(restriction, "rhs", std::move(rhs_json));
+    rjson::push_back(restrictions_arr, std::move(restriction));
 }
 
-// Parses a KeyConditionExpression from a vector search request and builds a
-// pre-filter JSON object for the vector store (same format as the CQL filter
-// in vector_search/filter.cc). The expression may only reference projected
-// attributes; currently those are the base table's key columns. Returns an
-// empty JSON object if no KeyConditionExpression is present.
+// Parses a SearchConditionExpression from a vector search request and builds
+// a pre-filter JSON object for the vector store (same format as the CQL
+// filter in vector_search/filter.cc). The expression may only reference
+// attributes declared in the vector index's SearchSchema (ss_info) - its
+// HASH and INLINE_FILTER attributes. Returns an empty JSON object if no
+// SearchConditionExpression is present.
 static rjson::value parse_vector_search_prefilter(
         parsed::expression_cache& parsed_expr_cache,
         const rjson::value& request,
-        const schema& schema,
+        const search_schema_info& ss_info,
         std::unordered_set<std::string>& used_attribute_names,
         std::unordered_set<std::string>& used_attribute_values)
 {
-    const rjson::value* key_cond_expr = rjson::find(request, "KeyConditionExpression");
-    if (!key_cond_expr) {
+    const rjson::value* search_cond_expr = rjson::find(request, "SearchConditionExpression");
+    if (!search_cond_expr) {
         return rjson::empty_object();
     }
-    if (!key_cond_expr->IsString()) {
-        throw api_error::validation("KeyConditionExpression must be a string");
+    if (!search_cond_expr->IsString()) {
+        throw api_error::validation("SearchConditionExpression must be a string");
     }
-    if (key_cond_expr->GetStringLength() == 0) {
-        throw api_error::validation("KeyConditionExpression must not be empty");
+    if (search_cond_expr->GetStringLength() == 0) {
+        throw api_error::validation("SearchConditionExpression must not be empty");
     }
 
     parsed::condition_expression parsed_expr;
     try {
         parsed_expr = parsed_expr_cache.parse_condition_expression(
-                rjson::to_string_view(*key_cond_expr), "KeyConditionExpression");
+                rjson::to_string_view(*search_cond_expr), "SearchConditionExpression");
     } catch (expressions_syntax_error& e) {
         throw api_error::validation(e.what());
     }
@@ -1554,16 +1499,6 @@ static rjson::value parse_vector_search_prefilter(
     resolve_condition_expression(parsed_expr, attr_names, attr_values,
             used_attribute_names, used_attribute_values);
 
-    // Build the map of projected attribute name -> column_definition.
-    // Currently only the base table's key columns are projected.
-    std::unordered_map<std::string, const column_definition*> projected_cols;
-    for (const column_definition& cdef : schema.partition_key_columns()) {
-        projected_cols[cdef.name_as_text()] = &cdef;
-    }
-    for (const column_definition& cdef : schema.clustering_key_columns()) {
-        projected_cols[cdef.name_as_text()] = &cdef;
-    }
-
     // Flatten the expression into AND-connected primitive conditions.
     // OR and NOT are rejected by condition_expression_and_list().
     std::vector<const parsed::primitive_condition*> conditions;
@@ -1571,7 +1506,7 @@ static rjson::value parse_vector_search_prefilter(
 
     auto restrictions_arr = rjson::empty_array();
     for (const parsed::primitive_condition* cond : conditions) {
-        primitive_condition_to_prefilter(*cond, projected_cols, restrictions_arr);
+        primitive_condition_to_prefilter(*cond, ss_info.attribute_types, restrictions_arr);
     }
 
     if (restrictions_arr.Empty()) {
@@ -1752,6 +1687,7 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     int dimensions = 0;
     bool is_vector = false;
     score_from_similarity_fn score_from_similarity = nullptr;
+    search_schema_info ss_info;
     for (const index_metadata& im : base_schema->indices()) {
         if (im.name() == index_name) {
             const auto& opts = im.options();
@@ -1773,6 +1709,7 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
                 score_from_similarity = pick_score_from_similarity(it->second);
             }
             throwing_assert(score_from_similarity);
+            ss_info = get_search_schema_info(im);
             is_vector = true;
             break;
         }
@@ -1858,23 +1795,19 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
         co_return api_error::validation(
             "SearchVectors does not support QueryFilter; use FilterExpression instead");
     }
-    // KeyConditions (the old-style API) is not supported for vector search Queries.
-    if (rjson::find(request, "KeyConditions")) {
-        co_return api_error::validation(
-            "SearchVectors does not support KeyConditions; use KeyConditionExpression instead");
-    }
     // FilterExpression: post-filter the vector search results by any attribute.
     filter flt(*_parsed_expression_cache, request, filter::request_type::QUERY,
                used_attribute_names, used_attribute_values);
-    // KeyConditionExpression: pre-filter sent to the vector store before ANN search.
-    // Only projected attributes (currently key columns) are allowed.
+    // SearchConditionExpression: pre-filter sent to the vector store before
+    // ANN search. Only attributes declared in the vector index's
+    // SearchSchema are allowed.
     rjson::value pre_filter = parse_vector_search_prefilter(
-            *_parsed_expression_cache, request, *base_schema,
+            *_parsed_expression_cache, request, ss_info,
             used_attribute_names, used_attribute_values);
     const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
-    verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "Query");
+    verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "SearchVectors");
     const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
-    verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "Query");
+    verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "SearchVectors");
 
     // Verify the user has SELECT permission on the base table, as we
     // do for every type of read operation after validating the input
