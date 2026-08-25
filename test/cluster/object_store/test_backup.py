@@ -464,7 +464,7 @@ class topo:
         self.racks = racks
         self.dcs = dcs
 
-async def create_cluster(topology, manager, logger, object_storage=None):
+async def create_cluster(topology, manager, logger, object_storage=None, extra_config=None, extra_cmdline=None):
     rf_rack_valid_keyspaces = (topology.rf <= topology.racks)
     logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks, rf_rack_valid_keyspaces: {rf_rack_valid_keyspaces}')
 
@@ -472,8 +472,12 @@ async def create_cluster(topology, manager, logger, object_storage=None):
     if object_storage:
         objconf = object_storage.create_endpoint_conf()
         cfg['object_storage_endpoints'] = objconf
+    if extra_config:
+        cfg |= extra_config
 
     cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=debug:sstable=debug:http=debug:api=info' ]
+    if extra_cmdline:
+        cmd += extra_cmdline
 
     property_files = []
     cur_dc = 0
