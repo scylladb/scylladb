@@ -793,20 +793,28 @@ async def test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, o
         restore_prefix = f'restore-prefix/{snap_name}'
         await asyncio.gather(*(do_backup(s, snap_name, f'{restore_prefix}/{s.server_id}/{cf}', src_ks, cf, object_storage, manager, logger) for cf in tables for s in servers))
 
-        # Restore all tables into a fresh keyspace, distributing restore calls
-        # round-robin across num_restore_nodes nodes. The API names only the destination,
-        # the source is addressed by the manifests, so the source keyspace is kept around
-        # to assert that the restore leaves it alone.
+        # Restore all tables into a fresh keyspace and under a differently named table,
+        # distributing restore calls round-robin across num_restore_nodes nodes. The API names
+        # only the destination, the source is addressed by the manifests, so the source keyspace
+        # is kept around to assert that the restore leaves it alone. The first destination table
+        # declares a column on top of the backed up ones, which the sstables do not carry and
+        # which therefore stays null.
         async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as dst_ks:
-            await asyncio.gather(*(cql.run_async(f"CREATE TABLE {dst_ks}.{cf} ( pk text primary key, value int );") for cf in tables))
+            async def create_dst_table(idx, cf):
+                extra_col = ', extra int' if idx == 0 else ''
+                await cql.run_async(f"CREATE TABLE {dst_ks}.{cf}_restored ( pk text primary key, value int{extra_col} );")
+
+            await asyncio.gather(*(create_dst_table(i, cf) for i, cf in enumerate(tables)))
+            for cf in tables:
+                assert not await cql.run_async(f"SELECT pk FROM {dst_ks}.{cf}_restored;"), f'{dst_ks}.{cf}_restored is not empty before the restore'
 
             restore_nodes = servers[:num_restore_nodes]
 
             async def restore_table(idx, cf):
                 node = restore_nodes[idx % len(restore_nodes)]
-                logger.info(f'Restore table {cf} via {node.ip_addr}')
+                logger.info(f'Restore table {cf} into {dst_ks}.{cf}_restored via {node.ip_addr}')
                 manifests = [f'{s.server_id}/{cf}/manifest.json' for s in servers]
-                tid = await manager.api.restore_tablets(node.ip_addr, dst_ks, cf, snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, restore_prefix)
+                tid = await manager.api.restore_tablets(node.ip_addr, dst_ks, f'{cf}_restored', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, restore_prefix)
                 status = await manager.api.wait_task(node.ip_addr, tid)
                 assert (status is not None) and (status['state'] == 'done'), f"Restore of {cf} via {node.ip_addr} failed: {status}"
                 assert status['progress_total'] > 0
@@ -814,7 +822,10 @@ async def test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, o
 
             await asyncio.gather(*(restore_table(i, cf) for i, cf in enumerate(tables)))
 
-            await asyncio.gather(*(check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, dst_ks, cf) for cf in tables))
+            await asyncio.gather(*(check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, dst_ks, f'{cf}_restored') for cf in tables))
+
+            res = await cql.run_async(f"SELECT extra FROM {dst_ks}.{tables[0]}_restored;")
+            assert res and all(x.extra is None for x in res), f'{dst_ks}.{tables[0]}_restored has {len(res)} rows and a non-null extra after restore'
 
             expected = {str(i): i for i in range(num_keys)}
             for cf in tables:
