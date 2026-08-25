@@ -72,6 +72,7 @@
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/statements/index_target.hh"
 #include "index/secondary_index.hh"
+#include "index/vector_index.hh"
 #include "alternator/ttl_tag.hh"
 #include "vector_search/vector_store_client.hh"
 #include "utils/simple_value_with_expiry.hh"
@@ -623,7 +624,7 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
             rjson::value vector_attribute = rjson::empty_object();
             auto target_it = opts.find(cql3::statements::index_target::target_option_name);
             if (target_it != opts.end()) {
-                rjson::add(vector_attribute, "AttributeName", rjson::from_string(target_it->second));
+                rjson::add(vector_attribute, "AttributeName", rjson::from_string(secondary_index::vector_index::get_target_column(target_it->second)));
             }
             auto dims_it = opts.find("dimensions");
             if (dims_it != opts.end()) {
@@ -636,6 +637,28 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
                 }
             }
             rjson::add(entry, "VectorAttribute", std::move(vector_attribute));
+            // Recover the SearchSchema from the index's options and print it in the
+            // response. If there is no SearchSchema, omit it from the output.
+            search_schema_info ss_info = get_search_schema_info(im);
+            if (ss_info.hash_attribute || !ss_info.inline_filter_attributes.empty()) {
+                rjson::value search_schema = rjson::empty_array();
+                if (ss_info.hash_attribute) {
+                    rjson::value elem = rjson::empty_object();
+                    rjson::add(elem, "AttributeName", rjson::from_string(*ss_info.hash_attribute));
+                    rjson::add(elem, "SearchSchemaElementType", "HASH");
+                    rjson::push_back(search_schema, std::move(elem));
+                }
+                for (const std::string& attr : ss_info.inline_filter_attributes) {
+                    rjson::value elem = rjson::empty_object();
+                    rjson::add(elem, "AttributeName", rjson::from_string(attr));
+                    rjson::add(elem, "SearchSchemaElementType", "INLINE_FILTER");
+                    rjson::push_back(search_schema, std::move(elem));
+                }
+                rjson::add(entry, "SearchSchema", std::move(search_schema));
+            }
+            // Add SearchSchema attribute types to AttributeDefinitions
+            // just like base-table and GSI/LSI key attribute types above:
+            key_attribute_types.insert(ss_info.attribute_types.begin(), ss_info.attribute_types.end());
             // Always return a Projection. Currently only KEYS_ONLY is
             // supported, so we always return that.
             rjson::value projection = rjson::empty_object();
@@ -1456,7 +1479,7 @@ static bool has_vector_index_on_attribute(const schema& s, std::string_view attr
         // LSI are implemented as materialized views, not secondary indexes).
         const auto& opts = im.options();
         auto target_it = opts.find(cql3::statements::index_target::target_option_name);
-        if (target_it != opts.end() && target_it->second == attribute_name) {
+        if (target_it != opts.end() && secondary_index::vector_index::get_target_column(target_it->second) == attribute_name) {
             return true;
         }
     }
@@ -1472,7 +1495,7 @@ static std::optional<int> get_vector_index_dimensions_on_attribute(const schema&
     for (const index_metadata& im : s.indices()) {
         const auto& opts = im.options();
         auto target_it = opts.find(cql3::statements::index_target::target_option_name);
-        if (target_it == opts.end() || target_it->second != attribute_name) {
+        if (target_it == opts.end() || secondary_index::vector_index::get_target_column(target_it->second) != attribute_name) {
             continue;
         }
         auto dims_it = opts.find("dimensions");
@@ -1591,6 +1614,148 @@ static void validate_projection(const rjson::value& json, std::string_view index
         throw api_error::validation(fmt::format(
             "Projection for vector index {}: only ProjectionType=KEYS_ONLY is currently supported.", index_name));
     }
+}
+
+// Validates the optional "SearchSchema" field of a VectorIndexes
+// (CreateTable) or VectorIndexUpdates Create (UpdateTable) entry.
+// If present, SearchSchema must be a non-empty array (an empty array is
+// rejected - it is NOT equivalent to omitting SearchSchema entirely). Each
+// element must have a legal AttributeName, declared in
+// attribute_definitions - just like a GSI or LSI's key attributes - and a
+// SearchSchemaElementType which must be exactly "HASH" or "INLINE_FILTER"
+// (case-sensitive). There can be at most one "HASH" element (there can also
+// be none), and any number of "INLINE_FILTER" elements.
+// Every attribute referenced by a SearchSchema element is erased from
+// unused_attribute_definitions, just like KeySchema and GSI/LSI key
+// attributes are - see validate_attribute_definitions().
+// The index_name parameter is used in error messages.
+static search_schema_info validate_search_schema(
+        const rjson::value& v,
+        std::string_view index_name,
+        const rjson::value& attribute_definitions,
+        std::unordered_set<std::string>& unused_attribute_definitions) {
+    search_schema_info info;
+    const rjson::value* search_schema_v = rjson::find(v, "SearchSchema");
+    if (!search_schema_v) {
+        return info;
+    }
+    if (!search_schema_v->IsArray() || search_schema_v->Empty()) {
+        throw api_error::validation(fmt::format(
+            "SearchSchema for vector index {} must be a non-empty array.", index_name));
+    }
+    for (const rjson::value& elem : search_schema_v->GetArray()) {
+        if (!elem.IsObject()) {
+            throw api_error::validation(fmt::format(
+                "SearchSchema for vector index {} must have object elements.", index_name));
+        }
+        const rjson::value* attribute_name_v = rjson::find(elem, "AttributeName");
+        if (!attribute_name_v || !attribute_name_v->IsString()) {
+            throw api_error::validation(fmt::format(
+                "Missing or invalid AttributeName in SearchSchema for vector index {}.", index_name));
+        }
+        std::string_view attribute_name = rjson::to_string_view(*attribute_name_v);
+        validate_attr_name_length(index_name, attribute_name.size(), /*is_key=*/true, "AttributeName ");
+        const rjson::value* type_v = rjson::find(elem, "SearchSchemaElementType");
+        if (!type_v || !type_v->IsString()) {
+            throw api_error::validation(fmt::format(
+                "Missing or invalid SearchSchemaElementType in SearchSchema for vector index {}.", index_name));
+        }
+        std::string_view type = rjson::to_string_view(*type_v);
+        if (type == "HASH") {
+            if (info.hash_attribute) {
+                throw api_error::validation(fmt::format(
+                    "SearchSchema for vector index {} can have at most one HASH element.", index_name));
+            }
+            info.hash_attribute = std::string(attribute_name);
+        } else if (type == "INLINE_FILTER") {
+            info.inline_filter_attributes.emplace_back(attribute_name);
+        } else {
+            throw api_error::validation(fmt::format(
+                "SearchSchemaElementType '{}' is not valid for vector index {}. Valid values are: HASH, INLINE_FILTER.",
+                type, index_name));
+        }
+        // Just like a GSI or LSI's key attribute, this attribute must be
+        // declared in AttributeDefinitions, with one of the three types
+        // allowed for a key attribute (S, N or B). Return that type in
+        // info.attribute_types.
+        bool found = false;
+        for (auto it = attribute_definitions.Begin(); it != attribute_definitions.End(); ++it) {
+            if (rjson::to_string_view((*it)["AttributeName"]) == attribute_name) {
+                found = true;
+                std::string_view attribute_type = rjson::to_string_view((*it)["AttributeType"]);
+                parse_key_type(attribute_type);
+                info.attribute_types[std::string(attribute_name)] = std::string(attribute_type);
+                break;
+            }
+        }
+        if (!found) {
+            throw api_error::validation(fmt::format(
+                "SearchSchema attribute '{}' for vector index {} missing in attribute definitions.",
+                attribute_name, index_name));
+        }
+        unused_attribute_definitions.erase(std::string(attribute_name));
+    }
+    return info;
+}
+
+// Builds the value of a vector index's "target" index-option (the same
+// option, and the same JSON encoding, used by CQL vector indexes - see
+// secondary_index::vector_index::serialize_targets()) out of the vector
+// attribute's name and a search_schema_info gathered by
+// validate_search_schema() above. This "target" is what tells the vector
+// store which attribute is the vector column ("tc"), which one (if any)
+// is this local index's key - SearchSchema's HASH attribute ("pk") - and
+// which ones are usable for filtering - SearchSchema's INLINE_FILTER
+// attributes ("fc").
+// The function get_search_schema_info() parses what this function and
+// build_vector_index_alternator_attribute_types() below write.
+static std::string build_vector_index_target(std::string_view vector_attribute, const search_schema_info& info) {
+    if (!info.hash_attribute && info.inline_filter_attributes.empty()) {
+        // When there is no HASH or INLINE_FILTER attribute at all, keep the
+        // simple plain-string encoding (just the vector attribute's name) that
+        // vector indexes without a SearchSchema have always used.
+        return std::string(vector_attribute);
+    }
+    rjson::value target = rjson::empty_object();
+    rjson::add(target, "tc", rjson::from_string(vector_attribute));
+    if (info.hash_attribute) {
+        rjson::value pk = rjson::empty_array();
+        rjson::push_back(pk, rjson::from_string(*info.hash_attribute));
+        rjson::add(target, "pk", std::move(pk));
+    }
+    if (!info.inline_filter_attributes.empty()) {
+        rjson::value fc = rjson::empty_array();
+        for (const std::string& attr : info.inline_filter_attributes) {
+            rjson::push_back(fc, rjson::from_string(attr));
+        }
+        rjson::add(target, "fc", std::move(fc));
+    }
+    return rjson::print(target);
+}
+
+// Encode in the vector index's "alternator_attribute_types" index option a map
+// (encoded in JSON) from each of its SearchSchema attributes (HASH and
+// INLINE_FILTER combined) to its declared AttributeType (S, N or B), out of
+// a search_schema_info gathered by validate_search_schema() above.
+// This is an Alternator-only option - it has no equivalent in CQL vector
+// indexes. There are three reasons why we need to save this information
+// in the index:
+// 1. The DynamoDB API requires that we be able to recover this information
+//    on DescribeTable.
+// 2. The DynamoDB API also wants us to reject writes with the wrong type in
+//    SearchSchema attributes.
+// 3. The vector store holds a typed array of the values of each filterable
+//    columns, so needs to know this type when creating the index.
+// Returns an empty string if there is no SearchSchema at all.
+static std::string build_vector_index_alternator_attribute_types(const search_schema_info& info) {
+    if (info.attribute_types.empty()) {
+        return std::string();
+    }
+    rjson::value types = rjson::empty_object();
+    for (const auto& [name, type] : info.attribute_types) {
+        rjson::add_with_string_name(types, name, rjson::from_string(type));
+    }
+    return rjson::print(types);
 }
 
 future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization,
@@ -1759,12 +1924,6 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             view_builders.emplace_back(std::move(view_builder));
         }
     }
-    if (!unused_attribute_definitions.empty()) {
-        co_return api_error::validation(fmt::format(
-            "AttributeDefinitions defines spurious attributes not used by any KeySchema: {}",
-            unused_attribute_definitions));
-    }
-
     // Parse VectorIndexes parameters and apply them to "builder". This all
     // happens before we actually create the table, so if we have a parse
     // errors we can still fail without creating any table.
@@ -1820,10 +1979,15 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             }
             std::string distance_function = get_distance_function(v, index_name);
             validate_projection(v, index_name);
+            search_schema_info ss_info = validate_search_schema(v, index_name, *attribute_definitions, unused_attribute_definitions);
             // Add a vector index metadata entry to the base table schema.
             index_options_map index_options;
             index_options[db::index::secondary_index::custom_class_option_name] = "vector_index";
-            index_options[cql3::statements::index_target::target_option_name] = sstring(attribute_name);
+            index_options[cql3::statements::index_target::target_option_name] = build_vector_index_target(attribute_name, ss_info);
+            std::string alternator_attribute_types = build_vector_index_alternator_attribute_types(ss_info);
+            if (!alternator_attribute_types.empty()) {
+                index_options["alternator_attribute_types"] = alternator_attribute_types;
+            }
             index_options["dimensions"] = std::to_string(dimensions);
             index_options["similarity_function"] = distance_function;
             builder.with_index(index_metadata{sstring(index_name), index_options,
@@ -1834,6 +1998,14 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         if (vector_indexes->Size() > 0) {
             validate_cdc_log_name_length(builder.cf_name());
         }
+    }
+    // This check must happen after VectorIndexes was parsed above, since a
+    // SearchSchema element there may be the only use of some attribute
+    // declared in AttributeDefinitions:
+    if (!unused_attribute_definitions.empty()) {
+        co_return api_error::validation(fmt::format(
+            "AttributeDefinitions defines spurious attributes not used by any KeySchema: {}",
+            unused_attribute_definitions));
     }
 
     // We don't yet support configuring server-side encryption (SSE) via the
@@ -2026,19 +2198,62 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     });
 }
 
+struct search_schema_attribute_info {
+    std::string type;
+    bool is_hash;
+};
+
+// Get, for every SearchSchema attribute (HASH or INLINE_FILTER) of every
+// vector index on this table, its declared AttributeType and whether it's
+// the HASH on any of the vector indexes (as opposed to INLINE_FILTER on all
+// of them).
+// This type information is needed by UpdateTable to refuse an attempt to
+// redefine the type of an attribute already used in a SearchSchema and also
+// needed by write operations to reject writes with the wrong type written
+// to a SearchSchema attribute. The is_hash flag is needed just because
+// writing an empty string to a HASH attribute is not allowed, while writing
+// the same empty string to an INLINE_FILTER attribute is fine.
+static std::unordered_map<bytes, search_schema_attribute_info> search_schema_attributes(const schema& s) {
+    std::unordered_map<bytes, search_schema_attribute_info> ret;
+    for (const index_metadata& im : s.indices()) {
+        const auto& opts = im.options();
+        auto class_it = opts.find(db::index::secondary_index::custom_class_option_name);
+        if (class_it == opts.end() || class_it->second != "vector_index") {
+            continue;
+        }
+        search_schema_info ss_info = get_search_schema_info(im);
+        for (const auto& [name, type] : ss_info.attribute_types) {
+            bool is_hash = ss_info.hash_attribute && *ss_info.hash_attribute == name;
+            // If *any* vector index on this table uses this attribute as its
+            // the is_hash restrictions (on empty) the is_hash restriction
+            // needs to apply, even if other vector indexes had this column
+            // as a INLINE_FILTER.
+            auto [it, inserted] = ret.try_emplace(to_bytes(name), search_schema_attribute_info{type, is_hash});
+            if (!inserted) {
+                it->second.is_hash |= is_hash;
+            }
+        }
+    }
+    return ret;
+}
+
 // When UpdateTable adds a GSI, the type of its key columns must be specified
-// in a AttributeDefinitions. If one of these key columns are *already* key
-// columns of the base table or any of its prior GSIs or LSIs, the type
-// given in AttributeDefinitions must match the type of the existing key -
-// otherwise Alternator will not know which type to enforce in new writes.
-// Also, if the table already has vector indexes, their key attributes cannot
-// be redefined in AttributeDefinitions with a non-vector type.
+// in a AttributeDefinitions. The same is true when UpdateTable adds a vector
+// index with a SearchSchema. If one of these key columns are *already* key
+// columns of the base table or any of its prior GSIs or LSIs or vector index
+// SearchSchemas, the type given in AttributeDefinitions must match the type
+// of the existing key - otherwise Alternator will not know which type to
+// enforce in new writes.
+// Also, if the table already has vector indexes, their vector attributes
+// cannot be redefined in AttributeDefinitions with a non-vector type.
 // This function checks for such conflicts. It assumes that the structure of
 // the given attribute_definitions was already validated (with
 // validate_attribute_definitions()).
 // This function should be called multiple times - once for the base schema
-// and once for each of its views (existing GSIs and LSIs on this table).
+// and once for each of its materialized views (existing GSIs and LSIs on this
+// table).
  static void check_attribute_definitions_conflicts(const rjson::value& attribute_definitions, const schema& schema) {
+    auto search_schema_attrs = search_schema_attributes(schema);
     for (auto it = attribute_definitions.Begin(); it != attribute_definitions.End(); ++it) {
         const rjson::value& attribute_info = *it;
         std::string_view attribute_name = rjson::to_string_view(attribute_info["AttributeName"]);
@@ -2057,6 +2272,17 @@ future<executor::request_return_type> executor::create_table(client_state& clien
         // AttributeDefinitions with a non-vector key type.
         if (has_vector_index_on_attribute(schema, attribute_name)) {
             throw api_error::validation(fmt::format("AttributeDefinitions redefines {} but already a key of a vector index in this table", attribute_name));
+        }
+        // Additionally, if the attribute is already a SearchSchema (HASH or
+        // INLINE_FILTER) attribute of an existing vector index, the type
+        // given here must agree with the type already established for it.
+        if (auto ss_it = search_schema_attrs.find(to_bytes(attribute_name)); ss_it != search_schema_attrs.end()) {
+            std::string_view type = rjson::to_string_view(attribute_info["AttributeType"]);
+            if (type != ss_it->second.type) {
+                throw api_error::validation(fmt::format(
+                    "AttributeDefinitions redefined {} to {} but it is already a SearchSchema attribute of type {} in this table",
+                    attribute_name, type, ss_it->second.type));
+            }
         }
     }
 }
@@ -2251,12 +2477,40 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                     }
                     std::string distance_function = get_distance_function(it->value, index_name);
                     validate_projection(it->value, index_name);
+                    // Validate an optional SearchSchema, just like in
+                    // CreateTable's VectorIndexes. If present, the attributes
+                    // it references must be declared in a top-level
+                    // AttributeDefinitions, just like when
+                    // GlobalSecondaryIndexUpdates creates a GSI.
+                    search_schema_info ss_info;
+                    if (rjson::find(it->value, "SearchSchema")) {
+                        const rjson::value* attribute_definitions = rjson::find(request, "AttributeDefinitions");
+                        if (!attribute_definitions) {
+                            co_return api_error::validation("VectorIndexUpdates Create with SearchSchema needs AttributeDefinitions");
+                        }
+                        std::unordered_set<std::string> unused_attribute_definitions =
+                            validate_attribute_definitions("VectorIndexUpdates", *attribute_definitions);
+                        check_attribute_definitions_conflicts(*attribute_definitions, *tab);
+                        for (auto& view : p.local().data_dictionary().find_column_family(tab).views()) {
+                            check_attribute_definitions_conflicts(*attribute_definitions, *view);
+                        }
+                        ss_info = validate_search_schema(it->value, index_name, *attribute_definitions, unused_attribute_definitions);
+                        if (!unused_attribute_definitions.empty()) {
+                            co_return api_error::validation(fmt::format(
+                                "AttributeDefinitions defines spurious attributes not used by any KeySchema: {}",
+                                unused_attribute_definitions));
+                        }
+                    }
                     // A vector index will use CDC on this table, so the CDC
                     // log table name will need to fit our length limits
                     validate_cdc_log_name_length(builder.cf_name());
                     index_options_map index_options;
                     index_options[db::index::secondary_index::custom_class_option_name] = "vector_index";
-                    index_options[cql3::statements::index_target::target_option_name] = sstring(attribute_name);
+                    index_options[cql3::statements::index_target::target_option_name] = build_vector_index_target(attribute_name, ss_info);
+                    std::string alternator_attribute_types = build_vector_index_alternator_attribute_types(ss_info);
+                    if (!alternator_attribute_types.empty()) {
+                        index_options["alternator_attribute_types"] = alternator_attribute_types;
+                    }
                     index_options["dimensions"] = std::to_string(dimensions);
                     index_options["similarity_function"] = distance_function;
                     builder.with_index(index_metadata{index_name, index_options,
@@ -2558,6 +2812,24 @@ void validate_value(const rjson::value& v, const char* caller) {
     }
 }
 
+// Per-table information needed to validate the attribute values written by
+// PutItem, UpdateItem or a BatchWriteItem PutRequest against GSI/LSI keys
+// and vector-index constraints (see si_key_attributes(),
+// vector_index_attributes() and search_schema_attributes() below). It
+// depends only on the table's schema, not on the item being written, so a
+// caller writing multiple items to the same table (BatchWriteItem) should
+// compute it once and reuse it, instead of recomputing it - and re-parsing
+// the vector indexes' JSON-encoded options - for every item.
+struct write_item_index_info {
+    std::unordered_map<bytes, std::string> key_attributes;
+    std::unordered_map<bytes, int> vec_attrs;
+    std::unordered_map<bytes, search_schema_attribute_info> search_schema_attrs;
+
+    // Defined below, once si_key_attributes(), vector_index_attributes() and
+    // search_schema_attributes() are all in scope.
+    write_item_index_info(service::storage_proxy& proxy, const schema& s);
+};
+
 // The put_or_delete_item class builds the mutations needed by the PutItem and
 // DeleteItem operations - either as stand-alone commands or part of a list
 // of commands in BatchWriteItem.
@@ -2588,7 +2860,7 @@ public:
     struct delete_item {};
     struct put_item {};
     put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item);
-    put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item, std::unordered_map<bytes, std::string> key_attributes);
+    put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item, const write_item_index_info& index_info);
     // put_or_delete_item doesn't keep a reference to schema (so it can be
     // moved between shards for LWT) so it needs to be given again to build():
     mutation build(schema_ptr schema, api::timestamp_type ts) const;
@@ -2661,11 +2933,17 @@ static std::unordered_map<bytes, int> vector_index_attributes(const schema& s) {
             continue;
         }
         try {
-            ret[to_bytes(target_it->second)] = std::stoi(dims_it->second);
+            ret[to_bytes(secondary_index::vector_index::get_target_column(target_it->second))] = std::stoi(dims_it->second);
         } catch (...) {}
     }
     return ret;
 }
+
+write_item_index_info::write_item_index_info(service::storage_proxy& proxy, const schema& s)
+    : key_attributes(si_key_attributes(proxy.data_dictionary().find_table(s.ks_name(), s.cf_name())))
+    , vec_attrs(vector_index_attributes(s))
+    , search_schema_attrs(search_schema_attributes(s))
+{}
 
 // When an attribute is a key (hash or sort) of one of the GSIs or LSIs on a
 // table, DynamoDB refuses an update to that attribute with an unsuitable
@@ -2714,11 +2992,11 @@ static void validate_value_if_index_key(
     }
 }
 
-// When an attribute is the target of a vector index on the table, a write
-// to that attribute is rejected unless the value is a DynamoDB list (type
-// "L") of exactly the declared number of numeric (type "N") elements, where
-// each number can be represented as a 32-bit float.
-//
+// When an attribute is the vector of a vector index on the table, a write
+// to that attribute is rejected unless the value is a valid vector - it must
+// have the allowed type (either the traditional DynamoDB list of numbers or
+// our extension float32vector), the correct length, and each element should
+// fit the range of a 32-bit float.
 // validate_value_if_vector_index_attribute() should only be called after
 // validate_value() already confirmed the value has a valid DynamoDB form.
 static void validate_value_if_vector_index_attribute(
@@ -2772,11 +3050,43 @@ static void validate_value_if_vector_index_attribute(
     }
 }
 
-put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item, std::unordered_map<bytes, std::string> key_attributes)
+// When an attribute is declared as a HASH or INLINE_FILTER element of a
+// vector index's SearchSchema, DynamoDB (like for GSI/LSI keys) refuses a
+// write with an unsuitable value:
+//   1. A value whose type differs from the attribute's declared
+//      AttributeType.
+//   2. For the HASH element specifically (which, like a GSI/LSI key,
+//      partitions the vector index), an empty string. 
+//      INLINE_FILTER does allow empty strings.
+// validate_value_if_search_schema_attribute() should only be called after
+// validate_value() already validated that the value itself has a valid form.
+static void validate_value_if_search_schema_attribute(
+        const std::unordered_map<bytes, search_schema_attribute_info>& search_schema_attrs,
+        const bytes& attribute,
+        const rjson::value& value) {
+    auto it = search_schema_attrs.find(attribute);
+    if (it == search_schema_attrs.end()) {
+        return;
+    }
+    std::string_view value_type = rjson::to_string_view(value.MemberBegin()->name);
+    if (it->second.type != value_type) {
+        throw api_error::validation(fmt::format(
+            "Type mismatch: expected type {} for SearchSchema attribute {}, got type {}",
+            it->second.type, to_string_view(attribute), value_type));
+    }
+    if (it->second.is_hash && rjson::to_string_view(value.MemberBegin()->value).empty()) {
+        throw api_error::validation(fmt::format(
+            "SearchSchema HASH attribute {} cannot be set to an empty string", to_string_view(attribute)));
+    }
+}
+
+put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item, const write_item_index_info& index_info)
         : _pk(pk_from_json(item, schema)), _ck(ck_from_json(item, schema)) {
     _cells = std::vector<cell>();
     _cells->reserve(item.MemberCount());
-    auto vec_attrs = vector_index_attributes(*schema);
+    const auto& key_attributes = index_info.key_attributes;
+    const auto& vec_attrs = index_info.vec_attrs;
+    const auto& search_schema_attrs = index_info.search_schema_attrs;
     for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
         bytes column_name = to_bytes(rjson::to_string_view(it->name));
         validate_value(it->value, "PutItem");
@@ -2793,6 +3103,12 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
             // in which case it must be a list of the right number of floats.
             if (!vec_attrs.empty()) {
                 validate_value_if_vector_index_attribute(vec_attrs, column_name, it->value);
+            }
+            // This attribute may also be a SearchSchema HASH or
+            // INLINE_FILTER attribute of a vector index, in which case
+            // there are some limitations on the value.
+            if (!search_schema_attrs.empty()) {
+                validate_value_if_search_schema_attribute(search_schema_attrs, column_name, it->value);
             }
             bytes value = serialize_item(it->value);
             if (value.size()) {
@@ -3203,7 +3519,7 @@ public:
     put_item_operation(parsed::expression_cache& parsed_expression_cache, service::storage_proxy& proxy, rjson::value&& request)
         : rmw_operation(proxy, std::move(request))
         , _mutation_builder(rjson::get(_request, "Item"), schema(), put_or_delete_item::put_item{},
-            si_key_attributes(proxy.data_dictionary().find_table(schema()->ks_name(), schema()->cf_name()))) {
+            write_item_index_info(proxy, *schema())) {
         _pk = _mutation_builder.pk();
         _ck = _mutation_builder.ck();
         if (_returnvalues != returnvalues::NONE && _returnvalues != returnvalues::ALL_OLD) {
@@ -3675,15 +3991,22 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
 
         std::unordered_set<primary_key, primary_key_hash, primary_key_equal> used_keys(
                 1, primary_key_hash{schema}, primary_key_equal{schema});
+        // Computed lazily (only if this table's batch has a PutRequest) and
+        // reused across all of this table's items, instead of being
+        // recomputed - and its vector indexes' JSON-encoded options
+        // re-parsed - for every item.
+        std::optional<write_item_index_info> index_info;
         for (auto& request : it->value.GetArray()) {
             auto& r = get_single_member(request, "RequestItems element");
             const auto r_name = rjson::to_string_view(r.name);
             if (r_name == "PutRequest") {
                 const rjson::value& item = get_member(r.value, "Item", "PutRequest");
                 validate_is_object(item, "Item in PutRequest");
+                if (!index_info) {
+                    index_info.emplace(_proxy, *schema);
+                }
                 auto&& put_item = put_or_delete_item(
-                        item, schema, put_or_delete_item::put_item{},
-                        si_key_attributes(_proxy.data_dictionary().find_table(schema->ks_name(), schema->cf_name())));
+                        item, schema, put_or_delete_item::put_item{}, *index_info);
                 mutation_builders.emplace_back(schema, std::move(put_item));
                 auto mut_key = std::make_pair(mutation_builders.back().second.pk(), mutation_builders.back().second.ck());
                 if (used_keys.contains(mut_key)) {
@@ -3918,12 +4241,11 @@ public:
     // them by top-level attribute, and detects forbidden overlaps/conflicts.
     attribute_path_map<parsed::update_expression::action> _update_expression;
 
-    // Saved list of GSI keys in the table being updated, used for
-    // validate_value_if_index_key()
-    std::unordered_map<bytes, std::string> _key_attributes;
-    // Saved map of vector index target attributes to their dimensions, used
-    // for validate_value_if_vector_index_attribute()
-    std::unordered_map<bytes, int> _vector_index_attributes;
+    // GSI keys, vector index target attributes and vector index SearchSchema
+    // attributes of the table being updated, used for
+    // validate_value_if_index_key(), validate_value_if_vector_index_attribute()
+    // and validate_value_if_search_schema_attribute() respectively.
+    write_item_index_info _index_info;
 
     parsed::condition_expression _condition_expression;
 
@@ -3945,6 +4267,7 @@ private:
 
 update_item_operation::update_item_operation(parsed::expression_cache& parsed_expression_cache, service::storage_proxy& proxy, rjson::value&& update_info)
     : rmw_operation(proxy, std::move(update_info))
+    , _index_info(proxy, *_schema)
 {
     const rjson::value* key = rjson::find(_request, "Key");
     if (!key) {
@@ -4026,10 +4349,6 @@ update_item_operation::update_item_operation(parsed::expression_cache& parsed_ex
     if (expression_attribute_values) {
         _consumed_capacity._total_bytes += estimate_value_size(*expression_attribute_values);
     }
-
-    _key_attributes = si_key_attributes(proxy.data_dictionary().find_table(
-        _schema->ks_name(), _schema->cf_name()));
-    _vector_index_attributes = vector_index_attributes(*_schema);
 }
 
 // These are the cases where update_item_operation::apply() needs to use
@@ -4326,13 +4645,19 @@ void update_item_operation::update_attribute(bytes&& column_name, const rjson::v
     } else {
         // This attribute may be a key column of one of the GSIs or LSIs,
         // in which case there are some limitations on the value.
-        if (!_key_attributes.empty()) {
-            validate_value_if_index_key(_key_attributes, column_name, json_value);
+        if (!_index_info.key_attributes.empty()) {
+            validate_value_if_index_key(_index_info.key_attributes, column_name, json_value);
         }
         // This attribute may also be a vector index target column,
         // in which case it must be a list of the right number of floats.
-        if (!_vector_index_attributes.empty()) {
-            validate_value_if_vector_index_attribute(_vector_index_attributes, column_name, json_value);
+        if (!_index_info.vec_attrs.empty()) {
+            validate_value_if_vector_index_attribute(_index_info.vec_attrs, column_name, json_value);
+        }
+        // This attribute may also be a SearchSchema HASH or INLINE_FILTER
+        // attribute of a vector index, in which case there are some
+        // limitations on the value.
+        if (!_index_info.search_schema_attrs.empty()) {
+            validate_value_if_search_schema_attribute(_index_info.search_schema_attrs, column_name, json_value);
         }
         modified_attrs.put(std::move(column_name), serialize_item(json_value), ts);
     }
