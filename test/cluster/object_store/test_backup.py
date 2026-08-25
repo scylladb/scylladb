@@ -1289,6 +1289,58 @@ async def test_restore_into_renamed_target(manager: ScyllaClusterManager, object
             assert kept == rows, f'Restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {kept}'
 
 
+# Neither restore API checks the destination schema against the backed up one, so the two tests
+# below pin down what a mismatch does today. Both run with abort_on_malformed_sstable_error off:
+# it defaults to true in dev and debug builds, where the sstable error aborts the node instead of
+# throwing, and the tests would otherwise assert a different outcome per build mode.
+#
+# The destination schemas are read against a source of ( name text primary key, value text ): one
+# redeclares a column with a type that is not value-compatible, the other drops it.
+INCOMPATIBLE_SCHEMAS = [
+    pytest.param('name text primary key, value int', id='column_type'),
+    pytest.param('name text primary key', id='missing_column'),
+]
+
+@pytest.mark.parametrize("dst_schema", INCOMPATIBLE_SCHEMAS)
+async def test_restore_into_incompatible_schema(manager: ScyllaClusterManager, object_storage, dst_schema):
+    '''Check that restore fails when the destination schema does not match the backed up one'''
+
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'object_storage_endpoints': objconf, 'task_ttl_in_seconds': 300, 'abort_on_malformed_sstable_error': False}
+    server = await manager.server_add(config=cfg)
+
+    cql = manager.get_cql()
+
+    rows = {'0': 'zero', '1': 'one'}
+
+    async with new_test_keyspace(manager, RF_1) as src_ks:
+        await cql.run_async(f"CREATE TABLE {src_ks}.cf1 ( name text primary key, value text );")
+        await asyncio.gather(*(cql.run_async(f"INSERT INTO {src_ks}.cf1 ( name, value ) VALUES ('{n}', '{v}');") for n, v in rows.items()))
+
+        snap_name, toc_names = await take_snapshot_on_one_server(src_ks, server, manager, logger)
+        prefix = f'cf1/{snap_name}'
+        await do_backup(server, snap_name, prefix, src_ks, 'cf1', object_storage, manager, logger)
+
+        async with new_test_keyspace(manager, RF_1) as dst_ks:
+            await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 ( {dst_schema} );")
+
+            logger.info(f'Restore {src_ks}.cf1 into {dst_ks}.cf2 declared as ( {dst_schema} )')
+            tid = await manager.api.restore(server.ip_addr, dst_ks, 'cf2', object_storage.address, object_storage.bucket_name, prefix, toc_names)
+            status = await manager.api.wait_task(server.ip_addr, tid)
+
+            # This restore reads the sstables to stream their mutations, so the mismatch is
+            # detected while the task runs
+            assert status is not None and status['state'] == 'failed', f'Restore into an incompatible {dst_ks}.cf2 did not fail: {status}'
+            assert 'malformed_sstable_exception' in str(status.get('error')), f'Unexpected restore error: {status.get("error")}'
+
+            # Nothing was added to the table, so it reads as the empty table it was
+            res = await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;")
+            assert not res, f'{dst_ks}.cf2 returned {len(res)} rows after a restore that failed'
+
+            kept = {x.name: x.value for x in await cql.run_async(f"SELECT * FROM {src_ks}.cf1;")}
+            assert kept == rows, f'Failed restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {kept}'
+
+
 async def test_restore_with_non_existing_sstable(manager: ScyllaClusterManager, object_storage):
     '''Check that restore task fails well when given a non-existing sstable'''
 
