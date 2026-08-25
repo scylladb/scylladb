@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 import logging
+import re
 import threading
 import pytest
 import asyncio
@@ -69,8 +70,12 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
         # replica (local write satisfies CL=ONE) and the other node is
         # always a replica (its paused response keeps the handler alive).
         # The caller restores these preconditions between runs.
-        async def do_test(target_server: ServerInfo) -> ServerInfo:
-            """Run the test scenario. Returns the newly added server."""
+        async def do_test(target_server: ServerInfo) -> ServerInfo | None:
+            """Run the test scenario.
+
+            Returns the newly added server, or None if the topology coordinator
+            canceled the queued join because the target node was down.
+            """
             other_server = next(s for s in running if s.server_id != target_server.server_id)
             target_host = next(h for h in hosts
                                if h.address == str(target_server.rpc_address))
@@ -157,7 +162,24 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
             await manager.server_start(target_server.server_id)
 
             logger.info("Waiting for addnode to complete")
-            return await add_last_node_task
+            try:
+                return await add_last_node_task
+            except Exception as exc:
+                # The coordinator cancels a queued join while a node it needs is down,
+                # which the target is on purpose. The reason is only in the joining
+                # node's log, not in the exception.
+                match = re.search(r"server_id (\d+)", str(exc.__cause__ or exc))
+                canceled = False
+                if match:
+                    log = await manager.server_open_log(int(match.group(1)))
+                    canceled = bool(await log.grep(
+                        "request canceled because some required nodes are dead"))
+                if not canceled:
+                    raise
+                # The shutdown behaviour was already verified; a canceled join leaves the
+                # cluster at the size the next run needs.
+                logger.info("The queued join was canceled because the target node was down")
+                return None
 
         async def pick_target(is_coordinator: bool) -> ServerInfo:
             coordinator_host_id = await get_topology_coordinator(manager)
@@ -185,7 +207,8 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
         # Restore the cluster to its original state: decommission the added
         # node. do_test already restarted the target. This keeps 2 nodes with
         # RF=2, so both are replicas for every partition — same as run 1.
-        await manager.decommission_node(new_server.server_id)
+        if new_server is not None:
+            await manager.decommission_node(new_server.server_id)
 
         # Run 2: target is the topology coordinator
         running = await manager.running_servers()
