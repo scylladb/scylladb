@@ -363,12 +363,17 @@ future<> cluster_backup_task::do_backup() {
                 manifest.sstables.push(s);
             }
             for (auto& n : nodes_for_location) {
-                manifest_json::node_info ni(n);
-                if (auto i = node_to_token_range.find(n.node); i != node_to_token_range.end()) {
-                    ni.first_token = dht::token::to_int64(i->second.first);
-                    ni.last_token = dht::token::to_int64(i->second.second);
+                for (auto& dc : info.datacenters) {
+                    if (n.datacenter == dc) {
+                        manifest_json::node_info ni(n);
+                        if (auto i = node_to_token_range.find(n.node); i != node_to_token_range.end()) {
+                            ni.first_token = dht::token::to_int64(i->second.first);
+                            ni.last_token = dht::token::to_int64(i->second.second);
+                        }
+                        manifest.nodes.push(std::move(ni));
+                        break;
+                    }
                 }
-                manifest.nodes.push(std::move(ni));
             }
 
             auto client = manager.get_endpoint_client(dst.endpoint);
