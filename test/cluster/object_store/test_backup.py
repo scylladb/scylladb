@@ -23,6 +23,7 @@ from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_t
 from test.pylib.rest_client import read_barrier, HTTPError
 from test.pylib.util import unique_name, wait_all
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
+from cassandra import ReadFailure
 from cassandra.cluster import ConsistencyLevel
 from collections import defaultdict
 from test.pylib.util import wait_for
@@ -622,6 +623,18 @@ async def do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logge
     tid = await manager.api.backup(s.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
     status = await manager.api.wait_task(s.ip_addr, tid)
     assert (status is not None) and (status['state'] == 'done')
+
+async def populate_and_backup(manager, cql, servers, object_storage, ks, cf, cf_opts, num_keys):
+    '''Create ks.cf with the given table options, fill it with num_keys rows and back it up from
+    every node. Returns the snapshot name and the manifests for a tablet-aware restore of it.'''
+    await cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int ) {cf_opts};")
+    insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+    insert_stmt.consistency_level = ConsistencyLevel.ALL
+    await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
+
+    snap_name, _ = await take_snapshot(ks, servers, manager, logger)
+    await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}', ks, cf, object_storage, manager, logger) for s in servers))
+    return snap_name, [f'{s.server_id}/{snap_name}/manifest.json' for s in servers]
 
 async def collect_mutations(cql, server, manager, ks, cf):
     host = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 30)
@@ -1362,6 +1375,53 @@ async def test_restore_into_incompatible_schema(manager: ScyllaClusterManager, o
 
             kept = {x.name: x.value for x in await cql.run_async(f"SELECT * FROM {src_ks}.cf1;")}
             assert kept == rows, f'Failed restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {kept}'
+
+
+# The destination schemas below are read against a source of ( pk text primary key, value int ),
+# the same mismatches the plain restore is checked against above.
+TABLETS_INCOMPATIBLE_SCHEMAS = [
+    pytest.param('pk text primary key, value text', id='column_type'),
+    pytest.param('pk text primary key', id='missing_column'),
+]
+
+@pytest.mark.parametrize("dst_schema", TABLETS_INCOMPATIBLE_SCHEMAS)
+async def test_restore_tablets_into_incompatible_schema(manager: ScyllaClusterManager, object_storage, dst_schema):
+    '''Check that a tablet-aware restore into a table with a mismatching schema yields no data.
+
+    Unlike the plain restore, this one only downloads the sstables and never looks inside them, so
+    the restore task itself reports success and the mismatch surfaces on reads. Restore-time
+    validation of the destination schema would report it earlier.'''
+
+    topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 1)
+
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage,
+                                             extra_config={'abort_on_malformed_sstable_error': False})
+
+    cql = manager.get_cql()
+
+    num_keys = 20
+    expected = {str(i): i for i in range(num_keys)}
+    rf = f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}"
+
+    async with new_test_keyspace(manager, rf) as src_ks:
+        snap_name, manifests = await populate_and_backup(manager, cql, servers, object_storage, src_ks, 'cf1', TABLETS_4, num_keys)
+
+        async with new_test_keyspace(manager, rf) as dst_ks:
+            await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 ( {dst_schema} ) {TABLETS_4};")
+
+            logger.info(f'Restore {src_ks}.cf1 into {dst_ks}.cf2 declared as ( {dst_schema} )')
+            tid = await manager.api.restore_tablets(servers[1].ip_addr, dst_ks, 'cf2', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+            status = await manager.api.wait_task(servers[1].ip_addr, tid)
+            logger.info(f'Restore into an incompatible {dst_ks}.cf2 reported state={status["state"] if status else None}')
+
+            # The sstables were taken as they are, so the mismatch is only reported once a read
+            # reaches them. Require the replica to be the one that fails: a decoding error on the
+            # driver side would mean the rows were served.
+            with pytest.raises(ReadFailure):
+                await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;")
+
+            kept = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {src_ks}.cf1;")}
+            assert kept == expected, f'Restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {len(kept)} rows'
 
 
 async def test_restore_with_non_existing_sstable(manager: ScyllaClusterManager, object_storage):
