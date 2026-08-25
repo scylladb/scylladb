@@ -2624,6 +2624,11 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
                 auto& cg = _t.compaction_group_for_sstable(sst);
                 _cg_desc[&cg].desc.new_sstables.push_back(sst);
             }
+            // Insert all GCed-data sstables into the original compaction group, so
+            // when they're removed, they can be found there.
+            for (auto& sst : _desc.new_gc_sstables) {
+                _cg_desc[&_cg].desc.new_sstables.push_back(sst);
+            }
             // The group that triggered compaction is the only one to have sstables removed from it.
             _cg_desc[&_cg].desc.old_sstables = _desc.old_sstables;
             for (auto& [cg, d] : _cg_desc) {
