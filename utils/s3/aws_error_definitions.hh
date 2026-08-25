@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #pragma once
