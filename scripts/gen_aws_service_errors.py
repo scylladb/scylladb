@@ -23,10 +23,14 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import NamedTuple
 
@@ -82,6 +86,18 @@ MODEL_URL_TEMPLATE = (
     "tools/code-generation/api-descriptions/{filename}"
 )
 
+# Bounds for the model fetch. Without an explicit timeout urlopen() inherits
+# socket.getdefaulttimeout(), which is None, so a black-holed connection
+# blocks forever and hangs whoever runs this.
+FETCH_TIMEOUT_SECONDS = 10
+FETCH_ATTEMPTS = 3
+FETCH_BACKOFF_SECONDS = 2
+# HTTP statuses worth another attempt. Anything else (404 for a renamed
+# model, 403) will not change on a retry, so fail immediately.
+FETCH_RETRY_STATUSES: set[int] = {408, 425, 429, 500, 502, 503, 504}
+# Cap on an honoured Retry-After, so a server asking for a long wait cannot
+# stall the run either.
+FETCH_MAX_RETRY_AFTER_SECONDS = 30
 
 # --- data types ----------------------------------------------------------------
 
@@ -197,18 +213,73 @@ def _write_if_changed(path: Path, text: str) -> bool:
     print(f"wrote {path}", file=sys.stderr)
     return True
 
+def _retry_after_seconds(value: str) -> float | None:
+    """How long Retry-After asks us to wait, or None if it cannot be read.
+
+    The header carries either delay-seconds or an HTTP-date. Only a
+    non-negative integer counts as the former, so that "inf" or "nan" cannot
+    reach time.sleep()."""
+    text = value.strip()
+    if text.isdigit():
+        return float(text)
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        # The obsolete asctime form carries no zone, and HTTP dates are GMT.
+        # Without this the subtraction below raises TypeError.
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
+def _retry_delay(error: Exception, attempt: int) -> float | None:
+    """How long to wait before retrying, or None if the error is permanent.
+
+    Anything that carries no HTTP status is a transport failure (DNS, TCP,
+    TLS, a timeout, a truncated response) and is always worth retrying. An
+    HTTPError is retried only for the statuses a server uses to say "later",
+    honouring Retry-After when it sends one."""
+    backoff = FETCH_BACKOFF_SECONDS * (2 ** (attempt - 1))
+    if not isinstance(error, urllib.error.HTTPError):
+        return backoff
+    if error.code not in FETCH_RETRY_STATUSES:
+        return None
+    retry_after = error.headers.get("Retry-After") if error.headers else None
+    if retry_after:
+        seconds = _retry_after_seconds(retry_after)
+        if seconds is not None:
+            return min(seconds, FETCH_MAX_RETRY_AFTER_SECONDS)
+    return backoff
+
+
 def _fetch_raw(filename: str) -> bytes:
-    """Fetch one c2j model. Raises RuntimeError on any network/HTTP error."""
+    """Fetch one c2j model, retrying transient failures. Raises RuntimeError
+    once the attempts are exhausted or the failure is permanent.
+
+    Every attempt is bounded by FETCH_TIMEOUT_SECONDS, so an unresponsive
+    endpoint ends the run with an error instead of hanging it."""
     url = MODEL_URL_TEMPLATE.format(filename=filename)
     print(f"# fetching {url}", file=sys.stderr)
-    try:
-        with urllib.request.urlopen(url) as resp:
-            return resp.read()
-    except urllib.error.URLError as e:
-        # HTTPError is a subclass of URLError, so this catches both
-        # transient network failures (DNS, TCP, TLS) and non-2xx
-        # HTTP responses (rate-limiting, model moved/renamed, etc.).
-        raise RuntimeError(f"failed to fetch {url}: {e}") from e
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=FETCH_TIMEOUT_SECONDS) as resp:
+                return resp.read()
+        except (OSError, http.client.HTTPException) as e:
+            # URLError (and its HTTPError subclass) derive from OSError, so
+            # this catches non-2xx responses (rate-limiting, model moved or
+            # renamed) alongside transport failures. urllib only wraps
+            # socket errors in URLError while connecting -- a timeout or a
+            # reset while reading the response body surfaces bare, as
+            # TimeoutError or ConnectionResetError, and a truncated body
+            # surfaces as http.client.IncompleteRead.
+            delay = _retry_delay(e, attempt)
+            if delay is None or attempt == FETCH_ATTEMPTS:
+                raise RuntimeError(f"failed to fetch {url}: {e}") from e
+            print(f"# attempt {attempt}/{FETCH_ATTEMPTS} failed ({e}), "
+                  f"retrying in {delay:g}s", file=sys.stderr)
+            time.sleep(delay)
+    raise AssertionError("unreachable")
 
 # --- main ----------------------------------------------------------------------
 
