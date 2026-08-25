@@ -1220,6 +1220,7 @@ async def test_restore_tablets_with_different_tablet_hints(build_mode: str, mana
 
 RF_1 = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}"
 TABLETS_4 = "WITH tablets = {'min_tablet_count': 4}"
+NO_TABLETS = "AND tablets = {'enabled': false}"
 
 @dataclass
 class restore_target:
@@ -1238,6 +1239,11 @@ class restore_target:
 RESTORE_TARGETS = [
     restore_target('same_schema'),
     restore_target('extra_column', extra_col='extra'),
+    # A backup of a tablet-based table carries a tablet count and a tablet id per sstable, but this
+    # restore streams the mutations through the write path, so the tablet layout the backup came
+    # from does not matter and the data lands in the table in either direction
+    restore_target('tablets_to_vnodes', dst_ks_opts=NO_TABLETS, dst_cf_opts=''),
+    restore_target('vnodes_to_tablets', src_ks_opts=NO_TABLETS, src_cf_opts=''),
 ]
 
 @pytest.mark.parametrize("target", RESTORE_TARGETS, ids=lambda t: t.name)
