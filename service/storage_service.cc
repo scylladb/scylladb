@@ -4107,11 +4107,11 @@ future<> storage_service::update_tablet_metadata(const locator::tablet_metadata_
     wake_up_topology_state_machine();
 }
 
-locator::tablet_map storage_service::build_tablet_map_for_migration(
-        const locator::token_metadata& tm,
+future<locator::tablet_map> storage_service::build_tablet_map_for_migration(
+        locator::token_metadata_ptr tm,
         const locator::static_effective_replication_map_ptr& erm,
         size_t target_pow2) const {
-    const auto& sorted_tokens = tm.sorted_tokens();
+    const auto& sorted_tokens = tm->sorted_tokens();
 
     // Construct token boundaries: union of vnode tokens + optional pow2 boundaries.
     // target_pow2 == 0 means no pow2 convergence target and only wrap-around pre-split.
@@ -4159,6 +4159,7 @@ locator::tablet_map storage_service::build_tablet_map_for_migration(
         auto boundary = tablet_last.unbias();
         tablets.push_back(tablet_desc{locator::tablet_id(i), vnode_token, boundary - prev_boundary});
         prev_boundary = boundary;
+        co_await coroutine::maybe_yield();
     }
 
     // Aggregate token range assigned to each shard of a node, kept as a min-heap
@@ -4167,7 +4168,7 @@ locator::tablet_map storage_service::build_tablet_map_for_migration(
     // holds exactly.
     using shard_range = std::pair<uint64_t, shard_id>;
     std::unordered_map<locator::host_id, std::vector<shard_range>> shard_load;
-    tm.for_each_token_owner([&] (const locator::node& node) {
+    tm->for_each_token_owner([&] (const locator::node& node) {
         auto shard_count = node.get_shard_count();
         if (!shard_count) {
             throw std::runtime_error(fmt::format("Shard count not known for node {}", node.host_id()));
@@ -4194,13 +4195,14 @@ locator::tablet_map storage_service::build_tablet_map_for_migration(
             std::ranges::push_heap(shards, std::greater<>{});
         }
         tmap.set_tablet(tablet.id, locator::tablet_info(std::move(tablet_replicas)));
+        co_await coroutine::maybe_yield();
     }
 
     if (target_pow2 && tablet_count != target_pow2) {
         tmap.set_target_pow2_tablet_count(target_pow2);
     }
 
-    return tmap;
+    co_return tmap;
 }
 
 future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_sizes_for_migration(
@@ -4333,7 +4335,8 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         //  min           P1            P2            P3          max
         //   |------------|-------------|-------------|------------|
 
-        const auto& tm = get_token_metadata();
+        const auto tmptr = get_token_metadata_ptr();
+        const auto& tm = *tmptr;
 
         // Estimate table sizes when pow2 convergence is enabled.
         // The estimates are used by the tablet allocator to determine the
@@ -4388,11 +4391,11 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
                     if (auto it = target_pow2s.find(tid); it != target_pow2s.end()) {
                         target_pow2 = it->second;
                     }
-                    auto tmap = build_tablet_map_for_migration(tm, erm, target_pow2);
+                    auto tmap = co_await build_tablet_map_for_migration(tmptr, erm, target_pow2);
                     co_await append_tablet_map_mutations(tid, cf_name, tmap, target_pow2);
                 }
             } else {
-                auto shared_tmap = build_tablet_map_for_migration(tm, erm, 0);
+                auto shared_tmap = co_await build_tablet_map_for_migration(tmptr, erm, 0);
                 for (const auto& [tid, cf_name] : tables_to_migrate) {
                     co_await append_tablet_map_mutations(tid, cf_name, shared_tmap, 0);
                 }
