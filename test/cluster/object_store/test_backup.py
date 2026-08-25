@@ -829,6 +829,11 @@ async def test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, o
 
             expected = {str(i): i for i in range(num_keys)}
             for cf in tables:
+                # check_mutation_replicas() above compares partition keys and replica counts, so
+                # the values are only checked here
+                restored = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {dst_ks}.{cf}_restored;")}
+                assert restored == expected, f'Unexpected contents of {dst_ks}.{cf}_restored after restore: {len(restored)} rows'
+
                 kept = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {src_ks}.{cf};")}
                 assert kept == expected, f'Restore into {dst_ks} modified the source table {src_ks}.{cf}: {len(kept)} rows'
 
