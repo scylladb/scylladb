@@ -28,7 +28,6 @@
 namespace replica {
 
 class database;
-class table;
 
 namespace logstor {
 
@@ -47,12 +46,13 @@ struct segment_manager_config {
     uint64_t disk_size;
     bool format_on_startup = true;
     bool compaction_enabled = true;
-    size_t max_segments_per_compaction = 8;
+    size_t max_segments_per_compaction = 32;
+    utils::updateable_value<double> trigger_compaction_threshold{0.05};
     seastar::scheduling_group compaction_sg;
     utils::updateable_value<float> compaction_static_shares;
+    utils::updateable_value<float> compaction_max_shares;
     seastar::scheduling_group separator_sg;
-    uint32_t separator_delay_limit_ms;
-    size_t max_separator_memory = 1 * 1024 * 1024;
+    seastar::scheduling_group split_compaction_sg;
 };
 
 struct table_segment_histogram_bucket {
@@ -114,6 +114,7 @@ public:
     segment_manager& operator=(const segment_manager&) = delete;
 
     future<> do_recovery(replica::database&);
+    future<> do_recovery_for_test();
 
     future<> start();
     future<> stop();
@@ -128,18 +129,18 @@ public:
     compaction_manager& get_compaction_manager() noexcept;
     const compaction_manager& get_compaction_manager() const noexcept;
 
-    void set_trigger_compaction_hook(std::function<void()> fn);
-    void set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn);
-
     uint64_t get_segment_size() const noexcept;
 
-    future<> discard_segments(segment_set&);
+    // Removes all the segments of the group and frees them. Waits for an ongoing compaction of
+    // the group and keeps compaction disabled while discarding, so the caller doesn't have to.
+    // The index must be cleared first, so that no record of the group is reachable.
+    future<> discard_segments(logstor_group&);
 
     size_t get_memory_usage() const;
 
     future<> await_pending_writes();
 
-    future<utils::chunked_vector<segment_snapshot>> make_snapshot(compaction_group& cg);
+    future<utils::chunked_vector<segment_snapshot>> make_snapshot(logstor_group& cg);
 
     // Create an output stream to write a segment (for receiving from remote node)
     // Allocates a new local segment and returns an output stream for writing to the segment.

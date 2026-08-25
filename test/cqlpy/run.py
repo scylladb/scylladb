@@ -343,7 +343,6 @@ def run_scylla_cmd(pid, dir):
         '--alternator-ttl-period-in-seconds=0.5',
         '--logstor-disk-size-in-mb=8',
         '--logstor-file-size-in-mb=4',
-        '--logstor-separator-max-memory-in-mb=8',
         ], env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same

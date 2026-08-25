@@ -140,7 +140,7 @@ struct join_node_request_result;
 struct join_node_response_params;
 struct join_node_response_result;
 
-enum class disk_error { regular, commit };
+enum class disk_error { regular, commit, logstor };
 
 class node_ops_meta_data;
 
