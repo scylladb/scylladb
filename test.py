@@ -35,7 +35,7 @@ import humanfriendly
 import treelib
 
 from scripts import coverage
-from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to
+from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to, DEBUG_MODES
 from test.pylib import coverage_utils
 from test.pylib.util import LogPrefixAdapter, get_configured_modes, palette
 
@@ -67,7 +67,7 @@ class ThreadsCalculator:
             max_system_memory_reserve,
         ))
         available_mem = max(0, sys_mem - system_memory_reserve)
-        is_debug = "debug" in modes
+        is_debug = set(DEBUG_MODES) & set(modes)
         test_mem = min(
             sys_mem / test_memory_fraction,
             max_test_memory if is_debug else non_debug_max_test_memory,
