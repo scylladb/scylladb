@@ -49,6 +49,17 @@ from urllib.parse import quote, unquote
 
 # Type definitions for annotation
 PathLike = Union[Path, str]
+
+
+def coverage_dir(mode_log_dir: PathLike) -> Path:
+    """Root of the raw-profile tree for one mode's log dir (<tmpdir>/<mode>).
+
+    Every writer (test/pylib/runner.py, test/pylib/cpp/base.py) and reader
+    (test.py, scripts/coverage.py callers) must build the path through this
+    helper so they can never disagree on the layout:
+    <tmpdir>/<mode>/coverage/<suite>/*.profraw
+    """
+    return Path(mode_log_dir) / "coverage"
 ConcurrencyParam = Optional[Union[int, Semaphore]]
 LoggerType = Union[logging.Logger, logging.LoggerAdapter]
 

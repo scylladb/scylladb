@@ -233,13 +233,9 @@ def parse_cmd_line() -> argparse.Namespace:
 
     if not args.coverage_modes and args.coverage:
         args.coverage_modes = list(args.modes)
-        if "coverage" in args.coverage_modes:
-            args.coverage_modes.remove("coverage")
         if not args.coverage_modes:
             args.coverage = False
     elif args.coverage_modes:
-        if "coverage" in args.coverage_modes:
-            raise RuntimeError("'coverage' mode is not allowed in --coverage-mode")
         missing_coverage_modes = set(args.coverage_modes).difference(set(args.modes))
         if len(missing_coverage_modes) > 0:
             raise RuntimeError(f"The following modes weren't built or ran (using the '--mode' option): {missing_coverage_modes}")
@@ -358,6 +354,9 @@ def run_pytest(options: argparse.Namespace) -> int:
         args.append(f'--random-seed={options.random_seed}')
     if options.gather_metrics:
         args.append('--gather-metrics')
+    if options.coverage:
+        args.append('--coverage')
+        args.extend(f'--coverage-mode={mode}' for mode in options.coverage_modes)
     if options.artifacts_dir_url:
         args.append(f'--artifacts_dir_url={options.artifacts_dir_url}')
     if options.timeout:
@@ -418,7 +417,10 @@ async def main() -> int:
                            "the test markers if you used the '--markers' option."
                            "Alternatively you can check with --list option if there any errors."))
     if 'coverage' in options.modes:
-        coverage.generate_coverage_report(path_to("coverage", "tests"))
+        coverage.generate_coverage_report(
+            str(coverage_utils.coverage_dir(pathlib.Path(options.tmpdir) / "coverage")),
+            path_to("coverage", "test"),
+        )
 
     if options.coverage:
         await process_coverage(options)
@@ -445,13 +447,19 @@ async def process_coverage(options):
                                                                logger = logger)
     logger.debug(f"Binary ids map is: {files_to_ids_map}")
     logger.info("Done getting binary ids for coverage conversion")
-    # get the suits that have actually been ran
-    suits_to_exclude = ["pylib_test", "dist_test", "nodetool"]
     sources_to_exclude = [line for line in open("coverage_excludes.txt", 'r').read().split('\n') if line and not line.startswith('#')]
-    ran_suites = list({test.suite for test in TestSuite.all_tests() if test.suite.need_coverage()})
 
-    def suite_coverage_path(suite) -> pathlib.Path:
-        return pathlib.Path(suite.options.tmpdir) / suite.mode / 'coverage' / suite.name
+    # The retired TestSuite registry used to hand out the suites that ran; the
+    # pytest runner instead writes per-suite raw profiles to
+    # `<tmpdir>/<mode>/coverage/<suite>/*.profraw` (see
+    # test/pylib/runner.py:create_cluster_factory), so discover them from disk.
+    ran_suites = []
+    for mode in modes_for_coverage:
+        coverage_root = coverage_utils.coverage_dir(pathlib.Path(options.tmpdir) / mode)
+        if not coverage_root.is_dir():
+            continue
+        for suite_dir in sorted(p for p in coverage_root.iterdir() if p.is_dir()):
+            ran_suites.append((suite_dir.name, mode, suite_dir))
 
     def pathsize(path : pathlib.Path):
         if path.is_file():
@@ -496,28 +504,21 @@ async def process_coverage(options):
                                   identifier = "root",
                                   data = Stats("Coverage Processing Stats", 0, 0))
 
-    for suite in list(ran_suites):
-        coverage_path = suite_coverage_path(suite)
-        if not coverage_path.exists():
-            logger.warning(f"Coverage dir for suite '{suite.name}' in mode '{suite.mode}' wasn't found, common reasons:\n\t"
-                "1. The suite doesn't use any instrumented binaries.\n\t"
-                "2. The binaries weren't compiled with coverage instrumentation.")
-            continue
-
+    for name, mode, coverage_path in ran_suites:
         # 1. Transform every suite raw profiles into indexed profiles
         raw_profiles = list(coverage_path.glob("*.profraw"))
         if len(raw_profiles) == 0:
-            logger.warning(f"Couldn't find any raw profiles for suite '{suite.name}' in mode '{suite.mode}' ({coverage_path}):\n\t"
+            logger.warning(f"Couldn't find any raw profiles for suite '{name}' in mode '{mode}' ({coverage_path}):\n\t"
                 "1. The binaries are killed instead of terminating which bypasses profile dump.\n\t"
                 "2. The suite tempres with the LLVM_PROFILE_FILE which causes the profile to be dumped\n\t"
                 "   to somewhere else.")
             continue
-        mode_stats = stats.get_node(suite.mode)
+        mode_stats = stats.get_node(mode)
         if not mode_stats:
             mode_stats = stats.create_node(tag = time.time(),
-                                           identifier = suite.mode,
+                                           identifier = mode,
                                            parent = ROOT_NODE,
-                                           data = Stats(f"{suite.mode} mode processing stats", 0, 0))
+                                           data = Stats(f"{mode} mode processing stats", 0, 0))
 
         raw_stats_node = stats.get_node(mode_stats.identifier + RAW_PROFILE_STATS)
         if not raw_stats_node:
@@ -526,15 +527,15 @@ async def process_coverage(options):
                                                parent = mode_stats,
                                                data = Stats(RAW_PROFILE_STATS, 0, 0))
         stat = stats.create_node(tag = time.time(),
-                                 identifier = raw_stats_node.identifier + suite.name,
+                                 identifier = raw_stats_node.identifier + name,
                                  parent = raw_stats_node,
-                                 data = Stats(suite.name, pathsize(coverage_path), 0))
+                                 data = Stats(name, pathsize(coverage_path), 0))
         raw_stats_node.data += stat.data
         mode_stats.data.time += stat.data.time
         mode_stats.data.size = max(mode_stats.data.size, raw_stats_node.data.size)
 
 
-        logger.info(f"{suite.name}: Converting raw profiles into indexed profiles - {stat.data}.")
+        logger.info(f"{name}: Converting raw profiles into indexed profiles - {stat.data}.")
         start_time = time.time()
         merge_result = await coverage_utils.merge_profiles(profiles = raw_profiles,
                                             path_for_merged = coverage_path,
@@ -548,21 +549,21 @@ async def process_coverage(options):
                                                    parent = mode_stats,
                                                    data = Stats(INDEXED_PROFILE_STATS, 0, 0))
         stat = stats.create_node(tag = time.time(),
-                                 identifier = indexed_stats_node.identifier + suite.name,
+                                 identifier = indexed_stats_node.identifier + name,
                                  parent = indexed_stats_node,
-                                 data = Stats(suite.name, pathsize(coverage_path), time.time() - start_time))
+                                 data = Stats(name, pathsize(coverage_path), time.time() - start_time))
         indexed_stats_node.data += stat.data
         mode_stats.data.time += stat.data.time
         mode_stats.data.size = max(mode_stats.data.size, indexed_stats_node.data.size)
 
-        logger.info(f"{suite.name}: Done converting raw profiles into indexed profiles - {humanfriendly.format_timespan(stat.data.time)}.")
+        logger.info(f"{name}: Done converting raw profiles into indexed profiles - {humanfriendly.format_timespan(stat.data.time)}.")
 
         # 2. Transform every indexed profile into an lcov trace file,
         #    after this step, the dependency upon the build artifacts
         #    ends and processing of the files can be done using the source
         #    code only.
 
-        logger.info(f"{suite.name}: Converting indexed profiles into lcov trace files.")
+        logger.info(f"{name}: Converting indexed profiles into lcov trace files.")
         start_time = time.time()
         if len(merge_result.errors) > 0:
             raise RuntimeError(merge_result.errors)
@@ -580,22 +581,22 @@ async def process_coverage(options):
                                                            parent = mode_stats,
                                                            data = Stats(LCOV_CONVERSION_STATS, 0, 0))
         stat = stats.create_node(tag = time.time(),
-                                 identifier = lcov_conversion_stats_node.identifier + suite.name,
+                                 identifier = lcov_conversion_stats_node.identifier + name,
                                  parent = lcov_conversion_stats_node,
-                                 data = Stats(suite.name, pathsize(coverage_path), time.time() - start_time))
+                                 data = Stats(name, pathsize(coverage_path), time.time() - start_time))
         lcov_conversion_stats_node.data += stat.data
         mode_stats.data.time += stat.data.time
         mode_stats.data.size = max(mode_stats.data.size, lcov_conversion_stats_node.data.size)
 
-        logger.info(f"{suite.name}: Done converting indexed profiles into lcov trace files - {humanfriendly.format_timespan(stat.data.time)}.")
+        logger.info(f"{name}: Done converting indexed profiles into lcov trace files - {humanfriendly.format_timespan(stat.data.time)}.")
 
         # 3. combine all tracefiles
-        logger.info(f"{suite.name} in mode {suite.mode}: Combinig lcov trace files.")
+        logger.info(f"{name} in mode {mode}: Combinig lcov trace files.")
         start_time = time.time()
         trace_files = list(coverage_path.glob("**/*.info"))
-        target_trace_file = coverage_path / (suite.name + ".info")
+        target_trace_file = coverage_path / (name + ".info")
         if len(trace_files) == 0: # No coverage data, can skip
-            logger.warning(f"{suite.name} in mode  {suite.mode}: No coverage tracefiles found")
+            logger.warning(f"{name} in mode  {mode}: No coverage tracefiles found")
         elif len(trace_files) == 1: # No need to merge, we can just rename the file
             trace_files[0].rename(str(target_trace_file))
         else:
@@ -612,21 +613,21 @@ async def process_coverage(options):
                                                       parent = mode_stats,
                                                       data = Stats(LCOV_SUITES_MEREGE_STATS, 0, 0))
         stat = stats.create_node(tag = time.time(),
-                                 identifier = lcov_merge_stats_node.identifier + suite.name,
+                                 identifier = lcov_merge_stats_node.identifier + name,
                                  parent = lcov_merge_stats_node,
-                                 data = Stats(suite.name, pathsize(coverage_path), time.time() - start_time))
+                                 data = Stats(name, pathsize(coverage_path), time.time() - start_time))
         lcov_merge_stats_node.data += stat.data
         mode_stats.data.time += stat.data.time
         mode_stats.data.size = max(mode_stats.data.size, lcov_merge_stats_node.data.size)
 
-        suits_trace_files.setdefault(suite.mode, {})[suite.name] = target_trace_file
-        logger.info(f"{suite.name}: Done combinig lcov trace files - {humanfriendly.format_timespan(stat.data.time)}")
+        suits_trace_files.setdefault(mode, {})[name] = target_trace_file
+        logger.info(f"{name}: Done combinig lcov trace files - {humanfriendly.format_timespan(stat.data.time)}")
 
     #4. combine the suite lcovs into per mode trace files
     modes_trace_files  = {}
     for mode, suite_traces in suits_trace_files.items():
 
-        target_trace_file = pathlib.Path(options.tmpdir) / mode / "coverage" / f"{mode}_coverage.info"
+        target_trace_file = coverage_utils.coverage_dir(pathlib.Path(options.tmpdir) / mode) / f"{mode}_coverage.info"
         start_time = time.time()
         logger.info(f"Consolidating trace files for mode {mode}.")
         await coverage_utils.lcov_combine_traces(lcovs = suite_traces.values(),

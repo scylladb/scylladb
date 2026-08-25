@@ -20,6 +20,7 @@ from _pytest._code.code import ReprFileLocation
 
 from scripts import coverage as coverage_script
 from test import DEBUG_MODES, TEST_DIR, TOP_SRC_DIR, path_to
+from test.pylib.coverage_utils import coverage_dir
 from test.pylib.runner import BUILD_MODE, RUN_ID, TEST_SUITE
 from test.pylib.scylla_server import merge_cmdline_options
 
@@ -107,7 +108,13 @@ class CppFile(pytest.File, ABC):
             "TMPDIR": str(self.log_dir),
         }
         if self.build_mode == "coverage":
-            variables.update(coverage_script.env(self.exe_path))
+            # "%m" is LLVM's own merge-pool token: repeated invocations of this
+            # binary (once per test case) merge their counters into the same
+            # profile in place, instead of each case dumping a full separate
+            # profile -- for a large multi-object boost binary that would
+            # balloon disk usage by the number of cases in that binary.
+            profile_base = coverage_dir(self.log_dir) / self.stash[TEST_SUITE].name / f"{self.test_name}.%m"
+            variables.update(coverage_script.env(profile_base))
         return variables
 
     @cached_property
