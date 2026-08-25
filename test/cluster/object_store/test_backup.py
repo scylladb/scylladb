@@ -1424,6 +1424,42 @@ async def test_restore_tablets_into_incompatible_schema(manager: ScyllaClusterMa
             assert kept == expected, f'Restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {len(kept)} rows'
 
 
+async def test_restore_tablets_into_vnodes_table(manager: ScyllaClusterManager, object_storage):
+    '''Check that tablet-aware restore into a vnodes-based table is rejected.
+
+    The topology coordinator fails the request while setting up the per-tablet restore transitions
+    and discards its updates, so the destination stays empty.'''
+
+    topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 1)
+
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
+
+    cql = manager.get_cql()
+
+    num_keys = 20
+    expected = {str(i): i for i in range(num_keys)}
+    rf = f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}"
+
+    async with new_test_keyspace(manager, rf) as src_ks:
+        snap_name, manifests = await populate_and_backup(manager, cql, servers, object_storage, src_ks, 'cf1', TABLETS_4, num_keys)
+
+        async with new_test_keyspace(manager, f'{rf} {NO_TABLETS}') as dst_ks:
+            await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 ( pk text primary key, value int );")
+
+            logger.info(f'Restore tablet-based {src_ks}.cf1 into vnodes-based {dst_ks}.cf2')
+            tid = await manager.api.restore_tablets(servers[1].ip_addr, dst_ks, 'cf2', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+            status = await manager.api.wait_task(servers[1].ip_addr, tid)
+
+            assert status is not None and status['state'] == 'failed', f'Restore into a vnodes-based {dst_ks}.cf2 did not fail: {status}'
+            assert 'no_such_tablet_map' in str(status.get('error')), f'Unexpected restore error: {status.get("error")}'
+
+            res = await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;")
+            assert not res, f'{dst_ks}.cf2 returned {len(res)} rows after a restore that failed'
+
+            kept = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {src_ks}.cf1;")}
+            assert kept == expected, f'Failed restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {len(kept)} rows'
+
+
 async def test_restore_with_non_existing_sstable(manager: ScyllaClusterManager, object_storage):
     '''Check that restore task fails well when given a non-existing sstable'''
 
