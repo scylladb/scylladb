@@ -13,7 +13,7 @@ from test.scylla_gdb.conftest import execute_gdb_command
 
 pytestmark = [
     pytest.mark.skip_mode(
-        mode=["dev", "debug"],
+        mode=["dev", "debug", "coverage"],
         reason="Scylla was built without debug symbols; use release mode",
     ),
 ]
