@@ -13,10 +13,14 @@
 # override it. Most of these tests, or perhaps even this entire file,
 # will probably go away eventually.
 
+import ast
+from contextlib import nullcontext
+
 import pytest
 from botocore.exceptions import ClientError
 
-from .util import new_test_table, scylla_config_read, scylla_config_temporary
+from .util import new_test_table, unique_table_name, scylla_config_read, scylla_config_temporary
+from .test_encoding import precreated_keyspace, tablets_option, skip_if_tablets_enforced
 
 # All tests in this file are scylla-only
 @pytest.fixture(scope="function", autouse=True)
@@ -162,3 +166,89 @@ def test_alternator_tablets_without_lwt(dynamodb):
         assert_tablets_usage_follows_config(dynamodb, table)
         table.put_item(Item={'p': 'hello'})
         assert table.get_item(Key={'p': 'hello'})['Item'] == {'p': 'hello'}
+
+# Utility function for reading the tombstone_gc mode of an Alternator table,
+# or - if index_name is given - of the materialized view backing that index
+# (index_delim distinguishes the view names of GSIs (':') and LSIs ('!:')).
+# Returns the mode as a string, or None if the table or view doesn't have
+# the tombstone_gc property at all.
+def tombstone_gc_mode(cql, table, index_name=None, index_delim=None):
+    keyspace = 'alternator_' + table.name
+    if index_name:
+        describe = f'DESCRIBE MATERIALIZED VIEW "{keyspace}"."{table.name}{index_delim}{index_name}"'
+    else:
+        describe = f'DESCRIBE TABLE "{keyspace}"."{table.name}"'
+    stmt = cql.execute(describe).one().create_statement
+    # The returned create statement lists the tombstone_gc property as a map,
+    # e.g., "tombstone_gc = {'mode': 'repair', ...}", so after partition()
+    # rest begins with the map literal, which ends at the first '}' (the map
+    # has no nested braces) and is also a valid Python literal. Parse it and
+    # return its 'mode' value - 'repair' in the example above - or None if
+    # the statement has no tombstone_gc property at all.
+    _, found, rest = stmt.partition('tombstone_gc = ')
+    return ast.literal_eval(rest[:rest.index('}') + 1])['mode'] if found else None
+
+# Alternator tables and their GSI/LSI views should get the same default
+# tombstone_gc mode as CQL-created tables and indexes: 'repair', except for
+# views co-located with their base table - a view of a tablets-using table
+# with the same partition key, such as an LSI or a GSI on the table's own
+# hash key - which don't support repair and should get 'timeout'. The mode
+# follows the keyspace the table lands in, also when that keyspace was
+# pre-created with CQL.
+# Reproduces SCYLLADB-3759, where the mode was left unset - so all Alternator
+# tables silently defaulted to 'timeout'.
+@pytest.mark.parametrize('tablets,precreated', [
+    pytest.param(True, False, id='tablets'),
+    pytest.param(False, False, id='vnodes'),
+    pytest.param(True, True, id='precreated_tablets'),
+    pytest.param(False, True, id='precreated_vnodes')])
+def test_tombstone_gc_default(dynamodb, cql, tablets, precreated):
+    if precreated and not tablets:
+        skip_if_tablets_enforced(dynamodb)
+    colocated_mode = 'timeout' if tablets else 'repair'
+    # A keyspace pre-created with CQL decides over the tag, so there the tag
+    # asks for the opposite, to show that it is ignored.
+    asks_tablets = not tablets if precreated else tablets
+    schema = {
+        'Tags': [{'Key': initial_tablets_tag, 'Value': '0' if asks_tablets else 'none'}],
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                       { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+        'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' },
+                                  { 'AttributeName': 'c', 'AttributeType': 'S' },
+                                  { 'AttributeName': 'x', 'AttributeType': 'S' },
+                                  { 'AttributeName': 'y', 'AttributeType': 'S' } ],
+        'GlobalSecondaryIndexes': [
+            { 'IndexName': 'gsi',
+              'KeySchema': [ { 'AttributeName': 'x', 'KeyType': 'HASH' } ],
+              'Projection': { 'ProjectionType': 'ALL' } },
+            { 'IndexName': 'gsi_p',
+              'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                             { 'AttributeName': 'x', 'KeyType': 'RANGE' } ],
+              'Projection': { 'ProjectionType': 'ALL' } } ],
+        'LocalSecondaryIndexes': [
+            { 'IndexName': 'lsi',
+              'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                             { 'AttributeName': 'y', 'KeyType': 'RANGE' } ],
+              'Projection': { 'ProjectionType': 'ALL' } } ]}
+    name = unique_table_name()
+    with precreated_keyspace(cql, name, tablets_option(tablets)) if precreated else nullcontext():
+        with new_test_table(dynamodb, name=name, **schema) as table:
+            assert uses_tablets(dynamodb, table) == tablets
+            assert tombstone_gc_mode(cql, table) == 'repair'
+            assert tombstone_gc_mode(cql, table, 'gsi', ':') == 'repair'
+            assert tombstone_gc_mode(cql, table, 'gsi_p', ':') == colocated_mode
+            assert tombstone_gc_mode(cql, table, 'lsi', '!:') == colocated_mode
+            # A GSI created later by UpdateTable takes a different code path
+            # than CreateTable, so check it too, both on another key and on
+            # the table's own hash key:
+            for index_name, key_schema, mode in [
+                    ('gsi2', [ { 'AttributeName': 'z', 'KeyType': 'HASH' } ], 'repair'),
+                    ('gsi2_p', [ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                                 { 'AttributeName': 'z', 'KeyType': 'RANGE' } ], colocated_mode)]:
+                dynamodb.meta.client.update_table(TableName=table.name,
+                    AttributeDefinitions=[ { 'AttributeName': k['AttributeName'], 'AttributeType': 'S' }
+                                           for k in key_schema ],
+                    GlobalSecondaryIndexUpdates=[ { 'Create':
+                        { 'IndexName': index_name, 'KeySchema': key_schema,
+                          'Projection': { 'ProjectionType': 'ALL' } }}])
+                assert tombstone_gc_mode(cql, table, index_name, ':') == mode
