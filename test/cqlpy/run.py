@@ -272,6 +272,11 @@ def run_scylla_cmd(pid, dir):
     }
     return ([scylla_link,
         '--options-file',  source_path + '/conf/scylla.yaml',
+        # api_doc_dir defaults to a path relative to the current directory,
+        # which is wherever this script happened to be started from, so spell
+        # it out - the same way install.sh points it at the installed copy.
+        # Without it every /api-doc record the server advertises is unusable.
+        '--api-doc-dir', source_path + '/api/api-doc/',
         '--developer-mode', '1',
         '--ring-delay-ms', '0',
         '--collectd', '0',

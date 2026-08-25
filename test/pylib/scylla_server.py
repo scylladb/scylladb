@@ -365,9 +365,14 @@ class ScyllaServer:
 
         # The basic server configuration (the workdir and the maintenance
         # socket are the server's own) topped by the caller-assembled options.
+        # api_doc_dir defaults to a path relative to the current directory,
+        # which is the server's workdir here, so point it at the source tree -
+        # the same way install.sh points it at the installed copy. Without it
+        # every /api-doc record the server advertises is unusable.
         self.config = {
             'workdir': str(self.workdir.resolve()),
             'maintenance_socket': self.maintenance_socket_path,
+            'api_doc_dir': f"{TOP_SRC_DIR / 'api/api-doc'}/",
         } | config_options
         self.property_file = property_file
         self.append_env = append_env
