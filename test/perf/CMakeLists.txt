@@ -65,6 +65,10 @@ add_perf_test(perf_big_decimal
     mutation
     schema)
 add_perf_test(perf_cache_eviction)
+add_perf_test(perf_canonical_mutation
+  LIBRARIES
+    mutation
+    schema)
 add_perf_test(perf_checksum)
 add_perf_test(perf_commitlog
   LIBRARIES
