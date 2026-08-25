@@ -3,31 +3,39 @@
 # Copyright (C) 2026-present ScyllaDB
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-# Generate ScyllaDB `aws_error_type` enum entries and wire-name → enum
-# mapping entries for S3 and STS by pulling the c2j models from
-# aws/aws-sdk-cpp main on GitHub.
+# Refresh the S3 and STS error entries in utils/s3/aws_error_definitions.{hh,cc}
+# from the c2j models published by aws/aws-sdk-cpp.
+#
+# Those files are ordinary sources, compiled as they are committed. Only the
+# region between the @SCYLLA_AWS_ERRORS_BEGIN@ and @SCYLLA_AWS_ERRORS_END@
+# markers is rewritten; the core error entries around it are maintained by
+# hand. Run this when AWS adds an error worth carrying, and commit the result.
 #
 # Ports the relevant bits of the aws-sdk-cpp Java generator:
-#   * ErrorFormatter.formatErrorConstName()  → _format_error_const_name()
-#   * C2jModelToGeneratorModelTransformer.convertError()  → error extraction
-#   * ServiceErrorsSource.vm GetErrorForName() body  → mapping snippet
+#   * ErrorFormatter.formatErrorConstName()  -> _format_error_const_name()
+#   * C2jModelToGeneratorModelTransformer.convertError()  -> error extraction
+#   * ServiceErrorsSource.vm GetErrorForName() body  -> mapping snippet
 #
 # Usage:
-#   python3 utils/s3/gen_aws_service_errors.py           # writes generated files next to templates
-#   python3 utils/s3/gen_aws_service_errors.py --output-dir DIR
-#                                                        # build-system mode
-#   python3 utils/s3/gen_aws_service_errors.py --dry-run # prints to stdout instead
+#   scripts/gen_aws_service_errors.py            # rewrite the two files
+#   scripts/gen_aws_service_errors.py --dry-run  # print the blocks instead
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import NamedTuple
+
+# The files whose marked region this script owns.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+HEADER = REPO_ROOT / "utils" / "s3" / "aws_error_definitions.hh"
+SOURCE = REPO_ROOT / "utils" / "s3" / "aws_error_definitions.cc"
+BEGIN_MARKER = "@SCYLLA_AWS_ERRORS_BEGIN@"
+END_MARKER = "@SCYLLA_AWS_ERRORS_END@"
 
 # --- constants copied verbatim from the upstream Java generator ---------------
 # Keep these in sync with:
@@ -73,6 +81,7 @@ MODEL_URL_TEMPLATE = (
     "https://raw.githubusercontent.com/aws/aws-sdk-cpp/main/"
     "tools/code-generation/api-descriptions/{filename}"
 )
+
 
 # --- data types ----------------------------------------------------------------
 
@@ -163,31 +172,20 @@ def _render_mapping_lines(errors: list[ServiceError], indent: str) -> str:
 
 # --- in-place patcher ----------------------------------------------------------
 
-HERE = Path(__file__).resolve().parent
-HEADER_TEMPLATE = HERE / "aws_error_definitions.hh.in"
-SOURCE_TEMPLATE = HERE / "aws_error_definitions.cc.in"
-# Names the build system consumes when the script is invoked with
-# --output-dir DIR: the generated files land under DIR/utils/s3/.
-GENERATED_HEADER_NAME = "aws_error_definitions_generated.hh"
-GENERATED_SOURCE_NAME = "aws_error_definitions_generated.cc"
-HASHES_NAME = "aws_error_definitions.hashes.json"
 
+def _replace_region(text: str, block: str, context: str) -> str:
+    """Replace whatever sits between the two markers with `block`.
 
-def _substitute_tags(text: str, per_service: dict[str, str], context: str) -> str:
-    """Replace `// @SCYLLA_AWS_ERRORS_<SERVICE>@` marker lines with the
-    corresponding generated block. Preserves the indentation of the marker
-    line so the emitted block matches the surrounding code."""
-    for service, generated in per_service.items():
-        tag = f"@SCYLLA_AWS_ERRORS_{service.upper()}@"
-        marker_line = None
-        for line in text.splitlines(keepends=False):
-            if tag in line:
-                marker_line = line
-                break
-        if marker_line is None:
-            raise RuntimeError(f"{context}: marker {tag} not found")
-        text = text.replace(marker_line, generated, 1)
-    return text
+    The marker lines themselves are kept, so the file can be rewritten again."""
+    begin = text.find(BEGIN_MARKER)
+    end = text.find(END_MARKER)
+    if begin < 0 or end < 0:
+        raise RuntimeError(f"{context}: markers not found")
+    if end < begin:
+        raise RuntimeError(f"{context}: end marker precedes begin marker")
+    begin_eol = text.index("\n", begin) + 1
+    end_bol = text.rindex("\n", 0, end) + 1
+    return text[:begin_eol] + block + text[end_bol:]
 
 
 def _write_if_changed(path: Path, text: str) -> bool:
@@ -199,12 +197,8 @@ def _write_if_changed(path: Path, text: str) -> bool:
     print(f"wrote {path}", file=sys.stderr)
     return True
 
-# --- main ----------------------------------------------------------------------
-
-
 def _fetch_raw(filename: str) -> bytes:
-    """Fetch one c2j model. Raises RuntimeError on any network/HTTP error;
-    the caller decides how to react (e.g. fall back to cached outputs)."""
+    """Fetch one c2j model. Raises RuntimeError on any network/HTTP error."""
     url = MODEL_URL_TEMPLATE.format(filename=filename)
     print(f"# fetching {url}", file=sys.stderr)
     try:
@@ -216,165 +210,45 @@ def _fetch_raw(filename: str) -> bytes:
         # HTTP responses (rate-limiting, model moved/renamed, etc.).
         raise RuntimeError(f"failed to fetch {url}: {e}") from e
 
-
-def _sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+# --- main ----------------------------------------------------------------------
 
 
-def _sha256_file(path: Path) -> str:
-    return _sha256_bytes(path.read_bytes())
-
-
-def _load_hashes(path: Path) -> dict:
-    if path.exists():
-        try:
-            return json.loads(path.read_text())
-        except json.JSONDecodeError:
-            pass
-    return {}
-
-
-def _save_hashes(path: Path, hashes: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(hashes, indent=2, sort_keys=True) + "\n")
+def _render_block(per_service: dict[str, list[ServiceError]], render, indent: str) -> str:
+    """One block covering every service, each labelled so the committed file
+    stays readable."""
+    parts = []
+    for service, errors in per_service.items():
+        parts.append(f"{indent}// {service.upper()}\n")
+        parts.append(render(errors, indent) + "\n")
+    return "".join(parts)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true",
-                        help="print generated blocks to stdout instead of "
-                             "writing any files")
-    parser.add_argument("--force", action="store_true",
-                        help="regenerate even if the cached sidefile shows "
-                             "all model/template/output hashes still match")
-    parser.add_argument("--output-dir", type=Path, default=None,
-                        help="build-system mode: read the source templates "
-                             "utils/s3/aws_error_definitions.{hh,cc}.in and "
-                             "write the fully-expanded copies (plus the "
-                             "hashes sidefile) to <output-dir>/utils/s3/. "
-                             "When omitted, the generated files land next to "
-                             "the templates.")
+                        help="print the generated blocks instead of rewriting "
+                             "the files")
     args = parser.parse_args()
 
-    # Where do generated files (and the sidefile) live? In `--output-dir`
-    # mode: under the build tree. Otherwise: alongside the source templates
-    # (developer in-place workflow).
-    if args.output_dir is not None:
-        out_dir = args.output_dir / "utils" / "s3"
-    else:
-        out_dir = HERE
-    header_out = out_dir / GENERATED_HEADER_NAME
-    source_out = out_dir / GENERATED_SOURCE_NAME
-    hashes_file = out_dir / HASHES_NAME
-
-    # Compute fresh hashes for the inputs we can hash without hitting the
-    # network first (templates).
-    fresh: dict = {
-        "templates": {
-            HEADER_TEMPLATE.name: _sha256_file(HEADER_TEMPLATE),
-            SOURCE_TEMPLATE.name: _sha256_file(SOURCE_TEMPLATE),
-        },
-    }
-
-    # Fetch models and hash them. If the network is unreachable but we
-    # already have generated outputs whose hashes match the sidefile, fall
-    # back to those (offline / air-gapped builds must still succeed). If we
-    # have no usable cache, the build must fail loudly.
-    raw_models: dict[str, bytes] = {}
-    fresh["models"] = {}
-    fetch_error: str | None = None
-    try:
-        for service, filename in SERVICES.items():
-            raw = _fetch_raw(filename)
-            raw_models[service] = raw
-            fresh["models"][service] = _sha256_bytes(raw)
-    except RuntimeError as e:
-        fetch_error = str(e)
-
-    cached = _load_hashes(hashes_file)
-    cached_gen = cached.get("generated", {})
-
-    if fetch_error is not None:
-        # No network. If cached outputs are present at all we let the build
-        # proceed with them — leaving a developer stranded without a
-        # buildable tree is worse than shipping a possibly-stale registry.
-        # If the recorded hashes don't match (someone hand-edited the
-        # generated files, or the sidefile is stale) we surface a second
-        # warning so it's not silent.
-        outputs_present = (
-            not args.dry_run
-            and header_out.exists() and source_out.exists()
-        )
-        if outputs_present and not args.force:
-            print(f"warning: {fetch_error}", file=sys.stderr)
-            hashes_match = (
-                cached_gen.get(header_out.name) == _sha256_file(header_out)
-                and cached_gen.get(source_out.name) == _sha256_file(source_out)
-            )
-            if not hashes_match:
-                print(f"warning: cached generated files at {out_dir} do not "
-                      f"match the sidefile hashes (manual edits or stale "
-                      f"sidefile); using them anyway to keep the build "
-                      f"working", file=sys.stderr)
-            else:
-                print(f"warning: keeping existing generated files at "
-                      f"{out_dir} (offline build)", file=sys.stderr)
-            return 0
-        # No cached outputs to fall back to, or --force was requested.
-        sys.exit(f"error: {fetch_error} and no cached outputs at "
-                 f"{out_dir}; cannot regenerate offline")
-
-    # Short-circuit only if every input matches AND the outputs on disk
-    # still match what we last wrote (guards against manual edits).
-    outputs_pristine = (
-        header_out.exists()
-        and source_out.exists()
-        and cached_gen.get(header_out.name) == _sha256_file(header_out)
-        and cached_gen.get(source_out.name) == _sha256_file(source_out)
-    ) if not args.dry_run else False
-
-    if (not args.force and not args.dry_run
-            and cached.get("models") == fresh["models"]
-            and cached.get("templates") == fresh["templates"]
-            and outputs_pristine):
-        print("models, templates and generated outputs all match cached "
-              "sidefile; nothing to do", file=sys.stderr)
-        return 0
-
     per_service = {
-        s: _extract_service_errors(json.loads(raw_models[s]))
-        for s in SERVICES
+        service: _extract_service_errors(json.loads(_fetch_raw(filename)))
+        for service, filename in SERVICES.items()
     }
+
+    enum_block = _render_block(per_service, _render_enum_lines, "    ")
+    map_block = _render_block(per_service, _render_mapping_lines, "        ")
 
     if args.dry_run:
-        for service, errors in per_service.items():
-            print(f"\n=== {service}: enum entries ===")
-            print(_render_enum_lines(errors, "    "))
-            print(f"\n=== {service}: mapping entries ===")
-            print(_render_mapping_lines(errors, "        "))
+        print(enum_block, end="")
+        print(map_block, end="")
         return 0
 
-    header_text = _substitute_tags(
-        HEADER_TEMPLATE.read_text(),
-        {s: _render_enum_lines(e, "    ") for s, e in per_service.items()},
-        context=HEADER_TEMPLATE.name)
-    source_text = _substitute_tags(
-        SOURCE_TEMPLATE.read_text(),
-        {s: _render_mapping_lines(e, "        ") for s, e in per_service.items()},
-        context=SOURCE_TEMPLATE.name)
-
-    _write_if_changed(header_out, header_text)
-    _write_if_changed(source_out, source_text)
-
-    fresh["generated"] = {
-        header_out.name: _sha256_bytes(header_text.encode()),
-        source_out.name: _sha256_bytes(source_text.encode()),
-    }
-    _save_hashes(hashes_file, fresh)
-    print(f"updated {hashes_file}", file=sys.stderr)
+    _write_if_changed(HEADER, _replace_region(HEADER.read_text(), enum_block,
+                                              HEADER.name))
+    _write_if_changed(SOURCE, _replace_region(SOURCE.read_text(), map_block,
+                                              SOURCE.name))
     return 0
 
 
 if __name__ == "__main__":
     sys.exit(main())
-
