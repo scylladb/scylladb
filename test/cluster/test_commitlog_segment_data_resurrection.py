@@ -132,7 +132,9 @@ async def test_pinned_cl_segment_doesnt_resurrect_data(manager: ScyllaClusterMan
 
         manager.driver_close()
         await manager.driver_connect()
-        cql = manager.cql
+        # driver_connect() alone doesn't guarantee full CQL availability right
+        # after a restart, so wait for it explicitly (see SCYLLADB-3908).
+        cql, _ = await manager.get_ready_cql([server])
 
         assert len(list(cql.execute(f"SELECT * FROM {tbl2} WHERE pk = {pk1}"))) == 0
 
@@ -293,6 +295,8 @@ async def test_pinned_cl_segment_doesnt_resurrect_data_but_repair_ensures_tombst
 
         manager.driver_close()
         await manager.driver_connect()
-        cql = manager.cql
+        # driver_connect() alone doesn't guarantee full CQL availability right
+        # after a restart, so wait for it explicitly (see SCYLLADB-3908).
+        cql, _ = await manager.get_ready_cql(servers)
 
         assert len(list(cql.execute(f"SELECT * FROM {tbl2} WHERE pk = {pk1}"))) == 0
