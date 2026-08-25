@@ -189,6 +189,25 @@ example the `refresh-submodules.sh seastar` will only refresh the seastar
 submodule and `refresh-submodules.sh seastar:foo` will do it fetching from
 the remote `foo` branch.
 
+## Refreshing the AWS error table
+
+`utils/s3/aws_error_definitions.{hh,cc}` map the error codes returned by S3 and
+STS to Scylla's `aws_error_type` and record whether each one is worth retrying.
+The region between the `@SCYLLA_AWS_ERRORS_BEGIN@` and `@SCYLLA_AWS_ERRORS_END@`
+markers is generated from the c2j service models published by aws/aws-sdk-cpp.
+The entries around that region are maintained by hand.
+
+ 1. Run `scripts/gen_aws_service_errors.py`, which fetches the current models
+    and rewrites the marked region in both files. It touches nothing else, so
+    hand-maintained entries survive, and running it twice is a no-op.
+ 2. Read `git diff`. AWS adds error codes and does not remove them, so the
+    change is normally new entries, occasionally a corrected retryability flag.
+ 3. Commit the result and submit it as a pull request.
+
+AWS changes these models rarely. Over the two years to 2026-08 the S3 error
+table changed three times and the STS table twice, so a quarterly run keeps
+Scylla current.
+
 ## Backporting patches
 
 To backport a patch, check out the next branch of the relevant
