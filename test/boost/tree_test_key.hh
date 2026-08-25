@@ -11,6 +11,8 @@
 #include "utils/assert.hh"
 #include <fmt/core.h>
 #include <cassert>
+#include <compare>
+#include <concepts>
 
 /*
  * Helper class that helps to check that tree

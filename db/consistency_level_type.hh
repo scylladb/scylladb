@@ -11,6 +11,7 @@
 #pragma once
 
 #include <fmt/core.h>
+#include <string_view>
 
 namespace db {
 
