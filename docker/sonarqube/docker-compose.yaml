@@ -1,0 +1,52 @@
+# Compose stack for the ScyllaDB SonarQube POC: the SonarQube server plus its
+# MCP server (mcp/sonarqube), so an agent-facing MCP endpoint comes up together
+# with SonarQube.
+#
+# Driven by ./sonarqube.sh (up / down / restart / destroy) -- it exports the
+# SONAR_* variables interpolated below. Compose also reads ./.env, where
+# `provision` saves SONAR_TOKEN; that token doubles as the MCP server's
+# SonarQube credential (MCP clients still send their own Bearer token per
+# request over HTTP transport).
+
+services:
+  sonarqube:
+    image: ${SONAR_IMAGE:-sonarqube:community}
+    container_name: ${SONAR_CONTAINER:-scylla-sonarqube}
+    ports:
+      - "${SONAR_PORT:-9090}:9000"
+    environment:
+      SONAR_TELEMETRY_ENABLE: "false"
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_logs:/opt/sonarqube/logs
+      - ./plugins:/opt/sonarqube/extensions/plugins
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/api/system/status | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  mcp:
+    image: ${SONAR_MCP_IMAGE:-mcp/sonarqube:latest}
+    container_name: ${SONAR_MCP_CONTAINER:-sonarqube-mcp}
+    ports:
+      - "${SONAR_MCP_PORT:-8080}:8080"
+    environment:
+      SONARQUBE_URL: http://sonarqube:9000
+      SONARQUBE_TOKEN: ${SONAR_TOKEN:-}
+      SONARQUBE_TRANSPORT: http
+      SONARQUBE_HTTP_HOST: "0.0.0.0"
+    # The MCP server exits at boot when SonarQube isn't reachable (it
+    # version-checks the server first thing), hence the health-gated
+    # dependency; the restart policy covers SonarQube restarting later.
+    depends_on:
+      sonarqube:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  sonarqube_data:
+    name: ${SONAR_DATA_VOL:-scylla_sonarqube_data}
+  sonarqube_logs:
+    name: ${SONAR_LOGS_VOL:-scylla_sonarqube_logs}

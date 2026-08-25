@@ -1,0 +1,3 @@
+# Plugin JARs are downloaded here by sonarqube.sh at runtime; don't commit them.
+*.jar
+!.gitignore
