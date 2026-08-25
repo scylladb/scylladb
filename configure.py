@@ -2668,7 +2668,7 @@ def write_build_file(f,
                         $builddir/{mode}/gen/${{stem}}Parser.cpp
                 description = ANTLR3 $in
             rule checkhh.{mode}
-              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags --include $in -c -o $out $builddir/{mode}/gen/empty.cc -USCYLLA_USE_PRECOMPILED_HEADER
+              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -include $in -c -o $out $builddir/{mode}/gen/empty.cc -USCYLLA_USE_PRECOMPILED_HEADER
               description = CHECKHH $in
               depfile = $out.d
             rule test.{mode}
