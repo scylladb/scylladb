@@ -1909,6 +1909,8 @@ future<executor::request_return_type> executor::update_table(client_state& clien
     _stats.api_operations.update_table++;
     elogger.trace("Updating table {}", request);
 
+    get_stats_from_schema(_proxy, *get_table(_proxy, request))->api_operations.update_table++;
+
     static const std::vector<sstring> unsupported = {
         "ProvisionedThroughput",
         "ReplicaUpdates",
@@ -3109,6 +3111,8 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     elogger.trace("put_item {}", request);
 
     auto op = make_shared<put_item_operation>(*_parsed_expression_cache, _proxy, std::move(request));
+    lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
+    per_table_stats->api_operations.put_item++;
 
     if (!audit_info) {
         // On LWT shard bounce, audit_info is already set on the originating shard.
@@ -3128,6 +3132,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
 
     if (cas_shard && !cas_shard->this_shard()) {
         _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
+        per_table_stats->api_operations.put_item--; // same, for the per-table counter
         _stats.shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info]
@@ -3141,8 +3146,6 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
             });
         });
     }
-    lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
-    per_table_stats->api_operations.put_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
     per_table_stats->operation_sizes.put_item_op_size_kb.add(bytes_to_kb_ceil(op->consumed_capacity()._total_bytes));
@@ -3233,6 +3236,7 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     }
 
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
+    per_table_stats->api_operations.delete_item++;
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
     const bool needs_read_before_write = _proxy.data_dictionary().get_config().alternator_force_read_before_write() || op->needs_read_before_write();
 
@@ -3242,6 +3246,7 @@ future<executor::request_return_type> executor::delete_item(client_state& client
 
     if (cas_shard && !cas_shard->this_shard()) {
         _stats.api_operations.delete_item--; // uncount on this shard, will be counted in other shard
+        per_table_stats->api_operations.delete_item--; // same, for the per-table counter
         _stats.shard_bounce_for_lwt++;
         per_table_stats->shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
@@ -3256,7 +3261,6 @@ future<executor::request_return_type> executor::delete_item(client_state& client
             });
         });
     }
-    per_table_stats->api_operations.delete_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
     if (op->consumed_capacity()._total_bytes > 1) {
@@ -4413,6 +4417,8 @@ future<executor::request_return_type> executor::update_item(client_state& client
     elogger.trace("update_item {}", request);
 
     auto op = make_shared<update_item_operation>(*_parsed_expression_cache, _proxy, std::move(request));
+    lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
+    per_table_stats->api_operations.update_item++;
 
     if (!audit_info) {
         // On LWT shard bounce, audit_info is already set on the originating shard.
@@ -4432,6 +4438,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
 
     if (cas_shard && !cas_shard->this_shard()) {
         _stats.api_operations.update_item--; // uncount on this shard, will be counted in other shard
+        per_table_stats->api_operations.update_item--; // same, for the per-table counter
         _stats.shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info]
@@ -4445,8 +4452,6 @@ future<executor::request_return_type> executor::update_item(client_state& client
             });
         });
     }
-    lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
-    per_table_stats->api_operations.update_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
     per_table_stats->operation_sizes.update_item_op_size_kb.add(bytes_to_kb_ceil(op->consumed_capacity()._total_bytes));

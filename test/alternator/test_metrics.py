@@ -33,8 +33,8 @@ import pytest
 import requests
 from botocore.exceptions import ClientError
 
-from test.alternator.test_cql_rbac import new_dynamodb, new_role
-from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read, scylla_config_temporary, get_signed_request
+from test.alternator.test_cql_rbac import new_dynamodb, new_dynamodb_streams, new_role
+from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read, scylla_config_temporary, get_signed_request, unique_table_name
 from test.pylib.skip_types import skip_env
 from test.alternator.test_streams import wait_for_active_stream
 from test.alternator.test_vector import vs, needs_vector_store, wait_for_vector_index_active, table_vs
@@ -1597,6 +1597,96 @@ def test_metric_reads_before_write(dynamodb, metrics, write_isolation):
                 UpdateExpression='SET a = :val',
                 ConditionExpression='attribute_exists(p)',
                 ExpressionAttributeValues={':val': 'newval'})
+
+# Test that when the user is *unauthorized* to perform an operation, both
+# global and per-table operation-count metrics (scylla_alternator_operation
+# and scylla_alternator_table_operation) are still incremented for that
+# operation. We test this for every operation that can fail on
+# authorization.
+#
+# Note that this test is about authorization failures, NOT authentication
+# failures. If authentication failed, the request is not parsed at all,
+# so neither of the operation counters would be incremented.
+#
+# Two of the operations below (CreateTable, DeleteTable) don't have a
+# per-table metric to check at all: it's not a bug, it's a deliberate
+# choice (see the "Metrics that do not make sense to report per table"
+# comment in alternator/stats.cc). All the other operations below *do*
+# have a per-table metric.
+#
+# Reproduces issue #31261 where some operations were incrementing the global
+# metric but not the per-table metric on authorization failure, and issue
+# #30754 where some operations never incremented the per-table metric at
+# all (not even on success).
+def test_unauthorized_operation_counted(dynamodb, cql, dynamodbstreams, metrics):
+    # Since "GetRecords" is one of the operations we want to test, we need
+    # a table with a stream enabled to be able to get a shard iterator
+    # to pass to GetRecords.
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}) as table:
+        # table_arn is for TagResource/UntagResource.
+        # stream_arn/shard_iterator are for GetRecords.
+        table_arn = dynamodb.meta.client.describe_table(TableName=table.name)['Table']['TableArn']
+        stream_arn, _ = wait_for_active_stream(dynamodbstreams, table)
+        shard_id = dynamodbstreams.describe_stream(StreamArn=stream_arn)['StreamDescription']['Shards'][0]['ShardId']
+        shard_iterator = dynamodbstreams.get_shard_iterator(
+            StreamArn=stream_arn, ShardId=shard_id, ShardIteratorType='TRIM_HORIZON')['ShardIterator']
+
+        # Each entry is (operation name, whether this operation has a
+        # per-table metric to check (all but CreateTable and DeleteTable do),
+        # and a function performing the operation given the unauthorized
+        # role's table resource and streams client).
+        ops = [
+            ('GetItem', True, lambda tab, streams: tab.get_item(Key={'p': random_string()}, ConsistentRead=True)),
+            ('PutItem', True, lambda tab, streams: tab.put_item(Item={'p': random_string()})),
+            ('UpdateItem', True, lambda tab, streams: tab.update_item(Key={'p': random_string()})),
+            ('DeleteItem', True, lambda tab, streams: tab.delete_item(Key={'p': random_string()})),
+            ('Query', True, lambda tab, streams: tab.query(KeyConditionExpression='p = :p',
+                ExpressionAttributeValues={':p': random_string()}, ConsistentRead=True)),
+            ('Scan', True, lambda tab, streams: tab.scan(ConsistentRead=True, Limit=1)),
+            ('BatchWriteItem', True, lambda tab, streams: tab.meta.client.batch_write_item(RequestItems={
+                tab.name: [{'PutRequest': {'Item': {'p': random_string()}}}]})),
+            ('BatchGetItem', True, lambda tab, streams: tab.meta.client.batch_get_item(RequestItems={
+                tab.name: {'Keys': [{'p': random_string()}], 'ConsistentRead': True}})),
+            ('TagResource', True, lambda tab, streams: tab.meta.client.tag_resource(
+                ResourceArn=table_arn, Tags=[{'Key': random_string(), 'Value': 'dog'}])),
+            ('UntagResource', True, lambda tab, streams: tab.meta.client.untag_resource(
+                ResourceArn=table_arn, TagKeys=[random_string()])),
+            ('UpdateTable', True, lambda tab, streams: tab.meta.client.update_table(
+                TableName=tab.name, BillingMode='PAY_PER_REQUEST')),
+            ('UpdateTimeToLive', True, lambda tab, streams: tab.meta.client.update_time_to_live(
+                TableName=tab.name, TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})),
+            ('GetRecords', True, lambda tab, streams: streams.get_records(ShardIterator=shard_iterator)),
+            ('CreateTable', False, lambda tab, streams: tab.meta.client.create_table(TableName=unique_table_name(),
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+                BillingMode='PAY_PER_REQUEST')),
+            ('DeleteTable', False, lambda tab, streams: tab.meta.client.delete_table(TableName=tab.name)),
+        ]
+        with scylla_config_auth_temporary(dynamodb, True, False):
+            with new_role(cql) as (role, key):
+                with new_dynamodb(dynamodb, role, key) as d:
+                    with new_dynamodb_streams(dynamodb, role, key) as streams:
+                        tab = d.Table(table.name)
+                        # "tab" and "streams" both use a new role "role"
+                        # that has no permission to access the table, so all
+                        # operations that need authorization should fail with
+                        # AccessDeniedException.
+                        for op, per_table, do in ops:
+                            def run():
+                                try:
+                                    do(tab, streams)
+                                    pytest.fail(f"{op} unexpectedly succeeded for an unauthorized role")
+                                except ClientError as e:
+                                    assert e.response['Error']['Code'] == 'AccessDeniedException'
+                            with check_increases_operation(metrics, [op]):
+                                if per_table:
+                                    with check_table_increases_operation(metrics, [op], table.name):
+                                        run()
+                                else:
+                                    run()
 
 # TODO: there are additional metrics which we don't yet test here. At the
 # time of this writing they are:
