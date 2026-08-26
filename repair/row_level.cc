@@ -2691,6 +2691,7 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
         // Empty targets meants all nodes
         db::hints::sync_point sync_point = co_await _sp.local().create_hint_sync_point(std::vector<locator::host_id>{});
         lowres_clock::time_point deadline = lowres_clock::now() + req.hints_timeout;
+        db::timeout_clock::time_point batchlog_deadline = db::timeout_clock::now() + req.batchlog_timeout;
         try {
             bool bm_throw = utils::get_local_injector().enter("repair_flush_hints_batchlog_handler_bm_uninitialized");
             if (!_bm.local_is_initialized() || bm_throw) {
@@ -2703,7 +2704,7 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                     rlogger.info("repair[{}]: Finished to flush hints for repair_flush_hints_batchlog_request from node={}", req.repair_uuid, from);
                     co_return;
                 },
-                [this, now, cache_disabled, &flush_time, &cache_time, &from, &req, &all_replayed] () -> future<>  {
+                [this, now, cache_disabled, &flush_time, &cache_time, &from, &req, &all_replayed, batchlog_deadline] () -> future<>  {
                     rlogger.info("repair[{}]: Started to flush batchlog for repair_flush_hints_batchlog_request from node={}", req.repair_uuid, from);
                     auto last_replay = _bm.local().get_last_replay();
                     bool issue_flush = false;
@@ -2729,7 +2730,11 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                     }
                     if (issue_flush) {
                         utils::get_local_injector().enter("repair_flush_hints_batchlog_handler");
-                        all_replayed = co_await _bm.local().do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no);
+                        // Bound the replay by req.batchlog_timeout, like the hints branch
+                        // above. Without it a slow replay holds _flush_hints_batchlog_sem
+                        // for as long as it takes, failing every later repair on this node.
+                        all_replayed = co_await _bm.local().do_batch_log_replay(
+                                db::batchlog_manager::post_replay_cleanup::no, batchlog_deadline);
                     }
                     rlogger.info("repair[{}]: Finished to flush batchlog for repair_flush_hints_batchlog_request from node={}, flushed={} all_replayed={}", req.repair_uuid, from, issue_flush, all_replayed);
                 }

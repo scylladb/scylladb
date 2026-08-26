@@ -220,6 +220,85 @@ async def test_batchlog_flush_in_repair_without_cache(manager):
     await do_batchlog_flush_in_repair(manager, 0);
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_repair_batchlog_flush_bounded_when_replay_is_stuck(manager):
+    """
+    Check that the batchlog flush a repair asks for gives up at the request's
+    batchlog_timeout when the replay cannot make progress, instead of waiting
+    for it. A replay that outlives the repair holds the node's single-slot
+    flush semaphore, which fails every later repair on that node.
+
+    Leaves a batch in the batchlog, pauses the write handlers so replaying it
+    cannot complete, and repairs. The repair coordinator carries on after a
+    failed flush, so the repair has to finish shortly after the batchlog
+    timeout, which an injection shortens to 2s.
+    """
+    cfg = {'tablets_mode_for_new_keyspaces': 'disabled'}
+    # Disable the batchlog flush cache: otherwise the periodic replay loop's
+    # own near-boot run can satisfy the default 60s cache window, so issue_flush
+    # ends up false and the replay is never reached.
+    cmdline = ["--repair-hints-batchlog-flush-cache-time-in-ms", "0"]
+    node1, node2 = await manager.servers_add(2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, [node1, node2], time.time() + 60)
+    host1 = next(h for h in hosts if h.address == str(node1.rpc_address))
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {{'mode': 'repair'}}")
+
+        # Leave a batch in the batchlog for the flush to pick up: fail its
+        # removal once it has been written, and keep the periodic replay loop
+        # from draining it in the meantime.
+        await manager.api.enable_injection(node1.ip_addr, "storage_proxy_fail_remove_from_batchlog", one_shot=False)
+        for node in (node1, node2):
+            await manager.api.enable_injection(node.ip_addr, "skip_batch_replay", one_shot=False)
+        try:
+            await cql.run_async(f"BEGIN BATCH "
+                                f"INSERT INTO {ks}.tbl (pk, ck) VALUES (0, 0); "
+                                f"INSERT INTO {ks}.tbl (pk, ck) VALUES (1, 1); "
+                                f"APPLY BATCH", host=host1)
+        except Exception as e:
+            logger.info(f"Batch failed as expected: {e}")
+        await manager.api.disable_injection(node1.ip_addr, "storage_proxy_fail_remove_from_batchlog")
+
+        # The batch lands on the batchlog endpoints picked by the coordinator,
+        # which need not include the coordinator itself.
+        counts = [(await cql.run_async("SELECT COUNT(*) FROM system.batchlog_v2", host=h))[0].count for h in hosts]
+        logger.info(f"Batchlog rows per node: {counts}")
+        assert sum(counts) > 0
+
+        # A batch is only replayed once it is older than twice
+        # write_request_timeout_in_ms, 4s with the default of 2s.
+        await asyncio.sleep(5)
+
+        await manager.api.enable_injection(node1.ip_addr, "repair_flush_hints_batchlog_timeout", one_shot=False,
+                                           parameters={"batchlog_timeout_in_s": "2"})
+        # Pause the write handlers, so whichever node holds the batch cannot
+        # finish replaying it: the replay writes to both replicas.
+        for node in (node1, node2):
+            await manager.api.enable_injection(node.ip_addr, "storage_proxy_write_response_pause", one_shot=False)
+            await manager.api.disable_injection(node.ip_addr, "skip_batch_replay")
+
+        log1 = await manager.server_open_log(node1.server_id)
+        mark1 = await log1.mark()
+        start = time.time()
+        try:
+            await asyncio.wait_for(manager.api.repair(node1.ip_addr, ks, "tbl"), timeout=60)
+        finally:
+            # Disabling releases the handlers parked in wait_for_message(), so the
+            # replay can finish before the servers are torn down.
+            for node in (node1, node2):
+                await manager.api.disable_injection(node.ip_addr, "storage_proxy_write_response_pause")
+            await manager.api.disable_injection(node1.ip_addr, "repair_flush_hints_batchlog_timeout")
+
+        duration = time.time() - start
+        logger.info(f"Repair with a stuck batchlog replay completed in {duration}s")
+        assert duration < 30
+        # The flush gave up rather than waiting for the replay, and the repair
+        # went ahead without it.
+        await log1.wait_for("Sending repair_flush_hints_batchlog failed, continue to run repair",
+                            from_mark=mark1, timeout=10)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_keyspace_drop_during_data_sync_repair(manager):
     cfg = {
         'tablets_mode_for_new_keyspaces': 'disabled',

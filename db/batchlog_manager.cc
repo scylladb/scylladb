@@ -164,21 +164,22 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_key
     });
 }
 
-future<db::all_batches_replayed> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup) {
-    return container().invoke_on(0, [cleanup] (auto& bm) -> future<db::all_batches_replayed> {
+future<db::all_batches_replayed> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup,
+        db::timeout_clock::time_point deadline) {
+    return container().invoke_on(0, [cleanup, deadline] (auto& bm) -> future<db::all_batches_replayed> {
         auto gate_holder = bm._gate.hold();
-        auto sem_units = co_await get_units(bm._sem, 1);
+        auto sem_units = co_await get_units(bm._sem, 1, deadline);
 
         auto dest = bm._cpu++ % this_smp_shard_count();
         blogger.debug("Batchlog replay on shard {}: starts", dest);
         auto last_replay = gc_clock::now();
         all_batches_replayed all_replayed = all_batches_replayed::yes;
         if (dest == 0) {
-            all_replayed = co_await bm.replay_all_failed_batches(cleanup);
+            all_replayed = co_await bm.replay_all_failed_batches(cleanup, deadline);
         } else {
-            all_replayed = co_await bm.container().invoke_on(dest, [cleanup] (auto& bm) {
-                return with_gate(bm._gate, [&bm, cleanup] {
-                    return bm.replay_all_failed_batches(cleanup);
+            all_replayed = co_await bm.container().invoke_on(dest, [cleanup, deadline] (auto& bm) {
+                return with_gate(bm._gate, [&bm, cleanup, deadline] {
+                    return bm.replay_all_failed_batches(cleanup, deadline);
                 });
             });
         }
@@ -344,6 +345,7 @@ static future<db::all_batches_replayed> process_batch(
         const db_clock::time_point now,
         db_clock::duration replay_timeout,
         std::chrono::seconds write_timeout,
+        db::timeout_clock::time_point deadline,
         const cql3::untyped_result_set::row& row) {
     const bool is_v1 = db::is_batchlog_v1(*schema);
     const auto stage = is_v1 ? db::batchlog_stage::initial : static_cast<db::batchlog_stage>(row.get_as<int8_t>("stage"));
@@ -421,7 +423,10 @@ static future<db::all_batches_replayed> process_batch(
                 // FIXME: verify that the above is reasonably true.
                 co_await limiter.reserve(size);
                 stats.write_attempts += mutations.size();
-                auto timeout = db::timeout_clock::now() + write_timeout;
+                // Never wait for the write past the deadline: the caller has given
+                // us until then to finish, and the write is the one step of a batch
+                // that can otherwise block for write_timeout.
+                auto timeout = std::min(db::timeout_clock::now() + write_timeout, deadline);
                 if (cleanup) {
                     co_await qp.proxy().send_batchlog_replay_to_all_replicas(mutations, timeout);
                 } else {
@@ -462,7 +467,7 @@ static future<db::all_batches_replayed> process_batch(
     co_return db::all_batches_replayed(!send_failed);
 }
 
-future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches_v1(post_replay_cleanup) {
+future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches_v1(post_replay_cleanup, db::timeout_clock::time_point deadline) {
     db::all_batches_replayed all_replayed = all_batches_replayed::yes;
     // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
     // max rate is scaled by the number of nodes in the cluster (same as for HHOM - see CASSANDRA-5272).
@@ -477,8 +482,13 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
     // same across a while prefix of written_at (across all ids).
     const auto now = db_clock::now();
 
-    auto batch = [this, &limiter, schema, &all_replayed, &replay_stats_per_shard, now] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
-        all_replayed = all_replayed && co_await process_batch(_qp, _stats, post_replay_cleanup::no, limiter, schema, replay_stats_per_shard, now, _replay_timeout, write_timeout, row);
+    auto batch = [this, &limiter, schema, &all_replayed, &replay_stats_per_shard, now, deadline] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
+        if (db::timeout_clock::now() >= deadline) {
+            blogger.debug("Stopping batchlog replay: deadline expired, remaining batches are left for the next replay");
+            all_replayed = all_batches_replayed::no;
+            co_return stop_iteration::yes;
+        }
+        all_replayed = all_replayed && co_await process_batch(_qp, _stats, post_replay_cleanup::no, limiter, schema, replay_stats_per_shard, now, _replay_timeout, write_timeout, deadline, row);
         co_return stop_iteration::no;
     };
 
@@ -500,7 +510,7 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
     co_return all_replayed;
 }
 
-future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches_v2(post_replay_cleanup cleanup) {
+future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches_v2(post_replay_cleanup cleanup, db::timeout_clock::time_point deadline) {
     co_await maybe_migrate_v1_to_v2();
 
     db::all_batches_replayed all_replayed = all_batches_replayed::yes;
@@ -517,12 +527,17 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
     // same across a while prefix of written_at (across all ids).
     const auto now = db_clock::now();
 
-    auto batch = [this, cleanup, &limiter, schema, &all_replayed, &replay_stats_per_shard, now] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
-        all_replayed = all_replayed && co_await process_batch(_qp, _stats, cleanup, limiter, schema, replay_stats_per_shard, now, _replay_timeout, write_timeout, row);
+    auto batch = [this, cleanup, &limiter, schema, &all_replayed, &replay_stats_per_shard, now, deadline] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
+        if (db::timeout_clock::now() >= deadline) {
+            blogger.debug("Stopping batchlog replay: deadline expired, remaining batches are left for the next replay");
+            all_replayed = all_batches_replayed::no;
+            co_return stop_iteration::yes;
+        }
+        all_replayed = all_replayed && co_await process_batch(_qp, _stats, cleanup, limiter, schema, replay_stats_per_shard, now, _replay_timeout, write_timeout, deadline, row);
         co_return stop_iteration::no;
     };
 
-    co_await with_gate(_gate, [this, cleanup, &all_replayed, batch = std::move(batch), now, &replay_stats_per_shard] () mutable -> future<> {
+    co_await with_gate(_gate, [this, cleanup, &all_replayed, batch = std::move(batch), now, &replay_stats_per_shard, deadline] () mutable -> future<> {
         blogger.debug("Started replayAllFailedBatches with cleanup: {}", cleanup);
 
         auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG_V2);
@@ -530,6 +545,10 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
         co_await coroutine::parallel_for_each(std::views::iota(0, 16), [&] (int32_t chunk) -> future<> {
             const int32_t batchlog_chunk_base = chunk * 16;
             for (int32_t i = 0; i < 16; ++i) {
+                if (db::timeout_clock::now() >= deadline) {
+                    all_replayed = all_batches_replayed::no;
+                    co_return;
+                }
                 int32_t batchlog_shard = batchlog_chunk_base + i;
 
                 co_await _qp.query_internal(
@@ -577,9 +596,9 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
     co_return all_replayed;
 }
 
-future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
+future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup, db::timeout_clock::time_point deadline) {
     if (_fs.batchlog_v2) {
-        return replay_all_failed_batches_v2(cleanup);
+        return replay_all_failed_batches_v2(cleanup, deadline);
     }
-    return replay_all_failed_batches_v1(cleanup);
+    return replay_all_failed_batches_v1(cleanup, deadline);
 }
