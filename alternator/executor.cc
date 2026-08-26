@@ -1925,6 +1925,9 @@ future<executor::request_return_type> executor::update_table(client_state& clien
     co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), enforce_authorization = bool(_enforce_authorization),
                 warn_authorization = bool(_warn_authorization), client_state_other_shard = client_state.move_to_other_shard(), empty_request, &e = this->container(), &audit_info]
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
+        // Materialize the shard-local copy once; every get() creates a whole
+        // new client_state.
+        const service::client_state local_client_state = client_state_other_shard.get();
         schema_ptr schema;
         size_t retries = mm.get_concurrent_ddl_retries();
         for (;;) {
@@ -2257,7 +2260,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                 co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, VectorIndexUpdates, StreamSpecification or BillingMode to be specified");
             }
 
-            co_await verify_permission(enforce_authorization, warn_authorization, client_state_other_shard.get(), schema, auth::permission::ALTER, e.local()._stats);
+            co_await verify_permission(enforce_authorization, warn_authorization, local_client_state, schema, auth::permission::ALTER, e.local()._stats);
             auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema, std::vector<view_ptr>(), group0_guard.write_timestamp());
             for (view_ptr view : new_views) {
                 auto m2 = co_await service::prepare_new_view_announcement(p.local(), view, group0_guard.write_timestamp());
@@ -2272,17 +2275,17 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             // Also, when we delete a GSI we should revoke any permissions set on
             // it - so if it's ever created again the old permissions wouldn't be
             // remembered for the new GSI. This is known as "auto-revoke"
-            if (client_state_other_shard.get().user() && (!new_views.empty() || !dropped_views.empty())) {
+            if (local_client_state.user() && (!new_views.empty() || !dropped_views.empty())) {
                 service::group0_batch mc(std::move(group0_guard));
                 mc.add_mutations(std::move(m));
                 for (view_ptr view : new_views) {
                     auto resource = auth::make_data_resource(view->ks_name(), view->cf_name());
                     co_await auth::grant_applicable_permissions(
-                        *client_state_other_shard.get().get_auth_service(), *client_state_other_shard.get().user(), resource, mc);
+                        *local_client_state.get_auth_service(), *local_client_state.user(), resource, mc);
                 }
                 for (const auto& view_name : dropped_views) {
                     auto resource = auth::make_data_resource(schema->ks_name(), view_name);
-                    co_await auth::revoke_all(*client_state_other_shard.get().get_auth_service(), resource, mc);
+                    co_await auth::revoke_all(*local_client_state.get_auth_service(), resource, mc);
                 }
                 std::tie(m, group0_guard) = co_await std::move(mc).extract();
             }
