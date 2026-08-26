@@ -218,6 +218,53 @@ async def test_batchlog_flush_in_repair_without_cache(manager):
     await do_batchlog_flush_in_repair(manager, 0);
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_repair_batchlog_flush_bounded_when_replay_is_stuck(manager):
+    """
+    Regression test for a bug where repair_flush_hints_batchlog_handler() could
+    hang forever if do_batch_log_replay() got stuck (e.g. under write-path
+    backpressure from a compaction backlog), which would also starve the node's
+    single-slot flush semaphore for every subsequent repair on that node.
+
+    Simulates a stuck replay via error injection ("do_batch_log_replay_wait") and
+    checks that repair still completes within a bounded time instead of hanging.
+    The "..._short_batchlog_timeout" injection shortens the otherwise-hardcoded
+    300s batchlog flush timeout to 2s, so this test doesn't need to wait minutes
+    to observe the bound.
+    """
+    cfg = {'tablets_mode_for_new_keyspaces': 'disabled'}
+    # Disable the batchlog flush cache: otherwise the periodic replay loop's
+    # own near-boot run can satisfy the default 60s cache window, so issue_flush
+    # ends up false and do_batch_log_replay() (and thus the injection below) is
+    # never actually reached.
+    cmdline = ["--repair-hints-batchlog-flush-cache-time-in-ms", "0"]
+    node1, node2 = await manager.servers_add(2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    cql.execute("CREATE TABLE ks.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {'mode': 'repair'}")
+
+    for node in (node1, node2):
+        await manager.api.enable_injection(node.ip_addr, "repair_flush_hints_batchlog_handler_short_batchlog_timeout", one_shot=False)
+        await manager.api.enable_injection(node.ip_addr, "do_batch_log_replay_wait", one_shot=False)
+
+    start = time.time()
+    try:
+        # Without with_timeout() bounding do_batch_log_replay() in
+        # repair_flush_hints_batchlog_handler(), this would hang: nothing here
+        # ever releases the "do_batch_log_replay_wait" injection while we wait.
+        await asyncio.wait_for(manager.api.repair(node1.ip_addr, "ks", "tbl"), timeout=30)
+    finally:
+        for node in (node1, node2):
+            # Disabling releases any handler currently parked in wait_for_message(),
+            # so the stuck replay can finish cleanly before the servers are torn down.
+            await manager.api.disable_injection(node.ip_addr, "do_batch_log_replay_wait")
+            await manager.api.disable_injection(node.ip_addr, "repair_flush_hints_batchlog_handler_short_batchlog_timeout")
+
+    duration = time.time() - start
+    logger.debug(f"Repair with a stuck batchlog replay completed in {duration}s")
+    assert duration < 20
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_keyspace_drop_during_data_sync_repair(manager):
     cfg = {
         'tablets_mode_for_new_keyspaces': 'disabled',
