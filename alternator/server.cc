@@ -23,6 +23,7 @@
 #include "seastarx.hh"
 #include "error.hh"
 #include "service/client_state.hh"
+#include "service/memory_limiter.hh"
 #include "service/qos/service_level_controller.hh"
 #include "utils/assert.hh"
 #include "timeout_config.hh"
@@ -765,6 +766,8 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         // for such a size.
         co_return api_error::payload_too_large(fmt::format("Request content length limit of {} bytes exceeded", request_content_length_limit));
     }
+    sstring content_encoding = req->get_header("Content-Encoding");
+    const bool content_is_compressed = content_encoding == "gzip" || content_encoding == "deflate";
     // Check the concurrency limit early, before acquiring memory and
     // reading the request body, to avoid piling up memory from excess
     // requests that will be rejected anyway. This mirrors the CQL
@@ -778,25 +781,32 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     auto leave = defer([this] () noexcept { _pending_requests.leave(); });
     // JSON parsing can allocate up to roughly 2x the size of the raw
     // document, + a couple of bytes for maintenance.
-    // If the Content-Length of the request is not available, we assume
+    // If the uncompressed length of the request is not available, we assume
     // the largest possible request (request_content_length_limit, i.e., 16 MB)
-    // and after reading the request we return_units() the excess.
-    size_t mem_estimate = (req->content_length ? req->content_length : request_content_length_limit) * 2 + 8000;
-    auto units_fut = get_units(*_memory_limiter, mem_estimate);
-    if (_memory_limiter->waiters()) {
+    // and return the excess after learning the actual length. For compressed
+    // requests this also covers the compressed and uncompressed bodies while
+    // both are alive during decompression.
+    const size_t estimated_content_length = content_is_compressed || !req->content_length
+            ? request_content_length_limit
+            : req->content_length;
+    // A semaphore request larger than its total capacity can never complete.
+    const size_t mem_estimate = std::min(estimated_content_length * 2 + 8000, _memory_limiter->total_memory());
+    auto& memory_limiter = _memory_limiter->get_semaphore();
+    auto units_fut = get_units(memory_limiter, mem_estimate);
+    if (memory_limiter.waiters()) {
         ++_executor._stats.requests_blocked_memory;
     }
     auto units = co_await std::move(units_fut);
     throwing_assert(req->content_stream);
     chunked_content content = co_await read_entire_stream(*req->content_stream, request_content_length_limit);
-    // If the request had no Content-Length, we reserved too many units
-    // so need to return some
-    if (req->content_length == 0) {
+    // If the uncompressed request had no Content-Length, we reserved too many
+    // units, so return the excess now.
+    if (req->content_length == 0 && !content_is_compressed) {
         size_t content_length = 0;
         for (const auto& chunk : content) {
             content_length += chunk.size();
         }
-        size_t new_mem_estimate = content_length * 2 + 8000;
+        const size_t new_mem_estimate = std::min(content_length * 2 + 8000, mem_estimate);
         units.return_units(mem_estimate - new_mem_estimate);
     }
     auto username = co_await verify_signature(*req, content);
@@ -805,7 +815,6 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     // We apply the request_content_length_limit again to the uncompressed
     // content - we don't want to allow a tiny compressed request to
     // expand to a huge uncompressed request.
-    sstring content_encoding = req->get_header("Content-Encoding");
     if (content_encoding == "gzip") {
         content = co_await ungzip(std::move(content), request_content_length_limit);
     } else if (content_encoding == "deflate") {
@@ -815,6 +824,14 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         // I'm not sure if this is the best error code, but let's do it too.
         // See the test test_garbage_content_encoding confirming this case.
         co_return api_error::internal("Unsupported Content-Encoding");
+    }
+    if (content_is_compressed) {
+        size_t content_length = 0;
+        for (const auto& chunk : content) {
+            content_length += chunk.size();
+        }
+        const size_t new_mem_estimate = std::min(content_length * 2 + 8000, mem_estimate);
+        units.return_units(mem_estimate - new_mem_estimate);
     }
 
     // As long as the system_clients_entry object is alive, this request will
@@ -1050,7 +1067,7 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
         std::optional<uint16_t> port_proxy_protocol, std::optional<uint16_t> https_port_proxy_protocol,
         std::optional<tls::credentials_builder> creds,
         utils::updateable_value<bool> enforce_authorization, utils::updateable_value<bool> warn_authorization, utils::updateable_value<uint64_t> max_users_query_size_in_trace_output,
-        semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
+        service::memory_limiter* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
     _memory_limiter = memory_limiter;
     _enforce_authorization = std::move(enforce_authorization);
     _warn_authorization = std::move(warn_authorization);

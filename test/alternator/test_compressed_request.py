@@ -28,16 +28,21 @@
 # and the server returning a compressed response - is a separate issue and
 # not tested here.
 
+import concurrent.futures
+import gzip
+import threading
+import time
+import zlib
+
 import boto3
 import botocore
-import gzip
-import zlib
 import requests
 import pytest
 from botocore import UNSIGNED
 
 from .util import random_string, get_cert
 from .test_manual_requests import get_signed_request
+from .test_metrics import get_metric, metrics
 
 # The compressed_req fixture is like the dynamodb fixture - providing a
 # connection to a DynamDB-API server. But the unique feature of compressed_req
@@ -115,6 +120,56 @@ def test_long_compressed_request(test_table_s, compressed_req):
     tab.put_item(Item=item)
     got_item = tab.get_item(Key={'p': p}, ConsistentRead=True)['Item']
     assert got_item == item
+
+class _DelayedBody:
+    def __init__(self, body, started, release):
+        self.body = body
+        self.started = started
+        self.release = release
+
+    def __len__(self):
+        return len(self.body)
+
+    def __iter__(self):
+        yield self.body[:1]
+        self.started.set()
+        if not self.release.wait(timeout=30):
+            raise RuntimeError('timed out waiting to send compressed request body')
+        yield self.body[1:]
+
+# A highly compressible request must reserve enough memory admission units for
+# its uncompressed body. Three requests are enough to exceed the limiter on at
+# least one of the two shards used by the test server. This reproduces issue
+# #31296: before the fix, each request reserved only its small compressed size,
+# so none of them blocked on the memory limiter.
+def test_large_compressed_request_accounted(dynamodb, test_table, metrics):
+    p = random_string()
+    payload = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "' + p + '"}, "c": {"S": "x"}}}'
+    payload = payload[:-1] + ' ' * (1024 * 1024) + payload[-1]
+    payload = gzip.compress(payload.encode('utf-8'))
+    assert len(payload) < 16 * 1024
+    req = get_signed_request(dynamodb, 'PutItem', payload)
+    headers = dict(req.headers)
+    headers.update({'Content-Encoding': 'gzip'})
+
+    blocked_before = get_metric(metrics, 'scylla_alternator_requests_blocked_memory')
+    release = threading.Event()
+    started = [threading.Event() for _ in range(3)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(started)) as executor:
+        responses = [executor.submit(requests.post, req.url, headers=headers,
+                data=_DelayedBody(req.body, event, release), verify=False, cert=req.cert, timeout=30)
+                for event in started]
+        try:
+            assert all(event.wait(timeout=10) for event in started)
+            deadline = time.monotonic() + 10
+            while get_metric(metrics, 'scylla_alternator_requests_blocked_memory') == blocked_before:
+                assert time.monotonic() < deadline, 'compressed requests did not reserve their uncompressed size'
+                time.sleep(0.05)
+        finally:
+            release.set()
+        assert all(response.result().status_code == 200 for response in responses)
+
+    assert test_table.get_item(Key={'p': p, 'c': 'x'}, ConsistentRead=True)['Item'] == {'p': p, 'c': 'x'}
 
 # The tests above configured boto3 to compress its requests so we could
 # test them. We now want to test unusual scenarios - including corrupt
