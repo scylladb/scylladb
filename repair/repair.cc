@@ -1552,7 +1552,7 @@ future<> repair::user_requested_repair_task_impl::run() {
 
         auto ranges_parallelism = _ranges_parallelism;
         bool small_table_optimization = _small_table_optimization;
-        auto parent_data = get_repair_uniq_id().task_info;
+        auto parent_data = info();
         for (auto shard : std::views::iota(0u, this_smp_shard_count())) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed, flush_time, ranges_parallelism, small_table_optimization,
                     data_centers, hosts, ignore_nodes, parent_data, germs] (repair_service& local_repair) mutable -> future<> {
@@ -1722,7 +1722,7 @@ future<> repair::data_sync_repair_task_impl::run() {
         std::vector<future<>> repair_results;
         repair_results.reserve(groups.size() * this_smp_shard_count());
         task_as.check();
-        auto parent_data = get_repair_uniq_id().task_info;
+        auto parent_data = info();
         for (auto& group : groups) {
             for (auto shard : std::views::iota(0u, this_smp_shard_count())) {
                 auto f = rs.container().invoke_on(shard, [keyspace, table_ids = group.table_ids, id, ranges_reduced_factor = group.ranges_reduced_factor, group_ranges = group.ranges, group_neighbors = group.neighbors, reason, germs, small_table_optimization = group.small_table_optimization, parent_data, frozen_topology_guard] (repair_service& local_repair) mutable -> future<> {
@@ -2547,7 +2547,7 @@ future<> repair::tablet_repair_task_impl::run() {
     co_await m->run(id, [this, &rs, id] () mutable {
         // This runs inside a seastar thread
         auto start_time = std::chrono::steady_clock::now();
-        auto parent_data = get_repair_uniq_id().task_info;
+        auto parent_data = info();
         std::atomic<int> idx{1};
 
         // Start the off strategy updater
