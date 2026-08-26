@@ -11,13 +11,13 @@ By default, ScyllaDB starts a compaction task whenever a new SSTable is written.
 
 The following compaction strategies are supported by ScyllaDB: 
 
-* Size-tiered Compaction Strategy (`STCS`_)
+* Incremental Compaction Strategy (`ICS`_) - the default strategy
 
 * Leveled Compaction Strategy (`LCS`_)
 
-* Incremental Compaction Strategy (`ICS`_)
-
 * Time-window Compaction Strategy (`TWCS`_)
+
+* Size-tiered Compaction Strategy (`STCS`_) - deprecated, an alias of `ICS`_
 
 This page concentrates on the parameters to use when creating a table with a compaction strategy. If you are unsure which strategy to use or want general information on the compaction strategies which are available to ScyllaDB, refer to :doc:`Compaction Strategies </architecture/compaction/compaction-strategies>`.
 
@@ -36,14 +36,15 @@ The following options are available for all compaction strategies.
 
 
 
-``class`` (default: SizeTieredCompactionStrategy)
+``class`` (default: IncrementalCompactionStrategy)
    Selects the compaction strategy. 
 
    It can be one of the following. If you are unsure which one to choose, refer to :doc:`Compaction Strategies </architecture/compaction/compaction-strategies>` :
 
-   * SizeTieredCompactionStrategy
-   * TimeWindowCompactionStrategy
+   * IncrementalCompactionStrategy
    * LeveledCompactionStrategy
+   * TimeWindowCompactionStrategy
+   * SizeTieredCompactionStrategy - deprecated, an alias of IncrementalCompactionStrategy
 
 
 =====
@@ -70,84 +71,6 @@ The following options are available for all compaction strategies.
    If unchecked_tombstone_compaction is set to true, tombstone_threshold will be ignored, and an SSTable will be compacted according to tombstone_compaction_interval.
 
 =====
-
-.. _STCS:
-
-Size Tiered Compaction Strategy (STCS)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-When using STCS, SSTables are put in different buckets depending on their size. When an SSTable is bucketed, the average size of the tables is compared to the new table as well as the high and low threshold levels. 
-
-The database compares each SSTable size to the average of all SSTable sizes on the node. It calculates ``bucket_low * avg_bucket_size`` and ``bucket_high * avg_bucket_size`` and then compares the result with the average SSTable size. The conditions set for ``bucket_high`` and ``bucket_low`` dictate if successive tables will be added to the same bucket. When compaction begins it merges SSTables whose size in KB are within ``[average-size * bucket_low]`` and ``[average-size * bucket_high]``.
-
-Once the ``min_threashold`` is reached, minor compaction begins. 
-
-.. _stcs-options:
-
-STCS options
-~~~~~~~~~~~~
-
-The following options only apply to SizeTieredCompactionStrategy:
-
-.. code-block:: cql
-
-   compaction = { 
-     'class' : 'SizeTieredCompactionStrategy', 
-     'bucket_high' : factor,
-     'bucket_low' : factor, 
-     'min_sstable_size' : int,
-     'min_sstable_age' : sec,
-     'min_threshold' : num_sstables,
-     'max_threshold' : num_sstables}
-
-``bucket_high`` (default: 1.5)
-   A new SSTable is added to the bucket if the SSTable size is less than bucket_high * the average size of that bucket (and if the bucket_low condition also holds). 
-   
-   For example, if **'bucket_high = 1.5'** and the **SSTable size = 14MB**, does it belong to a bucket with an average size of 10MB? 
-
-   Yes, because the **SSTable size = 14`**, which is **less** than **'bucket_high' * average bucket size = 15**. 
-
-   So, the SSTable will be added to the bucket, and the bucket’s average size will be recalculated. 
-
-=====
-
-``bucket_low`` (default: 0.5)
-   A new SSTable is added to the bucket if the SSTable size is more than bucket_low* the average size of that bucket (and if the bucket_high condition also holds). 
-
-   For example, if **'bucket_high = 0.5'** and the **SSTable size is 10MB**, does it belong to a bucket with an average size is 15MB? 
-
-   Yes, because the **SSTable size = 10** which is **more** than **'bucket_low' * average bucket size = 7.5**.
-
-   So, the SSTable will be added to the bucket, and the bucket’s average size will be recalculated.
-
-=====
-
-``min_sstable_size`` (default: 52,428,800)
-   All SSTables smaller than this number of bytes are eligible to be put into the same bucket, provided they are at least ``min_sstable_age`` old.
-
-=====
-
-``min_sstable_age`` (default: 3600)
-   The minimum age, in seconds, an SSTable must have before it is eligible to be put into the same bucket as other SSTables smaller than ``min_sstable_size``.
-   SSTables smaller than ``min_sstable_size`` that were written more recently than this are kept in their own size tier, so that similarly sized SSTables
-   are compacted together while they are still being actively written, avoiding excessive write amplification.
-
-=====
-
-``min_threshold`` (default: 4)
-   Minimum number of SSTables that need to belong to the same size bucket before compaction is triggered on that bucket.
-   If your SSTables are small, use *min_sstable_size* to define a size threshold (in bytes) below which all SSTables belong to one unique bucket.
-
-   .. note:: Enforcement of ``min_threshold`` is controlled by the ``compaction_enforce_min_threshold`` configuration option in the scylla.yaml configuration settings.
-      By default, ``compaction_enforce_min_threshold: false``, meaning the Size-Tiered Compaction Strategy will compact any bucket containing 2 or more SSTables.
-      Otherwise, if ``compaction_enforce_min_threshold: true``, the value of ``min_threshold`` is considered and only those buckets that contain at
-      least ``min_threshold`` SSTables will be compacted.
-
-=====
-
-``max_threshold`` (default: 32)
-   Maximum number of SSTables that will be compacted together in one compaction step.
-
-
 
 .. _LCS:
 
@@ -334,6 +257,31 @@ TWCS options
 
 ``max_threshold`` (default: 32)
   Maximum number of SSTables that will be compacted together in one compaction step.
+
+=====
+
+.. _STCS:
+
+Size Tiered Compaction Strategy (STCS)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. warning::
+
+   Size Tiered Compaction Strategy is deprecated. ``SizeTieredCompactionStrategy``
+   is an alias of `Incremental Compaction Strategy (ICS)`_: a table configured
+   with ``SizeTieredCompactionStrategy`` is compacted by ICS.
+
+.. _stcs-options:
+
+STCS options
+~~~~~~~~~~~~
+
+Since ``SizeTieredCompactionStrategy`` is an alias of
+``IncrementalCompactionStrategy``, it takes the same options, with the same
+defaults. See `ICS options`_.
+
+The one exception is the ``cold_reads_to_omit`` option, which ICS does not have.
+It is accepted, and ignored.
 
 =====
 
