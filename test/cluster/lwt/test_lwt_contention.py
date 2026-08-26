@@ -6,13 +6,15 @@
 """
 Test LWT (Paxos) contention with many concurrent workers.
 
-Re-implementation of test_contention_test_many_threads from scylla-dtest/paxos_tests.py
+Re-implementation of test_contention_test_many_threads and
+test_contention_test_multi_iterations from scylla-dtest/paxos_tests.py
 using asyncio instead of threads.
 
-The test spawns many async workers that all contend on the same row via a conditional
-batch statement (UPDATE IF v=? + INSERT IF NOT EXISTS). Each worker tries to increment
-a shared static column `v` exactly `iterations` times. At the end we verify that the
-final value equals workers * iterations, confirming linearizability under contention.
+Both scenarios spawn async workers that contend on the same row via a
+conditional batch statement (UPDATE IF v=? + INSERT IF NOT EXISTS). Each
+worker tries to increment a shared static column `v` exactly `iterations`
+times. At the end we verify that the final value equals workers * iterations,
+confirming linearizability under contention.
 """
 
 import asyncio
@@ -303,4 +305,22 @@ async def test_lwt_contention_many_workers(manager: ScyllaClusterManager, scale_
         num_workers=num_workers,
         iterations=1,
         max_retries_per_iteration=500,
+    )
+
+
+@pytest.mark.tier2
+async def test_lwt_contention_multi_iterations(manager: ScyllaClusterManager, scale_timeout, contention_cluster):
+    """
+    8 workers × 100 iterations — sustained contention over many CAS rounds.
+
+    Each worker performs 100 CAS+DELETE cycles on the same row. Verifies
+    the final value equals num_workers * iterations (800).
+
+    This is a tier2-only test due to the high contention load.
+    """
+    await _run_workload(
+        manager, scale_timeout, contention_cluster,
+        num_workers=8,
+        iterations=100,
+        max_retries_per_iteration=50,
     )
