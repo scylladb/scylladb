@@ -206,9 +206,85 @@ class ContentionLWTTester(BaseLWTTester):
         )
 
 
+def _cluster_config(tablets_enabled: bool) -> tuple[dict, str]:
+    """Return (server config, keyspace options) for the contention scenario."""
+    replication = "{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
+    if tablets_enabled:
+        return (
+            {"tablets_mode_for_new_keyspaces": "enabled"},
+            f"WITH replication = {replication} AND tablets = {{'initial': 1}}",
+        )
+    return (
+        {"tablets_mode_for_new_keyspaces": "disabled"},
+        f"WITH replication = {replication}",
+    )
+
+
+@pytest.fixture(params=[True, False], ids=["tablets", "vnodes"])
+async def contention_cluster(request, manager: ScyllaClusterManager) -> str:
+    """
+    Boot a 3-node cluster (dc1/rack1..3, --smp=2, paxos=trace) for LWT contention.
+
+    Parametrized over tablets and vnodes so any test depending on this fixture
+    automatically runs against both storage backends.
+
+    Returns the keyspace options string ready for `new_test_keyspace(...)`.
+    """
+    tablets_enabled = request.param
+    cfg, ks_opts = _cluster_config(tablets_enabled)
+    cmdline = ['--logger-log-level', 'paxos=trace']
+    await manager.servers_add(3, config=cfg, auto_rack_dc="dc1", cmdline=cmdline)
+    return ks_opts
+
+
+async def _run_workload(
+    manager: ScyllaClusterManager,
+    scale_timeout,
+    ks_opts: str,
+    *,
+    num_workers: int,
+    iterations: int,
+    max_retries_per_iteration: int,
+    test_timeout_s: int = 300,
+):
+    """
+    Run the contention workload against an already-booted cluster:
+    create keyspace/table, spawn workers, wait for completion, verify.
+    """
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        stop_event = asyncio.Event()
+        tester = ContentionLWTTester(
+            manager, ks, "test",
+            num_workers=num_workers,
+            iterations=iterations,
+            max_retries_per_iteration=max_retries_per_iteration,
+            scale_timeout=scale_timeout,
+        )
+
+        await tester.create_schema()
+        await tester.initialize_rows()
+
+        start = time.time()
+        logger.info(
+            "Starting contention scenario: %d workers, %d iterations",
+            num_workers, iterations,
+        )
+
+        try:
+            await tester.start_workers(stop_event)
+            await asyncio.wait_for(
+                asyncio.gather(*tester._tasks, return_exceptions=False),
+                timeout=scale_timeout(test_timeout_s),
+            )
+        finally:
+            await tester.stop_workers()
+
+        logger.info("Contention scenario completed in %.2fs", time.time() - start)
+        await tester.verify_consistency()
+
+
 @pytest.mark.tier2
-@pytest.mark.parametrize("tablets_enabled", [True, False], ids=["tablets", "vnodes"])
-async def test_lwt_contention_many_workers(manager: ScyllaClusterManager, scale_timeout, build_mode, tablets_enabled):
+async def test_lwt_contention_many_workers(manager: ScyllaClusterManager, scale_timeout, build_mode, contention_cluster):
     """
     Test many async workers repeatedly contending on the same row via LWT.
 
@@ -222,59 +298,9 @@ async def test_lwt_contention_many_workers(manager: ScyllaClusterManager, scale_
     This is a tier2-only test due to the high contention load.
     """
     num_workers = 100 if build_mode == "debug" else 300
-    num_iterations = 1
-    max_retries_per_iteration = 500
-
-    if tablets_enabled:
-        cfg = {"tablets_mode_for_new_keyspaces": "enabled"}
-        ks_opts = (
-            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
-            "AND tablets = {'initial': 1}"
-        )
-    else:
-        cfg = {"tablets_mode_for_new_keyspaces": "disabled"}
-        ks_opts = (
-            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
-        )
-
-    cmdline = [
-        '--logger-log-level', 'paxos=trace',
-    ]
-
-    await manager.servers_add(3, config=cfg, auto_rack_dc="dc1", cmdline=cmdline)
-
-    async with new_test_keyspace(manager, ks_opts) as ks:
-        stop_event = asyncio.Event()
-        tester = ContentionLWTTester(
-            manager, ks, "test",
-            num_workers=num_workers,
-            iterations=num_iterations,
-            max_retries_per_iteration=max_retries_per_iteration,
-            scale_timeout=scale_timeout,
-        )
-
-        await tester.create_schema()
-        await tester.initialize_rows()
-
-        start = time.time()
-        logger.info(
-            "Starting contention test: %d workers, %d iterations",
-            num_workers, num_iterations,
-        )
-
-        try:
-            await tester.start_workers(stop_event)
-            # Workers will finish after completing their iterations
-            # Use a timeout to prevent hanging if workers get stuck in retry loops
-            timeout = scale_timeout(300)  # 5 minutes base, scaled for slow environments
-            await asyncio.wait_for(
-                asyncio.gather(*tester._tasks, return_exceptions=False),
-                timeout=timeout,
-            )
-        finally:
-            await tester.stop_workers()
-
-        elapsed = time.time() - start
-        logger.info("Contention test completed in %.2f seconds", elapsed)
-
-        await tester.verify_consistency()
+    await _run_workload(
+        manager, scale_timeout, contention_cluster,
+        num_workers=num_workers,
+        iterations=1,
+        max_retries_per_iteration=500,
+    )
