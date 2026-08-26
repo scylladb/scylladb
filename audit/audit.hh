@@ -21,10 +21,13 @@
 
 #include "enum_set.hh"
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <set>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace db {
@@ -97,6 +100,17 @@ public:
             _query = operation + "|" + query_string;
         } else {
             _query = query_string;
+        }
+        return *this;
+    }
+    audit_info& set_query_string(std::string&& query_string, std::string_view operation) {
+        if (operation.empty()) {
+            _query = sstring(query_string);
+        } else {
+            _query = sstring(sstring::initialized_later{}, operation.size() + 1 + query_string.size());
+            std::ranges::copy(operation, _query.begin());
+            _query[operation.size()] = '|';
+            std::ranges::copy(query_string, _query.begin() + operation.size() + 1);
         }
         return *this;
     }
