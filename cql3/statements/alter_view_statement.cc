@@ -11,6 +11,7 @@
 #include <seastar/core/coroutine.hh>
 #include "cql3/statements/alter_view_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
+#include "cql3/statements/cf_prop_defs.hh"
 #include "cql3/statements/view_prop_defs.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
@@ -85,6 +86,13 @@ view_ptr alter_view_statement::prepare_view(data_dictionary::database db) const 
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>> alter_view_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
+    cql3::cql_warnings_vec warnings;
+    if (_properties) {
+        if (auto warning = check_deprecated_compaction_strategy(_properties->properties()->get_compaction_strategy_class(),
+                    qp.db().get_config().allow_deprecated_size_tiered_compaction_strategy())) {
+            warnings.emplace_back(std::move(*warning));
+        }
+    }
     auto m = co_await service::prepare_view_update_announcement(qp.proxy(), prepare_view(qp.db()), ts);
 
     using namespace cql_transport;
@@ -94,7 +102,7 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chun
             keyspace(),
             column_family());
 
-    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
+    co_return std::make_tuple(std::move(ret), std::move(m), std::move(warnings));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

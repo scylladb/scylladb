@@ -81,6 +81,12 @@ utils::chunked_vector<column_definition> create_table_statement::get_columns() c
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>
 create_table_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     utils::chunked_vector<mutation> m;
+    cql3::cql_warnings_vec warnings;
+
+    if (auto warning = check_deprecated_compaction_strategy(_properties->get_compaction_strategy_class(),
+                qp.db().get_config().allow_deprecated_size_tiered_compaction_strategy())) {
+        warnings.emplace_back(std::move(*warning));
+    }
 
     try {
         m = co_await service::prepare_new_column_family_announcement(qp.proxy(), get_cf_meta_data(qp.db()), ts);
@@ -98,7 +104,7 @@ create_table_statement::prepare_schema_mutations(query_processor& qp, const quer
     // are not yet aware of new schema or client's metadata may be outdated.
     // To force synchronization always emit the event (see
     // github.com/scylladb/scylladb/issues/16909).
-    co_return std::make_tuple(created_event(), std::move(m), std::vector<sstring>());
+    co_return std::make_tuple(created_event(), std::move(m), std::move(warnings));
 }
 
 /**
