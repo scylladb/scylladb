@@ -33,6 +33,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/net/byteorder.hh>
@@ -1156,17 +1157,16 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
     tracing::add_query(trace_state, query);
     tracing::begin(trace_state, "Preparing CQL3 query", client_state.get_client_address());
 
-    return _server._query_processor.invoke_on_others([query, &client_state, dialect] (auto& qp) mutable {
+    co_await _server._query_processor.invoke_on_others([query, &client_state, dialect] (auto& qp) mutable {
             return qp.prepare(std::move(query), client_state, dialect).discard_result();
-    }).then([this, query, stream, &client_state, trace_state, dialect] () mutable {
-        tracing::trace(trace_state, "Done preparing on remote shards");
-        return _server._query_processor.local().prepare(std::move(query), client_state, dialect).then([this, stream, trace_state] (auto msg) {
-            tracing::trace(trace_state, "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
-                return messages::result_message::prepared::cql::get_id(msg);
-            }));
-            return make_result(stream, *msg, trace_state, _version);
-        });
     });
+    tracing::trace(trace_state, "Done preparing on remote shards");
+
+    auto msg = co_await _server._query_processor.local().prepare(std::move(query), client_state, dialect);
+    tracing::trace(trace_state, "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
+        return messages::result_message::prepared::cql::get_id(msg);
+    }));
+    co_return make_result(stream, *msg, trace_state, _version);
 }
 
 static future<cql_server::process_fn_return_type>
