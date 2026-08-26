@@ -9,6 +9,8 @@
 import requests
 from . import nodetool
 import pytest
+import threading
+import time
 from contextlib import contextmanager
 
 from test.pylib.skip_types import skip_env
@@ -78,3 +80,17 @@ def scylla_inject_error(cql, err, one_shot=False):
     finally:
         print("Disabling error injection", err)
         delete_request(cql, f'v2/error_injection/injection/{err}')
+
+# Waits until a fiber reaches the given error injection. The injection's enter
+# count is bumped before the fiber parks, so once it is non-zero the injected
+# code is paused.
+def wait_for_injection_enter(cql, err, timeout=60):
+    tick = threading.Event()
+    deadline = time.monotonic() + timeout
+    while get_request(cql, f'v2/error_injection/injection/{err}/enters') == 0:
+        assert time.monotonic() < deadline, f'timed out waiting for injection {err}'
+        tick.wait(0.01)
+
+# Sends a message to a fiber paused on the given error injection, resuming it.
+def message_injection(cql, err):
+    post_request(cql, f'v2/error_injection/injection/{err}/message')
