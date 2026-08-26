@@ -15,8 +15,8 @@ from cassandra.protocol import InvalidRequest  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 
 from test.cluster.util import new_test_keyspace
-from test.pylib.manager_client import ManagerClient
-from test.pylib.scylla_cluster import ScyllaVersionDescription
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.scylla_server import ScyllaVersionDescription
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, wait_for_view
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ async def fill(cql, table, rows):
         await cql.run_async(insert, [p, v])
 
 
-async def test_resumed_page_keeps_its_plan_on_another_coordinator(manager: ManagerClient) -> None:
+async def test_resumed_page_keeps_its_plan_on_another_coordinator(manager: ScyllaClusterManager) -> None:
     servers = await manager.servers_add(2, auto_rack_dc="dc1")
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
@@ -84,7 +84,7 @@ async def test_resumed_page_keeps_its_plan_on_another_coordinator(manager: Manag
         assert expected == sorted(row.p for row in got)
 
 
-async def test_resuming_a_dropped_index_is_refused_on_another_coordinator(manager: ManagerClient) -> None:
+async def test_resuming_a_dropped_index_is_refused_on_another_coordinator(manager: ScyllaClusterManager) -> None:
     servers = await manager.servers_add(2, auto_rack_dc="dc1")
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
@@ -112,7 +112,7 @@ async def test_resuming_a_dropped_index_is_refused_on_another_coordinator(manage
             cql.execute(stmt, host=hosts[1], paging_state=page.paging_state)
 
 
-async def mixed_version_cluster(manager: ManagerClient, old_version: ScyllaVersionDescription,
+async def mixed_version_cluster(manager: ScyllaClusterManager, old_version: ScyllaVersionDescription,
         new_binary: str):
     """Brings up two nodes on a version that records no plan in the paging state
     and upgrades one of them, so that a page can cross from a coordinator which
@@ -144,7 +144,7 @@ async def indexed_table(cql, hosts, ks):
 
 @pytest.mark.skip_mode(mode='release', reason='dev mode is enough for this test')
 @pytest.mark.skip_mode(mode='debug', reason='dev mode is enough for this test')
-async def test_paged_read_crosses_versions(manager: ManagerClient,
+async def test_paged_read_crosses_versions(manager: ScyllaClusterManager,
         scylla_2025_1: ScyllaVersionDescription, scylla_binary: str) -> None:
     """A paged read has to survive a rolling upgrade in both directions: a state
     naming no plan cannot be refused, and a state naming one has to be read
@@ -172,7 +172,7 @@ async def test_paged_read_crosses_versions(manager: ManagerClient,
 
 @pytest.mark.skip_mode(mode='release', reason='dev mode is enough for this test')
 @pytest.mark.skip_mode(mode='debug', reason='dev mode is enough for this test')
-async def test_resuming_a_pre_plan_paging_state_is_not_refused(manager: ManagerClient,
+async def test_resuming_a_pre_plan_paging_state_is_not_refused(manager: ScyllaClusterManager,
         scylla_2025_1: ScyllaVersionDescription, scylla_binary: str) -> None:
     """A state that records no plan has nothing to pin, so dropping the index it
     was reading must not make the new coordinator refuse it - what such a resume
