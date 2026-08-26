@@ -79,7 +79,8 @@ class ScyllaCluster:
                  cmdline_options_override: list[str],
                  config_options: dict[str, Any],
                  append_env: dict[str, str],
-                 scylla_exe: str) -> None:
+                 scylla_exe: str,
+                 save_log_on_success: bool = False) -> None:
         self.logger = logger
         self.vardir = vardir
         self.mode = mode
@@ -88,6 +89,7 @@ class ScyllaCluster:
         self.config_options = config_options
         self.append_env = append_env
         self.scylla_exe = scylla_exe
+        self.save_log_on_success = save_log_on_success
         self.host_registry = HostRegistry()
         self.leased_ips = set[IPAddress]()
         self.name = str(uuid.uuid1())
@@ -164,6 +166,12 @@ class ScyllaCluster:
             self.api.close()
             self.api = None
         await self.release_ips()
+        if not self.save_log_on_success:
+            # The cluster has served its purpose: a failed test's logs were
+            # copied to failed_test/ when it failed, and nothing here is read
+            # again.  Delete now rather than at exit, so that a long run
+            # doesn't keep the directories of thousands of clusters on disk.
+            await gather_safely(*(srv.uninstall() for srv in self.servers.values()))
 
     def add_teardown_callback(self, callback: Callable[[], Awaitable[None]], name: str) -> None:
         """Register a cleanup to run when this cluster is recycled.
