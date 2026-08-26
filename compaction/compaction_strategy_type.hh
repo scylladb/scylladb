@@ -14,6 +14,9 @@ namespace compaction {
 
 enum class compaction_strategy_type {
     null,
+    // Deprecated: an alias of `incremental`. A table can still be configured
+    // with the SizeTieredCompactionStrategy class name, and it is then reported
+    // back as such, but the table is compacted by ICS.
     size_tiered,
     leveled,
     time_window,

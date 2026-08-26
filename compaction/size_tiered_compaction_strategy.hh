@@ -15,6 +15,11 @@
 
 namespace compaction {
 
+// Note: the SizeTieredCompactionStrategy class name is deprecated and is now
+// just an alias of IncrementalCompactionStrategy (see make_compaction_strategy()).
+// This implementation is still used internally, per time window by TWCS and
+// for level 0 by LCS.
+
 class size_tiered_backlog_tracker;
 
 class size_tiered_compaction_strategy_options {
@@ -75,7 +80,6 @@ public:
 
     size_tiered_compaction_strategy(const std::map<sstring, sstring>& options);
     explicit size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options);
-    static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 
     // Group files of similar size into buckets.
     static std::vector<std::vector<sstables::shared_sstable>> get_buckets(const std::vector<sstables::shared_sstable>& sstables, size_tiered_compaction_strategy_options options);

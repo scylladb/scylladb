@@ -159,8 +159,21 @@ public:
     }
 
     future<std::vector<sstables::frozen_sstable_run>> candidates_as_runs(compaction::compaction_group_view& t) const override {
-        auto main_set = co_await t.main_sstable_set();
-        co_return main_set->all_sstable_runs();
+        if (!_candidates_opt) {
+            auto main_set = co_await t.main_sstable_set();
+            co_return main_set->all_sstable_runs();
+        }
+        std::unordered_map<sstables::run_id, lw_shared_ptr<sstables::sstable_run>> runs;
+        for (const auto& sst : *_candidates_opt) {
+            auto& run = runs[sst->run_identifier()];
+            if (!run) {
+                run = make_lw_shared<sstables::sstable_run>();
+            }
+            BOOST_REQUIRE(run->insert(sst));
+        }
+        co_return runs | std::views::values | std::views::transform([] (auto& run) {
+            return sstables::frozen_sstable_run(std::move(run));
+        }) | std::ranges::to<std::vector>();
     }
 };
 
@@ -2419,6 +2432,26 @@ SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_s3_test, *boost::unit_test::p
 SEASTAR_FIXTURE_TEST_CASE(size_tiered_beyond_max_threshold_gcs_test, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
     return test_env::do_with_async([](test_env& env) { size_tiered_beyond_max_threshold_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
+}
+
+// SizeTieredCompactionStrategy is deprecated and is merely an alias of
+// IncrementalCompactionStrategy. The class name is still kept in the schema and
+// reported back as-is, but the table is compacted by ICS, and it takes the ICS
+// options rather than the STCS ones.
+SEASTAR_THREAD_TEST_CASE(size_tiered_is_alias_of_incremental) {
+    auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::size_tiered, {});
+    BOOST_REQUIRE(cs.type() == compaction::compaction_strategy_type::incremental);
+
+    auto validate = [] (std::map<sstring, sstring> options) {
+        compaction::compaction_strategy_impl::validate_options_for_strategy_type(options, compaction::compaction_strategy_type::size_tiered);
+    };
+    // An ICS-only option is accepted under the STCS name.
+    BOOST_REQUIRE_NO_THROW(validate({{"space_amplification_goal", "1.5"}}));
+    // So is the one STCS option ICS doesn't have, which is ignored, so that a
+    // schema dumped from an older version can still be replayed as-is.
+    BOOST_REQUIRE_NO_THROW(validate({{"cold_reads_to_omit", "0.5"}}));
+    // An option neither of them has is still rejected.
+    BOOST_REQUIRE_THROW(validate({{"no_such_option", "0.5"}}), exceptions::configuration_exception);
 }
 
 void sstable_expired_data_ratio(test_env& env) {

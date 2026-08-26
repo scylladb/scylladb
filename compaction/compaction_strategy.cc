@@ -170,16 +170,21 @@ void compaction_strategy_impl::validate_options_for_strategy_type(const std::map
     compaction_strategy_impl::validate_options(options, unchecked_options);
     switch (type) {
         case compaction_strategy_type::size_tiered:
-            size_tiered_compaction_strategy::validate_options(options, unchecked_options);
+            // STCS is deprecated and is an alias of ICS, so it takes the ICS options.
+            incremental_compaction_strategy::validate_options(options, unchecked_options);
+            // Accept, and ignore, the one STCS option ICS doesn't have, so that a
+            // schema dumped from an older version can still be replayed as-is.
+            // Its value isn't parsed, since nothing will read it.
+            unchecked_options.erase(size_tiered_compaction_strategy_options::COLD_READS_TO_OMIT_KEY);
+            break;
+        case compaction_strategy_type::incremental:
+            incremental_compaction_strategy::validate_options(options, unchecked_options);
             break;
         case compaction_strategy_type::leveled:
             leveled_compaction_strategy::validate_options(options, unchecked_options);
             break;
         case compaction_strategy_type::time_window:
             time_window_compaction_strategy::validate_options(options, unchecked_options);
-            break;
-        case compaction_strategy_type::incremental:
-            incremental_compaction_strategy::validate_options(options, unchecked_options);
             break;
         default:
             break;
@@ -681,13 +686,6 @@ size_tiered_compaction_strategy::size_tiered_compaction_strategy(const size_tier
     : _options(options)
 {}
 
-// options is a map of compaction strategy options and their values.
-// unchecked_options is an analogical map from which already checked options are deleted.
-// This helps making sure that only allowed options are being set.
-void size_tiered_compaction_strategy::validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
-    size_tiered_compaction_strategy_options::validate(options, unchecked_options);
-}
-
 std::unique_ptr<compaction_backlog_tracker::impl> size_tiered_compaction_strategy::make_backlog_tracker() const {
     return std::make_unique<size_tiered_backlog_tracker>(_options);
 }
@@ -766,9 +764,6 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
     case compaction_strategy_type::null:
         impl = ::make_shared<null_compaction_strategy>();
         break;
-    case compaction_strategy_type::size_tiered:
-        impl = ::make_shared<size_tiered_compaction_strategy>(options);
-        break;
     case compaction_strategy_type::leveled:
         impl = ::make_shared<leveled_compaction_strategy>(options);
         break;
@@ -782,8 +777,22 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
                 compaction_strategy::name(compaction_strategy_type::null));
         impl = ::make_shared<null_compaction_strategy>();
         break;
+    case compaction_strategy_type::size_tiered:
+        // STCS is deprecated. It is kept only as an alias of ICS, which
+        // provides the same read and write amplification with a much lower
+        // space amplification. See scylladb/scylladb#22306.
+        // Note that size-tiered compaction is still used internally, per time
+        // window by TWCS and for level 0 by LCS.
+        // Logged on one shard only: every shard builds a strategy per table.
+        if (this_shard_id() == 0 && options.contains(size_tiered_compaction_strategy_options::COLD_READS_TO_OMIT_KEY)) {
+            compaction_strategy_logger.warn("Ignoring the {} option: it is not supported by {}, which {} is now an alias of.",
+                    size_tiered_compaction_strategy_options::COLD_READS_TO_OMIT_KEY,
+                    compaction_strategy::name(compaction_strategy_type::incremental),
+                    compaction_strategy::name(compaction_strategy_type::size_tiered));
+        }
+        [[fallthrough]];
     case compaction_strategy_type::incremental:
-        impl = make_shared<incremental_compaction_strategy>(incremental_compaction_strategy(options));
+        impl = ::make_shared<incremental_compaction_strategy>(options);
         break;
     default:
         throw std::runtime_error("strategy not supported");

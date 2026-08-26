@@ -35,9 +35,20 @@ def test_size_tiered_compaction_strategy_options(cql, table1):
     assert_throws(cql, table1, r"bucket_low value \(0\) must be between 0.0 and 1.0", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'bucket_low' : 0.0 }")
     assert_throws(cql, table1, r"bucket_low value \(1.3\) must be between 0.0 and 1.0", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'bucket_low' : 1.3 }")
     assert_throws(cql, table1, r"bucket_high value \(0.7\) must be greater than 1.0", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'bucket_high' : 0.7 }")
-    assert_throws(cql, table1, r"cold_reads_to_omit value \(-8.1\) must be between 0.0 and 1.0", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'cold_reads_to_omit' : -8.1 }")
-    assert_throws(cql, table1, r"cold_reads_to_omit value \(3.5\) must be between 0.0 and 1.0", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'cold_reads_to_omit' : 3.5 }")
     assert_throws(cql, table1, r"min_threshold value \(1\) must be bigger or equal to 2", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'min_threshold' : 1 }")
+
+# In ScyllaDB, SizeTieredCompactionStrategy is deprecated and is merely an
+# alias of IncrementalCompactionStrategy. It therefore takes the ICS options -
+# including the ICS-only ones - and no longer takes the STCS-only
+# cold_reads_to_omit option. The class name is still reported back as-is.
+def test_size_tiered_is_alias_of_incremental(cql, test_keyspace, table1, scylla_only):
+    assert_throws(cql, table1, r"space_amplification_goal value \(2.2\) must be greater than 1.0 and less than or equal to 2.0", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'space_amplification_goal' : 2.2 }")
+    # The one STCS option ICS doesn't have is accepted, and ignored, so that a
+    # schema dumped from an older version can still be replayed as-is.
+    with new_test_table(cql, test_keyspace, "a int PRIMARY KEY, b int",
+                        "WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'cold_reads_to_omit' : 0.5 }") as table:
+        desc = cql.execute(f"DESCRIBE TABLE {table}").one().create_statement
+        assert 'SizeTieredCompactionStrategy' in desc, f"Expected SizeTieredCompactionStrategy in DESCRIBE output but got: {desc}"
 
 def test_time_window_compaction_strategy_options(cql, table1):
     assert_throws(cql, table1, "Invalid window unit SECONDS for compaction_window_unit|SECONDS is not valid for compaction_window_unit", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'compaction_window_unit' : 'SECONDS' }")
