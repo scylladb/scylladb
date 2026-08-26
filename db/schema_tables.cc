@@ -936,7 +936,7 @@ template<typename V>
 static std::vector<V> get_list(const query::result_set_row& row, const sstring& name);
 
 // Create types for a given keyspace. This takes care of topologically sorting user defined types.
-template <typename T> static future<std::vector<user_type>> create_types(keyspace_metadata& ks, T&& range) {
+template <typename T> static future<std::vector<user_type>> create_types(keyspace_metadata& ks, T&& range, std::string_view description) {
     cql_type_parser::raw_builder builder(ks);
     std::unordered_set<bytes> names;
     for (const query::result_set_row& row : range) {
@@ -964,7 +964,7 @@ template <typename T> static future<std::vector<user_type>> create_types(keyspac
             }
         }
     }
-    co_return co_await builder.build();
+    co_return co_await builder.build(description);
 }
 
 static lw_shared_ptr<keyspace_metadata> find_keyspace_metadata(std::string_view name, replica::database& db,
@@ -976,7 +976,7 @@ static lw_shared_ptr<keyspace_metadata> find_keyspace_metadata(std::string_view 
     return db.find_keyspace(name).metadata();
 }
 
-future<std::vector<user_type>> create_types(replica::database& db, const std::vector<const query::result_set_row*>& rows, std::map<sstring, std::reference_wrapper<replica::keyspace>>& new_keyspaces) {
+future<std::vector<user_type>> create_types(replica::database& db, const std::vector<const query::result_set_row*>& rows, std::map<sstring, std::reference_wrapper<replica::keyspace>>& new_keyspaces, std::string_view description) {
     std::vector<user_type> ret;
     for (auto i = rows.begin(), e = rows.end(); i != e;) {
         const auto &row = *i;
@@ -985,7 +985,7 @@ future<std::vector<user_type>> create_types(replica::database& db, const std::ve
             return r->get_nonnull<sstring>("keyspace_name") != keyspace;
         });
         auto ks = find_keyspace_metadata(keyspace, db, new_keyspaces);
-        auto v = co_await create_types(*ks, std::ranges::subrange(i, next) | std::views::transform([] (auto&& r) -> auto& { return *r; }));
+        auto v = co_await create_types(*ks, std::ranges::subrange(i, next) | std::views::transform([] (auto&& r) -> auto& { return *r; }), description);
         std::ranges::move(v, std::back_inserter(ret));
         i = next;
     }
@@ -1315,8 +1315,8 @@ static std::vector<V> get_list(const query::result_set_row& row, const sstring& 
 }
 
 future<std::vector<user_type>> create_types_from_schema_partition(
-        keyspace_metadata& ks, lw_shared_ptr<query::result_set> result) {
-    co_return co_await create_types(ks, result->rows());
+        keyspace_metadata& ks, lw_shared_ptr<query::result_set> result, std::string_view description) {
+    co_return co_await create_types(ks, result->rows(), description);
 }
 
 seastar::future<std::vector<shared_ptr<cql3::functions::user_function>>> create_functions_from_schema_partition(

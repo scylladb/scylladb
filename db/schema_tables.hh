@@ -24,6 +24,7 @@
 
 #include <vector>
 #include <map>
+#include <string_view>
 
 namespace data_dictionary {
 class keyspace_metadata;
@@ -212,9 +213,11 @@ utils::chunked_vector<mutation> make_create_type_mutations(lw_shared_ptr<keyspac
 // Given a set of rows that is sorted by keyspace, create types for each keyspace.
 // The topological sort in each keyspace is necessary when creating types, since we can only create a type when the
 // types it reference have already been created.
-future<std::vector<user_type>> create_types(replica::database& db, const std::vector<const query::result_set_row*>& rows, std::map<sstring, std::reference_wrapper<replica::keyspace>>& new_keyspaces);
+// description identifies the caller's context (e.g. "schema merge"), and is used to disambiguate
+// the error thrown if the user defined types form a dependency cycle.
+future<std::vector<user_type>> create_types(replica::database& db, const std::vector<const query::result_set_row*>& rows, std::map<sstring, std::reference_wrapper<replica::keyspace>>& new_keyspaces, std::string_view description);
 
-future<std::vector<user_type>> create_types_from_schema_partition(keyspace_metadata& ks, lw_shared_ptr<query::result_set> result);
+future<std::vector<user_type>> create_types_from_schema_partition(keyspace_metadata& ks, lw_shared_ptr<query::result_set> result, std::string_view description);
 
 std::vector<data_type> read_arg_types(const query::result_set_row& row, const sstring& keyspace, const data_dictionary::user_types_storage& user_types);
 
