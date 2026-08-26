@@ -103,6 +103,37 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chun
     try {
         auto ksm = _attrs->as_ks_metadata(_name, *tmptr, feat, cfg);
         m = service::prepare_new_keyspace_announcement(qp.db().real_database(), ksm, ts);
+
+        // We hold a group0_guard, so no other coordinator can create a keyspace
+        // behind our back. A cluster which is already mixed cannot be brought
+        // back by refusing more keyspaces, so it only gets a warning.
+        const bool wants_object_storage = ksm->get_storage_options().is_object_storage_type();
+        switch (qp.db().real_database().get_user_storage_kind()) {
+            using enum replica::database::user_storage_kind;
+        case none:
+            break;
+        case local:
+            if (wants_object_storage) {
+                throw exceptions::invalid_request_exception(
+                    seastar::format("Cannot create keyspace '{}' in object storage: this cluster keeps its user data in local "
+                                    "storage. A cluster keeps all of its user data either locally or in object storage.",
+                                    _name));
+            }
+            break;
+        case object_storage:
+            if (!wants_object_storage) {
+                throw exceptions::invalid_request_exception(
+                    seastar::format("Cannot create keyspace '{}' in local storage: this cluster keeps its user data in object "
+                                    "storage. A cluster keeps all of its user data either locally or in object storage.",
+                                    _name));
+            }
+            break;
+        case mixed:
+            warnings.push_back("This cluster keeps some of its user data locally and some in object storage. Such a cluster is not supported.");
+            mylogger.warn("Creating keyspace {}: {}", _name, warnings.back());
+            break;
+        }
+
         // If the new keyspace uses tablets, as long as there are features
         // which aren't supported by tablets we want to warn the user that
         // they will not be usable on the new keyspace - and suggest how a
