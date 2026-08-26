@@ -2333,6 +2333,36 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
                 }
             }
         }
+        // Alternator asks for no storage options, so the keyspace it creates
+        // keeps its data locally. A cluster which is already mixed only gets a
+        // warning: refusing the table would not bring it back to either kind.
+        if (_proxy.local_db().has_keyspace(keyspace_name)) {
+            // The keyspace can predate the table: nothing stops CREATE KEYSPACE
+            // from naming one and asking for object storage. The table is then
+            // built from that keyspace's metadata rather than from the one
+            // assembled here, so it would inherit the object storage with it.
+            if (_proxy.local_db().find_keyspace(keyspace_name).metadata()->get_storage_options().is_object_storage_type()) {
+                co_return api_error::validation(fmt::format("Cannot create table {}: keyspace {} keeps its data in object storage, and an Alternator "
+                                                            "table keeps its data in local storage.",
+                                                            table_name, keyspace_name));
+            }
+        } else {
+            switch (_proxy.local_db().get_user_storage_kind()) {
+                using enum replica::database::user_storage_kind;
+            case object_storage:
+                co_return api_error::validation(fmt::format("Cannot create table {}: this cluster keeps its user data in object storage, and an Alternator "
+                                                            "table keeps its data in local storage.",
+                                                            table_name));
+            case mixed:
+                elogger.warn("Creating table {}: this cluster keeps some of its user data locally and some in object "
+                             "storage. Such a cluster is not supported.",
+                             table_name);
+                break;
+            case none:
+            case local:
+                break;
+            }
+        }
         bool table_already_exists = false;
         try {
             schema_mutations = service::prepare_new_keyspace_announcement(_proxy.local_db(), ksm, ts);
