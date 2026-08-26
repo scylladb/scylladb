@@ -379,9 +379,14 @@ private:
     void register_metrics();
     future<> snitch_reconfigured();
 
-    future<locator::tablet_map> build_tablet_map_for_migration(locator::token_metadata_ptr tm,
+public:
+    // Builds the initial tablet map for a vnodes-to-tablets migration. Depends on
+    // nothing but its arguments, so it is static and can be driven directly with a
+    // synthetic topology.
+    static future<locator::tablet_map> build_tablet_map_for_migration(locator::token_metadata_ptr tm,
             const locator::static_effective_replication_map_ptr& erm,
-            size_t target_pow2 = 0) const;
+            size_t target_pow2 = 0);
+private:
     future<std::unordered_map<table_id, uint64_t>> collect_table_sizes_for_migration(
         const locator::token_metadata& tm,
         const locator::tablet_aware_replication_strategy* trs,

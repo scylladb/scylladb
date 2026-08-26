@@ -4110,7 +4110,7 @@ future<> storage_service::update_tablet_metadata(const locator::tablet_metadata_
 future<locator::tablet_map> storage_service::build_tablet_map_for_migration(
         locator::token_metadata_ptr tm,
         const locator::static_effective_replication_map_ptr& erm,
-        size_t target_pow2) const {
+        size_t target_pow2) {
     const auto& sorted_tokens = tm->sorted_tokens();
 
     // Construct token boundaries: union of vnode tokens + optional pow2 boundaries.
