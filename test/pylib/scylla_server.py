@@ -134,6 +134,10 @@ def make_scylla_conf(mode: str, host_addr: str, seed_addrs: List[str], cluster_n
         'alternator_allow_system_table_write': True,
         'alternator_ttl_period_in_seconds': 0.5,
         'sstable_format': 'mt',
+
+        # Tests create many small clusters; preallocating and zero-filling
+        # logstor files wastes disk space and I/O.
+        'logstor_sparse_files': True,
     }
 
 # Seastar options can not be passed through scylla.yaml, use command line

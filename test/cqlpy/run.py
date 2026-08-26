@@ -343,6 +343,8 @@ def run_scylla_cmd(pid, dir):
         '--alternator-ttl-period-in-seconds=0.5',
         '--logstor-disk-size-in-mb=8',
         '--logstor-file-size-in-mb=4',
+        # Don't waste disk space and I/O on formatting logstor files
+        '--logstor-sparse-files=true',
         ], env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same
@@ -415,6 +417,7 @@ def run_precompiled_scylla_cmd(exe, pid, dir):
         cmd.remove('--logstor-disk-size-in-mb=8')
         cmd.remove('--logstor-file-size-in-mb=4')
         cmd.remove('--logstor-separator-max-memory-in-mb=8')
+        cmd.remove('--logstor-sparse-files=true')
     return (cmd, env)
 
 # Get a Cluster object to connect to CQL at the given IP address (and with

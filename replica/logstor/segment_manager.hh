@@ -45,6 +45,10 @@ struct segment_manager_config {
     uint64_t file_size = default_file_size;
     uint64_t disk_size;
     bool format_on_startup = true;
+    // Create files sparse: extend them to their nominal size without
+    // preallocating or zero-filling. Saves disk space and I/O, at the cost of
+    // fragmentation and of not reserving space up front.
+    bool sparse_files = false;
     bool compaction_enabled = true;
     size_t max_segments_per_compaction = 32;
     utils::updateable_value<double> trigger_compaction_threshold{0.05};

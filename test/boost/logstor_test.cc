@@ -329,6 +329,7 @@ logstor_config make_test_logstor_config(const std::filesystem::path& base_dir) {
             .segment_size = segment_size,
             .file_size = file_size,
             .disk_size = 4 * file_size,
+            .sparse_files = true,
             .compaction_enabled = true,
             .max_segments_per_compaction = 8,
             .compaction_sg = seastar::current_scheduling_group(),
