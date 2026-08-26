@@ -297,9 +297,62 @@ std::vector<sstring> check_against_restricted_replication_strategies(
     return warnings;
 }
 
+// A cluster keeps all of its user data either locally or in object storage.
+// Refuse a keyspace of the other kind, unless restrict_mixed_storage_clusters
+// says otherwise. A cluster which is already mixed only gets a warning whatever
+// the setting says: refusing more keyspaces would not bring it back to either
+// kind, and would leave it unable to create any user keyspace at all.
+std::vector<sstring> check_against_mixed_storage(query_processor& qp, const sstring& keyspace, const ks_prop_defs& attrs) {
+    // An existing keyspace is not created again, whether the statement carries
+    // IF NOT EXISTS or is about to fail on the name, so it has nothing to check.
+    if (qp.db().has_keyspace(keyspace)) {
+        return {};
+    }
+
+    std::vector<sstring> warnings;
+    const auto restriction = qp.db().get_config().restrict_mixed_storage_clusters();
+    if (restriction == db::tri_mode_restriction_t::mode::FALSE) {
+        return warnings;
+    }
+
+    const bool wants_object_storage = attrs.get_storage_options().is_object_storage_type();
+    const auto refuse = [&] (std::string_view asked_for, std::string_view cluster_keeps) {
+        auto message = seastar::format("Cannot create keyspace '{}' in {} storage: this cluster keeps its user data in {} "
+                                       "storage. A cluster keeps all of its user data either locally or in object storage.",
+                                       keyspace, asked_for, cluster_keeps);
+        if (restriction == db::tri_mode_restriction_t::mode::TRUE) {
+            throw exceptions::invalid_request_exception(std::move(message));
+        }
+        warnings.push_back(std::move(message));
+    };
+
+    switch (qp.db().real_database().get_user_storage_kind()) {
+        using enum replica::database::user_storage_kind;
+    case none:
+        break;
+    case local:
+        if (wants_object_storage) {
+            refuse("object", "local");
+        }
+        break;
+    case object_storage:
+        if (!wants_object_storage) {
+            refuse("local", "object");
+        }
+        break;
+    case mixed:
+        warnings.push_back("This cluster keeps some of its user data locally and some in object storage. Such a cluster is not supported.");
+        break;
+    }
+    return warnings;
+}
+
 future<::shared_ptr<messages::result_message>>
 create_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
     std::vector<sstring> warnings = check_against_restricted_replication_strategies(qp, keyspace(), *_attrs, qp.get_cql_stats(), qp.get_cql_config().replication_restrictions);
+    for (auto& warning : check_against_mixed_storage(qp, keyspace(), *_attrs)) {
+        warnings.push_back(std::move(warning));
+    }
         return schema_altering_statement::execute(qp, state, options, std::move(guard)).then([warnings = std::move(warnings)] (::shared_ptr<messages::result_message> msg) {
         for (const auto& warning : warnings) {
             msg->add_warning(warning);
