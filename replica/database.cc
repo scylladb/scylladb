@@ -1659,6 +1659,8 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
         .cell_size_warn_threshold_mb = db_config.compaction_large_cell_warning_threshold_mb,
         .cql_warnings_enabled = db_config.large_data_cql_warnings,
     };
+    cfg.activity_ewma_window_seconds = db_config.tablets_activity_ewma_window_seconds();
+    cfg.activity_rate_tick_interval = std::chrono::seconds{std::max(cfg.activity_ewma_window_seconds / 10, 1U)};
 
     return cfg;
 }
