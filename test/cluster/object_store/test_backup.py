@@ -15,6 +15,7 @@ import time
 import random
 
 from typing import Callable, Awaitable
+from dataclasses import dataclass
 from functools import partial
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
@@ -22,6 +23,7 @@ from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_t
 from test.pylib.rest_client import read_barrier, HTTPError
 from test.pylib.util import unique_name, wait_all
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
+from cassandra import ReadFailure
 from cassandra.cluster import ConsistencyLevel
 from collections import defaultdict
 from test.pylib.util import wait_for
@@ -464,7 +466,7 @@ class topo:
         self.racks = racks
         self.dcs = dcs
 
-async def create_cluster(topology, manager, logger, object_storage=None):
+async def create_cluster(topology, manager, logger, object_storage=None, extra_config=None, extra_cmdline=None):
     rf_rack_valid_keyspaces = (topology.rf <= topology.racks)
     logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks, rf_rack_valid_keyspaces: {rf_rack_valid_keyspaces}')
 
@@ -472,8 +474,12 @@ async def create_cluster(topology, manager, logger, object_storage=None):
     if object_storage:
         objconf = object_storage.create_endpoint_conf()
         cfg['object_storage_endpoints'] = objconf
+    if extra_config:
+        cfg |= extra_config
 
     cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=debug:sstable=debug:http=debug:api=info' ]
+    if extra_cmdline:
+        cmd += extra_cmdline
 
     property_files = []
     cur_dc = 0
@@ -617,6 +623,18 @@ async def do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logge
     tid = await manager.api.backup(s.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
     status = await manager.api.wait_task(s.ip_addr, tid)
     assert (status is not None) and (status['state'] == 'done')
+
+async def populate_and_backup(manager, cql, servers, object_storage, ks, cf, cf_opts, num_keys):
+    '''Create ks.cf with the given table options, fill it with num_keys rows and back it up from
+    every node. Returns the snapshot name and the manifests for a tablet-aware restore of it.'''
+    await cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int ) {cf_opts};")
+    insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+    insert_stmt.consistency_level = ConsistencyLevel.ALL
+    await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
+
+    snap_name, _ = await take_snapshot(ks, servers, manager, logger)
+    await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}', ks, cf, object_storage, manager, logger) for s in servers))
+    return snap_name, [f'{s.server_id}/{snap_name}/manifest.json' for s in servers]
 
 async def collect_mutations(cql, server, manager, ks, cf):
     host = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 30)
@@ -771,43 +789,66 @@ async def test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, o
     tables = [f'test{i}' for i in range(num_tables)]
 
     # Create the keyspace, populate multiple tables, and back them all up
-    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as src_ks:
         async def create_table(cf):
-            await cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}}};")
-            insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+            await cql.run_async(f"CREATE TABLE {src_ks}.{cf} ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}}};")
+            insert_stmt = cql.prepare(f"INSERT INTO {src_ks}.{cf} (pk, value) VALUES (?, ?)")
             insert_stmt.consistency_level = ConsistencyLevel.ALL
             await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
 
         await asyncio.gather(*(create_table(cf) for cf in tables))
 
-        snap_name, _ = await take_snapshot(ks, servers, manager, logger)
+        snap_name, _ = await take_snapshot(src_ks, servers, manager, logger)
 
         # Use a common prefix across all backup locations so the tablet-aware-restore
         # API's own 'prefix' parameter (relative to which manifests are resolved) is
         # exercised, not just the degenerate empty-prefix case.
         restore_prefix = f'restore-prefix/{snap_name}'
-        await asyncio.gather(*(do_backup(s, snap_name, f'{restore_prefix}/{s.server_id}/{cf}', ks, cf, object_storage, manager, logger) for cf in tables for s in servers))
+        await asyncio.gather(*(do_backup(s, snap_name, f'{restore_prefix}/{s.server_id}/{cf}', src_ks, cf, object_storage, manager, logger) for cf in tables for s in servers))
 
-    # Restore all tables into a fresh keyspace, distributing restore calls
-    # round-robin across num_restore_nodes nodes.
-    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
-        await asyncio.gather(*(cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int );") for cf in tables))
+        # Restore all tables into a fresh keyspace and under a differently named table,
+        # distributing restore calls round-robin across num_restore_nodes nodes. The API names
+        # only the destination, the source is addressed by the manifests, so the source keyspace
+        # is kept around to assert that the restore leaves it alone. The first destination table
+        # declares a column on top of the backed up ones, which the sstables do not carry and
+        # which therefore stays null.
+        async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as dst_ks:
+            async def create_dst_table(idx, cf):
+                extra_col = ', extra int' if idx == 0 else ''
+                await cql.run_async(f"CREATE TABLE {dst_ks}.{cf}_restored ( pk text primary key, value int{extra_col} );")
 
-        restore_nodes = servers[:num_restore_nodes]
+            await asyncio.gather(*(create_dst_table(i, cf) for i, cf in enumerate(tables)))
+            for cf in tables:
+                assert not await cql.run_async(f"SELECT pk FROM {dst_ks}.{cf}_restored;"), f'{dst_ks}.{cf}_restored is not empty before the restore'
 
-        async def restore_table(idx, cf):
-            node = restore_nodes[idx % len(restore_nodes)]
-            logger.info(f'Restore table {cf} via {node.ip_addr}')
-            manifests = [f'{s.server_id}/{cf}/manifest.json' for s in servers]
-            tid = await manager.api.restore_tablets(node.ip_addr, ks, cf, snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, restore_prefix)
-            status = await manager.api.wait_task(node.ip_addr, tid)
-            assert (status is not None) and (status['state'] == 'done'), f"Restore of {cf} via {node.ip_addr} failed: {status}"
-            assert status['progress_total'] > 0
-            assert status['progress_completed'] == status['progress_total']
+            restore_nodes = servers[:num_restore_nodes]
 
-        await asyncio.gather(*(restore_table(i, cf) for i, cf in enumerate(tables)))
+            async def restore_table(idx, cf):
+                node = restore_nodes[idx % len(restore_nodes)]
+                logger.info(f'Restore table {cf} into {dst_ks}.{cf}_restored via {node.ip_addr}')
+                manifests = [f'{s.server_id}/{cf}/manifest.json' for s in servers]
+                tid = await manager.api.restore_tablets(node.ip_addr, dst_ks, f'{cf}_restored', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, restore_prefix)
+                status = await manager.api.wait_task(node.ip_addr, tid)
+                assert (status is not None) and (status['state'] == 'done'), f"Restore of {cf} via {node.ip_addr} failed: {status}"
+                assert status['progress_total'] > 0
+                assert status['progress_completed'] == status['progress_total']
 
-        await asyncio.gather(*(check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, cf) for cf in tables))
+            await asyncio.gather(*(restore_table(i, cf) for i, cf in enumerate(tables)))
+
+            await asyncio.gather(*(check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, dst_ks, f'{cf}_restored') for cf in tables))
+
+            res = await cql.run_async(f"SELECT extra FROM {dst_ks}.{tables[0]}_restored;")
+            assert res and all(x.extra is None for x in res), f'{dst_ks}.{tables[0]}_restored has {len(res)} rows and a non-null extra after restore'
+
+            expected = {str(i): i for i in range(num_keys)}
+            for cf in tables:
+                # check_mutation_replicas() above compares partition keys and replica counts, so
+                # the values are only checked here
+                restored = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {dst_ks}.{cf}_restored;")}
+                assert restored == expected, f'Unexpected contents of {dst_ks}.{cf}_restored after restore: {len(restored)} rows'
+
+                kept = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {src_ks}.{cf};")}
+                assert kept == expected, f'Restore into {dst_ks} modified the source table {src_ks}.{cf}: {len(kept)} rows'
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -1204,6 +1245,266 @@ async def test_restore_tablets_with_different_tablet_hints(build_mode: str, mana
         desc = (await cql.run_async(f"DESC TABLE {ks}.test"))[0].create_statement
         assert f"'min_tablet_count': '{min_tablet_count_before_restore}'" in desc, f"Expected min_tablet_count={min_tablet_count_before_restore} in: {desc}"
         assert f"'max_tablet_count': '{max_tablet_count_before_restore}'" in desc, f"Expected max_tablet_count={max_tablet_count_before_restore} in: {desc}"
+
+# The keyspace and table parameters of both restore APIs name the destination, while the source is
+# addressed by the bucket prefix together with the sstable list (plain restore) or by the manifests
+# (tablet-aware restore). Nothing ties the two together, so a backup can be restored under a
+# different name. The tests below cover that, including the case that motivates it: restoring a
+# snapshot into a temporary table to cherry-pick rows that were deleted by accident, which is
+# worthless unless the live table stays untouched.
+# Refs https://scylladb.atlassian.net/browse/SCYLLADB-3739
+
+RF_1 = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}"
+TABLETS_4 = "WITH tablets = {'min_tablet_count': 4}"
+NO_TABLETS = "AND tablets = {'enabled': false}"
+
+@dataclass
+class restore_target:
+    '''A source and a destination for a restore of one table into a differently named one.
+
+    The ks_opts are appended to the keyspace CREATE statement of the respective side and the
+    cf_opts to its table's. extra_col names an int column the destination declares on top of the
+    backed up ones, which the sstables do not carry and which therefore stays null.'''
+    name: str
+    src_ks_opts: str = ''
+    src_cf_opts: str = TABLETS_4
+    dst_ks_opts: str = ''
+    dst_cf_opts: str = TABLETS_4
+    extra_col: str = ''
+
+RESTORE_TARGETS = [
+    restore_target('same_schema'),
+    restore_target('extra_column', extra_col='extra'),
+    # A backup of a tablet-based table carries a tablet count and a tablet id per sstable, but this
+    # restore streams the mutations through the write path, so the tablet layout the backup came
+    # from does not matter and the data lands in the table in either direction
+    restore_target('tablets_to_vnodes', dst_ks_opts=NO_TABLETS, dst_cf_opts=''),
+    restore_target('vnodes_to_tablets', src_ks_opts=NO_TABLETS, src_cf_opts=''),
+]
+
+@pytest.mark.parametrize("target", RESTORE_TARGETS, ids=lambda t: t.name)
+async def test_restore_into_renamed_target(manager: ScyllaClusterManager, object_storage, target):
+    '''Check that a backup of one keyspace:table can be restored into another one'''
+
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'object_storage_endpoints': objconf, 'task_ttl_in_seconds': 300}
+    cmd = ['--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=debug:sstable=debug:api=info']
+    server = await manager.server_add(config=cfg, cmdline=cmd)
+
+    cql = manager.get_cql()
+
+    cols = 'name text primary key, value text'
+    rows = {'0': 'zero', '1': 'one', '2': 'two'}
+
+    async with new_test_keyspace(manager, f'{RF_1} {target.src_ks_opts}') as src_ks:
+        await cql.run_async(f"CREATE TABLE {src_ks}.cf1 ( {cols} ) {target.src_cf_opts};")
+        await asyncio.gather(*(cql.run_async(f"INSERT INTO {src_ks}.cf1 ( name, value ) VALUES ('{name}', '{value}');") for name, value in rows.items()))
+
+        snap_name, toc_names = await take_snapshot_on_one_server(src_ks, server, manager, logger)
+        prefix = f'cf1/{snap_name}'
+        await do_backup(server, snap_name, prefix, src_ks, 'cf1', object_storage, manager, logger)
+
+        # The destination differs from the source in both the keyspace and the table name
+        async with new_test_keyspace(manager, f'{RF_1} {target.dst_ks_opts}') as dst_ks:
+            dst_cols = f'{cols}, {target.extra_col} int' if target.extra_col else cols
+            await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 ( {dst_cols} ) {target.dst_cf_opts};")
+            assert not await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;"), f'{dst_ks}.cf2 is not empty before the restore'
+
+            logger.info(f'Restore {src_ks}.cf1 into {dst_ks}.cf2')
+            tid = await manager.api.restore(server.ip_addr, dst_ks, 'cf2', object_storage.address, object_storage.bucket_name, prefix, toc_names)
+            status = await manager.api.wait_task(server.ip_addr, tid)
+            assert (status is not None) and (status['state'] == 'done'), f'Restore into {dst_ks}.cf2 failed: {status}'
+
+            res = await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;")
+            restored = {x.name: x.value for x in res}
+            assert restored == rows, f'Unexpected contents of {dst_ks}.cf2 after restore: {restored}'
+            if target.extra_col:
+                assert all(getattr(x, target.extra_col) is None for x in res), f'{dst_ks}.cf2 has a non-null {target.extra_col} after restore'
+
+            kept = {x.name: x.value for x in await cql.run_async(f"SELECT * FROM {src_ks}.cf1;")}
+            assert kept == rows, f'Restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {kept}'
+
+
+# Neither restore API checks the destination schema against the backed up one, so the two tests
+# below pin down what a mismatch does today. Both run with abort_on_malformed_sstable_error off:
+# it defaults to true in dev and debug builds, where the sstable error aborts the node instead of
+# throwing, and the tests would otherwise assert a different outcome per build mode.
+#
+# The destination schemas are read against a source of ( name text primary key, value text ): one
+# redeclares a column with a type that is not value-compatible, the other drops it.
+INCOMPATIBLE_SCHEMAS = [
+    pytest.param('name text primary key, value int', id='column_type'),
+    pytest.param('name text primary key', id='missing_column'),
+]
+
+@pytest.mark.parametrize("dst_schema", INCOMPATIBLE_SCHEMAS)
+async def test_restore_into_incompatible_schema(manager: ScyllaClusterManager, object_storage, dst_schema):
+    '''Check that restore fails when the destination schema does not match the backed up one'''
+
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'object_storage_endpoints': objconf, 'task_ttl_in_seconds': 300, 'abort_on_malformed_sstable_error': False}
+    server = await manager.server_add(config=cfg)
+
+    cql = manager.get_cql()
+
+    rows = {'0': 'zero', '1': 'one'}
+
+    async with new_test_keyspace(manager, RF_1) as src_ks:
+        await cql.run_async(f"CREATE TABLE {src_ks}.cf1 ( name text primary key, value text );")
+        await asyncio.gather(*(cql.run_async(f"INSERT INTO {src_ks}.cf1 ( name, value ) VALUES ('{n}', '{v}');") for n, v in rows.items()))
+
+        snap_name, toc_names = await take_snapshot_on_one_server(src_ks, server, manager, logger)
+        prefix = f'cf1/{snap_name}'
+        await do_backup(server, snap_name, prefix, src_ks, 'cf1', object_storage, manager, logger)
+
+        async with new_test_keyspace(manager, RF_1) as dst_ks:
+            await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 ( {dst_schema} );")
+
+            logger.info(f'Restore {src_ks}.cf1 into {dst_ks}.cf2 declared as ( {dst_schema} )')
+            tid = await manager.api.restore(server.ip_addr, dst_ks, 'cf2', object_storage.address, object_storage.bucket_name, prefix, toc_names)
+            status = await manager.api.wait_task(server.ip_addr, tid)
+
+            # This restore reads the sstables to stream their mutations, so the mismatch is
+            # detected while the task runs
+            assert status is not None and status['state'] == 'failed', f'Restore into an incompatible {dst_ks}.cf2 did not fail: {status}'
+            assert 'malformed_sstable_exception' in str(status.get('error')), f'Unexpected restore error: {status.get("error")}'
+
+            # Nothing was added to the table, so it reads as the empty table it was
+            res = await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;")
+            assert not res, f'{dst_ks}.cf2 returned {len(res)} rows after a restore that failed'
+
+            kept = {x.name: x.value for x in await cql.run_async(f"SELECT * FROM {src_ks}.cf1;")}
+            assert kept == rows, f'Failed restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {kept}'
+
+
+# The destination schemas below are read against a source of ( pk text primary key, value int ),
+# the same mismatches the plain restore is checked against above.
+TABLETS_INCOMPATIBLE_SCHEMAS = [
+    pytest.param('pk text primary key, value text', id='column_type'),
+    pytest.param('pk text primary key', id='missing_column'),
+]
+
+@pytest.mark.parametrize("dst_schema", TABLETS_INCOMPATIBLE_SCHEMAS)
+async def test_restore_tablets_into_incompatible_schema(manager: ScyllaClusterManager, object_storage, dst_schema):
+    '''Check that a tablet-aware restore into a table with a mismatching schema yields no data.
+
+    Unlike the plain restore, this one only downloads the sstables and never looks inside them, so
+    the restore task itself reports success and the mismatch surfaces on reads. Restore-time
+    validation of the destination schema would report it earlier.'''
+
+    topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 1)
+
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage,
+                                             extra_config={'abort_on_malformed_sstable_error': False})
+
+    cql = manager.get_cql()
+
+    num_keys = 20
+    expected = {str(i): i for i in range(num_keys)}
+    rf = f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}"
+
+    async with new_test_keyspace(manager, rf) as src_ks:
+        snap_name, manifests = await populate_and_backup(manager, cql, servers, object_storage, src_ks, 'cf1', TABLETS_4, num_keys)
+
+        async with new_test_keyspace(manager, rf) as dst_ks:
+            await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 ( {dst_schema} ) {TABLETS_4};")
+
+            logger.info(f'Restore {src_ks}.cf1 into {dst_ks}.cf2 declared as ( {dst_schema} )')
+            tid = await manager.api.restore_tablets(servers[1].ip_addr, dst_ks, 'cf2', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+            status = await manager.api.wait_task(servers[1].ip_addr, tid)
+            logger.info(f'Restore into an incompatible {dst_ks}.cf2 reported state={status["state"] if status else None}')
+
+            # The sstables were taken as they are, so the mismatch is only reported once a read
+            # reaches them. Require the replica to be the one that fails: a decoding error on the
+            # driver side would mean the rows were served.
+            with pytest.raises(ReadFailure):
+                await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;")
+
+            kept = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {src_ks}.cf1;")}
+            assert kept == expected, f'Restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {len(kept)} rows'
+
+
+async def test_restore_tablets_into_vnodes_table(manager: ScyllaClusterManager, object_storage):
+    '''Check that tablet-aware restore into a vnodes-based table is rejected.
+
+    The topology coordinator fails the request while setting up the per-tablet restore transitions
+    and discards its updates, so the destination stays empty.'''
+
+    topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 1)
+
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
+
+    cql = manager.get_cql()
+
+    num_keys = 20
+    expected = {str(i): i for i in range(num_keys)}
+    rf = f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}"
+
+    async with new_test_keyspace(manager, rf) as src_ks:
+        snap_name, manifests = await populate_and_backup(manager, cql, servers, object_storage, src_ks, 'cf1', TABLETS_4, num_keys)
+
+        async with new_test_keyspace(manager, f'{rf} {NO_TABLETS}') as dst_ks:
+            await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 ( pk text primary key, value int );")
+
+            logger.info(f'Restore tablet-based {src_ks}.cf1 into vnodes-based {dst_ks}.cf2')
+            tid = await manager.api.restore_tablets(servers[1].ip_addr, dst_ks, 'cf2', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+            status = await manager.api.wait_task(servers[1].ip_addr, tid)
+
+            assert status is not None and status['state'] == 'failed', f'Restore into a vnodes-based {dst_ks}.cf2 did not fail: {status}'
+            assert 'no_such_tablet_map' in str(status.get('error')), f'Unexpected restore error: {status.get("error")}'
+
+            res = await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;")
+            assert not res, f'{dst_ks}.cf2 returned {len(res)} rows after a restore that failed'
+
+            kept = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {src_ks}.cf1;")}
+            assert kept == expected, f'Failed restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {len(kept)} rows'
+
+
+async def test_restore_tablets_vnodes_backup_into_tablets_table(manager: ScyllaClusterManager, object_storage):
+    '''Check that tablet-aware restore of a vnodes-based backup is rejected.
+
+    The manifests are parsed before the restore task is created, so the rejection comes out of the
+    request itself rather than as a failed task.'''
+
+    topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 1)
+
+    # A vnodes-based backup records a tablet count of 0 in its manifest, which the tablet-aware
+    # restore reports through on_internal_error. The nodes are started with
+    # --abort-on-internal-error, which takes the node down instead, and the command line wins over
+    # the yaml file, so the flag has to be turned off there.
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage,
+                                             extra_cmdline=['--abort-on-internal-error', '0'])
+
+    cql = manager.get_cql()
+
+    num_keys = 20
+    expected = {str(i): i for i in range(num_keys)}
+    rf = f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}"
+
+    async with new_test_keyspace(manager, f'{rf} {NO_TABLETS}') as src_ks:
+        snap_name, manifests = await populate_and_backup(manager, cql, servers, object_storage, src_ks, 'cf1', '', num_keys)
+
+        async with new_test_keyspace(manager, rf) as dst_ks:
+            await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 ( pk text primary key, value int ) {TABLETS_4};")
+
+            log = await manager.server_open_log(servers[1].server_id)
+            mark = await log.mark()
+
+            logger.info(f'Restore vnodes-based {src_ks}.cf1 into tablet-based {dst_ks}.cf2')
+            with pytest.raises(HTTPError) as excinfo:
+                await manager.api.restore_tablets(servers[1].ip_addr, dst_ks, 'cf2', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+            assert excinfo.value.code == 500, f'Unexpected status for a restore of a vnodes-based backup: {excinfo.value}'
+
+            # the response carries no body, the reason is only in the log
+            assert await log.grep('Invalid tablet_count 0 in manifest', from_mark=mark), \
+                    f'{servers[1].ip_addr} did not report the tablet count of the vnodes-based manifest'
+
+            res = await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;")
+            assert not res, f'{dst_ks}.cf2 returned {len(res)} rows after a restore that failed'
+
+            kept = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {src_ks}.cf1;")}
+            assert kept == expected, f'Failed restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {len(kept)} rows'
+
 
 async def test_restore_with_non_existing_sstable(manager: ScyllaClusterManager, object_storage):
     '''Check that restore task fails well when given a non-existing sstable'''
