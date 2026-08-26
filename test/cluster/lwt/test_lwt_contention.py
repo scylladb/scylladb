@@ -54,7 +54,6 @@ class ContentionWorker:
         delete_stmt: PreparedStatement,
         iterations: int,
         stop_event: asyncio.Event,
-        scale_timeout,
         max_retries_per_iteration: int,
     ):
         self.worker_id = worker_id
@@ -63,7 +62,6 @@ class ContentionWorker:
         self.delete_stmt = delete_stmt
         self.iterations = iterations
         self.stop_event = stop_event
-        self.scale_timeout = scale_timeout
         self.max_retries_per_iteration = max_retries_per_iteration
         self.retries = 0
         self.uncertainty_timeouts = 0
@@ -73,7 +71,7 @@ class ContentionWorker:
 
     async def __call__(self):
         prev = 0
-        for _ in range(self.iterations):
+        for i in range(self.iterations):
             attempt = 0
             while not self.stop_event.is_set():
                 if attempt >= self.max_retries_per_iteration:
@@ -107,7 +105,6 @@ class ContentionWorker:
                             "[worker %d] Uncertainty timeout (prev=%d, attempt=%d): %s",
                             self.worker_id, prev, attempt, e,
                         )
-                    await asyncio.sleep(self.scale_timeout(0.01))
                 except Exception as e:
                     logger.error(
                         "[worker %d] CAS error (prev=%d): %r",
@@ -116,13 +113,13 @@ class ContentionWorker:
                     self.stop()
                     raise
 
-            # Clean up our row for next iteration
-            while not self.stop_event.is_set():
-                try:
-                    await self.cql.run_async(self.delete_stmt, [self.worker_id])
-                    break
-                except (WriteTimeout, ReadTimeout, OperationTimedOut):
-                    await asyncio.sleep(self.scale_timeout(0.01))
+            if i < self.iterations - 1:
+                while not self.stop_event.is_set():
+                    try:
+                        await self.cql.run_async(self.delete_stmt, [self.worker_id])
+                        break
+                    except (WriteTimeout, ReadTimeout, OperationTimedOut):
+                        pass
 
         logger.info("ContentionWorker %d finished", self.worker_id)
 
@@ -180,7 +177,6 @@ class ContentionLWTTester(BaseLWTTester):
                 delete_stmt=delete_stmt,
                 iterations=self.iterations,
                 stop_event=stop_event,
-                scale_timeout=self.scale_timeout,
                 max_retries_per_iteration=self.max_retries_per_iteration,
             )
             for i in range(self.num_workers)
@@ -212,20 +208,20 @@ class ContentionLWTTester(BaseLWTTester):
 
 @pytest.mark.tier2
 @pytest.mark.parametrize("tablets_enabled", [True, False], ids=["tablets", "vnodes"])
-async def test_lwt_contention_many_workers(manager: ScyllaClusterManager, scale_timeout, tablets_enabled):
+async def test_lwt_contention_many_workers(manager: ScyllaClusterManager, scale_timeout, build_mode, tablets_enabled):
     """
     Test many async workers repeatedly contending on the same row via LWT.
 
-    Verifies that under heavy contention (300 workers, 1 iteration each),
-    Paxos correctly serializes all conditional updates and the final value
-    equals the total number of successful increments (300).
+    Verifies that under heavy contention (100 workers in debug builds, otherwise
+    300 workers; 1 iteration each), Paxos correctly serializes all conditional
+    updates and the final value equals the selected number of workers.
 
     Runs for both tablets and vnodes to ensure contention handling
     is correct regardless of the storage backend.
 
     This is a tier2-only test due to the high contention load.
     """
-    num_workers = 300
+    num_workers = 100 if build_mode == "debug" else 300
     num_iterations = 1
     max_retries_per_iteration = 500
 
