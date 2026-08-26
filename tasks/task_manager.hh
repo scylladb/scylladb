@@ -47,11 +47,6 @@ using is_user_task = bool_class<struct user_task_tag>;
 
 extern logging::logger tmlogger;
 
-enum class task_kind {
-    cluster,
-    node,
-};
-
 struct task_identity;
 struct task_status;
 struct task_stats;
@@ -226,6 +221,10 @@ public:
             task_id id() const noexcept;
             task_manager::task::status& get_status() noexcept;
             future<> done() const noexcept;
+            // A handle for making this task the parent of a new task.
+            tasks::task_info info() const noexcept {
+                return tasks::make_node_task_info(_status.id, _status.shard, _status.sequence_number);
+            }
         protected:
             virtual future<> run() = 0;
             future<> run_to_completion();
@@ -357,7 +356,7 @@ public:
         // Must be called on target shard.
         // If task has a parent, data concerning its children is updated and sequence number is inherited
         // from a parent and set. Otherwise, it must be set by caller.
-        future<task_ptr> make_task(task::task_impl_ptr task_impl_ptr, task_info parent_d = task_info{});
+        future<task_ptr> make_task(task::task_impl_ptr task_impl_ptr, task_info parent_d = make_empty_task_info());
 
         // Must be called on target shard.
         template<typename TaskImpl, typename... Args>

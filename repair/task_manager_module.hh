@@ -33,7 +33,7 @@ protected:
     repair_uniq_id get_repair_uniq_id() const noexcept {
         return repair_uniq_id{
             .id = _status.sequence_number,
-            .task_info = tasks::task_info(_status.id, _status.shard)
+            .task_info = info()
         };
     }
 
@@ -287,9 +287,10 @@ public:
     }
 
     repair_uniq_id new_repair_uniq_id() noexcept {
+        auto sequence_number = new_sequence_number();
         return repair_uniq_id{
-            .id = new_sequence_number(),
-            .task_info = tasks::task_info(tasks::task_id::create_random_id(), this_shard_id())
+            .id = sequence_number,
+            .task_info = tasks::make_node_task_info(tasks::task_id::create_random_id(), this_shard_id(), sequence_number)
         };
     }
 

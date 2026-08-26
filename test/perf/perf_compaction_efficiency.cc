@@ -733,7 +733,7 @@ void do_compaction_efficiency_test(cql_test_env& env, test_config& cfg) {
         auto& cf = db.find_column_family(gs);
         auto& cm = db.get_compaction_manager();
         return cf.parallel_foreach_compaction_group_view([&cm] (compaction::compaction_group_view& v) {
-            return cm.perform_major_compaction(v, tasks::task_info{});
+            return cm.perform_major_compaction(v, tasks::make_empty_task_info());
         });
     }).get();
     auto major_compacted_bytes = get_total_bytes_on_disk(env.db(), s);
@@ -1234,7 +1234,7 @@ void do_concurrent_compaction_test(cql_test_env& env, test_config& cfg) {
         auto& cf = db.find_column_family(gs);
         auto& cm = db.get_compaction_manager();
         return cf.parallel_foreach_compaction_group_view([&cm] (compaction::compaction_group_view& v) {
-            return cm.perform_major_compaction(v, tasks::task_info{});
+            return cm.perform_major_compaction(v, tasks::make_empty_task_info());
         });
     }).get();
     auto major_compacted_bytes = get_total_bytes_on_disk(env.db(), s);

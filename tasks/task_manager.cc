@@ -619,7 +619,7 @@ future<task_manager::task_ptr> task_manager::module::make_task(task::task_impl_p
     bool abort = false;
     if (parent_d) {
         // Regular task as a parent.
-        auto sequence_number = co_await _tm.container().invoke_on(parent_d.shard, coroutine::lambda([id = parent_d.id, task = make_foreign(task), &abort] (task_manager& tm) mutable -> future<std::optional<uint64_t>> {
+        auto sequence_number = co_await _tm.container().invoke_on(parent_d.get_shard(), coroutine::lambda([id = parent_d.get_id(), task = make_foreign(task), &abort] (task_manager& tm) mutable -> future<std::optional<uint64_t>> {
             const auto& all_tasks = tm.get_local_tasks();
             if (auto it = all_tasks.find(id); it != all_tasks.end()) {
                 co_await it->second->add_child(std::move(task));

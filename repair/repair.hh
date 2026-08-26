@@ -74,14 +74,14 @@ struct repair_uniq_id {
     int id;
     // Task info containing a UUID to identify a repair job, and a shard of the job.
     // We will transit to use UUID over the integer ID.
-    tasks::task_info task_info;
+    tasks::task_info task_info = tasks::make_empty_task_info();
 
     tasks::task_id uuid() const noexcept {
-        return task_info.id;
+        return task_info.get_id();
     }
 
     unsigned shard() const noexcept {
-        return task_info.shard;
+        return task_info.get_shard();
     }
 };
 std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x);

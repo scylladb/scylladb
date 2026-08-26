@@ -5928,7 +5928,7 @@ SEASTAR_THREAD_TEST_CASE(test_split_ready_groups_own_their_post_split_range) {
 
         e.db().invoke_on_all([] (replica::database& db) {
             auto& table = db.find_column_family("ks", "cf");
-            return table.split_all_storage_groups(tasks::task_info{});
+            return table.split_all_storage_groups(tasks::make_empty_task_info());
         }).get();
 
         e.db().invoke_on_all([] (replica::database& db) {
@@ -5983,7 +5983,7 @@ SEASTAR_THREAD_TEST_CASE(basic_tablet_storage_splitting_test) {
         e.db().invoke_on_all([] (replica::database& db) {
             auto& table = db.find_column_family("ks", "cf");
             testlog.info("sstable count: {}", table.sstables_count());
-            return table.split_all_storage_groups(tasks::task_info{});
+            return table.split_all_storage_groups(tasks::make_empty_task_info());
         }).get();
 
         testlog.info("Verifying sstables are split...");

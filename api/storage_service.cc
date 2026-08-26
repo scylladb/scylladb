@@ -808,7 +808,7 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
         // fall back to the local cleanup if local cleanup is requested
         auto& db = ctx.db;
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<compaction::global_cleanup_compaction_task_impl>({}, db);
+        auto task = co_await compaction_module.make_and_start_task<compaction::global_cleanup_compaction_task_impl>(tasks::make_empty_task_info(), db);
         co_await task->done();
 
         // Mark this node as clean
@@ -837,7 +837,7 @@ static future<shared_ptr<compaction::cleanup_keyspace_compaction_task_impl>> for
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
         co_return co_await compaction_module.make_and_start_task<compaction::cleanup_keyspace_compaction_task_impl>(
-            {}, std::move(keyspace), db, table_infos, compaction::flush_mode::all_tables, tasks::is_user_task::yes);
+            tasks::make_empty_task_info(), std::move(keyspace), db, table_infos, compaction::flush_mode::all_tables, tasks::is_user_task::yes);
 }
 
 static
@@ -2270,7 +2270,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
 
         compaction::compaction_stats stats;
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<compaction::scrub_sstables_compaction_task_impl>({}, info.keyspace, db, info.column_families, info.opts, &stats);
+        auto task = co_await compaction_module.make_and_start_task<compaction::scrub_sstables_compaction_task_impl>(tasks::make_empty_task_info(), info.keyspace, db, info.column_families, info.opts, &stats);
         try {
             co_await task->done();
             if (stats.validation_errors) {

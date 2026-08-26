@@ -1478,7 +1478,7 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
     }
 
     auto ranges_parallelism = options.ranges_parallelism == -1 ? std::nullopt : std::optional<int>(options.ranges_parallelism);
-    auto task = co_await _repair_module->make_and_start_task<repair::user_requested_repair_task_impl>({}, id, std::move(keyspace), "", germs, std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes), small_table_optimization, ranges_parallelism, _gossiper.local());
+    auto task = co_await _repair_module->make_and_start_task<repair::user_requested_repair_task_impl>(tasks::make_empty_task_info(), id, std::move(keyspace), "", germs, std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes), small_table_optimization, ranges_parallelism, _gossiper.local());
     co_return id.id;
 }
 
@@ -1552,9 +1552,10 @@ future<> repair::user_requested_repair_task_impl::run() {
 
         auto ranges_parallelism = _ranges_parallelism;
         bool small_table_optimization = _small_table_optimization;
+        auto parent_data = get_repair_uniq_id().task_info;
         for (auto shard : std::views::iota(0u, this_smp_shard_count())) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed, flush_time, ranges_parallelism, small_table_optimization,
-                    data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_info, germs] (repair_service& local_repair) mutable -> future<> {
+                    data_centers, hosts, ignore_nodes, parent_data, germs] (repair_service& local_repair) mutable -> future<> {
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
                 auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), std::move(keyspace),
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
@@ -1641,7 +1642,7 @@ future<> repair_service::sync_data_using_repair(
     }
 
     SCYLLA_ASSERT(this_shard_id() == 0);
-    auto task = co_await _repair_module->make_and_start_task<repair::data_sync_repair_task_impl>({}, _repair_module->new_repair_uniq_id(), std::move(keyspace), "", std::move(ranges), std::move(neighbors), reason, ops_info, std::move(frozen_topology_guard));
+    auto task = co_await _repair_module->make_and_start_task<repair::data_sync_repair_task_impl>(tasks::make_empty_task_info(), _repair_module->new_repair_uniq_id(), std::move(keyspace), "", std::move(ranges), std::move(neighbors), reason, ops_info, std::move(frozen_topology_guard));
     co_await task->done();
 }
 
@@ -1721,9 +1722,10 @@ future<> repair::data_sync_repair_task_impl::run() {
         std::vector<future<>> repair_results;
         repair_results.reserve(groups.size() * this_smp_shard_count());
         task_as.check();
+        auto parent_data = get_repair_uniq_id().task_info;
         for (auto& group : groups) {
             for (auto shard : std::views::iota(0u, this_smp_shard_count())) {
-                auto f = rs.container().invoke_on(shard, [keyspace, table_ids = group.table_ids, id, ranges_reduced_factor = group.ranges_reduced_factor, group_ranges = group.ranges, group_neighbors = group.neighbors, reason, germs, small_table_optimization = group.small_table_optimization, parent_data = get_repair_uniq_id().task_info, frozen_topology_guard] (repair_service& local_repair) mutable -> future<> {
+                auto f = rs.container().invoke_on(shard, [keyspace, table_ids = group.table_ids, id, ranges_reduced_factor = group.ranges_reduced_factor, group_ranges = group.ranges, group_neighbors = group.neighbors, reason, germs, small_table_optimization = group.small_table_optimization, parent_data, frozen_topology_guard] (repair_service& local_repair) mutable -> future<> {
                     auto data_centers = std::vector<sstring>();
                     auto hosts = std::vector<sstring>();
                     auto ignore_nodes = std::unordered_set<locator::host_id>();
@@ -2507,7 +2509,7 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     bool sched_by_scheduler = true;
     tablet_repair_sched_info sched_info{sched_by_scheduler, stage == locator::tablet_transition_stage::rebuild_repair, incremental_mode};
     task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
-    auto task = co_await _repair_module->make_and_start_task<repair::tablet_repair_task_impl>(global_tablet_repair_task_info, id, keyspace_name, global_tablet_repair_task_info.id, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, topo_guard, std::move(sched_info), rebuild_replicas.has_value());
+    auto task = co_await _repair_module->make_and_start_task<repair::tablet_repair_task_impl>(global_tablet_repair_task_info, id, keyspace_name, global_tablet_repair_task_info.get_id(), table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, topo_guard, std::move(sched_info), rebuild_replicas.has_value());
     co_await task->done();
     auto flush_time = task->get_flush_time();
     auto delay = utils::get_local_injector().inject_parameter<uint32_t>("tablet_repair_add_delay_in_ms");

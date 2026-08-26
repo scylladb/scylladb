@@ -413,11 +413,11 @@ future<> global_major_compaction_task_impl::run() {
     auto tables_by_keyspace = get_tables_by_keyspace(_db.local());
     seastar::condition_variable cv;
     current_task_type current_task;
-    tasks::task_info parent_info{_status.id, _status.shard};
+    auto parent_info = info();
     std::vector<keyspace_tasks_info> keyspace_tasks;
     flush_mode fm = flushed_all_tables ? flush_mode::skip : _flush_mode;
     for (auto& [ks, table_infos] : tables_by_keyspace) {
-        auto task = co_await _module->make_and_start_task<major_keyspace_compaction_task_impl>(parent_info, ks, parent_info.id, _db, table_infos, fm,
+        auto task = co_await _module->make_and_start_task<major_keyspace_compaction_task_impl>(parent_info, ks, parent_info.get_id(), _db, table_infos, fm,
                 _consider_only_existing_data, &cv, &current_task);
         keyspace_tasks.emplace_back(std::move(task), ks, std::move(table_infos));
     }
@@ -453,8 +453,8 @@ future<> major_keyspace_compaction_task_impl::run() {
     }
 
     flush_mode fm = flushed_all_tables ? flush_mode::skip : _flush_mode;
+    auto parent_info = info();
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
-        tasks::task_info parent_info{_status.id, _status.shard};
         auto& module = db.get_compaction_manager().get_task_manager_module();
         auto task = co_await module.make_and_start_task<shard_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos, fm, _consider_only_existing_data);
         co_await task->done();
@@ -472,7 +472,7 @@ future<std::optional<double>> major_keyspace_compaction_task_impl::expected_tota
 future<> shard_major_keyspace_compaction_task_impl::run() {
     seastar::condition_variable cv;
     current_task_type current_task;
-    tasks::task_info parent_info{_status.id, _status.shard};
+    auto parent_info = info();
     std::vector<table_tasks_info> table_tasks;
     for (auto& ti : _local_tables) {
         table_tasks.emplace_back(co_await _module->make_and_start_task<table_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task, _flush_mode, _consider_only_existing_data), ti);
@@ -491,7 +491,7 @@ future<std::optional<double>> shard_major_keyspace_compaction_task_impl::expecte
 
 future<> table_major_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
-    tasks::task_info info{_status.id, _status.shard};
+    auto info = this->info();
     replica::table::do_flush do_flush(_flush_mode != flush_mode::skip);
     co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [info, do_flush, consider_only_existing_data = _consider_only_existing_data] (replica::table& t) {
         return t.compact_all_sstables(info, do_flush, consider_only_existing_data);
@@ -511,12 +511,13 @@ tasks::is_user_task cleanup_keyspace_compaction_task_impl::is_user_task() const 
 }
 
 future<> cleanup_keyspace_compaction_task_impl::run() {
+    auto parent_info = info();
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
         if (_flush_mode == flush_mode::all_tables) {
             co_await db.flush_all_tables();
         }
         auto& module = db.get_compaction_manager().get_task_manager_module();
-        auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>({_status.id, _status.shard}, _status.keyspace, _status.id, db, _table_infos);
+        auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos);
         co_await task->done();
     });
 }
@@ -530,6 +531,7 @@ tasks::is_user_task global_cleanup_compaction_task_impl::is_user_task() const no
 }
 
 future<> global_cleanup_compaction_task_impl::run() {
+    auto parent_info = info();
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
         co_await db.flush_all_tables();
         // Local keyspaces do not require cleanup.
@@ -542,9 +544,8 @@ future<> global_cleanup_compaction_task_impl::run() {
                 tables.emplace_back(name, schema->id());
             }
             auto& module = db.get_compaction_manager().get_task_manager_module();
-            const tasks::task_info task_info{_status.id, _status.shard};
             auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>(
-                task_info, ks, _status.id, db, std::move(tables));
+                parent_info, ks, _status.id, db, std::move(tables));
             co_await task->done();
         });
     });
@@ -570,7 +571,7 @@ future<std::optional<double>> global_cleanup_compaction_task_impl::expected_tota
 future<> shard_cleanup_keyspace_compaction_task_impl::run() {
     seastar::condition_variable cv;
     current_task_type current_task;
-    tasks::task_info parent_info{_status.id, _status.shard};
+    auto parent_info = info();
     std::vector<table_tasks_info> table_tasks;
     for (auto& ti : _local_tables) {
         table_tasks.emplace_back(co_await _module->make_and_start_task<table_cleanup_keyspace_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task), ti);
@@ -597,7 +598,7 @@ future<> table_cleanup_keyspace_compaction_task_impl::run() {
     auto owned_ranges_ptr = co_await get_owned_ranges(_status.keyspace);
     co_await run_on_table("force_keyspace_cleanup", _db, _status.keyspace, _ti, [&] (replica::table& t) {
         // skip the flush, as cleanup_keyspace_compaction_task_impl::run should have done this.
-        return t.perform_cleanup_compaction(owned_ranges_ptr, tasks::task_info{_status.id, _status.shard}, replica::table::do_flush::no);
+        return t.perform_cleanup_compaction(owned_ranges_ptr, info(), replica::table::do_flush::no);
     });
 }
 
@@ -610,9 +611,9 @@ tasks::is_user_task offstrategy_keyspace_compaction_task_impl::is_user_task() co
 }
 
 future<> offstrategy_keyspace_compaction_task_impl::run() {
+    auto parent_info = info();
     bool res = co_await _db.map_reduce0([&] (replica::database& db) -> future<bool> {
         bool needed = false;
-        tasks::task_info parent_info{_status.id, _status.shard};
         auto& module = db.get_compaction_manager().get_task_manager_module();
         auto task = co_await module.make_and_start_task<shard_offstrategy_keyspace_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos, needed);
         co_await task->done();
@@ -630,7 +631,7 @@ future<std::optional<double>> offstrategy_keyspace_compaction_task_impl::expecte
 future<> shard_offstrategy_keyspace_compaction_task_impl::run() {
     seastar::condition_variable cv;
     current_task_type current_task;
-    tasks::task_info parent_info{_status.id, _status.shard};
+    auto parent_info = info();
     std::vector<table_tasks_info> table_tasks;
     for (auto& ti : _table_infos) {
         table_tasks.emplace_back(co_await _module->make_and_start_task<table_offstrategy_keyspace_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task, _needed), ti);
@@ -645,7 +646,7 @@ future<std::optional<double>> shard_offstrategy_keyspace_compaction_task_impl::e
 
 future<> table_offstrategy_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
-    tasks::task_info info{_status.id, _status.shard};
+    auto info = this->info();
     co_await run_on_table("perform_keyspace_offstrategy_compaction", _db, _status.keyspace, _ti, [this, info] (replica::table& t) -> future<> {
         _needed |= co_await t.perform_offstrategy_compaction(info);
     });
@@ -660,8 +661,8 @@ tasks::is_user_task upgrade_sstables_compaction_task_impl::is_user_task() const 
 }
 
 future<> upgrade_sstables_compaction_task_impl::run() {
+    auto parent_info = info();
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
-        tasks::task_info parent_info{_status.id, _status.shard};
         auto& compaction_module = db.get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<shard_upgrade_sstables_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos, _exclude_current_version);
         co_await task->done();
@@ -675,7 +676,7 @@ future<std::optional<double>> upgrade_sstables_compaction_task_impl::expected_to
 future<> shard_upgrade_sstables_compaction_task_impl::run() {
     seastar::condition_variable cv;
     current_task_type current_task;
-    tasks::task_info parent_info{_status.id, _status.shard};
+    auto parent_info = info();
     std::vector<table_tasks_info> table_tasks;
     for (auto& ti : _table_infos) {
         table_tasks.emplace_back(co_await _module->make_and_start_task<table_upgrade_sstables_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task, _exclude_current_version), ti);
@@ -699,7 +700,7 @@ future<> table_upgrade_sstables_compaction_task_impl::run() {
         co_return compaction::make_owned_ranges_ptr(co_await _db.get_keyspace_local_ranges(erm));
     };
     auto owned_ranges_ptr = co_await get_owned_ranges(_status.keyspace);
-    tasks::task_info info{_status.id, _status.shard};
+    auto info = this->info();
     co_await run_on_table("upgrade_sstables", _db, _status.keyspace, _ti, [&] (replica::table& t) -> future<> {
         return t.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) -> future<> {
             auto lock_holder = co_await t.get_compaction_manager().get_incremental_repair_read_lock(ts, "upgrade_sstables_compaction");
@@ -717,9 +718,9 @@ tasks::is_user_task scrub_sstables_compaction_task_impl::is_user_task() const no
 }
 
 future<> scrub_sstables_compaction_task_impl::run() {
+    auto parent_info = info();
     auto res = co_await _db.map_reduce0([&] (replica::database& db) -> future<compaction_stats> {
         compaction_stats stats;
-        tasks::task_info parent_info{_status.id, _status.shard};
         auto& compaction_module = db.get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<shard_scrub_sstables_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _column_families, _opts, stats);
         co_await task->done();
@@ -749,9 +750,9 @@ future<std::optional<double>> scrub_sstables_compaction_task_impl::expected_tota
 }
 
 future<> shard_scrub_sstables_compaction_task_impl::run() {
+    auto parent_info = info();
     _stats = co_await map_reduce(_column_families, [&] (sstring cfname) -> future<compaction_stats> {
         compaction_stats stats{};
-        tasks::task_info parent_info{_status.id, _status.shard};
         auto& compaction_module = _db.get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<table_scrub_sstables_compaction_task_impl>(parent_info, _status.keyspace, cfname, _status.id, _db, _opts, stats);
         co_await task->done();
@@ -780,7 +781,7 @@ future<std::optional<double>> shard_scrub_sstables_compaction_task_impl::expecte
 future<> table_scrub_sstables_compaction_task_impl::run() {
     auto& cm = _db.get_compaction_manager();
     auto& cf = _db.find_column_family(_status.keyspace, _status.table);
-    tasks::task_info info{_status.id, _status.shard};
+    auto info = this->info();
     co_await cf.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) mutable -> future<> {
         auto lock_holder = co_await cm.get_incremental_repair_read_lock(ts, "scrub_sstables_compaction");
         auto r = co_await cm.perform_sstable_scrub(ts, _opts, info);
@@ -807,9 +808,9 @@ future<std::optional<double>> table_scrub_sstables_compaction_task_impl::expecte
 
 future<> table_reshaping_compaction_task_impl::run() {
     auto start = std::chrono::steady_clock::now();
+    auto parent_info = info();
     auto total_size = co_await _dir.map_reduce0([&] (sstables::sstable_directory& d) -> future<uint64_t> {
         uint64_t total_shard_size = 0;
-        tasks::task_info parent_info{_status.id, _status.shard};
         auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<shard_reshaping_compaction_task_impl>(parent_info, _status.keyspace, _status.table, _status.id, d, _db, _mode, _creator, _filter, total_shard_size);
         co_await task->done();
@@ -825,7 +826,7 @@ future<> table_reshaping_compaction_task_impl::run() {
 future<> shard_reshaping_compaction_task_impl::run() {
     auto& table = _db.local().find_column_family(_status.keyspace, _status.table);
     auto holder = table.async_gate().hold();
-    tasks::task_info info{_status.id, _status.shard};
+    auto info = this->info();
 
     std::unordered_map<compaction::compaction_group_view*, std::unordered_set<sstables::shared_sstable>> sstables_grouped_by_compaction_group;
     for (auto& sstable : _dir.get_unshared_local_sstables()) {
@@ -917,8 +918,8 @@ future<> table_resharding_compaction_task_impl::run() {
     auto start = std::chrono::steady_clock::now();
     dblog.info("Resharding {} for {}.{}", utils::pretty_printed_data_size(total_size), _status.keyspace, _status.table);
 
+    auto parent_info = info();
     co_await _db.invoke_on_all(coroutine::lambda([&] (replica::database& db) -> future<> {
-        tasks::task_info parent_info{_status.id, _status.shard};
         auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
         // make shard-local copy of owned_ranges
         compaction::owned_ranges_ptr local_owned_ranges_ptr;
@@ -961,7 +962,7 @@ shard_resharding_compaction_task_impl::shard_resharding_compaction_task_impl(tas
 future<> shard_resharding_compaction_task_impl::run() {
     auto& table = _db.find_column_family(_status.keyspace, _status.table);
     auto info_vec = std::move(_destinations[this_shard_id()].info_vec);
-    tasks::task_info info{_status.id, _status.shard};
+    auto info = this->info();
     co_await reshard(_dir.local(), std::move(info_vec), table, _creator, std::move(_local_owned_ranges_ptr), _vnodes_resharding, info);
     co_await _dir.local().move_foreign_sstables(_dir);
 }

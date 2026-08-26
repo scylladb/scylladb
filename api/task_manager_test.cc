@@ -30,7 +30,7 @@ static future<tasks::task_id> make_test_task(tasks::task_manager& task_manager, 
                                       std::string table, std::string entity, tasks::task_info parent_d, tasks::is_user_task user_task) {
     return task_manager.container().invoke_on(shard, [id, module = std::move(module_name), keyspace = std::move(keyspace), table = std::move(table), entity = std::move(entity), parent_d, user_task] (tasks::task_manager& tm) {
         auto module_ptr = tm.find_module(module);
-        auto task_impl_ptr = seastar::make_shared<tasks::test_task_impl>(module_ptr, id ? id : tasks::task_id::create_random_id(), parent_d ? 0 : module_ptr->new_sequence_number(), std::move(keyspace), std::move(table), std::move(entity), parent_d.id, user_task);
+        auto task_impl_ptr = seastar::make_shared<tasks::test_task_impl>(module_ptr, id ? id : tasks::task_id::create_random_id(), parent_d ? 0 : module_ptr->new_sequence_number(), std::move(keyspace), std::move(table), std::move(entity), parent_d.get_id(), user_task);
         return module_ptr->make_task(std::move(task_impl_ptr), parent_d).then([] (auto task) {
             return task->id();
         });
@@ -64,11 +64,11 @@ void set_task_manager_test(http_context& ctx, routes& r, sharded<tasks::task_man
         std::string keyspace = req->get_query_param("keyspace");
         std::string table = req->get_query_param("table");
         std::string entity = req->get_query_param("entity");
-        tasks::task_info data;
+        auto data = tasks::make_empty_task_info();
         if (auto parent_id = req->get_query_param("parent_id"); !parent_id.empty()) {
-            data.id = tasks::task_id{utils::UUID{parent_id}};
-            auto parent_ptr = co_await tasks::task_manager::lookup_task_on_all_shards(tm, data.id);
-            data.shard = parent_ptr->get_status().shard;
+            auto pid = tasks::task_id{utils::UUID{parent_id}};
+            auto parent_ptr = co_await tasks::task_manager::lookup_task_on_all_shards(tm, pid);
+            data = tasks::make_node_task_info(pid, parent_ptr->get_status().shard, parent_ptr->get_status().sequence_number);
         }
         auto user_task = tasks::is_user_task{req_param<bool>(*req, "user_task", false)};
 

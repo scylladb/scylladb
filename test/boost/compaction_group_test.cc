@@ -164,7 +164,7 @@ SEASTAR_TEST_CASE(basic_compaction_group_splitting_test) {
                 return sstable_needs_split(sst) ? sst->bytes_on_disk() : size_t(0);
             }), int64_t(0), std::plus{});
 
-            auto ret = cm.perform_split_compaction(*compaction_group, compaction::compaction_type_options::split{classifier}, tasks::task_info{}).get();
+            auto ret = cm.perform_split_compaction(*compaction_group, compaction::compaction_type_options::split{classifier}, tasks::make_empty_task_info()).get();
             BOOST_REQUIRE_EQUAL(ret->start_size, expected_compaction_size);
 
             BOOST_REQUIRE(compaction_group->main_sstable_set().get()->size() == expected_output);
@@ -253,7 +253,7 @@ SEASTAR_TEST_CASE(compactions_dont_cross_group_boundary_test) {
         t.set_repair_sstable_classifier(repair_sstable_classifier);
 
         for (int i = 0; i < 4; i++) {
-            t->compact_all_sstables({}).get();
+            t->compact_all_sstables(tasks::make_empty_task_info()).get();
         }
 
         auto validate_sstable = [&] (const sstables::shared_sstable& sst) {
