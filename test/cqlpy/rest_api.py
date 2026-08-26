@@ -9,6 +9,8 @@
 import requests
 from . import nodetool
 import pytest
+import threading
+import time
 from contextlib import contextmanager
 
 # Sends GET request to REST API. Response is returned as JSON.
@@ -76,3 +78,18 @@ def scylla_inject_error(cql, err, one_shot=False):
     finally:
         print("Disabling error injection", err)
         delete_request(cql, f'v2/error_injection/injection/{err}')
+
+# Waits until a fiber enters the given one-shot error injection. A one-shot
+# injection reports itself as disabled on the shard which entered it, and it
+# is entered before the injected code parks, so once some shard reports the
+# injection as disabled the injected code is running (or about to park).
+def wait_for_injection_enter(cql, err, timeout=60):
+    tick = threading.Event()
+    deadline = time.monotonic() + timeout
+    while all(shard['enabled'] for shard in get_request(cql, f'v2/error_injection/injection/{err}')):
+        assert time.monotonic() < deadline, f'timed out waiting for injection {err}'
+        tick.wait(0.01)
+
+# Sends a message to a fiber paused on the given error injection, resuming it.
+def message_injection(cql, err):
+    post_request(cql, f'v2/error_injection/injection/{err}/message')
