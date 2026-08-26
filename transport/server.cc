@@ -1157,12 +1157,23 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
     tracing::add_query(trace_state, query);
     tracing::begin(trace_state, "Preparing CQL3 query", client_state.get_client_address());
 
-    co_await _server._query_processor.invoke_on_others([query, &client_state, dialect] (auto& qp) mutable {
-            return qp.prepare(std::move(query), client_state, dialect).discard_result();
+    // The statement is prepared on all shards, so client_state has to be passed
+    // to the other shards. It must not be passed by reference, because the
+    // owning shard can modify it concurrently (a USE statement reassigns
+    // _keyspace) while another shard reads it.
+    auto cs_snapshot = client_state.move_to_other_shard();
+
+    co_await _server._query_processor.invoke_on_others([query, cs_snapshot, dialect] (cql3::query_processor& qp) mutable -> future<> {
+        auto local_client_state = cs_snapshot.get();
+        co_await qp.prepare(std::move(query), local_client_state, dialect);
     });
     tracing::trace(trace_state, "Done preparing on remote shards");
 
-    auto msg = co_await _server._query_processor.local().prepare(std::move(query), client_state, dialect);
+    // Prepare on the local shard with the same snapshot: the statement id is
+    // derived from the keyspace, so a USE arriving in the middle of a PREPARE
+    // would otherwise make this shard return an id the others don't have.
+    auto local_client_state = cs_snapshot.get();
+    auto msg = co_await _server._query_processor.local().prepare(std::move(query), local_client_state, dialect);
     tracing::trace(trace_state, "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
         return messages::result_message::prepared::cql::get_id(msg);
     }));
