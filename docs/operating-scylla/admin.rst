@@ -409,12 +409,140 @@ Keyspace storage options
 ------------------------
 
 By default, SStables of a keyspace are stored in a local directory.
-As an alternative, you can configure your keyspace to be stored
-on Amazon S3 or another S3-compatible object store.
+As an alternative, you can configure your keyspace to be stored on Amazon S3,
+another S3-compatible object store, or Google Cloud Storage.
 
 Before creating keyspaces with object storage, you need to
 :ref:`configure <object-storage-configuration>` the object storage
-credentials and endpoint.
+credentials and endpoint. The keyspace is then created with a ``STORAGE``
+option naming that endpoint - see
+:ref:`Keyspace storage options <cql-keyspace-storage-options>` for the CQL
+syntax.
+
+.. important::
+
+   Review :ref:`Object storage keyspaces: status and limitations
+   <object-storage-limitations>` before using this feature. In particular,
+   snapshots and backup are **not available** for object-storage keyspaces.
+
+.. _admin-object-storage-config:
+
+Required configuration
+======================
+
+Object storage has far higher latency than local disks, and the following
+settings must be adjusted before using an object-storage keyspace:
+
+* ``query_page_size_in_bytes: 67108864`` (64 MiB). Without a larger page size,
+  range scans and multi-partition reads issue many small object requests and are
+  liable to time out.
+* Increased request timeouts. The relevant ``scylla.yaml`` options are
+  ``range_request_timeout_in_ms`` (default 10000), ``read_request_timeout_in_ms``
+  (5000) and ``write_request_timeout_in_ms`` (2000); all are live-updateable.
+  See :ref:`scylla.yaml <admin-scylla.yaml>` for the full list. The increase can
+  also be scoped to the affected workload instead of raising the global defaults,
+  with the ``USING TIMEOUT`` CQL extension on individual statements or with a
+  per-service-level timeout. Client-side timeouts are configured in the driver
+  and must be raised to match.
+* ``force_capacity_based_balancing: true``. By default the tablet load balancer
+  equalizes storage utilization, using SSTable sizes fetched from load
+  statistics. Those sizes do not correspond to local disk usage for
+  object-storage keyspaces, so the balancer must be switched to capacity based
+  balancing, which treats tablets as equally sized and balances against node and
+  shard capacity instead. The option is live-updateable.
+
+Verifying keyspace storage
+==========================
+
+.. code-block:: cql
+
+   SELECT keyspace_name, storage_type, storage_options
+   FROM system_schema.scylla_keyspaces;
+
+.. code-block:: none
+
+    keyspace_name | storage_type | storage_options
+   ---------------+--------------+---------------------------------------------------------------------------
+               ks |           S3 | {'bucket': 'my-bucket', 'endpoint': 'https://s3.us-east-1.amazonaws.com'}
+
+``storage_type`` is set only for object-storage keyspaces, to ``S3`` or ``GS``,
+and ``storage_options`` then holds the bucket and endpoint. There is no
+``LOCAL`` value: a keyspace that does not appear here, or appears with a null
+``storage_type``, is not stored on object storage. This table is not a list of
+all keyspaces.
+
+.. _object-storage-limitations:
+
+Object storage keyspaces: status and limitations
+-------------------------------------------------
+
+Object-storage keyspaces target archival workloads: data that is queried
+infrequently and benefits from object-storage pricing. Read latency is
+substantially higher than on local disks, and there is no local disk cache, so
+the cost of a read scales with the number of SSTables it touches.
+
+Supported
+=========
+
+* Tablets.
+* Reads, writes, memtable flush and compaction.
+* Adding, removing, replacing and decommissioning nodes. Tablet migration moves
+  no data for object-storage keyspaces: ownership of the shared objects is
+  transferred by reference instead of copying them.
+* Repair, including incremental repair.
+* Encryption at Rest.
+* Amazon S3 and S3-compatible object stores. Google Cloud Storage works over
+  the same code path, but is **experimental** - see below.
+
+Not supported
+=============
+
+.. list-table::
+   :widths: 35 65
+   :header-rows: 1
+
+   * - Capability
+     - Status
+   * - Snapshots, backup and restore
+     - Not available. ``nodetool snapshot`` fails for object-storage keyspaces
+       with ``Snapshotting non-local tables is not implemented``, and every
+       backup path is built on snapshots. Restoring **into** an object-storage
+       keyspace is likewise unavailable.
+   * - Vnode keyspaces
+     - Not supported. An object-storage keyspace must use tablets, which is the
+       default for new keyspaces.
+   * - Mixed-storage clusters
+     - Not supported. A cluster must use either local storage or object storage
+       for its user keyspaces, not both.
+   * - Materialized views and secondary indexes
+     - Not supported.
+   * - LWT, counters, CDC, Alternator
+     - Not supported.
+   * - Size based tablet load balancing
+     - The load balancer's size based mode treats SSTable sizes as local disk
+       usage, which does not hold for object storage. Set
+       ``force_capacity_based_balancing: true`` as described in
+       :ref:`Required configuration <admin-object-storage-config>`.
+   * - Changing a keyspace's storage type
+     - Not possible. ``ALTER KEYSPACE`` cannot move a keyspace between local and
+       object storage. Moving existing data means creating a second keyspace
+       with the desired storage and copying the data through CQL, reading from
+       one and writing to the other.
+   * - Google Cloud Storage backend
+     - Experimental. ScyllaDB exposes no per-request metrics for the GCS
+       backend, so object-storage request rate, latency, retries and errors
+       cannot be observed. Use S3 for production deployments.
+
+Backup and ScyllaDB Manager
+===========================
+
+ScyllaDB Manager cannot back up object-storage keyspaces, and a backup task that
+includes them fails. There is no way to back up an object-storage keyspace in
+this release.
+
+Storing SSTables in an object store does **not** make them a backup. The objects
+are live SSTables, and ScyllaDB deletes them when the last reference to them
+goes away.
 
 .. _admin-views-with-tablets:
 
