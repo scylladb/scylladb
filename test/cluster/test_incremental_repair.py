@@ -1562,9 +1562,13 @@ async def test_tombstone_gc_no_resurrection_full_repair_demotes_repaired(manager
     servers, cql, hosts, ks, table_id, logs = await _setup_tombstone_gc_cluster(manager, tablets=1)
 
     # min_sstable_size=1 so tiny sstables are bucketed by size only, keeping B
-    # away from A and C.
+    # away from A and C. bucket_low/bucket_high are pinned to the wider window
+    # that size-tiered compaction used to default to, so that A and C land in
+    # one bucket however the strategy's own defaults move; the ICS defaults
+    # (0.7071/1.4142) are narrow enough to split them.
     await cql.run_async(f"ALTER TABLE {ks}.test WITH compaction = "
-                        f"{{'class': 'SizeTieredCompactionStrategy', 'min_threshold': 2, 'min_sstable_size': 1}}")
+                        f"{{'class': 'IncrementalCompactionStrategy', 'min_threshold': 2, "
+                        f"'min_sstable_size': 1, 'bucket_low': 0.5, 'bucket_high': 1.5}}")
     for s in servers:
         await manager.api.disable_autocompaction(s.ip_addr, ks, 'test')
         await manager.api.set_logger_level(s.ip_addr, 'compaction', 'debug')

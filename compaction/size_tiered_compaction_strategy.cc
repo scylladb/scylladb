@@ -90,6 +90,10 @@ static double validate_cold_reads_to_omit(const std::map<sstring, sstring>& opti
     return cold_reads_to_omit;
 }
 
+void size_tiered_compaction_strategy_options::validate_deprecated_cold_reads_to_omit(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    ::compaction::validate_cold_reads_to_omit(options, unchecked_options);
+}
+
 size_tiered_compaction_strategy_options::size_tiered_compaction_strategy_options(const std::map<sstring, sstring>& options) {
     using namespace cql3::statements;
 
