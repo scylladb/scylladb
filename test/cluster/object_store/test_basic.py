@@ -11,7 +11,7 @@ import time
 import uuid
 
 from test.pylib.minio_server import MinioServer
-from cassandra.protocol import ConfigurationException
+from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
@@ -863,6 +863,79 @@ async def test_stream_sink_abort_on_object_storage(manager: ScyllaClusterManager
             components, refs = get_components_and_refs()
             logger.error(f"Orphaned components: {components=} {refs=}: {e}")
             raise
+
+
+async def test_reject_object_storage_keyspace_when_local_exists(manager: ScyllaClusterManager, object_storage):
+    '''a cluster keeps its user data either locally or in object storage, so an
+    object-storage keyspace must be refused once a local user keyspace exists'''
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf}
+    await manager.server_add(config=cfg)
+
+    cql = manager.get_cql()
+    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
+                                      'replication_factor': '1'})
+    cql.execute(f'CREATE KEYSPACE local_ks WITH REPLICATION = {replication_opts};')
+
+    with pytest.raises(InvalidRequest, match='in object storage: this cluster keeps its user data in local'):
+        cql.execute(f'CREATE KEYSPACE object_storage_ks {keyspace_options(object_storage)};')
+
+
+async def test_reject_local_keyspace_when_object_storage_exists(manager: ScyllaClusterManager, object_storage):
+    '''the other direction: a local keyspace must be refused once an
+    object-storage keyspace exists'''
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf}
+    await manager.server_add(config=cfg)
+
+    cql = manager.get_cql()
+    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
+                                      'replication_factor': '1'})
+    cql.execute(f'CREATE KEYSPACE object_storage_ks {keyspace_options(object_storage)};')
+
+    with pytest.raises(InvalidRequest, match='in local storage: this cluster keeps its user data in object'):
+        cql.execute(f'CREATE KEYSPACE local_ks WITH REPLICATION = {replication_opts};')
+
+
+async def test_audit_keyspace_does_not_count_as_local(manager: ScyllaClusterManager, object_storage):
+    '''the table-based audit backend creates the local "audit" keyspace on
+    startup. It belongs to Scylla, not to the user, so it must not make the
+    cluster look like a local one and block object-storage keyspaces'''
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf,
+           'audit': 'table'}
+    await manager.server_add(config=cfg)
+
+    cql = manager.get_cql()
+    assert list(cql.execute("SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = 'audit';")), \
+        'the audit keyspace was not created, the test would pass for the wrong reason'
+
+    # Were the audit keyspace counted as a user keyspace, the cluster would look
+    # local and this would be refused.
+    cql.execute(f'CREATE KEYSPACE object_storage_ks {keyspace_options(object_storage)};')
+
+
+async def test_user_keyspace_named_audit_counts_as_local(manager: ScyllaClusterManager, object_storage):
+    '''the audit keyspace only belongs to Scylla while the table sink is
+    configured. Without it the name is free, and such a keyspace is a user
+    keyspace like any other'''
+    # "audit" defaults to "table", which would have Scylla create the keyspace
+    # first and take the name.
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': object_storage.create_endpoint_conf(),
+           'audit': 'none'}
+    await manager.server_add(config=cfg)
+
+    cql = manager.get_cql()
+    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
+                                      'replication_factor': '1'})
+    cql.execute(f'CREATE KEYSPACE audit WITH REPLICATION = {replication_opts};')
+
+    with pytest.raises(InvalidRequest, match='this cluster keeps its user data in local'):
+        cql.execute(f'CREATE KEYSPACE {unique_name()} {keyspace_options(object_storage)};')
 
 
 async def run_scylla_sstable(args, timeout=300):
