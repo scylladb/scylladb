@@ -40,6 +40,7 @@
 #include <seastar/core/execution_stage.hh>
 #include "utils/assert.hh"
 #include "utils/exception_container.hh"
+#include "utils/error_injection.hh"
 #include "utils/log.hh"
 #include "utils/result_try.hh"
 #include "utils/result_combinators.hh"
@@ -1250,6 +1251,9 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
         co_await qp.prepare(std::move(query), local_client_state, dialect);
     });
     tracing::trace(trace_state, "Done preparing on remote shards");
+
+    co_await utils::get_local_injector().inject("cql_server_process_prepare_before_local_prepare",
+            utils::wait_for_message(std::chrono::seconds(60)));
 
     // Prepare on the local shard with the same snapshot: the statement id is
     // derived from the keyspace, so a USE arriving in the middle of a PREPARE
