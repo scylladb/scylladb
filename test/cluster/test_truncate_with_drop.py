@@ -45,9 +45,8 @@ async def test_truncation_records_pruned_on_dirty_restart(manager: ScyllaCluster
     async def restart():
         await manager.server_stop(server.server_id, convict=False)
         await manager.server_start(server.server_id)
-        manager.driver_close()
-        await manager.driver_connect()
-        return manager.cql
+        cql, _ = await manager.get_ready_cql([server])
+        return cql
     
     # Create a keyspace
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
