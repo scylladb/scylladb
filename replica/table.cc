@@ -2911,6 +2911,15 @@ void compaction_group::set_compaction_strategy_state(compaction::compaction_stra
 
 void table::set_compaction_strategy(compaction::compaction_strategy_type strategy) {
     tlogger.debug("Setting compaction strategy of {}.{} to {}", _schema->ks_name(), _schema->cf_name(), compaction::compaction_strategy::name(strategy));
+    // Don't let the switch be silent: a table carrying the deprecated name from
+    // before the upgrade is compacted by ICS from now on. Logged on one shard
+    // only, since every shard has its own table object.
+    if (this_shard_id() == 0 && strategy == compaction::compaction_strategy_type::size_tiered) {
+        tlogger.warn("Table {}.{} is configured with {}, which is deprecated: it is an alias of {}, and the table is compacted with the latter.",
+                _schema->ks_name(), _schema->cf_name(),
+                compaction::compaction_strategy::name(compaction::compaction_strategy_type::size_tiered),
+                compaction::compaction_strategy::name(compaction::compaction_strategy_type::incremental));
+    }
     auto new_cs = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
 
     struct compaction_group_strategy_updater {
