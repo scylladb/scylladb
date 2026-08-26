@@ -396,6 +396,8 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
         signed_headers_map.emplace(header, std::string_view());
     }
     std::vector<std::string> modified_values;
+    // The map values below point into this vector, so its elements must not move.
+    modified_values.reserve(signed_headers_map.size());
     for (auto& header : req._headers) {
         std::string header_str;
         header_str.resize(header.first.size());
