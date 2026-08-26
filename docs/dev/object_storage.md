@@ -82,9 +82,11 @@ storage use `CREATE KEYSPACE` with `STORAGE = { 'type': 'S3', 'endpoint': '$endp
 parameters, where `$endpoint_name` should match with the corresponding `name`
 of the configured endpoint in the YAML file above.
 
-In the following example, an endpoint named "s3.us-east-2.amazonaws.com" is
-defined in `scylla.yaml`, and this endpoint is used when creating the
-keyspace "ks".
+In the following example an endpoint is defined in `scylla.yaml` and then used
+when creating the keyspace "ks". Note that the `endpoint` value in `CREATE KEYSPACE`
+is the endpoint `name` copied verbatim: the lookup is an exact string match, so
+`https://s3.us-east-2.amazonaws.com` and `https://s3.us-east-2.amazonaws.com:443`
+are different endpoints.
 
 in `scylla.yaml`:
 
@@ -104,7 +106,7 @@ CREATE KEYSPACE ks
   }
   AND STORAGE = {
    'type' : 'S3',
-   'endpoint' : 's3.us-east-2.amazonaws.com',
+   'endpoint' : 'https://s3.us-east-2.amazonaws.com:443',
    'bucket' : 'bucket-for-testing'
   };
 ```
@@ -119,6 +121,7 @@ in `scylla.yaml`:
 ```yaml
 object_storage_endpoints:
   - name: default
+    type: gs
     credentials_file: <credentials file>|none
 ```
 
