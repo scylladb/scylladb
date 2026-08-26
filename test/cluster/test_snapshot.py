@@ -49,6 +49,7 @@ async def test_snapshot(manager, random_tables):
 
     logger.info("Driver connecting to D %s", server_d)
     await manager.driver_connect()
+    await manager.get_ready_cql([server_d])
 
     await random_tables.verify_schema(do_read_barrier=False)
 

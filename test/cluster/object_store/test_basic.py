@@ -16,7 +16,6 @@ from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-from test.cluster.util import reconnect_driver
 from test.pylib.object_storage import format_tuples, keyspace_options
 from test.cqlpy.rest_api import scylla_inject_error
 from test.cluster.test_alternator import alternator_config, get_alternator, unique_table_name
@@ -157,7 +156,7 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode, rep
         print('Restart scylla')
         for server in servers:
             await manager.server_restart(server.server_id)
-        cql = await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
 
         # Shouldn't be recreated by populator code
         assert not os.path.exists(os.path.join(workdir, f'data/{ks}')), "object storage backed keyspace has local directory resurrected"
@@ -197,7 +196,7 @@ async def test_garbage_collect(manager: ManagerClient, object_storage):
 
         print('Restart scylla')
         await manager.server_restart(server.server_id)
-        cql = await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql([server])
 
         res = cql.execute(f"SELECT * FROM {ks}.test;")
         have_res = {x.name: x.value for x in res}
@@ -240,7 +239,7 @@ async def test_populate_from_quarantine(manager: ManagerClient, object_storage):
 
         print('Restart scylla')
         await manager.server_restart(server.server_id)
-        cql = await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql([server])
 
         res = cql.execute(f"SELECT * FROM {ks}.test;")
         have_res = {x.name: x.value for x in res}
@@ -305,7 +304,7 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
 
         print('Restart scylla')
         await manager.server_restart(server.server_id)
-        cql = await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql([server])
 
         res = cql.execute(f"SELECT * FROM {ks}.test;")
         have_res = { x.name: x.value for x in res }
