@@ -1,6 +1,7 @@
 include(add_whole_archive)
 
 find_package(cpp-jwt REQUIRED)
+find_package(rapidxml REQUIRED)
 find_package(kmip)
 
 add_library(scylla_encryption STATIC)
@@ -31,6 +32,7 @@ target_link_libraries(scylla_encryption
   PRIVATE
     cql3
     utils
+    rapidxml::rapidxml
     cpp-jwt::cpp-jwt)
 if (Scylla_USE_PRECOMPILED_HEADER_USE)
   target_precompile_headers(scylla_encryption REUSE_FROM scylla-precompiled-header)

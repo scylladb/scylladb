@@ -8,4 +8,4 @@ add_scylla_test(client_test
   LIBRARIES vector_search)
 
 add_scylla_test(filter_test
-  LIBRARIES vector_search)
+  LIBRARIES vector_search cql3)

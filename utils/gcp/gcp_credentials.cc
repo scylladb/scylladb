@@ -17,7 +17,9 @@
 #include <seastar/core/fstream.hh>
 #include <seastar/util/log.hh>
 
+#if __has_include(<jwt/json/json.hpp>)
 #define CPP_JWT_USE_VENDORED_NLOHMANN_JSON
+#endif
 #include <jwt/jwt.hpp>
 
 #include "utils/overloaded_functor.hh"

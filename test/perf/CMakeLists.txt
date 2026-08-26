@@ -55,6 +55,7 @@ target_include_directories(perf-lib
 target_link_libraries(perf-lib
   PUBLIC
     Seastar::seastar
+    JsonCpp::JsonCpp
   PRIVATE
     xxHash::xxhash)
 

@@ -13,7 +13,11 @@
 #include "utils/s3/client.hh"
 #include "utils/s3/default_aws_retry_strategy.hh"
 
+#if __has_include(<rapidxml.h>)
 #include <rapidxml.h>
+#else
+#include <rapidxml/rapidxml.hpp>
+#endif
 #include <seastar/core/coroutine.hh>
 #include <seastar/http/client.hh>
 #include <seastar/http/request.hh>

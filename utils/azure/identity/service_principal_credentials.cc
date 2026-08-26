@@ -7,7 +7,9 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#if __has_include(<jwt/json/json.hpp>)
 #define CPP_JWT_USE_VENDORED_NLOHMANN_JSON
+#endif
 #include <jwt/jwt.hpp>
 #include <boost/regex.hpp>
 

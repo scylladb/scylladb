@@ -1,5 +1,6 @@
 find_package(cryptopp REQUIRED)
 find_package(rapidxml REQUIRED)
+find_package(cpp-jwt REQUIRED)
 find_package(GnuTLS 3.3.26 REQUIRED)
 find_package(Python3 COMPONENTS QUIET REQUIRED Interpreter)
 
@@ -109,6 +110,7 @@ target_link_libraries(utils
 	crypto
     cryptopp::cryptopp
     rapidxml::rapidxml
+    cpp-jwt::cpp-jwt
     yaml-cpp::yaml-cpp
     GnuTLS::gnutls)
 if (Scylla_USE_PRECOMPILED_HEADER_USE)

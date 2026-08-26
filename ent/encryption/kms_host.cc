@@ -20,7 +20,11 @@
 #include <seastar/json/formatter.hh>
 #include <seastar/http/url.hh>
 
+#if __has_include(<rapidxml.h>)
 #include <rapidxml.h>
+#else
+#include <rapidxml/rapidxml.hpp>
+#endif
 
 #include <fmt/chrono.h>
 #include <fmt/ranges.h>
