@@ -43,25 +43,7 @@ public:
     };
     using workload_type = qos::service_level_options::workload_type;
 
-    // This class is used to move client_state between shards
-    // It is created on a shard that owns client_state than passed
-    // to a target shard where client_state_for_another_shard::get()
-    // can be called to obtain a shard local copy.
-    class client_state_for_another_shard {
-    private:
-        const client_state* _cs;
-        seastar::sharded<auth::service>* _auth_service;
-        seastar::sharded<qos::service_level_controller>* _sl_controller;
-        client_state_for_another_shard(const client_state* cs,
-            seastar::sharded<auth::service>* auth_service,
-            seastar::sharded<qos::service_level_controller>* sl_controller)
-            : _cs(cs), _auth_service(auth_service), _sl_controller(sl_controller) {}
-        friend client_state;
-    public:
-        client_state get() const {
-            return client_state(_cs, _auth_service, _sl_controller);
-        }
-    };
+    class client_state_for_another_shard;
 private:
     client_state(const client_state* cs,
         seastar::sharded<auth::service>* auth_service,
@@ -404,11 +386,7 @@ public:
         return _user;
     }
 
-    client_state_for_another_shard move_to_other_shard() {
-        return client_state_for_another_shard(this,
-            _auth_service ? &_auth_service->container() : nullptr,
-            _sl_controller ? &_sl_controller->container() : nullptr);
-    }
+    client_state_for_another_shard move_to_other_shard();
 
 #if 0
     public static SemanticVersion[] getCQLSupportedVersion()
@@ -455,6 +433,32 @@ public:
         return _original_shard;
     }
 };
+
+// This class is used to move client_state between shards
+// It is created on a shard that owns client_state than passed
+// to a target shard where client_state_for_another_shard::get()
+// can be called to obtain a shard local copy.
+class client_state::client_state_for_another_shard {
+private:
+    const client_state* _cs;
+    seastar::sharded<auth::service>* _auth_service;
+    seastar::sharded<qos::service_level_controller>* _sl_controller;
+    client_state_for_another_shard(const client_state* cs,
+        seastar::sharded<auth::service>* auth_service,
+        seastar::sharded<qos::service_level_controller>* sl_controller)
+        : _cs(cs), _auth_service(auth_service), _sl_controller(sl_controller) {}
+    friend client_state;
+public:
+    client_state get() const {
+        return client_state(_cs, _auth_service, _sl_controller);
+    }
+};
+
+inline client_state::client_state_for_another_shard client_state::move_to_other_shard() {
+    return client_state_for_another_shard(this,
+        _auth_service ? &_auth_service->container() : nullptr,
+        _sl_controller ? &_sl_controller->container() : nullptr);
+}
 
 }
 
