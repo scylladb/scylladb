@@ -2437,7 +2437,9 @@ SEASTAR_FIXTURE_TEST_CASE(size_tiered_beyond_max_threshold_gcs_test, gcs_fixture
 // SizeTieredCompactionStrategy is deprecated and is merely an alias of
 // IncrementalCompactionStrategy. The class name is still kept in the schema and
 // reported back as-is, but the table is compacted by ICS, and it takes the ICS
-// options rather than the STCS ones.
+// options rather than the STCS ones. For the CQL side of this - a warning on
+// CREATE TABLE and a rejection on ALTER TABLE - see
+// test/cqlpy/test_compaction_strategy_validation.py.
 SEASTAR_THREAD_TEST_CASE(size_tiered_is_alias_of_incremental) {
     auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::size_tiered, {});
     BOOST_REQUIRE(cs.type() == compaction::compaction_strategy_type::incremental);

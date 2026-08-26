@@ -7,7 +7,7 @@
 #############################################################################
 
 import pytest
-from .util import new_test_table
+from .util import config_value_context, new_test_table, new_materialized_view, unique_name
 from cassandra.protocol import ConfigurationException
 
 @pytest.fixture(scope="module")
@@ -37,18 +37,79 @@ def test_size_tiered_compaction_strategy_options(cql, table1):
     assert_throws(cql, table1, r"bucket_high value \(0.7\) must be greater than 1.0", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'bucket_high' : 0.7 }")
     assert_throws(cql, table1, r"min_threshold value \(1\) must be bigger or equal to 2", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'min_threshold' : 1 }")
 
-# In ScyllaDB, SizeTieredCompactionStrategy is deprecated and is merely an
-# alias of IncrementalCompactionStrategy. It therefore takes the ICS options -
-# including the ICS-only ones - and no longer takes the STCS-only
-# cold_reads_to_omit option. The class name is still reported back as-is.
+# In ScyllaDB, SizeTieredCompactionStrategy is deprecated and is merely an alias
+# of IncrementalCompactionStrategy: a table that asks for STCS keeps the name in
+# its schema but is compacted by ICS, and takes the ICS options - including the
+# ICS-only ones.
 def test_size_tiered_is_alias_of_incremental(cql, test_keyspace, table1, scylla_only):
     assert_throws(cql, table1, r"space_amplification_goal value \(2.2\) must be greater than 1.0 and less than or equal to 2.0", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'space_amplification_goal' : 2.2 }")
     # The one STCS option ICS doesn't have is accepted, and ignored, so that a
-    # schema dumped from an older version can still be replayed as-is.
+    # schema dumped from an older version can still be replayed as-is, and the
+    # class name is kept in the schema.
     with new_test_table(cql, test_keyspace, "a int PRIMARY KEY, b int",
                         "WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'cold_reads_to_omit' : 0.5 }") as table:
         desc = cql.execute(f"DESCRIBE TABLE {table}").one().create_statement
         assert 'SizeTieredCompactionStrategy' in desc, f"Expected SizeTieredCompactionStrategy in DESCRIBE output but got: {desc}"
+        # Altering an unrelated property must not trip over the strategy it carries.
+        cql.execute(f"ALTER TABLE {table} WITH comment = 'still alterable'")
+        cql.execute(f"ALTER TABLE {table} WITH gc_grace_seconds = 1234")
+
+# Naming the deprecated SizeTieredCompactionStrategy returns a CQL warning, on
+# each of the four statements that can name it. It is only a warning by default,
+# for backward compatibility; the guardrail below turns it into an error.
+DEPRECATED = 'SizeTieredCompactionStrategy is deprecated'
+STCS = "{ 'class' : 'SizeTieredCompactionStrategy' }"
+
+def assert_warns(res):
+    warnings = res.response_future.warnings or []
+    assert any(DEPRECATED in w for w in warnings), f"Expected a deprecation warning, got: {warnings}"
+
+def test_size_tiered_table_warns(cql, test_keyspace, scylla_only):
+    table = test_keyspace + '.' + unique_name()
+    try:
+        assert_warns(cql.execute(f"CREATE TABLE {table} (a int PRIMARY KEY, b int) WITH compaction = {STCS}"))
+        assert_warns(cql.execute(f"ALTER TABLE {table} WITH compaction = {STCS}"))
+    finally:
+        cql.execute(f"DROP TABLE IF EXISTS {table}")
+
+def test_size_tiered_view_warns(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "a int, b int, PRIMARY KEY (a)") as table:
+        mv = test_keyspace + '.' + unique_name()
+        try:
+            assert_warns(cql.execute(f"CREATE MATERIALIZED VIEW {mv} AS SELECT * FROM {table} "
+                                     f"WHERE b is not null and a is not null PRIMARY KEY (b, a) "
+                                     f"WITH compaction = {STCS}"))
+            assert_warns(cql.execute(f"ALTER MATERIALIZED VIEW {mv} WITH compaction = {STCS}"))
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {mv}")
+
+# With allow_deprecated_size_tiered_compaction_strategy turned off, naming the
+# deprecated strategy is an error instead of a warning.
+def test_size_tiered_guardrail(cql, test_keyspace, scylla_only):
+    with config_value_context(cql, 'allow_deprecated_size_tiered_compaction_strategy', 'false'):
+        with new_test_table(cql, test_keyspace, "a int, b int, PRIMARY KEY (a)") as table:
+            with pytest.raises(ConfigurationException, match=DEPRECATED):
+                cql.execute(f"ALTER TABLE {table} WITH compaction = {STCS}")
+            with new_materialized_view(cql, table, '*', 'b, a', 'b is not null and a is not null') as mv:
+                with pytest.raises(ConfigurationException, match=DEPRECATED):
+                    cql.execute(f"ALTER MATERIALIZED VIEW {mv} WITH compaction = {STCS}")
+        with pytest.raises(ConfigurationException, match=DEPRECATED):
+            with new_test_table(cql, test_keyspace, "a int PRIMARY KEY, b int", f"WITH compaction = {STCS}"):
+                pass
+
+# The guardrail must also hold when the ALTER was prepared before the table
+# existed: at prepare time the statement can't see a schema to check against, so
+# it has to be enforced where the statement is applied.
+def test_size_tiered_guardrail_when_prepared_before_create(cql, test_keyspace, scylla_only):
+    with config_value_context(cql, 'allow_deprecated_size_tiered_compaction_strategy', 'false'):
+        table = test_keyspace + '.' + unique_name()
+        prepared = cql.prepare(f"ALTER TABLE {table} WITH compaction = {STCS}")
+        cql.execute(f"CREATE TABLE {table} (a int PRIMARY KEY, b int)")
+        try:
+            with pytest.raises(ConfigurationException, match=DEPRECATED):
+                cql.execute(prepared)
+        finally:
+            cql.execute(f"DROP TABLE {table}")
 
 def test_time_window_compaction_strategy_options(cql, table1):
     assert_throws(cql, table1, "Invalid window unit SECONDS for compaction_window_unit|SECONDS is not valid for compaction_window_unit", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'compaction_window_unit' : 'SECONDS' }")

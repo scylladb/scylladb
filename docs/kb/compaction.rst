@@ -63,6 +63,13 @@ Size-tiered Compaction Strategy (STCS)
    ``SizeTieredCompactionStrategy`` is deprecated. It is an alias of
    :ref:`IncrementalCompactionStrategy <incremental-compaction-strategy-ics>`:
    a table configured with ``SizeTieredCompactionStrategy`` is compacted by ICS.
+   Naming it in ``CREATE TABLE``, ``ALTER TABLE``, ``CREATE MATERIALIZED VIEW``
+   or ``ALTER MATERIALIZED VIEW`` is still accepted, so that existing
+   applications and schema dumps keep working, but returns a CQL warning.
+   Set the ``allow_deprecated_size_tiered_compaction_strategy`` configuration
+   option to ``false`` to make it an error instead. That option defaults to
+   ``true`` for backward compatibility, and will default to ``false`` in a
+   future version.
    Size-tiered compaction as described below is still used internally, per time
    window by `Time-window compaction strategy (TWCS)`_ and for level 0 by
    `Leveled compaction strategy (LCS)`_, and it is the basis for ICS.
