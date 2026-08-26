@@ -106,32 +106,75 @@ In addition, the timeout parameter can be applied to SELECT queries as well.
 (cql-keyspace-storage-options)=
 ## Keyspace storage options
 
-To store your keyspaces on Amazon S3 or another S3-compatible object store, you need to configure your storage endpoints.
+To store a keyspace's SSTables on Amazon S3, Google Cloud Storage, or another
+S3-compatible object store, you first configure the storage endpoints.
 See {ref}`Configuring Object Storage <object-storage-configuration>` for instructions.
 
-After your storage endpoints are configured, you can configure your object storage when creating a keyspace:
-
-```cql
-CREATE KEYSPACE with STORAGE = { 'type': 'S3', 'endpoint': '$endpoint_name', 'bucket': '$bucket' } 
+```{note}
+Object-storage keyspaces are supported for tablets only, and a number of features
+are not available for them. Review
+{ref}`Object storage keyspaces: status and limitations <object-storage-limitations>`
+before using this feature.
 ```
 
+After your storage endpoints are configured, you can select object storage when
+creating a keyspace:
+
+```cql
+CREATE KEYSPACE ... WITH STORAGE = { 'type': 'S3', 'endpoint': '$endpoint_name', 'bucket': '$bucket' }
+```
+
+Use `'type': 'S3'` for S3-compatible object stores and `'type': 'GS'` for Google
+Cloud Storage.
+
+```{important}
+`endpoint` must be **character-for-character identical** to the `name` of an
+endpoint configured in `scylla.yaml`. The lookup is an exact string match, so
+`https://s3.us-east-1.amazonaws.com` and `https://s3.us-east-1.amazonaws.com:443`
+are different endpoints even though they describe the same server. If the value
+does not match a configured endpoint, `CREATE KEYSPACE` fails with a
+configuration error.
+```
+
+The storage type of a keyspace cannot be changed after it is created;
+`ALTER KEYSPACE` cannot move a keyspace between local and object storage.
+
 **Example**
+
+Given this endpoint in `scylla.yaml`:
+
+```yaml
+object_storage_endpoints:
+  - name: https://s3.us-east-1.amazonaws.com
+    type: s3
+    aws_region: us-east-1
+```
+
+the keyspace is created with the same `name` string as `endpoint`:
 
 ```cql
 CREATE KEYSPACE ks
     WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 3 }
-    AND STORAGE = { 'type' : 'S3', 'bucket' : '/tmp/b1', 'endpoint' : 'localhost' } ;
+    AND STORAGE = { 'type' : 'S3',
+                    'endpoint' : 'https://s3.us-east-1.amazonaws.com',
+                    'bucket' : 'my-bucket' } ;
 ```
 
-Storage options can be inspected by checking the new system schema table: `system_schema.scylla_keyspaces`:
+Storage options can be inspected in the `system_schema.scylla_keyspaces` system
+schema table:
 
 ```cql
-    cassandra@cqlsh> select * from system_schema.scylla_keyspaces;
-    
-     keyspace_name | storage_options                                | storage_type
-    ---------------+------------------------------------------------+--------------
-               ksx | {'bucket': '/tmp/xx', 'endpoint': 'localhost'} |           S3
+    cassandra@cqlsh> SELECT keyspace_name, storage_type, storage_options
+                     FROM system_schema.scylla_keyspaces;
+
+     keyspace_name | storage_type | storage_options
+    ---------------+--------------+-------------------------------------------
+                ks |           S3 | {'bucket': 'my-bucket', 'endpoint': 'https://s3.us-east-1.amazonaws.com'}
 ```
+
+`storage_type` is set only for object-storage keyspaces, to `S3` or `GS`. There
+is no `LOCAL` value: a keyspace on local disk has a null `storage_type`, and not
+every keyspace has a row in this table, so it is not a list of all keyspaces.
 
 ## PRUNE MATERIALIZED VIEW statements
 
