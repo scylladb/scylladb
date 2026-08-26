@@ -3119,6 +3119,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
                     op->schema()->cf_name(), "PutItem", op->request(), db::consistency_level::LOCAL_QUORUM);
     }
 
+    lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
 
@@ -3129,6 +3130,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     if (cas_shard && !cas_shard->this_shard()) {
         _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
+        per_table_stats->shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info]
                 (executor& e) mutable {
@@ -3141,7 +3143,6 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
             });
         });
     }
-    lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
     per_table_stats->api_operations.put_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
@@ -4423,6 +4424,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
                     op->schema()->cf_name(), "UpdateItem", op->request(), db::consistency_level::LOCAL_QUORUM);
     }
 
+    lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
     const bool needs_read_before_write = _proxy.data_dictionary().get_config().alternator_force_read_before_write() || op->needs_read_before_write();
 
@@ -4433,6 +4435,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
     if (cas_shard && !cas_shard->this_shard()) {
         _stats.api_operations.update_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
+        per_table_stats->shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info]
                 (executor& e) mutable {
@@ -4445,7 +4448,6 @@ future<executor::request_return_type> executor::update_item(client_state& client
             });
         });
     }
-    lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
     per_table_stats->api_operations.update_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
