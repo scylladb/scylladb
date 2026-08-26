@@ -33,7 +33,7 @@
 #include "utils/phased_barrier.hh"
 #include "utils/small_vector.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
-#include <seastar/core/circular_buffer.hh>
+#include <seastar/core/chunked_fifo.hh>
 #include "exceptions/coordinator_result.hh"
 #include "replica/exceptions.hh"
 #include "locator/host_id.hh"
@@ -302,7 +302,7 @@ private:
     // be already completed by the point they tried to be unthrottled (request completion does
     // not remove request from the buffer), but this is fine since request ids are unique, so we
     // just skip an entry if request no longer exists.
-    circular_buffer<response_id_type> _throttled_writes;
+    chunked_fifo<response_id_type> _throttled_writes;
     db::hints::resource_manager _hints_resource_manager;
     db::hints::manager _hints_manager;
     db::hints::directory_initializer _hints_directory_initializer;
