@@ -9,10 +9,12 @@
 #pragma once
 
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 #include <map>
 #include <seastar/core/future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <fmt/core.h>
 #include "utils/stall_free.hh"
 
 namespace utils {
@@ -29,13 +31,16 @@ concept VerticiesContainer = requires(const Container& c) {
  *
  * @param vertices      Contains all vertices of the graph
  * @param adjacency_map Entry {k, v} means there is an k->v edge in the graph
- * @return a vector of topologically sorted vertices. 
+ * @param description   Describes what is being sorted and why, used to disambiguate the
+ *                       cycle-detected error between call sites (e.g. "user defined types
+ *                       during schema merge").
+ * @return a vector of topologically sorted vertices.
         If there is an edge k->v, then vertex k will be before vertex v.
  * @throws std::runtime_error when a graph has any cycle.
  */
 template<typename T, typename Compare = std::less<T>, typename Container>
 requires VerticiesContainer<Container, T>
-seastar::future<std::vector<T>> topological_sort(const Container& vertices, const std::multimap<T, T, Compare>& adjacency_map) {
+seastar::future<std::vector<T>> topological_sort(const Container& vertices, const std::multimap<T, T, Compare>& adjacency_map, std::string_view description) {
     std::map<T, size_t, Compare> ref_count_map; // Contains counters how many edges point (reference) to a vertex
     std::vector<T> sorted;
     sorted.reserve(vertices.size());
@@ -69,7 +74,7 @@ seastar::future<std::vector<T>> topological_sort(const Container& vertices, cons
     co_await utils::clear_gently(ref_count_map);
 
     if (sorted.size() != vertices.size()) {
-        throw std::runtime_error("Detected cycle in the graph.");
+        throw std::runtime_error(fmt::format("Detected cycle in the graph while sorting {}.", description));
     }
     co_return sorted;
 }

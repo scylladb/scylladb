@@ -87,7 +87,7 @@ public:
     }
 
     // See cassandra Types.java
-    future<std::vector<user_type>> build() {
+    future<std::vector<user_type>> build(std::string_view description) {
         struct entry_comparator {
             inline bool operator()(const entry* a, const entry* b) const {
                 return a->name < b->name;
@@ -119,7 +119,7 @@ public:
         replica::user_types_metadata types = _ks.user_types();
         const auto &ks_name = _ks.name();
 
-        auto sorted = co_await utils::topological_sort(all_definitions, adjacency);
+        auto sorted = co_await utils::topological_sort(all_definitions, adjacency, fmt::format("user defined types ({})", description));
         std::vector<user_type> created;
         created.reserve(sorted.size());
 
@@ -145,6 +145,6 @@ void db::cql_type_parser::raw_builder::add(sstring name, std::vector<sstring> fi
     _impl->add(std::move(name), std::move(field_names), std::move(field_types));
 }
 
-future<std::vector<user_type>> db::cql_type_parser::raw_builder::build() {
-    return _impl->build();
+future<std::vector<user_type>> db::cql_type_parser::raw_builder::build(std::string_view description) {
+    return _impl->build(description);
 }
