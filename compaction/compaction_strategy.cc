@@ -677,18 +677,9 @@ std::unique_ptr<compaction_backlog_tracker::impl> time_window_compaction_strateg
     return std::make_unique<time_window_backlog_tracker>(_options, _stcs_options);
 }
 
-size_tiered_compaction_strategy::size_tiered_compaction_strategy(const std::map<sstring, sstring>& options)
-    : compaction_strategy_impl(options)
-    , _options(options)
-{}
-
 size_tiered_compaction_strategy::size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options)
     : _options(options)
 {}
-
-std::unique_ptr<compaction_backlog_tracker::impl> size_tiered_compaction_strategy::make_backlog_tracker() const {
-    return std::make_unique<size_tiered_backlog_tracker>(_options);
-}
 
 compaction_strategy::compaction_strategy(::shared_ptr<compaction_strategy_impl> impl)
     : _compaction_strategy_impl(std::move(impl)) {}
@@ -819,7 +810,6 @@ namespace compaction {
 compaction_strategy_state compaction_strategy_state::make(const compaction_strategy& cs) {
     switch (cs.type()) {
         case compaction_strategy_type::null:
-        case compaction_strategy_type::size_tiered:
         case compaction_strategy_type::incremental:
             return compaction_strategy_state(default_empty_state{});
         case compaction_strategy_type::leveled:

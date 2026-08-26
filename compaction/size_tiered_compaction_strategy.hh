@@ -16,9 +16,11 @@
 namespace compaction {
 
 // Note: the SizeTieredCompactionStrategy class name is deprecated and is now
-// just an alias of IncrementalCompactionStrategy (see make_compaction_strategy()).
-// This implementation is still used internally, per time window by TWCS and
-// for level 0 by LCS.
+// just an alias of IncrementalCompactionStrategy (see make_compaction_strategy()),
+// so size-tiered compaction is no longer a compaction strategy a table can be
+// configured with, and this is no longer a compaction_strategy_impl. What
+// remains is the size-tiered bucketing logic, which is still used internally,
+// per time window by TWCS and for level 0 by LCS.
 
 class size_tiered_backlog_tracker;
 
@@ -54,7 +56,7 @@ public:
     friend class size_tiered_compaction_strategy;
 };
 
-class size_tiered_compaction_strategy : public compaction_strategy_impl {
+class size_tiered_compaction_strategy {
     size_tiered_compaction_strategy_options _options;
 
     // Return a list of pair of shared_sstable and its respective size.
@@ -69,41 +71,25 @@ class size_tiered_compaction_strategy : public compaction_strategy_impl {
     static bool is_bucket_interesting(const std::vector<sstables::shared_sstable>& bucket, int min_threshold) {
         return bucket.size() >= size_t(min_threshold);
     }
-
-    bool is_any_bucket_interesting(const std::vector<std::vector<sstables::shared_sstable>>& buckets, int min_threshold) const {
-        return std::ranges::any_of(buckets, [&] (const auto& bucket) {
-            return this->is_bucket_interesting(bucket, min_threshold);
-        });
-    }
 public:
     size_tiered_compaction_strategy() = default;
 
-    size_tiered_compaction_strategy(const std::map<sstring, sstring>& options);
     explicit size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options);
 
     // Group files of similar size into buckets.
     static std::vector<std::vector<sstables::shared_sstable>> get_buckets(const std::vector<sstables::shared_sstable>& sstables, size_tiered_compaction_strategy_options options);
 
-    virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override;
-
-    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) const override;
+    std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) const;
 
     static int64_t estimated_pending_compactions(const std::vector<sstables::shared_sstable>& sstables,
         int min_threshold, int max_threshold, size_tiered_compaction_strategy_options options);
-    virtual future<int64_t> estimated_pending_compactions(compaction_group_view& table_s) const override;
-
-    virtual compaction_strategy_type type() const override {
-        return compaction_strategy_type::size_tiered;
-    }
 
     // Return the most interesting bucket for a set of sstables
     static std::vector<sstables::shared_sstable>
     most_interesting_bucket(const std::vector<sstables::shared_sstable>& candidates, int min_threshold, int max_threshold,
         size_tiered_compaction_strategy_options options = {});
 
-    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const override;
-
-    virtual compaction_descriptor get_reshaping_job(std::vector<sstables::shared_sstable> input, schema_ptr schema, reshape_config cfg) const override;
+    compaction_descriptor get_reshaping_job(std::vector<sstables::shared_sstable> input, schema_ptr schema, reshape_config cfg) const;
 
     friend class ::compaction::size_tiered_backlog_tracker;
 };
