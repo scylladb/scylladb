@@ -341,6 +341,7 @@ add_scylla_test(combined_tests
     aggregate_fcts_test.cc
     auth_cache_test.cc
     auth_test.cc
+    client_state_test.cc
     batchlog_manager_test.cc
     table_helper_test.cc
     cache_algorithm_test.cc

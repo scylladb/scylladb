@@ -1692,6 +1692,9 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
     });
     tracing::trace(trace_state, "Done preparing on remote shards");
 
+    co_await utils::get_local_injector().inject("cql_server_process_prepare_before_local_prepare",
+            utils::wait_for_message(std::chrono::seconds(60)));
+
     // Prepare on the local shard with the same snapshot: the statement id is
     // derived from the keyspace, so a USE arriving in the middle of a PREPARE
     // would otherwise make this shard return an id the others don't have.
