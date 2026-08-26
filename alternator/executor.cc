@@ -58,6 +58,7 @@
 #include <seastar/core/when_all.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <boost/range/algorithm/find_end.hpp>
+#include <string_view>
 #include <unordered_set>
 #include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
@@ -120,16 +121,29 @@ const sstring TABLE_CREATION_TIME_TAG_KEY("system:table_creation_time");
 // configured by UpdateTimeToLive to be the expiration-time attribute for
 // this table.
 extern const sstring TTL_TAG_KEY("system:ttl_attribute");
-// This will be set to 1 in a case, where user DID NOT specify a range key.
-// The way GSI / LSI is implemented by Alternator assumes user specified keys will come first
-// in materialized view's key list. Then, if needed missing keys are added (current implementation
-// of materialized views requires that all base hash / range keys were added to the view as well).
-// Alternator allows only a single range key attribute to be specified by the user. So if
-// the SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY is set the user didn't specify any key and
-// base table's keys were added as range keys. In all other cases either the first key is the user specified key,
-// following ones are base table's keys added as needed or range key list will be empty.
+// This tag is set for GSIs since scylla-2026.4.
+// GSI implementation in Alternator assumes that (currently up to 4)
+// user-specified RANGE keys come first in the underlying materialized view's
+// clustering columns list. Then if not specified by the user as RANGE keys base
+// table HASH and/or RANGE key/keys is/are appended to the materialized view as
+// additional trailing clustering columns. This is required by the materialized
+// view's implementation but should not be reported to the Alternator user.
+// This tag keeps track of the number of RANGE keys the user specified thus
+// allowing for reporting correct user-specified RANGE keys with only a column
+// prefix of the clustering columns of length written in the tag.
+extern const sstring NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY("system:number_of_user_specified_gsi_range_keys");
+// This is a legacy tag since scylla-2026.4, replaced by the tag above.
+// It was set to true when the user did not specify a RANGE key for a single
+// HASH key GSI. In that case base table key column/columns is/are appended to
+// the materialized view's clustering column list so Alternator should report
+// 0 - no user-specified RANGE columns. If this tag is *not* set then only the
+// first clustering key column should be reported as user-specified RANGE key.
+// New GSIs are tagged with NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY
+// instead, and it takes precedence over this tag where both are present. This
+// tag is only still *written* on single key GSIs when
+// ALTERNATOR_COMPOSITE_GSI_KEYS feature is disabled. It is still read to
+// describe tables created long time ago.
 extern const sstring SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY("system:spurious_range_key_added_to_gsi_and_user_didnt_specify_range_key");
-
 // The following tags also have the "system:" prefix but are NOT used
 // by Alternator to store table properties - only the user ever writes to
 // them, as a way to configure the table. As such, these tags are writable
@@ -854,6 +868,76 @@ static std::pair<std::string, std::string> parse_key_schema(const rjson::value& 
     return {hash_key, range_key};
 }
 
+// parse_gsi_composite_key_schema() is like parse_key_schema() above, but for
+// GSIs, which (unlike base tables and LSIs) may have a "composite" (multi-
+// attribute) key: up to 4 HASH attributes forming the partition key, followed
+// by up to 4 RANGE attributes forming the sort key (up to 8 KeySchema entries
+// in total). All HASH entries must appear before all RANGE entries (i.e., the
+// KeySchema array must be a contiguous run of HASH entries followed by a
+// contiguous run of RANGE entries), at least one HASH entry is required, and
+// no attribute name may be used more than once (whether as two HASH entries,
+// two RANGE entries, or as both a HASH and a RANGE entry).
+// The function returns two vectors of column names - the HASH (partition)
+// key attributes in KeySchema order, and the RANGE (sort) key attributes in
+// KeySchema order (which may be empty).
+static std::pair<std::vector<std::string>, std::vector<std::string>> parse_gsi_composite_key_schema(const rjson::value& obj, std::string_view supplementary_context, bool composite_keys_supported) {
+    const size_t max_keys_of_each_type = composite_keys_supported ? 4 : 1;
+    const rjson::value *key_schema;
+    if (!obj.IsObject() || !(key_schema = rjson::find(obj, "KeySchema"))) {
+        throw api_error::validation("Missing KeySchema member");
+    }
+    if (!key_schema->IsArray() || key_schema->Size() < 1 || key_schema->Size() > 2 * max_keys_of_each_type) {
+        throw api_error::validation(fmt::format("KeySchema must list between one and {} key columns",
+                2 * max_keys_of_each_type));
+    }
+    std::vector<std::string> hash_keys;
+    std::vector<std::string> range_keys;
+    std::unordered_set<std::string_view> seen_names;
+    for (size_t i = 0; i < key_schema->Size(); ++i) {
+        if (!(*key_schema)[i].IsObject()) {
+            throw api_error::validation("KeySchema element " + std::to_string(i) + " must be an object");
+        }
+        const rjson::value *v = rjson::find((*key_schema)[i], "KeyType");
+        if (!v || !v->IsString()) {
+            throw api_error::validation("KeySchema element " + std::to_string(i) + " must have a string KeyType");
+        }
+        const std::string_view key_type = rjson::to_string_view(*v);
+        if (key_type != "HASH" && key_type != "RANGE") {
+            throw api_error::validation("KeySchema element " + std::to_string(i) + " KeyType must be HASH or RANGE");
+        }
+        v = rjson::find((*key_schema)[i], "AttributeName");
+        if (!v || !v->IsString()) {
+            throw api_error::validation("KeySchema element " + std::to_string(i) + " must have string AttributeName");
+        }
+        validate_attr_name_length(supplementary_context, v->GetStringLength(), true,
+                key_type == "HASH" ? "HASH key in KeySchema - " : "RANGE key in KeySchema - ");
+        std::string_view attr_name = rjson::to_string_view(*v);
+        if (!seen_names.insert(attr_name).second) {
+            throw api_error::validation("KeySchema cannot have two key elements with the same name ('" + std::string(attr_name) + "')");
+        }
+        if (key_type == "HASH") {
+            if (!range_keys.empty()) {
+                throw api_error::validation("All HASH keys in KeySchema must precede any RANGE key");
+            }
+            if (hash_keys.size() >= max_keys_of_each_type) {
+                throw api_error::validation(fmt::format("KeySchema can have at most {} HASH keys",
+                        max_keys_of_each_type));
+            }
+            hash_keys.emplace_back(attr_name);
+        } else {
+            if (range_keys.size() >= max_keys_of_each_type) {
+                throw api_error::validation(fmt::format("KeySchema can have at most {} RANGE keys",
+                        max_keys_of_each_type));
+            }
+            range_keys.emplace_back(attr_name);
+        }
+    }
+    if (hash_keys.empty()) {
+        throw api_error::validation("KeySchema must have at least one HASH key");
+    }
+    return {std::move(hash_keys), std::move(range_keys)};
+}
+
 arn_parts parse_arn(std::string_view arn, std::string_view arn_field_name, std::string_view type_name, std::string_view expected_postfix) {
     // Expected ARN format arn:partition:service:region:account-id:resource-type/resource-id
     // So (old arn produced by scylla for internal purposes) arn:scylla:alternator:${KEYSPACE_NAME}:scylla:table/${TABLE_NAME}
@@ -1430,6 +1514,28 @@ static std::string get_similarity_function(const rjson::value& vector_index, std
     return sf;
 }
 
+// Record how many of the view's leading clustering columns are genuine,
+// user-specified RANGE key attributes (as opposed to the base table's own
+// key columns, appended as irrelevant to the user clustering columns
+// for materialized view correctness). DescribeTable relies on this tag-writing
+// code via genuine_range_key_count() to know where to stop reporting RANGE
+// keys - if this writer and that reader ever diverge, DescribeTable will report
+// a wrong/stale KeySchema for the GSI.
+static std::map<sstring, sstring> make_gsi_tags(
+    bool composite_gsi_keys_supported,
+    bool spurious_base_key_added_as_range_key,
+    const std::vector<std::string>& view_hash_keys,
+    const std::vector<std::string>& view_range_keys
+) {
+    std::map<sstring, sstring> tags;
+    if (composite_gsi_keys_supported) {
+        tags[NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY] = std::to_string(view_range_keys.size());
+    } else if (view_hash_keys.size() == 1 && view_range_keys.empty() && spurious_base_key_added_as_range_key) {
+        tags[SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY] = "true";
+    }
+    return tags;
+}
+
 future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization,
             const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     throwing_assert(this_shard_id() == 0);
@@ -1542,6 +1648,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         if (!gsi->IsArray()) {
             co_return api_error::validation("GlobalSecondaryIndexes must be an array.");
         }
+        const bool composite_gsi_keys_supported = _proxy.features().alternator_composite_gsi_keys;
         for (const rjson::value& g : gsi->GetArray()) {
             const rjson::value* index_name_v = rjson::find(g, "IndexName");
             if (!index_name_v || !index_name_v->IsString()) {
@@ -1557,23 +1664,22 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             // FIXME: read and handle "Projection" parameter. This will
             // require the MV code to copy just parts of the attrs map.
             schema_builder view_builder(this_smp_shard_count(), keyspace_name, vname);
-            auto [view_hash_key, view_range_key] = parse_key_schema(g, "GlobalSecondaryIndexes");
+            const auto [view_hash_keys, view_range_keys] = parse_gsi_composite_key_schema(g, "GlobalSecondaryIndexes",
+                    composite_gsi_keys_supported);
 
             // If an attribute is already a real column in the base table
             // (i.e., a key attribute), we can use it directly as a view key.
             // Otherwise, we need to add it as a "computed column", which
             // extracts and deserializes the attribute from the ":attrs" map.
-            bool view_hash_key_real_column = partial_schema->get_column_definition(to_bytes(view_hash_key));
-            add_column(view_builder, view_hash_key, *attribute_definitions, column_kind::partition_key, !view_hash_key_real_column);
-            unused_attribute_definitions.erase(view_hash_key);
-            if (!view_range_key.empty()) {
+            for (const auto& view_hash_key : view_hash_keys) {
+                bool view_hash_key_real_column = partial_schema->get_column_definition(to_bytes(view_hash_key));
+                add_column(view_builder, view_hash_key, *attribute_definitions, column_kind::partition_key, !view_hash_key_real_column);
+                unused_attribute_definitions.erase(view_hash_key);
+            }
+
+            for (const auto& view_range_key : view_range_keys) {
                 bool view_range_key_real_column = partial_schema->get_column_definition(to_bytes(view_range_key));
                 add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key, !view_range_key_real_column);
-                if (!partial_schema->get_column_definition(to_bytes(view_range_key)) &&
-                    !partial_schema->get_column_definition(to_bytes(view_hash_key))) {
-                    // FIXME: This warning should go away. See issue #6714
-                    elogger.warn("Only 1 regular column from the base table should be used in the GSI key in order to ensure correct liveness management without assumptions");
-                }
                 unused_attribute_definitions.erase(view_range_key);
             }
 
@@ -1582,18 +1688,16 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             // key(s).
             // NOTE: DescribeTable's implementation depends on those keys being added AFTER user specified keys.
             bool spurious_base_key_added_as_range_key = false;
-            if (hash_key != view_hash_key && hash_key != view_range_key) {
+            if (!std::ranges::contains(view_hash_keys, hash_key) && !std::ranges::contains(view_range_keys, hash_key)) {
                 add_column(view_builder, hash_key, *attribute_definitions, column_kind::clustering_key);
                 spurious_base_key_added_as_range_key = true;
             }
-            if (!range_key.empty() && range_key != view_hash_key && range_key != view_range_key) {
+            if (!range_key.empty() && !std::ranges::contains(view_hash_keys, range_key) && !std::ranges::contains(view_range_keys, range_key)) {
                 add_column(view_builder, range_key, *attribute_definitions, column_kind::clustering_key);
                 spurious_base_key_added_as_range_key = true;
             }
-            std::map<sstring, sstring> tags;
-            if (view_range_key.empty() && spurious_base_key_added_as_range_key) {
-                tags[SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY] = "true";
-            }
+
+            auto tags = make_gsi_tags(composite_gsi_keys_supported, spurious_base_key_added_as_range_key, view_hash_keys, view_range_keys);
             view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
             view_builders.emplace_back(std::move(view_builder));
         }
@@ -2199,25 +2303,24 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         // FIXME: read and handle "Projection" parameter. This will
                         // require the MV code to copy just parts of the attrs map.
                         schema_builder view_builder(this_smp_shard_count(), keyspace_name, vname);
-                        auto [view_hash_key, view_range_key] = parse_key_schema(it->value, "GlobalSecondaryIndexUpdates");
+                        const bool composite_gsi_keys_supported = p.local().features().alternator_composite_gsi_keys;
+                        const auto [view_hash_keys, view_range_keys] = parse_gsi_composite_key_schema(it->value, "GlobalSecondaryIndexUpdates",
+                                composite_gsi_keys_supported);
                         // If an attribute is already a real column in the base
                         // table (i.e., a key attribute in the base table),
                         // we can use it directly as a view key. Otherwise, we
                         // need to add it as a "computed column", which extracts
                         // and deserializes the attribute from the ":attrs" map.
-                        bool view_hash_key_real_column =
-                            schema->get_column_definition(to_bytes(view_hash_key));
-                        add_column(view_builder, view_hash_key, *attribute_definitions, column_kind::partition_key, !view_hash_key_real_column);
-                        unused_attribute_definitions.erase(view_hash_key);
-                        if (!view_range_key.empty()) {
+                        for (const auto& view_hash_key : view_hash_keys) {
+                            bool view_hash_key_real_column =
+                                schema->get_column_definition(to_bytes(view_hash_key));
+                            add_column(view_builder, view_hash_key, *attribute_definitions, column_kind::partition_key, !view_hash_key_real_column);
+                            unused_attribute_definitions.erase(view_hash_key);
+                        }
+                        for (const auto& view_range_key : view_range_keys) {
                             bool view_range_key_real_column =
                                 schema->get_column_definition(to_bytes(view_range_key));
                             add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key, !view_range_key_real_column);
-                            if (!schema->get_column_definition(to_bytes(view_range_key)) &&
-                                !schema->get_column_definition(to_bytes(view_hash_key))) {
-                                // FIXME: This warning should go away. See issue #6714
-                                elogger.warn("Only 1 regular column from the base table should be used in the GSI key in order to ensure correct liveness management without assumptions");
-                            }
                             unused_attribute_definitions.erase(view_range_key);
                         }
                         // Surprisingly, although DynamoDB checks for unused
@@ -2231,13 +2334,17 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         // Base key columns which aren't part of the index's key need to
                         // be added to the view nonetheless, as (additional) clustering
                         // key(s).
+                        // NOTE: DescribeTable's implementation depends on those keys being added AFTER user specified keys.
+                        bool spurious_base_key_added_as_range_key = false;
                         for (auto& def : schema->primary_key_columns()) {
-                            if  (def.name_as_text() != view_hash_key && def.name_as_text() != view_range_key) {
+                            std::string_view target_view = def.name_as_text();
+                            if  (!std::ranges::contains(view_hash_keys, target_view) && !std::ranges::contains(view_range_keys, target_view)) {
                                 view_builder.with_column(def.name(), def.type, column_kind::clustering_key);
+                                spurious_base_key_added_as_range_key = true;
                             }
                         }
-                        // GSIs have no tags:
-                        view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>());
+                        auto tags = make_gsi_tags(composite_gsi_keys_supported, spurious_base_key_added_as_range_key, view_hash_keys, view_range_keys);
+                        view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
                         // Note below we don't need to add virtual columns, as all
                         // base columns were copied to view. TODO: reconsider the need
                         // for virtual columns when we support Projection.

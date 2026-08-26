@@ -17,15 +17,133 @@
 
 #include "cdc/generation.hh"
 #include "alternator/executor.hh"
+#include "alternator/executor_util.hh"
 #include "dht/token-sharding.hh"
 #include "alternator/expressions.hh"
 #include "alternator/streams.hh"
+#include "schema/schema_builder.hh"
+#include "types/types.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/sleep.hh>
 
 namespace alternator {
     const cdc::stream_id& find_parent_shard_in_previous_generation(db_clock::time_point prev_timestamp, const utils::chunked_vector<cdc::stream_id>& prev_streams, const cdc::stream_id& child);
+    extern const sstring SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY;
+    extern const sstring NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY;
+}
+
+// Builds a schema_ptr simulating a GSI with an irrelevant to the user
+// "base_range" column appended simulating materialized view's correctness
+// requirement regarding base table HASH and RANGE keys.
+static schema_ptr make_old_style_gsi_schema_without_user_range_key() {
+    schema_builder builder(1, "test_ks", "test_gsi");
+    builder.with_column("gsi_hash", utf8_type, column_kind::partition_key);
+    builder.with_column("base_range", utf8_type, column_kind::clustering_key);
+    return builder.build();
+}
+
+static schema_ptr make_table_schema_without_any_range_key() {
+    schema_builder builder(1, "test_ks", "only_hash_table");
+    builder.with_column("only_hash", utf8_type, column_kind::partition_key);
+    return builder.build();
+}
+
+BOOST_AUTO_TEST_CASE(test_genuine_range_key_count_old_tag_only) {
+    schema_ptr schema = make_old_style_gsi_schema_without_user_range_key();
+    std::map<sstring, sstring> tags{
+        {alternator::SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY, "true"},
+    };
+    // Only the legacy tag is present, simulating a GSI created before the new
+    // tag existed. It must be translated to "0 genuine range keys".
+    BOOST_REQUIRE_EQUAL(alternator::genuine_range_key_count(*schema, &tags), 0);
+
+    // No tags / empty tags should be translated to default 1 range key reported.
+    BOOST_REQUIRE_EQUAL(alternator::genuine_range_key_count(*schema, nullptr), 1);
+    std::map<sstring, sstring> no_tags;
+    BOOST_REQUIRE_EQUAL(alternator::genuine_range_key_count(*schema, &no_tags), 1);
+}
+
+// Reproduces a corrupted/undecodable
+// NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY tag value, which falls back
+// to reporting all of the clustering columns as RANGE keys.
+BOOST_AUTO_TEST_CASE(test_genuine_range_key_count_undecodable_tag_value) {
+    schema_ptr schema = make_old_style_gsi_schema_without_user_range_key();
+    const uint8_t all_clustering_columns = static_cast<uint8_t>(schema->clustering_key_size());
+
+    std::map<sstring, sstring> non_numeric_tag{
+        {alternator::NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY, "not_a_number"},
+    };
+    BOOST_REQUIRE_EQUAL(alternator::genuine_range_key_count(*schema, &non_numeric_tag), all_clustering_columns);
+
+    // Out-of-range values (valid GSIs only ever have 0 to 4 user-specified
+    // range keys) should be treated the same way as non-numeric ones.
+    std::map<sstring, sstring> out_of_range_tag{
+        {alternator::NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY, "5"},
+    };
+    BOOST_REQUIRE_EQUAL(alternator::genuine_range_key_count(*schema, &out_of_range_tag), all_clustering_columns);
+
+    std::map<sstring, sstring> valid_prefix_invalid_tag{
+        {alternator::NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY, "1junk"},
+    };
+    BOOST_REQUIRE_EQUAL(alternator::genuine_range_key_count(*schema, &valid_prefix_invalid_tag), all_clustering_columns);
+
+    std::map<sstring, sstring> not_exact_to_string_tag{
+        {alternator::NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY, " 1"},
+    };
+    BOOST_REQUIRE_EQUAL(alternator::genuine_range_key_count(*schema, &not_exact_to_string_tag), all_clustering_columns);
+}
+
+BOOST_AUTO_TEST_CASE(test_describe_key_schema_old_tag_only) {
+    schema_ptr schema = make_old_style_gsi_schema_without_user_range_key();
+    std::map<sstring, sstring> tags{
+        {alternator::SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY, "true"},
+    };
+    std::unordered_map<std::string, std::string> attribute_types;
+    rjson::value parent = rjson::empty_object();
+    alternator::describe_key_schema(parent, *schema, &attribute_types, &tags);
+
+    const rjson::value* key_schema = rjson::find(parent, "KeySchema");
+    BOOST_REQUIRE(key_schema);
+    BOOST_REQUIRE(key_schema->IsArray());
+    // Only the HASH key should be reported.
+    BOOST_REQUIRE_EQUAL(key_schema->Size(), 1u);
+    const rjson::value& hash_entry = (*key_schema)[0];
+    BOOST_REQUIRE_EQUAL(rjson::to_string_view(hash_entry["AttributeName"]), "gsi_hash");
+    BOOST_REQUIRE_EQUAL(rjson::to_string_view(hash_entry["KeyType"]), "HASH");
+
+    BOOST_REQUIRE_EQUAL(attribute_types.size(), 1u);
+    BOOST_REQUIRE(attribute_types.contains("gsi_hash"));
+    BOOST_REQUIRE(!attribute_types.contains("base_range"));
+}
+
+BOOST_AUTO_TEST_CASE(test_describe_key_schema_without_old_tag) {
+    schema_ptr schema = make_old_style_gsi_schema_without_user_range_key();
+    std::unordered_map<std::string, std::string> attribute_types;
+    rjson::value parent = rjson::empty_object();
+    alternator::describe_key_schema(parent, *schema, &attribute_types, nullptr);
+
+    const rjson::value* key_schema = rjson::find(parent, "KeySchema");
+    BOOST_REQUIRE(key_schema);
+    BOOST_REQUIRE(key_schema->IsArray());
+    // Both HASH and RANGE keys should be reported (preserved default behavior).
+    BOOST_REQUIRE_EQUAL(key_schema->Size(), 2u);
+    const rjson::value& hash_entry = (*key_schema)[0];
+    BOOST_REQUIRE_EQUAL(rjson::to_string_view(hash_entry["AttributeName"]), "gsi_hash");
+    BOOST_REQUIRE_EQUAL(rjson::to_string_view(hash_entry["KeyType"]), "HASH");
+    const rjson::value& range_entry = (*key_schema)[1];
+    BOOST_REQUIRE_EQUAL(rjson::to_string_view(range_entry["AttributeName"]), "base_range");
+    BOOST_REQUIRE_EQUAL(rjson::to_string_view(range_entry["KeyType"]), "RANGE");
+
+    BOOST_REQUIRE_EQUAL(attribute_types.size(), 2u);
+    BOOST_REQUIRE(attribute_types.contains("gsi_hash"));
+    BOOST_REQUIRE(attribute_types.contains("base_range"));
+}
+
+BOOST_AUTO_TEST_CASE(test_only_hash_table_without_tag) {
+    schema_ptr schema = make_table_schema_without_any_range_key();
+
+    BOOST_REQUIRE_EQUAL(0, alternator::genuine_range_key_count(*schema, nullptr));
 }
 
 BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_simple_new_format) {
