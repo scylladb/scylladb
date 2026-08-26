@@ -44,6 +44,7 @@ async def test_mutation_schema_change(manager, random_tables):
     logger.info("Stopping C %s", server_c)
     await manager.server_stop_gracefully(server_c.server_id)
     await manager.driver_connect()
+    await wait_for_cql_and_get_hosts(manager.cql, [server_a, server_b], time.time() + 60)
 
     async with inject_error(manager.api, server_b.ip_addr, 'paxos_error_before_learn'):
         await t.add_column()
@@ -104,6 +105,7 @@ async def test_mutation_schema_change_restart(manager, random_tables):
     logger.info("Stopping C %s", server_c)
     await manager.server_stop_gracefully(server_c.server_id)
     await manager.driver_connect()
+    await wait_for_cql_and_get_hosts(manager.cql, [server_a, server_b], time.time() + 60)
 
     await inject_error_one_shot(manager.api, server_a.ip_addr,
                                 'raft_server_reduce_threshold')

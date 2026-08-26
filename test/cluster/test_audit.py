@@ -173,6 +173,7 @@ class AuditTester:
                 await self.manager.server_update_config(srv.server_id, config_options=full_cfg)
                 await self.manager.server_start(srv.server_id)
                 await self.manager.driver_connect(auth_provider=auth_provider)
+                await self.manager.get_ready_cql([srv])
             else:
                 # Server stays up — only push live-updatable keys.
                 live_cfg = {k: v for k, v in target_config.items() if k in LIVE_AUDIT_KEYS}
@@ -283,7 +284,8 @@ class AuditTester:
 
         self._prev_config_keys = set(target_config.keys())
 
-        cql = self.manager.get_cql()
+        current_servers = await self.manager.running_servers()
+        cql, _ = await self.manager.get_ready_cql(current_servers)
         cql.get_execution_profile(EXEC_PROFILE_DEFAULT).consistency_level = ConsistencyLevel.ONE
         audit_mode = target_config.get("audit") or ""
         if "table" not in audit_mode:
