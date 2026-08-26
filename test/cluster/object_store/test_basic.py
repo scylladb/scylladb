@@ -11,12 +11,14 @@ import time
 import uuid
 
 from test.pylib.minio_server import MinioServer
+from botocore.exceptions import ClientError
 from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.pylib.object_storage import format_tuples, keyspace_options
 from test.cqlpy.rest_api import scylla_inject_error
+from test.cluster.test_alternator import alternator_config, get_alternator, unique_table_name
 from test.cluster.test_config import wait_for_config
 from test.cluster.util import new_test_keyspace, wait_for_token_ring_and_group0_consistency
 from test.pylib.tablets import get_all_tablet_replicas
@@ -936,6 +938,36 @@ async def test_user_keyspace_named_audit_counts_as_local(manager: ScyllaClusterM
 
     with pytest.raises(InvalidRequest, match='this cluster keeps its user data in local'):
         cql.execute(f'CREATE KEYSPACE {unique_name()} {keyspace_options(object_storage)};')
+
+
+async def test_alternator_create_table_rejected_on_object_storage_cluster(manager: ScyllaClusterManager, object_storage):
+    '''Alternator creates its keyspace with the default local storage, so a
+    CreateTable must be refused on a cluster which keeps its user data in
+    object storage'''
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf}
+    cfg.update(alternator_config)
+    server = await manager.server_add(config=cfg)
+
+    cql = manager.get_cql()
+    cql.execute(f'CREATE KEYSPACE object_storage_ks {keyspace_options(object_storage)};')
+
+    alternator = get_alternator(server.ip_addr)
+    with pytest.raises(ClientError, match='keeps its user data in object storage') as excinfo:
+        alternator.create_table(TableName=unique_table_name(),
+                                BillingMode='PAY_PER_REQUEST',
+                                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'N'}])
+    # An InternalServerError carries the same message but asks the SDK to retry
+    # a request which can never succeed.
+    assert excinfo.value.response['Error']['Code'] == 'ValidationException', \
+        f"expected a ValidationException, got {excinfo.value.response['Error']}"
+
+    # The refusal must come before the keyspace is created, not after.
+    keyspaces = [row.keyspace_name for row in cql.execute('SELECT keyspace_name FROM system_schema.keyspaces;')]
+    assert not [ks for ks in keyspaces if ks.startswith('alternator_')], \
+        f'a local Alternator keyspace was left behind: {keyspaces}'
 
 
 async def run_scylla_sstable(args, timeout=300):
