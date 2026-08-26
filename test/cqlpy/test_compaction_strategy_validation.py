@@ -168,7 +168,7 @@ def test_not_allowed_options(cql, table1):
     assert_throws(cql, table1, rf"{scylla_error(compaction_window_size=4)}|Properties specified \[compaction_window_size\] are not understood by LeveledCompactionStrategy", "ALTER TABLE %s WITH compaction = { 'class' : 'LeveledCompactionStrategy', 'compaction_window_size' : 4 }")
     assert_throws(cql, table1, rf"{scylla_error(cold_reads_to_omit=0.5)}|Properties specified \[cold_reads_to_omit\] are not understood by IncrementalCompactionStrategy", "ALTER TABLE %s WITH compaction = { 'class' : 'IncrementalCompactionStrategy', 'cold_reads_to_omit' : 0.5 }")
 
-BAD_TOMBSTONE_THRESHOLD = "{ 'class' : 'SizeTieredCompactionStrategy', 'tombstone_threshold' : -0.4 }"
+BAD_TOMBSTONE_THRESHOLD = "{ 'class' : 'LeveledCompactionStrategy', 'tombstone_threshold' : -0.4 }"
 BAD_TOMBSTONE_THRESHOLD_ERROR = r"tombstone_threshold value \(-0.4\) must be between 0.0 and 1.0|tombstone_threshold must be greater than 0, but was -0.400000"
 
 # The statement is prepared once and executed twice on purpose: the compaction

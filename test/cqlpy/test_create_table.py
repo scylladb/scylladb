@@ -17,4 +17,4 @@ def test_prepared_create_table_options_validated(cql, test_keyspace):
     """
     with pytest.raises(ConfigurationException, match="min_index_interval"):
         cql.prepare(f"CREATE TABLE {test_keyspace}.{unique_name()} (p int PRIMARY KEY)"
-                    " WITH compaction = {'class': 'SizeTieredCompactionStrategy'} AND min_index_interval = 0")
+                    " WITH compaction = {'class': 'LeveledCompactionStrategy'} AND min_index_interval = 0")
