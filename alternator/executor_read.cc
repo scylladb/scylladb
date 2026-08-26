@@ -2192,6 +2192,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         // clustering key is mapped to the original rjson::value "Key".
         using clustering_keys = std::map<clustering_key, rjson::value*, clustering_key::less_compare>;
         std::unordered_map<partition_key, clustering_keys, partition_key::hashing, partition_key::equality> requests;
+        uint item_count = 0;
         table_requests(schema_ptr s)
             : schema(std::move(s))
             , requests(8, partition_key::hashing(*schema), partition_key::equality(*schema))
@@ -2224,8 +2225,9 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         for (rjson::value& key : keys.GetArray()) {
             rs.add(key);
             check_key(key, rs.schema);
+            rs.item_count++;
         }
-        batch_size += rs.requests.size();
+        batch_size += rs.item_count;
         requests.emplace_back(std::move(rs));
     }
 
@@ -2244,7 +2246,8 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         const table_requests& rs = requests[i];
         bool is_quorum = rs.cl == db::consistency_level::LOCAL_QUORUM;
         lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
-        per_table_stats->api_operations.batch_get_item_histogram.add(rs.requests.size());
+        per_table_stats->api_operations.batch_get_item_batch_total += rs.item_count;
+        per_table_stats->api_operations.batch_get_item_histogram.add(rs.item_count);
         for (const auto& [pk, cks] : rs.requests) {
             dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*rs.schema, pk))};
             std::vector<query::clustering_range> bounds;
