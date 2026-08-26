@@ -271,6 +271,14 @@ Size Tiered Compaction Strategy (STCS)
    is an alias of `Incremental Compaction Strategy (ICS)`_: a table configured
    with ``SizeTieredCompactionStrategy`` is compacted by ICS.
 
+   Naming it in ``CREATE TABLE``, ``ALTER TABLE``, ``CREATE MATERIALIZED VIEW``
+   or ``ALTER MATERIALIZED VIEW`` is still accepted, so that existing
+   applications and schema dumps keep working, but returns a CQL warning.
+   Set the ``allow_deprecated_size_tiered_compaction_strategy`` configuration
+   option to ``false`` to make it an error instead. That option defaults to
+   ``true`` for backward compatibility, and will default to ``false`` in a
+   future version.
+
 .. _stcs-options:
 
 STCS options

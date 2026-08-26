@@ -17,6 +17,7 @@
 #include "cql3/cql_config.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/alter_table_statement.hh"
+#include "cql3/statements/cf_prop_defs.hh"
 #include "cql3/statements/alter_type_statement.hh"
 #include "exceptions/exceptions.hh"
 #include "index/secondary_index_manager.hh"
@@ -560,6 +561,13 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>
 alter_table_statement::prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type ts) const {
     data_dictionary::database db = qp.db();
+    cql3::cql_warnings_vec warnings;
+    if (_properties) {
+        if (auto warning = check_deprecated_compaction_strategy(_properties->get_compaction_strategy_class(),
+                    db.get_config().allow_deprecated_size_tiered_compaction_strategy())) {
+            warnings.emplace_back(std::move(*warning));
+        }
+    }
 
     // Registry-backed table config properties (e.g. auto_repair_enabled) and legacy schema
     // properties (e.g. gc_grace_seconds) may be freely combined in one ALTER TABLE statement:
@@ -604,7 +612,7 @@ alter_table_statement::prepare_schema_mutations(query_processor& qp, const query
                     event::schema_change::target_type::TABLE,
                     keyspace(),
                     column_family());
-            co_return std::make_tuple(std::move(ret), std::move(mutations), std::vector<sstring>());
+            co_return std::make_tuple(std::move(ret), std::move(mutations), std::move(warnings));
         }
     }
 
@@ -621,7 +629,7 @@ alter_table_statement::prepare_schema_mutations(query_processor& qp, const query
                 keyspace(),
                 column_family());
 
-    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
+    co_return std::make_tuple(std::move(ret), std::move(m), std::move(warnings));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
