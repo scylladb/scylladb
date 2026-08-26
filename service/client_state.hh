@@ -63,6 +63,8 @@ public:
 
     class client_state_for_another_shard;
 private:
+    // Copies the client_state fields from `cs`. Must be called on the shard
+    // owning `cs`, unless `cs` is a private snapshot which is not modified.
     client_state(const client_state* cs,
         seastar::sharded<auth::service>* auth_service,
         seastar::sharded<qos::service_level_controller>* sl_controller,
@@ -480,7 +482,9 @@ public:
         return _user;
     }
 
-    client_state_for_another_shard move_to_other_shard();
+    // Takes a snapshot of this client_state which can be safely passed to
+    // other shards.
+    client_state_for_another_shard move_to_other_shard() const;
 
 #if 0
     public static SemanticVersion[] getCQLSupportedVersion()
@@ -536,23 +540,32 @@ public:
 // It is created on a shard that owns client_state than passed
 // to a target shard where client_state_for_another_shard::get()
 // can be called to obtain a shard local copy.
+//
+// The relevant fields are copied eagerly, on the owning shard, when
+// this object is constructed. The original client_state must not be
+// referenced from another shard because it can be concurrently
+// modified by the owning shard (e.g. by a USE statement changing
+// _keyspace) while the other shard reads it, which is a data race.
 class client_state::client_state_for_another_shard {
 private:
-    const client_state* _cs;
+    client_state _snapshot;
     seastar::sharded<auth::service>* _auth_service;
     seastar::sharded<qos::service_level_controller>* _sl_controller;
     client_state_for_another_shard(const client_state* cs,
         seastar::sharded<auth::service>* auth_service,
         seastar::sharded<qos::service_level_controller>* sl_controller)
-        : _cs(cs), _auth_service(auth_service), _sl_controller(sl_controller) {}
+        : _snapshot(cs, nullptr, nullptr, nullptr), _auth_service(auth_service), _sl_controller(sl_controller) {}
     friend client_state;
 public:
+    client_state_for_another_shard(const client_state_for_another_shard& o)
+        : _snapshot(&o._snapshot, nullptr, nullptr, nullptr), _auth_service(o._auth_service), _sl_controller(o._sl_controller) {}
+    client_state_for_another_shard(client_state_for_another_shard&&) = default;
     client_state get(abort_source* as = nullptr) const {
-        return client_state(_cs, _auth_service, _sl_controller, as);
+        return client_state(&_snapshot, _auth_service, _sl_controller, as);
     }
 };
 
-inline client_state::client_state_for_another_shard client_state::move_to_other_shard() {
+inline client_state::client_state_for_another_shard client_state::move_to_other_shard() const {
     return client_state_for_another_shard(this,
         _auth_service ? &_auth_service->container() : nullptr,
         _sl_controller ? &_sl_controller->container() : nullptr);
