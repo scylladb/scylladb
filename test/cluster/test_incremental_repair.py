@@ -982,7 +982,7 @@ async def _setup_table_for_race_window(manager, servers, cql):
     """Create a fresh keyspace+table with incremental repair setup for the race window test.
 
     Creates a new keyspace (unique name each call), creates the table with
-    tombstone_gc=repair and STCS min_threshold=2, inserts keys 0-9 as baseline,
+    tombstone_gc=repair and ICS min_threshold=2, inserts keys 0-9 as baseline,
     runs repair 1 (sstables_repaired_at=1), then inserts keys 10-19 (subject
     of repair 2) and flushes all nodes.
 
@@ -993,11 +993,12 @@ async def _setup_table_for_race_window(manager, servers, cql):
     await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) "
                         f"WITH tombstone_gc = {{'mode':'repair'}};")
 
-    # Lower min_threshold to 2 so STCS fires as soon as two sstables appear in the
-    # UNREPAIRED compaction view, making the race easy to trigger deterministically.
+    # Lower min_threshold to 2 so compaction fires as soon as two sstables appear
+    # in the UNREPAIRED compaction view, making the race easy to trigger
+    # deterministically.
     await cql.run_async(
         f"ALTER TABLE {ks}.test WITH compaction = "
-        f"{{'class': 'SizeTieredCompactionStrategy', 'min_threshold': 2, 'max_threshold': 4}}"
+        f"{{'class': 'IncrementalCompactionStrategy', 'min_threshold': 2, 'max_threshold': 4}}"
     )
 
     # Insert keys 0-9 (baseline for repair 1).
@@ -1104,7 +1105,7 @@ async def _do_race_window_promotes_unrepaired_data(manager, servers, cql, ks, to
     # After restart both S1' and E are loaded from disk with being_repaired=null.
     # Without the classifier fix: is_repaired(sstables_repaired_at=1, S1'{repaired_at=2})
     # is false and being_repaired is null, so S1' lands in the UNREPAIRED view where
-    # autocompaction is active.  STCS (min_threshold=2) immediately merges S1' and E into
+    # autocompaction is active.  ICS (min_threshold=2) immediately merges S1' and E into
     # F(repaired_at=max(2,0)=2, keys 10-29), wrongly promoting E into the REPAIRED set.
     # With the classifier fix: S1' has repaired_at==sstables_repaired_at+1 and the tablet
     # is still in the `repair` stage, so it is classified REPAIRING (compaction disabled),

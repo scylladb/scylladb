@@ -215,13 +215,13 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
                       "{'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 86400000;").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl7"));
         e.execute_cql("UPDATE system.config SET value='50' WHERE name='twcs_max_window_count';").get();
-        e.execute_cql("ALTER TABLE tbl7 WITH compaction = {'class': 'SizeTieredCompactionStrategy'}").get();
+        e.execute_cql("ALTER TABLE tbl7 WITH compaction = {'class': 'IncrementalCompactionStrategy'}").get();
 
-        // Scenario 8: No TTL TWCS table to STCS
+        // Scenario 8: No TTL TWCS table to ICS
         e.execute_cql("CREATE TABLE tbl8 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy'};").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks" ,"tbl8"));
-        e.execute_cql("ALTER TABLE tbl8 WITH compaction = {'class': 'SizeTieredCompactionStrategy'};").get();
+        e.execute_cql("ALTER TABLE tbl8 WITH compaction = {'class': 'IncrementalCompactionStrategy'};").get();
 
         // Scenario 9: Large TTL TWCS table, modify attribute other than compaction and default_time_to_live
         e.execute_cql("UPDATE system.config SET value='0' WHERE name='twcs_max_window_count';").get();
@@ -231,7 +231,7 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
         e.execute_cql("UPDATE system.config SET value='50' WHERE name='twcs_max_window_count';").get();
         e.execute_cql("ALTER TABLE tbl9 WITH gc_grace_seconds = 0;").get();
 
-        // Scenario 10: Large TTL STCS table, fail to switch to TWCS with no TTL
+        // Scenario 10: Large TTL ICS table, fail to switch to TWCS with no TTL
         e.execute_cql("CREATE TABLE tbl10 (a int PRIMARY KEY, b int) WITH default_time_to_live = 8640000;").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl10"));
         BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE tbl10 WITH compaction = {'class': 'TimeWindowCompactionStrategy'};").get(), exceptions::configuration_exception);

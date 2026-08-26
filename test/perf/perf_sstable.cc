@@ -112,8 +112,8 @@ int scylla_sstable_main(int argc, char** argv) {
         ("sstables", bpo::value<unsigned>()->default_value(1), "number of sstables (valid only for compaction mode)")
         ("mode", bpo::value<test_modes>()->default_value(test_modes::index_write), "one of: sequential_read, index_read, write, compaction, index_write, full_scan_streaming, partitioned_streaming")
         ("testdir", bpo::value<sstring>()->default_value("/var/lib/scylla/perf-tests"), "directory in which to store the sstables")
-        ("compaction-strategy", bpo::value<sstring>()->default_value("SizeTieredCompactionStrategy"), "compaction strategy to use, one of "
-             "(SizeTieredCompactionStrategy, LeveledCompactionStrategy, DateTieredCompactionStrategy, TimeWindowCompactionStrategy)")
+        ("compaction-strategy", bpo::value<sstring>()->default_value("IncrementalCompactionStrategy"), "compaction strategy to use, one of "
+             "(IncrementalCompactionStrategy, LeveledCompactionStrategy, TimeWindowCompactionStrategy)")
         ("timestamp-range", bpo::value<api::timestamp_type>()->default_value(0), "Timestamp values to use, chosen uniformly from: [-x, +x]");
 
     return app.run(argc, argv, [&app] {
