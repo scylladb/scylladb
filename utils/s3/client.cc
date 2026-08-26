@@ -500,6 +500,9 @@ future<> client::make_request(http::request req,
                               error_handler err_handler,
                               std::optional<http::reply::status_type> expected,
                               seastar::abort_source* as) {
+    // Held for the whole request. close() waits for the gate before closing
+    // the http clients, so no http connection can outlive them.
+    auto holder = _requests_gate.hold();
     auto request = std::move(req);
     auto handler = wrap_handler(request, std::move(handle), expected);
     co_await authorize(request);
@@ -516,6 +519,9 @@ future<> client::make_request(http::request req,
                               error_handler err_handler,
                               std::optional<http::reply::status_type> expected,
                               seastar::abort_source* as) {
+    // Held across the lookup as well: find_or_create_client() can suspend and
+    // insert into _https, which close() must not drain in that window.
+    auto holder = _requests_gate.hold();
     auto& gc = co_await find_or_create_client();
     auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
@@ -2016,6 +2022,7 @@ future<> client::close() noexcept {
     s3l.info("Closing S3 client...");
 
     co_await _config_update_gate.close();
+    co_await _requests_gate.close();
     {
         auto units = co_await get_units(_creds_sem, 1);
         _creds_invalidation_timer.cancel();

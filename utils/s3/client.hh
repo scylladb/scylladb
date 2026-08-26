@@ -121,6 +121,7 @@ class client : public enable_shared_from_this<client> {
     aws_credentials _credentials;
     aws::aws_credentials_provider_chain _creds_provider_chain;
     seastar::gate _config_update_gate;
+    seastar::gate _requests_gate;
 
     struct group_client {
         seastar::http::client http;
