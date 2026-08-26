@@ -1769,6 +1769,51 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
                 }
             }
         }
+        // Alternator asks for no storage options, so the keyspace it creates
+        // keeps its data locally. restrict_mixed_storage_clusters decides
+        // whether the mix is refused, warned about or allowed -- except for a
+        // cluster which is already mixed, which only ever gets a warning:
+        // refusing the table would not bring it back to either kind.
+        const auto storage_restriction = _proxy.local_db().get_config().restrict_mixed_storage_clusters();
+        if (storage_restriction != db::tri_mode_restriction_t::mode::FALSE) {
+            if (_proxy.local_db().has_keyspace(keyspace_name)) {
+                // The keyspace can predate the table: nothing stops CREATE KEYSPACE
+                // from naming one and asking for object storage. The table is then
+                // built from that keyspace's metadata rather than from the one
+                // assembled here, so it would inherit the object storage with it.
+                if (_proxy.local_db().find_keyspace(keyspace_name).metadata()->get_storage_options().is_object_storage_type()) {
+                    auto message = fmt::format("Cannot create table {}: keyspace {} keeps its data in object storage, and an Alternator "
+                                               "table keeps its data in local storage.",
+                                               table_name, keyspace_name);
+                    if (storage_restriction == db::tri_mode_restriction_t::mode::TRUE) {
+                        co_return api_error::validation(std::move(message));
+                    }
+                    elogger.warn("{}", message);
+                }
+            } else {
+                switch (_proxy.local_db().get_user_storage_kind()) {
+                    using enum replica::database::user_storage_kind;
+                case object_storage: {
+                    auto message = fmt::format("Cannot create table {}: this cluster keeps its user data in object storage, and an Alternator "
+                                               "table keeps its data in local storage.",
+                                               table_name);
+                    if (storage_restriction == db::tri_mode_restriction_t::mode::TRUE) {
+                        co_return api_error::validation(std::move(message));
+                    }
+                    elogger.warn("{}", message);
+                    break;
+                }
+                case mixed:
+                    elogger.warn("Creating table {}: this cluster keeps some of its user data locally and some in object "
+                                 "storage. Such a cluster is not supported.",
+                                 table_name);
+                    break;
+                case none:
+                case local:
+                    break;
+                }
+            }
+        }
         bool table_already_exists = false;
         try {
             schema_mutations = service::prepare_new_keyspace_announcement(_proxy.local_db(), ksm, ts);
