@@ -349,7 +349,8 @@ class test_compaction_group_handle final : public logstor_group {
     compaction_manager& _cm;
 public:
     test_compaction_group_handle(schema_ptr schema, logstor& ls)
-        : _table_id(schema->id())
+        : logstor_group(ls.get_segment_manager().get_segment_size())
+        , _table_id(schema->id())
         , _owned_index(ls.make_primary_index(schema, false))
         , _index(*_owned_index)
         , _cm(ls.get_compaction_manager()) {
@@ -359,7 +360,8 @@ public:
     // A group of a table that already has an index: the index is per table, and all the groups of
     // a table share it. This is what the groups of a split have.
     test_compaction_group_handle(schema_ptr schema, logstor& ls, primary_index& index)
-        : _table_id(schema->id())
+        : logstor_group(ls.get_segment_manager().get_segment_size())
+        , _table_id(schema->id())
         , _index(index)
         , _cm(ls.get_compaction_manager()) {
         _cm.add(*this);
@@ -2276,6 +2278,53 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_candidate_score_ranks_by_effici
     BOOST_REQUIRE(four_in < all_dead);
 }
 
+// The live bytes of a segment set are maintained as segments are linked, freed from and unlinked,
+// rather than computed by walking it, so every one of those paths has to keep them in step with the
+// segments the set actually holds.
+SEASTAR_THREAD_TEST_CASE(test_logstor_segment_set_live_bytes) {
+    constexpr uint64_t segment_size = 128 * 1024;
+    constexpr size_t record_size = 1024;
+
+    // Descriptors are intrusively linked into the sets, so they must keep their addresses, and every
+    // set must be destroyed before them.
+    std::deque<segment_descriptor> descs;
+    segment_set segments{segment_size};
+
+    auto add_segment = [&] (segment_set& set, size_t live_records) -> segment_descriptor& {
+        auto& desc = descs.emplace_back();
+        desc.reset(segment_size);
+        desc.on_write(live_records * record_size, live_records);
+        set.add_segment(desc);
+        return desc;
+    };
+
+    // An empty set holds nothing.
+    BOOST_REQUIRE_EQUAL(segments.live_bytes(), 0);
+
+    // A segment joins with the records it already holds.
+    auto& sparse = add_segment(segments, 1);
+    auto& dense = add_segment(segments, 16);
+    BOOST_REQUIRE_EQUAL(segments.live_bytes(), 17 * record_size);
+
+    // Freeing records takes off exactly the space they gave back.
+    dense.on_free(6 * record_size, 6);
+    segments.update_segment(dense, 6 * record_size);
+    BOOST_REQUIRE_EQUAL(segments.live_bytes(), 11 * record_size);
+
+    // Merging hands the segments over together with their live bytes.
+    segment_set other{segment_size};
+    other.merge(segments).get();
+    BOOST_REQUIRE_EQUAL(segments.live_bytes(), 0);
+    BOOST_REQUIRE_EQUAL(other.live_bytes(), 11 * record_size);
+
+    // Removing a segment takes its bytes out of the set.
+    other.remove_segment(sparse);
+    BOOST_REQUIRE_EQUAL(other.live_bytes(), 10 * record_size);
+
+    other.clear();
+    BOOST_REQUIRE_EQUAL(other.live_bytes(), 0);
+}
+
 // Checks that compaction candidate selection chooses segments in ascending utilization order,
 // respects the batch cap, and the returned score accurately describes the selected segments.
 SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
@@ -2292,7 +2341,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
     // Descriptors are intrusively linked into the sets, so they must keep their addresses, and every
     // set must be destroyed before them.
     std::deque<segment_descriptor> descs;
-    segment_set segments;
+    segment_set segments{segment_size};
     auto add_segment = [&] (segment_set& set, size_t live_records) {
         auto& desc = descs.emplace_back();
         desc.reset(segment_size);
@@ -2344,14 +2393,14 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
 
     // A group whose segments are all nearly full has no batch with a net gain, which is the answer
     // for the whole group and not only for the prefix that happened to be scored.
-    segment_set dense;
+    segment_set dense{segment_size};
     for (size_t i = 0; i < min_segments_per_compaction; ++i) {
         add_segment(dense, dense_records);
     }
     BOOST_REQUIRE(!select_compaction_batch(dense, segment_size, min_segments_per_compaction));
 
     // An empty group has nothing to compact.
-    segment_set empty;
+    segment_set empty{segment_size};
     BOOST_REQUIRE(!select_compaction_batch(empty, segment_size, min_segments_per_compaction));
 }
 
