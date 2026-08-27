@@ -293,6 +293,9 @@ class fsm {
     // only feeds a leadership decision gated on the failure persisting for
     // multiples of delta -- a tick of staleness cannot matter.
     bool _clock_ok = false;
+    // The value of log_is_full() we last reported to a leader in an
+    // append_reply. Used to log only the transitions rather than every reply.
+    bool _log_full_reported = false;
 
     // Stores the last state observed by get_output().
     // Is updated with the actual state of the FSM after
@@ -424,6 +427,15 @@ private:
     // Replicate entries to a follower. If there are no entries to send
     // and allow_empty is true, send a heartbeat.
     void replicate_to(follower_progress& progress, bool allow_empty);
+    // Send an empty append_entries request to a follower which reported a full
+    // log, bypassing follower_progress::can_send_to(). Sends no entries, so it
+    // cannot grow the follower's log; it refreshes follower_progress::log_full
+    // and carries leader_commit_idx so that the follower can drain what it
+    // already has.
+    void send_throttled_heartbeat(follower_progress& progress);
+    // Return log_is_full(), logging whenever the answer changes since the last
+    // time we reported it to a leader. Used to fill in append_reply::log_full.
+    bool report_log_full();
     void replicate();
     void append_entries(server_id from, append_request&& append_request);
 
@@ -658,20 +670,28 @@ public:
     }
 
     // True if we will refuse to append further entries received from a leader
-    // until a snapshot shrinks the log back. Always false if the limit is
-    // disabled.
+    // until a snapshot shrinks the log back. Reported to the leader in every
+    // append_reply so that it can stop replicating to us. Always false if the
+    // limit is disabled.
     //
-    // Note that reaching the limit is not sufficient: if we cannot shrink we let
-    // one entry through per request to guarantee progress (see append_entries()),
-    // so we are not "full" in the sense a leader cares about. Claiming otherwise
-    // would make a leader stop replicating to us, and then it could never commit
-    // anything - neither the dummy entry it appends on election nor the entries
-    // that overwrite a diverged tail of our log - which is precisely what we need
-    // from it in order to become able to shrink.
+    // Note that reaching the limit is not sufficient: while we cannot shrink we
+    // let one entry through per request to guarantee progress (see
+    // append_entries()), so we are not "full" in the sense the leader cares
+    // about. Claiming otherwise would make it stop replicating to us, and then it
+    // could never commit anything - neither the dummy entry it appends on
+    // election nor the entries that overwrite a diverged tail of our log - which
+    // is precisely what we need from it in order to become able to shrink.
     bool log_is_full() const {
         return _config.max_follower_log_size != 0 &&
                _log.memory_usage() >= _config.max_follower_log_size &&
                can_shrink_log();
+    }
+
+    // Number of followers which reported a full log, i.e. which we are not
+    // currently replicating to. Leader only.
+    size_t throttled_followers() const {
+        return std::ranges::count_if(leader_state().tracker,
+                [] (const auto& p) { return p.second.log_full; });
     }
 
     server_id id() const { return _my_id; }

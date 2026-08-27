@@ -51,6 +51,13 @@ public:
     state state = state::PROBE;
     // true if a packet was sent already in a probe mode
     bool probe_sent = false;
+    // Set if the follower reported that its in-memory log has reached
+    // max_follower_log_size. While it is set we do not send any entries to the
+    // follower, since it would refuse them; fsm::tick_leader() sends an empty
+    // append_request once per tick instead, to learn when the follower has
+    // room again. Refreshed from every append_reply, so it is never stale for
+    // longer than one round trip.
+    bool log_full = false;
     // number of in flight still un-acked append entries requests
     size_t in_flight = 0;
     static constexpr size_t max_in_flight = 10;
