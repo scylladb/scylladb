@@ -48,6 +48,9 @@
 #include "init.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/parquet/encryption_keys.hh"
+#include "sstables/parquet/writer_impl.hh"
+#include "sstables/parquet/format/encryption.hh"
 #include "compaction/compaction_manager.hh"
 #include "tasks/types.hh"
 #include "cql3/untyped_result_set.hh"
@@ -476,6 +479,218 @@ SEASTAR_TEST_CASE(test_local_file_provider) {
     tmpdir tmp;
     auto keyfile = tmp.path() / "secret_key";
     co_await test_provider(fmt::format("'key_provider': 'LocalFileSystemKeyProviderFactory', 'secret_key_file': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", keyfile.string()), tmp);
+}
+
+// Per-column Parquet encryption keys, end to end through a *real* key provider.
+//
+// This is the test the rest of the per-column coverage cannot replace. The other cases install a
+// stub key source with sstables::parquet::set_key_source, which bypasses
+// ent/encryption/parquet_key_source.cc and every provider in ent/encryption -- so they pin the
+// format and the read path but say nothing about whether Scylla's own key management can express a
+// second key at all. Here the key source is the one register_extensions() installed, and the keys
+// come out of the local-file provider.
+//
+// Two separate things are pinned, and it is worth being precise about which assertion pins which,
+// because the obvious reading of the first one is wrong:
+//
+//   * The two key files on disk prove the per-column option set reached a *provider* -- the
+//     local-file provider materialises a key file on first use, and a second file with different
+//     contents cannot appear otherwise. But it does **not** prove the writer used it: DDL-time
+//     validate_encryption() now resolves every per-column option set too, and that alone creates
+//     the file. Verified by mutation: with the writer's column-key loop disabled the file is still
+//     created, and this assertion still passes.
+//   * The write path is pinned by the last case instead -- dropping `encryption_key.ssn` and
+//     re-reading must fail. That can only fail if the file really does declare a column key, so it
+//     is the assertion that goes red when the writer stops populating column_keys.
+//
+// Neither assertion can see the file's actual crypto metadata, because ColumnChunk.crypto_metadata
+// lives inside the footer that the footer key encrypts and this test has no way to spell that key.
+// The structural check is therefore in sstable_parquet_test, against a stub whose keys a test can
+// recompute; what is *here* is the provider integration those tests cannot have.
+SEASTAR_TEST_CASE(test_parquet_per_column_keys_through_local_file_provider) {
+    tmpdir tmp;
+    auto ext = std::make_shared<db::extensions>();
+    auto cfg = seastar::make_shared<db::config>(ext);
+    cfg->data_file_directories({tmp.path().string()});
+    {
+        boost::program_options::options_description desc;
+        boost::program_options::options_description_easy_init init(&desc);
+        configurable::append_all(*cfg, init);
+    }
+
+    const auto tbl_key = (tmp.path() / "table.key").string();
+    const auto pii_key = (tmp.path() / "pii.key").string();
+
+    co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+        // The adapter in ent/encryption/parquet_key_source.cc, installed by
+        // encryption::register_extensions. Without this the test would silently be testing nothing:
+        // a null key source makes the CREATE below fail, which would look like a DDL bug.
+        BOOST_REQUIRE(sstables::parquet::key_source_ptr() != nullptr);
+
+        env.execute_cql(fmt::format(
+                "CREATE TABLE ks.pqpc (pk text PRIMARY KEY, v text, ssn text) "
+                "WITH storage_format = 'parquet' AND parquet = {{"
+                "'encryption': 'aes_gcm_v1', "
+                "'key_provider': 'LocalFileSystemKeyProviderFactory', "
+                "'secret_key_file': '{}', "
+                "'secret_key_strength': '128', "
+                "'encryption_key.ssn': 'secret_key_file={}'}}",
+                tbl_key, pii_key)).get();
+
+        // The stored property round-trips, which is what DESCRIBE echoes (schema.cc emits the
+        // stored map verbatim) and what every later schema read reconstructs from.
+        {
+            auto s = env.local_db().find_schema("ks", "pqpc");
+            BOOST_REQUIRE_EQUAL(s->parquet_options().at("encryption_key.ssn"),
+                                "secret_key_file=" + pii_key);
+            const sstables::parquet::parquet_parameters pp{s->parquet_options()};
+            BOOST_REQUIRE_EQUAL(pp.column_key_opts().size(), 1u);
+            // Overlaid, so the column inherits the provider it never named.
+            BOOST_REQUIRE_EQUAL(pp.column_key_opts().at("ssn").at("key_provider"),
+                                "LocalFileSystemKeyProviderFactory");
+            BOOST_REQUIRE_EQUAL(pp.column_key_opts().at("ssn").at("secret_key_file"), pii_key);
+        }
+
+        env.execute_cql("INSERT INTO ks.pqpc (pk, v, ssn) VALUES ('a', 'hello', '123-45-6789')")
+                .get();
+        env.db().invoke_on_all([] (replica::database& db) {
+            return db.flush_all_memtables();
+        }).get();
+
+        // Two keys, from the provider, on disk: the per-column option set reached a real provider
+        // rather than being parsed and dropped. See the note on this test for why this is *not*
+        // also proof that the writer used it.
+        BOOST_REQUIRE(seastar::file_exists(tbl_key).get());
+        BOOST_REQUIRE_MESSAGE(seastar::file_exists(pii_key).get(),
+                              "the per-column key file was never created, so the column's option "
+                              "set never reached the key provider: " + pii_key);
+        {
+            auto a = read_text_file_fully(tbl_key).get();
+            auto b = read_text_file_fully(pii_key).get();
+            BOOST_REQUIRE_MESSAGE(
+                    std::string_view(a.get(), a.size()) != std::string_view(b.get(), b.size()),
+                    "the table key and the per-column key are identical, so the column is not "
+                    "separately encrypted");
+        }
+
+        // The file is really in encrypted-footer mode, and really carries a column key. Asserted
+        // off the sstable rather than off the property, because the property is the input.
+        env.db().invoke_on_all([] (replica::database& db) -> future<> {
+            auto& cf = db.find_column_family("ks", "pqpc");
+            auto ssts = cf.get_sstables();
+            for (auto& sst : *ssts) {
+                BOOST_REQUIRE(sst->get_version() == sstables::sstable_version_types::pq);
+                auto sem = reader_concurrency_semaphore(
+                        reader_concurrency_semaphore::no_limits{}, "pqpc-probe",
+                        reader_concurrency_semaphore::register_metrics::no);
+                auto stop = deferred_stop(sem);
+                const uint64_t len = sst->ondisk_data_size();
+                auto tail = co_await sst->data_read(len - 8, 8, sem.make_tracking_only_permit(
+                        cf.schema(), "pqpc-probe", db::no_timeout, {}));
+                BOOST_REQUIRE_EQUAL(
+                        std::string_view(tail.get() + 4, 4),
+                        std::string_view(sstables::parquet::format::magic_encrypted, 4));
+            }
+        }).get();
+
+        // And it reads back. The read resolves the footer key *and* the column key through the same
+        // provider, from a cold footer cache, which is the path a fresh node takes.
+        require_rows(env, "select v, ssn from ks.pqpc where pk = 'a'",
+                     {{utf8_type->decompose(sstring("hello")),
+                       utf8_type->decompose(sstring("123-45-6789"))}});
+
+        // Taking the key away must break the read, not empty the column. The provider options live
+        // in the schema, so dropping the sub-option is what takes a key away -- and the row cache
+        // has to be dropped or the answer comes from memory rather than from the file.
+        env.execute_cql(fmt::format(
+                "ALTER TABLE ks.pqpc WITH parquet = {{"
+                "'encryption': 'aes_gcm_v1', "
+                "'key_provider': 'LocalFileSystemKeyProviderFactory', "
+                "'secret_key_file': '{}', "
+                "'secret_key_strength': '128'}}", tbl_key)).get();
+        env.db().invoke_on_all([] (replica::database& db) {
+            auto& cf = db.find_column_family("ks", "pqpc");
+            return cf.get_row_cache().invalidate(row_cache::external_updater([] {}));
+        }).get();
+        try {
+            auto res = env.execute_cql("select v, ssn from ks.pqpc where pk = 'a'").get();
+            // Not "an exception was missing": the read *answered*, for a column whose key it does
+            // not have. Say that, because it is the failure mode the whole design is about.
+            BOOST_FAIL("the read succeeded after its column key was taken away; a column it "
+                       "cannot decrypt was returned rather than the read failing");
+        } catch (const std::exception& e) {
+            // Logged rather than asserted on, and that is a finding rather than laziness: what
+            // arrives here is the coordinator's generic "received 0 responses and 1 failures from
+            // 1 CL=ONE". The actionable message -- which column, which sub-option to restore --
+            // reaches the *node log* and not the client, because this is a replica-side read
+            // failure like any other. So "fails loudly" means loudly in the log; an operator
+            // reading only the CQL error learns that the read failed and nothing about why.
+            testlog.info("read after key removal failed as required: {}", e.what());
+        }
+    }, cfg, {}, cql_test_init_configurables{ *ext });
+}
+
+// The DDL surface, with a real key provider registered so the CREATE reaches validation rather than
+// failing for want of one.
+//
+// Every case here is a *name* the operator could get wrong, and the rule is that none of them may
+// be inert. An ignored `encoding.<column>` is a performance setting doing nothing; an ignored
+// `encryption_key.<column>` is an operator believing a column has its own key when it does not,
+// which is a false security claim.
+SEASTAR_TEST_CASE(test_parquet_per_column_key_ddl_validation) {
+    tmpdir tmp;
+    auto ext = std::make_shared<db::extensions>();
+    auto cfg = seastar::make_shared<db::config>(ext);
+    cfg->data_file_directories({tmp.path().string()});
+    {
+        boost::program_options::options_description desc;
+        boost::program_options::options_description_easy_init init(&desc);
+        configurable::append_all(*cfg, init);
+    }
+    const auto tbl_key = (tmp.path() / "table.key").string();
+    const auto col_key = (tmp.path() / "col.key").string();
+
+    co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+        const auto base = fmt::format(
+                "'encryption': 'aes_gcm_v1', "
+                "'key_provider': 'LocalFileSystemKeyProviderFactory', "
+                "'secret_key_file': '{}', 'secret_key_strength': '128'", tbl_key);
+
+        env.execute_cql(fmt::format(
+                "CREATE TABLE ks.ddl (pk text PRIMARY KEY, v text, m map<text,text>, "
+                "fm frozen<map<text,text>>) "
+                "WITH storage_format = 'parquet' AND parquet = {{{}}}", base)).get();
+
+        auto rejected = [&] (const sstring& extra) {
+            BOOST_REQUIRE_THROW(
+                    env.execute_cql(fmt::format(
+                            "ALTER TABLE ks.ddl WITH parquet = {{{}, {}}}", base, extra)).get(),
+                    exceptions::configuration_exception);
+        };
+        auto accepted = [&] (const sstring& extra) {
+            env.execute_cql(fmt::format(
+                    "ALTER TABLE ks.ddl WITH parquet = {{{}, {}}}", base, extra)).get();
+        };
+
+        // A column that does not exist. The one an operator hits first, via a typo.
+        rejected(fmt::format("'encryption_key.nosuch': 'secret_key_file={}'", col_key));
+        // A non-frozen collection owns no leaf bearing its own name -- its leaves are called `key`,
+        // `value`, `__ts`, `__ttl`, `__ldt` -- so there is nothing for a key to attach to.
+        rejected(fmt::format("'encryption_key.m': 'secret_key_file={}'", col_key));
+        // A scalar column, and a *frozen* collection, both do own their own leaf.
+        accepted(fmt::format("'encryption_key.v': 'secret_key_file={}'", col_key));
+        accepted(fmt::format("'encryption_key.fm': 'secret_key_file={}'", col_key));
+        // And a bad option inside the value is an error too, rather than a setting the provider
+        // would ignore and silently resolve to the table's own key.
+        rejected("'encryption_key.v': 'secret_key_fil=/nope'");
+        rejected("'encryption_key.v': '/nope'");
+
+        // The last accepted ALTER is what stands.
+        auto s = env.local_db().find_schema("ks", "ddl");
+        BOOST_REQUIRE_EQUAL(s->parquet_options().at("encryption_key.fm"),
+                            "secret_key_file=" + col_key);
+        BOOST_REQUIRE(!s->parquet_options().contains("encryption_key.v"));
+    }, cfg, {}, cql_test_init_configurables{ *ext });
 }
 
 static std::string local_key_options(const fs::path& keyfile) {

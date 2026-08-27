@@ -107,6 +107,7 @@ async def create_encrypted_cf(manager: ScyllaClusterManager, ks: str,
     secret_key_strength=None,
     compression=None,
     additional_options=None,
+    storage_format=None,
 ):
     """create test cf"""
     if additional_options is None:
@@ -125,6 +126,8 @@ async def create_encrypted_cf(manager: ScyllaClusterManager, ks: str,
 
     if compression is not None:
         extra = f"{extra} AND compression = {{ 'sstable_compression': '{compression}Compressor' }}"
+    if storage_format is not None:
+        extra = f"{extra} AND storage_format = '{storage_format}'"
 
     return new_test_table(manager, ks, columns, extra)
 
@@ -161,6 +164,7 @@ async def _smoke_test(manager: ScyllaClusterManager, key_provider: KeyProviderFa
                       exception_handler: Callable[[Exception,str,str], None] = None,
                       options: dict = {},
                       num_servers: int = 1,
+                      storage_format: str = None,
                       restart: Callable[[ScyllaClusterManager, list[ServerInfo], list[str]], Coroutine[None, None, None]] = None):
     """helper to create cluster, cfs, data and verify it after restart"""
     cfg = options | key_provider.configuration_parameters()
@@ -181,7 +185,8 @@ async def _smoke_test(manager: ScyllaClusterManager, key_provider: KeyProviderFa
                         await create_encrypted_cf(manager, ks, cipher_algorithm=cipher_algorithm,
                                                   secret_key_strength=secret_key_strength,
                                                   compression=compression,
-                                                  additional_options=additional_options
+                                                  additional_options=additional_options,
+                                                  storage_format=storage_format
                                                   ))
                     keys = await prepare_write_workload(cql, table_name=table_name)
                     cfs.append((table_name, keys))
@@ -561,3 +566,37 @@ async def test_system_encryption_reboot(manager: ScyllaClusterManager, tmpdir):
                           ciphers={"AES/CBC/PKCS5Padding": [128]},
                           options=options,
                           restart=restart)
+
+
+async def test_encrypted_parquet_across_providers(manager, key_provider):
+    """§11.1 B2: an encrypted `pq` table, through a REAL key provider, at the integration layer.
+
+    This is the gap B2 names. Whole-tree, exactly one file crossed parquet and encryption --
+    test/boost/sstable_parquet_test.cc -- and it installs a stub key source via
+    sstables::parquet::set_key_source, so ent/encryption/parquet_key_source.cc and every real
+    provider were out of the loop. It pinned the semaphore interaction, not the provider
+    integration. test/cqlpy, test/cluster and test/rest_api contained no encrypted-parquet coverage
+    at all, which is *why* the read-path deadlock (§10.17a) shipped.
+
+    The fixture is parametrized over every KeyProvider, so this runs the same table through
+    local-file, replicated, KMIP, KMS, Azure and GCP rather than one of them.
+
+    _smoke_test writes, does a rolling restart, and reads back, so it covers the part that matters
+    for a storage format: the key has to be re-resolved from the provider after the process that
+    wrote the file is gone.
+    """
+    await _smoke_test(manager, key_provider=key_provider,
+                      ciphers={"AES/CBC/PKCS5Padding": [128]},
+                      storage_format='parquet')
+
+
+async def test_encrypted_hybrid_across_providers(manager, key_provider):
+    """The same, for `hybrid`, which is the mode a real deployment would use.
+
+    Worth having separately rather than folding into the parquet case: hybrid decides per compaction
+    whether the output is parquet, so the schema path and the write path differ from a table pinned
+    to 'parquet', and a provider fault could show up in one and not the other.
+    """
+    await _smoke_test(manager, key_provider=key_provider,
+                      ciphers={"AES/CBC/PKCS5Padding": [128]},
+                      storage_format='hybrid')
