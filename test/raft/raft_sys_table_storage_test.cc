@@ -544,6 +544,12 @@ SEASTAR_TEST_CASE(test_groups_storage_shard_isolation) {
 
         auto idx0 = co_await storage0.load_commit_idx();
         BOOST_CHECK_EQUAL(raft::index_t(2000), idx0);
+        // The covering mutation persists the exact term of the entry at
+        // commit_idx alongside the value.
+        auto [pair_idx, pair_term] = co_await raft_groups_storage::load_commit_idx_and_term(qp, iso_gid, 0);
+        BOOST_CHECK_EQUAL(raft::index_t(2000), pair_idx);
+        BOOST_REQUIRE(pair_term.has_value());
+        BOOST_CHECK_EQUAL(raft::term_t(1), *pair_term);
 
         auto idx1 = co_await storage1.load_commit_idx();
         BOOST_CHECK_EQUAL(raft::index_t(0), idx1);
@@ -721,6 +727,88 @@ SEASTAR_TEST_CASE(test_groups_acquire_handles_skips_non_command_entries) {
         BOOST_CHECK_EQUAL(handles[0].index, raft::index_t(1));
         BOOST_CHECK_EQUAL(handles[1].index, raft::index_t(3));
         BOOST_CHECK_EQUAL(handles[2].index, raft::index_t(5));
+    });
+}
+
+// Test that acquire_replay_position_handles_for rejects a request containing
+// an index for which no handle is tracked, even when the request's endpoints
+// match tracked entries: requesting [1, 5, 6] against tracked [1, 2, 6] must
+// fail on the missing idx 5 rather than hand out the idx-2 handle.
+SEASTAR_TEST_CASE(test_groups_acquire_handles_rejects_prefix_gap) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+
+        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+
+        // Store commands at idx 1, 2, 6.
+        raft::command cmd1, cmd2, cmd6;
+        ser::serialize(cmd1, 1);
+        ser::serialize(cmd2, 2);
+        ser::serialize(cmd6, 6);
+        std::vector<raft::log_entry_ptr> entries = {
+            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(1), .data = std::move(cmd1)}),
+            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(2), .data = std::move(cmd2)}),
+            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(6), .data = std::move(cmd6)}),
+        };
+        co_await storage.store_log_entries(entries);
+
+        // Request [1, 5, 6]: same size, same first and last index as the
+        // tracked [1, 2, 6] entries, but no handle exists for idx 5.
+        raft::command cmd5;
+        ser::serialize(cmd5, 5);
+        raft::log_entry_ptr_list mismatched = {
+            entries[0],
+            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(5), .data = std::move(cmd5)}),
+            entries[2],
+        };
+        seastar::testing::scoped_no_abort_on_internal_error no_abort;
+        try {
+            storage.acquire_replay_position_handles_for(mismatched);
+            BOOST_FAIL("Expected on_internal_error for mid-prefix index mismatch");
+        } catch (...) {
+            // Expected — no handle is tracked for idx 5.
+        }
+    });
+}
+
+// Test truncate_log (head truncation) then verify remaining handles.
+// Store N>=3 entries, truncate at the second entry's idx (removes entries with idx >= second idx),
+// verify only the first entry can produce a valid handle, and later entries cannot.
+SEASTAR_TEST_CASE(test_groups_truncate_log_then_get_handles_for_remaining) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+
+        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+
+        std::vector<raft::log_entry_ptr> entries = create_test_command_log(3, 20);
+        co_await storage.store_log_entries(entries);
+
+        // Truncate at the second entry's idx — entries with idx >= entries[1]->idx are removed.
+        co_await storage.truncate_log(entries[1]->idx);
+
+        // First entry should still have a valid handle.
+        raft::log_entry_ptr_list first_entry = {entries[0]};
+        auto handles = storage.acquire_replay_position_handles_for(first_entry);
+        BOOST_CHECK_EQUAL(handles.size(), 1);
+        BOOST_CHECK_EQUAL(handles[0].index, entries[0]->idx);
+
+        // Entries from index 1 onward should trigger an error (their replay positions were removed).
+        {
+            seastar::testing::scoped_no_abort_on_internal_error no_abort;
+            raft::log_entry_ptr_list truncated_entries(entries.begin() + 1, entries.end());
+            try {
+                storage.acquire_replay_position_handles_for(truncated_entries);
+                BOOST_FAIL("Expected on_internal_error for truncated entries");
+            } catch (...) {
+                // Expected — entries from index 1 onward were truncated.
+            }
+        }
     });
 }
 
