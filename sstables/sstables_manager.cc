@@ -423,8 +423,14 @@ void sstables_manager::reclaim_memory_and_stop_tracking_sstable(sstable* sst) {
     // reclaim any remaining memory from the sstable
     sst->reclaim_memory_from_components();
     // disable further reload of components
-    _reclaimed.erase(*sst);
+    erase_from_reclaimed(sst);
     sst->disable_component_memory_reload();
+}
+
+void sstables_manager::erase_from_reclaimed(sstable* sst) noexcept {
+    if (sst->_manager_set_link.is_linked()) {
+        _reclaimed.erase(_reclaimed.iterator_to(*sst));
+    }
 }
 
 void sstables_manager::add(sstable* sst) {
