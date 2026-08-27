@@ -9,6 +9,7 @@
 
 #include "seastarx.hh"
 #include <seastar/core/semaphore.hh>
+#include <algorithm>
 
 namespace service {
 
@@ -23,20 +24,26 @@ public:
     struct unlimited_tag {};
 
 private:
+    // A fraction of 0 would block every request forever, and more than the whole
+    // shard is meaningless, so out-of-range values are clamped rather than rejected.
+    static size_t budget(size_t available_memory, double fraction) noexcept {
+        return available_memory * std::clamp(fraction, 0.01, 1.0);
+    }
+
     size_t _max_request_size;
     size_t _mem_total;
     bool _unlimited;
     semaphore _sem;
 
 public:
-    explicit memory_limiter(size_t available_memory) noexcept
-        : _max_request_size(available_memory / 10)
-        , _mem_total(available_memory / 10)
+    memory_limiter(size_t available_memory, double fraction) noexcept
+        : _max_request_size(budget(available_memory, fraction))
+        , _mem_total(budget(available_memory, fraction))
         , _unlimited(false)
         , _sem(_mem_total) {}
 
-    memory_limiter(unlimited_tag, size_t available_memory) noexcept
-        : _max_request_size(available_memory / 10)
+    memory_limiter(unlimited_tag, size_t available_memory, double fraction) noexcept
+        : _max_request_size(budget(available_memory, fraction))
         , _mem_total(semaphore::max_counter() / 2)
         , _unlimited(true)
         , _sem(_mem_total) {}
