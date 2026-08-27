@@ -27,20 +27,28 @@ raft_commitlog::raft_commitlog(raft::group_id group_id, db::commitlog& commitlog
     : _group_id(group_id)
     , _table_id(target_table_id)
     , _commit_log(commitlog)
-    , _replay_positions(std::move(replayed_data.replay_positions))
     , _replayed_entries(std::move(replayed_data.entries)) {
+    // Entries recovered from a previous run were rewritten into the new commitlog during
+    // replay, and are tracked like the ones we write ourselves.
+    for (auto& entry : replayed_data.replay_positions) {
+        add_to_rp_list(entry.index, std::move(entry.replay_position_handle));
+    }
     logger.debug("starting raft_commitlog group_id={}, table_id={}, replayed_entries={}", _group_id, _table_id, _replayed_entries.size());
 }
 
 raft_commitlog::~raft_commitlog() {
-    // Release all remaining replay position handles without decrementing
-    // segment dirty counts. This keeps commitlog segments alive after this
-    // object is destroyed, ensuring uncommitted raft entries remain
-    // available for replay after restart.
-    for (auto& entry : _replay_positions) {
-        entry.replay_position_handle.release();
-    }
-    logger.debug("released {} replay position handles for group_id={}", _replay_positions.size(), _group_id);
+    // The handles we still hold are for entries that were never applied. They all retain
+    // their segments, so destroying them leaves the entries on disk for the next replay.
+    logger.debug("retaining segments for {} replay position handles for group_id={}", _replay_positions.size(), _group_id);
+}
+
+// An entry can be committed before the state machine applies it, and until then the
+// commitlog record is its only durable copy: losing the handle on an exception must not let
+// the segment be reclaimed. The paths that no longer need an entry set mark_clean
+// explicitly; a successful apply disarms the handle in rp_set::put().
+void raft_commitlog::add_to_rp_list(raft::index_t index, db::rp_handle&& handle) {
+    handle.set_destruction_policy(db::rp_handle::destruction_policy::retain_segment);
+    _replay_positions.push_back(index_and_replay_position{.index = index, .replay_position_handle = std::move(handle)});
 }
 
 seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_list& entries) {
@@ -57,9 +65,7 @@ seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_li
     auto replay_handles = co_await _commit_log.add_raft_entries(_table_id, std::move(writers));
 
     for (size_t i = 0; i < entries.size(); ++i) {
-        const auto& log_entry_ptr = entries[i];
-        _replay_positions.push_back(
-                index_and_replay_position{.index = log_entry_ptr->idx, .replay_position_handle = std::move(replay_handles[i])});
+        add_to_rp_list(entries[i]->idx, std::move(replay_handles[i]));
     }
     logger.debug("store_log_entries completed: total_entries_in_map={}", _replay_positions.size());
 }
@@ -69,20 +75,32 @@ raft::log_entries raft_commitlog::load_log() {
     return std::move(_replayed_entries);
 }
 
+// Undo the retain_segment policy for [first, last): these entries are not needed any more,
+// so erasing them should decrement the segment dirty counts as usual.
+static void mark_clean_on_destruction(replay_position_list::iterator first, replay_position_list::iterator last) {
+    for (auto it = first; it != last; ++it) {
+        it->replay_position_handle.set_destruction_policy(db::rp_handle::destruction_policy::mark_clean);
+    }
+}
+
 void raft_commitlog::truncate_log(const raft::index_t idx) {
     logger.debug("truncate_log: group_id={}, idx={}", _group_id, idx);
     // Remove entries with index >= idx (Raft semantics: truncate from idx onward).
     // The deque is sorted by index, so binary search finds the cut point.
+    // These entries were replaced by a new leader before they committed, so their
+    // commitlog records are garbage — give the segments back.
     auto it = std::ranges::lower_bound(_replay_positions, idx, {}, &index_and_replay_position::index);
+    mark_clean_on_destruction(it, _replay_positions.end());
     _replay_positions.erase(it, _replay_positions.end());
 }
 
 void raft_commitlog::truncate_log_tail(const raft::index_t index) {
     logger.debug("truncate_log_tail: group_id={}, index={}", _group_id, index);
-    // Remove entries with index <= the given index. The handles are destructed
-    // normally, decrementing segment dirty counts and allowing commitlog
-    // segments to be reclaimed once no other references hold them.
+    // Remove entries with index <= the given index. They are covered by a persisted
+    // snapshot, so raft will not replay them and the segments can be reclaimed once no
+    // other reference holds them.
     auto it = std::ranges::upper_bound(_replay_positions, index, {}, &index_and_replay_position::index);
+    mark_clean_on_destruction(_replay_positions.begin(), it);
     _replay_positions.erase(_replay_positions.begin(), it);
     logger.debug("truncate_log_tail completed: remaining_map_size={}", _replay_positions.size());
 }
