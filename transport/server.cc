@@ -1235,10 +1235,14 @@ future<> cql_server::connection::process_request() {
 
         auto op = f.opcode;
         auto stream = f.stream;
-        auto mem_estimate = f.length * 2 + 8000; // Allow for extra copies and bookkeeping
+        // Computed in size_t: the frame length is a uint32_t read off the wire and
+        // only the very first frame is size-checked in read_frame(), so doubling it
+        // in 32 bits would wrap and let an absurdly large frame past the check below.
+        const uint32_t frame_length = f.length;
+        size_t mem_estimate = size_t(frame_length) * 2 + 8000; // Allow for extra copies and bookkeeping
         if (mem_estimate > _server._config.max_request_size) {
             const auto message = format("request size too large (frame size {:d}; estimate {:d}; allowed {:d})",
-                uint32_t(f.length), mem_estimate, _server._config.max_request_size);
+                frame_length, mem_estimate, _server._config.max_request_size);
             clogger.debug("{}: {}, request dropped", _client_state.get_remote_address(), message);
             write_response(_server.make_error(stream, exceptions::exception_code::INVALID, message, tracing::trace_state_ptr()));
             return std::exchange(_ready_to_respond, make_ready_future<>())

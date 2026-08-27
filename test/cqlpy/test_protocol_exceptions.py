@@ -386,3 +386,95 @@ def test_supported_includes_host_id(scylla_only, no_ssl, cql, host, request):
             pass
 
     assert captured_supported["SCYLLA_HOST_ID"] == [expected_host_id]
+
+def _recv_exactly(sock: socket.socket, size: int) -> bytes:
+    buf = b''
+    while len(buf) < size:
+        chunk = sock.recv(size - len(buf))
+        if not chunk:
+            break
+        buf += chunk
+    return buf
+
+# Read one complete response frame, using the length declared in its header
+# instead of hoping that a single recv() returns the whole thing.
+# Returns (stream, opcode, body).
+def _recv_full_frame(sock: socket.socket) -> tuple[int, int, bytes]:
+    header = _recv_exactly(sock, 9)
+    assert len(header) == 9, f"expected a 9-byte frame header, got {len(header)} bytes: {header!r}"
+    _version, _flags, stream, opcode, length = struct.unpack("!BBHBI", header)
+    body = _recv_exactly(sock, length)
+    assert len(body) == length, f"truncated frame body: expected {length} bytes, got {len(body)}"
+    return stream, opcode, body
+
+# An ERROR frame body is [int error code][string message].
+def _parse_error_body(body: bytes) -> tuple[int, str]:
+    code, = struct.unpack_from("!i", body, 0)
+    message_len, = struct.unpack_from("!H", body, 4)
+    message = body[6:6 + message_len].decode('utf-8')
+    return code, message
+
+# Complete a STARTUP handshake on a raw socket, so that whatever frame is sent
+# next is not the first frame on the connection.
+def _startup_handshake(sock: socket.socket) -> None:
+    body = b'\x00\x01\x00\x0bCQL_VERSION\x00\x053.0.0'
+    _send_frame(sock, opcode=0x01, stream=1, body=body)
+    frame = _recv_frame(sock)
+    op = frame[4]
+    assert op in (0x02, 0x03), f"expected READY(2) or AUTHENTICATE(3), got {hex(op)}"
+    if op == 0x03:
+        # AUTH_RESPONSE (0x0F) body is a [bytes] value, i.e. a 4-byte length
+        # followed by the SASL PLAIN token "\0user\0password".
+        token = b'\x00cassandra\x00cassandra'
+        _send_frame(sock, opcode=0x0F, stream=2, body=struct.pack("!I", len(token)) + token)
+        resp = _recv_frame(sock)
+        assert resp[4] == 0x10, f"expected AUTH_SUCCESS, got {hex(resp[4])}"
+
+# A frame whose declared body length exceeds max_request_size must be rejected
+# with an INVALID "request size too large" error.
+#
+# Regression test for an integer overflow in that check: the frame length is a
+# uint32_t read straight off the wire, and the memory estimate used to be
+# computed as "length * 2 + 8000" in 32-bit arithmetic. For length 0x80000000
+# the multiplication wraps to 0, so the estimate came out as a mere 8000 bytes,
+# sailed past the max_request_size check, reserved almost no memory and then the
+# server tried to read a 2 GiB body which the client never sends - hanging the
+# connection instead of answering with an error. 0xFFFFFFF0 does not wrap into
+# a small value and so was rejected even before the fix; it is included to show
+# that the test itself exercises the intended code path.
+#
+# Note only the very first frame on a connection is size-checked in read_frame()
+# (rejecting bodies over 100'000 bytes), hence the STARTUP handshake first.
+@pytest.mark.parametrize("declared_length", [0xFFFFFFF0, 0x80000000])
+def test_oversized_declared_frame_length(scylla_only, no_ssl, host, declared_length):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # Fail fast: a regression makes the server wait for a body that never
+    # arrives, and without a timeout that would hang the whole test suite.
+    s.settimeout(60)
+    s.connect((host, 9042))
+    try:
+        _startup_handshake(s)
+
+        # Send only the 9-byte header of a QUERY frame (opcode 0x07) declaring
+        # a huge body, and none of the body bytes it promises.
+        stream = 3
+        header = struct.pack("!BBHBI", 0x04, 0x00, stream, 0x07, declared_length)
+        assert len(header) == 9
+        s.sendall(header)
+
+        try:
+            resp_stream, opcode, body = _recv_full_frame(s)
+        except socket.timeout:
+            pytest.fail(f"no response to a frame declaring length {declared_length:#x}; "
+                        "the server most likely accepted it and started reading the "
+                        "declared body instead of rejecting the request")
+
+        assert opcode == 0x00, f"expected ERROR(0), got {hex(opcode)}"
+        assert resp_stream == stream
+        code, message = _parse_error_body(body)
+        # 0x2200 is INVALID
+        assert code == 0x2200, f"expected INVALID(0x2200), got {hex(code)}: {message}"
+        assert re.search("request size too large", message), \
+            f"unexpected error message: {message}"
+    finally:
+        s.close()
