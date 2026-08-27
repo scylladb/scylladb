@@ -396,6 +396,199 @@ void task_manager::task::set_virtual_parent() noexcept {
     _impl->set_virtual_parent();
 }
 
+task_manager::generic_task_impl::generic_task_impl(
+        module_ptr module,
+        task_id id,
+        uint64_t sequence_number,
+        std::string scope,
+        std::string keyspace,
+        std::string table,
+        std::string entity,
+        task_info parent_info,
+        std::string type,
+        std::string progress_units,
+        tasks::is_abortable is_abortable,
+        tasks::is_internal is_internal,
+        tasks::is_user_task is_user_task,
+        action_fn action,
+        progress_fn progress_fn,
+        workload_fn workload_fn,
+        abort_fn abort_fn,
+        finalize_fn finalizer) noexcept
+    : impl(std::move(module), id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_info.get_id())
+    , _type(std::move(type))
+    , _is_abortable(is_abortable)
+    , _is_internal(is_internal)
+    , _is_user_task(is_user_task)
+    , _action(std::move(action))
+    , _progress_fn(std::move(progress_fn))
+    , _workload_fn(std::move(workload_fn))
+    , _abort_fn(std::move(abort_fn))
+    , _finalizer(std::move(finalizer))
+{
+    _status.progress_units = std::move(progress_units);
+    if (parent_info && parent_info.get_kind() == task_kind::cluster) {
+        set_virtual_parent();
+    }
+}
+
+std::string task_manager::generic_task_impl::type() const {
+    return _type;
+}
+
+future<task_manager::task::progress> task_manager::generic_task_impl::get_progress() const {
+    if (_cached_progress) {
+        co_return *_cached_progress;
+    }
+    co_return co_await (_progress_fn ? _progress_fn() : task::impl::get_progress());
+}
+
+tasks::is_abortable task_manager::generic_task_impl::is_abortable() const noexcept {
+    return _is_abortable;
+}
+
+tasks::is_internal task_manager::generic_task_impl::is_internal() const noexcept {
+    return _is_internal;
+}
+
+tasks::is_user_task task_manager::generic_task_impl::is_user_task() const noexcept {
+    return _is_user_task;
+}
+
+void task_manager::generic_task_impl::abort() noexcept {
+    _abort_fn ? _abort_fn(_as) : task::impl::abort();
+}
+
+future<> task_manager::generic_task_impl::release_resources() noexcept {
+    _cached_progress = co_await get_progress();
+    _cached_workload = co_await expected_total_workload();
+    co_await (_finalizer ? _finalizer() : task::impl::release_resources());
+    _finalizer = {};
+    _action = {};
+    _progress_fn = {};
+    _workload_fn = {};
+    _abort_fn = {};
+}
+
+future<> task_manager::generic_task_impl::run() {
+    return _action(*this);
+}
+
+future<std::optional<double>> task_manager::generic_task_impl::expected_total_workload() const {
+    if (_cached_workload) {
+        co_return *_cached_workload;
+    }
+    co_return co_await (_workload_fn ? _workload_fn() : task::impl::expected_total_workload());
+}
+
+task_manager::task_builder::task_builder(module_ptr module, std::string type)
+    : _module(std::move(module))
+    , _type(std::move(type))
+    , _id(tasks::task_id::create_random_id())
+{}
+
+task_manager::task_builder::task_builder(module_ptr module, std::string type, task_id id)
+    : _module(std::move(module))
+    , _type(std::move(type))
+    , _id(id)
+{}
+
+task_manager::task_builder& task_manager::task_builder::set_sequence_number(uint64_t sequence_number) {
+    _sequence_number = sequence_number;
+    return *this;
+}
+
+task_manager::task_builder& task_manager::task_builder::set_scope(std::string scope) {
+    _scope = std::move(scope);
+    return *this;
+}
+
+task_manager::task_builder& task_manager::task_builder::set_keyspace(std::string keyspace) {
+    _keyspace = std::move(keyspace);
+    return *this;
+}
+
+task_manager::task_builder& task_manager::task_builder::set_table(std::string table) {
+    _table = std::move(table);
+    return *this;
+}
+
+task_manager::task_builder& task_manager::task_builder::set_entity(std::string entity) {
+    _entity = std::move(entity);
+    return *this;
+}
+
+task_manager::task_builder& task_manager::task_builder::set_progress_units(std::string progress_units) {
+    _progress_units = std::move(progress_units);
+    return *this;
+}
+
+task_manager::task_builder& task_manager::task_builder::set_parent_info(task_info parent_info) {
+    _parent_info = std::move(parent_info);
+    return *this;
+}
+
+task_manager::task_builder& task_manager::task_builder::set_is_abortable(tasks::is_abortable is_abortable) {
+    _is_abortable = is_abortable;
+    return *this;
+}
+
+task_manager::task_builder& task_manager::task_builder::set_is_internal(tasks::is_internal is_internal) {
+    _is_internal = is_internal;
+    return *this;
+}
+
+task_manager::task_builder& task_manager::task_builder::set_is_user_task(tasks::is_user_task is_user_task) {
+    _is_user_task = is_user_task;
+    return *this;
+}
+
+task_manager::task_builder& task_manager::task_builder::set_progress_fn(generic_task_impl::progress_fn progress_fn) {
+    _progress_fn = std::move(progress_fn);
+    return *this;
+}
+
+task_manager::task_builder& task_manager::task_builder::set_workload_fn(generic_task_impl::workload_fn workload_fn) {
+    _workload_fn = std::move(workload_fn);
+    return *this;
+}
+
+task_manager::task_builder& task_manager::task_builder::set_abort_fn(generic_task_impl::abort_fn abort_fn) {
+    _abort_fn = std::move(abort_fn);
+    return *this;
+}
+
+task_manager::task_builder& task_manager::task_builder::set_finalizer(generic_task_impl::finalize_fn finalizer) {
+    _finalizer = std::move(finalizer);
+    return *this;
+}
+
+future<task_manager::task_ptr> task_manager::task_builder::build(generic_task_impl::action_fn action) && {
+    auto task_impl = seastar::make_shared<generic_task_impl>(
+        _module,
+        _id,
+        _sequence_number.value_or(0),
+        _scope.value_or(""),
+        _keyspace.value_or(""),
+        _table.value_or(""),
+        _entity.value_or(""),
+        _parent_info.value_or(make_empty_task_info()),
+        std::move(_type),
+        _progress_units.value_or(""),
+        _is_abortable.value_or(tasks::is_abortable::no),
+        _is_internal.value_or(tasks::is_internal{_parent_info && *_parent_info && _parent_info->get_kind() == task_kind::node}),
+        _is_user_task.value_or(tasks::is_user_task::no),
+        std::move(action),
+        std::move(_progress_fn),
+        std::move(_workload_fn),
+        std::move(_abort_fn),
+        std::move(_finalizer)
+    );
+    auto task = co_await _module->make_task(std::move(task_impl), _parent_info.value_or(make_empty_task_info()));
+    task->start();
+    co_return task;
+}
+
 task_manager::virtual_task::impl::impl(module_ptr module) noexcept
     : _module(std::move(module))
 {}
