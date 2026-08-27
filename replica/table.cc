@@ -148,7 +148,7 @@ lw_shared_ptr<const sstables::sstable_set> table::make_compound_sstable_set() co
 }
 
 lw_shared_ptr<sstables::sstable_set> compaction_group::make_maintenance_sstable_set() const {
-    return make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(_t.schema(), token_range()));
+    return make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(_t.schema()));
 }
 
 void table::refresh_compound_sstable_set() {

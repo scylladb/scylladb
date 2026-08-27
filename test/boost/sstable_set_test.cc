@@ -32,10 +32,8 @@ BOOST_AUTO_TEST_SUITE(sstable_set_test)
 
 using namespace sstables;
 
-static auto full_range = dht::token_range::make(dht::first_token(), dht::last_token());
-
 static sstables::sstable_set make_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all = {}) {
-    auto ret = sstables::sstable_set(std::make_unique<partitioned_sstable_set>(schema, full_range));
+    auto ret = sstables::sstable_set(std::make_unique<partitioned_sstable_set>(schema));
     for (auto& sst : *all) {
         ret.insert(sst);
     }
@@ -163,7 +161,7 @@ SEASTAR_TEST_CASE(test_partitioned_sstable_set_bytes_on_disk) {
         auto sst1 = make_sstable_easy(env, std::move(mr), cfg);
         auto size1 = sst1->bytes_on_disk();
 
-        auto ss1 = make_lw_shared<sstable_set>(std::make_unique<partitioned_sstable_set>(ss.schema(), full_range));
+        auto ss1 = make_lw_shared<sstable_set>(std::make_unique<partitioned_sstable_set>(ss.schema()));
         ss1->insert(sst1);
         BOOST_REQUIRE_EQUAL(ss1->bytes_on_disk(), size1);
 
@@ -242,6 +240,88 @@ SEASTAR_TEST_CASE(test_split_compaction_group_inherits_tombstone_gc_enabled) {
     }, std::move(cfg));
 }
 
+// Drives the incremental selector across the ring and checks, at every
+// position, that the selection holds the sstables covering the position, and
+// that the range the selector reports the selection for contains the position.
+SEASTAR_TEST_CASE(test_partitioned_sstable_set_incremental_selector_randomized) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        // Ring-ordered, so that an sstable can be given a range of them.
+        const auto keys = tests::generate_partition_keys(16, s);
+
+        auto make_sstable = [&] (size_t first, size_t last) {
+            auto sst = env.make_sstable(s);
+            sstables::test(sst).set_values(keys[first].key(), keys[last].key(), {});
+            return sst;
+        };
+
+        auto& rnd = tests::random::gen();
+
+        for (unsigned iteration = 0; iteration < 100; iteration++) {
+            auto set = sstables::sstable_set(std::make_unique<partitioned_sstable_set>(s));
+            std::vector<shared_sstable> ssts;
+            auto count = std::uniform_int_distribution<size_t>(0, 12)(rnd);
+            for (size_t i = 0; i < count; i++) {
+                auto first = std::uniform_int_distribution<size_t>(0, keys.size() - 1)(rnd);
+                auto last = std::uniform_int_distribution<size_t>(first, keys.size() - 1)(rnd);
+                auto sst = make_sstable(first, last);
+                ssts.push_back(sst);
+                set.insert(sst);
+            }
+
+            // The positions of interest across the ring, in order: the
+            // minimum, then for every key the token before its keys, the key
+            // itself and the position after it, then the maximum.
+            std::vector<dht::ring_position> positions;
+            positions.push_back(dht::ring_position::min());
+            for (auto& key : keys) {
+                positions.push_back(dht::ring_position::starting_at(key.token()));
+                positions.push_back(dht::ring_position(key));
+                positions.push_back(dht::ring_position::ending_at(key.token()));
+            }
+            positions.push_back(dht::ring_position::max());
+
+            // Half of the iterations walk every position, the other half
+            // jump over some of them: the selection is only advanced forward,
+            // but the caller may skip positions, which is how sstables whose
+            // range is already behind reach the selection.
+            if (iteration % 2) {
+                std::vector<dht::ring_position> jumps;
+                for (size_t i = 0; i < positions.size(); i++) {
+                    if (i == 0 || std::uniform_int_distribution<int>(0, 2)(rnd) == 0) {
+                        jumps.push_back(positions[i]);
+                    }
+                }
+                positions = std::move(jumps);
+            }
+
+            auto selector = set.make_incremental_selector();
+            for (auto& position : positions) {
+                auto pos = dht::ring_position_view(position);
+                auto selection = selector.select(pos);
+                // The sstables covering the position, which the index knows by
+                // token, so the position's key doesn't take part.
+                std::unordered_set<shared_sstable> expected;
+                for (auto& sst : ssts) {
+                    if (sst->get_first_decorated_key().token() <= position.token()
+                            && position.token() <= sst->get_last_decorated_key().token()) {
+                        expected.insert(sst);
+                    }
+                }
+                std::unordered_set<shared_sstable> selected(selection.sstables.begin(), selection.sstables.end());
+                if (selected != expected) {
+                    BOOST_FAIL(fmt::format("iteration {}: at {} selected {} sstables, expected {}",
+                            iteration, position, selected.size(), expected.size()));
+                }
+                // The selector must not report a position it has already passed.
+                BOOST_REQUIRE(dht::ring_position_tri_compare(*s, selection.next_position, pos) > 0
+                        || selection.next_position.is_max());
+            }
+        }
+    });
+}
+
 SEASTAR_TEST_CASE(test_sstable_set_fast_forward_by_cache_reader_simulation) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
@@ -272,8 +352,7 @@ SEASTAR_TEST_CASE(test_sstable_set_fast_forward_by_cache_reader_simulation) {
             testlog.info("sstable [{}, {}]", sst->get_first_decorated_key().token(), sst->get_last_decorated_key().token());
             ssts.push_back(std::move(sst));
         }
-        auto token_range = dht::token_range::make(dht::first_token(), dht::last_token());
-        auto set = make_lw_shared<sstable_set>(std::make_unique<partitioned_sstable_set>(ss.schema(), token_range));
+        auto set = make_lw_shared<sstable_set>(std::make_unique<partitioned_sstable_set>(ss.schema()));
         for (auto& sst : ssts) {
             set->insert(sst);
         }
@@ -558,7 +637,7 @@ SEASTAR_TEST_CASE(test_tablet_sstable_set_preserves_arbitrary_boundaries) {
         auto tablet_sstable_set_copy = *tablet_sstable_set.get();
 
         // Compare against a token-partitioned oracle for every [sorted_tokens[i], sorted_tokens[j]] range.
-        auto oracle_set = make_lw_shared<sstables::sstable_set>(std::make_unique<partitioned_sstable_set>(s, full_range));
+        auto oracle_set = make_lw_shared<sstables::sstable_set>(std::make_unique<partitioned_sstable_set>(s));
         for (const auto& sst : *tablet_sstable_set->all()) {
             oracle_set->insert(sst);
         }

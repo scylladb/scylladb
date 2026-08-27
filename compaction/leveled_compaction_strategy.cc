@@ -257,7 +257,7 @@ leveled_compaction_strategy_state::leveled_compaction_strategy_state() {
 }
 
 std::unique_ptr<sstables::sstable_set_impl> leveled_compaction_strategy::make_sstable_set(const compaction_group_view& ts) const {
-    return std::make_unique<sstables::partitioned_sstable_set>(ts.schema(), ts.token_range());
+    return std::make_unique<sstables::partitioned_sstable_set>(ts.schema());
 }
 
 }
