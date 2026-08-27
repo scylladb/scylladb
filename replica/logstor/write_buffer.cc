@@ -548,7 +548,10 @@ bool buffered_writer::maybe_advance_head() noexcept {
     return true;
 }
 
-std::optional<future<log_location_with_holder>> buffered_writer::append_to_head_buffer(log_record_writer& writer, write_target target) {
+// The target is taken by reference and moved from only once the record is in a buffer: a caller
+// whose append does not happen goes on to queue the record, and the write target it queues has to
+// be the one it came with, holders and all.
+std::optional<future<log_location_with_holder>> buffered_writer::append_to_head_buffer(log_record_writer& writer, write_target& target) {
     if (!head_buf().can_fit(writer) && !maybe_advance_head()) {
         return std::nullopt;
     }
@@ -634,7 +637,7 @@ future<bool> buffered_writer::drain_queued_writes() {
         on_queued_write_removed(request);
         removed_queued_writes = true;
         try {
-            auto persisted = append_to_head_buffer(request.writer, std::move(request.target)).value();
+            auto persisted = append_to_head_buffer(request.writer, request.target).value();
             request.accepted_pr.set_value(buffered_write_result{request.persisted_pr.get_future()});
             std::move(persisted).forward_to(std::move(request.persisted_pr));
         } catch (...) {
@@ -748,7 +751,7 @@ future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer
     // fast path - if there are no queued writes and there is space in the current head buffer or the next, advance the
     // head buffer if needed and write to it.
     if (_queued_writes.empty()) {
-        if (auto persisted = append_to_head_buffer(writer, std::move(target))) {
+        if (auto persisted = append_to_head_buffer(writer, target)) {
             co_return buffered_write_result{std::move(*persisted)};
         }
     }
