@@ -151,20 +151,67 @@ auto ck_from_json(rjson::value const& item, std::size_t idx, schema_ptr const& s
     return clustering_key_prefix::from_exploded(raw_ck);
 }
 
-auto write_ann_json(vs_vector vs_vector, limit limit, const rjson::value& filter, bool routing) -> json_content {
+auto write_ann_json(vs_vector vs_vector, limit limit, const rjson::value& filter, bool routing, const std::vector<std::string>& return_columns)
+        -> json_content {
     // Omit "routing" entirely rather than sending "routing":true, so the
     // request stays wire-compatible with a vector store that only ever
     // routed by default (routing is currently the common case, needed by
     // CQL, and its absence in the request must mean "route as before").
     auto routing_suffix = routing ? "" : R"(,"routing":false)";
-    if (filter.ObjectEmpty()) {
-        return seastar::format(R"({{"vector":[{}],"limit":{}{}}})", fmt::join(vs_vector, ","), limit, routing_suffix);
+    // Likewise, omit "return_columns" entirely when empty, rather than
+    // sending an empty array, so the request stays wire-compatible with a
+    // vector store that doesn't know about this option (its absence must
+    // mean "return no column values", which is also the empty-array
+    // behavior on a vector store that does know about it).
+    sstring return_columns_suffix;
+    if (!return_columns.empty()) {
+        rjson::value arr = rjson::empty_array();
+        for (const std::string& attr : return_columns) {
+            rjson::push_back(arr, rjson::from_string(attr));
+        }
+        return_columns_suffix = seastar::format(R"(,"return_columns":{})", rjson::print(arr));
     }
-    return seastar::format(R"({{"vector":[{}],"limit":{},"filter":{}{}}})", fmt::join(vs_vector, ","), limit, rjson::print(filter), routing_suffix);
+    if (filter.ObjectEmpty()) {
+        return seastar::format(R"({{"vector":[{}],"limit":{}{}{}}})", fmt::join(vs_vector, ","), limit, routing_suffix, return_columns_suffix);
+    }
+    return seastar::format(R"({{"vector":[{}],"limit":{},"filter":{}{}{}}})", fmt::join(vs_vector, ","), limit, rjson::print(filter), routing_suffix,
+            return_columns_suffix);
 }
 
-auto read_scored_primary_keys_json(rjson::value const& json, schema_ptr const& schema, std::string_view score_field_name)
-        -> std::expected<primary_keys, ann_error> {
+// Extract, for a single result row `idx`, the values of `return_columns`
+// from the response's "column_values" member (a map from column name to a
+// per-row array of values, one entry per result, absent/null meaning the
+// column had no stored value for that row). Returns an empty map if
+// `return_columns` is empty (in which case the vector store wouldn't have
+// sent "column_values" at all).
+// If `return_columns` is non-empty, "column_values" is required in the ANN
+// response - an absent or wrong-typed "column_values" is a malformed
+// response and generates a service_reply_format_error.
+auto read_column_values_json(rjson::value const& json, const std::vector<std::string>& return_columns, std::size_t idx)
+        -> std::expected<std::unordered_map<std::string, rjson::value>, ann_error> {
+    std::unordered_map<std::string, rjson::value> values;
+    if (return_columns.empty()) {
+        return values;
+    }
+    auto const* column_values_json = rjson::find(json, "column_values");
+    if (column_values_json == nullptr || !column_values_json->IsObject()) {
+        return std::unexpected{service_reply_format_error{}};
+    }
+    for (const std::string& attr : return_columns) {
+        auto const* col_arr = rjson::find(*column_values_json, attr);
+        if (col_arr == nullptr || !col_arr->IsArray() || col_arr->Size() <= idx) {
+            continue;
+        }
+        auto const& val = (*col_arr)[idx];
+        if (!val.IsNull()) {
+            values.emplace(attr, rjson::copy(val));
+        }
+    }
+    return values;
+}
+
+auto read_scored_primary_keys_json(rjson::value const& json, schema_ptr const& schema, std::string_view score_field_name,
+        const std::vector<std::string>& return_columns = {}) -> std::expected<primary_keys, ann_error> {
     if (!json.HasMember("primary_keys")) {
         vslogger.error("Vector Store returned invalid JSON: missing 'primary_keys'");
         return std::unexpected{service_reply_format_error{}};
@@ -210,13 +257,18 @@ auto read_scored_primary_keys_json(rjson::value const& json, schema_ptr const& s
             vslogger.error("Vector Store returned invalid JSON: '{}[{}]'={} is not a number", score_field_name, idx, rjson::print(score_val));
             return std::unexpected{service_reply_format_error{}};
         }
-        keys.push_back(primary_key{dht::decorate_key(*schema, *pk), *ck, score});
+        auto column_values = read_column_values_json(json, return_columns, idx);
+        if (!column_values) {
+            return std::unexpected{column_values.error()};
+        }
+        keys.push_back(primary_key{dht::decorate_key(*schema, *pk), *ck, score, std::move(*column_values)});
     }
     return std::move(keys);
 }
 
-auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, ann_error> {
-    return read_scored_primary_keys_json(json, schema, "similarity_scores");
+auto read_ann_json(rjson::value const& json, schema_ptr const& schema, const std::vector<std::string>& return_columns)
+        -> std::expected<primary_keys, ann_error> {
+    return read_scored_primary_keys_json(json, schema, "similarity_scores", return_columns);
 }
 
 auto write_bm25_json(query_string query, limit limit) -> json_content {
@@ -376,14 +428,14 @@ struct vector_store_client::impl {
     }
 
     auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as,
-            bool routing) -> future<std::expected<primary_keys, ann_error>> {
+            bool routing, const std::vector<std::string>& return_columns) -> future<std::expected<primary_keys, ann_error>> {
         if (is_disabled()) {
             vslogger.error("Disabled Vector Store while calling ann");
             co_return std::unexpected{disabled{}};
         }
 
         auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
-        auto content = write_ann_json(std::move(vs_vector), limit, filter, routing);
+        auto content = write_ann_json(std::move(vs_vector), limit, filter, routing, return_columns);
 
         auto resp = co_await request(operation_type::POST, std::move(path), std::move(content), as);
         if (!resp) {
@@ -401,7 +453,7 @@ struct vector_store_client::impl {
         }
 
         try {
-            co_return read_ann_json(rjson::parse(std::move(resp->content)), schema);
+            co_return read_ann_json(rjson::parse(std::move(resp->content)), schema, return_columns);
         } catch (const rjson::error& e) {
             vslogger.error("Vector Store returned invalid JSON: {}", e.what());
             co_return std::unexpected{service_reply_format_error{}};
@@ -493,8 +545,8 @@ auto vector_store_client::get_index_status(keyspace_name keyspace, index_name na
 }
 
 auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter,
-        abort_source& as, bool routing) -> future<std::expected<primary_keys, ann_error>> {
-    return _impl->ann(std::move(keyspace), std::move(name), schema, std::move(vs_vector), limit, filter, as, routing);
+        abort_source& as, bool routing, const std::vector<std::string>& return_columns) -> future<std::expected<primary_keys, ann_error>> {
+    return _impl->ann(std::move(keyspace), std::move(name), schema, std::move(vs_vector), limit, filter, as, routing, return_columns);
 }
 
 auto vector_store_client::bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, abort_source& as)

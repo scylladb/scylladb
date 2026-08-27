@@ -16,6 +16,8 @@
 #include <chrono>
 #include <expected>
 #include <functional>
+#include <string>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 #include <seastar/core/abort_source.hh>
@@ -43,6 +45,14 @@ struct primary_key {
     /// [0.0, 1.0] for cosine and euclidean; unbounded for dot product on
     /// non-normalized vectors.
     float similarity = 0.0f;
+    /// Values of the columns requested via ann()'s return_columns
+    /// parameter, keyed by column name, exactly as returned by the vector
+    /// store (a raw JSON value - the caller is responsible for decoding it
+    /// according to that column's actual type). A column absent from this
+    /// map had no stored value for this row (e.g. the attribute didn't
+    /// exist in the item when it was indexed). Always empty when
+    /// return_columns was empty.
+    std::unordered_map<std::string, rjson::value> column_values;
 };
 
 /// A client with the vector-store service.
@@ -115,8 +125,15 @@ public:
     /// `false` when the caller (e.g. Alternator, which lets the user name
     /// the exact index to query) must not have its choice of index
     /// second-guessed.
+    ///
+    /// `return_columns` names filtering columns (as added to the index's
+    /// "fc" target - see Alternator's compute_extra_fc_attributes()) whose
+    /// stored values should be returned alongside the primary keys, in each
+    /// result's primary_key::column_values. Empty (the default) means
+    /// return no column values, matching CQL's use of ann(), which doesn't
+    /// need this.
     auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as,
-            bool routing = true) -> future<std::expected<primary_keys, ann_error>>;
+            bool routing = true, const std::vector<std::string>& return_columns = {}) -> future<std::expected<primary_keys, ann_error>>;
 
     /// Request the vector store service for the primary keys of the top
     /// full-text search results. Each returned primary_key has its similarity
