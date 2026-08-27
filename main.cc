@@ -836,6 +836,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<sstables::directory_semaphore> sst_dir_semaphore;
     sharded<service::raft_group_registry> raft_gr;
     sharded<service::memory_limiter> service_memory_limiter;
+    sharded<service::memory_limiter> maintenance_memory_limiter;
     sharded<repair_service> repair;
     sharded<sstables_loader> sst_loader;
     sharded<streaming::stream_manager> stream_manager;
@@ -882,6 +883,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         return seastar::async([&app, cfg, ext, &disk_space_monitor_shard0, &cm, &sstm, &db, &qp, &bm, &proxy, &mapreduce_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
+                &maintenance_memory_limiter,
                 &repair, &sst_loader, &auth_cache, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker, &vector_store_client] {
           try {
               if (opts.contains("relabel-config-file") && !opts["relabel-config-file"].as<sstring>().empty()) {
@@ -1204,6 +1206,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_mem_limiter = defer_verbose_shutdown("service_memory_limiter", [] {
                 // Uncomment this once services release all the memory on stop
                 // service_memory_limiter.stop().get();
+            });
+
+            // The maintenance socket gets its own, unlimited budget: it is the
+            // operator's escape hatch and must not be blocked by a flood of
+            // user requests holding the shared budget.
+            maintenance_memory_limiter.start(service::memory_limiter::unlimited_tag{}, memory::stats().total_memory()).get();
+            auto stop_maintenance_mem_limiter = defer_verbose_shutdown("maintenance_memory_limiter", [&maintenance_memory_limiter] {
+                maintenance_memory_limiter.stop().get();
             });
 
             checkpoint(stop_signal, "creating and verifying directories");
@@ -2368,7 +2378,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         sharded_parameter(make_auth_cfg),
                         maintenance_socket_enabled::yes, std::ref(auth_cache)).get();
 
-                cql_maintenance_server_ctl.emplace(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, messaging, timeout_cfg, *cfg, maintenance_cql_sg_stats_key, maintenance_socket_enabled::yes, dbcfg.statement_scheduling_group);
+                cql_maintenance_server_ctl.emplace(maintenance_auth_service, mm_notifier, gossiper, qp, maintenance_memory_limiter, sl_controller, lifecycle_notifier, messaging, timeout_cfg, *cfg, maintenance_cql_sg_stats_key, maintenance_socket_enabled::yes, dbcfg.statement_scheduling_group);
 
                 start_auth_service(maintenance_auth_service, stop_maintenance_auth_service, "maintenance auth service");
             }
