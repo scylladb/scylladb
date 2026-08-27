@@ -1202,7 +1202,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sst_dir_semaphore.stop().get();
             });
 
-            service_memory_limiter.start(memory::stats().total_memory(), cfg->cql_request_memory_fraction()).get();
+            service_memory_limiter.start(memory::stats().total_memory(), cfg->cql_request_memory_fraction(),
+                    sharded_parameter([&cfg] { return utils::updateable_value<double>(cfg->cql_request_memory_shared_pool_fraction); })).get();
             auto stop_mem_limiter = defer_verbose_shutdown("service_memory_limiter", [] {
                 // Uncomment this once services release all the memory on stop
                 // service_memory_limiter.stop().get();
