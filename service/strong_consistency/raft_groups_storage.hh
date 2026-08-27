@@ -80,6 +80,14 @@ public:
     // the floor the replayed entries' commit_idx records carry.
     static future<> store_commit_idx_if_higher(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
             raft::index_t commit_idx, raft::term_t commit_idx_term);
+    // Load the persisted (commit_idx, commit_idx_term) pair. The term is
+    // disengaged for rows written before the commit_idx_term column existed.
+    static future<std::pair<raft::index_t, std::optional<raft::term_t>>> load_commit_idx_and_term(
+            cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    // Load the current persisted snapshot's (idx, term) for this group.
+    // Returns (0, 0) if no snapshot has been recorded yet.
+    static future<std::pair<raft::index_t, raft::term_t>> load_snapshot_idx_and_term(
+            cql3::query_processor& qp, raft::group_id gid, shard_id shard);
     // Store snapshot idx and term without updating the configuration.
     // Used to advance the persisted snapshot index so that raft does not
     // re-apply already applied entries on restart. Only writes if the new
