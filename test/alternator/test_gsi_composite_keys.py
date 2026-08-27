@@ -27,6 +27,7 @@
 #     DynamoDB appears to allow it. Alternator rejects it with a specific
 #     error instead.
 
+import operator
 from contextlib import contextmanager
 from decimal import Decimal
 
@@ -1646,6 +1647,130 @@ def test_gsi_composite_query_rk_inequality_on_first_only(test_table_gsi_2h2r):
         KeyConditionExpression="h1 = :h1 AND h2 = :h2 AND r1 >= :r1",
         ExpressionAttributeValues={":h1": h1_val, ":h2": h2_val, ":r1": "bbb"},
     )
+
+
+# Equality on r1 plus an inequality on r2 must return only rows with exactly
+# the chosen r1 - the equality pins r1, so rows with any other r1 are out
+# whether they sort before it or after it. Pinning the first r1 block ("aaa")
+# catches a range left open above it, pinning the last ("bbb") catches one
+# left open below it.
+@pytest.mark.parametrize(
+    "pinned_r1,op,bound",
+    [
+        ("aaa", ">", "mmm"),
+        ("aaa", ">=", "zzz"),
+        ("bbb", "<", "mmm"),
+        ("bbb", "<=", "aaa"),
+    ],
+)
+def test_gsi_composite_query_rk_eq_r1_and_inequality_r2(
+    test_table_gsi_2h2r, pinned_r1, op, bound
+):
+    table = test_table_gsi_2h2r
+    h1_val, h2_val = random_string(), random_string()
+    # Two r1 blocks in one index partition. Ordered by (r1, r2), every "bbb"
+    # row sorts after every "aaa" row.
+    items = []
+    for r1_val, r2_val in [
+        ("aaa", "aaa"),
+        ("aaa", "zzz"),
+        ("bbb", "aaa"),
+        ("bbb", "zzz"),
+    ]:
+        item = {
+            "p": random_string(),
+            "h1": h1_val,
+            "h2": h2_val,
+            "r1": r1_val,
+            "r2": r2_val,
+        }
+        table.put_item(Item=item)
+        items.append(item)
+    assert_index_query(
+        table,
+        "idx_2h2r",
+        items,
+        KeyConditionExpression="h1 = :h1 AND h2 = :h2",
+        ExpressionAttributeValues={":h1": h1_val, ":h2": h2_val},
+    )
+    # Rows from the other r1 block also satisfy the r2 comparison, so getting
+    # any of them back would mean the range ran past the end of the pinned
+    # r1 block instead of stopping there.
+    compare = {">": operator.gt, ">=": operator.ge,
+               "<": operator.lt, "<=": operator.le}[op]
+    expected = [
+        i for i in items if i["r1"] == pinned_r1 and compare(i["r2"], bound)
+    ]
+    assert_index_query(
+        table,
+        "idx_2h2r",
+        expected,
+        KeyConditionExpression=f"h1 = :h1 AND h2 = :h2 AND r1 = :r1 AND r2 {op} :r2",
+        ExpressionAttributeValues={
+            ":h1": h1_val,
+            ":h2": h2_val,
+            ":r1": pinned_r1,
+            ":r2": bound,
+        },
+    )
+
+
+# begins_with() on a Binary attr whose prefix is all 0xFF bytes.
+def test_gsi_composite_query_rk_begins_with_all_ff_does_not_leak_past_eq_prefix(
+    test_table_gsi_4h4r,
+):
+    table = test_table_gsi_4h4r
+    h_vals = [random_string() for _ in range(4)]
+    items = []
+    # (r1, r3) pairs. r1 is type N, so r1=2 rows sort after every r1=1 row.
+    for r1_val, r3_val in [(1, b"\xff\x01"), (1, b"\x00"), (2, b"\xff\x01")]:
+        item = {
+            "p": random_string(),
+            "h1": h_vals[0],
+            "h2": h_vals[1],
+            "h3": h_vals[2],
+            "h4": h_vals[3],
+            "r1": r1_val,
+            "r2": "same",
+            "r3": r3_val,
+            "r4": random_string(),
+        }
+        table.put_item(Item=item)
+        items.append(item)
+    key_vals = {
+        ":h1": h_vals[0],
+        ":h2": h_vals[1],
+        ":h3": h_vals[2],
+        ":h4": h_vals[3],
+    }
+    assert_index_query(
+        table,
+        "idx_4h4r",
+        items,
+        KeyConditionExpression="h1 = :h1 AND h2 = :h2 AND h3 = :h3 AND h4 = :h4",
+        ExpressionAttributeValues=key_vals,
+    )
+    # Only the r1=1 row whose r3 starts with 0xFF matches. The r1=2 row sorts
+    # after (1, "same", b"\xff") too, so an upper-unbounded range returns it.
+    expected = [
+        i for i in items if i["r1"] == 1 and bytes(i["r3"]).startswith(b"\xff")
+    ]
+    assert_index_query(
+        table,
+        "idx_4h4r",
+        expected,
+        KeyConditionExpression=(
+            "h1 = :h1 AND h2 = :h2 AND h3 = :h3 AND h4 = :h4 "
+            "AND r1 = :r1 AND r2 = :r2 AND begins_with(r3, :prefix)"
+        ),
+        ExpressionAttributeValues={
+            **key_vals,
+            ":r1": 1,
+            ":r2": "same",
+            ":prefix": b"\xff",
+        },
+    )
+
 
 
 ###############################################################################

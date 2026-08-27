@@ -482,6 +482,26 @@ def test_key_condition_expression_bytes_begins(test_table_sb_with_sorted_partiti
     expected_items = [item for item in items if item['c'].startswith(bytearray('00', 'ascii'))]
     assert(got_items == expected_items)
 
+# begins_with() where the prefix consists entirely of 0xFF bytes. This is the
+# one prefix that has no "successor" - there is no byte to increment - so
+# get_clustering_range_for_begins_with() cannot build the usual half-open
+# range and has to leave the range open at the top instead. That is correct
+# because 0xFF is the largest byte, so every string larger than such a prefix
+# necessarily begins with it.
+@pytest.mark.parametrize("prefix", [b'\xff', b'\xff\xff'])
+def test_key_condition_expression_bytes_begins_all_ff(test_table_sb, prefix):
+    p = random_string()
+    # Sorted ascending, which is the order Query returns them in.
+    values = [b'\x00', b'\xfe\xff', b'\xff', b'\xff\x00', b'\xff\xff', b'\xff\xff\x00']
+    items = [{'p': p, 'c': bytearray(v), 'a': random_string()} for v in values]
+    with test_table_sb.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    got_items = full_query(test_table_sb, KeyConditionExpression='p=:p AND begins_with(c,:c)',
+        ExpressionAttributeValues={':p': p, ':c': bytearray(prefix)})
+    expected_items = [item for item in items if bytes(item['c']).startswith(prefix)]
+    assert(got_items == expected_items)
+
 # Query and KeyConditionExpression works also on a table with just a partition
 # key and no sort key, although obviously it isn't very useful (for such
 # tables, Query is just an elaborate way to do a GetItem).
