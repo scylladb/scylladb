@@ -529,11 +529,21 @@ SEASTAR_TEST_CASE(test_groups_storage_shard_isolation) {
         auto vote1 = co_await storage1.load_term_and_vote();
         BOOST_CHECK_EQUAL(raft::term_t{}, vote1.first);
 
-        // Commit index
-        co_await storage0.store_commit_idx(raft::index_t(42));
+        // Commit index. store_commit_idx() performs no CQL write; the value
+        // reaches system.raft_groups — what load_commit_idx() reads — through
+        // the covering mutations it applies to the raft_groups memtable once
+        // every entry of a commitlog segment is committed. Append one command
+        // at idx 2000 (past the replayed entries) and commit it.
+        std::vector<raft::log_entry_ptr> cmd;
+        raft::command c;
+        ser::serialize(c, 42);
+        cmd.push_back(make_lw_shared(raft::log_entry{
+            .term = raft::term_t(1), .idx = raft::index_t(2000), .data = std::move(c)}));
+        co_await storage0.store_log_entries(cmd);
+        co_await storage0.store_commit_idx(raft::index_t(2000));
 
         auto idx0 = co_await storage0.load_commit_idx();
-        BOOST_CHECK_EQUAL(raft::index_t(42), idx0);
+        BOOST_CHECK_EQUAL(raft::index_t(2000), idx0);
 
         auto idx1 = co_await storage1.load_commit_idx();
         BOOST_CHECK_EQUAL(raft::index_t(0), idx1);

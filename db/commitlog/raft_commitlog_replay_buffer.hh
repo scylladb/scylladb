@@ -177,7 +177,6 @@ public:
     // the post-crash value and treat those entries as committed.
     //
     // Then, for each raft group in the buffer:
-
     //   1. Reads commit_idx from the raft system tables.
     //   2. Filters entries: detects leader changes (discards replaced uncommitted
     //      entries) and stops at out-of-order tails from older pre-crash segments.
@@ -194,6 +193,7 @@ public:
     //   6. Non-command entries (configuration, dummy) are kept in the raft log but
     //      don't need mutation application or commitlog rewrite.
     future<> process_raft_replayed_items(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks);
+
     // For every strongly-consistent raft group known to this shard, ensure that
     // system.raft_groups_snapshots.idx >= system.raft_groups.commit_idx.
     //

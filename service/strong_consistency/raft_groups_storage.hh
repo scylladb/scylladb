@@ -55,6 +55,14 @@ public:
 
     future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override;
     future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override;
+    // Records the new commit index and, purely in memory, covers every
+    // commitlog segment whose entries are now all committed: one
+    // system.raft_groups mutation carrying the segment's highest index is
+    // applied to the raft_groups memtable with the segment's parked claim
+    // attached, and dummy handles the covers made redundant are released.
+    // The value becomes durable when the raft_groups memtable flushes, which
+    // is also when the claims are released. See raft_commitlog's class
+    // comment for the segment-lifetime invariant this maintains.
     future<> store_commit_idx(raft::index_t) override;
     future<raft::index_t> load_commit_idx() override;
     future<raft::log_entries> load_log() override;

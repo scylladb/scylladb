@@ -178,19 +178,19 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
         }
         const auto table_id = table_it->second;
 
-        // Query commit_idx from raft system tables. We treat commit_idx as
-        // the effective snapshot index: all entries up to commit_idx are committed
-        // and will be applied to memtables during replay.
-        const auto commit_idx = co_await service::strong_consistency::raft_groups_storage::load_commit_idx(qp, group_id, this_shard_id());
-
-        logger.debug("group {}: {} entries, commit_idx={}", group_id, entries_list.size(), commit_idx);
-
         // First pass: filter entries (leader changes, out-of-order tails).
         // This must be done before any database writes to avoid applying entries that would
         // later be discarded due to leader changes.
         auto filtered = filter_entries(entries_list, group_id);
 
-        // Second pass: Apply committed entries to database and rewrite uncommitted entries to commitlog.
+        // Query commit_idx from raft system tables. We treat commit_idx as the
+        // effective snapshot index: all entries up to commit_idx are committed
+        // and will be applied to memtables during replay.
+        const auto commit_idx = co_await service::strong_consistency::raft_groups_storage::load_commit_idx(qp, group_id, this_shard_id());
+
+        logger.debug("group {}: {} entries, commit_idx={}", group_id, entries_list.size(), commit_idx);
+
+        // Second pass: Apply committed entries to database and collect uncommitted entries.
         uint64_t applied = 0;
         auto& group_data = _per_group_data[group_id];
         raft::log_entry_ptr_list uncommitted;
@@ -210,7 +210,10 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
             }
 
             // Only uncommitted entries go back to the raft log (and to the new
-            // commitlog, below).
+            // commitlog, below). Committed entries have already been applied to
+            // memtables above and are covered by the snapshot index that
+            // bump_snapshot_indices() advances to commit_idx after replay (the
+            // sole snapshot-index advancer on startup).
             if (entry->idx > commit_idx) {
                 uncommitted.push_back(std::move(entry));
             }
@@ -221,18 +224,14 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
         // Rewrite uncommitted entries to the new commitlog the same way
         // store_log_entries() does: the entries' rp_handles keep the new
         // segments alive, and write_batches() mints a raft_groups claim per
-        // segment straight into covers — the segment->cover map
+        // segment straight into group_data.covers — the segment->cover map
         // that seeds the group's parked covers when its raft_commitlog is
         // constructed, for commit-time coverage of the rewritten entries
         // (see raft_commitlog).
         if (!uncommitted.empty()) {
-            // The cover map is local for now — the claims are released as soon
-            // as it goes out of scope; a later commit passes the group's own
-            // map so the claims survive for commit-time coverage.
-            service::strong_consistency::pending_cover_map covers;
             auto entry_handles = co_await service::strong_consistency::raft_commitlog::write_batches(
                     *new_commitlog_ptr, table_id, db::system_keyspace::raft_groups()->id(), group_id, uncommitted,
-                    raft_term_and_index{}, covers);
+                    raft_term_and_index{}, group_data.covers);
             for (size_t i = 0; i < uncommitted.size(); ++i) {
                 group_data.replay_positions.push_back(service::strong_consistency::index_and_replay_position{
                         .index = uncommitted[i]->idx, .replay_position_handle = std::move(entry_handles[i])});
@@ -251,6 +250,7 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
     _replayed_commit_idx_by_group.clear();
     logger.info("Raft groups commit log replayed data processing complete");
 }
+
 future<> raft_commitlog_replay_buffer::bump_snapshot_indices(replica::database& db, cql3::query_processor& qp) {
     // See header for rationale. Runs for every known raft group and is the sole
     // place that advances the persisted snapshot index on startup. store_snapshot_index

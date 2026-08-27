@@ -43,6 +43,7 @@ raft_commitlog::raft_commitlog(raft::group_id group_id, db::commitlog& commitlog
     , _raft_groups_table_id(raft_groups_table_id)
     , _commit_log(commitlog)
     , _replayed_entries(std::move(replayed_data.entries)) {
+    _pending_covers = std::move(replayed_data.covers);
     for (const auto& e : _replayed_entries) {
         _appended_terms.push_back(raft_term_and_index{.idx = e->idx, .term = e->term});
     }
@@ -63,16 +64,17 @@ raft_commitlog::raft_commitlog(raft::group_id group_id, db::commitlog& commitlog
         target.push_back(std::move(pos));
     }
     logger.debug("starting raft_commitlog group_id={}, table_id={}, replayed_entries={}, "
-            "command_positions={}, dummy_positions={}, config_positions={}",
+            "command_positions={}, dummy_positions={}, config_positions={}, pending_covers={}",
             _group_id, _table_id, _replayed_entries.size(), _command_positions.size(),
-            _dummy_positions.size(), _config_positions.size());
+            _dummy_positions.size(), _config_positions.size(), _pending_covers.size());
 }
 
 raft_commitlog::~raft_commitlog() {
-    // Release all remaining replay position handles without decrementing
-    // segment dirty counts. This keeps commitlog segments alive after this
-    // object is destroyed, ensuring uncommitted raft entries remain
-    // available for replay after restart.
+    // Release all remaining replay position handles and parked segment claims
+    // without decrementing segment dirty counts. This keeps commitlog
+    // segments alive after this object is destroyed, ensuring the uncommitted
+    // raft entries (and the commit_idx records) remain available for replay
+    // after restart.
     for (auto& entry : _command_positions) {
         entry.replay_position_handle.release();
     }
@@ -82,8 +84,15 @@ raft_commitlog::~raft_commitlog() {
     for (auto& entry : _config_positions) {
         entry.replay_position_handle.release();
     }
-    logger.debug("released {} command + {} dummy + {} config replay position handles for group_id={}",
-            _command_positions.size(), _dummy_positions.size(), _config_positions.size(), _group_id);
+    for (auto& [segment, cover] : _pending_covers) {
+        cover.segment_holder.release();
+    }
+    for (auto& orphan : _orphaned_holders) {
+        orphan.segment_holder.release();
+    }
+    logger.debug("released {} command + {} dummy + {} config replay position handles, {} parked covers and {} orphaned holders for group_id={}",
+            _command_positions.size(), _dummy_positions.size(), _config_positions.size(),
+            _pending_covers.size(), _orphaned_holders.size(), _group_id);
 }
 
 seastar::future<utils::chunked_vector<db::rp_handle>> raft_commitlog::write_batches(db::commitlog& cl,
@@ -164,14 +173,8 @@ seastar::future<utils::chunked_vector<db::rp_handle>> raft_commitlog::write_batc
 seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_list& entries) {
     logger.debug("store_log_entries: group_id={}, num_entries={}", _group_id, entries.size());
 
-    // The cover map is local for now: the claims it collects are released as
-    // soon as this call returns (the batch's own entry handles keep the
-    // segments alive), and commit_idx is still persisted by
-    // store_commit_idx()'s CQL write. A later commit keeps the map across
-    // batches and hands the claims to covering raft_groups mutations.
-    pending_cover_map covers;
     auto entry_handles = co_await write_batches(_commit_log, _table_id, _raft_groups_table_id, _group_id, entries,
-            _last_committed, covers);
+            _last_committed, _pending_covers);
     SCYLLA_ASSERT(entry_handles.size() == entries.size());
 
     for (size_t i = 0; i < entries.size(); ++i) {
@@ -183,8 +186,8 @@ seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_li
                 index_and_replay_position{.index = log_entry_ptr->idx, .replay_position_handle = std::move(entry_handles[i])});
         _appended_terms.push_back(raft_term_and_index{.idx = log_entry_ptr->idx, .term = log_entry_ptr->term});
     }
-    logger.debug("store_log_entries completed: command_positions={}, dummy_positions={}, config_positions={}",
-            _command_positions.size(), _dummy_positions.size(), _config_positions.size());
+    logger.debug("store_log_entries completed: command_positions={}, dummy_positions={}, config_positions={}, pending_covers={}",
+            _command_positions.size(), _dummy_positions.size(), _config_positions.size(), _pending_covers.size());
 }
 
 void raft_commitlog::note_commit_idx(const raft::index_t idx) {
@@ -206,7 +209,7 @@ raft::log_entries raft_commitlog::load_log() {
 void raft_commitlog::truncate_log(const raft::index_t idx) {
     logger.debug("truncate_log: group_id={}, idx={}", _group_id, idx);
     // Remove entries with index >= idx (Raft semantics: truncate from idx onward).
-    // The deque is sorted by index, so binary search finds the cut point.
+    // All deques are sorted by index, so binary search finds the cut point.
     auto trim = [idx] (replay_position_list& l) {
         auto it = std::ranges::lower_bound(l, idx, {}, &index_and_replay_position::index);
         l.erase(it, l.end());
@@ -218,6 +221,26 @@ void raft_commitlog::truncate_log(const raft::index_t idx) {
     // not end up in a floor record.
     while (!_appended_terms.empty() && _appended_terms.back().idx >= idx) {
         _appended_terms.pop_back();
+    }
+    // Covers whose max_idx refers to truncated entries can never pop with a
+    // correct (idx, term) pair, and leaving them parked would wedge
+    // take_committed_covers()'s prefix pop for every later cover (the reused
+    // indexes land in new, smaller-max covers behind them). Their claims
+    // must survive, though — the segments may still hold this group's earlier
+    // entries — so the claims move to _orphaned_holders, each tagged with the
+    // covering floor it must wait for: idx - 1 bounds the live entries left
+    // in its segment from above, and a lower value must not release it (a
+    // surviving pre-truncation cover can pop first, and its value would leave
+    // entries between it and the truncation point uncovered).
+    while (!_pending_covers.empty() && std::prev(_pending_covers.end())->second.max_idx >= idx) {
+        const auto last = std::prev(_pending_covers.end());
+        if (last->second.segment_holder) {
+            _orphaned_holders.push_back(orphaned_holder{
+                .release_floor = idx - raft::index_t{1},
+                .segment_holder = std::move(last->second.segment_holder),
+            });
+        }
+        _pending_covers.erase(last);
     }
 }
 
@@ -235,8 +258,60 @@ void raft_commitlog::truncate_log_tail(const raft::index_t index) {
     // now and the segments holding those entries can be reclaimed.
     auto cfg_it = std::ranges::upper_bound(_config_positions, index, {}, &index_and_replay_position::index);
     _config_positions.erase(_config_positions.begin(), cfg_it);
+    // _pending_covers is left alone: covers up to the snapshot index (<= the
+    // applied <= the commit index) were already taken by
+    // take_committed_covers(), which store_commit_idx() drives before entries
+    // can be applied, let alone snapshotted; segments still pending extend
+    // beyond it.
     logger.debug("truncate_log_tail completed: command_positions={}, dummy_positions={}, config_positions={}",
             _command_positions.size(), _dummy_positions.size(), _config_positions.size());
+}
+
+std::vector<segment_cover> raft_commitlog::take_committed_covers(raft::index_t commit_idx) {
+    std::vector<segment_cover> ret;
+    // The map's key order is also its max_idx order (see pending_cover_map),
+    // so the fully-committed covers form a prefix.
+    while (!_pending_covers.empty() && _pending_covers.begin()->second.max_idx <= commit_idx) {
+        auto node = _pending_covers.extract(_pending_covers.begin());
+        auto& cover = node.mapped();
+        if (!cover.segment_holder) {
+            // Replayed data constructed without real handles (tests); there
+            // is no claim to manage and nothing for a pin to guarantee.
+            continue;
+        }
+        ret.push_back(segment_cover{
+            .segment = node.key(),
+            .max_idx = cover.max_idx,
+            .max_term = cover.max_term,
+            .segment_holder = std::move(cover.segment_holder),
+        });
+    }
+    if (!ret.empty()) {
+        // Claims parked by truncate_log() whose floor this pop reaches ride
+        // the last cover's mutation: its value is >= their floors, hence >=
+        // any index remaining in their segments. Claims with higher floors
+        // stay parked for a later pop.
+        for (auto it = _orphaned_holders.begin(); it != _orphaned_holders.end(); ) {
+            if (it->release_floor <= ret.back().max_idx) {
+                ret.back().extra_holders.push_back(std::move(it->segment_holder));
+                it = _orphaned_holders.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    if (!ret.empty()) {
+        logger.debug("take_committed_covers: group_id={}, commit_idx={}, covers={}, remaining_pending={}",
+                _group_id, commit_idx, ret.size(), _pending_covers.size());
+    }
+    return ret;
+}
+
+void raft_commitlog::release_covered_dummies(const raft::index_t idx) {
+    auto it = std::ranges::upper_bound(_dummy_positions, idx, {}, &index_and_replay_position::index);
+    _dummy_positions.erase(_dummy_positions.begin(), it);
+    logger.debug("release_covered_dummies: group_id={}, up_to_idx={}, remaining_dummy={}, retained_config={}",
+            _group_id, idx, _dummy_positions.size(), _config_positions.size());
 }
 
 std::vector<index_and_replay_position> raft_commitlog::acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries) {
