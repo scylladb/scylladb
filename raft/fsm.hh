@@ -57,6 +57,37 @@ struct fsm_config {
     // the sum of sizes of trailing log entries, otherwise the state
     // machine will deadlock.
     size_t max_log_size;
+    // Limit in bytes on the size of the in-memory part of the log while this
+    // server is not a leader. A follower appends only the prefix of an
+    // append_request which fits into this limit and reports back the index it
+    // actually reached, which makes the leader stop replicating to it until a
+    // snapshot shrinks the log again.
+    //
+    // Must be at least max_log_size + snapshot_trailing_size: a follower
+    // legitimately holds the leader's entire log plus its own trailing entries,
+    // which the leader may already have dropped, so a smaller value would
+    // throttle healthy replication.
+    //
+    // The limit is exact while the leader is healthy: such a leader's log is
+    // capped at max_log_size by log_limiter_semaphore, so a follower holding it
+    // plus its own trailing entries stays exactly at this limit.
+    //
+    // It can be exceeded by at most snapshot_trailing_size, and only on one
+    // path: a node which was itself a full follower gets elected, so its log is
+    // up to max_follower_log_size, and become_leader() consumes all of it from
+    // the semaphore, so it can add nothing but the zero-byte dummy. A follower
+    // must be able to hold that log plus its own trailing entries, giving
+    // max_log_size + 2 * snapshot_trailing_size in the worst case.
+    //
+    // The overshoot only happens while the escape hatch in append_entries() is
+    // open, i.e. while can_shrink_log() is false and we let one entry through
+    // per request rather than refusing; a follower never exceeds the limit while
+    // it is actually refusing. It is self-limiting rather than merely bounded:
+    // the entries arriving are exactly what lets the leader commit, and the
+    // first commit above our snapshot index closes the hatch.
+    //
+    // Zero means unlimited.
+    size_t max_follower_log_size;
     // If set to true will enable prevoting stage during election
     bool enable_prevoting;
     // Enables fast bootstrap and selects which voting member becomes the initial
@@ -614,6 +645,34 @@ public:
     size_t log_memory_usage() const {
         return _log.memory_usage();
     };
+
+    // True if the applier fiber will be able to shrink the log on its own. It
+    // takes a snapshot once it applies past the snapshot index, and it can only
+    // apply committed entries, so there has to be something committed above the
+    // snapshot for that to ever happen.
+    //
+    // While this is false append_entries() lets one entry through per request
+    // instead of refusing; see max_follower_log_size for what that costs.
+    bool can_shrink_log() const {
+        return _commit_idx > _log.get_snapshot().idx;
+    }
+
+    // True if we will refuse to append further entries received from a leader
+    // until a snapshot shrinks the log back. Always false if the limit is
+    // disabled.
+    //
+    // Note that reaching the limit is not sufficient: if we cannot shrink we let
+    // one entry through per request to guarantee progress (see append_entries()),
+    // so we are not "full" in the sense a leader cares about. Claiming otherwise
+    // would make a leader stop replicating to us, and then it could never commit
+    // anything - neither the dummy entry it appends on election nor the entries
+    // that overwrite a diverged tail of our log - which is precisely what we need
+    // from it in order to become able to shrink.
+    bool log_is_full() const {
+        return _config.max_follower_log_size != 0 &&
+               _log.memory_usage() >= _config.max_follower_log_size &&
+               can_shrink_log();
+    }
 
     server_id id() const { return _my_id; }
 

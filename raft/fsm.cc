@@ -978,13 +978,42 @@ void fsm::append_entries(server_id from, append_request&& request) {
         return;
     }
 
+    // Learn what this request says is committed before deciding below whether we
+    // can shrink, rather than deciding against the commit index the previous
+    // request left behind. This is safe for the same reason the call after the
+    // append is: everything up to prev_log_idx matched by term, so by the log
+    // matching property it is identical to the leader's log, and it is at or
+    // below leader_commit_idx. It is also a subset of that call, since
+    // last_new_idx is never below prev_log_idx.
+    advance_commit_idx(std::min(request.leader_commit_idx, request.prev_log_idx));
+
+    // Refusing entries is only safe if our log shrinks on its own. The applier
+    // fiber takes a snapshot once it applies past the snapshot index, and it can
+    // only apply committed entries; max_follower_log_size is above
+    // snapshot_threshold_log_size, so the byte trigger for taking a snapshot is
+    // guaranteed to fire. If nothing is committed beyond the snapshot we cannot
+    // shrink, and refusing would deadlock the group: the leader needs us to
+    // accept entries in order to commit anything at all, in particular the dummy
+    // entry it appends on election, without which maybe_commit() does not
+    // advance the commit index at all. Note that being a zero-sized entry does
+    // not help the dummy here, since it sits above the entries we are refusing
+    // and skipping those would leave a gap in the log.
+    //
+    // This is the same condition log_is_full() reports to the leader, so that
+    // what we tell it agrees with what we actually do.
+    const bool can_shrink = can_shrink_log();
+
     // If there are no entries it means that the leader wants
     // to ensure forward progress. Reply with the last index
     // that matches.
     index_t last_new_idx = request.prev_log_idx;
 
     if (!request.entries.empty()) {
-        last_new_idx = _log.maybe_append(std::move(request.entries));
+        const index_t appended = _log.maybe_append(std::move(request.entries),
+                _config.max_follower_log_size, !can_shrink);
+        if (appended != index_t{0}) {
+            last_new_idx = appended;
+        }
     }
 
     // Do not advance commit index further than last_new_idx, or we could incorrectly

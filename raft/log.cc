@@ -191,10 +191,11 @@ const configuration& log::last_conf_for(index_t idx) const {
     return _snapshot.config;
 }
 
-index_t log::maybe_append(log_entry_ptr_list&& entries) {
+index_t log::maybe_append(log_entry_ptr_list&& entries, size_t max_memory_usage,
+                          bool force_at_least_one) {
     SCYLLA_ASSERT(!entries.empty());
 
-    index_t last_new_idx = entries.back()->idx;
+    index_t last_new_idx{0};
 
     // We must scan through all entries if the log already
     // contains them to ensure the terms match.
@@ -203,10 +204,13 @@ index_t log::maybe_append(log_entry_ptr_list&& entries) {
             if (e->idx < _first_idx) {
                 logger.trace("append_entries: skipping entry with idx {} less than log start {}",
                     e->idx, _first_idx);
+                // Covered by the snapshot, so we do have this entry.
+                last_new_idx = e->idx;
                 continue;
             }
             if (e->term == get_entry(e->idx)->term) {
                 logger.trace("append_entries: entries with index {} has matching terms {}", e->idx, e->term);
+                last_new_idx = e->idx;
                 continue;
             }
             logger.trace("append_entries: entries with index {} has non matching terms e.term={}, _log[i].term = {}",
@@ -215,10 +219,23 @@ index_t log::maybe_append(log_entry_ptr_list&& entries) {
             // index but different terms), delete the existing
             // entry and all that follow it (§5.3).
             SCYLLA_ASSERT(e->idx > _snapshot.idx);
+            // Note that this releases memory, which is why the limit below is
+            // only consulted for entries that are genuinely new: refusing a
+            // conflicting entry would prevent the log from ever shrinking.
             truncate_uncommitted(e->idx);
         }
+        if (max_memory_usage != 0 && !force_at_least_one &&
+                _memory_usage + memory_usage_of(*e, _max_command_size) > max_memory_usage) {
+            logger.trace("append_entries: not appending entry with idx {}, log memory usage {} would exceed the limit {}",
+                e->idx, _memory_usage, max_memory_usage);
+            // Stop rather than skip: skipping would leave a gap in the log.
+            break;
+        }
+        // The allowance is consumed by the first new entry.
+        force_at_least_one = false;
         // Assert log monotonicity
         SCYLLA_ASSERT(e->idx == next_idx());
+        last_new_idx = e->idx;
         emplace_back(std::move(e));
     }
 

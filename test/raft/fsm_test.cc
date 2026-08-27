@@ -1168,7 +1168,7 @@ BOOST_AUTO_TEST_CASE(test_truncate_rederives_config_indices) {
     raft::log_entry_ptr_list overwrite;
     overwrite.push_back(seastar::make_lw_shared<const raft::log_entry>(
             raft::log_entry{term_t{3}, index_t{4}, raft::log_entry::dummy{}}));
-    log.maybe_append(std::move(overwrite));
+    log.maybe_append(std::move(overwrite), 0, false);
 
     // The config at idx 3 is the effective one again, and the older config
     // at idx 1 - not the snapshot config - is the previous one.
@@ -3210,4 +3210,260 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_no_renewal_during_stepdown) {
     // The tick must neither throw nor append.
     BOOST_REQUIRE_NO_THROW(fsm1.tick());
     BOOST_CHECK_EQUAL(fsm1.log_last_idx(), idx_before);
+}
+
+// Tests for the follower-side in-memory log limit (max_follower_log_size).
+//
+// A leader bounds its log with log_limiter_semaphore, but a follower has no such
+// admission control: it used to append whatever a leader sent it, so a follower
+// whose state machine applied slowly (and therefore never snapshotted) grew its
+// log without bound. A follower now appends only the prefix of an append_request
+// which fits into max_follower_log_size and reports back the index it actually
+// reached, so the leader learns where it actually got to.
+
+namespace {
+
+// With the default max_command_size (sizeof(log_entry)), log::memory_usage_of
+// charges a command exactly its serialized size, which keeps the arithmetic in
+// these tests exact.
+size_t command_memory_usage(const raft::command& cmd) {
+    return raft::log::memory_usage_of(cmd, sizeof(raft::log_entry));
+}
+
+struct follower_log_limit_fixture {
+    server_id follower_id = id();
+    server_id leader_id = id();
+    raft::configuration cfg = config_from_ids({follower_id, leader_id});
+    raft::command cmd = create_command(1);
+    size_t entry_size = command_memory_usage(cmd);
+
+    raft::fsm_config config(size_t entries_budget) {
+        auto fcfg = fsm_cfg;
+        fcfg.max_follower_log_size = entries_budget * entry_size;
+        return fcfg;
+    }
+
+    // A log with `entries` command entries of term 1 at indexes 1..entries.
+    // The snapshot term has to be 1 as well: add_entry() derives an entry's term
+    // from log::last_term(), which for an empty log is the snapshot term.
+    raft::log make_log(size_t entries) {
+        raft::log log{raft::snapshot_descriptor{
+                .idx = index_t{0}, .term = term_t{1}, .config = cfg}};
+        for (size_t i = 0; i < entries; i++) {
+            add_entry(log, cmd);
+        }
+        return log;
+    }
+
+    raft::append_request request(index_t prev_idx, term_t prev_term, size_t entries,
+            index_t leader_commit_idx, term_t term = term_t{1}) {
+        raft::append_request req{
+            .current_term = term,
+            .prev_log_idx = prev_idx,
+            .prev_log_term = prev_term,
+            .leader_commit_idx = leader_commit_idx,
+            .entries = {},
+        };
+        for (size_t i = 0; i < entries; i++) {
+            req.entries.push_back(make_lw_shared<const raft::log_entry>(
+                    raft::log_entry{term, index_t{prev_idx.value() + 1 + i}, cmd}));
+        }
+        return req;
+    }
+
+    // The single append_reply the follower produced in response to the last step().
+    raft::append_reply reply_of(raft::fsm_output& output) {
+        BOOST_REQUIRE_EQUAL(output.messages.size(), 1);
+        return std::get<raft::append_reply>(output.messages.back().second);
+    }
+
+    index_t accepted_idx(const raft::append_reply& reply) {
+        BOOST_REQUIRE(std::holds_alternative<raft::append_reply::accepted>(reply.result));
+        return std::get<raft::append_reply::accepted>(reply.result).last_new_idx;
+    }
+};
+
+} // anonymous namespace
+
+// A follower appends only what fits and reports the index it actually reached.
+// Once a snapshot shrinks the log it accepts entries again.
+BOOST_AUTO_TEST_CASE(test_follower_log_size_limit) {
+    follower_log_limit_fixture f;
+    // Room for exactly 3 command entries.
+    fsm_debug fsm(f.follower_id, term_t{1}, server_id{}, f.make_log(0),
+            trivial_failure_detector, f.config(3));
+    BOOST_CHECK(fsm.is_follower());
+
+    // Send 5 entries and commit all of them: only 3 fit.
+    fsm.step(f.leader_id, f.request(index_t{0}, term_t{0}, 5, index_t{5}));
+    auto output = fsm.get_output();
+    BOOST_CHECK_EQUAL(fsm.get_log().last_idx(), index_t{3});
+    BOOST_CHECK_LE(fsm.get_log().memory_usage(), 3 * f.entry_size);
+    auto reply = f.reply_of(output);
+    // The reply reports what we have, not what was sent.
+    BOOST_CHECK_EQUAL(f.accepted_idx(reply), index_t{3});
+    BOOST_CHECK(fsm.log_is_full());
+    // The commit index still advanced, capped at what we actually have. This is
+    // what lets a throttled follower drain its log and eventually free memory.
+    BOOST_CHECK_EQUAL(fsm.commit_idx(), index_t{3});
+
+    // We are now full and we do have something to drain, so further entries are
+    // refused outright and the log does not grow at all.
+    fsm.step(f.leader_id, f.request(index_t{3}, term_t{1}, 2, index_t{5}));
+    output = fsm.get_output();
+    BOOST_CHECK_EQUAL(fsm.get_log().last_idx(), index_t{3});
+    BOOST_CHECK_LE(fsm.get_log().memory_usage(), 3 * f.entry_size);
+    reply = f.reply_of(output);
+    BOOST_CHECK_EQUAL(f.accepted_idx(reply), index_t{3});
+
+    // An empty request (the leader's throttled heartbeat) is always answered and
+    // never grows the log.
+    fsm.step(f.leader_id, f.request(index_t{3}, term_t{1}, 0, index_t{5}));
+    output = fsm.get_output();
+    BOOST_CHECK_EQUAL(fsm.get_log().last_idx(), index_t{3});
+    reply = f.reply_of(output);
+    BOOST_CHECK_EQUAL(f.accepted_idx(reply), index_t{3});
+
+    // Snapshotting frees the log, and replication resumes.
+    BOOST_CHECK(fsm.apply_snapshot(
+            raft::snapshot_descriptor{.idx = index_t{3}, .term = term_t{1}, .config = f.cfg},
+            0, 0, true));
+    BOOST_CHECK_EQUAL(fsm.get_log().memory_usage(), 0);
+    BOOST_CHECK(!fsm.log_is_full());
+    output = fsm.get_output();
+
+    fsm.step(f.leader_id, f.request(index_t{3}, term_t{1}, 2, index_t{5}));
+    output = fsm.get_output();
+    BOOST_CHECK_EQUAL(fsm.get_log().last_idx(), index_t{5});
+    reply = f.reply_of(output);
+    BOOST_CHECK_EQUAL(f.accepted_idx(reply), index_t{5});
+}
+
+// The limit must never be applied to entries which are already in the log: a
+// duplicate costs nothing, and a conflicting entry *frees* memory by truncating
+// the log. Refusing those would make it impossible for a new leader to overwrite
+// a full follower's uncommitted tail, which deadlocks the group.
+BOOST_AUTO_TEST_CASE(test_follower_log_limit_allows_overlapping_entries) {
+    follower_log_limit_fixture f;
+    // Log is exactly at the limit: 3 entries of term 1, budget for 3.
+    fsm_debug fsm(f.follower_id, term_t{1}, server_id{}, f.make_log(3),
+            trivial_failure_detector, f.config(3));
+    // Commit one entry, so that the log can shrink and the escape hatch in
+    // fsm::append_entries stays closed - we want to exercise the overlap path.
+    fsm.step(f.leader_id, f.request(index_t{3}, term_t{1}, 0, index_t{1}));
+    (void)fsm.get_output();
+    BOOST_CHECK_EQUAL(fsm.commit_idx(), index_t{1});
+    BOOST_CHECK(fsm.log_is_full());
+
+    // Re-sending entries the follower already has is accepted in full even
+    // though it is at the limit, and does not grow the log.
+    fsm.step(f.leader_id, f.request(index_t{0}, term_t{0}, 3, index_t{1}));
+    auto output = fsm.get_output();
+    BOOST_CHECK_EQUAL(fsm.get_log().last_idx(), index_t{3});
+    BOOST_CHECK_EQUAL(fsm.get_log().memory_usage(), 3 * f.entry_size);
+    BOOST_CHECK_EQUAL(f.accepted_idx(f.reply_of(output)), index_t{3});
+
+    // A new leader in term 2 overwrites the uncommitted tail at idx 2..3. The
+    // conflict at idx 2 truncates two entries, which makes room for both new
+    // ones, so the whole request is accepted.
+    fsm.step(f.leader_id, f.request(index_t{1}, term_t{1}, 2, index_t{1}, term_t{2}));
+    output = fsm.get_output();
+    BOOST_CHECK_EQUAL(fsm.get_log().last_idx(), index_t{3});
+    BOOST_CHECK_EQUAL(fsm.get_log().memory_usage(), 3 * f.entry_size);
+    BOOST_CHECK_EQUAL(fsm.get_log()[3]->term, term_t{2});
+    BOOST_CHECK_EQUAL(f.accepted_idx(f.reply_of(output)), index_t{3});
+}
+
+// A follower which has nothing committed beyond its snapshot cannot shrink its
+// log by snapshotting, so refusing entries would deadlock: the leader needs it
+// to accept in order to commit anything at all, including the dummy entry a new
+// leader appends on election. Note that the dummy being zero-sized does not help
+// - it sits above the entries being refused, and skipping those would leave a
+// gap in the log - so the follower has to let entries through one at a time.
+BOOST_AUTO_TEST_CASE(test_follower_log_limit_forces_progress_when_stuck) {
+    follower_log_limit_fixture f;
+    // Log is already at the limit and nothing is committed.
+    fsm_debug fsm(f.follower_id, term_t{1}, server_id{}, f.make_log(3),
+            trivial_failure_detector, f.config(3));
+    BOOST_CHECK_EQUAL(fsm.commit_idx(), index_t{0});
+    BOOST_CHECK_EQUAL(fsm.get_log().get_snapshot().idx, index_t{0});
+    BOOST_CHECK_EQUAL(fsm.get_log().memory_usage(), 3 * f.entry_size);
+    // We are at the byte limit, but since we cannot shrink we are going to let
+    // entries through rather than refuse them - so we must not report ourselves
+    // full. Telling a leader to stop sending here would stop it from ever
+    // committing anything, and it is the leader's commit index that we need in
+    // order to become able to shrink.
+    BOOST_CHECK(!fsm.log_is_full());
+
+    // Two entries are offered; exactly one is let through, over the limit. This
+    // is what walks a new leader up to its dummy entry one round trip at a time.
+    fsm.step(f.leader_id, f.request(index_t{3}, term_t{1}, 2, index_t{0}));
+    auto output = fsm.get_output();
+    BOOST_CHECK_EQUAL(fsm.get_log().last_idx(), index_t{4});
+    BOOST_CHECK_GT(fsm.get_log().memory_usage(), 3 * f.entry_size);
+    BOOST_CHECK_EQUAL(f.accepted_idx(f.reply_of(output)), index_t{4});
+
+    // Still nothing committed, so the next request lets one more entry through.
+    // The growth is bounded by the leader's own log, which is bounded by its
+    // log_limiter_semaphore.
+    fsm.step(f.leader_id, f.request(index_t{4}, term_t{1}, 2, index_t{0}));
+    output = fsm.get_output();
+    BOOST_CHECK_EQUAL(fsm.commit_idx(), index_t{0});
+    BOOST_CHECK_EQUAL(fsm.get_log().last_idx(), index_t{5});
+    BOOST_CHECK_EQUAL(f.accepted_idx(f.reply_of(output)), index_t{5});
+}
+
+// The counterpart of the above: as soon as the follower has something committed
+// beyond its snapshot it can shrink on its own, so the escape hatch closes and
+// the limit is enforced strictly. If it did not, the limit would be worthless -
+// the common case for a full follower is precisely a large backlog of committed
+// but not yet applied entries.
+BOOST_AUTO_TEST_CASE(test_follower_log_limit_enforced_when_able_to_shrink) {
+    follower_log_limit_fixture f;
+    fsm_debug fsm(f.follower_id, term_t{1}, server_id{}, f.make_log(3),
+            trivial_failure_detector, f.config(3));
+    // At the byte limit, but not reporting full yet - nothing is committed
+    // beyond the snapshot, so we cannot shrink and will not refuse.
+    BOOST_CHECK(!fsm.log_is_full());
+
+    // An empty request commits what we already have without growing the log.
+    fsm.step(f.leader_id, f.request(index_t{3}, term_t{1}, 0, index_t{3}));
+    (void)fsm.get_output();
+    // Now we can drain and snapshot, so we will refuse - and say so.
+    BOOST_CHECK(fsm.log_is_full());
+    BOOST_CHECK_EQUAL(fsm.commit_idx(), index_t{3});
+    BOOST_CHECK_EQUAL(fsm.get_log().last_idx(), index_t{3});
+
+    // Now we can shrink, so entries are refused and the log stays at the limit.
+    fsm.step(f.leader_id, f.request(index_t{3}, term_t{1}, 2, index_t{3}));
+    auto output = fsm.get_output();
+    BOOST_CHECK_EQUAL(fsm.get_log().last_idx(), index_t{3});
+    BOOST_CHECK_EQUAL(fsm.get_log().memory_usage(), 3 * f.entry_size);
+    auto reply = f.reply_of(output);
+    BOOST_CHECK_EQUAL(f.accepted_idx(reply), index_t{3});
+}
+
+// The decision whether we may refuse entries has to take into account what the
+// request being processed says is committed, not only what the previous one did.
+// A follower whose log is full of entries it believes to be uncommitted cannot
+// shrink, so it lets one entry through to guarantee progress; but if this very
+// request tells it those entries are committed, it can shrink after all and the
+// entry must be refused.
+BOOST_AUTO_TEST_CASE(test_follower_log_limit_uses_commit_idx_of_current_request) {
+    follower_log_limit_fixture f;
+    // At the limit, with nothing known to be committed beyond the snapshot.
+    fsm_debug fsm(f.follower_id, term_t{1}, server_id{}, f.make_log(3),
+            trivial_failure_detector, f.config(3));
+    BOOST_CHECK_EQUAL(fsm.commit_idx(), index_t{0});
+    BOOST_CHECK_EQUAL(fsm.get_log().get_snapshot().idx, index_t{0});
+
+    // This request both carries new entries and tells us that everything we
+    // already have is committed. The commit index it brings is what decides:
+    // we can drain and snapshot, so nothing is appended.
+    fsm.step(f.leader_id, f.request(index_t{3}, term_t{1}, 2, index_t{3}));
+    auto output = fsm.get_output();
+    BOOST_CHECK_EQUAL(fsm.commit_idx(), index_t{3});
+    BOOST_CHECK_EQUAL(fsm.get_log().last_idx(), index_t{3});
+    BOOST_CHECK_EQUAL(fsm.get_log().memory_usage(), 3 * f.entry_size);
+    BOOST_CHECK_EQUAL(f.accepted_idx(f.reply_of(output)), index_t{3});
 }

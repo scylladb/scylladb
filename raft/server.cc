@@ -124,6 +124,7 @@ public:
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as);
     void register_metrics() override;
     size_t max_command_size() const override;
+    size_t log_memory_usage() const override;
 private:
     seastar::condition_variable _events;
 
@@ -425,6 +426,10 @@ future<> server_impl::start() {
                                  fsm_config {
                                      .append_request_threshold = _config.append_request_threshold,
                                      .max_log_size = _config.max_log_size,
+                                     // A follower has to be able to hold everything a leader
+                                     // may have admitted plus its own trailing entries, which
+                                     // the leader may already have dropped.
+                                     .max_follower_log_size = _config.max_log_size + _config.snapshot_trailing_size,
                                      .enable_prevoting = _config.enable_prevoting,
                                      .fast_bootstrap_seed = _config.fast_bootstrap_seed,
                                      .leaseguard = fsm_leaseguard,
@@ -1912,6 +1917,9 @@ void server_impl::register_metrics() {
                        sm::description("size of in-memory part of the log"), {server_id_label(_id)}),
         sm::make_gauge("log_memory_usage", [this] { return _fsm->log_memory_usage(); },
                        sm::description("memory usage of in-memory part of the log in bytes"), {server_id_label(_id)}),
+        sm::make_gauge("log_full", [this] { return uint64_t(_fsm->log_is_full()); },
+                       sm::description("1 if the in-memory log reached max_follower_log_size, so entries from a leader are being refused"),
+                       {server_id_label(_id)}),
         sm::make_gauge("log_last_index", [this] { return _fsm->log_last_idx().value(); },
                        sm::description("term of the last log entry"), {server_id_label(_id)}),
         sm::make_gauge("log_last_term", [this] { return _fsm->log_last_term().value(); },
@@ -2009,6 +2017,10 @@ future<> server_impl::stepdown(logical_clock::duration timeout) {
 
 size_t server_impl::max_command_size() const {
     return _config.max_command_size;
+}
+
+size_t server_impl::log_memory_usage() const {
+    return _fsm->log_memory_usage();
 }
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
