@@ -1222,6 +1222,8 @@ public:
             bool update_sstable_id);
     // Must be called in a seastar thread
     void write_component_with_metadata(component_type type, scylla_metadata metadata);
+private:
+    future<uint64_t> component_filesize(component_type type) const noexcept;
 };
 
 // Validate checksums
