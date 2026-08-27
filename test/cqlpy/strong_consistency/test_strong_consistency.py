@@ -12,8 +12,9 @@
 #############################################################################
 
 import pytest
+from cassandra import ConsistencyLevel
 from cassandra.protocol import ConfigurationException, InvalidRequest
-from cassandra.query import BatchStatement, BatchType
+from cassandra.query import BatchStatement, BatchType, SimpleStatement
 
 from test.pylib.skip_types import skip_env
 
@@ -105,6 +106,7 @@ def test_batch(cql, sc_keyspace, batch_mode):
     - batch touching multiple tables,
     - batch touching multiple partitions,
     - statement touching multiple partition keys,
+    - batch at a weaker consistency level,
     - counter batch.
     """
 
@@ -206,6 +208,20 @@ def test_batch(cql, sc_keyspace, batch_mode):
             run_batch([
                 ("delete_in", (1, 2, 1)),
             ], kind="unlogged")
+
+        # A Raft group always replicates to a quorum, so a weaker
+        # consistency level cannot be honoured.
+        with pytest.raises(InvalidRequest, match="must use QUORUM/LOCAL_QUORUM"):
+            if batch_mode == "prepared":
+                batch = BatchStatement(batch_type=BatchType.UNLOGGED, consistency_level=ConsistencyLevel.ONE)
+                batch.add(cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)"), (1, 1, 10))
+                cql.execute(batch)
+            else:
+                cql.execute(SimpleStatement(f"""
+                    BEGIN UNLOGGED BATCH
+                    INSERT INTO {table} (pk, ck, v) VALUES (1, 1, 10);
+                    APPLY BATCH
+                """, consistency_level=ConsistencyLevel.ONE))
 
         with new_test_table(cql, sc_keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as other_table:
             with pytest.raises(InvalidRequest, match="same table"):

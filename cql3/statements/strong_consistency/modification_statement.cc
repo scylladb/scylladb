@@ -8,7 +8,6 @@
 
 #include "modification_statement.hh"
 
-#include "db/consistency_level_type.hh"
 #include "db/timeout_clock.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
@@ -30,10 +29,7 @@ future<::shared_ptr<result_message>> strongly_consistent<Base>::do_execute(
     // narrow the access of the overrides used below.
     const cql3::statements::modification_statement& stmt = *this;
 
-    const auto cl = options.get_consistency();
-    if (cl != db::consistency_level::QUORUM && cl != db::consistency_level::LOCAL_QUORUM) {
-        throw exceptions::invalid_request_exception("Strongly consistent writes must use QUORUM/LOCAL_QUORUM consistency level");
-    }
+    validate_write_consistency_level(options.get_consistency());
 
     auto timeout = db::timeout_clock::now() + stmt.get_timeout(qs.get_client_state(), options);
     auto json_cache = stmt.maybe_prepare_json_cache(options);

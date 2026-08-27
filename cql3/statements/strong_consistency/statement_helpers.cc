@@ -51,4 +51,10 @@ void validate_modification_support(const cql3::statements::modification_statemen
     }
 }
 
+void validate_write_consistency_level(db::consistency_level cl) {
+    if (cl != db::consistency_level::QUORUM && cl != db::consistency_level::LOCAL_QUORUM) {
+        throw exceptions::invalid_request_exception("Strongly consistent writes must use QUORUM/LOCAL_QUORUM consistency level");
+    }
+}
+
 }

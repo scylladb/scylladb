@@ -9,6 +9,7 @@
 #pragma once
 
 #include "cql3/cql_statement.hh"
+#include "db/consistency_level_type.hh"
 #include "locator/tablets.hh"
 
 namespace service::strong_consistency { struct stats; }
@@ -32,5 +33,9 @@ bool is_strongly_consistent(data_dictionary::database db, std::string_view ks_na
 // Called at prepare time, so that unsupported statements fail early rather than
 // being silently mis-executed.
 void validate_modification_support(const cql3::statements::modification_statement& stmt);
+
+// A weaker level cannot be honoured: strongly consistent writes are committed
+// by a Raft group, which always replicates to a quorum.
+void validate_write_consistency_level(db::consistency_level cl);
 
 }
