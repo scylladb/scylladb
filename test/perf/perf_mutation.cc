@@ -85,16 +85,29 @@ int main(int argc, char* argv[]) {
             "one fixed row exactly once, in order. Every insert is into a "
             "column that does not yet exist, so this isolates the cell tree's "
             "*miss* (insert) path with no steady-state overwrite phase and no "
-            "growth of the memtable's (unrelated) rows b-tree. Ignores --rows.");
+            "growth of the memtable's (unrelated) rows b-tree. Ignores --rows.")
+        ("merge-mode", bpo::bool_switch()->default_value(false),
+            "instead of applying a mutation into a memtable (which always binds "
+            "memtable::apply(const mutation&), copying regardless of value "
+            "category), merge two freshly-built same-schema mutations via "
+            "mutation::apply(mutation&&) -- the rvalue partition-apply path. "
+            "Ignores --rows and --sequential-columns.")
+        ("merge-rows", bpo::value<size_t>()->default_value(8),
+            "rows per mutation in --merge-mode.");
     return app.run_deprecated(argc, argv, [&] {
         size_t column_count = app.configuration()["column-count"].as<size_t>();
         bool sequential_columns = app.configuration()["sequential-columns"].as<bool>();
+        bool merge_mode = app.configuration()["merge-mode"].as<bool>();
         size_t rows = app.configuration()["rows"].as<size_t>();
+        size_t merge_rows = app.configuration()["merge-rows"].as<size_t>();
         if (column_count == 0) {
             throw std::invalid_argument("--column-count must be greater than zero");
         }
-        if (!sequential_columns && rows == 0) {
+        if (!sequential_columns && !merge_mode && rows == 0) {
             throw std::invalid_argument("--rows must be greater than zero");
+        }
+        if (merge_mode && merge_rows == 0) {
+            throw std::invalid_argument("--merge-rows must be greater than zero");
         }
         auto builder = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("p1", utf8_type, column_kind::partition_key)
@@ -116,7 +129,33 @@ int main(int argc, char* argv[]) {
         perf_counter instructions_retired_counter(PERF_COUNT_HW_INSTRUCTIONS);
         perf_counter cpu_cycles_retired_counter(PERF_COUNT_HW_CPU_CYCLES);
 
-        if (sequential_columns) {
+        if (merge_mode) {
+            std::cout << format("Merging two freshly-built mutations ({} row(s) x {} column(s) each) "
+                    "via mutation::apply(mutation&&)...\n", merge_rows, column_count);
+            std::vector<clustering_key> c_keys;
+            c_keys.reserve(merge_rows);
+            for (size_t i = 0; i < merge_rows; i++) {
+                c_keys.push_back(clustering_key::from_exploded(*s, {int32_type->decompose(int32_t(i))}));
+            }
+            auto build_mutation = [&] {
+                mutation m(s, key);
+                for (size_t r = 0; r < merge_rows; r++) {
+                    for (size_t c = 0; c < column_count; c++) {
+                        const column_definition& col = *s->get_column_definition(to_bytes(cnames[c]));
+                        m.set_clustered_cell(c_keys[r], col, make_atomic_cell(col.type, value));
+                    }
+                }
+                return m;
+            };
+            mutation target = build_mutation();
+            instructions_retired_counter.enable();
+            cpu_cycles_retired_counter.enable();
+            time_it([&] {
+                mutation src = build_mutation();
+                target.apply(std::move(src));
+                total_ops++;
+            });
+        } else if (sequential_columns) {
             std::cout << format("Inserting {} distinct columns into one row, once each (miss path)...\n", column_count);
             auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
             instructions_retired_counter.enable();
