@@ -119,13 +119,12 @@ private:
     replay_position_list _dummy_positions;
     // Replay position handles for configuration entries (raft::configuration).
     // Never consumed by apply(). Unlike commands and dummies these carry state
-    // that no covering value can reconstruct, so the entry itself must remain
-    // in the commitlog until it is persisted elsewhere: commitlog replay reads
-    // the newest committed configuration back out of it
-    // (store_snapshot_config_if_newer), and a snapshot writes it into
-    // system.raft_groups_snapshot_config. Hence released only by
-    // truncate_log() (the entry was discarded) or truncate_log_tail() (a
-    // snapshot persisted it). See SCYLLADB-3842.
+    // no covering value can reconstruct, so the entry has to stay readable
+    // until the configuration itself is persisted — which the covering
+    // mutation does (take_committed_config()), so release_covered_configs()
+    // then releases them exactly like dummy handles. truncate_log() releases
+    // the discarded ones and truncate_log_tail() whatever a snapshot covered.
+    // See SCYLLADB-3842.
     replay_position_list _config_positions;
     // The group's parked claims (see pending_cover_map). Updated in place
     // by write_batches() and seeded by the constructor (the map built while
@@ -151,6 +150,22 @@ private:
         db::rp_handle segment_holder;
     };
     std::vector<orphaned_holder> _orphaned_holders;
+    // Configurations of the configuration entries appended but not yet known
+    // to be committed, in index order. note_commit_idx() promotes the ones
+    // the commit index has reached into _committed_config, and truncate_log()
+    // drops the discarded tail. A configuration is a handful of members, and
+    // only the in-flight window is held.
+    //
+    // Fed from both sources of an uncommitted entry: store_log_entries() for
+    // entries appended in this run, and the constructor for entries the
+    // commitlog replay rewrote. Missing the second one loses a configuration
+    // that was uncommitted at a crash and commits after the restart, since
+    // the replay-side recovery only handles committed ones (SCYLLADB-3842).
+    std::deque<std::pair<raft::index_t, raft::configuration>> _appended_configs;
+    // The newest committed configuration not yet handed to a covering
+    // mutation, with the index of the entry that carried it. Consumed by
+    // take_committed_config().
+    std::optional<std::pair<raft::index_t, raft::configuration>> _committed_config;
     // (index, term) of the entries appended but not yet known to be
     // committed, in index order. note_commit_idx() consumes the prefix the
     // commit index has reached, keeping the last consumed pair in
@@ -240,13 +255,29 @@ public:
     // be released by the flush that makes the covering value durable.
     std::vector<segment_cover> take_committed_covers(raft::index_t commit_idx);
 
+    // Hand out the newest committed configuration whose entry is at or below
+    // `idx`, if one is pending. The caller must persist it in the same
+    // system.raft_groups mutation as the covering value for that entry's
+    // segment: the configuration then becomes durable exactly when the
+    // segment's claim is released, so the entry can only be reclaimed once
+    // its configuration is safe. Returns nothing when no configuration was
+    // committed in that range, or when it has already been handed out.
+    std::optional<std::pair<raft::index_t, raft::configuration>> take_committed_config(raft::index_t idx);
+
+    // Release configuration handles with index <= idx. Only valid once the
+    // configuration they carry has been persisted per the
+    // take_committed_config() contract — from that point the entry no longer
+    // has to be readable, so the handles that kept it in the commitlog can
+    // go, exactly like dummy handles.
+    void release_covered_configs(raft::index_t idx);
+
     // Release dummy handles with index <= idx. Only valid once every segment
     // containing them is covered per the take_committed_covers() contract —
     // from that point their retention no longer depends on these handles:
     // the covering value pins the segment via the raft_groups memtable until
     // the value is durable. (Command handles are consumed by apply();
-    // configuration handles are exempt and live until truncation, because
-    // their content is recovered from the entry itself.)
+    // configuration handles have their own release, see
+    // release_covered_configs().)
     void release_covered_dummies(raft::index_t idx);
 
     // Move replay position handles out of _command_positions for the

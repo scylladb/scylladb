@@ -137,6 +137,17 @@ schema_ptr make_raft_schema(sstring name, bool is_group0) {
         // log matching at the snapshot boundary (log::match_term), and an
         // inexact value is unsafe in both roles.
         builder.with_column("commit_idx_term", long_type, column_kind::static_column);
+        // The group's newest committed configuration and the index of the
+        // entry that carried it, written by the same mutation as commit_idx
+        // when that entry's segment is covered (see raft_groups_storage::
+        // store_commit_idx). This is what makes a committed configuration
+        // durable without waiting for a snapshot: the alternative is the
+        // configuration entry in the commitlog, which only survives while its
+        // segment does. Compared against the persisted snapshot index on
+        // startup, since a snapshot's own configuration accounts for every
+        // configuration entry at or below its index (SCYLLADB-3842).
+        builder.with_column("config", bytes_type, column_kind::static_column);
+        builder.with_column("config_idx", long_type, column_kind::static_column);
     }
 
     builder

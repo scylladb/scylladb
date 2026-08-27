@@ -92,6 +92,13 @@ public:
     // disengaged for rows written before the commit_idx_term column existed.
     static future<std::pair<raft::index_t, std::optional<raft::term_t>>> load_commit_idx_and_term(
             cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    // Persist (config, config_idx) in system.raft_groups, but only if
+    // config_idx advances the persisted one. Used during commitlog replay to
+    // fold a configuration recovered from the replayed entries into the same
+    // cells the covering mutations write, so that the boot-time snapshot
+    // restore has a single source to read and the two cannot disagree.
+    static future<> store_committed_config_if_higher(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
+            const raft::configuration& config, raft::index_t config_idx);
     // Persist `config` as the group's snapshot configuration, but only if it is
     // newer than what the persisted snapshot already reflects (config_idx must
     // exceed the persisted snapshot index). Used during commitlog replay to
@@ -99,8 +106,18 @@ public:
     // replay drops committed non-command entries, and without this the group
     // would come back with the configuration of its last snapshot — the
     // bootstrap one for a group that never snapshotted (SCYLLADB-3842).
+    //
+    // Must have a single caller per startup: the guard compares against the
+    // snapshot index, so two callers holding configurations from different
+    // sources would both pass it and the last one would win regardless of age.
     static future<> store_snapshot_config_if_newer(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
             const raft::configuration& config, raft::index_t config_idx);
+    // Load the newest committed configuration persisted by the covering
+    // mutations, with the index of the entry that carried it. Disengaged when
+    // no configuration has been covered yet (or the row predates the columns),
+    // in which case the snapshot's configuration is all there is.
+    static future<std::optional<std::pair<raft::index_t, raft::configuration>>> load_committed_config(
+            cql3::query_processor& qp, raft::group_id gid, shard_id shard);
     // Load the current persisted snapshot's (idx, term) for this group.
     // Returns (0, 0) if no snapshot has been recorded yet.
     static future<std::pair<raft::index_t, raft::term_t>> load_snapshot_idx_and_term(

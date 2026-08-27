@@ -232,11 +232,18 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
             co_await seastar::coroutine::maybe_yield();
         }
 
-        // Persist the newest committed configuration the replayed log carried.
-        // Only-newer: the persisted snapshot's configuration already accounts
-        // for every configuration entry at or below the snapshot index.
+        // Fold the newest committed configuration the replayed log carried
+        // into system.raft_groups, next to the commit_idx restored above and
+        // in the same cells the covering mutations write. It is not restored
+        // into the snapshot configuration directly: bump_snapshot_indices()
+        // does that, and it must be the only writer there — its guard compares
+        // against the snapshot index, so a second writer holding a
+        // configuration from another source would pass the same guard and
+        // could overwrite a newer configuration with an older one. Merging the
+        // two sources here, where they can be compared by config_idx, leaves
+        // that path a single source to read.
         if (committed_config) {
-            co_await service::strong_consistency::raft_groups_storage::store_snapshot_config_if_newer(
+            co_await service::strong_consistency::raft_groups_storage::store_committed_config_if_higher(
                     qp, group_id, this_shard_id(), committed_config->second, committed_config->first);
         }
 
@@ -287,6 +294,19 @@ future<> raft_commitlog_replay_buffer::bump_snapshot_indices(replica::database& 
                 co_await service::strong_consistency::raft_groups_storage::load_commit_idx_and_term(qp, group_id, this_shard_id());
         if (commit_idx.value() == 0) {
             co_return;
+        }
+        // The configuration the covering mutations persisted is newer than the
+        // snapshot's whenever its entry's index is — restore it before the
+        // bump, so the descriptor the group starts from carries the group's
+        // real membership even if it never snapshotted (SCYLLADB-3842).
+        // This is the only writer of the snapshot configuration on startup:
+        // process_raft_replayed_items() has already merged what the replayed
+        // entries carried into these same cells, so the value read here is the
+        // newest of both sources.
+        if (auto config = co_await service::strong_consistency::raft_groups_storage::load_committed_config(
+                    qp, group_id, this_shard_id())) {
+            co_await service::strong_consistency::raft_groups_storage::store_snapshot_config_if_newer(
+                    qp, group_id, this_shard_id(), config->second, config->first);
         }
         auto [snap_idx, snap_term] = co_await service::strong_consistency::raft_groups_storage::load_snapshot_idx_and_term(qp, group_id, this_shard_id());
         if (snap_idx >= commit_idx) {
