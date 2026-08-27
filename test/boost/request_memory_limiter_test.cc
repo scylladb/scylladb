@@ -6,11 +6,15 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include "service/memory_limiter.hh"
 #include "service/request_memory_limiter.hh"
+#include "utils/updateable_value.hh"
 
 #undef SEASTAR_TESTING_MAIN
+#include <seastar/core/reactor.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
+#include <seastar/util/defer.hh>
 #include <seastar/util/later.hh>
 #include <boost/test/unit_test.hpp>
 
@@ -644,6 +648,79 @@ SEASTAR_THREAD_TEST_CASE(test_request_memory_pool_shrink_wakes_waiters) {
     units.return_all();
     BOOST_REQUIRE(retired.drained());
     hog_units.return_all();
+}
+
+// Moving memory from the dedicated shares into the shared pool must not hand the
+// same bytes out twice. The pool has to be grown only after the shares it is
+// being grown out of have been taken away: a tenant funded from the enlarged
+// pool while it still holds the share it is about to lose ends up with both.
+SEASTAR_THREAD_TEST_CASE(test_memory_limiter_resplit_does_not_hand_memory_out_twice) {
+    constexpr size_t budget = 1000;
+    utils::updateable_value_source<double> pool_fraction(0.0);
+    service::memory_limiter limiter(budget, 1.0, utils::updateable_value<double>(pool_fraction));
+    BOOST_REQUIRE_EQUAL(limiter.total_memory(), budget);
+
+    auto sg_a = create_scheduling_group("rml_test_a", 100).get();
+    auto sg_b = create_scheduling_group("rml_test_b", 100).get();
+    auto destroy_sgs = defer([&] () noexcept {
+        destroy_scheduling_group(sg_a).get();
+        destroy_scheduling_group(sg_b).get();
+    });
+
+    // Equal shares and nothing in the pool, so each tenant owns half the budget.
+    limiter.add_or_update(sg_a, 100);
+    limiter.add_or_update(sg_b, 100);
+    auto& a = limiter.tenant_for(sg_a);
+    auto& b = limiter.tenant_for(sg_b);
+    BOOST_REQUIRE_EQUAL(a.capacity(), budget / 2);
+    BOOST_REQUIRE_EQUAL(b.capacity(), budget / 2);
+    BOOST_REQUIRE_EQUAL(limiter.pool().total_memory(), 0);
+
+    // Both tenants hold most of their own share and have a request queued that
+    // the rest of it cannot cover.
+    auto held_a = a.get_units(300).get();
+    auto held_b = b.get_units(300).get();
+    auto queued_a = a.get_units(400);
+    auto queued_b = b.get_units(400);
+    run_pending_tasks();
+    BOOST_REQUIRE(!queued_a.available());
+    BOOST_REQUIRE(!queued_b.available());
+
+    // Half the budget goes into the shared pool, 200 bytes of it out of each
+    // tenant's own share. The pool can then fund one of the two queued requests,
+    // and only one.
+    pool_fraction.set(0.5);
+    run_pending_tasks();
+    BOOST_REQUIRE_EQUAL(limiter.pool().total_memory(), budget / 2);
+    BOOST_REQUIRE_EQUAL(a.capacity(), budget / 4);
+    BOOST_REQUIRE_EQUAL(b.capacity(), budget / 4);
+
+    // What a tenant has handed out: its own share and what it borrowed, less
+    // what is left of them.
+    const auto outstanding = [] (const request_memory_tenant& tenant) -> ssize_t {
+        return static_cast<ssize_t>(tenant.capacity()) + tenant.borrowed() - tenant.available();
+    };
+    BOOST_TEST_MESSAGE(seastar::format("after the re-split: outstanding a={}, b={}",
+            outstanding(a), outstanding(b)));
+    BOOST_REQUIRE_LE(outstanding(a) + outstanding(b), static_cast<ssize_t>(budget));
+    BOOST_REQUIRE(queued_a.available() != queued_b.available());
+
+    // Drain, so that the tenants can be destroyed. The one that was funded has
+    // to give its memory back before the other one can be.
+    held_a.return_all();
+    held_b.return_all();
+    const auto finish = [] (future<semaphore_units<>> f) {
+        f.get().return_all();
+    };
+    if (queued_a.available()) {
+        finish(std::move(queued_a));
+        finish(std::move(queued_b));
+    } else {
+        finish(std::move(queued_b));
+        finish(std::move(queued_a));
+    }
+    BOOST_REQUIRE(a.drained());
+    BOOST_REQUIRE(b.drained());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
