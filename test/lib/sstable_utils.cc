@@ -258,7 +258,8 @@ void slightly_corrupt_sstable(sstables::shared_sstable sst, component_type compo
     auto f = open_file_dma(path, open_flags::rw).get();
     auto close_f = deferred_close(f);
     const auto mem_align = f.memory_dma_alignment();
-    const auto dma_align = f.disk_write_dma_alignment();
+    // Use an alignment valid for both dma_read() and dma_write().
+    const auto dma_align = std::max(f.disk_read_dma_alignment(), f.disk_write_dma_alignment());
     // For most components we corrupt the last byte. The TOC is special: it is a
     // newline-separated list of component names, and its last byte is the trailing
     // newline of the last entry. write_toc() emits entries via for_each_component(),
