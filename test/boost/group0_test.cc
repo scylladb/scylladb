@@ -10,6 +10,8 @@
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_assertions.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/sleep.hh>
+#include <seastar/core/timer.hh>
 #include <seastar/util/defer.hh>
 
 #include "clocks-impl.hh"
@@ -566,6 +568,112 @@ SEASTAR_TEST_CASE(test_group0_hard_timeout_history_absent_after_real_gc_is_hard_
         BOOST_CHECK_EXCEPTION(co_await std::move(mc_a).commit(rclient, as, ::service::raft_timeout{}),
                 service::group0_hard_timeout, [] (const service::group0_hard_timeout&) { return true; });
     });
+}
+
+// Reproducer: a raft_timeout expiry in add_entry() escapes as opaque
+// raft_operation_timeout_error, bypassing the applied/retryable
+// classification every other timeout path gets. See commit message.
+SEASTAR_TEST_CASE(test_group0_add_entry_timeout_in_flight_is_concurrent_modification) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+    return make_ready_future<>();
+#else
+    return do_with_cql_env([] (cql_test_env& e) -> future<> {
+        auto& rclient = e.get_raft_group0_client();
+        abort_source as;
+
+        schema_builder::register_schema_initializer([](schema_builder& builder) {
+            if (builder.cf_name() == "test_group0_timeout_bypass") {
+                builder.set_is_group0_table();
+            }
+        });
+
+        co_await e.execute_cql("CREATE TABLE test_group0_timeout_bypass (key int PRIMARY KEY)");
+
+        // Pin the GC window so the expected classification can't flip if the
+        // default ever changes.
+        rclient.set_history_gc_duration(std::chrono::hours{1});
+
+        auto guard = co_await rclient.start_operation(as);
+        auto muts = co_await e.get_modification_mutations("INSERT INTO test_group0_timeout_bypass (key) VALUES (1)");
+        service::group0_batch mc(std::move(guard));
+        mc.add_mutation(muts[0]);
+
+        // Stall the group0 io_fiber (shard 0, same as this test; enable() is
+        // shard-local) so add_entry can never observe "applied".
+        utils::get_local_injector().enable("poll_fsm_output/pause");
+        auto resume_polling = defer([] noexcept { utils::get_local_injector().disable("poll_fsm_output/pause"); });
+
+        // Already-past deadline: expiry fires without a real 60s op timeout.
+        ::service::raft_timeout past_deadline{.value = seastar::lowres_clock::now() - std::chrono::seconds{1}};
+
+        // Bound the test: a fix that retries instead would loop forever here.
+        seastar::timer<seastar::lowres_clock> watchdog([&as] () noexcept { as.request_abort(); });
+        watchdog.arm(std::chrono::minutes{2});
+
+        // The bug: a raft_operation_timeout_error escapes instead of the
+        // retry-safe classification (concurrent_modification/hard_timeout).
+        BOOST_CHECK_EXCEPTION(co_await std::move(mc).commit(rclient, as, past_deadline),
+                service::group0_concurrent_modification, [] (const service::group0_concurrent_modification&) { return true; });
+        watchdog.cancel();
+
+        resume_polling.cancel();
+        utils::get_local_injector().disable("poll_fsm_output/pause");
+        // The "failed" write lands once polling resumes: the entry was merely
+        // in flight, which is why the retryable classification is right.
+        for (int i = 0; (co_await fetch_rows(e, "SELECT key FROM test_group0_timeout_bypass")).empty(); ++i) {
+            BOOST_REQUIRE_MESSAGE(i < 600, "stalled entry never applied after polling resumed");
+            co_await seastar::sleep(std::chrono::milliseconds{100});
+        }
+    });
+#endif
+}
+
+// Companion: same stalled add_entry timeout, but with the state id already
+// past the GC window -- ambiguous, so it must be group0_hard_timeout. Pins
+// the other classification branch against a blind timeout->retryable map.
+SEASTAR_TEST_CASE(test_group0_add_entry_timeout_past_gc_window_is_hard_timeout) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+    return make_ready_future<>();
+#else
+    return do_with_cql_env([] (cql_test_env& e) -> future<> {
+        auto& rclient = e.get_raft_group0_client();
+        abort_source as;
+
+        schema_builder::register_schema_initializer([](schema_builder& builder) {
+            if (builder.cf_name() == "test_group0_timeout_bypass_gc") {
+                builder.set_is_group0_table();
+            }
+        });
+
+        co_await e.execute_cql("CREATE TABLE test_group0_timeout_bypass_gc (key int PRIMARY KEY)");
+
+        auto guard = co_await rclient.start_operation(as);
+        auto muts = co_await e.get_modification_mutations("INSERT INTO test_group0_timeout_bypass_gc (key) VALUES (1)");
+        service::group0_batch mc(std::move(guard));
+        mc.add_mutation(muts[0]);
+
+        // Make the guard's state id GC-eligible before the commit.
+        auto gc_dur = rclient.get_history_gc_duration();
+        forward_jump_clocks(gc_dur + std::chrono::seconds{1});
+        auto restore_clocks = defer([gc_dur] noexcept { forward_jump_clocks(-(gc_dur + std::chrono::seconds{1})); });
+
+        utils::get_local_injector().enable("poll_fsm_output/pause");
+        auto resume_polling = defer([] noexcept { utils::get_local_injector().disable("poll_fsm_output/pause"); });
+
+        ::service::raft_timeout past_deadline{.value = seastar::lowres_clock::now() - std::chrono::seconds{1}};
+
+        // Bound the test: a fix that retries instead would loop forever here.
+        seastar::timer<seastar::lowres_clock> watchdog([&as] () noexcept { as.request_abort(); });
+        watchdog.arm(std::chrono::minutes{2});
+
+        // Row absent and past the GC window is ambiguous: never a retry.
+        BOOST_CHECK_EXCEPTION(co_await std::move(mc).commit(rclient, as, past_deadline),
+                service::group0_hard_timeout, [] (const service::group0_hard_timeout&) { return true; });
+        watchdog.cancel();
+    });
+#endif
 }
 
 BOOST_AUTO_TEST_SUITE_END()
