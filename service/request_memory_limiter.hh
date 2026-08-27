@@ -10,12 +10,17 @@
 #include "seastarx.hh"
 
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/util/log.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sstring.hh>
 
 #include <deque>
 
 namespace service {
+
+// Shared by request_memory_limiter.cc and memory_limiter.cc, which are one
+// subsystem; a logger name may only be registered once per binary.
+extern seastar::logger rml_logger;
 
 class request_memory_tenant;
 

@@ -723,4 +723,48 @@ SEASTAR_THREAD_TEST_CASE(test_memory_limiter_resplit_does_not_hand_memory_out_tw
     BOOST_REQUIRE(b.drained());
 }
 
+// Setting a service level's shares to null moves its users to another scheduling
+// group, so its tenant must give its dedicated share back rather than keep
+// memory that nobody charges any more.
+SEASTAR_THREAD_TEST_CASE(test_memory_limiter_shares_dropped) {
+    constexpr size_t budget = 1000;
+    utils::updateable_value_source<double> pool_fraction(0.0);
+    service::memory_limiter limiter(budget, 1.0, utils::updateable_value<double>(pool_fraction));
+
+    auto sg_a = create_scheduling_group("rml_test_a", 100).get();
+    auto sg_b = create_scheduling_group("rml_test_b", 100).get();
+    auto destroy_sgs = defer([&] () noexcept {
+        destroy_scheduling_group(sg_a).get();
+        destroy_scheduling_group(sg_b).get();
+    });
+
+    const auto with_shares = [] (int32_t shares) {
+        qos::service_level_options slo;
+        slo.shares = shares;
+        return slo;
+    };
+    limiter.on_before_service_level_add(with_shares(100), {"a", sg_a}).get();
+    limiter.on_before_service_level_add(with_shares(100), {"b", sg_b}).get();
+    auto& a = limiter.tenant_for(sg_a);
+    BOOST_REQUIRE_EQUAL(a.capacity(), budget / 2);
+    BOOST_REQUIRE_EQUAL(limiter.tenant_for(sg_b).capacity(), budget / 2);
+
+    // A request still in flight keeps the old tenant draining.
+    auto held = a.get_units(100).get();
+
+    qos::service_level_options no_shares;
+    no_shares.shares = qos::service_level_options::delete_marker{};
+    limiter.on_before_service_level_change(with_shares(100), no_shares, {"a", sg_a}).get();
+    BOOST_REQUIRE_EQUAL(limiter.tenant_for(sg_b).capacity(), budget);
+    BOOST_REQUIRE_EQUAL(a.capacity(), 0);
+
+    held.return_all();
+    BOOST_REQUIRE(a.drained());
+
+    // Getting shares back gives the service level a tenant again.
+    limiter.on_before_service_level_change(no_shares, with_shares(100), {"a", sg_a}).get();
+    BOOST_REQUIRE_EQUAL(limiter.tenant_for(sg_a).capacity(), budget / 2);
+    BOOST_REQUIRE_EQUAL(limiter.tenant_for(sg_b).capacity(), budget / 2);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

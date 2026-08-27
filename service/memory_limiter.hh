@@ -8,8 +8,11 @@
 #pragma once
 
 #include "seastarx.hh"
+#include "service/qos/qos_configuration_change_subscriber.hh"
 #include "service/request_memory_limiter.hh"
 #include "utils/updateable_value.hh"
+#include <seastar/core/sharded.hh>
+#include <seastar/util/noncopyable_function.hh>
 
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/semaphore.hh>
@@ -18,6 +21,10 @@
 #include <algorithm>
 #include <unordered_map>
 #include <vector>
+
+namespace qos {
+class service_level_controller;
+}
 
 namespace service {
 
@@ -35,7 +42,7 @@ namespace service {
 //
 // So a flood of requests in one service level can never stop another service
 // level from being served.
-class memory_limiter final {
+class memory_limiter final : public qos::qos_configuration_change_subscriber {
 public:
     // Tag selecting a limiter that admits every request. The CQL maintenance
     // socket uses it: it is the operator's escape hatch, so it must stay usable
@@ -65,6 +72,7 @@ private:
     bool _fallback_counted_elsewhere = false;
     size_t _total_weight = 0;
     bool _use_metrics;
+    noncopyable_function<future<>()> _unsubscribe_qos_configuration_change;
     utils::observer<double> _shared_pool_fraction_observer;
 
     // A fraction of 0 would block every request forever, and more than the whole
@@ -83,7 +91,24 @@ public:
     memory_limiter(unlimited_tag, size_t available_memory, double fraction);
     ~memory_limiter();
 
+    // Registers for service level changes and creates the default service
+    // level's tenant, which doubles as the fallback. Must be called after the
+    // service level controller has started; every other service level's tenant
+    // is created from the subscription.
+    future<> start(sharded<qos::service_level_controller>& sl_controller);
+
+    // Stops following service level changes. Split out of stop() because the CQL
+    // server's limiter is deliberately never stopped, see main.cc.
+    future<> unsubscribe_qos();
+
     future<> stop();
+
+    // qos::qos_configuration_change_subscriber
+    future<> on_before_service_level_add(qos::service_level_options slo, qos::service_level_info sl_info) override;
+    future<> on_after_service_level_remove(qos::service_level_info sl_info) override;
+    future<> on_before_service_level_change(qos::service_level_options slo_before,
+            qos::service_level_options slo_after, qos::service_level_info sl_info) override;
+    future<> on_effective_service_levels_cache_reloaded() override;
 
     // Memory reserved for admitting requests.
     size_t total_memory() const noexcept { return _total_memory; }
