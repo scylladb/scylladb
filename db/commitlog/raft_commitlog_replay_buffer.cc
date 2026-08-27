@@ -192,8 +192,8 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
 
         // Second pass: Apply committed entries to database and rewrite uncommitted entries to commitlog.
         uint64_t applied = 0;
-        uint64_t rewritten = 0;
         auto& group_data = _per_group_data[group_id];
+        raft::log_entry_ptr_list uncommitted;
 
         for (auto& entry : filtered.entries) {
             // Apply committed command entries to the memtables. It is safe not to append them
@@ -209,32 +209,41 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
                 ++applied;
             }
 
-            // Rewrite uncommitted entries to the new commitlog to obtain rp_handles
-            // that ensure the commitlog segments won't be deleted.
+            // Only uncommitted entries go back to the raft log (and to the new
+            // commitlog, below).
             if (entry->idx > commit_idx) {
-                commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = group_id, .entries = {entry}});
-                const auto write_fn = [&writer](auto& out) {
-                    return writer.write(out);
-                };
-                const auto target_size = writer.size();
-                auto handle = co_await new_commitlog_ptr->add(table_id, target_size, db::no_timeout, db::commitlog_force_sync::yes, write_fn);
-                group_data.replay_positions.push_back(service::strong_consistency::index_and_replay_position{.index = entry->idx, .replay_position_handle = std::move(handle)});
-                ++rewritten;
-            }
-
-            // Only add uncommitted entries to the raft log. Committed entries have
-            // already been applied to memtables above and are covered by the
-            // snapshot index that bump_snapshot_indices() advances to commit_idx
-            // after replay (the sole snapshot-index advancer on startup).
-            if (entry->idx > commit_idx) {
-                group_data.entries.push_back(std::move(entry));
+                uncommitted.push_back(std::move(entry));
             }
 
             co_await seastar::coroutine::maybe_yield();
         }
 
+        // Rewrite uncommitted entries to the new commitlog the same way
+        // store_log_entries() does: the entries' rp_handles keep the new
+        // segments alive, and write_batches() mints a raft_groups claim per
+        // segment straight into covers — the segment->cover map
+        // that seeds the group's parked covers when its raft_commitlog is
+        // constructed, for commit-time coverage of the rewritten entries
+        // (see raft_commitlog).
+        if (!uncommitted.empty()) {
+            // The cover map is local for now — the claims are released as soon
+            // as it goes out of scope; a later commit passes the group's own
+            // map so the claims survive for commit-time coverage.
+            service::strong_consistency::pending_cover_map covers;
+            auto entry_handles = co_await service::strong_consistency::raft_commitlog::write_batches(
+                    *new_commitlog_ptr, table_id, db::system_keyspace::raft_groups()->id(), group_id, uncommitted,
+                    raft_term_and_index{}, covers);
+            for (size_t i = 0; i < uncommitted.size(); ++i) {
+                group_data.replay_positions.push_back(service::strong_consistency::index_and_replay_position{
+                        .index = uncommitted[i]->idx, .replay_position_handle = std::move(entry_handles[i])});
+            }
+            for (auto& entry : uncommitted) {
+                group_data.entries.push_back(std::move(entry));
+            }
+        }
+
         logger.debug("group {}: discarded_leader_change={}, applied={}, rewritten={}, total_in_log={}", group_id, filtered.discarded_leader_change, applied,
-                rewritten, group_data.entries.size());
+                uncommitted.size(), group_data.entries.size());
     }
 
     // The old items are not needed anymore.
