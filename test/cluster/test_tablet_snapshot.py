@@ -200,4 +200,3 @@ async def test_tablet_snapshot_taken_after_replace_before_rebuild(manager: Scyll
             # The window is all this test needs. Letting the replace finish would cost most of
             # the runtime, so the half joined cluster is thrown away instead.
             replace_task.cancel()
-            await manager.mark_dirty()

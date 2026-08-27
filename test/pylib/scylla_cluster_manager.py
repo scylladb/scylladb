@@ -280,12 +280,6 @@ class ScyllaClusterManager:
         self.test_case_log_fh.setFormatter(root_logger.handlers[0].formatter)
         root_logger.addHandler(self.test_case_log_fh)
         self.logger.info("Setting up %s", self.current_test_case_full_name)
-        if self.cluster.is_dirty:
-            self.logger.info("Current cluster %s is dirty after test %s, replacing with a new one...",
-                             self.cluster.name, self.current_test_case_full_name)
-            await self.cluster.recycle()
-            self.cluster = await self.create_cluster(self.logger)
-            self.logger.info("Got new Scylla cluster: %s", self.cluster.name)
         self.cluster.setLogger(self.logger)
         self.logger.info("Leasing Scylla cluster %s for test %s", self.cluster, self.current_test_case_full_name)
         self.cluster.before_test(self.current_test_case_full_name)
@@ -304,12 +298,6 @@ class ScyllaClusterManager:
             await self.cluster.recycle()
             self.cluster = None
         self.is_running = False
-
-    @manager_op
-    async def is_dirty(self) -> bool:
-        """Report if current cluster is dirty."""
-
-        return self.cluster.is_dirty
 
     @manager_op
     async def running_servers(self) -> list[ServerInfo]:
@@ -398,7 +386,7 @@ class ScyllaClusterManager:
         self.logger.info("Test %s %s, cluster: %s",
                          self.current_test_case_full_name, "SUCCEEDED" if success else "FAILED", self.cluster)
         try:
-            self.cluster.after_test(self.current_test_case_full_name, success)
+            self.cluster.after_test(self.current_test_case_full_name)
         finally:
             logging.getLogger().removeHandler(self.test_case_log_fh)
             if success:
@@ -411,12 +399,6 @@ class ScyllaClusterManager:
             "tasks_leaked": bool(tasks_leaked),
             "message": tasks_leaked,
         }
-
-    @manager_op
-    async def mark_dirty(self) -> None:
-        """Mark current cluster dirty."""
-
-        self.cluster.is_dirty = True
 
     @manager_op
     async def _server_stop(self, server_id: ServerNum) -> None:
@@ -664,7 +646,6 @@ class ScyllaClusterManager:
         You can update a single option by providing the (key, value) pair, or multiple options
         using config_options.
         If the server is running, reload the config with a SIGHUP.
-        Mark the cluster as dirty.
         """
         if key is not None:
             if value is None:
@@ -681,7 +662,6 @@ class ScyllaClusterManager:
         """Remove an option from conf/scylla.yaml of the given server.
 
         If the server is running, reload the config with a SIGHUP.
-        Mark the cluster as dirty.
         """
         self.cluster.remove_config_option(server_id=server_id, key=key)
 
@@ -690,7 +670,6 @@ class ScyllaClusterManager:
         """Update the command-line options of the given server by merging the new options into the existing ones.
 
         The update only takes effect after restart.
-        Marks the cluster as dirty.
         """
         self.cluster.update_cmdline(server_id, cmdline_options)
 
@@ -698,7 +677,6 @@ class ScyllaClusterManager:
     async def server_switch_executable(self, server_id: ServerNum, path: str) -> None:
         """Switch the executable of the server to the one specified by 'path'.
 
-        Marks the cluster as dirty.
         """
         self.cluster.server_switch_executable(server_id, path)
 

@@ -48,7 +48,6 @@ class StubCluster:
         self._release = loop.create_future()
         self.entered = threading.Event()      # readable from any thread
         self.stopped: list[ServerNum] = []
-        self.is_dirty = False
 
     async def server_stop(self, server_id: ServerNum, gracefully: bool) -> None:
         self.entered.set()

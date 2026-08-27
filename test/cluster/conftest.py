@@ -254,29 +254,16 @@ def cql(manager):
     yield manager.cql
 
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
-# used in tests to make schema changes. Tables are dropped after test finishes
-# unless the cluster is dirty or the test has failed.
+# used in tests to make schema changes.  Nothing is dropped afterwards: the
+# cluster lives only as long as the test.
 @pytest.fixture(scope="function")
 async def random_tables(request, manager):
     rf_marker = request.node.get_closest_marker("replication_factor")
     replication_factor = rf_marker.args[0] if rf_marker is not None else 3  # Default 3
     enable_tablets = request.node.get_closest_marker("enable_tablets")
     enable_tablets = enable_tablets.args[0] if enable_tablets is not None else None
-    tables = RandomTables(request.node.name, manager, unique_name(),
-                          replication_factor, None, enable_tablets)
-    yield tables
-
-    # Don't drop tables at the end if we failed or the cluster is dirty - it may be impossible
-    # (e.g. the cluster is completely dead) and it doesn't matter (we won't reuse the cluster
-    # anyway).
-    # The cluster will be marked as dirty if the test failed, but that happens
-    # at the end of `manager` fixture which we depend on (so these steps will be
-    # executed after us) - so at this point, we need to check for failure ourselves too.
-    reports = request.node.stash[PHASE_REPORT_KEY]
-    call_report = reports.get("call")
-    failed = call_report is not None and call_report.failed
-    if not failed and not await manager.is_dirty():
-        tables.drop_all()
+    yield RandomTables(request.node.name, manager, unique_name(),
+                       replication_factor, None, enable_tablets)
 
 @pytest.fixture(scope="function", autouse=True)
 async def prepare_3_nodes_cluster(request, manager):

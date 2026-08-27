@@ -34,7 +34,6 @@ async def test_mutation_schema_change(manager, random_tables):
     t = await random_tables.add_table(ncolumns=5, pks=1)
     manager.driver_close()
     # Reduce the snapshot thresholds
-    await manager.mark_dirty()
     errs = [inject_error_one_shot(manager.api, s.ip_addr, "raft_server_set_snapshot_thresholds",
                                   parameters={'snapshot_threshold': '3', 'snapshot_trailing': '1'})
             for s in [server_a, server_b, server_c]]
@@ -96,7 +95,6 @@ async def test_mutation_schema_change_restart(manager, random_tables):
     t = await random_tables.add_table(ncolumns=5, pks=1)
     manager.driver_close()
     # Reduce the snapshot thresholds
-    await manager.mark_dirty()
     errs = [inject_error_one_shot(manager.api, s.ip_addr, "raft_server_set_snapshot_thresholds",
                                   parameters={'snapshot_threshold': '3', 'snapshot_trailing': '1'})
             for s in [server_a, server_b, server_c]]
