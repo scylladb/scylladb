@@ -16,7 +16,7 @@
 import pytest
 import time
 from cassandra.protocol import InvalidRequest, ConfigurationException
-from .util import new_test_table, new_materialized_view, new_secondary_index, ScyllaMetrics
+from .util import new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index, ScyllaMetrics
 
 # All tests in this file check the Scylla-only per-row TTL feature, so
 # let's mark them all scylla_only with an autouse fixture:
@@ -626,3 +626,36 @@ def test_alter_table_ttl_then_twcs(cql, test_keyspace):
         with pytest.raises(ConfigurationException, match='not compatible'):
             cql.execute(f"ALTER TABLE {table} WITH "
                         f"compaction = {{'class': 'TimeWindowCompactionStrategy'}}")
+
+# Drives scan_table()'s real tablet path (SCYLLADB-3891) with many tablets,
+# unlike the default keyspace used above which has few or none.
+def test_row_ttl_expiration_many_tablets(cql, this_dc, ttl_period, skip_without_tablets):
+    typ = 'bigint'
+    nrows = 200
+    with new_test_keyspace(cql,
+            " WITH REPLICATION = {'class': 'NetworkTopologyStrategy', '" + this_dc + "': 1}"
+            " AND TABLETS = {'initial': 32}") as keyspace:
+        with new_test_table(cql, keyspace, f'p int primary key, e {typ} ttl, x int') as table:
+            start = ScyllaMetrics.query(cql)
+            e = to_ttl(typ, time.time()-60)
+            for p in range(nrows):
+                cql.execute(f'INSERT INTO {table} (p, e, x) values ({p}, {e}, {p})')
+            deadline = time.time() + 3*ttl_period + 3
+            while time.time() < deadline:
+                if len(list(cql.execute(f'SELECT p from {table}'))) == 0:
+                    break
+                time.sleep(0.1)
+            assert list(cql.execute(f'SELECT p from {table}')) == []
+            # The tablets_probed metric has no table label, so this only checks that the
+            # server-wide probe count rose by at least 32 (one pass over this table's tablets).
+            probed = scanned = 0
+            deadline = time.time() + 3*ttl_period + 3
+            while time.time() < deadline:
+                end = ScyllaMetrics.query(cql)
+                probed = (end.get('scylla_expiration_tablets_probed') or 0) - (start.get('scylla_expiration_tablets_probed') or 0)
+                scanned = (end.get('scylla_expiration_tablets_scanned') or 0) - (start.get('scylla_expiration_tablets_scanned') or 0)
+                if probed >= 32:
+                    break
+                time.sleep(0.1)
+            assert probed >= 32
+            assert scanned > 0
