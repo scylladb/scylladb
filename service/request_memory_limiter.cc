@@ -11,6 +11,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/format.hh>
+#include <seastar/core/metrics.hh>
 #include <seastar/core/on_internal_error.hh>
 
 #include <algorithm>
@@ -18,6 +19,52 @@
 namespace service {
 
 static logging::logger rml_logger("request_memory_limiter");
+
+namespace sm = seastar::metrics;
+
+static const sm::label scheduling_group_label("scheduling_group_name");
+
+void request_memory_pool::register_metrics() {
+    _metrics.add_group("transport", {
+        sm::make_gauge("cql_requests_shared_pool_total_memory", [this] { return _total; },
+                sm::description("Holds the size of the pool of request memory shared by all service levels.")),
+        sm::make_gauge("cql_requests_shared_pool_available_memory", [this] { return available(); },
+                sm::description("Holds the amount of memory in the shared request memory pool that is not lent out. "
+                                "Zero means every service level that needs more than its own share is waiting.")),
+        sm::make_gauge("cql_requests_shared_pool_waiting_service_levels", [this] { return _notify_list.size(); },
+                sm::description("Holds the number of service levels waiting for memory from the shared request memory pool.")),
+    });
+}
+
+void request_memory_tenant::register_metrics() {
+    if (!_use_metrics) {
+        return;
+    }
+    auto metrics = sm::metric_groups();
+    metrics.add_group("transport", {
+        sm::make_gauge("cql_requests_memory_total", [this] { return capacity(); },
+                sm::description("Holds this service level's own share of the request memory budget, which no other "
+                                "service level can take."),
+                {scheduling_group_label(_name)}),
+        sm::make_gauge("cql_requests_memory_available", [this] { return available(); },
+                sm::description("Holds how much of this service level's own share is available for admitting new "
+                                "requests. Negative when a single request larger than the whole share was admitted "
+                                "to guarantee forward progress."),
+                {scheduling_group_label(_name)}),
+        sm::make_gauge("cql_requests_memory_borrowed_from_shared_pool", [this] { return borrowed(); },
+                sm::description("Holds how much memory this service level has borrowed from the shared pool because "
+                                "its own share was exhausted."),
+                {scheduling_group_label(_name)}),
+        sm::make_gauge("cql_requests_blocked_memory_current", [this] { return waiters(); },
+                sm::description("Holds the number of requests in this service level currently waiting for memory. "
+                                "Non-zero means this service level is the one being throttled."),
+                {scheduling_group_label(_name)}),
+        sm::make_counter("cql_requests_blocked_memory", [this] { return _blocked_total; },
+                sm::description("Counts the requests in this service level that had to wait for memory."),
+                {scheduling_group_label(_name)}),
+    });
+    _metrics = std::exchange(metrics, {});
+}
 
 ssize_t request_memory_pool::available() const noexcept {
     return std::max(_available, ssize_t(0));
@@ -119,12 +166,15 @@ void request_memory_pool::unregister_wakeup(request_memory_tenant& tenant) noexc
     }
 }
 
-request_memory_tenant::request_memory_tenant(sstring name, size_t weight, request_memory_pool& pool)
+request_memory_tenant::request_memory_tenant(sstring name, size_t weight, request_memory_pool& pool,
+        bool with_metrics)
     : _name(std::move(name))
     , _weight(weight)
     , _pool(pool)
     , _sem(0)
+    , _use_metrics(with_metrics)
 {
+    register_metrics();
     _sem.set_borrow_source(&_pool);
     // A request needing more than this tenant's share plus the whole pool would
     // otherwise never be admitted. Let one such request through at a time, once
@@ -184,6 +234,12 @@ future<semaphore_units<>> request_memory_tenant::get_units(size_t amount, semaph
 
 void request_memory_tenant::start_draining() noexcept {
     _draining = true;
+    // Stop reporting. A service level with the same name can be created again
+    // while this tenant is still winding down, and registering the same metrics
+    // under the same label twice is an error. The memory it still holds is
+    // visible in the shard-wide totals.
+    _use_metrics = false;
+    _metrics = seastar::metrics::metric_groups();
     set_capacity(0);
 }
 

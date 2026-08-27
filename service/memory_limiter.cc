@@ -14,14 +14,18 @@
 namespace service {
 
 memory_limiter::memory_limiter(size_t available_memory, double fraction,
-        utils::updateable_value<double> shared_pool_fraction)
+        utils::updateable_value<double> shared_pool_fraction, bool with_metrics)
     : _max_request_size(budget(available_memory, fraction))
     , _total_memory(budget(available_memory, fraction))
     , _unlimited(false)
     , _shared_pool_fraction(std::move(shared_pool_fraction))
-    , _fallback(make_lw_shared<request_memory_tenant>("unclassified", 0, _pool))
+    , _fallback(make_lw_shared<request_memory_tenant>("unclassified", 0, _pool, with_metrics))
+    , _use_metrics(with_metrics)
     , _shared_pool_fraction_observer(_shared_pool_fraction.observe([this] (const double&) { adjust(); }))
 {
+    if (_use_metrics) {
+        _pool.register_metrics();
+    }
     adjust();
 }
 
@@ -33,6 +37,7 @@ memory_limiter::memory_limiter(unlimited_tag, size_t available_memory, double fr
     // is never called; an unlimited limiter has nothing to re-split anyway.
     , _shared_pool_fraction(utils::updateable_value<double>(0.0))
     , _fallback(make_lw_shared<request_memory_tenant>("unlimited", 0, _pool))
+    , _use_metrics(false)
     , _shared_pool_fraction_observer(_shared_pool_fraction.observe([this] (const double&) { adjust(); }))
 {
     _fallback->set_capacity(_total_memory);
@@ -107,7 +112,7 @@ void memory_limiter::adjust() noexcept {
 void memory_limiter::add_or_update(scheduling_group sg, size_t shares) {
     auto it = _tenants.find(sg);
     if (it == _tenants.end()) {
-        it = _tenants.emplace(sg, make_lw_shared<request_memory_tenant>(sstring(sg.name()), 0, _pool)).first;
+        it = _tenants.emplace(sg, make_lw_shared<request_memory_tenant>(sg.name(), 0, _pool, _use_metrics)).first;
     }
     auto& tenant = *it->second;
     const ssize_t diff = static_cast<ssize_t>(shares) - static_cast<ssize_t>(tenant.weight());

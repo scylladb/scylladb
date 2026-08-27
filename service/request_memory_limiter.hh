@@ -9,6 +9,7 @@
 
 #include "seastarx.hh"
 
+#include <seastar/core/metrics_registration.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sstring.hh>
 
@@ -36,6 +37,7 @@ class request_memory_pool final : public seastar::semaphore_borrow_source {
     // repay the difference.
     ssize_t _available = 0;
     std::deque<request_memory_tenant*> _notify_list;
+    seastar::metrics::metric_groups _metrics;
     // A tenant woken from on_repaid() borrows and repays, which calls back in
     // here; coalesce those into the outermost pass instead of recursing.
     bool _dispatching = false;
@@ -54,6 +56,8 @@ public:
 
     ssize_t total_memory() const noexcept { return _total; }
     ssize_t available_memory() const noexcept { return available(); }
+
+    void register_metrics();
 
     // Resizes the pool.
     void set_total_memory(ssize_t total) noexcept;
@@ -81,6 +85,10 @@ class request_memory_tenant {
     uint64_t _blocked_total = 0;
     bool _on_notify_list = false;
     bool _draining = false;
+    bool _use_metrics = false;
+    seastar::metrics::metric_groups _metrics;
+
+    void register_metrics();
 
     void note_blocked() noexcept;
     // Called by the pool when it has memory to offer. Re-runs admission, which
@@ -88,7 +96,8 @@ class request_memory_tenant {
     void wake() noexcept { _sem.adjust_capacity(0); }
 
 public:
-    request_memory_tenant(sstring name, size_t weight, request_memory_pool& pool);
+    request_memory_tenant(sstring name, size_t weight, request_memory_pool& pool,
+            bool with_metrics = false);
     ~request_memory_tenant();
 
     request_memory_tenant(const request_memory_tenant&) = delete;
@@ -111,7 +120,6 @@ public:
     semaphore& sem() noexcept { return _sem; }
 
     const sstring& name() const noexcept { return _name; }
-    void rename(sstring name) { _name = std::move(name); }
 
     size_t weight() const noexcept { return _weight; }
     void set_weight(size_t weight) noexcept { _weight = weight; }
@@ -130,9 +138,9 @@ public:
     uint64_t blocked_total() const noexcept { return _blocked_total; }
 
     // A draining tenant belongs to a service level that was removed. It gives
-    // up its dedicated share but keeps admitting requests out of the shared
-    // pool, because connections are not reclassified the moment a service
-    // level goes away.
+    // up its dedicated share and stops reporting metrics, but keeps admitting
+    // requests out of the shared pool, because connections are not reclassified
+    // the moment a service level goes away.
     void start_draining() noexcept;
     bool draining() const noexcept { return _draining; }
     // True once nothing is outstanding, so the tenant can be destroyed.
