@@ -54,6 +54,9 @@
 #include "compaction/compaction_manager.hh"
 #include "compaction/task_manager_module.hh"
 #include "sstables/sstables.hh"
+#include "sstables/parquet/writer_impl.hh"
+#include "sstables/parquet/gain_estimator.hh"
+#include "sstables/parquet/tiering_context.hh"
 #include "replica/database.hh"
 #include "db/extensions.hh"
 #include "db/snapshot-ctl.hh"
@@ -1332,6 +1335,158 @@ rest_get_effective_ownership(http_context& ctx, sharded<service::storage_service
         co_return json::json_return_type(stream_range_as_array(co_await ss.local().effective_ownership(keyspace_name, table_name), &map_to_json<gms::inet_address, float>));
 }
 
+// Estimate what a table's data would cost as Parquet, by sampling rows from one
+// of its SSTables and running them through the real shredder and writer.
+//
+// This is criterion C6 of the hybrid tiering policy: "would Parquet actually
+// help this table?" answered by measuring the real data rather than guessing
+// from the schema. Ratios converge long before row counts do -- a 20k-row sample
+// predicts the full-table ratio to well under a percent -- so this is cheap
+// enough to run before deciding to rewrite anything.
+static future<json::json_return_type>
+rest_estimate_parquet_ratios(http_context& ctx, sharded<service::storage_service>& ss,
+                             std::unique_ptr<http::request> req) {
+    auto ks = api::req_param<sstring>(*req, "keyspace", {}).value;
+    auto cf = api::req_param<sstring>(*req, "cf", {}).value;
+    // Clamped: the sample accumulates in memory in the shredder, and the compaction permit is
+    // obtained at unit cost -- so an unbounded value shreds an entire bottom-tier SSTable into
+    // RAM. Ratios converge to well under a percent by ~20k rows (the default), so the cap costs
+    // accuracy nothing; it exists purely to bound the worst case.
+    constexpr uint64_t max_rows_cap = 200'000;
+    const uint64_t requested_rows = api::req_param<uint64_t>(*req, "rows", 20000).value;
+    if (requested_rows == 0) {
+        // Not "sample nothing and report 0": an empty sample has no ratio, and 0 here is
+        // far more likely a typo than a request for one.
+        throw bad_param_exception("rows must be greater than 0");
+    }
+    const uint64_t max_rows = std::min(requested_rows, max_rows_cap);
+    apilog.debug("estimate_parquet_ratios: ks={} cf={} rows={}", ks, cf, max_rows);
+
+    auto s = ctx.db.local().find_column_family(ks, cf).schema();
+    if (!sstables::parquet::schema_is_parquet_eligible(*s)) {
+        throw std::runtime_error(format("{}.{} is not eligible for Parquet: counters and "
+                                        "non-frozen collections are not supported", ks, cf));
+    }
+    // One sample at a time per node, like estimate_compression_ratios below: the sample is
+    // held decoded in memory for the duration, and two operators asking at once should
+    // queue rather than double the footprint.
+    auto ticket = co_await get_units(ss.local().get_do_sample_sstables_concurrency_limiter(), 1);
+
+    // Sample the largest SSTable *on any shard*: it is the most representative of what the
+    // bottom tier would actually contain. Looking only at the shard the HTTP request landed
+    // on made the answer depend on which shard that was, and failed outright for a table
+    // whose data happened to live elsewhere.
+    struct largest_sstable {
+        uint64_t bytes = 0;
+        unsigned shard = 0;
+    };
+    const auto pick = co_await ctx.db.map_reduce0([id = s->id()] (replica::database& db) {
+        largest_sstable l{0, this_shard_id()};
+        auto& t = db.find_column_family(id);
+        if (auto ssts = t.get_sstables()) {
+            for (const auto& sst : *ssts) {
+                l.bytes = std::max<uint64_t>(l.bytes, sst->ondisk_data_size());
+            }
+        }
+        return l;
+    }, largest_sstable{}, [] (largest_sstable a, largest_sstable b) {
+        return b.bytes > a.bytes ? b : a;
+    });
+    if (pick.bytes == 0) {
+        throw std::runtime_error(format("{}.{} has no SSTables to sample", ks, cf));
+    }
+
+    // Plain values, built on the sampling shard and handed back: the json model objects
+    // are assembled on this shard, after the hop.
+    struct level_estimate {
+        sstring folding_level;
+        uint64_t rows_sampled = 0;
+        uint64_t parquet_bytes = 0;
+        uint64_t sstable_bytes = 0;
+        double ratio = 0.0;
+    };
+    auto estimates = co_await ctx.db.invoke_on(pick.shard,
+            [id = s->id(), max_rows] (replica::database& db) -> future<std::vector<level_estimate>> {
+        auto& t = db.find_column_family(id);
+        auto s = t.schema();
+        auto ssts = t.get_sstables();
+        if (!ssts || ssts->empty()) {
+            throw std::runtime_error(format("{}.{} has no SSTables to sample",
+                                            s->ks_name(), s->cf_name()));
+        }
+        auto sst = *std::ranges::max_element(*ssts, std::less<>{},
+                [] (const sstables::shared_sstable& x) { return x->ondisk_data_size(); });
+
+        // Borrow the compaction semaphore: this is background analysis over
+        // SSTables, which is exactly the work that semaphore exists to bound.
+        auto& sem = t.compaction_concurrency_semaphore();
+        auto permit = co_await sem.obtain_permit(s, "estimate_parquet_ratios",
+                                                 1, db::no_timeout, {});
+
+        // The table's own writer settings (codec, row-group size, encodings), with only
+        // the folding level varied: the question is what *this* table would cost as
+        // Parquet, so the sample is encoded the way its compactions would encode it.
+        const auto base = sstables::parquet::parquet_parameters(s->parquet_options()).config();
+        std::vector<sstables::parquet::pq_writer_config> cfgs;
+        for (auto lvl : {sstables::parquet::folding_level::verbatim,
+                         sstables::parquet::folding_level::row_folded,
+                         sstables::parquet::folding_level::uniform}) {
+            cfgs.push_back(base);
+            cfgs.back().level = lvl;
+        }
+        // The same sampler compaction uses for C6, so the REST answer and the tiering
+        // decision cannot disagree about what a sample contains: partition tombstones,
+        // static rows, range tombstones and placeholder rows all count, and the byte
+        // budget bounds the shredder however wide the rows are.
+        sstables::parquet::gain_sample_limits lim;
+        lim.max_rows = max_rows;
+        const auto sample = co_await sstables::parquet::sample_sstable(
+                s, std::move(permit), sst, cfgs, lim);
+
+        // ondisk_data_size(), NOT data_size(): the latter is the *uncompressed*
+        // logical size, so comparing against it understates the SSTable by the whole
+        // compression ratio and makes Parquet look ~7x better than it is.
+        const uint64_t sst_bytes = sst->ondisk_data_size();
+        // Compare like with like. A truncated sample covers a prefix of the SSTable, so
+        // dividing its bytes by the whole SSTable's would understate the ratio by exactly
+        // the sampling factor -- which is how the first version of this reported 1.3%.
+        // The prefix is scaled the way estimate_parquet_gain() scales it, by the fraction
+        // of partitions read: unlike a row count that works for static-only and
+        // tombstone-only data too. A full read needs no scaling at all.
+        const uint64_t partitions_total = sst->get_estimated_key_count();
+        const double frac = sample.truncated && partitions_total
+                ? std::min(1.0, double(sample.partitions) / double(partitions_total))
+                : 1.0;
+        const double native_sample = double(sst_bytes) * frac;
+        if (native_sample < 1.0 || sample.rows == 0) {
+            throw std::runtime_error("sampled SSTable yielded no rows; cannot form a ratio");
+        }
+        std::vector<level_estimate> out;
+        for (size_t i = 0; i < cfgs.size(); ++i) {
+            out.push_back(level_estimate{
+                .folding_level = sstring(sstables::parquet::to_string(cfgs[i].level)),
+                .rows_sampled = sample.rows,
+                .parquet_bytes = sample.encoded_bytes[i],
+                .sstable_bytes = sst_bytes,
+                .ratio = double(sample.encoded_bytes[i]) / native_sample,
+            });
+        }
+        co_return out;
+    });
+
+    std::vector<ss::parquet_ratio_result> out;
+    for (auto& e : estimates) {
+        ss::parquet_ratio_result r;
+        r.folding_level = e.folding_level;
+        r.rows_sampled = e.rows_sampled;
+        r.parquet_bytes = e.parquet_bytes;
+        r.sstable_bytes = e.sstable_bytes;
+        r.ratio = e.ratio;
+        out.push_back(std::move(r));
+    }
+    co_return json::json_return_type(std::move(out));
+}
+
 static
 future<json::json_return_type>
 rest_estimate_compression_ratios(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
@@ -2017,6 +2172,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_effective_ownership.set(r, gated(ss, rest_bind(rest_get_effective_ownership, ctx, ss)));
     ss::retrain_dict.set(r, gated(ss, rest_bind(rest_retrain_dict, ctx, ss, group0_client)));
     ss::estimate_compression_ratios.set(r, gated(ss, rest_bind(rest_estimate_compression_ratios, ctx, ss)));
+    ss::estimate_parquet_ratios.set(r, gated(ss, rest_bind(rest_estimate_parquet_ratios, ctx, ss)));
     ss::sstable_info.set(r, gated(ss, rest_bind(rest_sstable_info, ctx)));
     ss::logstor_info.set(r, gated(ss, rest_bind(rest_logstor_info, ctx)));
     ss::reload_raft_topology_state.set(r, gated(ss, rest_bind(rest_reload_raft_topology_state, ss, group0_client)));
