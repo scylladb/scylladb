@@ -472,9 +472,17 @@ static future<shared_sstable> load_large_partition_sst(test_env& env, const ssta
 // which contains a promoted index. It just checks that the promoted index
 // is read from disk, as an unparsed array, and doesn't actually use it to
 // search for anything.
+// The checked-in reference sstables under test/resource/sstables were generated for
+// the kl and m families. `pq` re-encodes the Data component as Parquet and has no
+// legacy fixture to read; generating one would only test our own writer against our
+// own reader, which the pq suites already do directly.
+static bool has_reference_fixture(sstables::sstable::version_types v) {
+    return v != sstables::sstable::version_types::pq;
+}
+
 SEASTAR_TEST_CASE(promoted_index_read) {
   return for_each_sstable_version([] (const sstables::sstable::version_types version) {
-    if (!has_summary_and_index(version)) {
+    if (!has_summary_and_index(version) || !has_reference_fixture(version)) {
         // This test is so basic that updating it to support `ms` sstables is not worth the effort.
         return make_ready_future<>();
     }
@@ -587,6 +595,7 @@ static future<int> count_rows(test_env& env, sstable_ptr sstp, schema_ptr s, sst
 SEASTAR_TEST_CASE(sub_partition_read) {
   schema_ptr s = large_partition_schema();
   return for_each_sstable_version([s] (const sstables::sstable::version_types version) {
+    if (!has_reference_fixture(version)) { return make_ready_future<>(); }
     return test_env::do_with_async([s, version] (test_env& env) {
         auto sstp = load_large_partition_sst(env, version).get();
         {
@@ -656,6 +665,7 @@ SEASTAR_TEST_CASE(sub_partition_read) {
 SEASTAR_TEST_CASE(sub_partitions_read) {
   schema_ptr s = large_partition_schema();
   return for_each_sstable_version([s] (const sstables::sstable::version_types version) {
+    if (!has_reference_fixture(version)) { return make_ready_future<>(); }
    return test_env::do_with_async([s, version] (test_env& env) {
         auto sstp = load_large_partition_sst(env, version).get();
         auto nrows = count_rows(env, sstp, s, "18wX", "18xB").get();

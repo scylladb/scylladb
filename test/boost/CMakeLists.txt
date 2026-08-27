@@ -28,6 +28,10 @@ add_scylla_test(big_decimal_test
   LIBRARIES utils)
 add_scylla_test(bloom_filter_test
   KIND SEASTAR)
+add_scylla_test(sstable_parquet_test
+  KIND SEASTAR)
+add_scylla_test(sstable_parquet_perf_test
+  KIND SEASTAR)
 add_scylla_test(bptree_test
   KIND SEASTAR
   LIBRARIES utils)
@@ -201,6 +205,10 @@ add_scylla_test(nonwrapping_interval_test
   KIND BOOST)
 add_scylla_test(observable_test
   KIND BOOST)
+add_scylla_test(parquet_tiering_test
+  KIND BOOST)
+add_scylla_test(parquet_writer_test
+  KIND SEASTAR)
 add_scylla_test(partitioner_test
   KIND SEASTAR)
 add_scylla_test(pretty_printers_test

@@ -78,6 +78,7 @@
 #include "tracing/traced_file.hh"
 #include "kl/reader.hh"
 #include "mx/reader.hh"
+#include "sstables/parquet/reader.hh"
 #include "utils/bit_cast.hh"
 #include "utils/cached_file.hh"
 #include "tombstone_gc.hh"
@@ -270,6 +271,7 @@ const std::unordered_map<sstable_version_types, sstring, enum_hash<sstable_versi
     { sstable_version_types::me , "me" },
     { sstable_version_types::ms , "ms" },
     { sstable_version_types::mt , "mt" },
+    { sstable_version_types::pq , "pq" },
 };
 
 const std::unordered_map<sstable_format_types, sstring, enum_hash<sstable_format_types>> format_string = {
@@ -974,7 +976,14 @@ void sstable::generate_toc() {
     if (_schema->bloom_filter_fp_chance() != 1.0) {
         _recognized_components.insert(component_type::Filter);
     }
-    if (!_schema->get_compressor_params().compression_enabled()) {
+    // pq never uses Scylla's block compression: a Parquet file compresses its
+    // own pages, and a second layer on top would defeat both the page index and
+    // external readability. It therefore always takes the CRC component set,
+    // whatever the table's compression settings say. Declaring CompressionInfo
+    // and not writing it makes data_size() zero, which silently reads as
+    // "end of file" everywhere -- including the index reader.
+    if (_version == sstable_version_types::pq
+            || !_schema->get_compressor_params().compression_enabled()) {
         _recognized_components.insert(component_type::CRC);
     } else {
         _recognized_components.insert(component_type::CompressionInfo);
@@ -2091,13 +2100,55 @@ void sstable::build_delayed_filter(uint64_t num_partitions) {
 
 size_t sstable::total_reclaimable_memory_size() const {
     if (!_total_reclaimable_memory) {
-        _total_reclaimable_memory = _components->filter ? _components->filter->memory_size() : 0;
+        _total_reclaimable_memory = (_components->filter ? _components->filter->memory_size() : 0)
+                + (_pq_footer ? _pq_footer->memory_size() : 0);
     }
 
     return _total_reclaimable_memory.value();
 }
 
-size_t sstable::reclaim_memory_from_components() {
+void sstable::set_pq_footer_cache(parquet::cached_footer_ptr footer) {
+    // Replacing an entry is a real case, not a defensive one: two readers can miss on the same
+    // sstable concurrently, both parse, and both publish. The old entry's bytes have to come back
+    // out of the manager's total or it drifts upwards once per race.
+    const size_t replaced = drop_pq_footer_cache(false);
+    size_t size = 0;
+    if (footer) {
+        size = footer->memory_size();
+        _pq_footer = std::move(footer);
+        parquet::note_footer_cache_populated(size);
+        _total_reclaimable_memory.reset();
+    }
+    // A delta rather than increment_total_reclaimable_memory(): unlike a bloom filter, this
+    // component appears after the sstable was loaded and counted, so the whole-sstable form
+    // would count the filter twice.
+    _manager.adjust_total_reclaimable_memory(ssize_t(size) - ssize_t(replaced));
+}
+
+void sstable::grow_pq_footer_cache(size_t delta) noexcept {
+    if (!_pq_footer || !delta) {
+        return;
+    }
+    parquet::note_footer_cache_grew(delta);
+    _total_reclaimable_memory.reset();
+    _manager.adjust_total_reclaimable_memory(ssize_t(delta));
+}
+
+size_t sstable::drop_pq_footer_cache(bool evicted) noexcept {
+    if (!_pq_footer) {
+        return 0;
+    }
+    const size_t size = _pq_footer->memory_size();
+    // Before the pointer goes: the entry may outlive this call in a reader's hands, but its bytes
+    // stop being reusable now, so the shard-wide read-cache budget should free up now too.
+    _pq_footer->on_dropped();
+    _pq_footer = nullptr;
+    parquet::note_footer_cache_dropped(size, evicted);
+    _total_reclaimable_memory.reset();
+    return size;
+}
+
+size_t sstable::reclaim_memory_from_components(bool closing) {
     size_t memory_reclaimed_this_iteration = 0;
 
     if (_components->filter) {
@@ -2107,11 +2158,18 @@ size_t sstable::reclaim_memory_from_components() {
             // No need to remove it from _recognized_components as the filter is still in disk.
             _components->filter = std::make_unique<utils::filter::always_present_filter>();
             memory_reclaimed_this_iteration += filter_memory_size;
+            // Only the filter has to be reloaded by the manager's fiber: nothing else will put
+            // it back, since it is read at open time and never on the read path.
+            _total_memory_reclaimed += filter_memory_size;
         }
     }
 
+    // The parsed pq footer, by contrast, is repopulated by the next read that needs it, so it is
+    // released without being remembered as owed. Reloading it eagerly would re-read footers for
+    // sstables nobody is reading, and the manager reload fiber has no way to tell the difference.
+    memory_reclaimed_this_iteration += drop_pq_footer_cache(!closing);
+
     _total_reclaimable_memory.reset();
-    _total_memory_reclaimed += memory_reclaimed_this_iteration;
     return memory_reclaimed_this_iteration;
 }
 
@@ -2678,7 +2736,10 @@ future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
     }
     co_await utils::get_local_injector().inject("sstable_validate/pause", utils::wait_for_message(std::chrono::seconds(5)));
 
-    if (_version >= sstable_version_types::mc) {
+    // pq is excluded deliberately: mx::validate walks the mx data format, which a
+    // Parquet Data component is not. It falls through to the generic validator
+    // below, which goes through make_full_scan_reader and so through the pq reader.
+    if (implies_mx_generation(_version, sstable_version_types::mc)) {
         co_return co_await mx::validate(shared_from_this(), std::move(permit), abort, std::move(error_handler), monitor);
     }
 
@@ -2978,6 +3039,7 @@ sstring sstable::component_basename(const sstring& ks, const sstring& cf, versio
     case sstable::version_types::me:
     case sstable::version_types::ms:
     case sstable::version_types::mt:
+    case sstable::version_types::pq:
         return v + "-" + g + "-" + f + "-" + component;
     }
     on_internal_error(sstlog, seastar::format("invalid version {} for sstable: table={}.{}, generation={}, format={}, component={}",
@@ -3052,6 +3114,26 @@ sstable::make_reader(
 ) {
     const auto reversed = slice.is_reversed();
 
+    // pq must be dispatched before anything keyed off `>= mc`: it sorts after mc
+    // in the enum but is a different format entirely. Also before the index
+    // reader is built -- the Parquet reader does not consume one.
+    if (_version == version_types::pq) {
+        if (reversed) {
+            // No native reversed support yet; read forward and reverse, as kl does.
+            auto rd = make_reversing_reader(
+                    parquet::make_reader(shared_from_this(), query_schema->make_reversed(),
+                            permit, range, reverse_slice(*query_schema, slice),
+                            trace_state, streamed_mutation::forwarding::no, fwd_mr, mon),
+                    permit.max_result_size());
+            if (fwd) {
+                rd = make_forwardable(std::move(rd));
+            }
+            return rd;
+        }
+        return parquet::make_reader(shared_from_this(), std::move(query_schema),
+                std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr, mon);
+    }
+
     auto index_caching = use_caching(global_cache_index_pages && !slice.options.contains(query::partition_slice::option::bypass_cache));
     auto index_reader = make_index_reader(permit, trace_state, index_caching, range.is_singular());
 
@@ -3110,6 +3192,11 @@ sstable::make_full_scan_reader(
         tracing::trace_state_ptr trace_state,
         read_monitor& monitor,
         integrity_check integrity) {
+    // Before the `>= mc` test: pq sorts after mc but is not an mx file.
+    if (_version == version_types::pq) {
+        return parquet::make_full_scan_reader(shared_from_this(), std::move(schema),
+                std::move(permit), std::move(trace_state), monitor);
+    }
     if (_version >= version_types::mc) {
         return mx::make_full_scan_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor, integrity);
     }
@@ -3121,7 +3208,7 @@ static std::expected<std::tuple<entry_descriptor, sstring, sstring>, sstring> ma
     //   la-42-big-Data.db
     //   ka-42-big-Data.db
     //   me-3g8w_00qf_4pbog2i7h2c7am0uoe-big-Data.db
-    static boost::regex la_mx("(la|m[cdest])-([^-]+)-(\\w+)-(.*)");
+    static boost::regex la_mx("(la|m[cdest]|pq)-([^-]+)-(\\w+)-(.*)");
     static boost::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
     // Use non-greedy match so that a snapshot tag that ressembles a name-<uuid> wouldn't match
@@ -3624,9 +3711,17 @@ std::strong_ordering sstable::compare_by_first_key(const sstable& other) const {
 double sstable::get_compression_ratio() const {
     if (this->has_component(component_type::CompressionInfo)) {
         return double(_components->compression.compressed_file_length()) / _components->compression.uncompressed_file_length();
-    } else {
-        return metadata_collector::NO_COMPRESSION_RATIO;
     }
+    // A format that compresses inside its own container has no CompressionInfo component but can
+    // still have recorded a ratio in its statistics -- `pq` does. Without this fall-back Scylla
+    // reports no compression ratio at all for such a table, which is wrong rather than merely
+    // missing. Formats that record nothing still leave the statistics value at
+    // NO_COMPRESSION_RATIO, so their behaviour is unchanged.
+    const auto& contents = _components->statistics.contents;
+    if (contents.contains(metadata_type::Stats)) {
+        return get_stats_metadata().compression_ratio;
+    }
+    return metadata_collector::NO_COMPRESSION_RATIO;
 }
 
 void sstable::set_sstable_level(uint32_t new_level) {
@@ -4071,6 +4166,54 @@ future<> init_metrics() {
             sm::description("Number of bytes currently used by cached promoted index blocks")),
         sm::make_gauge("pi_cache_block_count", [] { return promoted_index_cache_metrics.block_count; },
             sm::description("Number of promoted index blocks currently cached")),
+
+        // The pq (Parquet) parsed-footer cache. `bytes` is what the reclaimer sees, so it is the
+        // one to watch against components_memory_reclaim_threshold; a rising eviction count with
+        // a rising miss count is the cache being squeezed rather than merely cold.
+        sm::make_counter("pq_footer_cache_hits", [] { return parquet::footer_cache_stats_local().hits; },
+            sm::description("Parquet footer parses avoided because the sstable's footer was already cached")),
+        sm::make_counter("pq_footer_cache_misses", [] { return parquet::footer_cache_stats_local().misses; },
+            sm::description("Reads that had to fetch and parse a Parquet footer because it was not cached")),
+        sm::make_counter("pq_footer_cache_populations", [] { return parquet::footer_cache_stats_local().populations; },
+            sm::description("Parsed Parquet footers inserted into the cache")),
+        sm::make_counter("pq_footer_cache_evictions", [] { return parquet::footer_cache_stats_local().evictions; },
+            sm::description("Parsed Parquet footers dropped by the component memory reclaimer")),
+        sm::make_gauge("pq_footer_cache_bytes", [] { return parquet::footer_cache_stats_local().bytes; },
+            sm::description("Bytes retained by parsed Parquet footers on this shard")),
+
+        // The three read caches, and whether a query's projection could be applied. All four
+        // answer questions an operator cannot get from a query: whether the point-read caches are
+        // paying (their gain is a hit rate, design doc 10.48), and whether narrow scans are being
+        // projected or silently declined because the table's rows lack row markers (10.50).
+        sm::make_counter("pq_offset_index_cache_hits",
+            [] { return parquet::offset_index_cache_stats_local().hits; },
+            sm::description("Page-index reads avoided because the sstable's page index was cached")),
+        sm::make_counter("pq_offset_index_cache_misses",
+            [] { return parquet::offset_index_cache_stats_local().misses; },
+            sm::description("Reads that had to fetch a Parquet page index")),
+        sm::make_counter("pq_page_cache_hits",
+            [] { return parquet::page_cache_stats_local().hits; },
+            sm::description("Page decompressions avoided because the decompressed page was cached")),
+        sm::make_counter("pq_page_cache_misses",
+            [] { return parquet::page_cache_stats_local().misses; },
+            sm::description("Data pages that had to be decompressed")),
+        sm::make_counter("pq_extent_cache_hits",
+            [] { return parquet::extent_cache_stats_local().hits; },
+            sm::description("Page fetches avoided because the compressed extent was cached")),
+        sm::make_counter("pq_extent_cache_misses",
+            [] { return parquet::extent_cache_stats_local().misses; },
+            sm::description("Compressed page extents that had to be read from disk")),
+        sm::make_gauge("pq_read_cache_bytes",
+            [] { return parquet::read_cache_bytes_local().total(); },
+            sm::description("Bytes retained by the Parquet decompressed-page and extent caches on "
+                            "this shard, against the shard-wide budget")),
+        sm::make_counter("pq_projection_groups_projected",
+            [] { return parquet::projection_stats_local().groups_projected; },
+            sm::description("Row groups a query's column projection was applied to")),
+        sm::make_counter("pq_projection_groups_declined",
+            [] { return parquet::projection_stats_local().groups_declined; },
+            sm::description("Row groups a projection was declined for, because their rows do not "
+                            "all carry a live row marker to hold row existence")),
 
         sm::make_counter("partition_writes", [] { return sstables_stats::get_shard_stats().partition_writes; },
             sm::description("Number of partitions written")),

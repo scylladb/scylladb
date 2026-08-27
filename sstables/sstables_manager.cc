@@ -267,7 +267,8 @@ sstables::sstable::version_types sstables_manager::get_preferred_sstable_version
 
 sstables::sstable::version_types sstables_manager::get_safe_sstable_version_for_rewrites(sstable_version_types existing_version) const {
     auto preferred_format = sstables::version_from_string(_config.format());
-    auto mt_supported = bool(_features.mt_sstable) || existing_version >= sstable_version_types::mt;
+    auto mt_supported = bool(_features.mt_sstable) ||
+            implies_mx_generation(existing_version, sstable_version_types::mt);
     if (mt_supported && preferred_format == sstable_version_types::mt) {
         return sstable_version_types::mt;
     }
@@ -277,7 +278,8 @@ sstables::sstable::version_types sstables_manager::get_safe_sstable_version_for_
     if (mt_supported && preferred_format == sstable_version_types::ms) {
         return sstable_version_types::mt;
     }
-    auto ms_supported = bool(_features.ms_sstable) || existing_version >= sstable_version_types::ms;
+    auto ms_supported = bool(_features.ms_sstable) ||
+            implies_mx_generation(existing_version, sstable_version_types::ms);
     if (ms_supported && preferred_format == sstable_version_types::ms) {
         return sstable_version_types::ms;
     }
@@ -326,6 +328,18 @@ void sstables_manager::increment_total_reclaimable_memory(sstable* sst) {
     _components_memory_change_event.signal();
 }
 
+void sstables_manager::adjust_total_reclaimable_memory(ssize_t delta) {
+    if (delta < 0) {
+        // Clamped rather than wrapped: an accounting bug should cost a suboptimal reclaim
+        // decision, not a size_t that has gone round the houses and reads as 16 exabytes held.
+        const size_t drop = size_t(-delta);
+        _total_reclaimable_memory -= std::min(_total_reclaimable_memory, drop);
+    } else {
+        _total_reclaimable_memory += size_t(delta);
+    }
+    _components_memory_change_event.signal();
+}
+
 future<> sstables_manager::maybe_reclaim_components() {
     while(_total_reclaimable_memory > get_components_memory_reclaim_threshold()) {
         // Memory consumption is above threshold. Reclaim from the SSTable that
@@ -334,14 +348,32 @@ future<> sstables_manager::maybe_reclaim_components() {
         auto sst_with_max_memory = std::max_element(_active.begin(), _active.end(), [](const sstable& sst1, const sstable& sst2) {
             return sst1.total_reclaimable_memory_size() < sst2.total_reclaimable_memory_size();
         });
+        if (sst_with_max_memory == _active.end()) {
+            // Nothing to reclaim from, so the accounting says more is held than any live sstable
+            // holds. Bailing out beats dereferencing end(), and beats spinning without a yield.
+            break;
+        }
 
+        // Some of what was just released has to be reloaded by maybe_reload_components() (the
+        // bloom filter) and some repopulates itself on the read path (the pq footer cache). Only
+        // the former is owed, and only for it does the sstable belong in _reclaimed -- putting an
+        // sstable there with nothing to reload would have the fiber walk it forever.
+        const auto owed_before = sst_with_max_memory->total_memory_reclaimed();
         auto memory_reclaimed = sst_with_max_memory->reclaim_memory_from_components();
-        _total_memory_reclaimed += memory_reclaimed;
+        const auto newly_owed = sst_with_max_memory->total_memory_reclaimed() - owed_before;
+        _total_memory_reclaimed += newly_owed;
         _total_reclaimable_memory -= memory_reclaimed;
-        _reclaimed.insert(*sst_with_max_memory);
-        // TODO: As of now only bloom filter is reclaimed. Print actual component names when adding support for more components.
+        if (newly_owed) {
+            _reclaimed.insert(*sst_with_max_memory);
+        }
+        // TODO: Print actual component names.
         smlogger.info("Reclaimed {} bytes of memory from components of {}. Total memory reclaimed so far is {} bytes",
                 memory_reclaimed, sst_with_max_memory->get_filename(), _total_memory_reclaimed);
+        if (!memory_reclaimed) {
+            // Nothing left to squeeze out of the largest holder, so the rest cannot help either.
+            // Without this the loop spins forever when the threshold is below what is pinned.
+            break;
+        }
         }
         co_await coroutine::maybe_yield();
 }
@@ -420,8 +452,9 @@ void sstables_manager::reclaim_memory_and_stop_tracking_sstable(sstable* sst) {
     // remove the sstable from the memory tracking metrics
     _total_reclaimable_memory -= sst->total_reclaimable_memory_size();
     _total_memory_reclaimed -= sst->total_memory_reclaimed();
-    // reclaim any remaining memory from the sstable
-    sst->reclaim_memory_from_components();
+    // reclaim any remaining memory from the sstable. `closing`: the sstable is going away, so
+    // dropping its footer cache is not an eviction and should not read as memory pressure.
+    sst->reclaim_memory_from_components(true);
     // disable further reload of components
     _reclaimed.erase(*sst);
     sst->disable_component_memory_reload();

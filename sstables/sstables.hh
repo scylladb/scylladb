@@ -34,6 +34,7 @@
 #include "stats.hh"
 #include "utils/observable.hh"
 #include "sstables/shareable_components.hh"
+#include "sstables/parquet/footer_cache.hh"
 #include "sstables/storage.hh"
 #include "sstables/generation_type.hh"
 #include "sstables/types.hh"
@@ -67,6 +68,8 @@ class corrupt_data_handler;
 }
 
 namespace sstables {
+
+namespace parquet { class pq_writer_impl; }
 
 template <typename ChecksumType, bool calculate_chunk_checksums>
 requires ChecksumUtils<ChecksumType>
@@ -669,8 +672,18 @@ private:
     // It is initialized to 0 to prevent the sstables manager from reclaiming memory
     // from the components before the SSTable has been fully loaded.
     mutable std::optional<size_t> _total_reclaimable_memory{0};
-    // Total memory reclaimed so far from this sstable
+    // Total memory reclaimed so far from this sstable, counting only components the manager's
+    // reload fiber can put back. The pq footer cache is deliberately not counted here: it is
+    // repopulated by the next read that needs it, so there is nothing to reload (see
+    // reclaim_memory_from_components()).
     size_t _total_memory_reclaimed{0};
+    // The parsed Parquet footer of a `pq` sstable: populated by the first read, dropped under
+    // memory pressure by the same reclaim machinery that drops bloom filters, and re-parsed on
+    // demand afterwards. Null for every other format. Held by value here rather than in
+    // `shareable_components` on purpose -- that member is a foreign_ptr and may belong to another
+    // shard, whereas this one is shard-local and so can be published and dropped without a
+    // cross-shard hazard (design doc 10.4l).
+    parquet::cached_footer_ptr _pq_footer;
     std::optional<db_clock::time_point> _unlinked_at;
     const bool _ignore_component_digest_mismatch;
 
@@ -816,11 +829,14 @@ private:
 
     future<> create_data() noexcept;
 
-    // Note that only bloom filters are reclaimable by the following methods.
+    // Bloom filters and the pq footer cache are the reclaimable components.
     // Return the total reclaimable memory in this SSTable
     size_t total_reclaimable_memory_size() const;
-    // Reclaim memory from the components back to the system.
-    size_t reclaim_memory_from_components();
+    // Reclaim memory from the components back to the system. Returns the number of bytes
+    // released, which is not necessarily the same as the growth of total_memory_reclaimed():
+    // see the pq footer cache. `closing` says the sstable is going away rather than being
+    // squeezed, which is the difference between "evicted" and "freed" in the metrics.
+    size_t reclaim_memory_from_components(bool closing = false);
     // Return memory reclaimed so far from this sstable
     size_t total_memory_reclaimed() const;
     // Reload components from which memory was previously reclaimed
@@ -923,6 +939,22 @@ public:
     shareable_components& get_shared_components() const {
         return *_components;
     }
+
+    // The parsed Parquet footer, if one is currently cached. Null means "not cached" and never
+    // means "no footer": the caller re-parses and publishes it with set_pq_footer_cache().
+    const parquet::cached_footer_ptr& pq_footer_cache() const noexcept {
+        return _pq_footer;
+    }
+    // Publish a parsed footer, replacing any entry already there, and hand the accounting to the
+    // manager so the entry is subject to the same reclaim pressure as a bloom filter.
+    void set_pq_footer_cache(parquet::cached_footer_ptr);
+    // Drop the cached footer, if any, returning the bytes released.
+    size_t drop_pq_footer_cache(bool evicted) noexcept;
+    // Account for an entry that has grown since it was published -- the page index is filled in
+    // per row group as reads touch them, so the entry's size is not known when it is first
+    // handed over. Without this the manager's total would lag the real footprint and, worse,
+    // drop_pq_footer_cache() would return more than was ever added.
+    void grow_pq_footer_cache(size_t delta) noexcept;
     schema_ptr get_schema() const {
         return _schema;
     }
@@ -1221,6 +1253,7 @@ public:
     friend class test;
 
     friend class mc::writer;
+    friend class parquet::pq_writer_impl;
     friend class index_reader;
     friend class sstables_manager;
     template <typename DataConsumeRowsContext>

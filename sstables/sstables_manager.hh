@@ -346,6 +346,10 @@ private:
 
     // Increment the _total_reclaimable_memory with the new SSTable's reclaimable memory
     void increment_total_reclaimable_memory(sstable* sst);
+    // Account a reclaimable component that appeared or went away after the SSTable was loaded,
+    // so it cannot be counted by re-reading the whole SSTable's size. Used by the pq footer cache,
+    // which is populated on the read path.
+    void adjust_total_reclaimable_memory(ssize_t delta);
     // Fiber to reload reclaimed components back into memory when memory becomes available.
     future<> components_reclaim_reload_fiber();
     // Reclaims components from SSTables if total memory usage exceeds the threshold.

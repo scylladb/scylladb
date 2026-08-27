@@ -5565,9 +5565,27 @@ SEASTAR_THREAD_TEST_CASE(test_large_data_records_round_trip) {
                     // clustering_key and column_name should be empty for partition-level entries
                     BOOST_REQUIRE(rec.clustering_key.value.empty());
                     BOOST_REQUIRE(rec.column_name.value.empty());
-                    // Verify partition-level auxiliary fields:
-                    // elements_count = rows in partition (1 clustering row + 1 implicit static row)
-                    BOOST_REQUIRE_EQUAL(rec.elements_count, 2u);
+                    // Verify partition-level auxiliary fields.
+                    //
+                    // elements_count = rows in partition, and the two formats
+                    // disagree by one here deliberately rather than
+                    // approximately.
+                    //
+                    // mx writes an empty static row into every partition whose
+                    // schema declares static columns
+                    // (writer::ensure_static_row_is_written_if_needed) and
+                    // counts it as a row, so this one-clustering-row partition
+                    // is reported as 2. simple_schema declares a static column
+                    // and this mutation sets none, so that static row is purely
+                    // an artifact of the mc row encoding.
+                    //
+                    // A Parquet file has no static row: fragment_shredder
+                    // replays static cells onto every storage row instead. The
+                    // partition holds exactly the one clustering row it was
+                    // given, so 1 is the honest count; reporting 2 would mean
+                    // inventing a row that is not in the file.
+                    BOOST_REQUIRE_EQUAL(rec.elements_count,
+                            version == sstable_version_types::pq ? 1u : 2u);
                     BOOST_REQUIRE_EQUAL(rec.range_tombstones, 0u);
                     BOOST_REQUIRE_EQUAL(rec.dead_rows, 0u);
                     break;

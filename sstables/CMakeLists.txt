@@ -29,6 +29,19 @@ target_sources(sstables
     trie/bti_partition_index_writer.cc
     trie/bti_row_index_writer.cc
     trie/trie_writer.cc
+    parquet/format/parquet_metadata.cc
+    parquet/format/page_header.cc
+    parquet/format/parquet_writer.cc
+    parquet/schema_mapping.cc
+    parquet/writer_impl.cc
+    parquet/reader.cc
+    parquet/tiering_policy.cc
+    parquet/tiering_context.cc
+    parquet/gain_estimator.cc
+    parquet/format/parquet_reader.cc
+    parquet/format/encryption.cc
+    parquet/batch_reader.cc
+    parquet/encryption_keys.cc
     writer.cc)
 target_include_directories(sstables
   PUBLIC
@@ -44,6 +57,8 @@ target_link_libraries(sstables
     tracing
     absl::headers
     libdeflate::libdeflate
+    zstd::zstd_static
+    Snappy::snappy
     ZLIB::ZLIB)
 if (Scylla_USE_PRECOMPILED_HEADER_USE)
   target_precompile_headers(sstables REUSE_FROM scylla-precompiled-header)
