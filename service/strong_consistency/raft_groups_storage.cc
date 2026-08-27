@@ -28,7 +28,8 @@ logging::logger rgslog("raft_groups_storage");
 
 raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id, shard_id shard, db::commitlog& commit_log,
         table_id target_table_id, replayed_data_per_group replayed_data)
-    : _raft_commitlog(gid, commit_log, target_table_id, std::move(replayed_data))
+    : _raft_commitlog(gid, commit_log, target_table_id,
+            db::system_keyspace::raft_groups()->id(), std::move(replayed_data))
     , _group_id(std::move(gid))
     , _server_id(std::move(server_id))
     , _qp(qp)
@@ -65,6 +66,11 @@ future<std::pair<raft::term_t, raft::server_id>> raft_groups_storage::load_term_
 }
 
 future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
+    // Keep the (index, term) pair of the last committed entry, which the next
+    // batch records in the commitlog as the crash-replay floor. Raft calls
+    // this before the entries are applied, so the entry at idx is still
+    // tracked and its term is exact.
+    _raft_commitlog.note_commit_idx(idx);
     return execute_with_linearization_point([this, idx] {
         static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?)",
             db::system_keyspace::RAFT_GROUPS);

@@ -1545,7 +1545,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_store_and_truncate_log) {
         auto tid = make_table_id();
 
         service::strong_consistency::replayed_data_per_group replayed_data;
-        service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, make_table_id(), std::move(replayed_data));
 
         // Store 10 entries.
         raft::log_entry_ptr_list all_entries;
@@ -1589,7 +1589,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_truncate_log_tail_releases_handles) {
         auto tid = make_table_id();
 
         service::strong_consistency::replayed_data_per_group replayed_data;
-        service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, make_table_id(), std::move(replayed_data));
 
         raft::log_entry_ptr_list all_entries;
         for (int i = 1; i <= 10; ++i) {
@@ -1742,7 +1742,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_combined_truncation) {
         auto tid = make_table_id();
 
         service::strong_consistency::replayed_data_per_group replayed_data;
-        service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, make_table_id(), std::move(replayed_data));
 
         raft::log_entry_ptr_list all_entries;
         for (int i = 1; i <= 10; ++i) {
@@ -1794,7 +1794,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_load_log_one_shot) {
         replayed_data.entries.push_back(make_dummy_entry(raft::term_t(1), raft::index_t(2)));
         replayed_data.entries.push_back(make_config_entry(raft::term_t(2), raft::index_t(3)));
 
-        service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, make_table_id(), std::move(replayed_data));
 
         // First call should return the entries.
         auto entries = persistence.load_log();

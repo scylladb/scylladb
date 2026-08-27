@@ -10,6 +10,7 @@
 #include "raft/raft.hh"
 #include "db/commitlog/commitlog.hh"
 #include <deque>
+#include <map>
 
 namespace service::strong_consistency {
 struct index_and_replay_position {
@@ -22,6 +23,30 @@ struct index_and_replay_position {
 // truncate_log_tail() and back removal for truncate_log().
 using replay_position_list = std::deque<index_and_replay_position>;
 
+// A segment's raft_groups-accounted claim together with the highest raft
+// index the group has written to that segment so far (the pending_cover_map
+// value; the segment is the key), parked until every entry at or below that
+// index is committed. The claim is taken (commitlog::acquire_cf_count) when
+// the group first writes to the segment and pins it from that moment until
+// take_committed_covers() attaches it to a covering raft_groups mutation.
+struct pending_cover {
+    // Highest raft index the group has written to the claim's segment, and
+    // that entry's term. The pair is persisted together by the covering
+    // mutation; the term must be exact — see make_raft_schema()'s
+    // commit_idx_term comment.
+    raft::index_t max_idx;
+    raft::term_t max_term;
+    db::rp_handle segment_holder;
+};
+
+// A group's covers, keyed by commitlog segment: one claim per segment,
+// updated in place by write_batches(). Batches arrive in index order and
+// segments advance monotonically, so the key order is also the max_idx
+// order — the fully-committed covers always form a prefix
+// (take_committed_covers()) and the covers a truncation invalidates form a
+// suffix (truncate_log()).
+using pending_cover_map = std::map<db::segment_id_type, pending_cover>;
+
 struct replayed_data_per_group {
     replay_position_list replay_positions;
     raft::log_entries entries;
@@ -33,6 +58,10 @@ class raft_commitlog {
 private:
     const raft::group_id _group_id;
     const db::cf_id_type _table_id;
+    // cf the segments' claims are minted under (system.raft_groups); a later
+    // commit hands the claims to that table's memtable with a covering
+    // commit_idx mutation.
+    const db::cf_id_type _raft_groups_table_id;
     // Common commit log.
     db::commitlog& _commit_log;
     // Replay positions in the commit log for each raft log entry.
@@ -42,16 +71,69 @@ private:
     // After a snapshot, some entries with index below the snapshot index may
     // still be present, in accordance with raft trailing log settings.
     replay_position_list _replay_positions;
+    // (index, term) of the entries appended but not yet known to be
+    // committed, in index order. note_commit_idx() consumes the prefix the
+    // commit index has reached, keeping the last consumed pair in
+    // _last_committed; truncate_log() drops the discarded tail. Small: it
+    // only ever holds the in-flight window.
+    std::deque<raft_term_and_index> _appended_terms;
+    // (index, term) of the last entry known to be committed, recorded by
+    // every batch's trailing commit_idx entry. Zero until the first commit
+    // index this instance observes; until then no record is written, which
+    // costs nothing — a replay-restored floor or an earlier run's covering
+    // mutations already cover everything committed before this instance.
+    raft_term_and_index _last_committed{};
     // The log entries that were loaded from database commit log on startup.
     raft::log_entries _replayed_entries;
 
 public:
-    raft_commitlog(raft::group_id group_id, db::commitlog& commit_log, table_id target_table_id, replayed_data_per_group replayed_data);
+    raft_commitlog(raft::group_id group_id, db::commitlog& commit_log, table_id target_table_id,
+            db::cf_id_type raft_groups_table_id, replayed_data_per_group replayed_data);
 
     ~raft_commitlog();
 
-    // Persist the given log entries in the commit log and get the replay position handles for them.
+    // Write the given entries to the commit log as one batch, followed by a
+    // small commit_idx record carrying `committed` — the index and term of
+    // the last entry the group had committed — and make sure every segment
+    // the entries landed in holds a raft_groups-accounted claim.
+    //
+    // That record is the crash-replay floor: startup restores the highest
+    // surviving value per group into system.raft_groups, so replay applies
+    // the entries below it to memtables instead of re-adding them to the raft
+    // log. It carries the term with the index so the restore needs no lookup
+    // — the pair goes straight into system.raft_groups, and the boot-time
+    // snapshot bump needs it exact (see make_raft_schema's commit_idx_term
+    // comment). Nothing keeps the record's own handle: it is written in the
+    // batch's cf like the entries and dropped right after, because segment
+    // retention is the claims' job, and losing a record to a reclaimed
+    // segment only lowers the recovered floor. A zero index means this
+    // instance has not observed a commit index yet, and no record is written.
+    //
+    // `covers` is the caller's cover map, updated in place: a segment new to
+    // the map gets a claim of its own (commitlog::acquire_cf_count) — one per
+    // segment per group, not one per batch — while a segment already there
+    // keeps its claim and only its (max index, term) pair advances. Returns
+    // one rp_handle per input entry, in input order, accounted to the target
+    // table.
+    //
+    // Static so the commitlog replay's rewrite path can write the same
+    // format, building the map that seeds the group's _pending_covers.
+    static future<utils::chunked_vector<db::rp_handle>> write_batches(db::commitlog& cl, db::cf_id_type table_id,
+            db::cf_id_type raft_groups_table_id, raft::group_id group_id,
+            const raft::log_entry_ptr_list& entries, raft_term_and_index committed, pending_cover_map& covers);
+
+    // Persist the given log entries in the commit log via write_batches()
+    // (which maintains _pending_covers), tracking the entries' handles. The
+    // trailing commit_idx record carries the pair note_commit_idx() last saw.
     future<> store_log_entries(const raft::log_entry_ptr_list& entries);
+
+    // Record that the group has committed up to `idx`. Keeps the (index,
+    // term) pair of the last committed entry, which the next batch's
+    // trailing commit_idx record persists as the crash-replay floor. The
+    // term is taken from the entry itself: raft calls this before the entry
+    // is applied, so it is still tracked here.
+    void note_commit_idx(raft::index_t idx);
+
 
     // Get the log items that were loaded from database commit log on startup.
     raft::log_entries load_log();
