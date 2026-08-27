@@ -195,6 +195,7 @@ public:
 
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<seastar::http::experimental::retry_strategy> rs = nullptr);
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf = {});
     static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, global_factory gf = {}, unsigned connections_per_shard = endpoint_config::default_connections_per_shard);
@@ -209,6 +210,13 @@ public:
 =======
     // No defaults: make() is the only caller and always passes both, so the two cannot
     // disagree about what a null argument means.
+||||||| parent of 6304ecc31f (s3: let make() decide the client's retry strategy)
+    // No defaults: make() is the only caller and always passes both, so the two cannot
+    // disagree about what a null argument means.
+=======
+    // No defaults, and no fallbacks in the body: make() is the only caller and decides
+    // both dependencies, so there is never a second opinion about what a null means.
+>>>>>>> 6304ecc31f (s3: let make() decide the client's retry strategy)
     client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag,
            std::unique_ptr<seastar::http::experimental::retry_strategy> rs, std::unique_ptr<throttling_controller> tc);
 >>>>>>> 81fd4c2073 (s3: wire the send brake into the client with metrics)
