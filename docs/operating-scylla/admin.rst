@@ -183,8 +183,12 @@ is ignored when connecting, but it still forms part of the endpoint identifier,
 so ``https://s3.us-east-1.amazonaws.com/`` and
 ``https://s3.us-east-1.amazonaws.com`` are two different endpoints.
 
-Credentials
-===========
+S3 credentials
+==============
+
+This section applies to S3 and S3-compatible endpoints. Credentials for GCS
+endpoints are configured with ``credentials_file``, described in
+:ref:`Google Cloud Storage <object-storage-gcs-config>` above.
 
 The AWS-related credentials options (``aws_access_key_id``,
 ``aws_secret_access_key``, ``aws_session_token``) can be configured using
@@ -194,9 +198,9 @@ the following environment variables:
   - ``AWS_SECRET_ACCESS_KEY``
   - ``AWS_SESSION_TOKEN``
 
-The ScyllaDB S3 client will first attempt to access credentials from environment variables.
-If it fails to obtain credentials, it will then try to retrieve them from the
-AWS Security Token Service (STS) or the EC2 Instance Metadata Service.
+The ScyllaDB S3 client resolves credentials in this order: environment
+variables, the EC2 Instance Metadata Service, and finally the AWS Security
+Token Service (STS). STS additionally requires ``iam_role_arn`` to be set.
 
 ``iam_role_arn`` must be the ARN of the IAM **role** to assume
 (``arn:aws:iam::<account>:role/<name>``) - not the ARN of the instance profile
@@ -209,6 +213,15 @@ the AWS documentation.
    - All AWS-related parameters must be either present or absent as a group.
    - When set, these values are used by the S3 client to sign requests.
    - If not set, requests are sent unsigned, which may not be accepted by all servers.
+
+.. note::
+
+   On EC2, prefer an instance profile or STS so that no long-lived credentials
+   are kept on the node. Object stores that do not provide an EC2-compatible
+   instance metadata service - :ref:`OCI <admin-oci-object-storage>` among them -
+   can only be accessed with credentials supplied through the environment
+   variables above: unlike the GCS client, which reads a service-account file,
+   the S3 client has no file-based credentials provider.
 
 Tuning options
 ==============
