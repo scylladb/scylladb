@@ -18,6 +18,7 @@
 #include "compaction_fwd.hh"
 #include "mutation_writer/token_group_based_splitting_writer.hh"
 #include "utils/chunked_vector.hh"
+#include "sstables/parquet/tiering_policy.hh"
 
 namespace compaction {
 
@@ -209,6 +210,18 @@ struct compaction_descriptor {
     // log, there is currently no way to check if the key exists; only the minimum
     // timestamp comparison, similar to memtables, is performed.
     bool gc_check_only_compacting_sstables = false;
+
+    // Parquet tiering inputs the strategy is the only one able to answer -- today
+    // just C1, "is this output in the bottom tier". Filled in by whichever
+    // strategy built this descriptor and read by the sstable creator, which is
+    // where the output format is finally chosen. Left at its default by
+    // strategies that have no meaningful notion of a bottom tier, and the
+    // default is the conservative answer: not bottom, so no conversion.
+    //
+    // The remaining criteria are either derivable from `sstables` (C2, C3, C4),
+    // from the schema (C5), or measured separately (C6); see
+    // sstables/parquet/tiering_context.hh.
+    sstables::parquet::compaction_context parquet_ctx;
 
     compaction_descriptor() = default;
 

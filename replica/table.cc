@@ -30,6 +30,7 @@
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstable_set.hh"
 #include "sstables/sstables.hh"
+#include "sstables/parquet/tiering_context.hh"
 #include "sstables/sstables_manager.hh"
 #include "db/schema_tables.hh"
 #include "db/snapshot/manifest.hh"
@@ -285,14 +286,41 @@ table::make_mutation_reader(schema_ptr s,
     return rd;
 }
 
+// Everything that arrives by streaming lands here: repair, bootstrap, decommission, and
+// `nodetool refresh` in load-and-stream mode, which re-streams a snapshot's partitions rather
+// than adopting its files. Without consulting storage_format these wrote the preferred *native*
+// version, so a table declared 'parquet' silently accumulated `me` sstables -- data intact, but
+// the format regressed until natural compaction happened to convert it. Found by snapshotting a
+// pq table, truncating, and refreshing: the rows came back correctly and the sstables came back
+// as `me`.
+//
+// 'hybrid' on a size-tiered table keeps the native format here: streamed data is freshly arrived
+// rather than bottom-tier, so C1 would decline it anyway (design doc 6.3), and writing Parquet for
+// data about to be compacted again is the one thing the tiering policy exists to avoid.
+//
+// 'hybrid' on a TWCS table does not: there, hybrid means parquet outright, because TWCS has no
+// rewritten levels for the policy to protect (design doc 6.4). Both cases come from
+// writes_parquet_unconditionally() rather than being decided here, so that streaming, flush and
+// compaction cannot drift apart.
+static std::optional<sstables::sstable_version_types> streaming_version_for(const ::schema& s) {
+    if (sstables::parquet::writes_parquet_unconditionally(s)) {
+        return sstables::sstable_version_types::pq;
+    }
+    return std::nullopt;
+}
+
 sstables::shared_sstable table::make_streaming_sstable_for_write() {
-    auto newtab = make_sstable(sstables::sstable_state::normal);
+    auto v = streaming_version_for(*schema());
+    auto newtab = v ? make_sstable(sstables::sstable_state::normal, *v)
+                    : make_sstable(sstables::sstable_state::normal);
     tlogger.debug("Created sstable for streaming: ks={}, cf={}", schema()->ks_name(), schema()->cf_name());
     return newtab;
 }
 
 sstables::shared_sstable table::make_streaming_staging_sstable() {
-    auto newtab = make_sstable(sstables::sstable_state::staging);
+    auto v = streaming_version_for(*schema());
+    auto newtab = v ? make_sstable(sstables::sstable_state::staging, *v)
+                    : make_sstable(sstables::sstable_state::staging);
     tlogger.debug("Created staging sstable for streaming: ks={}, cf={}", schema()->ks_name(), schema()->cf_name());
     return newtab;
 }
@@ -493,8 +521,28 @@ static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
     return shards.size() != size_t(belongs_to_current_shard(shards));
 }
 
+// The version-less overload, used by memtable flush among others.
+//
+// It used to return the preferred *native* version unconditionally, so a table declared 'parquet'
+// flushed native sstables and relied on a later compaction to convert them. That is fine on a
+// size-tiered strategy, where everything gets recompacted anyway -- and it is not fine on TWCS.
+//
+// Measured (`~/pq-lab/twcs_converge.py`, design doc 10.7): a TWCS table with 3 M rows over 25 daily
+// windows, left entirely to automatic compaction, settled at **21 native sstables against 5
+// Parquet** and stayed there. The reason is structural rather than a timing artefact: TWCS's
+// per-window major needs two sstables in the window and its size-tiered fallback needs
+// `min_compaction_threshold`, so a closed window holding exactly *one* sstable is terminal -- there
+// is nothing to merge, compaction correctly never runs again, and the file keeps whatever format it
+// was flushed in. Under a write-side-conversion design that means never Parquet.
+//
+// So a table that writes Parquet unconditionally flushes Parquet. That is what makes "the whole
+// table is Parquet" true without operator action, and it removes a native-to-Parquet rewrite of
+// every flush as a side effect.
 sstables::shared_sstable table::make_sstable(sstables::sstable_state state) {
     auto& sstm = get_sstables_manager();
+    if (sstables::parquet::writes_parquet_unconditionally(*_schema)) {
+        return make_sstable(state, sstables::sstable_version_types::pq);
+    }
     return make_sstable(state, sstm.get_preferred_sstable_version());
 }
 
@@ -2268,6 +2316,8 @@ void table::set_metrics() {
     namespace ms = seastar::metrics;
     if (_config.enable_metrics_reporting) {
         _metrics.add_group("column_family", {
+                ms::make_counter("single_partition_reads", _stats.single_partition_reads, ms::description("Number of reads where every requested partition range was singular, i.e. point reads by partition key"))(cf)(ks).set_skip_when_empty(),
+                ms::make_counter("range_scan_reads", _stats.range_scan_reads, ms::description("Number of reads that touched at least one non-singular partition range, i.e. scans"))(cf)(ks).set_skip_when_empty(),
                 ms::make_counter("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), _stats.memtable_switch_count)(cf)(ks).set_skip_when_empty(),
                 ms::make_counter("memtable_partition_writes", [this] () { return _stats.memtable_partition_insertions + _stats.memtable_partition_hits; }, ms::description("Number of write operations performed on partitions in memtables"))(cf)(ks).set_skip_when_empty(),
                 ms::make_counter("memtable_partition_hits", _stats.memtable_partition_hits, ms::description("Number of times a write operation was issued on an existing partition in memtables"))(cf)(ks).set_skip_when_empty(),
@@ -2333,6 +2383,12 @@ void table::set_metrics() {
     } else {
         if (_config.enable_node_aggregated_table_metrics && !is_internal_keyspace(_schema->ks_name())) {
             _metrics.add_group("column_family", {
+                // Registered here as well as in the per-keyspace group above, because that group is
+                // gated on `enable_keyspace_column_family_metrics`, which is off by default -- a
+                // counter registered only there is invisible on a stock node, which is exactly how
+                // the first attempt at these produced an endpoint with no sign of them.
+                ms::make_counter("single_partition_reads", _stats.single_partition_reads, ms::description("Number of reads where every requested partition range was singular, i.e. point reads by partition key"))(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                ms::make_counter("range_scan_reads", _stats.range_scan_reads, ms::description("Number of reads that touched at least one non-singular partition range, i.e. scans"))(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                 ms::make_counter("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), _stats.memtable_switch_count)(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                 ms::make_counter("memtable_partition_writes", [this] () { return _stats.memtable_partition_insertions + _stats.memtable_partition_hits; }, ms::description("Number of write operations performed on partitions in memtables"))(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                 ms::make_counter("memtable_partition_hits", _stats.memtable_partition_hits, ms::description("Number of times a write operation was issued on an existing partition in memtables"))(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
@@ -5102,20 +5158,50 @@ table::query(schema_ptr query_schema,
         co_return make_lw_shared<query::result>();
     }
 
+    // A client query builds its result from the slice's columns and discards the rest, so a
+    // storage engine that can cheaply skip the others may. Derived here, and only here, for two
+    // reasons that both had to hold:
+    //
+    //   * it must not cross the wire. enum_set::from_mask() throws on an unknown bit, so a new
+    //     coordinator setting this in the read command would break the read on an older replica
+    //     mid-upgrade. Setting it replica-side means old and new nodes interoperate untouched, in
+    //     either direction.
+    //   * bypass_cache alone is not permission. A reader whose output populates the row cache must
+    //     produce whole rows, so the cache is the reason the flag is needed -- but
+    //     table::stream_view_replica_updates() also sets bypass_cache, and a materialized-view
+    //     update computed from a partially-read base row produces wrong view rows. That path goes
+    //     through as_mutation_source_excluding_staging(), never through table::query(), which is
+    //     what makes *this* function the safe place to conclude it.
+    //
+    // The copy is per query and shallow enough not to matter next to the read it is about to do.
+    const query::read_command& cmd_ref = cmd;
+
     const auto table_async_gate_holder = _async_gate.hold();
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
+
+    // Point read or scan, counted here because this is the last place that knows. A read is a point
+    // read when every range it was given is singular -- a coordinator may batch several named
+    // partitions into one call, and that is still N lookups rather than a sweep. Anything else
+    // touches at least one open-ended range and is a scan.
+    if (!partition_ranges.empty()
+        && std::all_of(partition_ranges.begin(), partition_ranges.end(),
+                       [] (const dht::partition_range& r) { return r.is_singular(); })) {
+        ++_stats.single_partition_reads;
+    } else {
+        ++_stats.range_scan_reads;
+    }
 
     auto finally = defer([&] () noexcept {
         _stats.reads.mark(lc);
     });
 
-    const auto short_read_allowed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
+    const auto short_read_allowed = query::short_read(cmd_ref.slice.options.contains<query::partition_slice::option::allow_short_read>());
     auto accounter = co_await (opts.request == query::result_request::only_digest
              ? memory_limiter.new_digest_read(permit.max_result_size(), short_read_allowed)
              : memory_limiter.new_data_read(permit.max_result_size(), short_read_allowed));
 
-    query_state qs(query_schema, cmd, opts, partition_ranges, std::move(accounter));
+    query_state qs(query_schema, cmd_ref, opts, partition_ranges, std::move(accounter));
 
     std::optional<querier> querier_opt;
     if (saved_querier) {

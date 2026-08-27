@@ -123,14 +123,44 @@ void size_tiered_compaction_strategy_options::validate(const std::map<sstring, s
     compaction_strategy_impl::validate_min_max_threshold(options, unchecked_options);
 }
 
+// Which length to bucket a candidate set by.
+//
+// `data_size()` is not one unit. For a compressed native sstable it is the data component's
+// *uncompressed* length; for a `pq` sstable there is no separate compression layer to undo, so it
+// is the file size. Within an all-native set that inconsistency is invisible -- every entry uses
+// the same convention, so the ratios bucketing is built on are self-consistent -- which is why
+// this stays on `data_size()` there: no existing table's bucketing changes.
+//
+// A hybrid table is different. Parquet compresses internally at roughly 5-10x, so a `pq` sstable
+// holding exactly the same rows as a native one reports a length 5-10x smaller and drops several
+// tiers below its true peer. Bucketing then merges it with genuinely small sstables and repeatedly
+// rewrites the one format that is most expensive to rewrite. So when the set is mixed, compare
+// what is actually on disk, which is the same unit for both.
+//
+// This matters for TWCS as much as for ICS: TWCS falls back to size-tiering *within* a window
+// (`bucket_compaction_mode::size_tiered`), and TWCS is the recommended strategy for the timestamp
+// clustering keys Parquet is best at -- see docs/dev/parquet-storage-format.md section 6.4.
+static bool mixed_formats(const std::vector<sstables::shared_sstable>& sstables) {
+    bool any_pq = false, any_other = false;
+    for (auto& sst : sstables) {
+        (sst->get_version() == sstables::sstable_version_types::pq ? any_pq : any_other) = true;
+    }
+    return any_pq && any_other;
+}
+
+static uint64_t bucketing_size(const sstables::shared_sstable& sst, bool use_ondisk) {
+    return use_ondisk ? sst->ondisk_data_size() : sst->data_size();
+}
+
 std::vector<std::pair<sstables::shared_sstable, uint64_t>>
 size_tiered_compaction_strategy::create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables) {
 
     std::vector<std::pair<sstables::shared_sstable, uint64_t>> sstable_length_pairs;
     sstable_length_pairs.reserve(sstables.size());
 
+    const bool use_ondisk = mixed_formats(sstables);
     for(auto& sstable : sstables) {
-        auto sstable_size = sstable->data_size();
+        auto sstable_size = bucketing_size(sstable, use_ondisk);
         SCYLLA_ASSERT(sstable_size != 0);
 
         sstable_length_pairs.emplace_back(sstable, sstable_size);
@@ -143,6 +173,8 @@ std::vector<std::vector<sstables::shared_sstable>>
 size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_sstable>& sstables, size_tiered_compaction_strategy_options options) {
     // sstables sorted by size of its data file.
     auto sorted_sstables = create_sstable_and_length_pairs(sstables);
+    // Whatever unit the pairs above were built in, the re-read below has to match it.
+    const bool use_ondisk = mixed_formats(sstables);
 
     std::sort(sorted_sstables.begin(), sorted_sstables.end(), [] (auto& i, auto& j) {
         return i.second < j.second;
@@ -170,7 +202,7 @@ size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_
                 auto& bucket = bucket_list.back();
                 auto total_size = bucket.size() * bucket_average_size;
                 auto new_average_size = (total_size + size) / (bucket.size() + 1);
-                auto smallest_sstable_in_bucket = bucket[0]->data_size();
+                auto smallest_sstable_in_bucket = bucketing_size(bucket[0], use_ondisk);
 
                 // SSTables are added in increasing size order so the bucket's
                 // average might drift upwards.
@@ -245,13 +277,17 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
 
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-        co_return compaction_descriptor(std::move(most_interesting));
+        auto desc = compaction_descriptor(std::move(most_interesting));
+        desc.parquet_ctx.bottom_tier = inputs_are_bottom_tier(desc.sstables, candidates);
+        co_return desc;
     }
 
     // If we are not enforcing min_threshold explicitly, try any pair of SStables in the same tier.
     if (!table_s.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
         std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
-        co_return compaction_descriptor(std::move(most_interesting));
+        auto desc = compaction_descriptor(std::move(most_interesting));
+        desc.parquet_ctx.bottom_tier = inputs_are_bottom_tier(desc.sstables, candidates);
+        co_return desc;
     }
 
     if (!table_s.tombstone_gc_enabled()) {

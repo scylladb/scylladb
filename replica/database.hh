@@ -427,6 +427,20 @@ struct table_stats {
     utils::estimated_histogram estimated_sstable_per_read{35};
     utils::timed_rate_moving_average_and_histogram tombstone_scanned;
     utils::timed_rate_moving_average_and_histogram live_scanned;
+    // How the reads split between looking up named partitions and sweeping ranges.
+    //
+    // `reads` above is one aggregate, and `live_scanned` is a Cassandra-compatibility stub that
+    // nothing populates -- reading it returns zero, which any "is this table point-read dominated?"
+    // test would interpret as "no", converting exactly the tables such a test exists to protect
+    // (docs/dev/parquet-future-work.md item 10). These two are populated at the one place that still
+    // knows which kind of query it is, `table::query()`, before the partition ranges are consumed.
+    //
+    // Instrumentation first, criterion later: the Parquet tiering policy dropped its point-read
+    // criterion because it could not be evaluated, and the standing rule is that any proposal to add
+    // a criterion back comes with a measurement rather than a rationale. These counters are what make
+    // such a measurement possible; they do not by themselves decide anything.
+    int64_t single_partition_reads = 0;
+    int64_t range_scan_reads = 0;
     utils::estimated_histogram estimated_coordinator_read;
     shared_ptr<alternator::table_stats> alternator_stats;
 };
