@@ -609,6 +609,8 @@ bool operator==(const schema::user_properties& lhs, const schema::user_propertie
         && lhs.compaction_strategy_options == rhs.compaction_strategy_options
         && lhs.compaction_enabled == rhs.compaction_enabled
         && lhs.storage_engine == rhs.storage_engine
+        && lhs.storage_format == rhs.storage_format
+        && lhs.parquet_options == rhs.parquet_options
         && lhs.caching_options == rhs.caching_options
         && lhs.tablet_options == rhs.tablet_options
         && lhs.get_paxos_grace_seconds() == rhs.get_paxos_grace_seconds()
@@ -716,6 +718,8 @@ table_schema_version schema::calculate_digest(const schema::raw_schema& r) {
     feed_hash(h, r._indices_by_name);
     feed_hash(h, r._is_counter);
     feed_hash(h, r._props.storage_engine);
+    feed_hash(h, r._props.storage_format);
+    feed_hash(h, r._props.parquet_options);
 
     for (auto&& [name, ext] : r._props.extensions) {
         feed_hash(h, name);
@@ -906,6 +910,9 @@ auto fmt::formatter<schema>::format(const schema& s, fmt::format_context& ctx) c
     out = fmt::format_to(out, ",minIndexInterval={}", s._raw._props.min_index_interval);
     out = fmt::format_to(out, ",maxIndexInterval={}", s._raw._props.max_index_interval);
     out = fmt::format_to(out, ",speculativeRetry={}", s._raw._props.speculative_retry.to_sstring());
+    if (s.has_storage_format() && s.storage_format() != storage_format_type::sstable) {
+        out = fmt::format_to(out, ",storage_format={}", storage_format_type_to_sstring(s.storage_format()));
+    }
     if (s.storage_engine() != storage_engine_type::normal) {
         out = fmt::format_to(out, ",storage_engine={}", storage_engine_type_to_sstring(s.storage_engine()));
     }
@@ -1253,8 +1260,28 @@ fragmented_ostringstream& schema::schema_properties(const schema_describe_helper
     os << "\n    AND memtable_flush_period_in_ms = " << fmt::to_string(memtable_flush_period());
     os << "\n    AND min_index_interval = " << fmt::to_string(min_index_interval());
     os << "\n    AND speculative_retry = '" << speculative_retry().to_sstring() << "'";
+    // Emitted unconditionally, including at the 'sstable' default. Every other property in this
+    // function prints at its default too -- bloom_filter_fp_chance = 0.01, default_time_to_live = 0,
+    // crc_check_chance = 1 -- so suppressing only this one made storage_format the single property
+    // whose absence was ambiguous: a table described without it could be an explicit 'sstable', or
+    // a server that does not know the property at all. Since which storage format a table uses is
+    // the whole subject of this feature, that is the last property that should be guessed at.
+    // has_storage_format() still gates it, so a table predating the feature prints nothing.
+    if (has_storage_format()) {
+        os << "\n    AND storage_format = '" << storage_format_type_to_sstring(storage_format()) << "'";
+    }
     if (storage_engine() != storage_engine_type::normal) {
         os << "\n    AND storage_engine = '" << storage_engine_type_to_sstring(storage_engine()) << "'";
+    }
+    // Emitted verbatim rather than through parquet_parameters::to_map(). The stored map is what the
+    // user wrote and was already validated at CREATE/ALTER time, so echoing it keeps DESCRIBE
+    // reproducible without pulling the sstables writer into schema.cc. Without this the per-column
+    // `encoding.<col>` settings -- and every other parquet sub-option -- were absent from DESCRIBE,
+    // so a table recreated from its own description silently lost them.
+    if (!parquet_options().empty()) {
+        os << "\n    AND parquet = {";
+        map_as_cql_param(os, parquet_options());
+        os << "}";
     }
 
     if (has_tablet_options()) {
