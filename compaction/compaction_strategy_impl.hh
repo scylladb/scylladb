@@ -42,6 +42,16 @@ protected:
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
     compaction_strategy_impl() = default;
     explicit compaction_strategy_impl(const std::map<sstring, sstring>& options);
+    // C1 of the Parquet tiering decision (design doc section 6.3): is this output in
+    // the bottom tier, i.e. is anything larger ever going to absorb it again?
+    //
+    // Expressed generically as "the inputs include the largest sstable the strategy
+    // was offered". For the size-tiered family that is exactly what compacting the
+    // top tier means, and it needs no knowledge of tier boundaries -- which is the
+    // point, since STCS and ICS bucket by size ratio rather than by level.
+    static bool inputs_are_bottom_tier(const std::vector<sstables::shared_sstable>& inputs,
+                                       const std::vector<sstables::shared_sstable>& candidates);
+
     static compaction_descriptor make_major_compaction_job(std::vector<sstables::shared_sstable> candidates,
             int level = compaction_descriptor::default_level,
             uint64_t max_sstable_bytes = compaction_descriptor::default_max_sstable_bytes);

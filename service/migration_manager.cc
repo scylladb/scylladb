@@ -46,6 +46,7 @@
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/function_name.hh"
 #include "unimplemented.hh"
+#include "sstables/parquet/encryption_keys.hh"
 #include "idl/migration_manager.dist.hh"
 
 namespace service {
@@ -513,9 +514,15 @@ utils::chunked_vector<mutation> prepare_new_keyspace_announcement(replica::datab
 
 static
 future<> validate(schema_ptr schema) {
-    return do_for_each(schema->extensions(), [schema](auto & p) {
+    co_await do_for_each(schema->extensions(), [schema](auto & p) {
         return p.second->validate(*schema);
     });
+    // Parquet Modular Encryption keys come from the same providers as encryption at rest, but the
+    // `parquet` property is a schema field rather than a schema extension, so it has no validate()
+    // of its own to be picked up by the loop above. Checked here, on the same path and for the
+    // same reason: it is the last point at which an unreachable key provider is a rejected DDL
+    // rather than a table that fails every flush.
+    co_await sstables::parquet::validate_encryption(*schema);
 }
 
 static future<utils::chunked_vector<mutation>> include_keyspace(
