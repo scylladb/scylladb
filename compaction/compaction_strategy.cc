@@ -55,7 +55,7 @@ std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compact
 
 std::unique_ptr<sstables::sstable_set_impl>
 compaction_strategy_impl::make_sstable_set(const compaction_group_view& ts) const {
-    return std::make_unique<sstables::partitioned_sstable_set>(ts.schema(), ts.token_range());
+    return std::make_unique<sstables::partitioned_sstable_set>(ts.schema());
 }
 
 bool compaction_strategy_impl::worth_dropping_tombstones(const sstables::shared_sstable& sst, gc_clock::time_point compaction_time, const compaction_group_view& t) {
@@ -800,7 +800,7 @@ future<reshape_config> make_reshape_config(const sstables::storage& storage, res
 }
 
 std::unique_ptr<sstables::sstable_set_impl> incremental_compaction_strategy::make_sstable_set(const compaction_group_view& ts) const {
-    return std::make_unique<sstables::partitioned_sstable_set>(ts.schema(), ts.token_range());
+    return std::make_unique<sstables::partitioned_sstable_set>(ts.schema());
 }
 
 }

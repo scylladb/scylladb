@@ -4552,9 +4552,8 @@ void compound_sstable_set_incremental_selector_fn(test_env& env) {
         };
 
         auto incremental_selection_test = [&] (strategy_param param) {
-            auto token_range = dht::token_range::make(dht::first_token(), dht::last_token());
-            auto set1 = make_lw_shared<sstable_set>(sstables::make_partitioned_sstable_set(s, token_range));
-            auto set2 = make_lw_shared<sstable_set>(sstables::make_partitioned_sstable_set(s, token_range));
+            auto set1 = make_lw_shared<sstable_set>(sstables::make_partitioned_sstable_set(s));
+            auto set2 = make_lw_shared<sstable_set>(sstables::make_partitioned_sstable_set(s));
             new_sstable(set1, 1, 1, 1);
             new_sstable(set2, 0, 2, 1);
             new_sstable(set2, 3, 3, 1);

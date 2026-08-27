@@ -1476,7 +1476,7 @@ public:
     }
 
     virtual sstables::sstable_set make_sstable_set_for_input() const override {
-        return sstables::make_partitioned_sstable_set(_schema, _table_s.token_range());
+        return sstables::make_partitioned_sstable_set(_schema);
     }
 
     // Unconditionally enable incremental compaction if the strategy specifies a max output size, e.g. LCS.

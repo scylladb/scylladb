@@ -34,21 +34,15 @@ class partitioned_sstable_set : public sstable_set_impl {
     };
 private:
     schema_ptr _schema;
-    std::vector<shared_sstable> _unleveled_sstables;
-    interval_index_type _leveled_sstables;
+    interval_index_type _sstables;
     lw_shared_ptr<sstable_list> _all;
     std::unordered_map<run_id, shared_sstable_run> _all_runs;
-    // Change counter on the interval index for leveled sstables, which is used
-    // by the incremental selector to determine whether or not to reposition its
-    // cursor.
-    uint64_t _leveled_sstables_change_cnt = 0;
-    // Token range spanned by the compaction group owning this sstable set.
-    dht::token_range _token_range;
+    // Change counter on the interval index, which is used by the incremental
+    // selector to determine whether or not to reposition its cursor.
+    uint64_t _change_cnt = 0;
 private:
     static token_interval make_interval(const dht::partition_range& range);
     static token_interval make_interval(const sstable& sst);
-    // SSTables are stored separately to avoid interval map's fragmentation issue when level 0 falls behind.
-    bool store_as_unleveled(const shared_sstable& sst) const;
     // The range over which a selection made at `pos` holds, given the position
     // at which the set of sstables covering the position next changes, if any.
     static dht::partition_range to_partition_range(const dht::ring_position_view& pos, std::optional<biased_token> change);
@@ -56,15 +50,13 @@ private:
 public:
 
     partitioned_sstable_set(const partitioned_sstable_set&) = delete;
-    explicit partitioned_sstable_set(schema_ptr schema, dht::token_range token_range);
+    explicit partitioned_sstable_set(schema_ptr schema);
     // For cloning the partitioned_sstable_set (makes a deep copy, including *_all)
     explicit partitioned_sstable_set(
         schema_ptr schema,
-        const std::vector<shared_sstable>& unleveled_sstables,
-        const interval_index_type& leveled_sstables,
+        const interval_index_type& sstables,
         const lw_shared_ptr<sstable_list>& all,
         const std::unordered_map<run_id, shared_sstable_run>& all_runs,
-        dht::token_range token_range,
         file_size_stats bytes_on_disk);
 
     virtual std::unique_ptr<sstable_set_impl> clone() const override;
