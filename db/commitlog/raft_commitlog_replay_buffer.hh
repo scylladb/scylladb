@@ -112,6 +112,14 @@ class raft_commitlog_replay_buffer {
     // Populated via add() during replay, then consumed and cleared by process_raft_replayed_items().
     std::unordered_map<raft::group_id, utils::chunked_vector<raft::log_entry_ptr>> _replayed_commitlog_entries_by_group;
 
+    // Highest commit_idx (with its term) seen per group across the replayed
+    // commit_idx entries. Used by process_raft_replayed_items() to restore
+    // system.raft_groups after a crash dropped the value from the raft_groups
+    // memtable before it flushed. A group may have such a record and no
+    // replayed log entries, if its entries' segments were reclaimed while a
+    // record's segment was not.
+    std::unordered_map<raft::group_id, raft_term_and_index> _replayed_commit_idx_by_group;
+
     // Resulting entries and rp_handles written to the new (post-crash) commitlog,
     // raft_commitlog instances when tablet Raft groups start.
     std::unordered_map<raft::group_id, service::strong_consistency::replayed_data_per_group> _per_group_data;
@@ -122,6 +130,18 @@ public:
     void add(const raft::group_id group_id, raft::log_entry_ptr entry) {
         _replayed_commitlog_entries_by_group[group_id].push_back(std::move(entry));
         ++_total_entries;
+    }
+
+    // Record a commit_idx read from a replayed commit_idx entry, keeping the
+    // highest per group. Any such record is a true statement about the past —
+    // commit indexes only advance and committed entries are never replaced —
+    // so the highest one is the tightest safe floor, and its term is exactly
+    // the term of the entry at that index.
+    void add_commit_idx(const raft::group_id group_id, raft_term_and_index committed) {
+        auto& slot = _replayed_commit_idx_by_group[group_id];
+        if (committed.idx > slot.idx) {
+            slot = committed;
+        }
     }
 
     // Get the replayed items for a group. These are removed from the buffer since they are now owned by the caller (raft_commitlog).
@@ -151,7 +171,13 @@ public:
     // Process the raft replay items after commitlog replay completes but before
     // old commitlog segments are deleted and memtables are flushed.
     //
-    // For each raft group in the buffer:
+    // First restores the commit_idx values the replayed entries carried (see
+    // add_commit_idx()) into system.raft_groups — only-advance, index and
+    // term together — so the steps below and bump_snapshot_indices() observe
+    // the post-crash value and treat those entries as committed.
+    //
+    // Then, for each raft group in the buffer:
+
     //   1. Reads commit_idx from the raft system tables.
     //   2. Filters entries: detects leader changes (discards replaced uncommitted
     //      entries) and stops at out-of-order tails from older pre-crash segments.

@@ -81,6 +81,32 @@ future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
     });
 }
 
+// Execute the CQL INSERT that persists (commit_idx, commit_idx_term) to
+// system.raft_groups. Only used during commitlog replay
+// (store_commit_idx_if_higher), before any raft group is running; at runtime
+// the pair is written exclusively by store_commit_idx()'s in-memory covering
+// mutations.
+static future<> store_commit_idx_cql(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
+        raft::index_t commit_idx, raft::term_t commit_idx_term) {
+    static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx, commit_idx_term) VALUES (?, ?, ?, ?)",
+        db::system_keyspace::RAFT_GROUPS);
+    return qp.execute_internal(
+        store_cql,
+        {int16_t(shard), gid.id, int64_t(commit_idx.value()), int64_t(commit_idx_term.value())},
+        cql3::query_processor::cache_internal::yes).discard_result();
+}
+
+future<> raft_groups_storage::store_commit_idx_if_higher(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
+        raft::index_t commit_idx, raft::term_t commit_idx_term) {
+    // Only advance, never regress: a prior run (or an earlier replay) may
+    // already have persisted a value at or beyond the recovered one.
+    const auto persisted = co_await load_commit_idx(qp, gid, shard);
+    if (commit_idx <= persisted) {
+        co_return;
+    }
+    co_await store_commit_idx_cql(qp, gid, shard, commit_idx, commit_idx_term);
+}
+
 future<raft::index_t> raft_groups_storage::load_commit_idx() {
     return load_commit_idx(_qp, _group_id, _shard);
 }

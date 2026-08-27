@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
@@ -126,7 +127,7 @@ filter_entries_result filter_entries(utils::chunked_vector<raft::log_entry_ptr>&
 } // anonymous namespace
 
 future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks) {
-    if (remaining_groups() == 0) {
+    if (remaining_groups() == 0 && _replayed_commit_idx_by_group.empty()) {
         co_return;
     }
 
@@ -137,6 +138,30 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
     SCYLLA_ASSERT(new_commitlog_ptr);
 
     logger.info("processing {} raft groups with {} total entries from commitlog replay", remaining_groups(), total_entries());
+
+    // Restore the recovered commit_idx values first: a crash can leave the
+    // persisted system.raft_groups value behind the replayed commit_idx
+    // records, and the loop below reads it to decide which entries are
+    // committed. A group can have a record and no surviving entries at all
+    // (its entries' segments were reclaimed while a record's was not), which
+    // is why this runs over the records rather than over the entries. Each record carries the exact term of the entry at its
+    // index, so the pair goes straight to system.raft_groups — the
+    // boot-time snapshot bump needs it exact (see make_raft_schema's
+    // commit_idx_term comment). Groups absent from tablet metadata are
+    // skipped, like their entries are: the tablet moved away or was dropped,
+    // so nothing may resurrect its row. The writes are independent, so run
+    // them concurrently.
+    co_await seastar::coroutine::parallel_for_each(_replayed_commit_idx_by_group,
+            [&qp, &group_to_table] (const auto& entry) -> future<> {
+        const auto& [group_id, committed] = entry;
+        if (!group_to_table.contains(group_id)) {
+            logger.debug("group {} not found in tablet metadata, discarding recovered commit_idx {}",
+                    group_id, committed.idx);
+            co_return;
+        }
+        co_await service::strong_consistency::raft_groups_storage::store_commit_idx_if_higher(
+                qp, group_id, this_shard_id(), committed.idx, committed.term);
+    });
 
     for (auto& [group_id, entries_list] : _replayed_commitlog_entries_by_group) {
         if (entries_list.empty()) {
@@ -236,6 +261,7 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
 
     // The old items are not needed anymore.
     _replayed_commitlog_entries_by_group.clear();
+    _replayed_commit_idx_by_group.clear();
     logger.info("Raft groups commit log replayed data processing complete");
 }
 namespace raft_buffer_detail {

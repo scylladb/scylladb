@@ -2208,10 +2208,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     // uncommitted entries are now in new segments).
                     supervisor::notify("processing raft replay buffer");
                     raft_replay_buffer.invoke_on_all([&db, &qp](db::raft_commitlog_replay_buffer& buffer) mutable {
-                        if (buffer.remaining_groups()) {
-                            return buffer.process_raft_replayed_items(db.local(), qp.local(), sys_ks.local());
-                        }
-                        return make_ready_future<>();
+                        // Called unconditionally — the buffer returns early when it
+                        // holds nothing. A group may have a replayed commit_idx
+                        // record but no log entries (its entries' segments were
+                        // reclaimed while a record's was not); the buffer restores
+                        // those floors too.
+                        return buffer.process_raft_replayed_items(db.local(), qp.local(), sys_ks.local());
                     }).get();
 
                     startlog.info("replaying commit log - flushing memtables");
