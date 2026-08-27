@@ -881,6 +881,11 @@ async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager
 
             await asyncio.gather(*(restore_table(i, cf) for i, cf in enumerate(tables)))
 
+            # Restore reverts the tablet hints it forced on the table, which lets the
+            # balancer resize and rebalance it. Wait for that to settle: a migration in
+            # flight would double-count the moving replica in check_mutation_replicas()
+            await manager.api.quiesce_topology(servers[0].ip_addr)
+
             await asyncio.gather(*(check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, dst_ks, f'{cf}_restored') for cf in tables))
 
             res = await cql.run_async(f"SELECT extra FROM {dst_ks}.{tables[0]}_restored;")
@@ -982,6 +987,7 @@ async def test_restore_tablets_parallel(build_mode: str, manager: ScyllaClusterM
         assert (status is not None) and (status['state'] == 'done'), f"Restore failed: {status}"
         assert status['progress_completed'] == status['progress_total']
 
+        await manager.api.quiesce_topology(servers[0].ip_addr)
         await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -1033,6 +1039,7 @@ async def test_restore_tablets_vs_migration(build_mode: str, manager: ScyllaClus
         assert (status is not None) and (status['state'] == 'done')
 
         await migration_task
+        await manager.api.quiesce_topology(servers[1].ip_addr)
         await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
 
 
@@ -1302,10 +1309,7 @@ async def test_restore_tablets_with_different_tablet_hints(build_mode: str, mana
         status = await manager.api.wait_task(servers[1].ip_addr, tid)
         assert (status is not None) and (status['state'] == 'done')
 
-        # FIXME:Disable the tablet balancer before checking mutations to avoid
-        # MUTATION_FRAGMENTS returning inconsistent results during inter-node
-        # tablet migrations (different nodes see different ERM stages).
-        await manager.disable_tablet_balancing()
+        await manager.api.quiesce_topology(servers[1].ip_addr)
         await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
 
         # Verify that restore altered the table back with the tablet hints set before restore started
