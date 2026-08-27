@@ -24,6 +24,7 @@ from cassandra.auth import PlainTextAuthProvider
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
 from test.cluster.util import new_test_keyspace, new_test_table
+from test.pylib.tablets import get_tablet_count
 
 async def get_cpu_metrics(manager: ScyllaClusterManager):
     """Utility function for getting the current amount of work (in CPU ms)
@@ -349,3 +350,36 @@ async def test_row_ttl_multi_dc(manager: ScyllaClusterManager):
                     time.sleep(0.1)
             for dc in range(2):
                 assert 0 == len(list(await cql_dc[dc].run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.LOCAL_QUORUM))))
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_row_ttl_tablet_split_during_scan(manager: ScyllaClusterManager):
+    """A tablet split between the scanner collecting its tablets and scanning
+       them must not leave any of the new tablets unscanned in that pass."""
+    servers = [await manager.server_add(cmdline=['--smp', '1'], config={'alternator_ttl_period_in_seconds': '0.5'})]
+    ip = servers[0].ip_addr
+    cql = manager.get_cql()
+    injection = 'alternator_ttl_tablet_candidates_collected'
+    async def scanner_paused(count):
+        return await manager.api.get_injection_enter_count(ip, injection) >= count or None
+    async def tablet_count_is(count):
+        return await get_tablet_count(manager, servers[0], ks, 't') == count or None
+    async def probed():
+        return (await manager.metrics.query(ip)).get('scylla_expiration_tablets_probed') or 0
+    ksdef = "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+    async with new_test_keyspace(manager, ksdef) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (p int primary key, e bigint ttl) WITH tablets = {{'min_tablet_count': 4, 'max_tablet_count': 4}}")
+        await wait_for(lambda: tablet_count_is(4), time.time() + 60)
+        # Pause a pass right after it has collected the 4 tablets.
+        await manager.api.enable_injection(ip, injection, one_shot=False)
+        await wait_for(lambda: scanner_paused(1), time.time() + 60)
+        e = int(time.time()) - 10
+        await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.t (p, e) VALUES ({p}, {e})') for p in range(100)])
+        await cql.run_async(f"ALTER TABLE {ks}.t WITH tablets = {{'min_tablet_count': 8, 'max_tablet_count': 8}}")
+        await wait_for(lambda: tablet_count_is(8), time.time() + 120)
+        probed_before = await probed()
+        # Let the paused pass finish; the next pass pauses again.
+        await manager.api.message_injection(ip, injection)
+        await wait_for(lambda: scanner_paused(2), time.time() + 60)
+        assert await probed() - probed_before == 8
+        assert [] == list(await cql.run_async(f'SELECT p FROM {ks}.t'))
+        await manager.api.disable_injection(ip, injection)

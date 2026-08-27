@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -38,6 +39,7 @@
 #include "types/types.hh"
 #include "types/map.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include "utils/rjson.hh"
 #include "utils/big_decimal.hh"
 #include "cql3/selection/selection.hh"
@@ -763,25 +765,51 @@ static future<bool> scan_table(
     scan_ranges_context scan_ctx{s, proxy, std::move(column_name), std::move(member)};
 
     if (s->table().uses_tablets()) {
-        std::optional<dht::token> last_token;
-        do {
-            std::optional<locator::tablet_metadata_guard> tablet_guard;
-            std::optional<dht::partition_range> range;
-            {
-                auto erm = s->table().get_effective_replication_map();
-                auto my_host_id = erm->get_topology().my_host_id();
-                const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(s->id());
-                std::optional<locator::tablet_id> tablet = last_token ? tablet_map.get_tablet_id(dht::next_token(*last_token)) : tablet_map.first_tablet();
+        // Search only tablets this shard hosts: O(hosted), not O(tablets in the table).
+        // Keep token ranges, not ids: a split or merge renumbers every tablet id.
+        std::vector<std::pair<dht::token, dht::token>> candidates;
+        {
+            auto erm = s->table().get_effective_replication_map();
+            const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(s->id());
+            auto local_tablets = s->table().local_tablet_ids();
+            candidates.reserve(local_tablets.size());
+            for (auto tid : local_tablets) {
+                candidates.emplace_back(tablet_map.get_first_token(tid), tablet_map.get_last_token(tid));
+            }
+        } // No yield above: the ERM is dropped before any preemption point.
+        std::ranges::sort(candidates);
+        utils::wait_for_message wfm(std::chrono::minutes(5));
+        wfm.as = &abort_source;
+        co_await utils::get_local_injector().inject("alternator_ttl_tablet_candidates_collected", wfm, false);
 
-                // The loop finds the tablet range to scan, one which we are the primary replica for,
-                // or if the primary replica is down, one which we are the secondary replica for.
-                do {
-                    auto tablet_token_range = tablet_map.get_token_range(*tablet);
-                    last_token = tablet_map.get_last_token(*tablet);
-                    auto tablet_primary_replica = tablet_map.get_primary_replica(*tablet, erm->get_topology());
+        // Walk each candidate range over the current tablet map, so all
+        // children of a split are covered and a merged tablet is scanned once.
+        std::optional<dht::token> scanned_up_to;
+        for (const auto& [first, last] : candidates) {
+            if (scanned_up_to && *scanned_up_to >= last) {
+                continue;
+            }
+            dht::token token = scanned_up_to && *scanned_up_to >= first ? dht::next_token(*scanned_up_to) : first;
+            for (;;) {
+                if (abort_source.abort_requested()) {
+                    co_return true;
+                }
+                std::optional<locator::tablet_metadata_guard> tablet_guard;
+                std::optional<dht::partition_range> range;
+                {
+                    // Re-check against a fresh ERM: tablets may have moved, split or merged.
+                    auto erm = s->table().get_effective_replication_map();
+                    const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(s->id());
+                    auto tid = tablet_map.get_tablet_id(token);
+                    scanned_up_to = tablet_map.get_last_token(tid);
+                    expiration_stats.tablets_probed++;
+                    auto my_host_id = erm->get_topology().my_host_id();
+                    auto tablet_token_range = tablet_map.get_token_range(tid);
+                    auto tablet_primary_replica = tablet_map.get_primary_replica(tid, erm->get_topology());
                     if (tablet_primary_replica.host == my_host_id && tablet_primary_replica.shard == this_shard_id()) {
                         range = dht::to_partition_range(std::move(tablet_token_range));
-                    } else if (erm->get_replication_factor() > 1) {
+                        expiration_stats.tablets_scanned++;
+                    } else if (tablet_map.get_tablet_info(tid).replicas.size() > 1) {
                         // If each node only scans its own primary ranges, then when any node is
                         // down part of the token range will not get scanned. This can be viewed
                         // as acceptable (when it comes back online, it will resume its scan),
@@ -789,35 +817,35 @@ static future<bool> scan_table(
                         // by tasking another node to take over scanning of the dead node's primary
                         // ranges. What we do here is that this node will also check expiration
                         // on its *secondary* ranges - but only those whose primary owner is down.
-                        auto tablet_secondary_replica = tablet_map.get_secondary_replica(*tablet, erm->get_topology()); // throws if no secondary replica
+                        auto tablet_secondary_replica = tablet_map.get_secondary_replica(tid, erm->get_topology()); // throws if no secondary replica
                         if (tablet_secondary_replica.host == my_host_id && tablet_secondary_replica.shard == this_shard_id()) {
                             if (!gossiper.is_alive(tablet_primary_replica.host)) {
                                 range = dht::to_partition_range(std::move(tablet_token_range));
+                                expiration_stats.secondary_tablets_scanned++;
                             }
                         }
                     }
                     if (range) {
-                        break;
+                        // Take the tablet guard to protect the tablet while we scan it.
+                        tablet_guard.emplace(s->table(), locator::global_tablet_id{s->id(), tid});
                     }
-                    tablet = tablet_map.next_tablet(*tablet);
-                } while (tablet);
-
+                } // Drop the ERM before the scan so to unblock any tablet operations,
+                  // which would otherwise be held up by us keeping the ERM.
+                  // tablet_guard blocks only the selected tablet.
                 if (range) {
-                    // Take the tablet guard to protect the tablet while we scan it.
-                    tablet_guard.emplace(s->table(), locator::global_tablet_id{s->id(), *tablet});
+                    // Note that because of issue #9167 we need to run a separate query on each partition range, and can't pass
+                    // several of them into one partition_range_vector that is passed to scan_table_ranges().
+                    co_await scan_table_ranges(proxy, scan_ctx, {std::move(*range)}, abort_source, page_sem, expiration_stats);
+                    tablet_guard.reset();
                 } else {
-                    // No range was found means all tablets have been iterated and we are done.
+                    co_await coroutine::maybe_yield();
+                }
+                if (*scanned_up_to >= last) {
                     break;
                 }
-            } // Drop the ERM before the scan so to unblock any tablet operations,
-              // which would otherwise be held up by us keeping the ERM.
-              // tablet_guard blocks only the selected tablet.
-
-            // Note that because of issue #9167 we need to run a separate query on each partition range, and can't pass
-            // several of them into one partition_range_vector that is passed to scan_table_ranges().
-            co_await scan_table_ranges(proxy, scan_ctx, {std::move(*range)}, abort_source, page_sem, expiration_stats);
-            tablet_guard.reset();
-        } while (*last_token < dht::last_token());
+                token = dht::next_token(*scanned_up_to);
+            }
+        }
     } else {  // VNodes
         locator::static_effective_replication_map_ptr ermp =
                 db.real_database().find_keyspace(s->ks_name()).get_static_effective_replication_map();
@@ -951,6 +979,12 @@ expiration_service::stats::stats() {
             seastar::metrics::description("number of items deleted after expiration"))(basic_level)(alternator_label).set_skip_when_empty(),
         seastar::metrics::make_total_operations("secondary_ranges_scanned", secondary_ranges_scanned,
             seastar::metrics::description("number of token ranges scanned by this node while their primary owner was down"))(alternator_label).set_skip_when_empty(),
+        seastar::metrics::make_total_operations("tablets_probed", tablets_probed,
+            seastar::metrics::description("number of tablet ownership checks performed by the expiration scan"))(alternator_label).set_skip_when_empty(),
+        seastar::metrics::make_total_operations("tablets_scanned", tablets_scanned,
+            seastar::metrics::description("number of tablets scanned by this shard as their primary replica"))(alternator_label).set_skip_when_empty(),
+        seastar::metrics::make_total_operations("secondary_tablets_scanned", secondary_tablets_scanned,
+            seastar::metrics::description("number of tablets scanned by this shard as a secondary replica while the primary was down"))(alternator_label).set_skip_when_empty(),
     });
 }
 
