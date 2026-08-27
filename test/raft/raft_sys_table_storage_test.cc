@@ -472,6 +472,54 @@ SEASTAR_TEST_CASE(test_groups_store_load_snapshot_descriptor) {
     });
 }
 
+// Test that a configuration committed but never snapshotted is recoverable:
+// store_snapshot_config_if_newer() replaces the stored configuration when the
+// committed entry is newer than the persisted snapshot index, and leaves it
+// alone when the snapshot already accounts for it (SCYLLADB-3842). This is what
+// commitlog replay uses for the committed configuration entries it drops.
+SEASTAR_TEST_CASE(test_groups_restore_committed_config_only_if_newer) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+
+        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+
+        auto make_config = [] {
+            raft::config_member srv{raft::server_address{
+                    raft::server_id::create_random_id(),
+                    ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"))
+                }, raft::is_voter::yes};
+            return raft::configuration({std::move(srv)});
+        };
+
+        // A snapshot at index 100 carrying config A.
+        const auto snap_cfg = make_config();
+        co_await storage.store_snapshot_descriptor(raft::snapshot_descriptor{
+                .idx = raft::index_t(100), .term = raft::term_t(1),
+                .config = snap_cfg, .id = raft::snapshot_id::create_random_id()}, 0);
+
+        // A configuration committed at index 50 is already accounted for by
+        // that snapshot: it must not overwrite config A.
+        co_await raft_groups_storage::store_snapshot_config_if_newer(
+                qp, gid, test_shard, make_config(), raft::index_t(50));
+        auto loaded = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK(loaded.config == snap_cfg);
+
+        // A configuration committed at index 150 is newer than the snapshot,
+        // so it replaces the stored one — this is the case that would
+        // otherwise be lost when the group never snapshots again.
+        const auto newer_cfg = make_config();
+        co_await raft_groups_storage::store_snapshot_config_if_newer(
+                qp, gid, test_shard, newer_cfg, raft::index_t(150));
+        loaded = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK(loaded.config == newer_cfg);
+        // Only the configuration changed; the snapshot index is untouched.
+        BOOST_CHECK_EQUAL(loaded.idx, raft::index_t(100));
+    });
+}
+
 // Verify partitioner round-trip: token_for_shard -> shard_of returns the original shard
 SEASTAR_TEST_CASE(test_fixed_shard_partitioner_shard_mapping) {
     for (uint16_t shard = 0; shard < 256; ++shard) {

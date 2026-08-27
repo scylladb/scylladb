@@ -194,6 +194,7 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
         uint64_t applied = 0;
         auto& group_data = _per_group_data[group_id];
         raft::log_entry_ptr_list uncommitted;
+        std::optional<std::pair<raft::index_t, raft::configuration>> committed_config;
 
         for (auto& entry : filtered.entries) {
             // Apply committed command entries to the memtables. It is safe not to append them
@@ -209,6 +210,16 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
                 ++applied;
             }
 
+            // A committed configuration entry is dropped like every other
+            // committed non-command entry, so its content has to be persisted
+            // here or the group would come back with the configuration of its
+            // last snapshot — the bootstrap one for a group that never
+            // snapshotted (SCYLLADB-3842). Entries ascend, so the last one
+            // seen is the newest committed configuration.
+            if (entry->idx <= commit_idx && std::holds_alternative<raft::configuration>(entry->data)) {
+                committed_config = std::pair(entry->idx, std::get<raft::configuration>(entry->data));
+            }
+
             // Only uncommitted entries go back to the raft log (and to the new
             // commitlog, below). Committed entries have already been applied to
             // memtables above and are covered by the snapshot index that
@@ -219,6 +230,14 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
             }
 
             co_await seastar::coroutine::maybe_yield();
+        }
+
+        // Persist the newest committed configuration the replayed log carried.
+        // Only-newer: the persisted snapshot's configuration already accounts
+        // for every configuration entry at or below the snapshot index.
+        if (committed_config) {
+            co_await service::strong_consistency::raft_groups_storage::store_snapshot_config_if_newer(
+                    qp, group_id, this_shard_id(), committed_config->second, committed_config->first);
         }
 
         // Rewrite uncommitted entries to the new commitlog the same way

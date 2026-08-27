@@ -132,8 +132,9 @@ future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
     // covers above, so the handles raft_commitlog still holds for them are
     // redundant. Command handles are left alone — apply() has yet to move
     // them to the target table's memtable, which must hold the segment until
-    // the data is durable. Configuration handles are exempt — see
-    // raft_commitlog::release_covered_dummies().
+    // the data is durable. Configuration handles are exempt: their content is
+    // recovered from the entry itself, so the entry must stay in the
+    // commitlog — see raft_commitlog::release_covered_dummies().
     _raft_commitlog.release_covered_dummies(covers.back().max_idx);
 }
 
@@ -314,6 +315,40 @@ raft_groups_storage::load_snapshot_idx_and_term(cql3::query_processor& qp, raft:
     co_return std::pair(
             raft::index_t(row.get_or<int64_t>("idx", 0)),
             raft::term_t(row.get_or<int64_t>("term", 0)));
+}
+
+future<> raft_groups_storage::store_snapshot_config_if_newer(cql3::query_processor& qp, raft::group_id gid,
+        shard_id shard, const raft::configuration& config, raft::index_t config_idx) {
+    // The persisted snapshot's configuration is the one in effect at its index,
+    // so it already accounts for every configuration entry at or below it.
+    static const auto load_snp_idx_cql = format("SELECT idx FROM system.{} WHERE shard = ? AND group_id = ?",
+        db::system_keyspace::RAFT_GROUPS_SNAPSHOTS);
+    auto rs = co_await qp.execute_internal(load_snp_idx_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    if (!rs->empty() && rs->one().has("idx")) {
+        const auto snap_idx = raft::index_t(static_cast<uint64_t>(rs->one().get_as<int64_t>("idx")));
+        if (config_idx <= snap_idx) {
+            co_return;
+        }
+    }
+    // Replace the stored configuration wholesale: it is a set of members, not
+    // a delta. A crash in the middle only means replay runs again and rewrites
+    // the same rows from the same commitlog entry.
+    static const auto delete_cfg_cql = format("DELETE FROM system.{} WHERE shard = ? AND group_id = ?",
+        db::system_keyspace::RAFT_GROUPS_SNAPSHOT_CONFIG);
+    co_await qp.execute_internal(delete_cfg_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    static const auto store_cfg_cql = format("INSERT INTO system.{} (shard, group_id, disposition, server_id, can_vote) VALUES (?, ?, ?, ?, ?)",
+        db::system_keyspace::RAFT_GROUPS_SNAPSHOT_CONFIG);
+    for (const raft::config_member& srv : config.current) {
+        co_await qp.execute_internal(store_cfg_cql,
+                {int16_t(shard), gid.id, "CURRENT", srv.addr.id.id, srv.can_vote},
+                cql3::query_processor::cache_internal::yes);
+    }
+    for (const raft::config_member& srv : config.previous) {
+        co_await qp.execute_internal(store_cfg_cql,
+                {int16_t(shard), gid.id, "PREVIOUS", srv.addr.id.id, srv.can_vote},
+                cql3::query_processor::cache_internal::yes);
+    }
+    rgslog.info("group {}: restored the configuration committed at index {} from the commitlog", gid, config_idx);
 }
 
 future<> raft_groups_storage::store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap) {

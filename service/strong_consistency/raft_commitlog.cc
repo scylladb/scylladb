@@ -28,9 +28,10 @@ bool is_command_entry(const raft::log_entry& e) {
     return std::holds_alternative<raft::command>(e.data);
 }
 
-// Configuration entries carry state that is only made durable by
-// store_snapshot_descriptor(), so their handles follow a different release
-// rule than commands and dummies (see SCYLLADB-3842).
+// Configuration entries carry state no covering value can reconstruct, so the
+// entry must stay in the commitlog until a snapshot or commitlog replay has
+// persisted the configuration; their handles therefore follow a different
+// release rule than commands and dummies (see SCYLLADB-3842).
 bool is_config_entry(const raft::log_entry& e) {
     return std::holds_alternative<raft::configuration>(e.data);
 }

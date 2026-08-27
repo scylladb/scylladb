@@ -119,10 +119,13 @@ private:
     replay_position_list _dummy_positions;
     // Replay position handles for configuration entries (raft::configuration).
     // Never consumed by apply(). Unlike commands and dummies these carry state
-    // that is only persisted by store_snapshot_descriptor(), and commitlog
-    // replay discards committed non-command entries — so their handles must
-    // stay held until a snapshot has written the configuration durably.
-    // Released only by truncate_log() / truncate_log_tail(). See SCYLLADB-3842.
+    // that no covering value can reconstruct, so the entry itself must remain
+    // in the commitlog until it is persisted elsewhere: commitlog replay reads
+    // the newest committed configuration back out of it
+    // (store_snapshot_config_if_newer), and a snapshot writes it into
+    // system.raft_groups_snapshot_config. Hence released only by
+    // truncate_log() (the entry was discarded) or truncate_log_tail() (a
+    // snapshot persisted it). See SCYLLADB-3842.
     replay_position_list _config_positions;
     // The group's parked claims (see pending_cover_map). Updated in place
     // by write_batches() and seeded by the constructor (the map built while
@@ -242,7 +245,8 @@ public:
     // from that point their retention no longer depends on these handles:
     // the covering value pins the segment via the raft_groups memtable until
     // the value is durable. (Command handles are consumed by apply();
-    // configuration handles are exempt and live until truncation.)
+    // configuration handles are exempt and live until truncation, because
+    // their content is recovered from the entry itself.)
     void release_covered_dummies(raft::index_t idx);
 
     // Move replay position handles out of _command_positions for the
