@@ -303,6 +303,12 @@ def testpy_logger(testpy_uname: str) -> logging.Logger:
     return logging.getLogger(testpy_uname)
 
 
+@pytest.fixture
+def testpy_test_name(request: pytest.FixtureRequest, testpy_uname: str) -> str:
+    """The test case's full unique name, e.g. test_topology.1::test_add_server_add_column."""
+    return f"{testpy_uname}::{request.node.name}"
+
+
 @pytest.fixture(scope="module")
 def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
     def scale_timeout_inner(timeout: int | float) -> int | float:
@@ -391,45 +397,25 @@ def scylla_binary(request: pytest.FixtureRequest, build_mode: str) -> str:
 @pytest.fixture(scope="module")
 async def scylla_cluster(request: pytest.FixtureRequest,
                          testpy_cluster_factory: ClusterFactory,
-                         testpy_shortname: str,
                          testpy_uname: str,
                          testpy_logger: logging.Logger) -> AsyncGenerator[ScyllaCluster]:
     """Create a ScyllaCluster for the tests in a module.
 
-    Builds a cluster with the suite's factory, runs the before-test hook and
-    yields it to the module's tests. Once the module is done the cluster is
-    recycled, so a later module always starts from a fresh one.
+    Builds a cluster with the suite's factory and yields it to the module's
+    tests. Once the module is done the cluster is recycled, so a later module
+    always starts from a fresh one.
     """
-    cluster_logger = testpy_logger
-    cluster: ScyllaCluster | None = None
-    server_log_filename: pathlib.Path | None = None
-    testpy_name = os.path.join(get_params_stash(node=request.node)[TEST_SUITE].name, testpy_shortname.split('.')[0])
-    is_before_test_ok = False
-    is_after_test_ok = False
+    cluster = await testpy_cluster_factory(testpy_logger)
     try:
-        cluster = await testpy_cluster_factory(cluster_logger)
-        cluster.before_test(testpy_uname)
-        cluster_logger.info("Leasing Scylla cluster %s for test %s", cluster, testpy_uname)
-        server_log_filename = cluster.server_log_filename()
-        is_before_test_ok = True
+        testpy_logger.info("Leasing Scylla cluster %s for test %s", cluster, testpy_uname)
         cluster.take_log_savepoint()
-
         yield cluster
-
-        cluster.after_test(testpy_uname)
-        is_after_test_ok = True
     except Exception as exc:
-        if not is_before_test_ok:
-            logger.info("Test %s pre-check failed: %s\ncheck server logs: %s", testpy_name, exc, server_log_filename)
-            cluster_logger.info("Discarding cluster after failed start for test %s...", testpy_name)
-        elif not is_after_test_ok:
-            logger.info("Test %s post-check failed: %s\ncheck server logs: %s", testpy_name, exc, server_log_filename)
-            cluster_logger.info("Discarding cluster after failed test %s...", testpy_name)
+        testpy_logger.info("Test %s failed: %s", testpy_uname, exc)
         raise
     finally:
-        if cluster is not None:
-            cluster_logger.info("Test %s finished", testpy_uname)
-            await cluster.recycle()
+        testpy_logger.info("Test %s finished", testpy_uname)
+        await cluster.recycle()
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Config) -> None:

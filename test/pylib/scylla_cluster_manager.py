@@ -18,15 +18,18 @@ import ssl
 import traceback
 import uuid
 from collections import defaultdict
+import concurrent.futures
+import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from functools import wraps
 from pathlib import Path
 from time import time
-from typing import Any, Awaitable, Callable, Concatenate, cast, overload
+from typing import Any, AsyncIterator, Awaitable, Callable, Concatenate, cast, overload
 
 import allure
 from cassandra import ConsistencyLevel
-from cassandra.auth import AuthProvider
+from cassandra.auth import AuthProvider, PlainTextAuthProvider
 from cassandra.cluster import (
     EXEC_PROFILE_DEFAULT,
     Cluster as CassandraCluster,
@@ -46,7 +49,7 @@ from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import HTTPError, ScyllaMetricsClient, ScyllaRESTAPIClient
-from test.pylib.scylla_cluster import ClusterFactory, ReplaceConfig, ScyllaCluster, bind_to_current_loop
+from test.pylib.scylla_cluster import ReplaceConfig, ScyllaCluster, bind_to_current_loop
 from test.pylib.scylla_server import ScyllaServer, ScyllaVersionDescription
 from test.pylib.util import (
     Host,
@@ -146,6 +149,7 @@ def manager_op[**P, R](entry_point: ManagerAsyncFn[P, R] | None = None,
 
         @wraps(fn)
         async def wrapper(self: ScyllaClusterManager, *args: P.args, **kwargs: P.kwargs) -> R:
+            assert self._loop is not None, "ScyllaClusterManager is not running"
             if asyncio.get_running_loop() is self._loop:
                 # Already on the manager's loop, i.e. one operation calling
                 # another -- which no operation does today.  There is nothing
@@ -169,11 +173,8 @@ class ScyllaClusterManager:
     Parallel requests are not supported.
 
     The manager lives for one test: the fixture starts it before the test and
-    stops it right after, recycling the cluster.  State belonging to the test
-    -- the driver session, the log patterns to ignore -- is reset by
-    before_test(), while after_test() drains what the test left running.  A
-    task leaked past the test finds the manager's loop closed and gets a
-    RuntimeError.
+    stops it right after, recycling the cluster.  after_test() drains what
+    the test left running and reports what it leaked.
 
     A method that awaits cluster or server internals must be a @manager_op --
     those objects belong to the manager's loop -- and the CQL driver, the REST
@@ -183,52 +184,49 @@ class ScyllaClusterManager:
     operation behind a public wrapper holding that work.
 
     Args:
-        test_uname: name of the test module the manager serves
-        create_cluster: factory of Scylla clusters
+        test_name: unique name of the served test case, e.g.
+            test_topology.1::test_add_server_add_column
+        cluster: the cluster the manager serves to the test
         port: CQL port for driver connections
         use_ssl: use SSL for driver connections
-        auth_provider: authentication provider for driver connections
+        auth_username: user name for driver connections
+        auth_password: password for driver connections
     """
     def __init__(self,
-                 test_uname: str,
-                 create_cluster: ClusterFactory,
+                 test_name: str,
+                 cluster: ScyllaCluster,
                  port: int,
                  use_ssl: bool,
-                 auth_provider: Any | None) -> None:
-        # The manager must be constructed on its own, always-running loop:
-        # its operations run there (see manager_op), whichever loop or thread
-        # they are called from.
-        self._loop = asyncio.get_running_loop()
-        self.test_uname = test_uname
-        self.logger = logging.getLogger(self.test_uname)
-        self.cluster: ScyllaCluster | None = None
-        self.create_cluster = create_cluster
-        self.is_running = False
-        # tasks_history holds the running test's operations: after_test()
-        # drains it, and whatever is left over is the leak it reports.
-        self.tasks_history: dict[asyncio.Task, str] = {}
-        # Per-module: configuration and helpers that outlive every test.
+                 auth_username: str | None = None,
+                 auth_password: str | None = None) -> None:
+        self.test_name = test_name
+        self.cluster = cluster
         self.port = port
         self.use_ssl = use_ssl
-        # The suite's provider, restored per test: tests override
-        # self.auth_provider to connect as someone else.
-        self._suite_auth_provider = auth_provider
-        self.api = ScyllaRESTAPIClient()
+        self.auth_provider: AuthProvider | None = None
+        if auth_username is not None and auth_password is not None:
+            self.auth_provider = PlainTextAuthProvider(username=auth_username, password=auth_password)
+
+        self.logger = cluster.logger
+        self.api: ScyllaRESTAPIClient = cluster.api
         self.metrics = ScyllaMetricsClient()
         self.thread_pool = ThreadPoolExecutor()
-
-        # Per-test: before_test() resets the patterns and the policy, and the
-        # fixture's driver_close() drops the session.
-        # The currently running test case with self.test_uname prepended, e.g.
-        # test_topology.1::test_add_server_add_column
-        self.current_test_case_full_name = ""
         self.load_balancing_policy = RoundRobinPolicy()
-        self.auth_provider = self._suite_auth_provider
-        self.ignore_log_patterns: list[str] = []  # patterns to ignore in server logs when checking for errors
-        self.ignore_cores_log_patterns: list[str] = []  # patterns to ignore in server logs when checking for core files
+
         self.ccluster: CassandraCluster | None = None
         self.cql: CassandraSession | None = None
         self.exclusive_clusters: list[CassandraCluster] = []
+        self.ignore_log_patterns: list[str] = []  # patterns to ignore in server logs when checking for errors
+        self.ignore_cores_log_patterns: list[str] = []  # patterns to ignore in server logs when checking for core files
+
+        # The manager's own loop, claimed by run_in_thread(): its operations
+        # run there (see manager_op), whichever loop or thread they are
+        # called from.
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+        # tasks_history holds the running test's operations: after_test()
+        # drains it, and whatever is left over is the leak it reports.
+        self.tasks_history: dict[asyncio.Task, str] = {}
 
     def repr_tasks_history(self) -> str:
         out = "Cluster_history"
@@ -236,48 +234,67 @@ class ScyllaClusterManager:
             out += f"\n{val}:\t\t{repr(key)}"
         return out
 
-    async def start(self) -> None:
-        """Get first cluster."""
-
-        if self.is_running:
-            self.logger.warning("ScyllaClusterManager already running")
-            return
-        self.cluster = await self.create_cluster(self.logger)
-        self.logger.info("First Scylla cluster: %s", self.cluster)
-        self.is_running = True
-
-    @manager_op(timeout=600)
-    async def before_test(self, test_case_name: str) -> str:
-        """Before-test hook of the manager fixture: reset the per-test state
-        and lease a cluster for the test.
-
-        The driver is connected by the fixture afterwards: the session is used
-        from the test's loop, and connecting blocks for as long as the driver's
-        connect timeout, so it has no business running on the manager's.
-        """
-        self.ignore_log_patterns = []
-        self.ignore_cores_log_patterns = []
-        self.load_balancing_policy = RoundRobinPolicy()
-        self.auth_provider = self._suite_auth_provider
-        self.current_test_case_full_name = f"{self.test_uname}::{test_case_name}"
-        self.logger.info("Setting up %s", self.current_test_case_full_name)
-        self.logger.info("Leasing Scylla cluster %s for test %s", self.cluster, self.current_test_case_full_name)
-        self.cluster.before_test(self.current_test_case_full_name)
-        self.cluster.take_log_savepoint()
-        return str(self.cluster)
-
     async def stop(self) -> None:
-        """Dispose of the last cluster if present."""
+        """Dispose of the cluster if present."""
 
-        self.logger.info("ScyllaManager stopping for test %s", self.test_uname)
+        self.logger.info("ScyllaManager stopping for test %s", self.test_name)
         self.driver_close()
         self.thread_pool.shutdown(wait=False)
         if self.cluster:
-            self.logger.info("ScyllaManager: stopping Scylla cluster %s after %s",
-                             self.cluster, self.test_uname)
+            self.logger.info("ScyllaManager: stopping Scylla cluster %s after %s", self.cluster, self.test_name)
             await self.cluster.recycle()
             self.cluster = None
-        self.is_running = False
+
+    @asynccontextmanager
+    async def run_in_thread(self) -> AsyncIterator[ScyllaClusterManager]:
+        """Run this manager on its own thread and event loop.
+
+        The manager owns loop-bound state -- the Scylla subprocess transports
+        and the per-server asyncio locks -- so all of its coroutines have to
+        run on one loop, and that loop has to keep running: tests reach the
+        manager from pytest's event loops and, in dtest, from plain worker
+        threads.  Hence, a dedicated thread whose loop is idle but alive
+        until the context exits.
+        """
+        ready: concurrent.futures.Future[None] = concurrent.futures.Future()
+        stop_event = threading.Event()
+
+        async def run_manager() -> None:
+            self.logger.info("Setting up %s", self.test_name)
+            self._loop = asyncio.get_running_loop()
+            ready.set_result(None)
+            try:
+                await asyncio.get_running_loop().run_in_executor(None, stop_event.wait)
+            finally:
+                await self.stop()
+
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="cluster-manager") as executor:
+            future = executor.submit(asyncio.run, run_manager())
+            # Fail instead of waiting forever when the manager dies before it
+            # signals readiness.  The callback fires only once the future is
+            # done, so reaching it without a result always means a startup
+            # failure.
+            future.add_done_callback(
+                lambda f: None if ready.done() else ready.set_exception(
+                    f.exception() or RuntimeError("ScyllaClusterManager exited before signaling readiness")))
+            # ready.result() blocks, so hand it to a thread rather than
+            # stalling the caller's loop.
+            await asyncio.get_running_loop().run_in_executor(None, ready.result)
+            try:
+                yield self
+            finally:
+                stop_event.set()
+                # Wait for the manager thread off the event loop.  Stopping
+                # the manager recycles the cluster, and recycling runs
+                # teardown callbacks that belong to the caller's loop;
+                # blocking it here would deadlock them.
+                try:
+                    await asyncio.get_running_loop().run_in_executor(None, future.result)
+                finally:
+                    # The loop is gone with the thread; let manager_op's
+                    # not-running assert catch a leaked caller instead of a
+                    # cryptic "Event loop is closed".
+                    self._loop = None
 
     @manager_op
     async def running_servers(self) -> list[ServerInfo]:
@@ -322,10 +339,9 @@ class ScyllaClusterManager:
     async def after_test(self, success: bool) -> dict[str, Any]:
         """After-test hook of the manager fixture.
 
-        Drains the operations the test left running and reports the result to
-        the cluster.
+        Drains the operations the test left running and returns what the test
+        leaked.
         """
-        assert self.current_test_case_full_name
         tasks_leaked = ""
         self.logger.info(self.repr_tasks_history())
         # Drop our own entry: the drain below must not wait for itself.
@@ -362,17 +378,11 @@ class ScyllaClusterManager:
         if not tasks_leaked and self.tasks_history:
             tasks_leaked = f"tasks leakage found  {self.tasks_history}"
         if tasks_leaked:
-            self.logger.error("%s, test case %s", tasks_leaked, self.current_test_case_full_name)
-        self.logger.info("Test %s %s, cluster: %s",
-                         self.current_test_case_full_name, "SUCCEEDED" if success else "FAILED", self.cluster)
-        try:
-            self.cluster.after_test(self.current_test_case_full_name)
-        finally:
-            self.current_test_case_full_name = ""
-        cluster_str = str(self.cluster)
+            self.logger.error("%s, test case %s", tasks_leaked, self.test_name)
+        self.logger.info("Test %s %s, cluster: %s", self.test_name, "SUCCEEDED" if success else "FAILED", self.cluster)
 
         return {
-            "cluster_str": cluster_str,
+            "cluster_str": str(self.cluster),
             "tasks_leaked": bool(tasks_leaked),
             "message": tasks_leaked,
         }
@@ -432,11 +442,9 @@ class ScyllaClusterManager:
         object storage bucket that an in-flight tablet migration could
         otherwise still read from (SCYLLADB-2471).
 
-        Two consequences of firing that late are worth knowing.  The resource
+        One consequence of firing that late is worth knowing: the resource
         the callback disposes of has to stay alive past the fixture that
-        created it, and a failure inside a callback is reported against the
-        test case that recycled the cluster, not necessarily the one that
-        registered the callback.
+        created it.
 
         Callbacks fire in LIFO order; both plain callables and coroutine
         functions are accepted.  Register them from a fixture rather than from
@@ -1224,7 +1232,7 @@ class ScyllaClusterManager:
         servers, you should use multiple server_add calls.
         """
         assert servers_num > 0, f"servers_add: cannot add {servers_num} servers, servers_num must be positive"
-        assert not (property_file and auto_rack_dc), f"Either property_file or auto_rack_dc can be provided, but not both"
+        assert not (property_file and auto_rack_dc), "Either property_file or auto_rack_dc can be provided, but not both"
 
         if expected_error is not None:
             self.ignore_log_patterns.append(re.escape(expected_error))

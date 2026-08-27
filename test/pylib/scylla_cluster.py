@@ -9,7 +9,6 @@
 import asyncio
 import copy
 import importlib
-import itertools
 import logging
 import pathlib
 import uuid
@@ -443,25 +442,6 @@ class ScyllaCluster:
     def starting_servers(self) -> list[ServerInfo]:
         """Get a list of tuples of server ids and IP address of servers which are currently starting (not yet running)"""
         return [server.server_info() for server in self.starting.values()]
-
-    def before_test(self, name) -> None:
-        """Check that  the cluster is ready for a test. If
-        there was a start error, throw it here - the cluster is started
-        outside of any specific test, so throwing it at start time
-        wouldn't be attributed to a test."""
-        if self.start_exception:
-            raise Exception(f'Exception when starting cluster {self}:\n{self.start_exception}')
-
-        for server in self.running.values():
-            server.write_log_marker(f"------ Starting test {name} ------\n")
-
-    def after_test(self, name: str) -> None:
-        """Mark the end of the test in the server logs.  The log files are
-        closed by recycle(), which always follows: the cluster is destroyed
-        after every test."""
-        assert self.start_exception is None
-        for server in itertools.chain(self.running.values(), self.stopped.values()):
-            server.write_log_marker(f"------ Ending test {name} ------\n")
 
     async def server_stop(self, server_id: ServerNum, gracefully: bool) -> None:
         """Stop a server. No-op if already stopped."""
