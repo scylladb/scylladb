@@ -28,9 +28,11 @@
 #include "transport/messages/result_message.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "service/raft/raft_group_registry.hh"
 #include "service/storage_service.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/metrics_api.hh>
+#include <seastar/coroutine/as_future.hh>
 #include "replica/database.hh"
 
 static future<utils::chunked_vector<std::vector<managed_bytes_opt>>> fetch_rows(cql_test_env& e, std::string_view cql) {
@@ -700,6 +702,92 @@ SEASTAR_TEST_CASE(test_request_completes_after_local_apply) {
         testlog.info("Releasing the apply; the request must complete now");
         injector.receive_message(apply_pause);
         request.get_future().get();
+    });
+}
+
+// Starts a group0 batch commit on a fresh group0 table while the io_fiber is paused.
+static future<future<>> start_stalled_commit(cql_test_env& e, std::string table, lowres_clock::duration timeout, abort_source& as,
+        utils::UUID* state_id = nullptr, lowres_clock::time_point* deadline_out = nullptr) {
+    auto& rclient = e.get_raft_group0_client();
+
+    schema_builder::register_schema_initializer([table] (schema_builder& builder) {
+        if (builder.cf_name() == table) {
+            builder.set_is_group0_table();
+        }
+    });
+    co_await e.execute_cql(fmt::format("CREATE TABLE {} (key int PRIMARY KEY)", table));
+
+    auto guard = co_await rclient.start_operation(as);
+    if (state_id) {
+        *state_id = guard.new_group0_state_id();
+    }
+    auto muts = co_await e.get_modification_mutations(fmt::format("INSERT INTO {} (key) VALUES (1)", table));
+    service::group0_batch mc(std::move(guard));
+    mc.add_mutation(muts[0]);
+
+    utils::get_local_injector().enable("poll_fsm_output/pause");
+    // The deadline starts here, after the slow setup above.
+    ::service::raft_timeout deadline{.value = lowres_clock::now() + timeout};
+    if (deadline_out) {
+        *deadline_out = *deadline.value;
+    }
+    co_return do_with(std::move(mc), [&rclient, &as, deadline] (service::group0_batch& mc) {
+        return std::move(mc).commit(rclient, as, deadline);
+    });
+}
+
+// An entry applied after its deadline expired is a success, not an error.
+SEASTAR_TEST_CASE(test_group0_add_entry_timeout_then_applied_succeeds) {
+    return do_with_cql_env([] (cql_test_env& e) -> future<> {
+        abort_source as;
+        auto resume_polling = defer([] noexcept { utils::get_local_injector().disable("poll_fsm_output/pause"); });
+        const auto inj = "group0_add_entry_before_history_check";
+        auto disable_inj = defer([inj] noexcept { utils::get_local_injector().disable(inj); });
+
+        // A live deadline, so the entry reaches the log before it expires.
+        utils::UUID state_id;
+        lowres_clock::time_point deadline;
+        auto commit = co_await start_stalled_commit(e, "test_group0_timeout_applied",
+                std::chrono::seconds{1}, as, &state_id, &deadline);
+        std::exception_ptr ex;
+        try {
+            // Only now: the CREATE TABLE above also passes the injection point.
+            utils::get_local_injector().enable(inj);
+            co_await wait_for_injection_enter(inj);
+            // Another add_entry may have entered the injection; the commit must have timed out by now.
+            BOOST_REQUIRE(lowres_clock::now() >= deadline);
+
+            utils::get_local_injector().disable("poll_fsm_output/pause");
+            // The history row is written after the data, so it is what the history check needs.
+            // Gives up well before the injection's own one-minute timeout.
+            for (int i = 0; !co_await e.get_system_keyspace().local().group0_history_contains(state_id); ++i) {
+                BOOST_REQUIRE_MESSAGE(i < 300, "stalled entry never applied after polling resumed");
+                co_await seastar::sleep(std::chrono::milliseconds{100});
+            }
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        if (ex) {
+            // The commit refers to this frame, so let it finish before unwinding.
+            utils::get_local_injector().disable("poll_fsm_output/pause");
+            utils::get_local_injector().disable(inj);
+            (co_await coroutine::as_future(std::move(commit))).ignore_ready_future();
+            std::rethrow_exception(std::move(ex));
+        }
+        utils::get_local_injector().receive_message(inj);
+        co_await std::move(commit);
+        BOOST_REQUIRE(!(co_await fetch_rows(e, "SELECT key FROM test_group0_timeout_applied")).empty());
+    });
+}
+
+// An unapplied entry keeps the original timeout: it may still land, so it isn't safe to retry.
+SEASTAR_TEST_CASE(test_group0_add_entry_timeout_unapplied_rethrows_timeout) {
+    return do_with_cql_env([] (cql_test_env& e) -> future<> {
+        abort_source as;
+        auto resume_polling = defer([] noexcept { utils::get_local_injector().disable("poll_fsm_output/pause"); });
+        auto commit = co_await start_stalled_commit(e, "test_group0_timeout_unapplied",
+                std::chrono::seconds{1}, as);
+        BOOST_CHECK_THROW(co_await std::move(commit), service::raft_operation_timeout_error);
     });
 }
 
