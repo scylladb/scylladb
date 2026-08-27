@@ -3696,6 +3696,49 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/storage_service/estimate_parquet_ratios",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Estimate the size of a table's data re-encoded as Parquet, by sampling its SSTables.",
+               "type":"array",
+               "items":{
+                  "type":"parquet_ratio_result"
+               },
+               "nickname":"estimate_parquet_ratios",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"Name of the keyspace containing the target table.",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Name of the target table.",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"rows",
+                     "description":"Maximum rows to sample. Ratios converge long before row counts do; 20000 is enough for sub-1% error.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
       }
    ],
    "models":{
@@ -4170,6 +4213,32 @@
                   "type":"string"
                },
                "description":"List of manifest file paths, relative to 'prefix'. Only used by tablet-aware restore; must not be set for backup."
+            }
+         }
+      },
+      "parquet_ratio_result":{
+         "id":"parquet_ratio_result",
+         "description":"Estimated Parquet size for one folding level.",
+         "properties":{
+            "folding_level":{
+               "type":"string",
+               "description":"Metadata folding level (L0, L1, L2)."
+            },
+            "rows_sampled":{
+               "type":"long",
+               "description":"Rows fed through the shredder."
+            },
+            "parquet_bytes":{
+               "type":"long",
+               "description":"Encoded size of the sample."
+            },
+            "sstable_bytes":{
+               "type":"long",
+               "description":"Size of the sampled SSTable's Data component."
+            },
+            "ratio":{
+               "type":"double",
+               "description":"Estimated parquet/sstable ratio; below 1.0 means Parquet is smaller."
             }
          }
       }

@@ -2946,6 +2946,34 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/column_family/storage_format/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Per-table breakdown of on-disk bytes and sstable counts by storage format",
+               "type":"array",
+               "items":{
+                  "type":"mapper"
+               },
+               "nickname":"get_storage_format_breakdown",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ],
+               "notes":"How much of this table is already in the Parquet format and how much is still native. Answers the operator question a format conversion raises -- \"is this table converted yet?\" -- which is otherwise only visible by listing sstable filenames."
+            }
+         ]
       }
    ],
    "models":{
