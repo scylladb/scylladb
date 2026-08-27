@@ -4,22 +4,21 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 import asyncio
-import pytest
-import time
 import logging
-import requests
 import re
+import time
 
+import pytest
+import requests
 from cassandra.cluster import ConnectionException, NoHostAvailable  # type: ignore
-from cassandra.query import SimpleStatement, ConsistencyLevel
-
-from test.cluster.util import new_test_keyspace
+from cassandra.query import ConsistencyLevel, SimpleStatement
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.cluster.mv.tablets.test_mv_tablets import get_tablet_replicas, pin_the_only_tablet
+from test.cluster.util import new_test_keyspace, wait_for_token_ring_and_group0_consistency
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica
-from test.pylib.util import wait_for, wait_for_view
-from test.cluster.mv.tablets.test_mv_tablets import get_tablet_replicas, pin_the_only_tablet
+from test.pylib.util import wait_for, wait_for_first_completed, wait_for_view
 
 
 logger = logging.getLogger(__name__)
@@ -83,6 +82,7 @@ async def test_mv_topology_change(manager: ScyllaClusterManager):
 
         stop_event.set()
         await asyncio.gather(*tasks)
+
 
 # Reproduces #19152
 # Verify a pending replica is not doing unnecessary work of building and sending view updates.
@@ -551,3 +551,147 @@ async def test_no_crash_on_shutdown_with_pending_remote_view_update(manager: Scy
         await manager.server_stop_gracefully(servers[0].server_id)
         # Start the server again for clean test shutdown
         await manager.server_start(servers[0].server_id)
+
+
+@pytest.mark.parametrize(
+    ("tablets_enabled", "enable_repair_based_node_ops"),
+    [
+        pytest.param(True, None, id="tablets"),
+        pytest.param(False, True, id="vnodes_with_rbno"),
+        pytest.param(False, False, id="vnodes_without_rbno"),
+    ],
+)
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_mv_resurrected_rows_after_decommission_interrupt(
+        manager: ScyllaClusterManager, tablets_enabled: bool, enable_repair_based_node_ops: bool | None) -> None:
+    """Verify an interrupted decommission cannot resurrect base or MV rows (SCYLLADB-3805).
+
+    Decommission writes streamed data to its future owners before the topology transition
+    commits. If it is interrupted at that point, those nodes temporarily contain data they
+    do not own. Cleanup must remove those copies so they cannot reappear after tombstone GC
+    and a later removenode operation.
+    """
+    config = {'tablets_mode_for_new_keyspaces': 'enabled' if tablets_enabled else 'disabled'}
+    if enable_repair_based_node_ops is not None:
+        config['enable_repair_based_node_ops'] = enable_repair_based_node_ops
+    if enable_repair_based_node_ops is True:
+        config['allowed_repair_based_node_ops'] = 'decommission'
+    cmdline = ['--logger-log-level', 'repair=debug']
+
+    property_file = [
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+        {'dc': 'dc1', 'rack': 'rack3'}]
+
+    servers = await manager.servers_add(4, config=config, cmdline=cmdline, property_file=property_file)
+    cql = manager.get_cql()
+    keyspace_options = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
+    if tablets_enabled:
+        keyspace_options += " AND tablets = {'initial': 1}"
+        # Keep the explicitly selected tablet replicas stable until decommission starts.
+        # Node operations can still migrate tablets while background balancing is disabled.
+        await manager.disable_tablet_balancing()
+    else:
+        keyspace_options += " AND tablets = {'enabled': false}"
+
+    async with new_test_keyspace(manager, keyspace_options) as ks:
+        table = 'users'
+        view = 'users_by_state'
+        gc_grace_seconds = 1
+        await cql.run_async(f"CREATE TABLE {ks}.{table} (username int PRIMARY KEY, state int) WITH gc_grace_seconds = {gc_grace_seconds}")
+        await cql.run_async(
+            f"CREATE MATERIALIZED VIEW {ks}.{view} AS SELECT * FROM {ks}.{table} "
+            "WHERE state IS NOT NULL AND username IS NOT NULL PRIMARY KEY (state, username)"
+        )
+        await cql.run_async(f"ALTER MATERIALIZED VIEW {ks}.{view} WITH gc_grace_seconds = {gc_grace_seconds}")
+        await wait_for_view(cql, view, len(servers))
+
+        key = 0
+        rack3_servers = [server for server in servers if server.rack == 'rack3']
+        if tablets_enabled:
+            # The base and view have different partition keys, so their tablet maps are
+            # independent. Put the rack3 replica of both single-tablet maps on the same
+            # node, ensuring that decommission streams both rows.
+            decommissioned = rack3_servers[-1]
+            decommissioned_host_id = await manager.get_host_id(decommissioned.server_id)
+            servers_by_host_id = {await manager.get_host_id(server.server_id): server for server in servers}
+            for table_name in (table, view):
+                replicas = await get_tablet_replicas(manager, servers[0], ks, table_name, 0)
+                if decommissioned_host_id not in [host_id for host_id, _ in replicas]:
+                    source_host_id, source_shard = next(
+                        replica for replica in replicas if servers_by_host_id[replica[0]].rack == decommissioned.rack)
+                    await manager.api.move_tablet(
+                        servers[0].ip_addr, ks, table_name,
+                        source_host_id, source_shard, decommissioned_host_id, 0, 0)
+        else:
+            # Pick the rack3 node which owns this token instead of relying on a large
+            # probabilistic set of rows to hit the node selected for decommission.
+            base_endpoints = await manager.api.natural_endpoints(servers[0].ip_addr, ks, table, str(key))
+            decommissioned = next(server for server in rack3_servers if server.ip_addr in base_endpoints)
+
+        for table_name in (table, view):
+            endpoints = await manager.api.natural_endpoints(servers[0].ip_addr, ks, table_name, str(key))
+            assert decommissioned.ip_addr in endpoints, f"{decommissioned} does not own {table_name} row {key}"
+        survivors = [server for server in servers if server != decommissioned]
+
+        insert = cql.prepare(f"INSERT INTO {ks}.{table} (username, state) VALUES (?, ?)")
+        insert.consistency_level = ConsistencyLevel.ALL
+        await cql.run_async(insert, (key, key))
+
+        # Put the original base and view data on disk before the topology change,
+        # so cleanup and compaction exercise the SSTable resurrection path instead
+        # of depending on incidental memtable flush timing.
+        await asyncio.gather(*(manager.api.keyspace_flush(server.ip_addr, ks) for server in servers))
+
+        # Both repair-based and legacy decommission reach this injection after all
+        # streamed data is durable, but before reporting success to the topology
+        # coordinator. Waiting here establishes the state required by this regression:
+        # temporary data exists on future owners while decommission is still uncommitted.
+        injection = 'streaming_task_impl_decommission_done_wait'
+        await manager.api.enable_injection(decommissioned.ip_addr, injection, one_shot=True)
+
+        logs = [await manager.server_open_log(server.server_id) for server in servers]
+        marks = [await log.mark() for log in logs]
+        decommission_task = asyncio.create_task(manager.decommission_node(decommissioned.server_id))
+        interrupted = False
+        try:
+            deadline = time.time() + 60
+            await manager.api.wait_for_injection_enter(decommissioned.ip_addr, injection, deadline=deadline)
+            assert not any([await log.grep("raft_topology - streaming completed", from_mark=mark) for log, mark in zip(logs, marks)]), "decommission streaming completed before the node was stopped"
+            await manager.server_stop(decommissioned.server_id, convict=True)
+            interrupted = True
+        finally:
+            if not interrupted:
+                await manager.api.disable_injection(decommissioned.ip_addr, injection)
+                decommission_task.cancel()
+                await asyncio.gather(decommission_task, return_exceptions=True)
+
+        [decommission_result] = await asyncio.gather(decommission_task, return_exceptions=True)
+        assert isinstance(decommission_result, Exception), "decommission unexpectedly completed after its node was stopped"
+
+        await wait_for_first_completed([log.wait_for("raft_topology - rollback.*after decommissioning failure, moving transition state to rollback to normal",
+                from_mark=mark, timeout=60) for log, mark in zip(logs, marks)], timeout=65)
+
+        await manager.server_start(decommissioned.server_id)
+        await wait_for_token_ring_and_group0_consistency(manager, time.time() + 60)
+        cql = manager.get_cql()
+
+        await asyncio.gather(*(manager.api.cleanup_keyspace(server.ip_addr, ks) for server in servers))
+
+        delete = cql.prepare(f"DELETE FROM {ks}.{table} WHERE username = ?")
+        delete.consistency_level = ConsistencyLevel.ALL
+        await cql.run_async(delete, (key,))
+        await asyncio.sleep(gc_grace_seconds + 1)
+        await asyncio.gather(*(manager.api.keyspace_compaction(server.ip_addr, ks) for server in servers))
+
+        await manager.server_stop(decommissioned.server_id, convict=True)
+        await manager.remove_node(survivors[0].server_id, decommissioned.server_id)
+        await wait_for_token_ring_and_group0_consistency(manager, time.time() + 60)
+        await asyncio.gather(*(manager.api.drop_sstable_caches(server.ip_addr) for server in survivors))
+
+        cql = manager.get_cql()
+        base_rows = await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.{table}", consistency_level=ConsistencyLevel.ALL))
+        view_rows = await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.{view}", consistency_level=ConsistencyLevel.ALL))
+        assert list(base_rows) == []
+        assert list(view_rows) == []
