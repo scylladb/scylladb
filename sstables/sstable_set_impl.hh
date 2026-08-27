@@ -20,8 +20,16 @@ namespace sstables {
 // specialized when sstables are partitioned in the token range space
 // e.g. leveled compaction strategy
 class partitioned_sstable_set : public sstable_set_impl {
+    // The interval map is keyed by biased tokens, i.e. tokens mapped into the
+    // uint64_t domain (see dht::token::unbias()), rather than by ring
+    // positions. That keeps the keys plain integers: comparisons don't need
+    // the schema, and no partition key is copied into the map. The loss of
+    // precision (a partition key is ignored when a token is shared by
+    // sstable bounds) only makes selection return a superset, which callers
+    // must tolerate anyway.
+    using biased_token = uint64_t;
     using value_set = std::unordered_set<shared_sstable>;
-    using interval_map_type = boost::icl::interval_map<dht::compatible_ring_position_or_view, value_set>;
+    using interval_map_type = boost::icl::interval_map<biased_token, value_set>;
     using interval_type = interval_map_type::interval_type;
     using map_iterator = interval_map_type::const_iterator;
 private:
@@ -36,18 +44,19 @@ private:
     // Token range spanned by the compaction group owning this sstable set.
     dht::token_range _token_range;
 private:
-    static interval_type make_interval(const schema& s, const dht::partition_range& range);
-    interval_type make_interval(const dht::partition_range& range) const;
-    static interval_type make_interval(const schema_ptr& s, const sstable& sst);
-    interval_type make_interval(const sstable& sst);
-    interval_type singular(const dht::ring_position& rp) const;
+    static interval_type make_interval(const dht::partition_range& range);
+    static interval_type make_interval(const sstable& sst);
+    static interval_type singular(const dht::token& t);
     std::pair<map_iterator, map_iterator> query(const dht::partition_range& range) const;
     // SSTables are stored separately to avoid interval map's fragmentation issue when level 0 falls behind.
     bool store_as_unleveled(const shared_sstable& sst) const;
-public:
-    static dht::ring_position to_ring_position(const dht::compatible_ring_position_or_view& crp);
+    // The position at which the interval starts, i.e. before all keys of its first token.
+    static dht::ring_position to_start_position(const interval_type& i);
+    // The position at which the interval ends, i.e. after all keys of its last token.
+    static dht::ring_position to_end_position(const interval_type& i);
     static dht::partition_range to_partition_range(const interval_type& i);
     static dht::partition_range to_partition_range(const dht::ring_position_view& pos, const interval_type& i);
+public:
 
     partitioned_sstable_set(const partitioned_sstable_set&) = delete;
     explicit partitioned_sstable_set(schema_ptr schema, dht::token_range token_range);
