@@ -72,6 +72,7 @@
 #include "readers/compacting.hh"
 #include "replica/schema_describe_helper.hh"
 #include "repair/incremental.hh"
+#include "service/strong_consistency/groups_manager.hh"
 
 namespace replica {
 
@@ -2110,6 +2111,87 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
     });
 
     undo_stats.reset();
+
+    if (_config.strong_consistency_groups_manager && uses_tablets()) {
+        // Resolve this tablet's raft group without throwing: the tablet map or
+        // its raft info can legitimately disappear while a flush is in flight
+        // (DROP TABLE / tablet migration), and then there is no group to
+        // persist for. Only that lookup is tolerant — the persist itself below
+        // must not be dropped (see the comment there).
+        const auto group_id = [&] () -> std::optional<raft::group_id> {
+            const auto& tablets = _erm->get_token_metadata().tablets();
+            if (!tablets.has_tablet_map(_schema->id())) {
+                return std::nullopt;
+            }
+            const auto& tablet_map = tablets.get_tablet_map(_schema->id());
+            if (!tablet_map.has_raft_info()) {
+                return std::nullopt;
+            }
+            const auto tablet = locator::tablet_id(cg.group_id());
+            try {
+                return tablet_map.get_tablet_raft_info(tablet).group_id;
+            } catch (...) {
+                tlogger.info("No raft info for tablet {} of table {} during flush ({}); "
+                        "skipping commit index persist", tablet, _schema->id(), std::current_exception());
+                return std::nullopt;
+            }
+        }();
+        if (group_id) {
+            // Persist the raft commit index here: after the sealed memtable has
+            // been written to an SSTable, and before this memtable's commitlog
+            // segments are discarded just below. `old` was sealed long before
+            // this point and accepts no further writes, so the tracked commit
+            // index already covers every entry that ended up in it (persisting
+            // *before* the seal would race with concurrent applies landing in
+            // `old` and could leave commit_idx behind the flushed data).
+            //
+            // It must not run before try_flush_memtable_to_sstable() either:
+            // seal_active_memtable() is driven by dirty_memory_manager::
+            // flush_when_needed() under dirty-memory pressure, and
+            // system.raft_groups is created with write_in_user_memory (see
+            // maybe_write_in_user_memory()), so the CQL write below waits on the
+            // *user* dirty-memory pool. Issuing it while the sealed memtable is
+            // still unflushed would make it wait for memory that only this very
+            // flush can release.
+            //
+            // This write is the only thing that keeps commit_idx from falling
+            // behind data flushed to SSTables: the commit_idx entries in the
+            // commitlog carry only the value that was known when their batch
+            // was *appended*, so they cannot cover entries that committed and
+            // flushed afterwards. It therefore must not be dropped — retry
+            // transient failures for about half an hour, as the flush steps
+            // below do, and if it still cannot be persisted, take the node down
+            // rather than let the next restart recover a commit_idx behind the
+            // data this flush puts into SSTables (which would leave raft's
+            // applied state inconsistent with the state machine). The commitlog
+            // still holds the raft entries, so replay recovers.
+            auto commit_idx_retry = exponential_backoff_retry(100ms, 10s);
+            for (int attempts_left = default_retries; ; --attempts_left) {
+                std::exception_ptr ex;
+                try {
+                    co_await _config.strong_consistency_groups_manager->save_commit_log_index(_schema->id(), *group_id);
+                    break;
+                } catch (...) {
+                    ex = std::current_exception();
+                }
+                if (_async_gate.is_closed()) {
+                    // Shutting down; propagate like the flush steps below do
+                    // instead of aborting a node that is already going away.
+                    tlogger.warn("Failed to persist raft commit index for table {} raft group {}: {}. Dropped due to shutdown",
+                            _schema->id(), *group_id, ex);
+                    co_await coroutine::return_exception_ptr(std::move(ex));
+                }
+                if (attempts_left <= 0) {
+                    on_fatal_internal_error(tlogger, fmt::format(
+                            "Failed to persist raft commit index for table {} raft group {} during flush: {}",
+                            _schema->id(), *group_id, ex));
+                }
+                tlogger.warn("Failed to persist raft commit index for table {} raft group {}: {}. Will retry in {}ms",
+                        _schema->id(), *group_id, ex, commit_idx_retry.sleep_time().count());
+                co_await commit_idx_retry.retry();
+            }
+        }
+    }
 
     if (_commitlog) {
         _commitlog->discard_completed_segments(_schema->id(), old->get_and_discard_rp_set());

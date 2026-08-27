@@ -112,6 +112,11 @@ class raft_commitlog_replay_buffer {
     // Populated via add() during replay, then consumed and cleared by process_raft_replayed_items().
     std::unordered_map<raft::group_id, utils::chunked_vector<raft::log_entry_ptr>> _replayed_commitlog_entries_by_group;
 
+    // Highest commit_idx seen per group across the commitlog's commit_idx entries.
+    // Used by process_raft_replayed_items() to restore commit_idx after a crash
+    // that dropped it from the raft_groups memtable before it could flush.
+    std::unordered_map<raft::group_id, raft::index_t> _replayed_commit_idx_by_group;
+
     // Resulting entries and rp_handles written to the new (post-crash) commitlog,
     // raft_commitlog instances when tablet Raft groups start.
     std::unordered_map<raft::group_id, service::strong_consistency::replayed_data_per_group> _per_group_data;
@@ -122,6 +127,15 @@ public:
     void add(const raft::group_id group_id, raft::log_entry_ptr entry) {
         _replayed_commitlog_entries_by_group[group_id].push_back(std::move(entry));
         ++_total_entries;
+    }
+
+    // Record a commit_idx recovered from a commitlog commit_idx entry during
+    // replay, keeping the highest value seen per group.
+    void add_commit_idx(const raft::group_id group_id, raft::index_t commit_idx) {
+        auto& slot = _replayed_commit_idx_by_group[group_id];
+        if (commit_idx > slot) {
+            slot = commit_idx;
+        }
     }
 
     // Get the replayed items for a group. These are removed from the buffer since they are now owned by the caller (raft_commitlog).
@@ -151,7 +165,11 @@ public:
     // Process the raft replay items after commitlog replay completes but before
     // old commitlog segments are deleted and memtables are flushed.
     //
-    // For each raft group in the buffer:
+    // First restores commit_idx values recovered from the commitlog's commit_idx
+    // entries (see add_commit_idx()) into system.raft_groups, only-advance, so
+    // the steps below and bump_snapshot_indices() read the post-crash value.
+    //
+    // Then, for each raft group in the buffer:
     //   1. Reads commit_idx from the raft system tables.
     //   2. Filters entries: detects leader changes (discards replaced uncommitted
     //      entries) and stops at out-of-order tails from older pre-crash segments.
@@ -168,5 +186,24 @@ public:
     //   6. Non-command entries (configuration, dummy) are kept in the raft log but
     //      don't need mutation application or commitlog rewrite.
     future<> process_raft_replayed_items(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks);
+
+    // For every strongly-consistent raft group known to this shard, ensure that
+    // system.raft_groups_snapshots.idx >= system.raft_groups.commit_idx.
+    //
+    // The fake-mutation apply in raft_groups_storage::store_log_entries writes
+    // commit_idx into system.raft_groups via the raft_groups memtable → sstable
+    // path, without going through store_snapshot_descriptor. On a clean shutdown
+    // the SC tablet memtables flush and their commitlog segments are reclaimed,
+    // so on the next startup the commitlog can be empty (or contain only
+    // uncommitted entries) for a group even though its persisted commit_idx > 0.
+    //
+    // Without this bump, raft::server::start would observe
+    // commit_idx > log.stable_idx (== snapshot.idx for an empty log) and trip
+    // its "committed index cannot be larger then persisted one" assert.
+    //
+    // This is the sole place that advances the persisted snapshot index during
+    // startup; it must be called unconditionally on every startup (independent
+    // of whether there were any commitlog segments to replay).
+    future<> bump_snapshot_indices(replica::database& db, cql3::query_processor& qp);
 };
 } // namespace db
