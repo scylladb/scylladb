@@ -182,8 +182,8 @@ class client : public enable_shared_from_this<client> {
     future<> get_object_header(sstring object_name, http::client::reply_handler handler, seastar::abort_source* = nullptr);
 public:
 
-    // No defaults: make() is the only caller and always passes both, so the two cannot
-    // disagree about what a null argument means.
+    // No defaults, and no fallbacks in the body: make() is the only caller and decides
+    // both dependencies, so there is never a second opinion about what a null means.
     client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<seastar::http::retry_strategy> rs,
            std::unique_ptr<throttling_controller> tc);
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf = {});
