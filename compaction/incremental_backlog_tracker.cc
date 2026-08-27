@@ -9,6 +9,8 @@
 
 namespace compaction {
 
+extern logging::logger clogger;
+
 incremental_backlog_tracker::inflight_component incremental_backlog_tracker::compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const {
     inflight_component in;
     for (auto& crp : ongoing_compactions) {
@@ -85,42 +87,42 @@ double incremental_backlog_tracker::backlog(const compaction_backlog_tracker::on
     return b > 0 ? b : 0;
 }
 
-// Removing could be the result of a failure of an in progress write, successful finish of a
-// compaction, or some one-off operation, like drop
+// O(K log R) per batch of size K, not O(N) in the total run count; no rollback on exception (caller disables the tracker on throw).
 void incremental_backlog_tracker::replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) {
-    auto all = _all;
-    auto total_bytes = _total_bytes;
-    auto threshold = _threshold;
-    for (auto&& sst : new_ssts) {
-    if (sst->data_size() > 0) {
-        // note: we don't expect failed insertions since each sstable will be inserted once
-        (void)all[sst->run_identifier()].insert(sst);
-        total_bytes += sst->data_size();
-        // Deduce threshold from the last SSTable added to the set
-        threshold = sst->get_schema()->min_compaction_threshold();
-    }
-    }
-
+    // Remove before add: lets a rewrite/scrub/split that reuses the old run id succeed.
     for (auto&& sst : old_ssts) {
-    if (sst->data_size() > 0) {
-        auto run_identifier = sst->run_identifier();
-        all[run_identifier].erase(sst);
-        if (all[run_identifier].all().empty()) {
-            all.erase(run_identifier);
+        if (sst->data_size() == 0) {
+            continue;
         }
-        total_bytes -= sst->data_size();
-    }
+        auto it = _all.find(sst->run_identifier());
+        // Skip untracked runs and inserts rejected below.
+        if (it == _all.end() || !it->second.erase(sst)) {
+            continue;
+        }
+        _total_bytes -= sst->data_size();
+        if (it->second.empty()) {
+            _all.erase(it);
+        }
     }
 
-    // commit calculations
-    std::invoke([&] () noexcept {
-        _all = std::move(all);
-        _total_bytes = total_bytes;
-        _threshold = threshold;
-        // Defer backlog contribution recalculation to the next backlog() call,
-        // avoiding O(N^2) cost when many sstables are added in a batch (e.g. boot).
-        _backlog_dirty = true;
-    });
+    for (auto&& sst : new_ssts) {
+        if (sst->data_size() == 0) {
+            continue;
+        }
+        if (_all[sst->run_identifier()].insert(sst)) {
+            _total_bytes += sst->data_size();
+        } else {
+            clogger.warn("incremental_backlog_tracker: SSTable {} overlaps an existing fragment of run {}; dropped from backlog tracking",
+                    sst->get_filename(), sst->run_identifier());
+        }
+    }
+    if (!new_ssts.empty()) {
+        // All sstables in one instance share a table, so any carries the current threshold.
+        _threshold = new_ssts.back()->get_schema()->min_compaction_threshold();
+    }
+
+    // Deferred to backlog() to avoid O(N^2) on a large batch (e.g. boot).
+    _backlog_dirty = true;
 }
 
 }
