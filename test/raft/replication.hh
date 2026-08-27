@@ -475,7 +475,7 @@ public:
         auto term_and_vote = std::make_pair(_conf.term, _conf.vote);
         return make_ready_future<std::pair<raft::term_t, raft::server_id>>(term_and_vote);
     }
-    future<> store_commit_idx(raft::index_t) override {
+    future<> store_commit_idx(raft::index_t, raft::term_t) override {
         co_return;
     }
     future<raft::index_t> load_commit_idx() override {

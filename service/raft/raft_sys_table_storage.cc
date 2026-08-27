@@ -69,7 +69,9 @@ future<std::pair<raft::term_t, raft::server_id>> raft_sys_table_storage::load_te
     co_return std::pair(vote_term, vote);
 }
 
-future<> raft_sys_table_storage::store_commit_idx(raft::index_t idx) {
+future<> raft_sys_table_storage::store_commit_idx(raft::index_t idx, raft::term_t) {
+    // The term is not persisted here: group0 snapshots are driven by
+    // state_machine snapshots, not by a commit_idx catch-up on restart.
     return execute_with_linearization_point([this, idx] {
         static const auto store_cql = format("INSERT INTO system.{} (group_id, commit_idx) VALUES (?, ?)",
             db::system_keyspace::RAFT);

@@ -733,10 +733,12 @@ public:
     // in parallel with store.
     virtual future<std::pair<term_t, server_id>> load_term_and_vote() = 0;
 
-    // Persist given commit index.
+    // Persist given commit index. `term` is the term of the log entry
+    // at `idx`; implementations that snapshot up to the commit index on
+    // restart can persist it to recover the exact term later.
     // Cannot be called conccurrently with itself.
     // Persisting a commit index is optional.
-    virtual future<> store_commit_idx(index_t idx) = 0;
+    virtual future<> store_commit_idx(index_t idx, term_t term) = 0;
 
     // Load persisted commit index.
     // Called during Raft server initialization only, is not run

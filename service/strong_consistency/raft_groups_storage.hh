@@ -48,6 +48,25 @@ class raft_groups_storage : public raft::persistence {
     // Used to linearize write operations to system.raft_groups table.
     // This is managed by `execute_with_linearization_point` helper function.
     future<> _pending_op_fut;
+    // Set once abort() is called. abort() does not persist commit_idx itself
+    // (shutdown may have closed the CQL / storage_proxy gates); durability is
+    // provided by the per-batch fake system.raft_groups mutation and the
+    // raft_groups memtable flush. After this point persist_commit_idx() becomes
+    // a quiet no-op so no new CQL write starts while the object is being torn
+    // down. abort() drains any in-flight operation via _pending_op_fut before
+    // this object is destroyed.
+    bool _aborted = false;
+    // Last commit index (and the term of the entry at it) reported by the raft
+    // io_fiber via store_commit_idx(). The io_fiber calls store_commit_idx()
+    // *before* pushing entries to the applier_fiber for apply(), so the index
+    // is always >= the raft index of any entry that has been applied to a
+    // memtable.
+    commit_idx_and_term _last_known_commit{};
+    // Last commit index recorded to system.raft_groups, by either the flush-hook
+    // CQL write (persist_commit_idx()) or the per-batch fake mutation
+    // (store_log_entries()) — both target the raft_groups memtable. Both paths
+    // skip when commit_idx has not advanced past this watermark.
+    raft::index_t _last_persisted_commit_idx{0};
 
 public:
     explicit raft_groups_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id, shard_id shard,
@@ -55,7 +74,7 @@ public:
 
     future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override;
     future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override;
-    future<> store_commit_idx(raft::index_t) override;
+    future<> store_commit_idx(raft::index_t, raft::term_t) override;
     future<raft::index_t> load_commit_idx() override;
     future<raft::log_entries> load_log() override;
     future<raft::snapshot_descriptor> load_snapshot_descriptor() override;
@@ -75,13 +94,31 @@ public:
     // Static version that doesn't require constructing a full raft_groups_storage object.
     // Useful during commitlog replay when only read access to metadata is needed.
     static future<raft::index_t> load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    // Load the persisted (commit_idx, commit_idx_term) pair. Term 0 means the
+    // row predates the commit_idx_term column ("unknown").
+    static future<commit_idx_and_term> load_commit_idx_and_term(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    // Load the current persisted snapshot's (idx, term) for this group.
+    // Returns (0, 0) if no snapshot has been recorded yet.
+    static future<std::pair<raft::index_t, raft::term_t>> load_snapshot_idx_and_term(
+            cql3::query_processor& qp, raft::group_id gid, shard_id shard);
     // Store snapshot idx and term without updating the configuration.
     // Used to advance the persisted snapshot index so that raft does not
     // re-apply already applied entries on restart. Only writes if the new
     // index is higher than the existing one (safe to call on repeated replays).
     static future<> store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap);
+    // Persist (commit_idx, commit_idx_term) to system.raft_groups, but only if
+    // the index advances the currently persisted value. Used during commitlog
+    // replay to restore a commit_idx that a crash dropped from the raft_groups
+    // memtable before it could flush (the pair survives in the commitlog's
+    // commit_idx entries).
+    static future<> store_commit_idx_if_higher(cql3::query_processor& qp, raft::group_id gid, shard_id shard, commit_idx_and_term commit);
 
     std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
+
+    // Persist _last_known_commit (idx and term) to system.raft_groups. Skips
+    // the write if the index hasn't advanced since the last persist, or if
+    // abort() has begun.
+    future<> persist_commit_idx();
 
 private:
 
