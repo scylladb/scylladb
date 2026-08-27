@@ -72,7 +72,7 @@ For the EC2 Instance Metadata Service to function correctly, no additional confi
 object_storage_endpoints:
   - name: https://s3.us-east-1.amazonaws.com:443
     aws_region: us-east-1
-    iam_role_arn: arn:aws:iam::123456789012:instance-profile/my-instance-instance-profile
+    iam_role_arn: arn:aws:iam::123456789012:role/my-scylla-role
 ```
 
 ## Creating keyspace with S3
