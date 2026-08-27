@@ -18,6 +18,7 @@ target_sources(scylla_encryption
     kms_host.cc
     kms_key_provider.cc
     local_file_provider.cc
+    parquet_key_source.cc
     replicated_key_provider.cc
     symmetric_key.cc
     system_key.cc
