@@ -16,6 +16,8 @@
 #include "cdc/log.hh"
 #include "cdc/cdc_options.hh"
 #include "cdc/cdc_extension.hh"
+#include "tombstone_gc_extension.hh"
+#include "tombstone_gc.hh"
 #include "auth/service.hh"
 #include "cql3/cql3_type.hh"
 #include "db/config.hh"
@@ -1333,6 +1335,13 @@ static future<> mark_view_schemas_as_built(utils::chunked_vector<mutation>& out,
     }
 }
 
+// Check whether two schemas have the same partition key - the same columns
+// in the same order (cf. database::get_base_table_for_tablet_colocation()).
+static bool same_partition_key(const schema& view, const schema& base) {
+    return std::ranges::equal(view.partition_key_columns(), base.partition_key_columns(),
+            {}, &column_definition::name, &column_definition::name);
+}
+
 // When Alternator Streams are requested on a tablet table, update the
 // already-configured enabled=true CDC options:
 // - tablet_merge_blocked=true: suppress tablet merges that would produce
@@ -1754,7 +1763,10 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         auto ksm = create_keyspace_metadata(keyspace_name, _proxy, _gossiper, ts, tags_map, _proxy.features(), tablets_mode);
         locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets(), ksm->consistency_option());
         const auto& topo = _proxy.local_db().get_token_metadata().get_topology();
-        auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo);
+        // The keyspace may have been pre-created by the user, in which case its
+        // replication strategy - not the one we would create - governs its tables.
+        auto rs = _proxy.local_db().has_keyspace(keyspace_name) ? _proxy.local_db().find_keyspace(keyspace_name).get_replication_strategy_ptr()
+                : locator::replication_strategy_ptr(locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo));
 
         // Vector indexes is a new feature that we decided to only support
         // on tablets.
@@ -1803,15 +1815,20 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             // This should never happen, the ID is supposed to be unique
             co_return api_error::internal(format("Table with ID {} already exists", schema->id()));
         }
+        // Set the default tombstone_gc mode, like CQL CREATE TABLE does via
+        // cf_prop_defs::apply_to_builder(). Co-located views don't support
+        // repair (see create_index_statement.cc), so they keep 'timeout'.
+        builder.add_extension(tombstone_gc_extension::NAME, ::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(*rs, true)));
+        schema = builder.build();
         std::vector<schema_ptr> schemas;
         schemas.push_back(schema);
         for (schema_builder& view_builder : view_builders) {
+            const bool colocated = rs->uses_tablets() && same_partition_key(*view_builder.build(), *schema);
+            view_builder.add_extension(tombstone_gc_extension::NAME, ::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(*rs, !colocated)));
             schemas.push_back(view_builder.build());
         }
         co_await service::prepare_new_column_families_announcement(schema_mutations, _proxy, *ksm, schemas, ts);
-        const bool uses_tablets = _proxy.local_db().has_keyspace(keyspace_name)
-                ? _proxy.local_db().find_keyspace(keyspace_name).uses_tablets() : ksm->uses_tablets();
-        if (uses_tablets) {
+        if (rs->uses_tablets()) {
             co_await mark_view_schemas_as_built(schema_mutations, schemas, ts, _proxy);
         }
 
@@ -2240,6 +2257,11 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         }
                         // GSIs have no tags:
                         view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>());
+                        // Set the default tombstone_gc mode, like CQL CREATE
+                        // INDEX does (see create_index_statement.cc).
+                        const auto& ks_rs = p.local().local_db().find_keyspace(keyspace_name).get_replication_strategy();
+                        const bool colocated = ks_rs.uses_tablets() && same_partition_key(*view_builder.build(), *schema);
+                        view_builder.add_extension(tombstone_gc_extension::NAME, ::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(ks_rs, !colocated)));
                         // Note below we don't need to add virtual columns, as all
                         // base columns were copied to view. TODO: reconsider the need
                         // for virtual columns when we support Projection.
