@@ -1809,7 +1809,9 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             schemas.push_back(view_builder.build());
         }
         co_await service::prepare_new_column_families_announcement(schema_mutations, _proxy, *ksm, schemas, ts);
-        if (ksm->uses_tablets()) {
+        const bool uses_tablets = _proxy.local_db().has_keyspace(keyspace_name)
+                ? _proxy.local_db().find_keyspace(keyspace_name).uses_tablets() : ksm->uses_tablets();
+        if (uses_tablets) {
             co_await mark_view_schemas_as_built(schema_mutations, schemas, ts, _proxy);
         }
 
