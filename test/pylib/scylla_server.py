@@ -1085,13 +1085,6 @@ class ScyllaServer:
         self.log_file.write(msg.encode())
         self.log_file.flush()
 
-    def setLogger(self, logger: logging.LoggerAdapter):
-        """Change the logger used by the server.
-           Called when a cluster is reused between tests so that logs during the new test
-           are prefixed appropriately with the corresponding test's name.
-        """
-        self.logger = logger
-
     def __str__(self):
         host_id = getattr(self, '_host_id', 'undefined id')
         return f"ScyllaServer({self.server_id}, {self.ip_addr}, {host_id})"

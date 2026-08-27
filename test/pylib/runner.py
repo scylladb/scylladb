@@ -298,6 +298,12 @@ def testpy_uname(request: pytest.FixtureRequest, testpy_shortname: str) -> str:
 
 
 @pytest.fixture(scope="module")
+def testpy_logger(testpy_uname: str) -> logging.Logger:
+    """Logger for the module's cluster activity, named by the module's unique name."""
+    return logging.getLogger(testpy_uname)
+
+
+@pytest.fixture(scope="module")
 def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
     def scale_timeout_inner(timeout: int | float) -> int | float:
         return scale_timeout_by_mode(build_mode, timeout)
@@ -385,17 +391,16 @@ def scylla_binary(request: pytest.FixtureRequest, build_mode: str) -> str:
 @pytest.fixture(scope="module")
 async def scylla_cluster(request: pytest.FixtureRequest,
                          testpy_cluster_factory: ClusterFactory,
-                         build_mode: str,
                          testpy_shortname: str,
-                         testpy_uname: str) -> AsyncGenerator[ScyllaCluster]:
+                         testpy_uname: str,
+                         testpy_logger: logging.Logger) -> AsyncGenerator[ScyllaCluster]:
     """Create a ScyllaCluster for the tests in a module.
 
     Builds a cluster with the suite's factory, runs the before-test hook and
     yields it to the module's tests. Once the module is done the cluster is
     recycled, so a later module always starts from a fresh one.
     """
-    logger_prefix = f"{build_mode}/"
-    cluster_logger = LogPrefixAdapter(logging.getLogger(logger_prefix), {"prefix": logger_prefix})
+    cluster_logger = testpy_logger
     cluster: ScyllaCluster | None = None
     server_log_filename: pathlib.Path | None = None
     testpy_name = os.path.join(get_params_stash(node=request.node)[TEST_SUITE].name, testpy_shortname.split('.')[0])

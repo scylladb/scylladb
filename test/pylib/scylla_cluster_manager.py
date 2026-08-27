@@ -50,7 +50,6 @@ from test.pylib.scylla_cluster import ClusterFactory, ReplaceConfig, ScyllaClust
 from test.pylib.scylla_server import ScyllaServer, ScyllaVersionDescription
 from test.pylib.util import (
     Host,
-    LogPrefixAdapter,
     gather_safely,
     graceful_stop_timeout,
     universalasync_typed_wrap,
@@ -107,7 +106,7 @@ def manager_op[**P, R](entry_point: ManagerAsyncFn[P, R] | None = None,
     A waiter that times out or is cancelled abandons the operation instead of
     killing it: the operation is shielded, stays in tasks_history and
     after_test() drains it from there.  Failures are logged with their
-    traceback into the per-test cluster log.
+    traceback through the cluster's logger.
 
     Every entry point works on the current cluster, so that is asserted here.
     """
@@ -186,19 +185,13 @@ class ScyllaClusterManager:
     Args:
         test_uname: name of the test module the manager serves
         create_cluster: factory of Scylla clusters
-        base_dir: directory for the per-test-case cluster logs
         port: CQL port for driver connections
         use_ssl: use SSL for driver connections
         auth_provider: authentication provider for driver connections
     """
-    # Per test, created by before_test() and removed by after_test().
-    test_case_log_file: pathlib.Path
-    test_case_log_fh: logging.FileHandler
-
     def __init__(self,
                  test_uname: str,
                  create_cluster: ClusterFactory,
-                 base_dir: str,
                  port: int,
                  use_ssl: bool,
                  auth_provider: Any | None) -> None:
@@ -207,9 +200,7 @@ class ScyllaClusterManager:
         # they are called from.
         self._loop = asyncio.get_running_loop()
         self.test_uname = test_uname
-        self.base_dir = base_dir
-        logger = logging.getLogger(self.test_uname)
-        self.logger = LogPrefixAdapter(logger, {"prefix": self.test_uname})
+        self.logger = logging.getLogger(self.test_uname)
         self.cluster: ScyllaCluster | None = None
         self.create_cluster = create_cluster
         self.is_running = False
@@ -253,7 +244,6 @@ class ScyllaClusterManager:
             return
         self.cluster = await self.create_cluster(self.logger)
         self.logger.info("First Scylla cluster: %s", self.cluster)
-        self.cluster.setLogger(self.logger)
         self.is_running = True
 
     @manager_op(timeout=600)
@@ -270,17 +260,7 @@ class ScyllaClusterManager:
         self.load_balancing_policy = RoundRobinPolicy()
         self.auth_provider = self._suite_auth_provider
         self.current_test_case_full_name = f"{self.test_uname}::{test_case_name}"
-        root_logger = logging.getLogger()
-        parent_test_name = pathlib.Path(self.test_uname.replace("/", "_")).stem
-        self.test_case_log_file = pathlib.Path(self.base_dir) / f"{parent_test_name}.{test_case_name}_cluster.log"
-        self.test_case_log_fh = logging.FileHandler(self.test_case_log_file)
-        self.test_case_log_fh.setLevel(root_logger.getEffectiveLevel())
-        # to have the custom formatter with a timestamp that used in a test.py but for each testcase's log, we need to
-        # extract it from the root logger and apply to the handler
-        self.test_case_log_fh.setFormatter(root_logger.handlers[0].formatter)
-        root_logger.addHandler(self.test_case_log_fh)
         self.logger.info("Setting up %s", self.current_test_case_full_name)
-        self.cluster.setLogger(self.logger)
         self.logger.info("Leasing Scylla cluster %s for test %s", self.cluster, self.current_test_case_full_name)
         self.cluster.before_test(self.current_test_case_full_name)
         self.cluster.take_log_savepoint()
@@ -388,9 +368,6 @@ class ScyllaClusterManager:
         try:
             self.cluster.after_test(self.current_test_case_full_name)
         finally:
-            logging.getLogger().removeHandler(self.test_case_log_fh)
-            if success:
-                self.test_case_log_file.unlink()
             self.current_test_case_full_name = ""
         cluster_str = str(self.cluster)
 

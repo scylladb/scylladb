@@ -614,15 +614,6 @@ class ScyllaCluster:
         assert server_id in self.servers, f"Server {server_id} unknown"
         self.servers[server_id].update_cmdline(cmdline_options)
 
-    def setLogger(self, logger: logging.LoggerAdapter):
-        """Change the logger used by the cluster.
-           Called when a cluster is reused between tests so that logs during the new test
-           are prefixed appropriately with the corresponding test's name.
-        """
-        self.logger = logger
-        for srv in self.servers.values():
-            srv.setLogger(self.logger)
-
     async def change_ip(self, server_id: ServerNum) -> IPAddress:
         """Lease a new IP address and update conf/scylla.yaml with it. The
         original IP is released at the end of the test to avoid an

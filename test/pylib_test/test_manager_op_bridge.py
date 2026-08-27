@@ -16,14 +16,12 @@ decorator and the bridge under test are the production ones.
 
 import asyncio
 import concurrent.futures
-import logging
 import threading
 from collections.abc import Iterator
 
 import pytest
 
 from test.pylib.internal_types import ServerNum
-from test.pylib.util import LogPrefixAdapter
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
@@ -75,12 +73,10 @@ def manager() -> Iterator[tuple[ScyllaClusterManager, StubCluster, asyncio.Abstr
         mgr = ScyllaClusterManager(
             test_uname="test_manager_op_bridge",
             create_cluster=None,
-            base_dir="",
             port=9042,
             use_ssl=False,
             auth_provider=None,
         )
-        mgr.logger = LogPrefixAdapter(logging.getLogger("test_manager_op_bridge"), {"prefix": "test"})
         mgr.cluster = StubCluster(asyncio.get_running_loop())
         ready.set_result((mgr, asyncio.get_running_loop()))
         await asyncio.get_running_loop().run_in_executor(None, stop_event.wait)

@@ -77,7 +77,6 @@ def pytest_addoption(parser):
 
 @pytest.fixture
 async def _scylla_cluster_manager(request: pytest.FixtureRequest,
-                                  suite_log_dir: Path,
                                   testpy_cluster_factory: ClusterFactory,
                                   testpy_uname: str) -> AsyncGenerator[ScyllaClusterManager]:
     """Run a per-test cluster manager on its own thread and event loop.
@@ -102,7 +101,6 @@ async def _scylla_cluster_manager(request: pytest.FixtureRequest,
         mgr = ScyllaClusterManager(
             test_uname=testpy_uname,
             create_cluster=testpy_cluster_factory,
-            base_dir=str(suite_log_dir),
             port=int(request.config.getoption('port')),
             use_ssl=bool(request.config.getoption('ssl')),
             auth_provider=auth_provider,
@@ -165,7 +163,7 @@ async def manager(request: pytest.FixtureRequest,
     # failed test's properties by record_failed_test_artifacts().
     request.node.stash[MANAGER_LOGS_KEY] = {
         "manager": _scylla_cluster_manager,
-        "logs": {"test_py.log": _scylla_cluster_manager.test_case_log_file},
+        "logs": {},
     }
     yield _scylla_cluster_manager
     # `request.node.stash` contains reports stored per phase in `pytest_runtest_makereport`
