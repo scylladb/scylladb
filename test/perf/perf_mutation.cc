@@ -93,21 +93,37 @@ int main(int argc, char* argv[]) {
             "mutation::apply(mutation&&) -- the rvalue partition-apply path. "
             "Ignores --rows and --sequential-columns.")
         ("merge-rows", bpo::value<size_t>()->default_value(8),
-            "rows per mutation in --merge-mode.");
+            "rows per mutation in --merge-mode.")
+        ("merge-interleave", bpo::bool_switch()->default_value(false),
+            "single-pass variant of --merge-mode: target gets --merge-rows even "
+            "clustering keys, source gets --merge-rows odd keys interleaved "
+            "between them, merged once. Every row is a miss, exercising the "
+            "row b-tree's lookup-then-insert path instead of the (identical-keys) "
+            "overwrite/hit path --merge-mode alone produces.")
+        ("merge-gap", bpo::value<size_t>()->default_value(1),
+            "in --merge-interleave, target has --merge-rows dense keys and source "
+            "has --merge-rows/gap keys spaced `gap` apart -- each source miss then "
+            "skips gap-1 target rows. gap 1 is the default (adjacent) case; a "
+            "larger gap tests the lower_bound fallback.");
     return app.run_deprecated(argc, argv, [&] {
         size_t column_count = app.configuration()["column-count"].as<size_t>();
         bool sequential_columns = app.configuration()["sequential-columns"].as<bool>();
         bool merge_mode = app.configuration()["merge-mode"].as<bool>();
+        bool merge_interleave = app.configuration()["merge-interleave"].as<bool>();
         size_t rows = app.configuration()["rows"].as<size_t>();
         size_t merge_rows = app.configuration()["merge-rows"].as<size_t>();
         if (column_count == 0) {
             throw std::invalid_argument("--column-count must be greater than zero");
         }
-        if (!sequential_columns && !merge_mode && rows == 0) {
+        if (!sequential_columns && !merge_mode && !merge_interleave && rows == 0) {
             throw std::invalid_argument("--rows must be greater than zero");
         }
-        if (merge_mode && merge_rows == 0) {
+        if ((merge_mode || merge_interleave) && merge_rows == 0) {
             throw std::invalid_argument("--merge-rows must be greater than zero");
+        }
+        size_t merge_gap = app.configuration()["merge-gap"].as<size_t>();
+        if (merge_interleave && (merge_gap == 0 || merge_gap > merge_rows)) {
+            throw std::invalid_argument("--merge-gap must be between 1 and --merge-rows");
         }
         auto builder = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("p1", utf8_type, column_kind::partition_key)
@@ -129,7 +145,26 @@ int main(int argc, char* argv[]) {
         perf_counter instructions_retired_counter(PERF_COUNT_HW_INSTRUCTIONS);
         perf_counter cpu_cycles_retired_counter(PERF_COUNT_HW_CPU_CYCLES);
 
-        if (merge_mode) {
+        if (merge_interleave) {
+            size_t gap = merge_gap;
+            std::cout << format("Merging {} dense target rows vs {} source rows spaced {} apart (all misses)...\n",
+                    merge_rows, merge_rows / gap, gap);
+            auto col = *s->get_column_definition(to_bytes(cnames[0]));
+            mutation target(s, key);
+            for (size_t r = 0; r < merge_rows; r++) {
+                auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(int32_t(2 * r))});
+                target.set_clustered_cell(c_key, col, make_atomic_cell(col.type, value));
+            }
+            mutation src(s, key);
+            for (size_t r = 0; r < merge_rows / gap; r++) {
+                auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(int32_t(2 * gap * r + 1))});
+                src.set_clustered_cell(c_key, col, make_atomic_cell(col.type, value));
+            }
+            instructions_retired_counter.enable();
+            cpu_cycles_retired_counter.enable();
+            target.apply(std::move(src));
+            total_ops = merge_rows / gap;
+        } else if (merge_mode) {
             std::cout << format("Merging two freshly-built mutations ({} row(s) x {} column(s) each) "
                     "via mutation::apply(mutation&&)...\n", merge_rows, column_count);
             std::vector<clustering_key> c_keys;
@@ -147,10 +182,10 @@ int main(int argc, char* argv[]) {
                 }
                 return m;
             };
-            mutation target = build_mutation();
             instructions_retired_counter.enable();
             cpu_cycles_retired_counter.enable();
             time_it([&] {
+                mutation target = build_mutation();
                 mutation src = build_mutation();
                 target.apply(std::move(src));
                 total_ops++;
