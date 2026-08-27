@@ -13,6 +13,7 @@ target_sources(service
     paxos/prepare_summary.cc
     paxos/proposal.cc
     qos/qos_common.cc
+    request_memory_limiter.cc
     qos/service_level_controller.cc
     qos/raft_service_level_distributed_data_accessor.cc
     strong_consistency/groups_manager.cc
