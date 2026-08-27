@@ -64,6 +64,7 @@ private:
     // _draining. Keeps the sums below from counting it twice.
     bool _fallback_counted_elsewhere = false;
     size_t _total_weight = 0;
+    bool _use_metrics;
     utils::observer<double> _shared_pool_fraction_observer;
 
     // A fraction of 0 would block every request forever, and more than the whole
@@ -75,7 +76,10 @@ private:
     void reap_drained() noexcept;
 
 public:
-    memory_limiter(size_t available_memory, double fraction, utils::updateable_value<double> shared_pool_fraction);
+    // `with_metrics` should be set on exactly one limiter per shard, since the
+    // per-service-level metrics are not namespaced by limiter.
+    memory_limiter(size_t available_memory, double fraction,
+            utils::updateable_value<double> shared_pool_fraction, bool with_metrics = false);
     memory_limiter(unlimited_tag, size_t available_memory, double fraction);
     ~memory_limiter();
 
