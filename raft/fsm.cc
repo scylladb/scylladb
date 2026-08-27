@@ -244,6 +244,10 @@ void fsm::become_leader() {
         leader_state().lease_wait_done = leader_state().last_prev_term_idx == index_t{0};
     }
 
+    // A leader bounds its log with log_limiter_semaphore instead, so drop any
+    // outstanding "my log is full" state to avoid prodding a leader spuriously
+    // if we step down later.
+    _log_full_reported = false;
     // a new leader needs to commit at least one entry to make sure that
     // all existing entries in its log are committed as well. Also it should
     // send append entries RPC as soon as possible to establish its leadership
@@ -1496,6 +1500,25 @@ bool fsm::apply_snapshot(snapshot_descriptor snp, size_t max_trailing_entries, s
     if (is_leader()) {
         logger.trace("apply_snapshot[{}]: signal {} available units", _tag, units);
         leader_state().log_limiter_semaphore->signal(units);
+    } else if (_log_full_reported && !log_is_full() && current_leader()) {
+        // We told the leader our log was full, so it stopped replicating to us
+        // and is now only probing us once per tick. Truncating the log just made
+        // room, so prod it instead of waiting for the next probe.
+        //
+        // Reuse the "looking for a leader" message: the leader answers it by
+        // calling replicate_to() straight away (see append_entries_reply), and
+        // since it clears follower_progress::log_full from this very reply,
+        // replication resumes immediately with real entries.
+        //
+        // This is only an optimization - tick_leader() would eventually probe us
+        // anyway - so it is fine that the message may be dropped.
+        logger.trace("apply_snapshot[{}]: log usage is down to {}, asking {} to resume replication",
+                _tag, _log.memory_usage(), current_leader());
+        // Goes through report_log_full() like every other reply, so that the
+        // "accepting entries again" transition is logged exactly once.
+        const bool log_full = report_log_full();
+        send_to(current_leader(), append_reply{_current_term, _commit_idx,
+                append_reply::rejected{index_t{0}, index_t{0}}, _clock_ok, log_full});
     }
     _sm_events.signal();
     return true;

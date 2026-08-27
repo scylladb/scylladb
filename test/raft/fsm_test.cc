@@ -3745,3 +3745,44 @@ BOOST_AUTO_TEST_CASE(test_leader_replicates_to_full_follower_with_diverged_tail)
     BOOST_CHECK(B.log_is_full());
     BOOST_CHECK(A.get_progress(B_id).log_full);
 }
+
+// After reporting a full log, a follower which frees memory by snapshotting
+// prods the leader instead of waiting to be probed on the next tick.
+BOOST_AUTO_TEST_CASE(test_follower_notifies_leader_when_log_shrinks) {
+    follower_log_limit_fixture f;
+    fsm_debug fsm(f.follower_id, term_t{1}, server_id{}, f.make_log(0),
+            trivial_failure_detector, f.config(3));
+
+    // Fill up and report it.
+    fsm.step(f.leader_id, f.request(index_t{0}, term_t{0}, 5, index_t{5}));
+    auto output = fsm.get_output();
+    BOOST_REQUIRE(f.reply_of(output).log_full);
+
+    // Snapshotting makes room, so we ask the leader to resume. The message is
+    // the same "looking for a leader" ping the leader answers by replicating.
+    BOOST_REQUIRE(fsm.apply_snapshot(
+            raft::snapshot_descriptor{.idx = index_t{3}, .term = term_t{1}, .config = f.cfg},
+            0, 0, true));
+    output = fsm.get_output();
+    BOOST_REQUIRE_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK_EQUAL(output.messages.back().first, f.leader_id);
+    auto reply = std::get<raft::append_reply>(output.messages.back().second);
+    BOOST_REQUIRE(std::holds_alternative<raft::append_reply::rejected>(reply.result));
+    auto rejected = std::get<raft::append_reply::rejected>(reply.result);
+    BOOST_CHECK_EQUAL(rejected.non_matching_idx, index_t{0});
+    BOOST_CHECK_EQUAL(rejected.last_idx, index_t{0});
+    BOOST_CHECK(!reply.log_full);
+
+    // The latch is consumed: a second snapshot does not prod the leader again,
+    // since we never told it we were full in between.
+    fsm.step(f.leader_id, f.request(index_t{3}, term_t{1}, 2, index_t{5}));
+    output = fsm.get_output();
+    BOOST_REQUIRE(!f.reply_of(output).log_full);
+    BOOST_REQUIRE(fsm.apply_snapshot(
+            raft::snapshot_descriptor{.idx = index_t{5}, .term = term_t{1}, .config = f.cfg},
+            0, 0, true));
+    output = fsm.get_output();
+    for (auto& [to, msg] : output.messages) {
+        BOOST_CHECK(!std::holds_alternative<raft::append_reply>(msg));
+    }
+}
