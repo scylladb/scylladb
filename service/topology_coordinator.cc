@@ -74,6 +74,7 @@
 #include "repair/repair.hh"
 #include "idl/repair.dist.hh"
 #include "idl/sstables_loader.dist.hh"
+#include "idl/strong_consistency/groups_manager.dist.hh"
 
 #include "service/topology_coordinator.hh"
 
@@ -1760,6 +1761,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             rtlogger.warn("Tablet already in transition, ignoring migration: {}", mig);
             return;
         }
+        // The rule that a tablet being resized does not move rests on two things. The replacement
+        // group ids exist only while the resize finalization transition state is set: both go into
+        // the same group0 command, and the write which clears them carries the
+        // del_transition_state(). And while that state is set, the dispatcher runs the finalization
+        // handler alone, which emits no migration.
+        //
+        // This check and the load balancer's are defence in depth on top of that, not a substitute
+        // for it: the RF change, rebuild retry and restore paths write tablet transitions directly
+        // and do not come through here.
+        if (tmap.is_resizing(mig.tablet.tablet)) {
+            rtlogger.warn("Tablet's resize is being finalized, ignoring migration: {}", mig);
+            return;
+        }
         auto migration_task_info = mig.kind == locator::tablet_transition_kind::migration ? locator::tablet_task_info::make_migration_request()
             : locator::tablet_task_info::make_intranode_migration_request();
         migration_task_info.sched_nr++;
@@ -2778,6 +2792,161 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
     }
 
+    // How long a round waits for a replica to answer.
+    //
+    // An attempt does not retry. On a healthy cluster the sealing takes two rounds with no waiting
+    // in between, and it usually gets them. The write which enters the finalization reaches the
+    // replicas an iteration earlier, so their children have had time to start and to elect the
+    // leaders they were co-located with.
+    //
+    // A round can still achieve nothing without anything being wrong. A replica starts its children
+    // in the background, and the barrier the handler opens with waits for the new tablet metadata
+    // to be applied, not for the groups it names to be running. The handler cannot tell that apart
+    // from a sealing which is stuck, and the same answer serves both: let go of the group0 guard,
+    // so that an exclusion can land, rather than run another round under it.
+    static constexpr auto sc_resize_rpc_timeout = std::chrono::seconds(10);
+
+    // Seals the parent Raft group of every resizing strongly consistent tablet among the tables
+    // being finalized. Each stops accepting writes and finishes its log on every replica, so that
+    // its children can take over.
+    //
+    // Every tablet takes two rounds of process_raft_resize on all of its replicas: one which leaves
+    // the markers committed in its parent group, one which waits for every replica to apply them.
+    // Returns false if either round got nowhere. The caller answers that by starting the
+    // finalization over rather than by giving up on it. Stopping loses nothing: the markers are
+    // never cleared, so the next attempt picks up where this one stopped.
+    future<bool> run_sc_tablet_resize(const locator::token_metadata_ptr& tm,
+            const std::unordered_set<table_id>& finalize_resize) {
+        // Describes a strongly consistent tablet whose Raft group must be replaced by the
+        // group(s) of the tablets it is resized into.
+        struct sc_resize_tablet {
+            locator::global_tablet_id tablet;
+            raft::group_id parent_gid;
+            std::vector<raft::group_id> new_gids;
+            // The replicas to drive. Excluded nodes are on their way out of the cluster and are
+            // left out. The set is fixed for the whole attempt, because the attempt cannot see it
+            // change: the group0 guard the finalization holds also holds the read-apply mutex,
+            // which group0_state_machine::apply() needs. No group0 command is applied on this node
+            // while the seal runs, so a newly excluded node waits for the next attempt.
+            locator::tablet_replica_set replicas;
+        };
+
+        std::vector<sc_resize_tablet> sc_tablets;
+        for (const auto& table_id : finalize_resize) {
+            const auto& tmap = tm->tablets().get_tablet_map(table_id);
+            if (!tmap.has_raft_info() || !tmap.needs_split()) {
+                continue;
+            }
+            for (auto tid : tmap.tablet_ids()) {
+                if (!tmap.is_resizing(tid)) {
+                    continue;
+                }
+                const auto& raft_resize = tmap.get_raft_resize_info(tid);
+                const auto parent_gid = tmap.get_tablet_raft_info(tid).group_id;
+                locator::tablet_replica_set replicas;
+                for (const auto& replica : tmap.get_tablet_info(tid).replicas) {
+                    if (is_excluded(raft::server_id(replica.host.uuid()))) {
+                        rtlogger.debug("process_raft_resize to {} for parent {} skipped because node is excluded", replica, parent_gid);
+                        continue;
+                    }
+                    replicas.push_back(replica);
+                }
+                sc_resize_tablet t {
+                    .tablet = locator::global_tablet_id{table_id, tid},
+                    .parent_gid = parent_gid,
+                    .new_gids{raft_resize.new_gids.begin(), raft_resize.new_gids.end()},
+                    .replicas = std::move(replicas)
+                };
+                sc_tablets.push_back(std::move(t));
+            }
+        }
+        if (sc_tablets.empty()) {
+            co_return true;
+        }
+        rtlogger.info("Running strongly consistent tablet resize for {} tablet(s)", sc_tablets.size());
+
+        bool all_sealed = true;
+
+        // We seal every tablet of every table being finalized, and the last round of each makes
+        // its replicas flush the tablet. Without a bound we would flush the whole table on every
+        // replica at once, and a flush queued behind that many others outlives the deadline of the
+        // RPC which asked for it. That costs an attempt rather than the split - the flush finishes
+        // and is remembered, so the next attempt's last round answers straight away - so the bound
+        // errs towards fewer concurrent flushes.
+        //
+        // Not lower, though: the sealing runs under the group0 guard, and what we do not seal in
+        // parallel we seal in sequence, with every topology operation waiting for all of it.
+        constexpr size_t max_concurrent_sealed_tablets = 16;
+
+        co_await max_concurrent_for_each(sc_tablets, max_concurrent_sealed_tablets, [&] (const sc_resize_tablet& t) -> future<> {
+            // Asks every replica of the tablet to carry the resize a step further, and answers
+            // whether the round got what it was for. A driving round only has to leave the markers
+            // committed in the parent group, which one replica reporting success establishes. A
+            // wait_only round has to see every replica apply them.
+            auto round = [&] (bool wait_only) -> future<bool> {
+                bool any = false;
+                bool all = true;
+                co_await coroutine::parallel_for_each(t.replicas, [&] (const locator::tablet_replica& replica) -> future<> {
+                    try {
+                        auto host = replica.host;
+                        auto success = co_await ser::groups_manager_rpc_verbs::send_process_raft_resize(
+                            &_messaging, host, lowres_clock::now() + sc_resize_rpc_timeout,
+                            raft::server_id(host.uuid()), t.tablet, t.parent_gid, t.new_gids, wait_only);
+                        if (success) {
+                            any = true;
+                        } else {
+                            all = false;
+                        }
+                    } catch (...) {
+                        rtlogger.debug("process_raft_resize to {} for parent {} failed: {}",
+                            replica, t.parent_gid, std::current_exception());
+                        all = false;
+                    }
+                });
+                co_return wait_only ? all : any;
+            };
+
+            // Reports a round which got nowhere and hands back, so that the guard is released and
+            // an exclusion can be seen; the handler will dispatch the finalization again.
+            auto give_up = [&] {
+                static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(30));
+                rtlogger.log(log_level::warn, rate_limit,
+                    "Raft group {} of tablet {} has not been sealed on all of {} yet. "
+                    "No other topology operation runs until the resize is finalized. If one of those "
+                    "replicas is gone for good, exclude it - the next attempt will then skip it.",
+                    t.parent_gid, t.tablet, t.replicas);
+                all_sealed = false;
+            };
+
+            // Drive the replicas, so that the markers end up committed in the parent group. If
+            // the exclusions left nobody to drive, nobody reports success and the attempt ends
+            // here. Reaching that needs every replica of the tablet to have been excluded before
+            // the attempt started.
+            _as.check();
+            if (!co_await round(false)) {
+                give_up();
+                co_return;
+            }
+
+            // Committing the markers only establishes that they are committed, not that they
+            // have been applied. We therefore wait for every replica to apply them before the
+            // tablet map is replaced: a parent group whose Raft server is torn down before it
+            // applied the marker never releases the appliers of its children. The replicas which
+            // are already done answer this round straight away.
+            _as.check();
+            if (!co_await round(true)) {
+                give_up();
+                co_return;
+            }
+        });
+
+        if (!all_sealed) {
+            co_return false;
+        }
+        rtlogger.info("Sealed the parent Raft group of {} strongly consistent tablet(s)", sc_tablets.size());
+        co_return true;
+    }
+
     future<> handle_tablet_resize_finalization(group0_guard g) {
         // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
         // of token metadata will complete before we update topology.
@@ -2788,9 +2957,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         auto tm = get_token_metadata_ptr();
         auto plan = co_await _tablet_allocator.balance_tablets(tm, &_topo_sm._topology, &_sys_ks, {}, get_dead_nodes());
 
+        // A strongly consistent table is in the set iff its replacement group ids are recorded;
+        // split-readiness decides only for the rest. Readiness is reported from replica memory and
+        // aggregated by taking the minimum over the sources, so it can drop a table whose ids are
+        // already recorded, and split_tablets() cannot replace the map of one which joined without
+        // them.
+        //
+        // Note: this is also what makes the tablet_resize_finalization_postpone and
+        // tablet_split_finalization_postpone injections stop working once the ids are recorded.
+        // They keep a table out of what the balancer plans, and the loop below puts it back.
+        auto finalize_resize = plan.resize_plan().finalize_resize;
+        std::erase_if(finalize_resize, [&] (table_id t) {
+            const auto& tmap = tm->tablets().get_tablet_map(t);
+            return tmap.has_raft_info() && !tmap.has_raft_resizes();
+        });
+        for (const auto& [t, _] : tm->tablets().all_table_groups()) {
+            if (tm->tablets().get_tablet_map(t).has_raft_resizes()) {
+                finalize_resize.insert(t);
+            }
+        }
+
         group0_update_collector updates;
 
-        for (auto& table_id : plan.resize_plan().finalize_resize) {
+        for (auto& table_id : finalize_resize) {
             auto s = _db.find_schema(table_id);
             auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
             co_await replica::tablet_map_to_mutations(
@@ -2837,6 +3026,39 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
         }
 
+        // Strongly consistent tablet resize: seal the parent Raft groups before replacing the
+        // tablet map. The replica set and the Raft membership stay fixed here. No tablet of the
+        // table was in transition when the finalization was entered (see
+        // maybe_start_tablet_migration()), and a tablet whose replacement group ids are recorded
+        // is not a migration candidate - see the migrating() check in tablet_allocator_impl's
+        // make_plan(), with generate_migration_update() as the backstop. The new tablet map
+        // computed above already assigns the replacement Raft group ids as the new tablets' group
+        // ids.
+        if (!co_await run_sc_tablet_resize(tm, finalize_resize)) {
+            // A replica which is gone for good is the one failure the sealing cannot retry its
+            // way out of, and only an exclusion moves past it. An exclusion cannot land while this
+            // fiber holds the group0 guard, so we hand the guard back rather than retry under it.
+            //
+            // The transition state stays, so we give up on the attempt, never on the split - which
+            // must not happen, the seal being irreversible. Re-entering re-reads the topology,
+            // re-plans, re-runs the barrier and re-seals; every step is idempotent, the markers
+            // being monotonic.
+            //
+            // We wait as long as the coordinator waits after any other iteration it means to retry,
+            // so that a sealing which cannot progress does not re-run the barrier as fast as the
+            // cluster will answer it. This is the only place where the sealing waits: a replica
+            // which is down fails the barrier instead, and never gets this far.
+            release_guard(std::move(guard));
+            co_await sleep_abortable(std::chrono::seconds(1), _as);
+            co_return;
+        }
+
+        // Holds the finalization in the window where the parent groups are already sealed but the
+        // tablet map still names them, which is what a replica restarting here has to recover from
+        // by reading its markers back.
+        co_await utils::get_local_injector().inject("sc_pause_after_sealing_parents",
+                utils::wait_for_message(std::chrono::minutes(2)));
+
         updates.emplace_back(
             topology_mutation_builder(guard.write_timestamp())
                 .del_transition_state()
@@ -2847,7 +3069,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         if (auto old_load_stats = _tablet_allocator.get_load_stats()) {
             guard = co_await start_operation();
             auto new_tm = get_token_metadata_ptr();
-            auto reconciled_stats = old_load_stats->reconcile_tablets_resize(plan.resize_plan().finalize_resize, *tm, *new_tm);
+            auto reconciled_stats = old_load_stats->reconcile_tablets_resize(finalize_resize, *tm, *new_tm);
             if (reconciled_stats) {
                 _tablet_allocator.set_load_stats(reconciled_stats);
             }
@@ -4481,10 +4703,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     future<bool> generate_tablet_transition_updates(
             group0_update_collector& updates, const group0_guard& guard, migration_plan& plan);
 
-    // Generates a single resize finalization mutation (set tstate + version bump).
-    // Appends to `updates`. Does not commit.
+    // Generates the resize finalization mutations: the transition state, and for a strongly
+    // consistent table the ids of the groups which will replace the group of each of its splitting
+    // tablets. Appends to `updates`. Does not commit.
     void generate_tablet_resize_finalization_update(
-            group0_update_collector& updates, const group0_guard& guard) {
+            group0_update_collector& updates, const group0_guard& guard,
+            const std::unordered_set<table_id>& finalize_resize) {
         auto resize_finalization_transition_state = [this] {
             return _feature_service.tablet_merge ? topology::transition_state::tablet_resize_finalization : topology::transition_state::tablet_split_finalization;
         };
@@ -4493,6 +4717,43 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 .set_transition_state(resize_finalization_transition_state())
                 .set_version(_topo_sm._topology.version + 1)
                 .build());
+
+        // The groups replacing a splitting strongly consistent tablet's group have to exist, and
+        // every replica has to agree on which they are, before the split is carried out. Their ids
+        // are therefore generated here, and reach the replicas with the write which starts the
+        // finalization. Recorded until the tablet map is replaced, they also tell the load balancer
+        // that this split can no longer be revoked - see make_resize_plan().
+        //
+        // FIXME: tablet merge for strongly consistent tables is not implemented yet, so no merge
+        // decision reaches this point - see the suppression in tablet_allocator_impl's
+        // process_table().
+        for (const auto table_id : finalize_resize) {
+            const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
+            if (!tmap.has_raft_info() || !tmap.needs_split()) {
+                continue;
+            }
+            replica::tablet_mutation_builder builder(guard.write_timestamp(), table_id);
+            bool generated = false;
+            for (auto tid : tmap.tablet_ids()) {
+                // An earlier attempt at this finalization may have generated them already, and the
+                // replicas may have created the groups the recorded ones name.
+                if (tmap.is_resizing(tid)) {
+                    continue;
+                }
+                builder.set_raft_resize_info(tmap.get_last_token(tid), locator::raft_resize_info {
+                    .new_gids = {
+                        raft::group_id(utils::UUID_gen::get_time_UUID()),
+                        raft::group_id(utils::UUID_gen::get_time_UUID()),
+                    },
+                });
+                generated = true;
+            }
+            if (generated) {
+                rtlogger.info("Generated the replacement Raft group ids of table {} for the resize "
+                    "finalization", table_id);
+                updates.add_large(builder.build());
+            }
+        }
     }
 
     // Returns true if the state machine was transitioned into tablet migration path.
@@ -4654,7 +4915,7 @@ future<bool> topology_coordinator::generate_tablet_transition_updates(
         if (utils::get_local_injector().enter("tablet_split_finalization_postpone")) {
             co_return false;
         }
-        generate_tablet_resize_finalization_update(updates, guard);
+        generate_tablet_resize_finalization_update(updates, guard, plan.resize_plan().finalize_resize);
         co_return true;
     }
 
@@ -4766,6 +5027,18 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
 
             locator::load_stats node_stats;
             if (!_gossiper.is_alive(dst)) {
+                if (is_excluded(dst_server)) {
+                    // An excluded node is one the operator has declared gone for good, and it is
+                    // banned from rejoining, so its stats are never coming back. Counting it as a
+                    // node whose stats are merely missing would invalidate the whole collection
+                    // for as long as it stays in the topology, which is what a coordinator that
+                    // took over after the node died would otherwise do - it has nothing cached to
+                    // fall back on. Leave it out of the aggregate instead: the split-ready
+                    // sequence number is a minimum over the nodes which did report, so the
+                    // survivors alone can carry a resize past a node which will never answer.
+                    rtlogger.debug("raft topology: Not refreshing table load on {} because it is excluded.", dst);
+                    co_return;
+                }
                 if (require == require_live_nodes::no && _load_stats_per_node.contains(dst) &&
                         !utils::get_local_injector().enter("force_down_node_load_stats_invalid")) {
                     node_stats = _load_stats_per_node[dst];

@@ -10,3 +10,9 @@
 #include "idl/uuid.idl.hh"
 
 verb [[with_timeout]] wait_for_raft_groups_to_start(raft::server_id dst_id, table_id table);
+
+// Seals the raft group `parent_gid` of `tablet` on the target replica, which is being replaced by
+// `new_gids` - for a split the left and right child in that order. `parent_gid` has to match what
+// the receiver's tablet map says: a tablet id only names a tablet together with the map it indexes.
+// With `wait_only`, only waits. Returns false if the call has to be retried.
+verb [[with_timeout]] process_raft_resize(raft::server_id dst_id, locator::global_tablet_id tablet, raft::group_id parent_gid, std::vector<raft::group_id> new_gids, bool wait_only) -> bool;

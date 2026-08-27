@@ -737,6 +737,9 @@ private:
     // must operate on storage group level.
     utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const;
     storage_group& storage_group_for_id(size_t i) const;
+    // Like storage_group_for_id(), but returns nullptr instead of throwing when this shard holds
+    // no storage group with that id.
+    storage_group* maybe_storage_group_for_id(size_t i) const;
 
     std::unique_ptr<storage_group_manager> make_storage_group_manager();
     compaction_group* get_compaction_group(size_t id) const;
@@ -997,7 +1000,9 @@ public:
     api::timestamp_type min_memtable_timestamp() const;
     api::timestamp_type min_memtable_live_timestamp() const;
     api::timestamp_type min_memtable_live_row_marker_timestamp() const;
-    api::timestamp_type get_max_timestamp_for_tablet(locator::tablet_id) const;
+    // Returns the highest timestamp this shard has stored for the tablet. Nullopt if the shard
+    // holds no storage for it, i.e. the tablet is not served here, or not any more.
+    std::optional<api::timestamp_type> get_max_timestamp_for_tablet(locator::tablet_id) const;
 
     const row_cache& get_row_cache() const {
         return _cache;
@@ -1120,6 +1125,12 @@ public:
     void start();
     future<> stop() noexcept;
     future<> flush(std::optional<db::replay_position> = {});
+    // Flushes the memtables of a single tablet, i.e. of the storage group which owns it, rather
+    // than of every storage group of this table on this shard as flush() does.
+    // A no-op if this shard does not hold the tablet. The caller holds the tablet for as long as it
+    // needs the flush, so a missing storage group means the table is being stopped and there is
+    // nothing left here to flush.
+    future<> flush_tablet(locator::tablet_id);
     bool needs_flush() const;
     future<> clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);

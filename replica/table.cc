@@ -1446,6 +1446,10 @@ storage_group& table::storage_group_for_id(size_t i) const {
     return _sg_manager->storage_group_for_id(_schema, i);
 }
 
+storage_group* table::maybe_storage_group_for_id(size_t i) const {
+    return _sg_manager->maybe_storage_group_for_id(_schema, i);
+}
+
 compaction_group& tablet_storage_group_manager::compaction_group_for_token(dht::token token) const {
     auto idx = storage_group_of(token);
     auto& sg = storage_group_for_id(idx);
@@ -4566,6 +4570,20 @@ future<> table::flush(std::optional<db::replay_position> pos) {
     co_await parallel_foreach_compaction_group([pos](auto& cg) { return cg.flush(pos); });
 }
 
+future<> table::flush_tablet(locator::tablet_id tid) {
+    // There is nothing to flush if the table was stopped.
+    if (_pending_flushes_phaser.is_closed()) {
+        co_return;
+    }
+    auto op = _pending_flushes_phaser.start();
+    auto sgp = _sg_manager->maybe_storage_group_for_id(_schema, tid.value());
+    if (!sgp) {
+        tlogger.debug("Storage group for tablet {} is deallocated. Nothing to flush.", tid);
+        co_return;
+    }
+    co_await flush_compaction_groups(*sgp);
+}
+
 bool storage_group::can_flush() const {
     return std::ranges::any_of(compaction_groups_immediate(), std::mem_fn(&compaction_group::can_flush));
 }
@@ -5004,8 +5022,12 @@ void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
     _stats.writes.mark(lc);
 }
 
-api::timestamp_type table::get_max_timestamp_for_tablet(locator::tablet_id tid) const {
-    return std::ranges::max(storage_group_for_id(tid.value()).compaction_groups_immediate()
+std::optional<api::timestamp_type> table::get_max_timestamp_for_tablet(locator::tablet_id tid) const {
+    auto* sg = maybe_storage_group_for_id(tid.value());
+    if (!sg) {
+        return std::nullopt;
+    }
+    return std::ranges::max(sg->compaction_groups_immediate()
         | std::views::transform([](const compaction_group_ptr& cg_ptr) {
             return std::max(cg_ptr->max_seen_timestamp(), cg_ptr->max_memtable_timestamp());
         }));

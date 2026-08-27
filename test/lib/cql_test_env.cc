@@ -39,6 +39,7 @@
 #include "message/messaging_service.hh"
 #include "gms/gossip_address_map.hh"
 #include "service/raft/raft_group_registry.hh"
+#include "service/strong_consistency/raft_resize_tracker.hh"
 #include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
 #include "service/mapreduce_service.hh"
@@ -175,6 +176,7 @@ private:
     sharded<tasks::task_manager> _task_manager;
     sharded<netw::messaging_service> _ms;
     sharded<db::raft_commitlog_replay_buffer> _raft_replay_buffer;
+    sharded<service::strong_consistency::raft_resize_tracker> _raft_resize_tracker;
     sharded<service::strong_consistency::groups_manager> _groups_manager;
     sharded<service::strong_consistency::coordinator> _sc_coordinator;
     sharded<service::storage_service> _ss;
@@ -998,12 +1000,15 @@ private:
             _auth_cache.start(std::ref(_qp), std::ref(abort_sources)).get();
             auto stop_auth_cache = defer_verbose_shutdown("auth cache", [this] { _auth_cache.stop().get(); });
 
+            _raft_resize_tracker.start(std::ref(_sys_ks)).get();
+            auto stop_raft_resize_tracker = defer_verbose_shutdown("Raft resize tracker", [this] { _raft_resize_tracker.stop().get(); });
+
             _raft_replay_buffer.start().get();
             auto stop_raft_replay_buffer = defer_verbose_shutdown("raft_replay_buffer", [this] { _raft_replay_buffer.stop().get(); });
 
             _groups_manager.start(std::ref(_ms), std::ref(_group0_registry), std::ref(_qp), 
                 std::ref(_db), std::ref(_mm), std::ref(_sys_ks), std::ref(_feature_service), std::ref(_gossiper),
-                std::ref(_raft_replay_buffer)).get();
+                std::ref(_raft_replay_buffer), std::ref(_raft_resize_tracker)).get();
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [this] { _groups_manager.stop().get(); });
 
             _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db), std::ref(_gossiper)).get();

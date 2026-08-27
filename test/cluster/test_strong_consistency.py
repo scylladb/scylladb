@@ -983,8 +983,7 @@ async def test_timed_out_queries(manager: ScyllaClusterManager):
             # Case 2: Writes.
             write_error_injections = [
                 "sc_coordinator_wait_before_acquire_server",
-                "sc_coordinator_wait_before_begin_mutate",
-                "sc_coordinator_wait_before_add_entry"
+                "sc_coordinator_wait_before_begin_mutate"
             ]
             for error_injection_name in write_error_injections:
                 await try_write(error_injection_name)
@@ -1019,7 +1018,7 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
 
     Setup: 2 nodes, RF=2, 1 tablet (raft quorum = 2).
 
-    We pause a read (before read_barrier) and a write (before add_entry)
+    We pause a read (before read_barrier) and a write (before begin_mutate)
     on the leader, then drop the table. The follower destroys its raft group
     immediately (no in-flight ops). On the leader, the raft server is aborted
     as part of group deletion (SCYLLADB-2080 fix), causing the paused
@@ -1062,7 +1061,7 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
             manager.api.enable_injection(leader_server.ip_addr,
                 "sc_coordinator_wait_before_query_read_barrier", one_shot=True),
             manager.api.enable_injection(leader_server.ip_addr,
-                "sc_coordinator_wait_before_add_entry", one_shot=True))
+                "sc_coordinator_wait_before_begin_mutate", one_shot=True))
 
         read_fut = asyncio.ensure_future(
             cql.run_async(f"SELECT * FROM {table} WHERE pk = 0", host=leader_host))
@@ -1073,7 +1072,7 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
         await asyncio.gather(
             leader_log.wait_for("sc_coordinator_wait_before_query_read_barrier: waiting",
                 from_mark=mark_leader, timeout=30),
-            leader_log.wait_for("sc_coordinator_wait_before_add_entry: waiting",
+            leader_log.wait_for("sc_coordinator_wait_before_begin_mutate: waiting",
                 from_mark=mark_leader, timeout=30))
 
         mark_leader = await leader_log.mark()
@@ -1097,7 +1096,7 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
             manager.api.message_injection(leader_server.ip_addr,
                 "sc_coordinator_wait_before_query_read_barrier"),
             manager.api.message_injection(leader_server.ip_addr,
-                "sc_coordinator_wait_before_add_entry"))
+                "sc_coordinator_wait_before_begin_mutate"))
 
         # Both should fail with "no such column family" / "unconfigured table".
         # The raft server is aborted as part of group deletion, causing
