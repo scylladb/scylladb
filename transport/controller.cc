@@ -257,7 +257,7 @@ future<> controller::do_start_server() {
             }
             return cql_server_config {
               .timeout_config = _timeout_config.local(),
-              .max_request_size = _mem_limiter.local().total_memory(),
+              .max_request_size = _mem_limiter.local().max_request_size(),
               .partitioner_name = cfg.partitioner(),
               .sharding_ignore_msb = cfg.murmur3_partitioner_ignore_msb_bits(),
               .shard_aware_transport_port = shard_aware_transport_port,
