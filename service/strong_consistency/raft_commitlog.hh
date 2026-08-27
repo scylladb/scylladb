@@ -64,13 +64,25 @@ private:
     const db::cf_id_type _raft_groups_table_id;
     // Common commit log.
     db::commitlog& _commit_log;
-    // Replay positions in the commit log for each raft log entry.
-    // Contains entries that have been added but not yet removed by either:
-    //  - truncate_log() (leader change discarding uncommitted tail)
-    //  - truncate_log_tail() (snapshot allowing old entries to be reclaimed)
-    // After a snapshot, some entries with index below the snapshot index may
-    // still be present, in accordance with raft trailing log settings.
-    replay_position_list _replay_positions;
+    // Replay position handles for command entries (raft::command), in index
+    // order. Moved out by acquire_replay_position_handles_for() when
+    // state_machine::apply() hands the entry to its target memtable, which
+    // then holds the claim until the data is flushed.
+    replay_position_list _command_positions;
+    // Replay position handles for dummy entries (raft::log_entry::dummy), in
+    // index order. Never handed to apply(); a dummy carries no state, so a
+    // durable commit index at or above it is all a restart needs — a later
+    // commit releases these as soon as their segment's covering commit_idx
+    // is on its way to durability. Until then they follow the
+    // configurations' rule: released only by truncation.
+    replay_position_list _dummy_positions;
+    // Replay position handles for configuration entries (raft::configuration).
+    // Never consumed by apply(). Unlike commands and dummies these carry state
+    // that is only persisted by store_snapshot_descriptor(), and commitlog
+    // replay discards committed non-command entries — so their handles must
+    // stay held until a snapshot has written the configuration durably.
+    // Released only by truncate_log() / truncate_log_tail(). See SCYLLADB-3842.
+    replay_position_list _config_positions;
     // (index, term) of the entries appended but not yet known to be
     // committed, in index order. note_commit_idx() consumes the prefix the
     // commit index has reached, keeping the last consumed pair in
@@ -147,10 +159,12 @@ public:
     // Called from store_snapshot_descriptor after the snapshot is persisted.
     void truncate_log_tail(raft::index_t index);
 
-    // Move replay position handles out of the map for the specified indices.
-    // The handles are handed to memtables in the raft state machine apply(),
-    // and removed from the map since the memtable now owns segment lifetime.
-    // Triggers on_internal_error if an entry is missing from the map.
+    // Move replay position handles out of _command_positions for the
+    // specified entries. The handles are handed to memtables in the raft
+    // state machine apply(), and removed since the memtable now owns segment
+    // lifetime. Command entries only — that is all state_machine::apply() is
+    // ever handed. Triggers on_internal_error if a requested entry is
+    // missing.
     std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
 };
 } // namespace service::strong_consistency

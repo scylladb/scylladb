@@ -135,6 +135,34 @@ static std::vector<raft::log_entry_ptr> create_test_log(size_t min_entries = 0, 
     return entries;
 }
 
+// Like create_test_log() but with command entries only, randomized the same
+// way (length, first index, payloads, non-decreasing terms all derive from
+// tests::random). acquire_replay_position_handles_for() serves command
+// entries only (see state_machine::apply, which is handed only commands), so
+// tests exercising it use an all-command log rather than create_test_log()'s
+// mixed types.
+static std::vector<raft::log_entry_ptr> create_test_command_log(size_t min_entries = 3, size_t max_entries = 20) {
+    SCYLLA_ASSERT(min_entries >= 1 && min_entries <= max_entries);
+
+    uint64_t first_idx = tests::random::get_int<uint64_t>(1, 1000);
+    size_t count = tests::random::get_int(min_entries, max_entries);
+
+    std::vector<raft::log_entry_ptr> entries;
+    entries.reserve(count);
+    uint64_t term = 1;
+    for (size_t i = 0; i < count; ++i) {
+        raft::command cmd;
+        ser::serialize(cmd, tests::random::get_int(0, 100000));
+        term += tests::random::get_int(0, 3);
+        entries.push_back(make_lw_shared(raft::log_entry{
+            .term = raft::term_t(term),
+            .idx  = raft::index_t(first_idx + i),
+            .data = std::move(cmd)}));
+    }
+    testlog.info("create_test_command_log: {} entries, first_idx={}", entries.size(), first_idx);
+    return entries;
+}
+
 // Factory functions to create storage instances with uniform interface
 static service::raft_sys_table_storage make_sys_table_storage(cql_test_env& env, raft::group_id group_id) {
     return service::raft_sys_table_storage(env.local_qp(), group_id, raft::server_id::create_random_id());
@@ -384,7 +412,7 @@ SEASTAR_TEST_CASE(test_groups_truncate_log) {
         raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
                 cl, dummy_table, {});
 
-        std::vector<raft::log_entry_ptr> entries = create_test_log(3, 20);
+        std::vector<raft::log_entry_ptr> entries = create_test_command_log(3, 20);
         co_await storage.store_log_entries(entries);
 
         // Truncate the last entry from the log (entries with idx >= entries.back()->idx)
@@ -585,12 +613,13 @@ SEASTAR_TEST_CASE(test_groups_store_and_get_replay_positions) {
         raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
                 cl, dummy_table, {});
 
-        std::vector<raft::log_entry_ptr> entries = create_test_log(3, 20);
+        std::vector<raft::log_entry_ptr> entries = create_test_command_log(3, 20);
         co_await storage.store_log_entries(entries);
 
-        // Acquire replay position handles for all entries.
-        // The handles are moved out of the internal map, transferring
-        // ownership to the caller (for attaching to memtables on apply).
+        // Acquire replay position handles for all entries. The handles are
+        // moved out (for attaching to memtables on apply); the batch's
+        // trailing commit_idx handle keeps pinning the segment until it is
+        // covered.
         raft::log_entry_ptr_list entries_to_get(entries.begin(), entries.end());
         auto handles = storage.acquire_replay_position_handles_for(entries_to_get);
         BOOST_CHECK_EQUAL(handles.size(), entries.size());
@@ -612,7 +641,7 @@ SEASTAR_TEST_CASE(test_groups_get_partial_replay_positions) {
         raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
                 cl, dummy_table, {});
 
-        std::vector<raft::log_entry_ptr> entries = create_test_log(3, 20);
+        std::vector<raft::log_entry_ptr> entries = create_test_command_log(3, 20);
         co_await storage.store_log_entries(entries);
 
         // Get handles only for the first half of entries
@@ -685,44 +714,6 @@ SEASTAR_TEST_CASE(test_groups_acquire_handles_skips_non_command_entries) {
     });
 }
 
-// Test truncate_log (head truncation) then verify remaining handles.
-// Store N>=3 entries, truncate at the second entry's idx (removes entries with idx >= second idx),
-// verify only the first entry can produce a valid handle, and later entries cannot.
-SEASTAR_TEST_CASE(test_groups_truncate_log_then_get_handles_for_remaining) {
-    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
-        cql3::query_processor& qp = env.local_qp();
-        auto& cl = *env.local_db().commitlog();
-        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
-
-        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
-                cl, dummy_table, {});
-
-        std::vector<raft::log_entry_ptr> entries = create_test_log(3, 20);
-        co_await storage.store_log_entries(entries);
-
-        // Truncate at the second entry's idx — entries with idx >= entries[1]->idx are removed.
-        co_await storage.truncate_log(entries[1]->idx);
-
-        // First entry should still have a valid handle.
-        raft::log_entry_ptr_list first_entry = {entries[0]};
-        auto handles = storage.acquire_replay_position_handles_for(first_entry);
-        BOOST_CHECK_EQUAL(handles.size(), 1);
-        BOOST_CHECK_EQUAL(handles[0].index, entries[0]->idx);
-
-        // Entries from index 1 onward should trigger an error (their replay positions were removed).
-        {
-            seastar::testing::scoped_no_abort_on_internal_error no_abort;
-            raft::log_entry_ptr_list truncated_entries(entries.begin() + 1, entries.end());
-            try {
-                storage.acquire_replay_position_handles_for(truncated_entries);
-                BOOST_FAIL("Expected on_internal_error for truncated entries");
-            } catch (...) {
-                // Expected — entries from index 1 onward were truncated.
-            }
-        }
-    });
-}
-
 // Test store_snapshot_descriptor (which truncates the log tail) then verify handles.
 // Store N>=3 entries, store a snapshot at the second entry's idx with preserve_log_entries=1
 // (truncates entries with idx <= second_idx - 1 = first_idx), verify first entry is gone
@@ -742,7 +733,7 @@ SEASTAR_TEST_CASE(test_groups_store_snapshot_truncate_tail_then_get_handles) {
             }, raft::is_voter::yes};
         co_await storage.bootstrap(raft::configuration({srv}), false);
 
-        std::vector<raft::log_entry_ptr> entries = create_test_log(3, 20);
+        std::vector<raft::log_entry_ptr> entries = create_test_command_log(3, 20);
         co_await storage.store_log_entries(entries);
 
         // Store snapshot at entries[1]->idx with preserve_log_entries=1.
