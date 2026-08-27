@@ -100,21 +100,26 @@ The :code:`scylla-server` file contains configuration related to starting up the
 Configuring Object Storage
 ----------------------------------
 
-ScyllaDB can communicate directly with S3-compatible object storage. Before
-using features that rely on object storage, you must first enable and
-configure access to the storage endpoints.
+ScyllaDB can communicate directly with S3-compatible object storage and with
+Google Cloud Storage (GCS). Before using features that rely on object storage,
+you must first enable and configure access to the storage endpoints.
 
 Storage endpoints define where data can be stored and are specified in
-the ``scylla.yaml`` configuration file. The relevant section of ``scylla.yaml``
-should follow this format:
+the ``scylla.yaml`` configuration file.
+
+Amazon S3 and S3-compatible stores
+==================================
+
+An endpoint with no ``type`` is treated as S3, but state ``type: s3``
+explicitly so that the backend of each entry is evident.
 
 .. code-block:: yaml
 
    object_storage_endpoints:
      - name: http[s]://<endpoint_address_or_domain_name>[:<port_number>]
+       type: s3
        aws_region: <region_name> # required unless AWS_DEFAULT_REGION is set, e.g. us-east-1
        iam_role_arn: <iam_role> # optional
-
 
 Example:
 
@@ -122,6 +127,7 @@ Example:
 
    object_storage_endpoints:
      - name: https://s3.us-east-1.amazonaws.com
+       type: s3
        aws_region: us-east-1
        iam_role_arn: arn:aws:iam::123456789012:role/my-scylla-role
 
@@ -129,6 +135,56 @@ The ``aws_region`` option can also be specified using
 the ``AWS_DEFAULT_REGION`` environment variable. An S3 endpoint needs a region
 from one of the two. If neither supplies a non-empty value, ScyllaDB logs an
 error and ignores that endpoint.
+
+.. _object-storage-gcs-config:
+
+Google Cloud Storage
+====================
+
+Set ``type: gs`` to select the GCS backend. The endpoint ``name`` is normally
+``default``, which resolves to the standard GCS endpoint; a URI is only needed
+when using a private proxy or a mock server.
+
+.. code-block:: yaml
+
+   object_storage_endpoints:
+     - name: default
+       type: gs
+       credentials_file: <path to a service-account JSON file> # optional
+
+If ``credentials_file`` is omitted, the default credentials on the machine are
+used - the current user's credentials, or the instance credentials when running
+on a GCE instance. The ``GOOGLE_APPLICATION_CREDENTIALS`` environment variable is
+also honored.
+
+.. warning::
+
+   ``type`` defaults to ``s3`` when it is not specified. A GCS endpoint that
+   omits ``type: gs`` is configured as an S3 endpoint pointing at a Google URL,
+   which fails in ways that are hard to diagnose.
+
+.. _object-storage-endpoint-name:
+
+The endpoint name
+=================
+
+The ``name`` of an endpoint is also its identifier: statements that select an
+object-storage endpoint - such as
+:ref:`CREATE KEYSPACE <cql-keyspace-storage-options>` - must repeat this string
+**exactly**. The lookup is an exact string comparison, so
+``https://s3.us-east-1.amazonaws.com`` and ``https://s3.us-east-1.amazonaws.com:443``
+are two different endpoints even though they address the same server.
+
+Write ``name`` as a URL, for example ``https://s3.us-east-1.amazonaws.com``. The
+scheme selects whether the connection is encrypted; use ``https`` in production.
+The port is taken from the URL; when it is omitted, the scheme default is used
+(443 for ``https``, 80 for ``http``). Do not add a trailing slash or a path: it
+is ignored when connecting, but it still forms part of the endpoint identifier,
+so ``https://s3.us-east-1.amazonaws.com/`` and
+``https://s3.us-east-1.amazonaws.com`` are two different endpoints.
+
+Credentials
+===========
 
 The AWS-related credentials options (``aws_access_key_id``,
 ``aws_secret_access_key``, ``aws_session_token``) can be configured using
@@ -153,6 +209,27 @@ the AWS documentation.
    - All AWS-related parameters must be either present or absent as a group.
    - When set, these values are used by the S3 client to sign requests.
    - If not set, requests are sent unsigned, which may not be accepted by all servers.
+
+Tuning options
+==============
+
+.. list-table::
+   :widths: 30 15 55
+   :header-rows: 1
+
+   * - Option
+     - Default
+     - Description
+   * - ``object_storage_endpoints``
+     - empty
+     - The list of endpoints described above. Live-updateable: endpoints can be
+       added without restarting the node.
+   * - ``object_storage_connections_per_shard``
+     - 128
+     - Maximum number of connections per shard for **S3** endpoints, distributed
+       across scheduling groups in proportion to their shares so that compaction
+       and streaming traffic does not starve user reads. Live-updateable. The
+       GCS backend ignores this option.
 
 .. _admin-oci-object-storage:
 
