@@ -1598,6 +1598,13 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_grou
 
 void segment_manager_impl::on_add_record(log_location location) noexcept {
     auto& desc = get_segment_descriptor(location);
+    // A segment is handed to a compaction group only once it has been written and sealed, which is
+    // what lets the group count its live bytes once, when it takes it. Writing into a segment a
+    // group already owns would leave those bytes out of that count, and take it below zero when
+    // they are freed, so this is a correctness bug rather than a lost statistic.
+    if (desc.owner) {
+        on_fatal_internal_error(logstor_logger, format("adding a record to segment {}, which a compaction group already owns", location.segment));
+    }
     desc.on_write(location);
     _stats.live_record_bytes += location.size;
     _stats.live_record_count++;
@@ -1609,11 +1616,7 @@ void segment_manager_impl::on_free_record(log_location location) noexcept {
     _stats.live_record_bytes -= location.size;
     _stats.live_record_count--;
     if (desc.owner) {
-        try {
-            desc.owner->update_segment(desc);
-        } catch (...) {
-            logstor_logger.warn("Failed to update segments histogram: {:t}", std::current_exception());
-        }
+        desc.owner->update_segment(desc, location.size);
     }
     _stats.bytes_freed += location.size;
 }
