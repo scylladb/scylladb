@@ -1202,7 +1202,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sst_dir_semaphore.stop().get();
             });
 
-            service_memory_limiter.start(memory::stats().total_memory()).get();
+            service_memory_limiter.start(memory::stats().total_memory(), cfg->cql_request_memory_fraction()).get();
             auto stop_mem_limiter = defer_verbose_shutdown("service_memory_limiter", [] {
                 // Uncomment this once services release all the memory on stop
                 // service_memory_limiter.stop().get();
@@ -1211,7 +1211,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // The maintenance socket gets its own, unlimited budget: it is the
             // operator's escape hatch and must not be blocked by a flood of
             // user requests holding the shared budget.
-            maintenance_memory_limiter.start(service::memory_limiter::unlimited_tag{}, memory::stats().total_memory()).get();
+            maintenance_memory_limiter.start(service::memory_limiter::unlimited_tag{}, memory::stats().total_memory(), cfg->cql_request_memory_fraction()).get();
             auto stop_maintenance_mem_limiter = defer_verbose_shutdown("maintenance_memory_limiter", [&maintenance_memory_limiter] {
                 maintenance_memory_limiter.stop().get();
             });
