@@ -54,6 +54,10 @@ public:
     }
     // Data size of the whole run, meaning it's a sum of the data size of all its fragments.
     uint64_t data_size() const;
+    // Same, but the bytes actually occupied on disk. The two differ by the compression ratio for a
+    // compressed native sstable and not at all for a `pq` one, so this is the only one of the two
+    // that is comparable across a run holding both formats.
+    uint64_t ondisk_data_size() const;
     const sstable_set& all() const { return _all; }
     double estimate_droppable_tombstone_ratio(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
     run_id run_identifier() const;
