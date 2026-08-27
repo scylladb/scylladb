@@ -279,6 +279,16 @@ public:
         enable_schema_commitlog();
     }
 
+    schema_builder& set_parquet_options(std::map<sstring, sstring> opts) {
+        _raw._props.parquet_options = std::move(opts);
+        return *this;
+    }
+
+    schema_builder& set_storage_format(storage_format_type t) {
+        _raw._props.storage_format = t;
+        return *this;
+    }
+
     schema_builder& set_logstor() {
         _raw._props.storage_engine = storage_engine_type::logstor;
         return *this;
