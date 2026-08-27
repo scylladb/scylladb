@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "service/memory_limiter.hh"
 #include "alternator/executor.hh"
 #include "utils/scoped_item_list.hh"
 #include <seastar/core/future.hh>
@@ -72,7 +73,7 @@ class server : public peering_sharded_service<server> {
 
     alternator_callbacks_map _callbacks;
 
-    semaphore* _memory_limiter;
+    service::memory_limiter* _memory_limiter;
     utils::updateable_value<uint32_t> _max_concurrent_requests;
 
     ::shared_ptr<seastar::tls::server_credentials> _credentials;
@@ -121,7 +122,7 @@ public:
             std::optional<uint16_t> port_proxy_protocol, std::optional<uint16_t> https_port_proxy_protocol,
             std::optional<tls::credentials_builder> creds,
             utils::updateable_value<bool> enforce_authorization, utils::updateable_value<bool> warn_authorization, utils::updateable_value<uint64_t> max_users_query_size_in_trace_output,
-            semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests);
+            service::memory_limiter* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests);
     future<> stop();
     // get_client_data() is called (on each shard separately) when the virtual
     // table "system.clients" is read. It is expected to generate a list of

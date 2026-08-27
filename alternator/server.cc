@@ -782,8 +782,13 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     // the largest possible request (request_content_length_limit, i.e., 16 MB)
     // and after reading the request we return_units() the excess.
     size_t mem_estimate = (req->content_length ? req->content_length : request_content_length_limit) * 2 + 8000;
-    auto units_fut = get_units(*_memory_limiter, mem_estimate);
-    if (_memory_limiter->waiters()) {
+    // Alternator has no service levels of its own: the user is only known after
+    // the signature is verified below, which needs the body this reservation
+    // pays for. So requests are charged to the tenant of the scheduling group
+    // they arrive in, which is the default service level's.
+    auto& tenant = _memory_limiter->tenant_for_current_scheduling_group();
+    auto units_fut = tenant.get_units(mem_estimate);
+    if (tenant.waiters()) {
         ++_executor._stats.requests_blocked_memory;
     }
     auto units = co_await std::move(units_fut);
@@ -1050,7 +1055,7 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
         std::optional<uint16_t> port_proxy_protocol, std::optional<uint16_t> https_port_proxy_protocol,
         std::optional<tls::credentials_builder> creds,
         utils::updateable_value<bool> enforce_authorization, utils::updateable_value<bool> warn_authorization, utils::updateable_value<uint64_t> max_users_query_size_in_trace_output,
-        semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
+        service::memory_limiter* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
     _memory_limiter = memory_limiter;
     _enforce_authorization = std::move(enforce_authorization);
     _warn_authorization = std::move(warn_authorization);

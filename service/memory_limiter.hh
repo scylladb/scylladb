@@ -147,11 +147,6 @@ public:
 
     const request_memory_pool& pool() const noexcept { return _pool; }
 
-    // Transitional, until the CQL server and Alternator admit against tenants:
-    // everything goes through the fallback tenant, which is the only tenant
-    // there is until service levels are wired up.
-    semaphore& get_semaphore() noexcept { return _fallback->sem(); }
-
     // Memory available for admitting new requests: what is left of the tenants'
     // own shares, plus what the shared pool has not lent out. Clamped at zero,
     // because a tenant's share goes negative when a request larger than the
