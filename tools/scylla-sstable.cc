@@ -55,6 +55,8 @@
 #include "tools/lua_sstable_consumer.hh"
 #include "tools/schema_loader.hh"
 #include "tools/sstable_consumer.hh"
+#include "sstables/parquet/writer_impl.hh"
+#include "sstables/parquet/format/parquet_metadata.hh"
 #include "tools/utils.hh"
 #include "types/json_utils.hh"
 #include "locator/host_id.hh"
@@ -2127,12 +2129,11 @@ void script_operation(schema_ptr schema, reader_permit permit, const std::vector
 }
 
 template <typename SstableConsumer>
-void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map& vm) {
+void sstable_consumer_operation_impl(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        const bpo::variables_map& vm, bool merge) {
     if (sstables.empty()) {
         throw std::invalid_argument("no sstables specified on the command line");
     }
-    const auto merge = vm.count("merge");
     const auto no_skips = vm.count("no-skips");
     const auto partitions = get_partitions(schema, vm);
     const auto use_full_scan_reader = no_skips || partitions.empty();
@@ -2142,6 +2143,25 @@ void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const s
         return consume_reader(std::move(rd), consumer, sst, partitions, no_skips);
     });
     consumer->consume_stream_end().get();
+}
+
+template <typename SstableConsumer>
+void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager&, const db::config&, const bpo::variables_map& vm) {
+    sstable_consumer_operation_impl<SstableConsumer>(std::move(schema), std::move(permit), sstables, vm, vm.count("merge"));
+}
+
+// parquet-export always merges its inputs. The other consumers print fragments, for which
+// "one stream per sstable" is a meaningful thing to ask for; this one produces a *file*, and
+// a file built by concatenating the streams holds a row per sstable for every key that
+// appears in more than one of them -- an overwritten value twice, a deleted row next to its
+// tombstone -- which is neither what the table contains nor what the storage writer would
+// produce. Merging is what compaction does, so it is the only reading of "these sstables as
+// Parquet" that means anything.
+template <typename SstableConsumer>
+void merging_sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager&, const db::config&, const bpo::variables_map& vm) {
+    sstable_consumer_operation_impl<SstableConsumer>(std::move(schema), std::move(permit), sstables, vm, true);
 }
 
 void shard_of_with_vnodes(const std::vector<sstables::shared_sstable>& sstables,
@@ -2573,6 +2593,144 @@ const std::vector<operation_option> global_positional_options{
     typed_option<std::vector<sstring>>("sstables", "sstable(s) to process for operations that have sstable inputs, can also be provided as positional arguments", -1),
 };
 
+
+// Re-encodes an sstable's rows as Parquet, using the same shredder the storage
+// format itself uses (sstables/parquet/writer_impl.hh).
+//
+// This exists for two reasons. It is how the size numbers in
+// docs/dev/parquet-storage-format.md get produced by our own writer rather than
+// by a third-party one, and it is the foundation for the estimator that
+// criterion C6 needs -- "would Parquet actually help this table?" answered by
+// measuring, on the real data, before anything is rewritten.
+class parquet_export_consumer : public sstable_consumer {
+    schema_ptr _schema;
+    sstables::parquet::fragment_shredder _shredder;
+    sstables::parquet::pq_writer_config _cfg;
+    sstring _output;
+    bool _stats_only;
+    uint64_t _rows = 0;
+    uint64_t _max_rows = 0;    // 0 => no limit
+
+public:
+    parquet_export_consumer(schema_ptr s, reader_permit, const bpo::variables_map& vm)
+        : _schema(std::move(s))
+        , _shredder(*_schema)
+        , _output(vm.count("output-file") ? vm["output-file"].as<sstring>() : sstring())
+        , _stats_only(vm.count("stats-only"))
+        , _max_rows(vm.count("max-rows") ? vm["max-rows"].as<uint64_t>() : 0) {
+        if (vm.count("folding")) {
+            const auto f = vm["folding"].as<std::string>();
+            if (f == "verbatim")   { _cfg.level = sstables::parquet::folding_level::verbatim; }
+            else if (f == "row")   { _cfg.level = sstables::parquet::folding_level::row_folded; }
+            else if (f == "uniform") { _cfg.level = sstables::parquet::folding_level::uniform; }
+            else if (f == "logical") { _cfg.level = sstables::parquet::folding_level::logical; }
+            else { throw std::invalid_argument(fmt::format("unknown folding level '{}'", f)); }
+        }
+        if (vm.count("compression-level")) {
+            _cfg.wopt.zstd_level = vm["compression-level"].as<int>();
+        }
+    }
+
+    virtual future<> consume_stream_start() override { return make_ready_future<>(); }
+    virtual future<stop_iteration> consume_sstable_start(const sstables::sstable* const) override {
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    // The whole fragment protocol goes to the shredder, exactly as the storage writer
+    // feeds it: a partition tombstone, a range tombstone or a static row with no
+    // clustering row under it is data the Parquet file has to carry, and an export
+    // that dropped them would print a size for a file that lost deletions.
+    virtual future<stop_iteration> consume(partition_start&& ps) override {
+        _shredder.new_partition(ps.key());
+        _shredder.set_partition_tombstone(ps.partition_tombstone());
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    virtual future<stop_iteration> consume(static_row&& sr) override {
+        _shredder.add_static_row(sr);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    virtual future<stop_iteration> consume(clustering_row&& cr) override {
+        // Once the sample is full, keep draining but stop accumulating. Asking to
+        // stop here would make the framework seek to the next partition, and the
+        // full-scan reader does not support next_partition(); the legal early-out
+        // is at a partition boundary, below.
+        if (_max_rows && _rows >= _max_rows) {
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+        _shredder.add_clustering_row(cr);
+        ++_rows;
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override {
+        _shredder.add_range_tombstone_change(rtc);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    virtual future<stop_iteration> consume(partition_end&&) override {
+        // Closes the partition first: this is what emits the placeholder row for a
+        // partition that had no clustering row, and it has to happen whether or not
+        // the sample stops here.
+        _shredder.end_partition();
+        // Sampling early-out, taken at a partition boundary where skipping the
+        // remaining partitions is supported.
+        const auto stop = (_max_rows && _rows >= _max_rows) ? stop_iteration::yes
+                                                            : stop_iteration::no;
+        return make_ready_future<stop_iteration>(stop);
+    }
+    virtual future<stop_iteration> consume_sstable_end() override {
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+
+    virtual future<> consume_stream_end() override {
+        auto img = _shredder.to_parquet(_cfg);
+        if (!_output.empty() && !_stats_only) {
+            auto f = co_await open_file_dma(_output, open_flags::wo | open_flags::create | open_flags::truncate);
+            auto os = co_await make_file_output_stream(std::move(f));
+            co_await os.write(reinterpret_cast<const char*>(img.data()), img.size());
+            co_await os.flush();
+            co_await os.close();
+        }
+        auto md = sstables::parquet::format::parse_footer(img);
+        fmt::print("{{\n");
+        // Both counts, because they differ and each answers a different question. `rows`
+        // is the clustering rows read; `storage_rows` is what the Parquet file holds,
+        // which adds one placeholder row per partition that had no clustering row
+        // (static-only, partition-deleted, or range-deleted) -- see
+        // fragment_shredder::end_partition().
+        fmt::print("  \"rows\": {},\n", _rows);
+        fmt::print("  \"storage_rows\": {},\n", _shredder.size());
+        fmt::print("  \"parquet_bytes\": {},\n", img.size());
+        // The write-side memory budget's own estimate, so it can be checked against
+        // measured RSS rather than trusted (R-13, design doc 5.5a).
+        fmt::print("  \"buffered_bytes_estimate\": {},\n", _shredder.buffered_bytes());
+        fmt::print("  \"row_groups\": {},\n", md.row_groups.size());
+        fmt::print("  \"leaf_columns\": {},\n", md.leaf_count());
+        // Requested *and* effective, because they differ and only the effective one describes the
+        // file. map_schema() falls back from L2 to L1 whenever the uniform precondition breaks --
+        // and it always breaks for INSERT-written data, since an INSERT writes a row marker. This
+        // used to report `_cfg.level` alone, so every L2 measurement taken with this tool was
+        // labelled L2 while being L1, which is how the L2 savings figures in the design doc came
+        // to describe the wrong folding level.
+        const auto effective = sstables::parquet::map_schema(
+                _shredder.columns(), _cfg.level, _shredder.rows(), _cfg.exc).level;
+        fmt::print("  \"folding_requested\": \"{}\",\n",
+                   sstables::parquet::to_string(_cfg.level));
+        fmt::print("  \"folding_effective\": \"{}\",\n",
+                   sstables::parquet::to_string(effective));
+        fmt::print("  \"columns\": [\n");
+        bool first = true;
+        for (const auto& rg : md.row_groups) {
+            for (const auto& cc : rg.columns) {
+                if (!cc.meta) { continue; }
+                if (!first) { fmt::print(",\n"); }
+                first = false;
+                fmt::print("    {{\"path\": \"{}\", \"compressed\": {}, \"uncompressed\": {}}}",
+                           cc.meta->path(), cc.meta->total_compressed_size,
+                           cc.meta->total_uncompressed_size);
+            }
+        }
+        fmt::print("\n  ]\n}}\n");
+    }
+};
+
 const std::map<operation, operation_func> operations_with_func{
 /* dump-data */
     {{"dump-data",
@@ -2599,6 +2757,38 @@ For more information, see: {}
                     typed_option<std::string>("output-format", "json", "the output-format, one of (text, json)"),
             }},
             sstable_consumer_operation<dumping_consumer>},
+/* parquet-export */
+    {{"parquet-export",
+            "Re-encode sstable(s) as Parquet",
+R"(
+Read the sstable(s) and write their rows out as a Parquet file, using the same
+schema mapping and metadata folding the Parquet storage format uses. Partition
+and range tombstones and static rows are carried exactly as the storage format
+carries them.
+
+When several sstables are given they are always merged into one mutation stream
+first, the way compaction merges them, so the output has one row per live key
+rather than one per sstable that mentions it. There is no --merge option here
+because there is no other meaningful reading of several sstables as one file.
+
+Prints a JSON summary of the result -- clustering rows read ("rows"), rows in
+the file ("storage_rows", which adds a placeholder per partition that had only a
+static row or only tombstones), encoded size, row groups, leaf column count and
+per-column compressed sizes -- which is what makes this usable as a sizing
+estimator: run it against real data and compare the reported size to the
+sstable it came from, before deciding whether to convert anything.
+
+With --stats-only no file is written and only the summary is printed.
+)",
+            {
+                    typed_option<sstring>("output-file", "write the Parquet file here"),
+                    typed_option<>("stats-only", "report sizes without writing a file"),
+                    typed_option<std::string>("folding", "row", "metadata folding level, one of (verbatim, row, uniform, logical). 'logical' emits the plain CQL schema with no cell metadata -- lossy, for analytics export only"),
+                    typed_option<int>("compression-level", 3, "zstd compression level"),
+                    typed_option<uint64_t>("max-rows", "stop after this many clustering rows, at the next partition boundary; makes the run a cheap sampling estimate rather than a full re-encode"),
+                    typed_option<>("no-skips", "don't use skips to skip to next partition"),
+            }},
+            merging_sstable_consumer_operation<parquet_export_consumer>},
 /* dump-index */
     {{"dump-index",
             "Dump content of sstable index(es)",
