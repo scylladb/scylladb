@@ -123,7 +123,7 @@ Example:
    object_storage_endpoints:
      - name: https://s3.us-east-1.amazonaws.com
        aws_region: us-east-1
-       iam_role_arn: arn:aws:iam::123456789012:instance-profile/my-instance-instance-profile
+       iam_role_arn: arn:aws:iam::123456789012:role/my-scylla-role
 
 The ``aws_region`` option can also be specified using 
 the ``AWS_DEFAULT_REGION`` environment variable. An S3 endpoint needs a region
@@ -141,6 +141,12 @@ the following environment variables:
 The ScyllaDB S3 client will first attempt to access credentials from environment variables.
 If it fails to obtain credentials, it will then try to retrieve them from the
 AWS Security Token Service (STS) or the EC2 Instance Metadata Service.
+
+``iam_role_arn`` must be the ARN of the IAM **role** to assume
+(``arn:aws:iam::<account>:role/<name>``) - not the ARN of the instance profile
+that contains that role. See `AssumeRole
+<https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html>`_ in
+the AWS documentation.
 
 .. note::
 
