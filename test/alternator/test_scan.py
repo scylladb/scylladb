@@ -324,6 +324,17 @@ def test_scan_paging_bytes(test_table_b):
 def query_tombstone_page_limit(dynamodb, scylla_only):
     return int(scylla_config_read(dynamodb, 'query_tombstone_page_limit'))
 
+# Disable tombstone GC for an Alternator table, through CQL. The tests below
+# need this, because a read does not count the tombstones that it purges
+# toward query_tombstone_page_limit. The default tombstone_gc mode 'repair'
+# acts as 'immediate' on an RF=1 table, as in a single-node test cluster.
+# Then a read purges each tombstone written in an earlier second. The CQL
+# versions of these tests in test/cqlpy/test_tombstone_limit.py also use
+# mode 'disabled'. The setting goes away when the test deletes the table.
+def disable_tombstone_gc(cql, table):
+    cql.execute(f'ALTER TABLE "alternator_{table.name}"."{table.name}" '
+                "WITH tombstone_gc = {'mode': 'disabled'}")
+
 # The following two tests reproduced issue #7933, where a scan encounters a
 # long string of row/partition tombstones, and because it is expected to
 # return a page in a constant amount of time, it should stop in the middle
@@ -357,7 +368,7 @@ def query_tombstone_page_limit(dynamodb, scylla_only):
 # expect this in Scylla's tombstone-based implementation - and in that
 # implementation, and only in that implementation, we can require the scan
 # to stop early, and also that we know when- after "query_tombstone_page_limit".
-def test_scan_long_row_tombstone_string(dynamodb, query_tombstone_page_limit):
+def test_scan_long_row_tombstone_string(dynamodb, cql, query_tombstone_page_limit):
     N = query_tombstone_page_limit + 10
     with new_test_table(dynamodb,
         KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' },
@@ -365,6 +376,7 @@ def test_scan_long_row_tombstone_string(dynamodb, query_tombstone_page_limit):
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'N' },
                                { 'AttributeName': 'c', 'AttributeType': 'N' }]
         ) as table:
+        disable_tombstone_gc(cql, table)
         # Create two items with c=0 and c=N, and N-2 deletions between them.
         # Although the deleted items never existed, Scylla is forced to keep
         # tombstones for them.
@@ -389,7 +401,7 @@ def test_scan_long_row_tombstone_string(dynamodb, query_tombstone_page_limit):
 # separated by a long string of partition tombstones. Again, the Scan should
 # be able to stop in the middle of that string, and not return both partitions
 # in a single page.
-def test_scan_long_partition_tombstone_string(dynamodb, query_tombstone_page_limit):
+def test_scan_long_partition_tombstone_string(dynamodb, cql, query_tombstone_page_limit):
     # Unfortunately, unlike strings of row-tombstones which end a page after
     # exactly query_tombstone_page_limit, in the case of partition tombstones
     # the limit applies to separate vnode subscans, so we need to have
@@ -403,6 +415,7 @@ def test_scan_long_partition_tombstone_string(dynamodb, query_tombstone_page_lim
         # to make the test less slow.
         Tags=[{'Key': 'system:write_isolation', 'Value': 'forbid_rmw'}]
         ) as table:
+        disable_tombstone_gc(cql, table)
         # We want to have two live partitions with a lot of partition
         # tombstones between them. But the hash function is pseudo-random
         # so we don't know which partitions would be the first and last.
