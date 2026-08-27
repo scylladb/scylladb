@@ -145,6 +145,8 @@ add_scylla_test(index_reader_test
 add_scylla_test(input_stream_test
   KIND BOOST
   LIBRARIES Seastar::seastar_testing)
+add_scylla_test(interval_index_test
+  KIND BOOST)
 add_scylla_test(intrusive_array_test
   KIND SEASTAR)
 add_scylla_test(json_test
