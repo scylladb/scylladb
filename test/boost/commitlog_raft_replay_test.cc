@@ -1978,11 +1978,10 @@ SEASTAR_TEST_CASE(test_raft_commitlog_acquire_skips_non_command_entries) {
 
 // Test: take_committed_covers() returns one cover per commitlog segment
 // whose entries are all committed — carrying the segment's highest index and
-// the claim taken for that segment as the pin — and
-// release_covered_dummies() then drops the dummy handles while leaving
-// command handles for apply() and retaining configuration handles, which are
-// released only by truncate_log_tail() once store_snapshot_descriptor() has
-// made the configuration durable (SCYLLADB-3842).
+// the claim taken for that segment as the pin. Covering the batch releases
+// nothing else: dummy and configuration entries never took a claim of their
+// own, and the batch's claim stays until apply() has minted from it for every
+// command it holds.
 //
 // Note this exercises the code paths but cannot *observe* segment retention:
 // commitlog::get_num_dirty_segments() only counts segments that have stopped

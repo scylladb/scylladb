@@ -136,8 +136,8 @@ seastar::future<db::rp_handle> raft_commitlog::write_batches(db::commitlog& cl,
     // feature; strongly consistent tables are gated behind an experimental
     // flag, so in practice it is on). Either way the batch has exactly one
     // position — its head segment — and the tail segments of a fragmented
-    // entry are held by the commitlog's own head-segment chaining, which
-    // frees them only once the whole head segment is clean.
+    // entry outlive every claim taken at that position, because the head
+    // segment counts the claims holding them (segment::extended_entry).
     auto handles = co_await cl.add_raft_entries(table_id, std::move(writers));
     SCYLLA_ASSERT(handles.size() == 1);
     auto batch_handle = std::move(handles[0]);

@@ -18,11 +18,6 @@ struct index_and_replay_position {
     db::rp_handle replay_position_handle;
 };
 
-// Raft indexes only increase, so entries are naturally sorted by index.
-// A deque allows efficient access from both ends: front removal for
-// truncate_log_tail() and back removal for truncate_log().
-using replay_position_list = std::deque<index_and_replay_position>;
-
 // A segment's raft_groups-accounted claim together with the highest raft
 // index the group has written to that segment so far (the pending_cover_map
 // value; the segment is the key), parked until every entry at or below that

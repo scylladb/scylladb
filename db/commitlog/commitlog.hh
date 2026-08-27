@@ -255,9 +255,11 @@ public:
      * This is possible because segment retention accounting is a pure per-cf
      * count (segment::_cf_dirty, matched by mark_clean() at flush) rather than
      * a set of positions: the holding cf need not be one the segment was
-     * written for, and several claims at one position may coexist. A
-     * fragmented entry's tail segments are held until the whole head segment
-     * goes clean, so sharing a position does not affect them either.
+     * written for, and several claims at one position may coexist. The one
+     * piece of position-keyed state, the tail pins of a fragmented entry
+     * (segment::extended_entry), counts its owners for exactly that reason, so
+     * the tails outlive every claim at the head position rather than the first
+     * one to be released.
      *
      * `src` must be a live handle; it is the proof that the segment is still
      * there, so there is no lookup and no failure mode. One claim per call:

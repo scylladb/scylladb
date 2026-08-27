@@ -590,8 +590,8 @@ SEASTAR_TEST_CASE(test_groups_restore_committed_config_only_if_newer) {
 // persisted once it commits after the restart. The replay path only restores
 // *committed* configurations, so this one is carried by the rewritten entry
 // alone: the group must track it from construction, or its covering mutation
-// carries no configuration while release_covered_configs() drops the entry's
-// handle anyway, and the configuration ends up nowhere durable (SCYLLADB-3842).
+// carries no configuration at all and the configuration ends up nowhere
+// durable once the entry's segment is reclaimed (SCYLLADB-3842).
 SEASTAR_TEST_CASE(test_groups_uncommitted_config_persisted_after_restart) {
     return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
