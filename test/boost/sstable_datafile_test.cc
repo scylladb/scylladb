@@ -51,6 +51,8 @@
 #include <boost/icl/interval_map.hpp>
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/random_utils.hh"
+#include "sstables/writer.hh"
+#include <seastar/core/fstream.hh>
 #include "test/lib/test_utils.hh"
 #include "test/lib/cql_test_env.hh"
 #include "readers/from_mutations.hh"
@@ -3551,4 +3553,53 @@ SEASTAR_THREAD_TEST_CASE(test_small_sstable_has_reasonable_memory_usage) {
     BOOST_REQUIRE_LT(growth, upper_bound);
     BOOST_REQUIRE_GE(growth, lower_bound);
 #endif
+}
+
+// ---------------------------------------------------------------------------------------------
+// A regression test for a defect that had none. It lives here rather than in a writer-focused file
+// because sstable_datafile_test is a standalone binary that can actually be built and run in this
+// configuration; other regression tests live in files that are compiled into test/boost/combined_tests.
+// ---------------------------------------------------------------------------------------------
+
+// Destroying a checksummed_file_writer WITHOUT calling close() must not fault.
+//
+// The class keeps `checksum _c` and `uint32_t _full_checksum` as DERIVED members while the base
+// file_writer owns the output_stream whose sink holds references to both. Derived members are
+// destroyed before the base destructor runs, and ~file_writer() best-effort auto-closes an unclosed
+// stream -- so the flush appended a CRC to a checksum struct that was already gone. A cancelled
+// compaction destroying an unclosed writer hit exactly this, as a near-null write at 0x8 inside
+// chunked_vector::emplace_back.
+//
+// HONEST LIMITATION, checked rather than assumed: in dev mode this test PASSES with the fix
+// reverted. It was run that way. The bug is undefined behaviour, not a null dereference -- freeing a
+// small chunked_vector and then appending to it touches memory that has not been reused yet, so
+// nothing faults. That is precisely why the original reproduction needed 7.7 M rows of allocation
+// churn, and it means this test is NOT a regression guard on its own in dev.
+//
+// It is a real guard where it matters: seastar turns ASAN on by default for the Debug and Sanitize
+// build types, and ASAN reports a use-after-free here deterministically regardless of size. So this
+// exists to be run under those, and in dev it is a smoke test that the path is exercised at all.
+//
+// There must be BUFFERED DATA at destruction, or the auto-close has nothing to flush and the test
+// cannot detect anything even under a sanitizer.
+SEASTAR_THREAD_TEST_CASE(test_checksummed_file_writer_destroyed_without_close) {
+    tmpdir tmp;
+    auto path = tmp.path() / "unclosed";
+
+    {
+        auto f = open_file_dma(path.native(),
+                               open_flags::wo | open_flags::create | open_flags::truncate).get();
+        auto sink = make_file_data_sink(std::move(f), file_output_stream_options{}).get();
+        // The two-argument overload: component_name holds an sstable reference and cannot be
+        // default-constructed, and naming a component is irrelevant to what this test exercises.
+        sstables::crc32_checksummed_file_writer w(std::move(sink), 4096);
+        // Enough to be buffered but not enough to have been flushed on its own.
+        sstring payload(1024, 'x');
+        w.write(payload.c_str(), payload.size());
+        BOOST_REQUIRE_EQUAL(w.offset(), payload.size());
+        // Deliberately NO w.close(). Leaving this scope is the whole test.
+    }
+
+    // Surviving to here is the assertion. Anything else is a crash, not a failure.
+    BOOST_REQUIRE(file_exists(path.native()).get());
 }

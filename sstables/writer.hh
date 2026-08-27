@@ -22,6 +22,8 @@
 
 namespace sstables {
 
+extern logging::logger sstlog;
+
 class index_sampling_state;
 class compression;
 class metadata_collector;
@@ -174,8 +176,40 @@ public:
     // Since we are exposing a reference to _full_checksum, we delete the move
     // constructor.  If it is moved, the reference will refer to the old
     // location.
+    //
+    // Copying is deleted for exactly the same reason, and stated as `= delete` rather than
+    // `= default`: the base holds an output_stream and declares a move constructor, so it is not
+    // copyable and `= default` was already defined-as-deleted. It merely read as though copying
+    // were permitted, which for a class whose sink holds references to its own members is the
+    // wrong thing for it to look like.
     checksummed_file_writer(checksummed_file_writer&&) = delete;
-    checksummed_file_writer(const checksummed_file_writer&) = default;
+    checksummed_file_writer(const checksummed_file_writer&) = delete;
+
+    // Close the stream here, not in ~file_writer().
+    //
+    // _c and _full_checksum are members of THIS class, and the base's output_stream holds
+    // references to both (see the constructors above, and checksummed_file_data_sink_impl). A
+    // derived class's members are destroyed before the base destructor runs, and ~file_writer()
+    // best-effort auto-closes a stream that was never closed -- "close() should be called by the
+    // owner ... it may not be called on exception handling paths". That close flushes, the flush
+    // appends a CRC to _c, and _c is gone: a use-after-free, seen as a near-null write at 0x8
+    // inside chunked_vector::emplace_back when a cancelled compaction destroyed a pq writer
+    // without closing it.
+    //
+    // This destructor body runs BEFORE the members are destroyed, so closing here is safe, and
+    // close() sets _closed so ~file_writer() then does nothing. Callers that close explicitly are
+    // unaffected.
+    virtual ~checksummed_file_writer() {
+        if (is_closed()) {
+            return;
+        }
+        try {
+            file_writer::close();
+        } catch (...) {
+            sstlog.warn("Error while auto-closing checksummed writer: {}. Ignored.",
+                        std::current_exception());
+        }
+    }
 
     checksum& finalize_checksum() {
         return _c;
@@ -184,6 +218,12 @@ public:
         return _full_checksum;
     }
 };
+
+// The sink holds references to _c and _full_checksum, so a copy or move would leave those
+// references pointing into the old object. Asserted rather than trusted: both were already
+// unavailable via the base, and an assertion says so where a reader will see it.
+static_assert(!std::is_copy_constructible_v<checksummed_file_writer<adler32_utils, true>>);
+static_assert(!std::is_move_constructible_v<checksummed_file_writer<adler32_utils, true>>);
 
 using adler32_checksummed_file_writer = checksummed_file_writer<adler32_utils, true>;
 using crc32_checksummed_file_writer = checksummed_file_writer<crc32_utils, true>;
