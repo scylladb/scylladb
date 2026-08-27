@@ -26,6 +26,7 @@
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
 #include "service/memory_limiter.hh"
+#include "service/request_memory_limiter.hh"
 #include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
 #include "service/qos/service_level_controller.hh"
@@ -330,8 +331,7 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
     , _query_processor(qp)
     , _ms(ms)
     , _config(std::move(config))
-    , _memory_available(ml.get_semaphore())
-    , _total_memory(ml.total_memory())
+    , _mem_limiter(ml)
     , _notifier(std::make_unique<event_notifier>(*this))
     , _auth_service(auth_service)
     , _sl_controller(sl_controller)
@@ -360,7 +360,8 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
         sm::make_gauge("requests_serving", _stats.requests_serving,
                         sm::description("Holds a number of requests that are being processed right now.")),
 
-        sm::make_gauge("requests_blocked_memory_current", [this] { return _memory_available.waiters(); },
+        sm::make_gauge("requests_blocked_memory_current",
+                        [this] { return _mem_limiter.sum_over_tenants(&service::request_memory_tenant::waiters); },
                         sm::description(
                             seastar::format("Holds the number of requests that are currently blocked due to reaching the memory quota limit ({}B). "
                                             "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _config.max_request_size))),
@@ -377,7 +378,8 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
         sm::make_counter("connections_blocked", _blocked_connections,
             sm::description("Holds an incrementing counter with the CQL connections that were blocked before being processed due to threshold configured via uninitialized_connections_semaphore_cpu_concurrency. "
                                             "Blocks are normal when we have multiple connections initialized at once. If connections are timing out and this value is high it indicates either connections storm or unusually slow processing.")),
-        sm::make_gauge("requests_memory_available", [this] { return _memory_available.current(); },
+        sm::make_gauge("requests_memory_available",
+                        [this] { return _mem_limiter.available_memory(); },
                         sm::description(
                             seastar::format("Holds the amount of available memory for admitting new requests (max is {}B)."
                                             "Zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _config.max_request_size))),
@@ -1121,6 +1123,7 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
     , _server_addr(server_addr)
     , _client_state(service::client_state::external_tag{}, server._auth_service, &server._sl_controller, server.timeout_config(), addr, bool(server._used_by_maintenance_socket), &server._abort_source)
     , _current_scheduling_group(server.get_scheduling_group_for_new_connection())
+    , _memory_tenant(server._mem_limiter.shared_tenant_for(_current_scheduling_group))
 {
     _shedding_timer.set_callback([this] {
         clogger.debug("Shedding all incoming requests due to overload");
@@ -1253,8 +1256,6 @@ future<> cql_server::connection::process_request() {
         if (op == uint8_t(cql_binary_opcode::QUERY) || op == uint8_t(cql_binary_opcode::PREPARE)) {
             mem_estimate += _server._query_processor.local().parsing_cost_estimate();
         }
-        // Cap the estimate, otherwise get_units call later would deadlock
-        mem_estimate = std::min(mem_estimate, _server._total_memory);
 
         if (_server._stats.requests_serving > _server._config.max_concurrent_requests) {
             ++_server._stats.requests_shed;
@@ -1270,8 +1271,13 @@ future<> cql_server::connection::process_request() {
         }
 
         const auto shedding_timeout = std::chrono::milliseconds(50);
+        // Charged to this connection's service level: its own share of the
+        // budget first, then the pool shared with the other service levels. A
+        // flood in another service level can therefore never take the share
+        // this connection is entitled to.
+        auto& tenant = *_memory_tenant;
         auto fut = allow_shedding
-                ? get_units(_server._memory_available, mem_estimate, shedding_timeout).then_wrapped([this, length = f.length] (auto f) {
+                ? tenant.get_units(mem_estimate, shedding_timeout).then_wrapped([this, length = f.length] (auto f) {
                     try {
                         return make_ready_future<semaphore_units<>>(f.get());
                     } catch (semaphore_timed_out& sto) {
@@ -1284,22 +1290,28 @@ future<> cql_server::connection::process_request() {
                         });
                     }
                 })
-                : get_units(_server._memory_available, mem_estimate);
-        if (_server._memory_available.waiters()) {
+                : tenant.get_units(mem_estimate);
+        if (tenant.waiters()) {
             if (allow_shedding && !_shedding_timer.armed()) {
                 _shedding_timer.arm(shedding_timeout);
             }
             ++_server._stats.requests_blocked_memory;
         }
 
-        return fut.then_wrapped([this, length = f.length, flags = f.flags, op, stream, tracing_requested, request_start_time, request_start_timestamp] (auto mem_permit_fut) {
+        return fut.then_wrapped([this, length = f.length, flags = f.flags, op, stream, tracing_requested,
+                // Bound now, not once the wait completes: the connection can be
+                // moved to another service level while this request is queued,
+                // and the top-up below has to charge the same semaphore the
+                // units came from or adopt() aborts.
+                charged_tenant = _memory_tenant,
+                request_start_time, request_start_timestamp] (auto mem_permit_fut) mutable {
           if (mem_permit_fut.failed()) {
               // Ignore semaphore errors - they are expected if load shedding took place
               mem_permit_fut.ignore_ready_future();
               return make_ready_future<>();
           }
           semaphore_units<> mem_permit = mem_permit_fut.get();
-          return this->read_and_decompress_frame(length, flags).then([this, op, stream, flags, tracing_requested, mem_permit = make_service_permit(std::move(mem_permit)), request_start_time, request_start_timestamp] (fragmented_temporary_buffer buf) mutable {
+          return this->read_and_decompress_frame(length, flags).then([this, op, stream, flags, tracing_requested, mem_permit = make_service_permit(std::move(mem_permit)), charged_tenant = std::move(charged_tenant), request_start_time, request_start_timestamp] (fragmented_temporary_buffer buf) mutable {
 
             ++_server._stats.requests_served;
             ++_server._stats.requests_serving;
@@ -1328,7 +1340,7 @@ future<> cql_server::connection::process_request() {
                     _process_request_stage(this, istream, op, stream, flags, seastar::ref(_client_state), tracing_requested, mem_permit, request_start_timestamp) :
                     process_request_one(istream, op, stream, flags, seastar::ref(_client_state), tracing_requested, mem_permit, request_start_timestamp);
 
-            future<> request_response_future = request_process_future.then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave), stream, request_start_time] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
+            future<> request_response_future = request_process_future.then_wrapped([this, buf = std::move(buf), mem_permit, charged_tenant = std::move(charged_tenant), leave = std::move(leave), stream, request_start_time] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
                 try {
                     auto& sg_stats = _server.get_cql_sg_stats();
                     size_t pending_response_size = 0;
@@ -1345,8 +1357,7 @@ future<> cql_server::connection::process_request() {
                         auto permit_size = mem_permit.count();
                         if (resp_size > permit_size) {
                             auto extra = resp_size - permit_size;
-                            auto extra_units = consume_units(_server._memory_available, extra);
-                            mem_permit.adopt(std::move(extra_units));
+                            mem_permit.adopt(charged_tenant->consume(extra));
                         }
                         pending_response_size = resp_size;
                         sg_stats._pending_response_memory += pending_response_size;
@@ -1525,9 +1536,14 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     co_return res;
 }
 
+void cql_server::connection::update_memory_tenant() {
+    _memory_tenant = _server._mem_limiter.shared_tenant_for(_current_scheduling_group);
+}
+
 void cql_server::connection::update_user_scheduling_group(const std::optional<auth::authenticated_user>& usr) {
     auto shg_grp = _server._sl_controller.get_cached_user_scheduling_group(usr);
     _current_scheduling_group = shg_grp;
+    update_memory_tenant();
     switch_tenant([this, usr] (this auto self, noncopyable_function<future<> ()> process_loop) -> future<> {
         co_return co_await _server._sl_controller.with_user_service_level(usr, std::move(process_loop));
     });
@@ -1536,6 +1552,7 @@ void cql_server::connection::update_user_scheduling_group(const std::optional<au
 void cql_server::connection::update_control_connection_scheduling_group() {
     auto shg_grp = _server._sl_controller.get_driver_scheduling_group().value_or(_server._sl_controller.get_default_scheduling_group());
     _current_scheduling_group = shg_grp;
+    update_memory_tenant();
     switch_tenant([this] (this auto self, noncopyable_function<future<> ()> process_loop) -> future<> {
         co_return co_await _server._sl_controller.with_service_level(qos::service_level_controller::driver_service_level_name, std::move(process_loop));
     });
@@ -1634,7 +1651,7 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
         cql3::dialect dialect, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp,
         // Only EXECUTE takes memory here; a QUERY is already charged for parsing
         // up front. Taken to share one signature across the process_fn's.
-        semaphore&) {
+        service::memory_limiter&) {
     utils::result_with_exception_ptr<utils::chunked_string> query = in.read_long_chunked_string();
     if (!query) {
         return make_exception_future<cql_server::process_fn_return_type>(std::move(query).assume_error());
@@ -1726,7 +1743,7 @@ struct pinned_plan {
 static pinned_plan
 maybe_rederive_with_pinned_plan(cql3::query_processor& qp, const service::client_state& client_state,
         cql3::dialect dialect, const lw_shared_ptr<const service::pager::paging_state>& paging_state,
-        const cql3::cql_statement& stmt, semaphore& memory_available,
+        const cql3::cql_statement& stmt, service::memory_limiter& mem_limiter,
         const tracing::trace_state_ptr& trace_state) {
     auto pinned = cql3::query_processor::pinned_plan_from_paging_state(paging_state);
     if (!pinned) {
@@ -1747,7 +1764,8 @@ maybe_rederive_with_pinned_plan(cql3::query_processor& qp, const service::client
     }
     // An EXECUTE is not charged for parsing up front, so charge it here rather
     // than tax the hot path. consume_units() does not wait, so cannot deadlock.
-    pinned_plan rederived{.parsing_units = consume_units(memory_available, qp.parsing_cost_estimate())};
+    pinned_plan rederived{.parsing_units =
+            mem_limiter.tenant_for_current_scheduling_group().consume(qp.parsing_cost_estimate())};
     tracing::trace(trace_state,
             "Paging state pins another query plan; re-deriving the statement with that plan pinned");
     rederived.statement = qp.get_statement(stmt.raw_cql_statement, client_state, dialect,
@@ -1766,13 +1784,13 @@ execute_prepared_with_paging_state(service::client_state& client_state, sharded<
         std::unique_ptr<cql_query_state> q_state, cql3::statements::prepared_statement::checked_weak_ptr prepared,
         cql3::prepared_cache_key_type cache_key, bool needs_authorization,
         cql_metadata_id_wrapper metadata_id, bool skip_metadata, bool init_trace,
-        tracing::trace_state_ptr trace_state, semaphore& memory_available) {
+        tracing::trace_state_ptr trace_state, service::memory_limiter& mem_limiter) {
     auto& query_state = q_state->query_state;
     auto& options = *q_state->options;
     auto stmt = prepared->statement;
 
     pinned_plan pinned = maybe_rederive_with_pinned_plan(qp.local(), client_state, dialect,
-            options.get_specific_options().state, *stmt, memory_available, query_state.get_trace_state());
+            options.get_specific_options().state, *stmt, mem_limiter, query_state.get_trace_state());
     if (pinned.statement) {
         stmt = pinned.statement->statement;
     }
@@ -1811,7 +1829,7 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
         uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls,
         cql3::dialect dialect, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp,
-        semaphore& memory_available) {
+        service::memory_limiter& mem_limiter) {
     utils::result_with_exception_ptr<bytes> cache_key_bytes = in.read_short_bytes();
     if (!cache_key_bytes) {
         return make_exception_future<cql_server::process_fn_return_type>(std::move(cache_key_bytes).assume_error());
@@ -1891,7 +1909,7 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     if (options.get_specific_options().state) {
         return execute_prepared_with_paging_state(client_state, qp, stream, version, dialect,
                 std::move(q_state), std::move(prepared), std::move(cache_key), needs_authorization,
-                std::move(metadata_id), skip_metadata, init_trace, trace_state, memory_available);
+                std::move(metadata_id), skip_metadata, init_trace, trace_state, mem_limiter);
     }
 
     options.prepare(prepared->bound_names);
@@ -1925,7 +1943,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
         uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls, cql3::dialect dialect, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp,
         // Never paged, so nothing here re-derives a statement. See above.
-        semaphore&) {
+        service::memory_limiter&) {
     const utils::result_with_exception_ptr<int8_t> type = in.read_byte();
     if (!type) {
         return make_exception_future<cql_server::process_fn_return_type>(std::move(type).assume_error());
@@ -2138,7 +2156,7 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
     bool init_trace = (bool)!bounced; // If the request was bounced, we already started the trace in the handler
     auto& sg_stats = get_cql_sg_stats();
     auto msg = co_await coroutine::try_future(process_fn(client_state, _query_processor, in, stream,
-        version, permit, trace_state, init_trace, {}, dialect, sg_stats, request_start_timestamp, _memory_available));
+        version, permit, trace_state, init_trace, {}, dialect, sg_stats, request_start_timestamp, _mem_limiter));
     while (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&msg)) {
         auto shard = (*bounce_msg)->target_shard();
         auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
@@ -2157,7 +2175,7 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
                 auto& local_sg_stats = server.get_cql_sg_stats();
                 co_return co_await process_fn(local_client_state, server._query_processor, in, stream, version,
                         /* FIXME */empty_service_permit(), std::move(local_trace_state), false, cached_vals, dialect, local_sg_stats, request_start_timestamp,
-                        server._memory_available);
+                        server._mem_limiter);
             });
         } else {
             // Node bounce

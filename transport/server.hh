@@ -16,6 +16,7 @@
 #include "service/migration_listener.hh"
 #include "auth/authenticator.hh"
 #include <seastar/core/sharded.hh>
+#include "service/memory_limiter.hh"
 #include "service/qos/qos_configuration_change_subscriber.hh"
 #include "timeout_config.hh"
 #include <seastar/core/semaphore.hh>
@@ -57,9 +58,6 @@ class registrations;
 
 }
 
-namespace service {
-class memory_limiter;
-}
 
 enum class client_type;
 struct client_data;
@@ -237,8 +235,7 @@ private:
     sharded<cql3::query_processor>& _query_processor;
     netw::messaging_service& _ms;
     cql_server_config _config;
-    semaphore& _memory_available;
-    const size_t _total_memory;
+    service::memory_limiter& _mem_limiter;
     seastar::metrics::metric_groups _metrics;
     std::unique_ptr<event_notifier> _notifier;
 private:
@@ -311,6 +308,11 @@ private:
         service::client_state _client_state;
         timer<lowres_clock> _shedding_timer;
         scheduling_group _current_scheduling_group;
+        // The request memory tenant for _current_scheduling_group, i.e. for this
+        // connection's service level. Held by pointer so that a tenant whose
+        // service level was removed stays alive while connections still use it.
+        // Unrelated to generic_server's switch_tenant().
+        service::memory_limiter::tenant_ptr _memory_tenant;
         bool _shed_incoming_requests = false;
         bool _ready = false;
         bool _authenticating = false;
@@ -343,6 +345,7 @@ private:
         const service::client_state& get_client_state() const { return _client_state; }
         void update_scheduling_group();
         void maybe_update_scheduling_group_after_reclassification();
+        void update_memory_tenant();
         service::client_state& get_client_state() { return _client_state; }
         scheduling_group get_scheduling_group() const { return _current_scheduling_group; }
     private:
