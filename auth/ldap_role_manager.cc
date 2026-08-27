@@ -475,7 +475,7 @@ future<role_manager::attribute_vals> ldap_role_manager::query_attribute_for_all(
 
 future<> ldap_role_manager::set_attribute(
         std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value, ::service::group0_batch& mc) {
-    return _std_mgr.set_attribute(role_name, attribute_value, attribute_value, mc);
+    return _std_mgr.set_attribute(role_name, attribute_name, attribute_value, mc);
 }
 
 future<> ldap_role_manager::remove_attribute(std::string_view role_name, std::string_view attribute_name, ::service::group0_batch& mc) {
