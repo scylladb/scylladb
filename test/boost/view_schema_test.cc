@@ -21,6 +21,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/eventually.hh"
+#include "test/lib/data_driven_test_case.hh"
 #include "exceptions/unrecognized_entity_exception.hh"
 #include "db/config.hh"
 #include "types/set.hh"
@@ -28,6 +29,7 @@
 #include "types/map.hh"
 #include "types/vector.hh"
 #include "utils/chunked_string.hh"
+
 
 BOOST_AUTO_TEST_SUITE(view_schema_test)
 
@@ -3054,7 +3056,15 @@ struct update_counter {
     }
 };
 
-SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
+
+void maybe_flush_cluster(cql_test_env& e, bool flush){
+    if (flush){ 
+        e.db().invoke_on_all([] (replica::database& db) {
+            return db.flush_all_tables();}).get();
+    }
+}
+
+auto test_view_update_generating_writetime(bool flush) {
     // The test revolves around timestamps in materialized views and their relation to timestamps
     // in the base table. Values in an MV should have the same timestamp as the corresponding
     // ones in the base table. However, that only applies to values that are readable with `WRITETIME`.
@@ -3072,7 +3082,7 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
     //        to the unselected columns from the base table. As a result, no view updates will be
     //        generated for unselected columns as a result.
 
-    return do_with_cql_env_thread([] (cql_test_env& e) {
+    return do_with_cql_env_thread([flush] (cql_test_env& e) {
 
         auto f1 = e.local_view_builder().wait_until_built("ks", "mv1");
         auto f2 = e.local_view_builder().wait_until_built("ks", "mv2");
@@ -3087,22 +3097,37 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
         f2.get();
 
         auto total_t_view_updates = [&] {
-            return e.db().map_reduce0([] (replica::database& local_db) {
-                const db::view::stats& local_stats = local_db.find_column_family("ks", "t").get_view_stats();
-                return local_stats.view_updates_pushed_local + local_stats.view_updates_pushed_remote;
-            }, 0, std::plus<int64_t>()).get();
+            auto total = e.db().map_reduce0([] (replica::database& local_db) {
+                const db::view::stats& local_stats =
+                        local_db.find_column_family("ks", "t").get_view_stats();
+
+                return local_stats.view_updates_pushed_local
+                    + local_stats.view_updates_pushed_remote;
+            }, int64_t{0}, std::plus<int64_t>()).get();
+
+            maybe_flush_cluster(e, flush);
+
+            return total;
         };
 
         auto total_mv1_updates = [&] {
-            return e.db().map_reduce0([] (replica::database& local_db) {
+            auto total = e.db().map_reduce0([] (replica::database& local_db) {
                 return local_db.find_column_family("ks", "mv1").get_stats().writes.hist.count;
             }, 0, std::plus<int64_t>()).get();
+
+            maybe_flush_cluster(e, flush);
+
+            return total;
         };
 
         auto total_mv2_updates = [&] {
-            return e.db().map_reduce0([] (replica::database& local_db) {
+            auto total = e.db().map_reduce0([] (replica::database& local_db) {
                 return local_db.find_column_family("ks", "mv2").get_stats().writes.hist.count;
             }, 0, std::plus<int64_t>()).get();
+
+            maybe_flush_cluster(e, flush);
+
+            return total;
         };
 
         ::shared_ptr<cql_transport::messages::result_message> msg;
@@ -3221,6 +3246,10 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
         });
     });
 }
+
+DATA_DRIVEN_TEST_CASE(test_view_update_generating_writetime, flush, false);
+DATA_DRIVEN_TEST_CASE(test_view_update_generating_writetime, flush, true);
+
 
 // Usually if only an unselected column in the base table is modified, we expect an optimization that a view
 // update is not done, but we had an bug(https://scylladb.atlassian.net/browse/SCYLLADB-808) where the existence
