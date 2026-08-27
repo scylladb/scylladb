@@ -341,7 +341,8 @@ class fsm {
     // multiples of delta -- a tick of staleness cannot matter.
     bool _clock_ok = false;
     // The value of log_is_full() report_log_full() last reported to a leader.
-    // Its log lines mark the transitions.
+    // Its log lines mark the transitions, and apply_snapshot() prods the leader
+    // to resume while it is true and the log has room.
     bool _log_full_reported = false;
     // Pace the two lines report_log_full() logs, one per direction of the
     // transition: a follower whose state machine stays slow crosses the limit
