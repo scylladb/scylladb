@@ -248,20 +248,20 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
         }
 
         // Rewrite uncommitted entries to the new commitlog the same way
-        // store_log_entries() does: the entries' rp_handles keep the new
-        // segments alive, and write_batches() mints a raft_groups claim per
-        // segment straight into group_data.covers — the segment->cover map
-        // that seeds the group's parked covers when its raft_commitlog is
-        // constructed, for commit-time coverage of the rewritten entries
-        // (see raft_commitlog).
+        // store_log_entries() does: one batch, whose claim keeps the new
+        // segment alive until the group's own apply() mints from it, and
+        // whose raft_groups claim goes straight into group_data.covers — the
+        // segment->cover map that seeds the group's parked covers when its
+        // raft_commitlog is constructed, for commit-time coverage of the
+        // rewritten entries (see raft_commitlog).
         if (!uncommitted.empty()) {
-            auto entry_handles = co_await service::strong_consistency::raft_commitlog::write_batches(
+            auto batch_handle = co_await service::strong_consistency::raft_commitlog::write_batches(
                     *new_commitlog_ptr, table_id, db::system_keyspace::raft_groups()->id(), group_id, uncommitted,
                     raft_term_and_index{}, group_data.covers);
-            for (size_t i = 0; i < uncommitted.size(); ++i) {
-                group_data.replay_positions.push_back(service::strong_consistency::index_and_replay_position{
-                        .index = uncommitted[i]->idx, .replay_position_handle = std::move(entry_handles[i])});
-            }
+            group_data.rewritten = service::strong_consistency::batch_claim{
+                    .first = uncommitted.front()->idx,
+                    .last = uncommitted.back()->idx,
+                    .claim = std::move(batch_handle)};
             for (auto& entry : uncommitted) {
                 group_data.entries.push_back(std::move(entry));
             }

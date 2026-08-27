@@ -11,6 +11,8 @@
 #include "db/commitlog/commitlog_entry.hh"
 #include "raft/raft.hh"
 
+#include <limits>
+
 #include "raft_commitlog.hh"
 
 #include "idl/commitlog.dist.hh"
@@ -45,67 +47,53 @@ raft_commitlog::raft_commitlog(raft::group_id group_id, db::commitlog& commitlog
     , _commit_log(commitlog)
     , _replayed_entries(std::move(replayed_data.entries)) {
     _pending_covers = std::move(replayed_data.covers);
+    // The rewritten batch, if replay rewrote anything, holds the claim on the
+    // entries above the recovered commit index. Its range is what tells us
+    // which replayed entries those are: everything below was already applied
+    // by replay and needs nothing from us.
+    const auto rewritten_from = replayed_data.rewritten
+            ? replayed_data.rewritten->first
+            : raft::index_t(std::numeric_limits<uint64_t>::max());
+    if (replayed_data.rewritten) {
+        _batch_claims.push_back(std::move(*replayed_data.rewritten));
+    }
     for (const auto& e : _replayed_entries) {
         _appended_terms.push_back(raft_term_and_index{.idx = e->idx, .term = e->term});
-    }
-    // Classify each replay position as config / non-config by the entry it
-    // belongs to. Replay positions are a subset of the replayed entries (only
-    // uncommitted entries are rewritten to the new commitlog on replay) and
-    // both are in raft-index order, so we match them by index with a single
-    // forward walk over _replayed_entries.
-    auto entry_it = _replayed_entries.begin();
-    for (auto& pos : replayed_data.replay_positions) {
-        while (entry_it != _replayed_entries.end() && (*entry_it)->idx != pos.index) {
-            ++entry_it;
+        if (e->idx < rewritten_from) {
+            continue;
         }
-        SCYLLA_ASSERT(entry_it != _replayed_entries.end());
-        const auto& entry = **entry_it;
-        if (is_command_entry(entry)) {
-            _command_positions.push_back(std::move(pos));
-        } else if (is_config_entry(entry)) {
-            _config_positions.push_back(std::move(pos));
-            // A rewritten entry is by definition one that was still
-            // uncommitted at the crash, which is exactly what
-            // _appended_configs tracks. It has to be seeded here or a
-            // configuration that commits only after the restart would reach
-            // note_commit_idx() unknown: take_committed_config() would return
-            // nothing, the covering mutation would carry no configuration, and
-            // release_covered_configs() would still drop the entry's handle —
-            // leaving the configuration nowhere durable, the SCYLLADB-3842
-            // loss this path exists to prevent. The replay-time restore in
-            // raft_commitlog_replay_buffer only covers *committed*
-            // configurations, so it cannot stand in for this.
+        if (is_command_entry(*e)) {
+            _pending_commands.push_back(e->idx);
+        } else if (is_config_entry(*e)) {
+            // A configuration that was still uncommitted at the crash commits
+            // after the restart, and only a covering mutation will make it
+            // durable — the replay-time restore handles committed ones only.
+            // Without this seeding it would reach note_commit_idx() unknown,
+            // its covering mutation would carry no configuration, and the
+            // entry would be released anyway: the SCYLLADB-3842 loss on the
+            // one path the replay-time restore does not cover.
             //
-            // Indices here are above the recovered commit index, hence above
+            // Indexes here are above the recovered commit index, hence above
             // any config_idx already durable in system.raft_groups (that one
             // was written by a covering mutation, in the same mutation as a
-            // commit_idx at or below the recovered one). So a covering
+            // commit_idx at or below the recovered one), so a covering
             // mutation can only ever advance the persisted configuration.
-            _appended_configs.emplace_back(entry.idx, std::get<raft::configuration>(entry.data));
-        } else {
-            _dummy_positions.push_back(std::move(pos));
+            _appended_configs.emplace_back(e->idx, std::get<raft::configuration>(e->data));
         }
     }
     logger.debug("starting raft_commitlog group_id={}, table_id={}, replayed_entries={}, "
-            "command_positions={}, dummy_positions={}, config_positions={}, pending_covers={}",
-            _group_id, _table_id, _replayed_entries.size(), _command_positions.size(),
-            _dummy_positions.size(), _config_positions.size(), _pending_covers.size());
+            "rewritten_from={}, pending_commands={}, pending_covers={}",
+            _group_id, _table_id, _replayed_entries.size(), rewritten_from,
+            _pending_commands.size(), _pending_covers.size());
 }
 
 raft_commitlog::~raft_commitlog() {
-    // Release all remaining replay position handles and parked segment claims
-    // without decrementing segment dirty counts. This keeps commitlog
-    // segments alive after this object is destroyed, ensuring the uncommitted
-    // raft entries (and the commit_idx records) remain available for replay
-    // after restart.
-    for (auto& entry : _command_positions) {
-        entry.replay_position_handle.release();
-    }
-    for (auto& entry : _dummy_positions) {
-        entry.replay_position_handle.release();
-    }
-    for (auto& entry : _config_positions) {
-        entry.replay_position_handle.release();
+    // Release every remaining claim without decrementing segment dirty counts.
+    // This keeps the commitlog segments alive after this object is destroyed,
+    // so the uncommitted raft entries (and the commit indexes their batch
+    // headers carry) remain available for replay after a restart.
+    for (auto& batch : _batch_claims) {
+        batch.claim.release();
     }
     for (auto& [segment, cover] : _pending_covers) {
         cover.segment_holder.release();
@@ -113,18 +101,14 @@ raft_commitlog::~raft_commitlog() {
     for (auto& orphan : _orphaned_holders) {
         orphan.segment_holder.release();
     }
-    logger.debug("released {} command + {} dummy + {} config replay position handles, {} parked covers and {} orphaned holders for group_id={}",
-            _command_positions.size(), _dummy_positions.size(), _config_positions.size(),
-            _pending_covers.size(), _orphaned_holders.size(), _group_id);
+    logger.debug("released {} batch claims, {} parked covers and {} orphaned holders for group_id={}",
+            _batch_claims.size(), _pending_covers.size(), _orphaned_holders.size(), _group_id);
 }
 
-seastar::future<utils::chunked_vector<db::rp_handle>> raft_commitlog::write_batches(db::commitlog& cl,
+seastar::future<db::rp_handle> raft_commitlog::write_batches(db::commitlog& cl,
         db::cf_id_type table_id, db::cf_id_type raft_groups_table_id, raft::group_id group_id,
         const raft::log_entry_ptr_list& entries, raft_term_and_index committed, pending_cover_map& covers) {
-    utils::chunked_vector<db::rp_handle> entry_handles;
-    if (entries.empty()) {
-        co_return entry_handles;
-    }
+    SCYLLA_ASSERT(!entries.empty());
 
     // One commitlog entry for the whole batch: the group id, the entries, and
     // the group's last committed (index, term) as the crash-replay floor. The
@@ -152,22 +136,11 @@ seastar::future<utils::chunked_vector<db::rp_handle>> raft_commitlog::write_batc
     // feature; strongly consistent tables are gated behind an experimental
     // flag, so in practice it is on). Either way the batch has exactly one
     // position — its head segment — and the tail segments of a fragmented
-    // entry are held by the owner count on that position
-    // (segment::extended_entry), so they outlive every claim taken below.
+    // entry are held by the commitlog's own head-segment chaining, which
+    // frees them only once the whole head segment is clean.
     auto handles = co_await cl.add_raft_entries(table_id, std::move(writers));
     SCYLLA_ASSERT(handles.size() == 1);
-    auto& batch_handle = handles[0];
-
-    // One claim per entry, all at the batch's position, so each entry's
-    // lifetime is tracked separately even though they share a record: a
-    // command's claim moves to the target table's memtable when apply()
-    // consumes it, while a dummy's or a configuration's is released once the
-    // batch is covered. Taken from the batch's own claim, which is still held
-    // here — that is what makes them safe to take at all.
-    entry_handles.reserve(entries.size());
-    for (size_t i = 0; i < entries.size(); ++i) {
-        entry_handles.emplace_back(cl.acquire_cf_count(batch_handle, table_id));
-    }
+    auto batch_handle = std::move(handles[0]);
 
     // The segment must also be held on behalf of system.raft_groups: without
     // that, a target-table flush could reclaim it before a covering commit_idx
@@ -188,32 +161,40 @@ seastar::future<utils::chunked_vector<db::rp_handle>> raft_commitlog::write_batc
         it->second.segment_holder = cl.acquire_cf_count(batch_handle, raft_groups_table_id);
     }
 
-    // batch_handle goes out of scope here: the write's own claim is replaced by
-    // the per-entry claims and the cover's, which have their own lifetimes.
-    co_return entry_handles;
+    co_return batch_handle;
 }
 
 seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_list& entries) {
     logger.debug("store_log_entries: group_id={}, num_entries={}", _group_id, entries.size());
+    if (entries.empty()) {
+        co_return;
+    }
 
-    auto entry_handles = co_await write_batches(_commit_log, _table_id, _raft_groups_table_id, _group_id, entries,
+    auto batch_handle = co_await write_batches(_commit_log, _table_id, _raft_groups_table_id, _group_id, entries,
             _last_committed, _pending_covers);
-    SCYLLA_ASSERT(entry_handles.size() == entries.size());
 
-    for (size_t i = 0; i < entries.size(); ++i) {
-        const auto& log_entry_ptr = entries[i];
-        auto& target = is_command_entry(*log_entry_ptr) ? _command_positions
-                : is_config_entry(*log_entry_ptr) ? _config_positions
-                : _dummy_positions;
-        target.push_back(
-                index_and_replay_position{.index = log_entry_ptr->idx, .replay_position_handle = std::move(entry_handles[i])});
+    bool has_commands = false;
+    for (const auto& log_entry_ptr : entries) {
         _appended_terms.push_back(raft_term_and_index{.idx = log_entry_ptr->idx, .term = log_entry_ptr->term});
-        if (is_config_entry(*log_entry_ptr)) {
+        if (is_command_entry(*log_entry_ptr)) {
+            _pending_commands.push_back(log_entry_ptr->idx);
+            has_commands = true;
+        } else if (is_config_entry(*log_entry_ptr)) {
             _appended_configs.emplace_back(log_entry_ptr->idx, std::get<raft::configuration>(log_entry_ptr->data));
         }
     }
-    logger.debug("store_log_entries completed: command_positions={}, dummy_positions={}, config_positions={}, pending_covers={}",
-            _command_positions.size(), _dummy_positions.size(), _config_positions.size(), _pending_covers.size());
+    // Only a batch containing commands needs its claim kept: apply() mints
+    // from it, and nothing else will. A batch of dummies and configurations is
+    // outlived by its segment's cover (see batch_claim), so its claim goes
+    // here.
+    if (has_commands) {
+        _batch_claims.push_back(batch_claim{
+                .first = entries.front()->idx,
+                .last = entries.back()->idx,
+                .claim = std::move(batch_handle)});
+    }
+    logger.debug("store_log_entries completed: batch_claims={}, pending_commands={}, pending_covers={}",
+            _batch_claims.size(), _pending_commands.size(), _pending_covers.size());
 }
 
 void raft_commitlog::note_commit_idx(const raft::index_t idx) {
@@ -242,18 +223,35 @@ raft::log_entries raft_commitlog::load_log() {
 
 void raft_commitlog::truncate_log(const raft::index_t idx) {
     logger.debug("truncate_log: group_id={}, idx={}", _group_id, idx);
-    // Remove entries with index >= idx (Raft semantics: truncate from idx onward).
-    // All deques are sorted by index, so binary search finds the cut point.
-    auto trim = [idx] (replay_position_list& l) {
-        auto it = std::ranges::lower_bound(l, idx, {}, &index_and_replay_position::index);
-        l.erase(it, l.end());
-    };
-    trim(_command_positions);
-    trim(_dummy_positions);
-    trim(_config_positions);
+    // Remove entries with index >= idx (Raft semantics: truncate from idx
+    // onward). Everything here is index-ordered, so each is a back trim.
+    //
+    // The discarded commands will never be applied, so nothing will ever mint
+    // a memtable claim for them.
+    while (!_pending_commands.empty() && _pending_commands.back() >= idx) {
+        _pending_commands.pop_back();
+    }
+    // A batch entirely at or above the truncation point is gone: its claim can
+    // go with it, because its entries are discarded and its segment's
+    // retention for anything else is the business of that segment's cover.
+    while (!_batch_claims.empty() && _batch_claims.back().first >= idx) {
+        _batch_claims.pop_back();
+    }
+    // A batch straddling the truncation point keeps its claim — its surviving
+    // commands may still be waiting for apply() — with its range clamped so
+    // the drain check below only looks at what survived.
+    if (!_batch_claims.empty() && _batch_claims.back().last >= idx) {
+        _batch_claims.back().last = idx - raft::index_t{1};
+    }
+    // ...and if nothing survived that needs it, it goes too: the surviving
+    // entries are then dummies, configurations, or commands already handed to
+    // a memtable, none of which depend on this claim.
+    while (!_batch_claims.empty()
+            && (_pending_commands.empty() || _pending_commands.back() < _batch_claims.back().first)) {
+        _batch_claims.pop_back();
+    }
     // The discarded entries can no longer be committed, so their terms must
-    // not end up in a floor record, and their configurations must not be
-    // persisted.
+    // not end up in a floor, and their configurations must not be persisted.
     while (!_appended_terms.empty() && _appended_terms.back().idx >= idx) {
         _appended_terms.pop_back();
     }
@@ -266,7 +264,7 @@ void raft_commitlog::truncate_log(const raft::index_t idx) {
     // indexes land in new, smaller-max covers behind them). Their claims
     // must survive, though — the segments may still hold this group's earlier
     // entries — so the claims move to _orphaned_holders, each tagged with the
-    // covering floor it must wait for: idx - 1 bounds the live entries left
+    // release floor it must wait for: idx - 1 bounds the live entries left
     // in its segment from above, and a lower value must not release it (a
     // surviving pre-truncation cover can pop first, and its value would leave
     // entries between it and the truncation point uncovered).
@@ -284,25 +282,24 @@ void raft_commitlog::truncate_log(const raft::index_t idx) {
 
 void raft_commitlog::truncate_log_tail(const raft::index_t index) {
     logger.debug("truncate_log_tail: group_id={}, index={}", _group_id, index);
-    // Remove entries with index <= the given index. The handles are destructed
-    // normally, decrementing segment dirty counts and allowing commitlog
-    // segments to be reclaimed once no other references hold them.
-    auto it = std::ranges::upper_bound(_command_positions, index, {}, &index_and_replay_position::index);
-    _command_positions.erase(_command_positions.begin(), it);
-    auto dummy_it = std::ranges::upper_bound(_dummy_positions, index, {}, &index_and_replay_position::index);
-    _dummy_positions.erase(_dummy_positions.begin(), dummy_it);
-    // Configuration handles are released here and only here: the snapshot whose
-    // descriptor we just persisted carries the configuration, so it is durable
-    // now and the segments holding those entries can be reclaimed.
-    auto cfg_it = std::ranges::upper_bound(_config_positions, index, {}, &index_and_replay_position::index);
-    _config_positions.erase(_config_positions.begin(), cfg_it);
+    // Entries at or below a persisted snapshot index are all applied — raft
+    // does not snapshot past what the state machine consumed — so nothing here
+    // is still waiting on them. Front trims, and the claims are destructed
+    // normally, decrementing segment dirty counts and letting segments be
+    // reclaimed once nothing else holds them.
+    while (!_pending_commands.empty() && _pending_commands.front() <= index) {
+        _pending_commands.pop_front();
+    }
+    while (!_batch_claims.empty() && _batch_claims.front().last <= index) {
+        _batch_claims.pop_front();
+    }
     // _pending_covers is left alone: covers up to the snapshot index (<= the
     // applied <= the commit index) were already taken by
     // take_committed_covers(), which store_commit_idx() drives before entries
     // can be applied, let alone snapshotted; segments still pending extend
     // beyond it.
-    logger.debug("truncate_log_tail completed: command_positions={}, dummy_positions={}, config_positions={}",
-            _command_positions.size(), _dummy_positions.size(), _config_positions.size());
+    logger.debug("truncate_log_tail completed: batch_claims={}, pending_commands={}",
+            _batch_claims.size(), _pending_commands.size());
 }
 
 std::vector<segment_cover> raft_commitlog::take_committed_covers(raft::index_t commit_idx) {
@@ -356,43 +353,54 @@ std::optional<std::pair<raft::index_t, raft::configuration>> raft_commitlog::tak
     return std::exchange(_committed_config, std::nullopt);
 }
 
-void raft_commitlog::release_covered_configs(const raft::index_t idx) {
-    auto it = std::ranges::upper_bound(_config_positions, idx, {}, &index_and_replay_position::index);
-    _config_positions.erase(_config_positions.begin(), it);
-    logger.debug("release_covered_configs: group_id={}, up_to_idx={}, remaining_config={}",
-            _group_id, idx, _config_positions.size());
-}
-
-void raft_commitlog::release_covered_dummies(const raft::index_t idx) {
-    auto it = std::ranges::upper_bound(_dummy_positions, idx, {}, &index_and_replay_position::index);
-    _dummy_positions.erase(_dummy_positions.begin(), it);
-    logger.debug("release_covered_dummies: group_id={}, up_to_idx={}, remaining_dummy={}, retained_config={}",
-            _group_id, idx, _dummy_positions.size(), _config_positions.size());
-}
-
 std::vector<index_and_replay_position> raft_commitlog::acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries) {
-    logger.debug("acquire_replay_position_handles_for: group_id={}, entries_count={}, current_command_size={}",
-            _group_id, entries.size(), _command_positions.size());
+    logger.debug("acquire_replay_position_handles_for: group_id={}, entries_count={}, pending_commands={}",
+            _group_id, entries.size(), _pending_commands.size());
 
     std::vector<index_and_replay_position> ret;
     ret.reserve(entries.size());
 
-    // Move replay position handles for requested entries. Both sequences are
-    // command-only and index-sorted; scan forward matching them up.
-    auto it = _command_positions.begin();
+    // Both sequences are command-only and index-sorted, so a single forward
+    // walk matches them up, as does a second one over the batches. A pending
+    // command below the requested one is left where it is rather than dropped:
+    // its data never reached a memtable, so its batch's claim must go on
+    // holding the segment.
+    auto pending = _pending_commands.begin();
+    auto batch = _batch_claims.begin();
     for (const auto& entry : entries) {
-        while (it != _command_positions.end() && it->index < entry->idx) {
-            ++it;
+        while (pending != _pending_commands.end() && *pending < entry->idx) {
+            ++pending;
         }
-        if (it == _command_positions.end() || it->index != entry->idx) {
-            on_internal_error(logger, fmt::format("missing replay position handle for group_id={}, idx={}", _group_id, entry->idx));
+        if (pending == _pending_commands.end() || *pending != entry->idx) {
+            on_internal_error(logger, fmt::format("no pending command for group_id={}, idx={}", _group_id, entry->idx));
         }
-        ret.emplace_back(index_and_replay_position{.index = it->index, .replay_position_handle = std::move(it->replay_position_handle)});
-        it = _command_positions.erase(it);
+        while (batch != _batch_claims.end() && batch->last < entry->idx) {
+            ++batch;
+        }
+        if (batch == _batch_claims.end() || batch->first > entry->idx) {
+            on_internal_error(logger, fmt::format("no batch claim for group_id={}, idx={}", _group_id, entry->idx));
+        }
+        // The minted handle carries the batch's position — the position the
+        // mutation was really written at — so the target memtable's recorded
+        // replay position, and the truncation and cleanup records derived from
+        // it, stay truthful.
+        ret.emplace_back(index_and_replay_position{
+                .index = entry->idx,
+                .replay_position_handle = _commit_log.acquire_cf_count(batch->claim, _table_id)});
+        pending = _pending_commands.erase(pending);
     }
 
-    logger.debug(
-            "acquire_replay_position_handles_for completed: returned_count={}, remaining_command_size={}", ret.size(), _command_positions.size());
+    // A batch with no pending command left has nothing more to hand out: the
+    // memtables hold claims of their own now, and its other entry kinds are
+    // outlived by the segment's cover. Front only — commands are applied in
+    // index order, so earlier batches drain first.
+    while (!_batch_claims.empty()
+            && (_pending_commands.empty() || _pending_commands.front() > _batch_claims.front().last)) {
+        _batch_claims.pop_front();
+    }
+
+    logger.debug("acquire_replay_position_handles_for completed: returned={}, batch_claims={}, pending_commands={}",
+            ret.size(), _batch_claims.size(), _pending_commands.size());
     return ret;
 }
 } // namespace service::strong_consistency

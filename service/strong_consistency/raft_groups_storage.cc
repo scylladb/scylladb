@@ -164,24 +164,9 @@ future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
             co_await db.apply_in_memory(m, cf, std::move(holder), db::no_timeout);
         }
     }
-    // Dummy entries at or below the highest covered index are committed,
-    // carry no state, and their segments' retention is now guaranteed by the
-    // covers above, so the handles raft_commitlog still holds for them are
-    // redundant. Command handles are left alone — apply() has yet to move
-    // them to the target table's memtable, which must hold the segment until
-    // the data is durable.
-    _raft_commitlog.release_covered_dummies(covers.back().max_idx);
-    // Configuration handles too: the newest configuration in the covered range
-    // rode one of the mutations above, and older ones are superseded by it — a
-    // configuration is a whole member set, not a delta. Every committed
-    // configuration reaches note_commit_idx(), whether its entry was appended
-    // in this run or rewritten from the old commitlog on replay (raft_commitlog
-    // seeds both), so no covered configuration is released unpersisted.
-    // The entries stay readable for as long as it matters: their segments are
-    // held by the claims that ride those same mutations, so a crash before the
-    // flush still leaves them in the commitlog, where replay recovers the
-    // configuration from.
-    _raft_commitlog.release_covered_configs(covers.back().max_idx);
+    // Nothing else to release: dummy and configuration entries never took a
+    // claim of their own (see batch_claim), and a command's claim is the
+    // target memtable's business once apply() minted it.
 }
 
 // Execute the CQL INSERT that persists (commit_idx, commit_idx_term) to

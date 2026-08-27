@@ -47,8 +47,33 @@ struct pending_cover {
 // suffix (truncate_log()).
 using pending_cover_map = std::map<db::segment_id_type, pending_cover>;
 
+// One claim on the commitlog entry a batch was written as, with the batch's
+// raft index range. It is what keeps the segment alive between the write and
+// apply(): the segment's cover can be released by a raft_groups flush before
+// the applier fiber runs, and until every command in the batch has reached a
+// memtable this claim is the only thing left holding the segment.
+//
+// One claim serves the whole batch because the batch is one commitlog entry,
+// so all of its entries share a position; apply() mints a per-command handle
+// from it (commitlog::acquire_cf_count), which then carries that same
+// position into the target memtable.
+//
+// Dummy and configuration entries need no claim of their own. The segment's
+// cover has max_idx >= their index, so it is released only once a durable
+// commit index covers them, by which point replay does not need the entries;
+// and a committed configuration is persisted by the very mutation that
+// carries the cover's claim (take_committed_config()).
+struct batch_claim {
+    raft::index_t first;
+    raft::index_t last;
+    db::rp_handle claim;
+};
+
 struct replayed_data_per_group {
-    replay_position_list replay_positions;
+    // The claim on the batch the commitlog replay rewrote this group's
+    // uncommitted entries as, if it rewrote any. Its range says which of
+    // `entries` are the rewritten (uncommitted) ones.
+    std::optional<batch_claim> rewritten;
     raft::log_entries entries;
     // The cover map write_batches() built while the commitlog replay
     // rewrote the group's batches into the new commitlog; moved wholesale
@@ -104,28 +129,19 @@ private:
     const db::cf_id_type _raft_groups_table_id;
     // Common commit log.
     db::commitlog& _commit_log;
-    // Replay position handles for command entries (raft::command), in index
-    // order. Moved out by acquire_replay_position_handles_for() when
-    // state_machine::apply() hands the entry to its target memtable, which
-    // then holds the claim until the data is flushed. Until then this deque
-    // is the pin that lets covering happen at commit time: a covering value
-    // may become durable before the entry is applied, and the segment must
-    // survive for replay to re-apply it.
-    replay_position_list _command_positions;
-    // Replay position handles for dummy entries (raft::log_entry::dummy), in
-    // index order. Never handed to apply(); released once their segment is
-    // covered (release_covered_dummies()) — a dummy carries no state, so a
-    // durable commit index at or above it is all a restart needs.
-    replay_position_list _dummy_positions;
-    // Replay position handles for configuration entries (raft::configuration).
-    // Never consumed by apply(). Unlike commands and dummies these carry state
-    // no covering value can reconstruct, so the entry has to stay readable
-    // until the configuration itself is persisted — which the covering
-    // mutation does (take_committed_config()), so release_covered_configs()
-    // then releases them exactly like dummy handles. truncate_log() releases
-    // the discarded ones and truncate_log_tail() whatever a snapshot covered.
-    // See SCYLLADB-3842.
-    replay_position_list _config_positions;
+    // One claim per appended batch, in index order (see batch_claim). Held
+    // until every command in the batch has been handed to a memtable by
+    // acquire_replay_position_handles_for(); a batch with no commands at all
+    // never needs one. truncate_log() drops the batches a leader change
+    // discarded and clamps a straddling one; truncate_log_tail() drops what a
+    // snapshot covered.
+    std::deque<batch_claim> _batch_claims;
+    // Indexes of the command entries appended but not yet handed to apply(),
+    // in order. Drained by acquire_replay_position_handles_for(), which mints
+    // each command's memtable claim from its batch's claim; a batch with no
+    // pending command left is dropped. Eight bytes per in-flight command
+    // rather than a handle each, and nothing at all for the other kinds.
+    std::deque<raft::index_t> _pending_commands;
     // The group's parked claims (see pending_cover_map). Updated in place
     // by write_batches() and seeded by the constructor (the map built while
     // the commitlog replay rewrote the group's batches); consumed by
@@ -187,44 +203,43 @@ public:
 
     ~raft_commitlog();
 
-    // Write the given entries to the commit log as one batch, followed by a
-    // small commit_idx record carrying `committed` — the index and term of
-    // the last entry the group had committed — and make sure every segment
-    // the entries landed in holds a raft_groups-accounted claim.
+    // Write the given entries to the commit log as ONE commitlog entry: the
+    // group id once, the entries, and `committed` — the index and term of the
+    // last entry the group had committed — as the batch header.
     //
-    // That record is the crash-replay floor: startup restores the highest
+    // That pair is the crash-replay floor: startup restores the highest
     // surviving value per group into system.raft_groups, so replay applies
     // the entries below it to memtables instead of re-adding them to the raft
-    // log. It carries the term with the index so the restore needs no lookup
-    // — the pair goes straight into system.raft_groups, and the boot-time
-    // snapshot bump needs it exact (see make_raft_schema's commit_idx_term
-    // comment). Nothing keeps the record's own handle: it is written in the
-    // batch's cf like the entries and dropped right after, because segment
-    // retention is the claims' job, and losing a record to a reclaimed
-    // segment only lowers the recovered floor. A zero index means this
-    // instance has not observed a commit index yet, and no record is written.
+    // log. The term travels with the index because the entry at that index is
+    // normally in an earlier batch, whose segment may already be gone, so the
+    // restore cannot look it up — and the boot-time snapshot bump needs it
+    // exact (see make_raft_schema's commit_idx_term comment). A zero index
+    // means this instance has not observed a commit index yet.
     //
     // `covers` is the caller's cover map, updated in place: a segment new to
     // the map gets a claim of its own (commitlog::acquire_cf_count) — one per
     // segment per group, not one per batch — while a segment already there
-    // keeps its claim and only its (max index, term) pair advances. Returns
-    // one rp_handle per input entry, in input order, accounted to the target
-    // table.
+    // keeps its claim and only its (max index, term) pair advances.
+    //
+    // Returns the batch's own claim, accounted to the target table and
+    // carrying the batch's position. The caller keeps it until every command
+    // in the batch has been applied (see batch_claim).
     //
     // Static so the commitlog replay's rewrite path can write the same
     // format, building the map that seeds the group's _pending_covers.
-    static future<utils::chunked_vector<db::rp_handle>> write_batches(db::commitlog& cl, db::cf_id_type table_id,
+    static future<db::rp_handle> write_batches(db::commitlog& cl, db::cf_id_type table_id,
             db::cf_id_type raft_groups_table_id, raft::group_id group_id,
             const raft::log_entry_ptr_list& entries, raft_term_and_index committed, pending_cover_map& covers);
 
     // Persist the given log entries in the commit log via write_batches()
-    // (which maintains _pending_covers), tracking the entries' handles. The
-    // trailing commit_idx record carries the pair note_commit_idx() last saw.
+    // (which maintains _pending_covers), keeping the batch's claim and the
+    // indexes of its command entries. The batch header carries the pair
+    // note_commit_idx() last saw.
     future<> store_log_entries(const raft::log_entry_ptr_list& entries);
 
     // Record that the group has committed up to `idx`. Keeps the (index,
-    // term) pair of the last committed entry, which the next batch's
-    // trailing commit_idx record persists as the crash-replay floor. The
+    // term) pair of the last committed entry, which the next batch's header
+    // persists as the crash-replay floor. The
     // term is taken from the entry itself: raft calls this before the entry
     // is applied, so it is still tracked here.
     void note_commit_idx(raft::index_t idx);
@@ -246,9 +261,9 @@ public:
     // coalescing happens here). Commitment — not application — is the gate:
     // the covering value only claims that entries at or below it are
     // committed, and a committed entry stays recoverable whether or not it
-    // has been applied, because its handle stays in _command_positions until
-    // apply() acquires it and in the target table's memtable until the data
-    // is durable. Contract for the caller (raft_groups_storage): for each
+    // has been applied, because its batch's claim is held until apply()
+    // mints from it and the target table's memtable then holds that claim
+    // until the data is durable. Contract for the caller (raft_groups_storage): for each
     // cover, apply a system.raft_groups mutation carrying a commit index >=
     // max_idx to the raft_groups memtable together with the pin. The
     // mutation and its pin share a memtable generation, so the pin can only
@@ -264,30 +279,17 @@ public:
     // committed in that range, or when it has already been handed out.
     std::optional<std::pair<raft::index_t, raft::configuration>> take_committed_config(raft::index_t idx);
 
-    // Release configuration handles with index <= idx. Only valid once the
-    // configuration they carry has been persisted per the
-    // take_committed_config() contract — from that point the entry no longer
-    // has to be readable, so the handles that kept it in the commitlog can
-    // go, exactly like dummy handles.
-    void release_covered_configs(raft::index_t idx);
-
-    // Release dummy handles with index <= idx. Only valid once every segment
-    // containing them is covered per the take_committed_covers() contract —
-    // from that point their retention no longer depends on these handles:
-    // the covering value pins the segment via the raft_groups memtable until
-    // the value is durable. (Command handles are consumed by apply();
-    // configuration handles have their own release, see
-    // release_covered_configs().)
-    void release_covered_dummies(raft::index_t idx);
-
-    // Move replay position handles out of _command_positions for the
-    // specified entries. The handles are handed to memtables in the raft
-    // state machine apply(), and removed since the memtable takes over that
-    // claim. This opens no window where the target memtable is the segment's
-    // sole owner: the segment's claim, parked at write time and attached to
-    // the covering raft_groups mutation at commit, exists continuously until
-    // the covering value is durable. Triggers on_internal_error if a
-    // requested entry is missing.
+    // Mint a memtable claim for each of the specified command entries from
+    // the claim of the batch it was written in, and forget the command. Each
+    // returned handle carries the batch's position, which is the position the
+    // mutation was actually written at, so the memtable's recorded replay
+    // position stays truthful. A batch with no pending command left is
+    // dropped, since the memtables now hold claims of their own.
+    //
+    // This opens no window where the target memtable is the segment's sole
+    // owner: the batch's claim exists continuously from the write until the
+    // last of its commands is handed over here. Triggers on_internal_error if
+    // a requested entry has no pending command or no batch to mint from.
     std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
 };
 } // namespace service::strong_consistency

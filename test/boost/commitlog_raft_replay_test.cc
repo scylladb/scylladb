@@ -326,7 +326,7 @@ SEASTAR_TEST_CASE(test_raft_replay_buffer_add_take) {
     // (processing moves entries from _replayed_commitlog_entries_by_group to _per_group_data)
     auto data = buffer.take_replayed_group_entries(gid1);
     BOOST_CHECK(data.entries.empty());
-    BOOST_CHECK(data.replay_positions.empty());
+    BOOST_CHECK(!data.rewritten.has_value());
 
     return make_ready_future<>();
 }
@@ -356,7 +356,7 @@ SEASTAR_TEST_CASE(test_raft_replay_buffer_process_discards_unknown_groups) {
                 // take should return empty since the group was discarded.
                 auto data = buffer.take_replayed_group_entries(gid);
                 BOOST_CHECK(data.entries.empty());
-                BOOST_CHECK(data.replay_positions.empty());
+                BOOST_CHECK(!data.rewritten.has_value());
             },
             std::move(db_cfg_ptr));
 }
@@ -582,7 +582,7 @@ SEASTAR_TEST_CASE(test_raft_replay_buffer_basic_operations) {
     // (entries are in _replayed_commitlog_entries_by_group, not _per_group_data)
     auto data1 = buffer.take_replayed_group_entries(gid1);
     BOOST_CHECK(data1.entries.empty());
-    BOOST_CHECK(data1.replay_positions.empty());
+    BOOST_CHECK(!data1.rewritten.has_value());
 
     // Non-existent group returns empty
     auto data_nonexistent = buffer.take_replayed_group_entries(make_group_id());
@@ -1803,10 +1803,10 @@ SEASTAR_TEST_CASE(test_raft_commitlog_load_log_one_shot) {
         replayed_data.entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(1)));
         replayed_data.entries.push_back(make_dummy_entry(raft::term_t(1), raft::index_t(2)));
         replayed_data.entries.push_back(make_config_entry(raft::term_t(2), raft::index_t(3)));
-        // replay_positions must be 1:1 with entries (raft_commitlog ctor invariant).
-        replayed_data.replay_positions.push_back({.index = raft::index_t(1), .replay_position_handle = {}});
-        replayed_data.replay_positions.push_back({.index = raft::index_t(2), .replay_position_handle = {}});
-        replayed_data.replay_positions.push_back({.index = raft::index_t(3), .replay_position_handle = {}});
+        // The rewritten range says which of the entries were uncommitted; here
+        // all three were, as the replay rewrite would have left them.
+        replayed_data.rewritten = service::strong_consistency::batch_claim{
+                .first = raft::index_t(1), .last = raft::index_t(3), .claim = {}};
 
         service::strong_consistency::raft_commitlog persistence(gid, log, tid, make_table_id(), std::move(replayed_data));
 
@@ -2046,17 +2046,18 @@ SEASTAR_TEST_CASE(test_raft_commitlog_take_committed_covers_and_release) {
         BOOST_REQUIRE(bool(covers2[0].segment_holder));
         BOOST_REQUIRE_EQUAL(covers2[0].segment_holder.rp().id, covers[0].segment);
 
-        // release_covered_dummies() drops dummy@3 and dummy@5, but leaves
-        // command@4 for apply() — it must still be acquirable — and keeps
-        // config@2 for truncation.
-        persistence.release_covered_dummies(raft::index_t(6));
+        // Dummies and configurations took no claim of their own, so covering
+        // the batch released nothing for them; command@4 must still be
+        // acquirable, minted from its batch's claim.
         auto cmd4 = persistence.acquire_replay_position_handles_for({entries[3]});
         BOOST_REQUIRE_EQUAL(cmd4.size(), 1);
         BOOST_REQUIRE_EQUAL(cmd4[0].index, raft::index_t(4));
+        BOOST_REQUIRE(bool(cmd4[0].replay_position_handle));
+        BOOST_REQUIRE_EQUAL(cmd4[0].replay_position_handle.rp().id, batch_segment);
 
-        // truncate_log_tail() is the only path that releases configuration
-        // handles. It must accept the retained config@2 without error, and the
-        // destructor below must then find nothing left to release for it.
+        // truncate_log_tail() drops whatever a snapshot covered. It must
+        // accept the whole range without error, and the destructor below must
+        // then find nothing left to release.
         persistence.truncate_log_tail(raft::index_t(6));
     });
 }
@@ -2210,7 +2211,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_write_batches_covers_one_per_segment) {
         // A small batch first: takes one claim for the segment it lands in.
         raft::log_entry_ptr_list small;
         small.push_back(make_command_entry(raft::term_t(1), raft::index_t(1)));
-        auto small_handles = co_await service::strong_consistency::raft_commitlog::write_batches(
+        auto small_handle = co_await service::strong_consistency::raft_commitlog::write_batches(
                 log, tid, rg_tid, gid, small, raft_term_and_index{}, covers);
         BOOST_REQUIRE_EQUAL(covers.size(), 1);
         const auto small_seg = covers.begin()->first;
@@ -2221,7 +2222,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_write_batches_covers_one_per_segment) {
         // rather than adding one.
         raft::log_entry_ptr_list same_segment;
         same_segment.push_back(make_command_entry(raft::term_t(1), raft::index_t(2)));
-        auto same_handles = co_await service::strong_consistency::raft_commitlog::write_batches(
+        auto same_handle = co_await service::strong_consistency::raft_commitlog::write_batches(
                 log, tid, rg_tid, gid, same_segment, raft_term_and_index{}, covers);
         BOOST_REQUIRE_EQUAL(covers.size(), 1);
         BOOST_REQUIRE_EQUAL(covers.begin()->first, small_seg);
@@ -2229,20 +2230,17 @@ SEASTAR_TEST_CASE(test_raft_commitlog_write_batches_covers_one_per_segment) {
 
         // Now fill past the segment size in several batches, so later ones land
         // in new segments and each contributes its own cover.
-        utils::chunked_vector<db::rp_handle> entry_handles;
+        utils::chunked_vector<db::rp_handle> batch_handles;
         uint64_t next = 3;
         for (int batch = 0; batch < 6; ++batch) {
             raft::log_entry_ptr_list entries;
             for (int i = 0; i < 4; ++i, ++next) {
                 entries.push_back(make_command_entry_sized(raft::term_t(1), raft::index_t(next), 64 * 1024));
             }
-            auto handles = co_await service::strong_consistency::raft_commitlog::write_batches(
+            auto handle = co_await service::strong_consistency::raft_commitlog::write_batches(
                     log, tid, rg_tid, gid, entries, raft_term_and_index{}, covers);
-            BOOST_REQUIRE_EQUAL(handles.size(), entries.size());
-            for (auto& h : handles) {
-                BOOST_REQUIRE(bool(h));
-                entry_handles.emplace_back(std::move(h));
-            }
+            BOOST_REQUIRE(bool(handle));
+            batch_handles.emplace_back(std::move(handle));
         }
         BOOST_REQUIRE_GT(covers.size(), 1);
 
@@ -2260,19 +2258,15 @@ SEASTAR_TEST_CASE(test_raft_commitlog_write_batches_covers_one_per_segment) {
         }
         BOOST_REQUIRE_EQUAL(std::prev(covers.end())->second.max_idx, raft::index_t(next - 1));
 
-        // Every entry's segment is covered by some claim.
-        for (const auto& h : entry_handles) {
+        // Every batch's segment is covered by some claim.
+        for (const auto& h : batch_handles) {
             BOOST_REQUIRE(covers.contains(h.rp().id));
         }
 
         // Release everything (this test manages the handles directly).
-        for (auto& h : small_handles) {
-            h = {};
-        }
-        for (auto& h : same_handles) {
-            h = {};
-        }
-        for (auto& h : entry_handles) {
+        small_handle = {};
+        same_handle = {};
+        for (auto& h : batch_handles) {
             h = {};
         }
         for (auto& [segment, c] : covers) {
@@ -2305,32 +2299,40 @@ SEASTAR_TEST_CASE(test_commitlog_fragmented_batch_is_one_cover) {
         for (int i = 1; i <= 40; ++i) {
             entries.push_back(make_command_entry_sized(raft::term_t(1), raft::index_t(i), 64 * 1024));
         }
-        auto entry_handles = co_await service::strong_consistency::raft_commitlog::write_batches(
+        auto batch_handle = co_await service::strong_consistency::raft_commitlog::write_batches(
                 log, tid, rg_tid, gid, entries, raft_term_and_index{}, covers);
 
-        // One batch, one position, hence exactly one cover — and one claim per
-        // entry, all at that position.
+        // One batch, one position, hence exactly one cover — and the cover's
+        // claim sits at the batch's own position.
         BOOST_REQUIRE_EQUAL(covers.size(), 1);
-        BOOST_REQUIRE_EQUAL(entry_handles.size(), entries.size());
-        const auto batch_rp = covers.begin()->second.segment_holder.rp();
-        for (const auto& h : entry_handles) {
-            BOOST_REQUIRE(bool(h));
-            BOOST_REQUIRE(h.rp() == batch_rp);
+        BOOST_REQUIRE(bool(batch_handle));
+        const auto batch_rp = batch_handle.rp();
+        BOOST_REQUIRE(covers.begin()->second.segment_holder.rp() == batch_rp);
+
+        // Claims minted from the batch for apply() all carry that position, so
+        // the target memtable records the position the mutations were really
+        // written at.
+        std::vector<db::rp_handle> minted;
+        for (size_t i = 0; i < entries.size(); ++i) {
+            minted.push_back(log.acquire_cf_count(batch_handle, tid));
+            BOOST_REQUIRE(minted.back().rp() == batch_rp);
         }
+
         // Sealed segments carrying the batch's bytes are retained.
         const auto sealed_dirty = log.get_num_dirty_segments();
         BOOST_REQUIRE_GT(sealed_dirty, 0u);
         BOOST_REQUIRE_EQUAL(log.get_num_segments_destroyed(), 0u);
 
-        // apply() hands each command's claim to the target memtable, whose
-        // flush releases it. Dropping them one at a time here stands in for
-        // that: no single release may let a segment go while the cover still
-        // holds the position.
-        for (auto& h : entry_handles) {
+        // Releasing the minted claims one at a time — as the target memtable's
+        // flush would — must not let a segment go while the batch's own claim
+        // and the cover still hold the position.
+        for (auto& h : minted) {
             h = {};
             BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), sealed_dirty);
             BOOST_REQUIRE_EQUAL(log.get_num_segments_destroyed(), 0u);
         }
+        batch_handle = {};
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), sealed_dirty);
 
         // The cover's claim is the last one at that position: releasing it is
         // what finally lets the head segment — and with it the tails — go.

@@ -617,14 +617,16 @@ SEASTAR_TEST_CASE(test_groups_uncommitted_config_persisted_after_restart) {
                 .term = raft::term_t(3), .idx = raft::index_t(1001), .data = std::move(cmd)}));
 
         replayed_data_per_group replayed;
-        auto handles = co_await raft_commitlog::write_batches(cl, dummy_table,
+        auto batch_handle = co_await raft_commitlog::write_batches(cl, dummy_table,
                 db::system_keyspace::raft_groups()->id(), gid, uncommitted,
                 raft_term_and_index{}, replayed.covers);
-        BOOST_REQUIRE_EQUAL(handles.size(), uncommitted.size());
-        for (size_t i = 0; i < uncommitted.size(); ++i) {
-            replayed.replay_positions.push_back(index_and_replay_position{
-                    .index = uncommitted[i]->idx, .replay_position_handle = std::move(handles[i])});
-            replayed.entries.push_back(uncommitted[i]);
+        BOOST_REQUIRE(bool(batch_handle));
+        replayed.rewritten = batch_claim{
+                .first = uncommitted.front()->idx,
+                .last = uncommitted.back()->idx,
+                .claim = std::move(batch_handle)};
+        for (const auto& e : uncommitted) {
+            replayed.entries.push_back(e);
         }
 
         raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
