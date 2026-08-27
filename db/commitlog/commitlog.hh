@@ -245,6 +245,27 @@ public:
             const cf_id_type& id, utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers);
 
     /**
+     * Take an additional claim at `src`'s position, accounted to the given
+     * column family, without writing anything. The new handle holds the
+     * segment — prevents it from being discarded or recycled — exactly like
+     * one returned from an add_*() call, and is released the same two ways: by
+     * handing it to a memtable (released when discard_completed_segments()
+     * runs for that memtable's flush) or by destroying it.
+     *
+     * This is possible because segment retention accounting is a pure per-cf
+     * count (segment::_cf_dirty, matched by mark_clean() at flush) rather than
+     * a set of positions: the holding cf need not be one the segment was
+     * written for, and several claims at one position may coexist. A
+     * fragmented entry's tail segments are held until the whole head segment
+     * goes clean, so sharing a position does not affect them either.
+     *
+     * `src` must be a live handle; it is the proof that the segment is still
+     * there, so there is no lookup and no failure mode. One claim per call:
+     * the new handle is independent of `src` and of every other claim.
+     */
+    rp_handle acquire_cf_count(const rp_handle& src, const cf_id_type& id);
+
+    /**
      * Modifies the per-CF dirty cursors of any commit log segments for the column family according to the position
      * given. Discards any commit log segments that are no longer used.
      *

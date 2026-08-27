@@ -92,6 +92,9 @@ class db::cf_holder {
 public:
     virtual ~cf_holder() {};
     virtual void release_cf_count(const cf_id_type&, const replay_position&) = 0;
+    // Take an additional claim at an already-claimed position, for the given
+    // column family. Symmetric with release_cf_count: the two must balance.
+    virtual rp_handle acquire_cf_count(const cf_id_type&, const replay_position&) = 0;
 };
 
 const db::replay_position db::replay_position::max = db::replay_position(std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max());
@@ -908,6 +911,20 @@ public:
     void release_cf_count(const cf_id_type& cf, const replay_position& rp) override {
         _extended_segments.erase(rp);
         release_cf_count(cf);
+    }
+
+    rp_handle acquire_cf_count(const cf_id_type& cf, const replay_position& rp) override {
+        SCYLLA_ASSERT(contains(rp));
+        _cf_dirty[cf]++; // increase use count for cf.
+        _cf_min_time.emplace(cf, gc_clock::now()); // if value already exists this does nothing.
+        // Claims are a pure count, so several may share one position. The only
+        // position-keyed state in the release path is _extended_segments, and
+        // a fragmented entry's tails are filed there under a default-
+        // constructed position rather than the head entry's (see the store
+        // site in oversized_allocation), so releasing one of several claims at
+        // a real position cannot disturb them: the tails go when the whole
+        // head segment goes clean.
+        return rp_handle(static_pointer_cast<cf_holder>(shared_from_this()), cf, rp);
     }
 
     bool must_sync() {
@@ -3276,6 +3293,12 @@ future<utils::chunked_vector<db::rp_handle>> db::commitlog::add_raft_entries(
         }
     };
     return _segment_manager->allocate_when_possible(cl_raft_entries_writer(std::move(entry_writers), id), db::no_timeout);
+}
+
+db::rp_handle db::commitlog::acquire_cf_count(const rp_handle& src, const cf_id_type& id) {
+    // The source handle names the segment and the position, so there is no
+    // lookup and no way to ask for a segment that is already gone.
+    return src._h->acquire_cf_count(id, src._rp);
 }
 
 db::commitlog::commitlog(config cfg)
