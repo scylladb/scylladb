@@ -1016,3 +1016,66 @@ SEASTAR_TEST_CASE(sstable_directory_test_reshard_vnodes) {
 }
 
 BOOST_AUTO_TEST_SUITE_END()
+
+// ---------------------------------------------------------------------------------------------
+// Regression test for scylladb/scylladb#31589 (series tracking: #31556).
+//
+// The restore-manifest defect. Reached via test/boost/combined_tests, which is
+// what this file compiles into -- there is no standalone sstable_directory_test binary, which is
+// why an earlier attempt to build one "failed" and the test was parked in sstable_datafile_test.
+// ---------------------------------------------------------------------------------------------
+// A malformed name in a restore manifest must be REJECTED, not abort the node.
+//
+// A blank trailing line in a --sstables-file-list parsed as an sstable named "", reached
+// throw_malformed_sstable_exception, and because that honours abort_on_malformed_sstable_error
+// (default true) it took the node down -- the operator saw "Connection reset by peer" from the very
+// node they were restoring with. Aborting is right for corrupt bytes found on disk and wrong for
+// operator input on a recovery path.
+//
+// This asserts on the EXCEPTION, because an abort cannot be caught and asserted on at all, which is
+// exactly why the behaviour went untested.
+SEASTAR_THREAD_TEST_CASE(test_restore_rejects_malformed_toc_names) {
+    BOOST_REQUIRE_NO_THROW(sstables::validate_restore_toc_names(
+            {"me-3h39_0jv6_26nsg2gplzfjtup6vf-big-TOC.txt"}));
+    BOOST_REQUIRE_NO_THROW(sstables::validate_restore_toc_names({}));
+
+    // The exact trigger, and the same list with a good entry beside it.
+    BOOST_REQUIRE_THROW(sstables::validate_restore_toc_names({""}), std::invalid_argument);
+    BOOST_REQUIRE_THROW(sstables::validate_restore_toc_names(
+            {"me-3h39_0jv6_26nsg2gplzfjtup6vf-big-TOC.txt", ""}), std::invalid_argument);
+
+    // Shapes of nonsense that were never tried when the fix landed.
+    BOOST_REQUIRE_THROW(sstables::validate_restore_toc_names({"not-an-sstable"}),
+                        std::invalid_argument);
+    BOOST_REQUIRE_THROW(sstables::validate_restore_toc_names({"zz-1-big-TOC.txt"}),
+                        std::invalid_argument);
+
+    // Well-formed sstable names that are NOT TOC objects. parse_path accepts both -- a known
+    // non-TOC component, and an unrecognised one, which it maps to component_type::Unknown rather
+    // than rejecting -- so the validator has to check the component itself.
+    BOOST_REQUIRE_THROW(sstables::validate_restore_toc_names(
+            {"me-3h39_0jv6_26nsg2gplzfjtup6vf-big-Data.db"}), std::invalid_argument);
+    BOOST_REQUIRE_THROW(sstables::validate_restore_toc_names(
+            {"me-3h39_0jv6_26nsg2gplzfjtup6vf-big-ReallyBigData.db"}), std::invalid_argument);
+
+    // The message must name the offender, or an operator cannot fix their manifest.
+    auto message_for = [] (std::vector<sstring> names) -> sstring {
+        try {
+            sstables::validate_restore_toc_names(std::move(names));
+        } catch (const std::invalid_argument& e) {
+            return e.what();
+        }
+        BOOST_FAIL("expected std::invalid_argument");
+        return {};
+    };
+    // The empty name: the offender is quoted, so an operator sees the '' and knows to look for a
+    // blank line.
+    BOOST_REQUIRE(message_for({"", "me-3h39_0jv6_26nsg2gplzfjtup6vf-big-TOC.txt"})
+                          .starts_with("restore: '' is not a valid sstable TOC object name"));
+    // A visible offender must appear verbatim, quoted.
+    BOOST_REQUIRE(message_for({"me-3h39_0jv6_26nsg2gplzfjtup6vf-big-TOC.txt", "zz-1-big-TOC.txt"})
+                          .find("'zz-1-big-TOC.txt'") != sstring::npos);
+    // And so must a well-formed name rejected for not being a TOC.
+    BOOST_REQUIRE(message_for({"me-3h39_0jv6_26nsg2gplzfjtup6vf-big-Data.db"})
+                          .find("'me-3h39_0jv6_26nsg2gplzfjtup6vf-big-Data.db'") != sstring::npos);
+}

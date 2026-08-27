@@ -67,6 +67,19 @@ public:
     }
 };
 
+// Reject TOC object names that came from a restore REQUEST, before any restoring starts.
+//
+// Split out of restore_components_lister::process() so it can be tested without standing up a
+// replica::table: the bug it guards -- a malformed name reaching
+// throw_malformed_sstable_exception, which honours abort_on_malformed_sstable_error and so ABORTS
+// THE NODE -- had no test at all, and an abort is not something a caller can catch and assert on.
+//
+// Every name must parse as an sstable component name AND be a TOC: a Data.db, or an unrecognised
+// component, is a well-formed sstable name that is not a TOC object, and is rejected too.
+//
+// Throws std::invalid_argument, which reaches the API caller as an error.
+void validate_restore_toc_names(const std::vector<sstring>& toc_filenames);
+
 // Handles a directory containing SSTables. It could be an auxiliary directory (like upload),
 // or the main directory.
 class sstable_directory {
