@@ -46,20 +46,21 @@ raft_commitlog::~raft_commitlog() {
 seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_list& entries) {
     logger.debug("store_log_entries: group_id={}, num_entries={}", _group_id, entries.size());
 
+    // The whole batch is one commitlog entry, so the write returns one
+    // handle; each entry then takes a claim of its own at that position, so
+    // per-entry lifetimes are tracked as before.
     utils::chunked_vector<commitlog_raft_log_entry_writer> writers;
-    writers.reserve(entries.size());
-
-    for (const auto& log_entry_ptr : entries) {
-        logger.debug("  storing log entry: idx={}, term={}", log_entry_ptr->idx, log_entry_ptr->term);
-        writers.emplace_back(raft_commitlog_entry{.group_id = _group_id, .entry = log_entry_ptr});
-    }
+    writers.emplace_back(raft_commitlog_entry{
+            .group_id = _group_id, .entries = {entries.begin(), entries.end()}});
 
     auto replay_handles = co_await _commit_log.add_raft_entries(_table_id, std::move(writers));
+    SCYLLA_ASSERT(replay_handles.size() == 1);
 
-    for (size_t i = 0; i < entries.size(); ++i) {
-        const auto& log_entry_ptr = entries[i];
-        _replay_positions.push_back(
-                index_and_replay_position{.index = log_entry_ptr->idx, .replay_position_handle = std::move(replay_handles[i])});
+    for (const auto& log_entry_ptr : entries) {
+        logger.debug("  stored log entry: idx={}, term={}", log_entry_ptr->idx, log_entry_ptr->term);
+        _replay_positions.push_back(index_and_replay_position{
+                .index = log_entry_ptr->idx,
+                .replay_position_handle = _commit_log.acquire_cf_count(replay_handles[0], _table_id)});
     }
     logger.debug("store_log_entries completed: total_entries_in_map={}", _replay_positions.size());
 }

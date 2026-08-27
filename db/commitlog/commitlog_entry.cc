@@ -44,7 +44,9 @@ void commitlog_mutation_entry_writer::compute_size() {
 
 template<typename Output>
 inline void commitlog_raft_log_entry_writer::serialize(Output& out) const {
-    ser::writer_of_commitlog_entry<Output>(out).write_item_raft_commitlog_entry(_item).end_commitlog_entry();
+    ser::writer_of_commitlog_entry<Output>(out)
+            .write_item_raft_commitlog_entry(_item)
+            .end_commitlog_entry();
 }
 
 void commitlog_raft_log_entry_writer::write(ostream& out) const {
@@ -75,8 +77,8 @@ auto read_variant_commitlog_entry(const fragmented_temporary_buffer& buffer) {
     auto view = ser::deserialize(in, std::type_identity<ser::commitlog_entry_view>());
     return seastar::visit(
             view.item(),
-            [](raft_commitlog_entry raft_log_entry) {
-                return commitlog_entry{.item = std::move(raft_log_entry)};
+            [](raft_commitlog_entry raft_batch) {
+                return commitlog_entry{.item = std::move(raft_batch)};
             },
             [](const ser::mutation_entry_view& entry_view) {
                 return commitlog_entry{.item = mutation_entry(entry_view.mapping(), entry_view.mutation())};
