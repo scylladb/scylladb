@@ -7,11 +7,27 @@
 
 #include "service/memory_limiter.hh"
 
+#include "service/qos/service_level_controller.hh"
+#include "utils/log.hh"
+
 #include <seastar/core/coroutine.hh>
 
 #include <cmath>
 
 namespace service {
+
+namespace {
+
+// A service level only gets a tenant of its own when it has shares; the rest
+// fall back to the default service level's tenant, the same way reads do.
+std::optional<int32_t> shares_of(const qos::service_level_options& slo) {
+    if (auto* shares = std::get_if<int32_t>(&slo.shares)) {
+        return *shares;
+    }
+    return std::nullopt;
+}
+
+} // anonymous namespace
 
 memory_limiter::memory_limiter(size_t available_memory, double fraction,
         utils::updateable_value<double> shared_pool_fraction, bool with_metrics)
@@ -45,12 +61,78 @@ memory_limiter::memory_limiter(unlimited_tag, size_t available_memory, double fr
 
 memory_limiter::~memory_limiter() = default;
 
-future<> memory_limiter::stop() {
-    // Waiting for the request memory to come back is deliberately not attempted:
-    // a request holds its charge until its response has been written to a client
-    // that may never read it, so this would not be bounded. main.cc does not stop
-    // the CQL server's limiter for the same reason.
+future<> memory_limiter::start(sharded<qos::service_level_controller>& sl_controller) {
+    if (_unlimited) {
+        return make_ready_future<>();
+    }
+    auto& controller = sl_controller.local();
+    controller.register_subscriber(this);
+    _unsubscribe_qos_configuration_change = [this, &sl_controller] {
+        return sl_controller.local().unregister_subscriber(this);
+    };
+
+    // The default service level's tenant also serves every scheduling group that
+    // has no tenant of its own. It has to be set up here, because the default
+    // service level is created by the controller's own start() and its
+    // notification was therefore missed.
+    //
+    // The other service levels are not enumerated here: they all arrive through
+    // on_before_service_level_add(). At boot the controller seeds its cache from
+    // the system tables (update_cache() in main.cc, after the distributed data
+    // accessor is installed, which is after this point) and that notifies every
+    // shard's subscribers - before the CQL server starts accepting connections.
+    const auto& default_sl = controller.get_service_level(qos::service_level_controller::default_service_level_name);
+    const auto default_shares = shares_of(default_sl.slo);
+    if (!default_shares) {
+        on_internal_error(rml_logger, "the default service level should always have a shares value");
+    }
+    add_or_update(default_sl.sg, *default_shares);
+    set_fallback(default_sl.sg);
     return make_ready_future<>();
+}
+
+future<> memory_limiter::on_before_service_level_add(qos::service_level_options slo, qos::service_level_info sl_info) {
+    if (auto shares = shares_of(slo)) {
+        add_or_update(sl_info.sg, *shares);
+    }
+    return make_ready_future<>();
+}
+
+future<> memory_limiter::on_before_service_level_change(qos::service_level_options slo_before,
+        qos::service_level_options slo_after, qos::service_level_info sl_info) {
+    if (auto shares = shares_of(slo_after)) {
+        add_or_update(sl_info.sg, *shares);
+    }
+    return make_ready_future<>();
+}
+
+future<> memory_limiter::on_after_service_level_remove(qos::service_level_info sl_info) {
+    remove(sl_info.sg);
+    return make_ready_future<>();
+}
+
+future<> memory_limiter::on_effective_service_levels_cache_reloaded() {
+    // A tenant that finished draining after the last service level change would
+    // otherwise sit in _draining until the next one, so reap here too: this runs
+    // whenever roles or service levels change, and unlike the shared pool's
+    // repayment path it is not inside a semaphore signal.
+    reap_drained();
+    return make_ready_future<>();
+}
+
+future<> memory_limiter::unsubscribe_qos() {
+    if (_unsubscribe_qos_configuration_change) {
+        co_await std::exchange(_unsubscribe_qos_configuration_change, {})();
+    }
+}
+
+future<> memory_limiter::stop() {
+    // Only the service level subscription is torn down. Waiting for the request
+    // memory to come back is deliberately not attempted: a request holds its
+    // charge until its response has been written to a client that may never read
+    // it, so this would not be bounded. main.cc does not stop the CQL server's
+    // limiter for the same reason.
+    return unsubscribe_qos();
 }
 
 void memory_limiter::adjust() noexcept {

@@ -18,7 +18,7 @@
 
 namespace service {
 
-static logging::logger rml_logger("request_memory_limiter");
+logging::logger rml_logger("request_memory_limiter");
 
 namespace sm = seastar::metrics;
 

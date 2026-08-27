@@ -1437,6 +1437,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             checkpoint(stop_signal, "starting per-shard database core");
             db.invoke_on_all(&replica::database::start, std::ref(sl_controller), only_on_shard0(&*disk_space_monitor_shard0)).get();
 
+            // Split the request memory budget per service level. Done here, and
+            // not where the limiter is started, because it needs the service
+            // level controller. The unsubscribe hook has to be registered here
+            // too: the limiter's own shutdown hook runs earlier by LIFO, when
+            // the controller is already gone.
+            service_memory_limiter.invoke_on_all(&service::memory_limiter::start, std::ref(sl_controller)).get();
+            auto unsubscribe_mem_limiter = defer_verbose_shutdown("service_memory_limiter service levels", [&service_memory_limiter] {
+                service_memory_limiter.invoke_on_all(&service::memory_limiter::unsubscribe_qos).get();
+            });
+
             ::sigquit_handler sigquit_handler(db);
 
 // FIXME: The stall detector uses glibc backtrace function to
