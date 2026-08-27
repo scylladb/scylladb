@@ -118,9 +118,6 @@ client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, pri
         .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>(_cfg->region, _cfg->role_arn));
 
     _creds_update_timer.arm(lowres_clock::now());
-    if (!_retry_strategy) {
-        _retry_strategy = std::make_unique<aws::default_aws_retry_strategy>(aws::default_aws_retry_strategy::default_max_retries, *_request_limiter);
-    }
     register_client_metrics();
 }
 
@@ -183,6 +180,12 @@ shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, s
                                 std::unique_ptr<throttling_controller> tc, global_factory gf) {
     if (!tc) {
         tc = make_default_throttling_controller();
+    }
+    // After the controller, which the default strategy takes a reference to. The client
+    // owns both and destroys the strategy first, since _retry_strategy is declared after
+    // _request_limiter.
+    if (!rs) {
+        rs = std::make_unique<aws::default_aws_retry_strategy>(aws::default_aws_retry_strategy::default_max_retries, *tc);
     }
     return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{}, std::move(rs), std::move(tc));
 }
