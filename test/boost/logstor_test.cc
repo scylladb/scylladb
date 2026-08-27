@@ -1662,6 +1662,75 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_paused_flush_fills_ring_th
     assert_records_in_order(schema, flush_ctl.all_records(), expected);
 }
 
+// A record that finds no room in the ring is queued, and it has to keep the write target it came
+// with: the holders of that target are what keep its compaction group from being reported empty to
+// a tablet split and from finishing its stop() while the write is still to come.
+SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_write_keeps_its_write_target) {
+    auto schema = make_kv_schema();
+    constexpr size_t buffer_size = 4 * 1024;
+    const auto large_value = make_single_buffer_value(schema, buffer_size);
+
+    // Outlive the writer, so that the holders of the queued write are released before the gates
+    // they were taken from are destroyed.
+    seastar::gate non_empty_gate;
+    seastar::gate alive_gate;
+
+    test_flush_controller flush_ctl{.pause_flushes = true};
+    buffered_writer writer(make_buffered_writer_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
+        return flush_ctl(wb);
+    });
+
+    writer.start().get();
+    auto stop = defer([&writer] noexcept {
+        writer.stop().get();
+    });
+
+    std::vector<log_record> expected;
+    for (size_t i = 0; i < 3; ++i) {
+        expected.push_back(make_buffered_writer_record(schema, i, large_value, api::timestamp_type(300 + i)));
+    }
+
+    // Fill the ring: the first record is being flushed and the second holds the only other buffer.
+    auto accepted0 = writer.write_to_buffer(log_record_writer(expected[0]), test_timeout()).get();
+    auto persisted0 = std::move(accepted0.persisted);
+    flush_ctl.wait_for_flush_starts(1);
+    auto accepted1 = writer.write_to_buffer(log_record_writer(expected[1]), test_timeout()).get();
+    auto persisted1 = std::move(accepted1.persisted);
+
+    // The third record has nowhere to go, so it is queued rather than appended.
+    auto queued = writer.write_to_buffer(log_record_writer(expected[2]), test_timeout(), write_target{
+            .cg = nullptr,
+            .non_empty_holder = non_empty_gate.hold(),
+            .alive_holder = alive_gate.hold(),
+    });
+    BOOST_REQUIRE(!queued.available());
+    BOOST_REQUIRE_EQUAL(writer.queued_write_count(), 1u);
+
+    // The write is in flight, so its group is still held by both of the target's holders. Checked
+    // rather than required, so that a failure here still drains the writer below: a queued write
+    // left behind would hang the stop() of this test rather than fail it.
+    BOOST_CHECK_EQUAL(non_empty_gate.get_count(), 1u);
+    BOOST_CHECK_EQUAL(alive_gate.get_count(), 1u);
+
+    // Let the queued record through and drain everything, which releases the holders.
+    flush_ctl.release_one_flush();
+    wait_for_persisted(persisted0);
+    flush_ctl.wait_for_flush_starts(2);
+
+    auto accepted2 = queued.get();
+    auto persisted2 = std::move(accepted2.persisted);
+    BOOST_REQUIRE_EQUAL(writer.queued_write_count(), 0u);
+
+    flush_ctl.release_one_flush();
+    wait_for_persisted(persisted1);
+    flush_ctl.wait_for_flush_starts(3);
+
+    flush_ctl.release_one_flush();
+    wait_for_persisted(persisted2);
+
+    assert_records_in_order(schema, flush_ctl.all_records(), expected);
+}
+
 // Checks that queued writes are accepted and persisted in FIFO order once capacity becomes available.
 SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_writes_preserve_fifo_order) {
     auto schema = make_kv_schema();

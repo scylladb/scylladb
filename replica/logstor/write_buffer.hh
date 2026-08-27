@@ -613,7 +613,7 @@ class buffered_writer {
     bool should_rotate_head_for_flush() const noexcept;
     bool maybe_advance_head() noexcept;
 
-    std::optional<future<log_location_with_holder>> append_to_head_buffer(log_record_writer&, write_target);
+    std::optional<future<log_location_with_holder>> append_to_head_buffer(log_record_writer&, write_target&);
 
     bool try_dispatch_next_buffer();
     future<> run_dispatched_write(size_t idx);
