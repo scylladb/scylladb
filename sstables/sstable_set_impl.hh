@@ -8,54 +8,51 @@
 
 #pragma once
 
-#include <boost/icl/interval_map.hpp>
-
 #include "dht/ring_position.hh"
 #include "sstable_set.hh"
 #include "readers/clustering_combined.hh"
 #include "sstables/types_fwd.hh"
+#include "utils/interval_index.hh"
 
 namespace sstables {
 
 // specialized when sstables are partitioned in the token range space
 // e.g. leveled compaction strategy
 class partitioned_sstable_set : public sstable_set_impl {
-    // The interval map is keyed by biased tokens, i.e. tokens mapped into the
+    // The intervals are keyed by biased tokens, i.e. tokens mapped into the
     // uint64_t domain (see dht::token::unbias()), rather than by ring
     // positions. That keeps the keys plain integers: comparisons don't need
-    // the schema, and no partition key is copied into the map. The loss of
+    // the schema, and no partition key is copied into the index. The loss of
     // precision (a partition key is ignored when a token is shared by
     // sstable bounds) only makes selection return a superset, which callers
     // must tolerate anyway.
     using biased_token = uint64_t;
-    using value_set = std::unordered_set<shared_sstable>;
-    using interval_map_type = boost::icl::interval_map<biased_token, value_set>;
-    using interval_type = interval_map_type::interval_type;
-    using map_iterator = interval_map_type::const_iterator;
+    using interval_index_type = utils::interval_index<biased_token, shared_sstable>;
+    struct token_interval {
+        biased_token start;
+        biased_token end;
+    };
 private:
     schema_ptr _schema;
     std::vector<shared_sstable> _unleveled_sstables;
-    interval_map_type _leveled_sstables;
+    interval_index_type _leveled_sstables;
     lw_shared_ptr<sstable_list> _all;
     std::unordered_map<run_id, shared_sstable_run> _all_runs;
-    // Change counter on interval map for leveled sstables which is used by
-    // incremental selector to determine whether or not to invalidate iterators.
+    // Change counter on the interval index for leveled sstables, which is used
+    // by the incremental selector to determine whether or not to reposition its
+    // cursor.
     uint64_t _leveled_sstables_change_cnt = 0;
     // Token range spanned by the compaction group owning this sstable set.
     dht::token_range _token_range;
 private:
-    static interval_type make_interval(const dht::partition_range& range);
-    static interval_type make_interval(const sstable& sst);
-    static interval_type singular(const dht::token& t);
-    std::pair<map_iterator, map_iterator> query(const dht::partition_range& range) const;
+    static token_interval make_interval(const dht::partition_range& range);
+    static token_interval make_interval(const sstable& sst);
     // SSTables are stored separately to avoid interval map's fragmentation issue when level 0 falls behind.
     bool store_as_unleveled(const shared_sstable& sst) const;
-    // The position at which the interval starts, i.e. before all keys of its first token.
-    static dht::ring_position to_start_position(const interval_type& i);
-    // The position at which the interval ends, i.e. after all keys of its last token.
-    static dht::ring_position to_end_position(const interval_type& i);
-    static dht::partition_range to_partition_range(const interval_type& i);
-    static dht::partition_range to_partition_range(const dht::ring_position_view& pos, const interval_type& i);
+    // The range over which a selection made at `pos` holds, given the position
+    // at which the set of sstables covering the position next changes, if any.
+    static dht::partition_range to_partition_range(const dht::ring_position_view& pos, std::optional<biased_token> change);
+    static dht::ring_position_ext to_next_position(std::optional<biased_token> change);
 public:
 
     partitioned_sstable_set(const partitioned_sstable_set&) = delete;
@@ -64,7 +61,7 @@ public:
     explicit partitioned_sstable_set(
         schema_ptr schema,
         const std::vector<shared_sstable>& unleveled_sstables,
-        const interval_map_type& leveled_sstables,
+        const interval_index_type& leveled_sstables,
         const lw_shared_ptr<sstable_list>& all,
         const std::unordered_map<run_id, shared_sstable_run>& all_runs,
         dht::token_range token_range,
