@@ -1592,7 +1592,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Maximum number of concurrent requests a single shard can handle before it starts shedding extra load. By default, no requests will be shed.")
     , uninitialized_connections_semaphore_cpu_concurrency(this, "uninitialized_connections_semaphore_cpu_concurrency", liveness::LiveUpdate, value_status::Used, 8,
         "Maximum number of new concurrent connections from drivers that a single shard can be processing before it starts throttling incoming connections. This limit applies only to new connections excluding the ones blocked on network IO; connections that are ready to serve requests are not affected. By default the limit is 8.")
-    , cql_request_memory_fraction(this, "cql_request_memory_fraction", liveness::MustRestart, value_status::Used, 0.1,
+    , cql_request_memory_fraction(this, "cql_request_memory_fraction", liveness::MustRestart, value_status::Used, 0.06,
         "Fraction of shard memory reserved for admitting CQL requests. It also caps the size of a single request. Clamped to the [0.01, 1] range.")
     , cql_request_memory_shared_pool_fraction(this, "cql_request_memory_shared_pool_fraction", liveness::LiveUpdate, value_status::Used, 0.5,
         "Fraction of the CQL request memory budget held in a pool shared by all service levels, the rest being divided between them in proportion to their shares. Clamped to the [0, 1] range. A setting of 0 gives every service level a strictly private budget.")
