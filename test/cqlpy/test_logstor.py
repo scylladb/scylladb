@@ -156,6 +156,14 @@ def test_logstor_clustering_columns_disabled(cql, test_keyspace):
                             " WITH storage_engine = 'logstor'") as table:
             pass
 
+# Test that logstor tables can't be created with counter columns, since
+# counters are not supported currently with logstor.
+def test_logstor_counter_columns_disabled(cql, test_keyspace):
+    with pytest.raises(ConfigurationException, match="The 'logstor' storage engine cannot be used with counter columns"):
+        with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, c counter",
+                            " WITH storage_engine = 'logstor'") as table:
+            pass
+
 # Test frozen map column with logstor storage engine.
 def test_logstor_frozen_map(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v frozen<map<text, text>>",

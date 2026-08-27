@@ -2371,8 +2371,12 @@ future<> database::do_apply_many(const utils::chunked_vector<frozen_mutation>& m
         auto s = local_schema_registry().get(muts[i].schema_version());
         auto&& cf = find_column_family(muts[i].column_family_id());
 
-        if (cf.uses_logstor()) {
-            continue;
+        // Atomicity here comes from writing all the mutations to the commitlog as one batch, which
+        // a logstor table cannot take part in, having no commitlog. Skipping it instead would also
+        // desynchronize the handles below from the mutations they belong to.
+        if (cf.uses_logstor()) [[unlikely]] {
+            on_internal_error(dblog, format("Cannot apply atomically to a table using logstor: {}.{}",
+                              cf.schema()->ks_name(), cf.schema()->cf_name()));
         }
 
         if (!cl) {
