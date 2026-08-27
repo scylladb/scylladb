@@ -480,8 +480,12 @@ future<> inspect(shared_ptr<cql3::cql_statement> statement, const service::query
     }
     if (audit_info->batch()) {
         // Only the two CQL batch paths mark an audit_info as a batch, and both
-        // build a batch_statement, so the cast cannot pick the wrong type.
-        const auto* batch = static_cast<const cql3::statements::batch_statement*>(statement.get());
+        // build a batch_statement. Nothing enforces that, so check rather than
+        // trust it; this runs once per audited batch, so the cost is irrelevant.
+        const auto* batch = dynamic_cast<const cql3::statements::batch_statement*>(statement.get());
+        if (!batch) {
+            on_internal_error(logger, "audit_info marked as a batch on a statement which is not a batch_statement");
+        }
         return do_for_each(batch->get_statements(), [&query_state, &options, error] (auto&& m) {
             return inspect(m.statement, query_state, options, error);
         });
