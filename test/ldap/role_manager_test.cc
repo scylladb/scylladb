@@ -587,7 +587,7 @@ SEASTAR_TEST_CASE(ldap_delegates_config) {
     });
 }
 
-SEASTAR_TEST_CASE(ldap_delegates_attributes, *boost::unit_test::expected_failures(3)) {
+SEASTAR_TEST_CASE(ldap_delegates_attributes) {
     return do_with_cql_env_thread([](cql_test_env& env) {
         auto fetch_all_attributes = [&env] {
             auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(
