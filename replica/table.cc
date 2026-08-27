@@ -5174,7 +5174,41 @@ table::query(schema_ptr query_schema,
     //     what makes *this* function the safe place to conclude it.
     //
     // The copy is per query and shallow enough not to matter next to the read it is about to do.
-    const query::read_command& cmd_ref = cmd;
+    // RE-ENABLED. The bug below was real; what fixed it was not a format change but noticing that
+    // the information was already in the file -- pq_reader::projection_is_safe() now declines to
+    // project any row group whose rows do not all carry a live row marker, which is the channel a
+    // projection keeps. See that function for why a per-row liveness bit would not have worked.
+    //
+    // The original defect, kept because it is the reason the gate exists:
+    //
+    // Enabling it here made `SELECT ck, a ... BYPASS CACHE` return 5 rows where the row format
+    // returns 6, caught by test_parquet_bypass_cache_projection_matches_row_format. The missing row
+    // is one written by `UPDATE ... SET b = ...`: it has no row marker, so in CQL it exists exactly
+    // because `b` is live. The row format sends every cell, so the query layer sees b live, decides
+    // the row exists, and returns it with a = null. Project b away and pq sends no cells at all, so
+    // the layer concludes there is no row.
+    //
+    // So a projecting reader has to convey "this row has a live cell somewhere" -- something the row
+    // format conveys implicitly by sending everything, and which pq's shared channels do not
+    // currently say (`__ts` covers live *and* dead cells, and CQL row existence needs live).
+    // Skipping the read is easy; preserving that one bit of information is the actual problem.
+    //
+    // Why this is derived here rather than sent: enum_set::from_mask() throws on an unknown bit, so
+    // a new coordinator putting may_project_columns in the read command would break the read on an
+    // older replica mid-upgrade. And bypass_cache is not permission on its own --
+    // table::stream_view_replica_updates() sets it, and a view update computed from a partially-read
+    // base row produces wrong view rows. That path goes through
+    // as_mutation_source_excluding_staging(), never through table::query(), which is what makes this
+    // function the safe place to conclude it.
+    std::optional<query::read_command> projecting_cmd;
+    const query::read_command* cmd_p = &cmd;
+    if (cmd.slice.options.contains<query::partition_slice::option::bypass_cache>()
+            && !cmd.slice.options.contains<query::partition_slice::option::may_project_columns>()) {
+        projecting_cmd = cmd;
+        projecting_cmd->slice.options.set<query::partition_slice::option::may_project_columns>();
+        cmd_p = &*projecting_cmd;
+    }
+    const query::read_command& cmd_ref = *cmd_p;
 
     const auto table_async_gate_holder = _async_gate.hold();
     utils::latency_counter lc;
