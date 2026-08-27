@@ -700,6 +700,12 @@ private:
     future<> delete_sstables_atomically(const sstable_list_permit&, std::vector<sstables::shared_sstable> sstables_to_remove);
 
 public:
+    // Ids of the tablets hosted by this shard (those with a storage group).
+    // The ids are copied out, so the result is safe to use across preemption
+    // points, but can go stale: re-validate against a fresh ERM before use.
+    // Valid only for tablet-based tables.
+    std::vector<locator::tablet_id> local_tablet_ids() const;
+
     // Precondition: table needs tablet splitting.
     // Returns true if all storage of table is ready for splitting.
     bool all_storage_groups_split();

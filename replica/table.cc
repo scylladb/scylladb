@@ -1636,6 +1636,16 @@ const storage_group_map& table::storage_groups() const {
     return _sg_manager->storage_groups();
 }
 
+std::vector<locator::tablet_id> table::local_tablet_ids() const {
+    const auto& sgs = storage_groups();
+    std::vector<locator::tablet_id> ids;
+    ids.reserve(sgs.size());
+    for (const auto& [id, sg] : sgs) {
+        ids.push_back(locator::tablet_id(id));
+    }
+    return ids;
+}
+
 future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_storage_snapshot(dht::token_range tr) {
     utils::chunked_vector<sstables::sstable_files_snapshot> ret;
 
