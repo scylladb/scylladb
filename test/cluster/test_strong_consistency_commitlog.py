@@ -303,3 +303,85 @@ async def test_crash_recovery_after_flush(manager: ScyllaClusterManager):
             assert rows[0].c == pk * 10, f"pk={pk}: expected c={pk * 10}, got c={rows[0].c}"
 
     await manager.server_stop_gracefully(server.server_id)
+
+
+@pytest.mark.asyncio
+async def test_commit_idx_persisted_on_graceful_shutdown(manager: ManagerClient):
+    """A graceful shutdown must leave system.raft_groups.commit_idx covering every
+    write that was committed and applied, not just the value that was known when
+    the last raft batch was appended (the commit_idx entries in the commitlog
+    carry only the append-time value, and a clean shutdown discards the
+    commitlog).
+
+    That guarantee comes from commit-time coverage: the raft io_fiber writes a
+    covering commit_idx value into the raft_groups memtable when entries
+    commit — before they are even applied, let alone acknowledged
+    (raft_groups_storage::store_commit_idx) — and the drain flush persists
+    that memtable. This test pins the mechanism end to end:
+    the commit_idx observable while the node is live covers every acknowledged
+    write, and a graceful restart must come back with a snapshot index at least
+    that high — if the drain lost the raft_groups memtable, it could not."""
+    config = {
+        'experimental_features': ['strongly-consistent-tables'],
+        'commitlog_total_space_in_mb': 10000,
+    }
+    server = await manager.server_add(config=config)
+    (cql, hosts) = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        for pk in range(10):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({pk}, {pk * 10})")
+
+        table_id = await manager.get_table_id(ks.replace('"', ''), "test")
+        tablet_rows = await cql.run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")
+        assert len(tablet_rows) == 1
+        group_id = tablet_rows[0].raft_group_id
+
+        # commit_idx as recorded by the commit-time covering mutations (read
+        # from the raft_groups memtable): the coverage runs before a write is
+        # even applied, let alone acknowledged, so with the inserts above
+        # executed sequentially this covers all of them.
+        pre_rows = await cql.run_async(f"SELECT commit_idx, commit_idx_term FROM system.raft_groups WHERE shard = 0 AND group_id = {group_id}")
+        assert len(pre_rows) == 1
+        pre_commit_idx = pre_rows[0].commit_idx
+        pre_commit_idx_term = pre_rows[0].commit_idx_term
+        assert pre_commit_idx >= 10, \
+            f"live commit_idx {pre_commit_idx} does not cover the 10 acknowledged inserts"
+        # The exact term of the entry at commit_idx is persisted atomically
+        # with the value; the startup bump feeds it into raft's election and
+        # log-matching checks, so it must never be missing on a covered row.
+        assert pre_commit_idx_term is not None and pre_commit_idx_term >= 1, \
+            f"live commit_idx_term is {pre_commit_idx_term}"
+
+        await manager.server_stop_gracefully(server.server_id)
+        await manager.server_start(server.server_id)
+        await reconnect_driver(manager)
+        cql = manager.get_cql()
+
+        for pk in range(10):
+            rows = await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk = {pk};")
+            assert len(rows) == 1, f"Expected 1 row for pk={pk}, got {len(rows)}"
+            assert rows[0].c == pk * 10
+
+        # The startup bump sets raft_groups_snapshots.idx from the commit_idx that
+        # was persisted at shutdown, and nothing after startup moves it (post-restart
+        # commits advance system.raft_groups.commit_idx, not the snapshot index), so
+        # it is a stable witness of what shutdown actually persisted.
+        #
+        # The drain flushes the raft_groups memtable, making the covering
+        # values durable, so the bump must reach at least the commit_idx that
+        # was observable while the node was live. Were the covering values
+        # lost, the persisted commit_idx would fall back to whatever an
+        # earlier flush wrote (possibly nothing).
+        snp_rows = await cql.run_async(f"SELECT idx, term FROM system.raft_groups_snapshots WHERE shard = 0 AND group_id = {group_id}")
+        assert len(snp_rows) == 1
+        assert snp_rows[0].idx >= pre_commit_idx, \
+            f"snapshot idx {snp_rows[0].idx} is behind the pre-shutdown commit_idx {pre_commit_idx} " \
+            f"— was commit_idx persisted on shutdown?"
+        # The bump must carry the exact persisted term, not a stale snapshot
+        # term (a wrong term corrupts elections and log matching).
+        assert snp_rows[0].term >= pre_commit_idx_term, \
+            f"snapshot term {snp_rows[0].term} is behind the pre-shutdown commit_idx_term {pre_commit_idx_term}"
+
+    await manager.server_stop_gracefully(server.server_id)

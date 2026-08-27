@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
@@ -126,7 +127,7 @@ filter_entries_result filter_entries(utils::chunked_vector<raft::log_entry_ptr>&
 } // anonymous namespace
 
 future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks) {
-    if (remaining_groups() == 0) {
+    if (remaining_groups() == 0 && _replayed_commit_idx_by_group.empty()) {
         co_return;
     }
 
@@ -137,6 +138,30 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
     SCYLLA_ASSERT(new_commitlog_ptr);
 
     logger.info("processing {} raft groups with {} total entries from commitlog replay", remaining_groups(), total_entries());
+
+    // Restore the recovered commit_idx values first: a crash can leave the
+    // persisted system.raft_groups value behind the replayed commit_idx
+    // records, and the loop below reads it to decide which entries are
+    // committed. A group can have a record and no surviving entries at all
+    // (its entries' segments were reclaimed while a record's was not), which
+    // is why this runs over the records rather than over the entries. Each record carries the exact term of the entry at its
+    // index, so the pair goes straight to system.raft_groups — the
+    // boot-time snapshot bump needs it exact (see make_raft_schema's
+    // commit_idx_term comment). Groups absent from tablet metadata are
+    // skipped, like their entries are: the tablet moved away or was dropped,
+    // so nothing may resurrect its row. The writes are independent, so run
+    // them concurrently.
+    co_await seastar::coroutine::parallel_for_each(_replayed_commit_idx_by_group,
+            [&qp, &group_to_table] (const auto& entry) -> future<> {
+        const auto& [group_id, committed] = entry;
+        if (!group_to_table.contains(group_id)) {
+            logger.debug("group {} not found in tablet metadata, discarding recovered commit_idx {}",
+                    group_id, committed.idx);
+            co_return;
+        }
+        co_await service::strong_consistency::raft_groups_storage::store_commit_idx_if_higher(
+                qp, group_id, this_shard_id(), committed.idx, committed.term);
+    });
 
     for (auto& [group_id, entries_list] : _replayed_commitlog_entries_by_group) {
         if (entries_list.empty()) {
@@ -153,25 +178,23 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
         }
         const auto table_id = table_it->second;
 
-        // Query commit_idx from raft system tables. We treat commit_idx as
-        // the effective snapshot index: all entries up to commit_idx are committed
-        // and will be applied to memtables during replay.
-        const auto commit_idx = co_await service::strong_consistency::raft_groups_storage::load_commit_idx(qp, group_id, this_shard_id());
-
-        logger.debug("group {}: {} entries, commit_idx={}", group_id, entries_list.size(), commit_idx);
-
         // First pass: filter entries (leader changes, out-of-order tails).
         // This must be done before any database writes to avoid applying entries that would
         // later be discarded due to leader changes.
         auto filtered = filter_entries(entries_list, group_id);
 
-        // Second pass: Apply committed entries to database and rewrite uncommitted entries to commitlog.
-        uint64_t applied = 0;
-        uint64_t rewritten = 0;
-        auto& group_data = _per_group_data[group_id];
+        // Query commit_idx from raft system tables. We treat commit_idx as the
+        // effective snapshot index: all entries up to commit_idx are committed
+        // and will be applied to memtables during replay.
+        const auto commit_idx = co_await service::strong_consistency::raft_groups_storage::load_commit_idx(qp, group_id, this_shard_id());
 
-        // Track the term of the last committed entry to update the snapshot descriptor.
-        std::optional<raft::term_t> last_committed_term;
+        logger.debug("group {}: {} entries, commit_idx={}", group_id, entries_list.size(), commit_idx);
+
+        // Second pass: Apply committed entries to database and collect uncommitted entries.
+        uint64_t applied = 0;
+        auto& group_data = _per_group_data[group_id];
+        raft::log_entry_ptr_list uncommitted;
+        std::optional<std::pair<raft::index_t, raft::configuration>> committed_config;
 
         for (auto& entry : filtered.entries) {
             // Apply committed command entries to the memtables. It is safe not to append them
@@ -187,56 +210,132 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
                 ++applied;
             }
 
-            if (entry->idx <= commit_idx) {
-                last_committed_term = entry->term;
+            // A committed configuration entry is dropped like every other
+            // committed non-command entry, so its content has to be persisted
+            // here or the group would come back with the configuration of its
+            // last snapshot — the bootstrap one for a group that never
+            // snapshotted (SCYLLADB-3842). Entries ascend, so the last one
+            // seen is the newest committed configuration.
+            if (entry->idx <= commit_idx && std::holds_alternative<raft::configuration>(entry->data)) {
+                committed_config = std::pair(entry->idx, std::get<raft::configuration>(entry->data));
             }
 
-            // Rewrite uncommitted entries to the new commitlog to obtain rp_handles
-            // that ensure the commitlog segments won't be deleted.
+            // Only uncommitted entries go back to the raft log (and to the new
+            // commitlog, below). Committed entries have already been applied to
+            // memtables above and are covered by the snapshot index that
+            // bump_snapshot_indices() advances to commit_idx after replay (the
+            // sole snapshot-index advancer on startup).
             if (entry->idx > commit_idx) {
-                commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = group_id, .entry = entry});
-                const auto write_fn = [&writer](auto& out) {
-                    return writer.write(out);
-                };
-                const auto target_size = writer.size();
-                auto handle = co_await new_commitlog_ptr->add(table_id, target_size, db::no_timeout, db::commitlog_force_sync::yes, write_fn);
-                group_data.replay_positions.push_back(service::strong_consistency::index_and_replay_position{.index = entry->idx, .replay_position_handle = std::move(handle)});
-                ++rewritten;
-            }
-
-            // Only add uncommitted entries to the raft log. Committed entries have
-            // already been applied to memtables above and will be covered by the
-            // updated snapshot descriptor (see below).
-            if (entry->idx > commit_idx) {
-                group_data.entries.push_back(std::move(entry));
+                uncommitted.push_back(std::move(entry));
             }
 
             co_await seastar::coroutine::maybe_yield();
         }
 
-        // Advance the persisted snapshot index to commit_idx. This tells the raft
-        // server (which sets _applied_idx = snapshot.idx on restart) that all
-        // committed entries have already been applied, preventing double-application
-        // through the state machine.
-        if (last_committed_term) {
-            // Strongly-consistent tablet raft groups don't use real snapshots,
-            // so we generate a random snapshot ID just to satisfy the schema requirement.
-            co_await service::strong_consistency::raft_groups_storage::store_snapshot_index(
-                    qp, group_id, this_shard_id(), raft::snapshot_descriptor{
-                        .idx = commit_idx,
-                        .term = *last_committed_term,
-                        .id = raft::snapshot_id(utils::make_random_uuid()),
-                    });
-            logger.debug("group {}: advanced snapshot to idx={}, term={}", group_id, commit_idx, *last_committed_term);
+        // Fold the newest committed configuration the replayed log carried
+        // into system.raft_groups, next to the commit_idx restored above and
+        // in the same cells the covering mutations write. It is not restored
+        // into the snapshot configuration directly: bump_snapshot_indices()
+        // does that, and it must be the only writer there — its guard compares
+        // against the snapshot index, so a second writer holding a
+        // configuration from another source would pass the same guard and
+        // could overwrite a newer configuration with an older one. Merging the
+        // two sources here, where they can be compared by config_idx, leaves
+        // that path a single source to read.
+        if (committed_config) {
+            co_await service::strong_consistency::raft_groups_storage::store_committed_config_if_higher(
+                    qp, group_id, this_shard_id(), committed_config->second, committed_config->first);
+        }
+
+        // Rewrite uncommitted entries to the new commitlog the same way
+        // store_log_entries() does: one batch, whose claim keeps the new
+        // segment alive until the group's own apply() mints from it, and
+        // whose raft_groups claim goes straight into group_data.covers — the
+        // segment->cover map that seeds the group's parked covers when its
+        // raft_commitlog is constructed, for commit-time coverage of the
+        // rewritten entries (see raft_commitlog).
+        if (!uncommitted.empty()) {
+            auto batch_handle = co_await service::strong_consistency::raft_commitlog::write_batches(
+                    *new_commitlog_ptr, table_id, db::system_keyspace::raft_groups()->id(), group_id, uncommitted,
+                    raft_term_and_index{}, group_data.covers);
+            group_data.rewritten = service::strong_consistency::batch_claim{
+                    .first = uncommitted.front()->idx,
+                    .last = uncommitted.back()->idx,
+                    .claim = std::move(batch_handle)};
+            for (auto& entry : uncommitted) {
+                group_data.entries.push_back(std::move(entry));
+            }
         }
 
         logger.debug("group {}: discarded_leader_change={}, applied={}, rewritten={}, total_in_log={}", group_id, filtered.discarded_leader_change, applied,
-                rewritten, group_data.entries.size());
+                uncommitted.size(), group_data.entries.size());
     }
 
     // The old items are not needed anymore.
     _replayed_commitlog_entries_by_group.clear();
+    _replayed_commit_idx_by_group.clear();
     logger.info("Raft groups commit log replayed data processing complete");
+}
+
+future<> raft_commitlog_replay_buffer::bump_snapshot_indices(replica::database& db, cql3::query_processor& qp) {
+    // See header for rationale. Runs for every known raft group and is the sole
+    // place that advances the persisted snapshot index on startup. store_snapshot_index
+    // has an internal "only advance" guard, so groups whose snapshot is already at or
+    // beyond commit_idx (e.g. from a prior run) are left untouched.
+    const auto token_metadata = db.get_shared_token_metadata().get();
+    const auto group_to_table = build_group_to_table_map(*token_metadata);
+
+    // Process groups concurrently: each does independent CQL reads/writes, and
+    // doing them serially would make startup O(groups) round-trips.
+    co_await seastar::coroutine::parallel_for_each(group_to_table,
+            [&qp] (const auto& entry) -> future<> {
+        const auto group_id = entry.first;
+        const auto [commit_idx, commit_idx_term] =
+                co_await service::strong_consistency::raft_groups_storage::load_commit_idx_and_term(qp, group_id, this_shard_id());
+        if (commit_idx.value() == 0) {
+            co_return;
+        }
+        // The configuration the covering mutations persisted is newer than the
+        // snapshot's whenever its entry's index is — restore it before the
+        // bump, so the descriptor the group starts from carries the group's
+        // real membership even if it never snapshotted (SCYLLADB-3842).
+        // This is the only writer of the snapshot configuration on startup:
+        // process_raft_replayed_items() has already merged what the replayed
+        // entries carried into these same cells, so the value read here is the
+        // newest of both sources.
+        if (auto config = co_await service::strong_consistency::raft_groups_storage::load_committed_config(
+                    qp, group_id, this_shard_id())) {
+            co_await service::strong_consistency::raft_groups_storage::store_snapshot_config_if_newer(
+                    qp, group_id, this_shard_id(), config->second, config->first);
+        }
+        auto [snap_idx, snap_term] = co_await service::strong_consistency::raft_groups_storage::load_snapshot_idx_and_term(qp, group_id, this_shard_id());
+        if (snap_idx >= commit_idx) {
+            co_return;
+        }
+        // The bumped snapshot term must be the exact term of the entry at
+        // commit_idx: it feeds raft's election check (log::is_up_to_date via
+        // last_term() on an empty log — a too-low term makes this replica
+        // vote for candidates missing its committed entries) and log matching
+        // at the snapshot boundary (log::match_term — any wrong term makes
+        // the leader back off below the snapshot and fall back to a snapshot
+        // transfer, which strongly consistent groups do not implement).
+        // commit_idx_term is written atomically with commit_idx; it can only
+        // be missing for a row written by a build predating the column, where
+        // the old snapshot's term is the only value available.
+        if (!commit_idx_term) {
+            logger.warn("group {}: no commit_idx_term persisted for commit_idx {} (pre-upgrade row); "
+                    "falling back to the last snapshot's term {}", group_id, commit_idx, snap_term);
+        }
+        const auto bump_term = commit_idx_term.value_or(snap_term);
+        co_await service::strong_consistency::raft_groups_storage::store_snapshot_index(
+                qp, group_id, this_shard_id(), raft::snapshot_descriptor{
+                    .idx = commit_idx,
+                    .term = bump_term,
+                    .id = raft::snapshot_id(utils::make_random_uuid()),
+                });
+        logger.debug("group {}: post-replay catch-up, advanced snapshot idx {} -> {} (term={})",
+                group_id, snap_idx, commit_idx, bump_term);
+    });
 }
 namespace raft_buffer_detail {
 entry_ordering_check_result check_entry_ordering(raft_term_and_idx current, raft_term_and_idx last) {

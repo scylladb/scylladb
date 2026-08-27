@@ -19,6 +19,11 @@
 #include "idl/raft_storage.dist.impl.hh"
 
 #include "cql3/query_processor.hh"
+#include "mutation/mutation.hh"
+#include "mutation/timestamp.hh"
+#include "replica/database.hh"
+#include "service/storage_proxy.hh"
+#include "types/types.hh"
 
 #include <seastar/core/coroutine.hh>
 
@@ -28,7 +33,8 @@ logging::logger rgslog("raft_groups_storage");
 
 raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id, shard_id shard, db::commitlog& commit_log,
         table_id target_table_id, replayed_data_per_group replayed_data)
-    : _raft_commitlog(gid, commit_log, target_table_id, std::move(replayed_data))
+    : _raft_commitlog(gid, commit_log, target_table_id,
+            db::system_keyspace::raft_groups()->id(), std::move(replayed_data))
     , _group_id(std::move(gid))
     , _server_id(std::move(server_id))
     , _qp(qp)
@@ -64,19 +70,149 @@ future<std::pair<raft::term_t, raft::server_id>> raft_groups_storage::load_term_
     co_return std::pair(vote_term, vote);
 }
 
-future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
-    return execute_with_linearization_point([this, idx] {
-        static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?)",
-            db::system_keyspace::RAFT_GROUPS);
-        return _qp.execute_internal(
-            store_cql,
-            {int16_t(_shard), _group_id.id, int64_t(idx.value())},
-            cql3::query_processor::cache_internal::yes).discard_result();
+// Serialize a raft::configuration for the system.raft_groups config cell,
+// using the IDL serializer the log entries' data variant already uses
+// (idl/raft_storage.idl.hh).
+static bytes serialize_config(const raft::configuration& config) {
+    bytes_ostream out;
+    ser::serialize(out, config);
+    return bytes(out.linearize());
+}
+
+// Build a static-only system.raft_groups mutation that sets commit_idx and
+// commit_idx_term for the (shard, group_id) partition, plus the group's newest
+// committed configuration when one is being persisted. Every cell is set at
+// one timestamp, so a reader never sees a mismatched (index, term) pair, nor a
+// configuration paired with the wrong index. Applied in-memory (see
+// store_commit_idx) with the covered segment's claim attached so it rides the
+// raft_groups memtable flush.
+static mutation make_commit_idx_mutation(shard_id shard, raft::group_id group_id,
+        raft::index_t commit_idx, raft::term_t commit_idx_term,
+        const std::optional<std::pair<raft::index_t, raft::configuration>>& config,
+        api::timestamp_type ts) {
+    auto schema = db::system_keyspace::raft_groups();
+    auto pk = partition_key::from_exploded(*schema, {
+        short_type->decompose(int16_t(shard)),
+        timeuuid_type->decompose(group_id.id),
     });
+    mutation m(schema, std::move(pk));
+    m.set_static_cell("commit_idx", data_value(int64_t(commit_idx.value())), ts);
+    m.set_static_cell("commit_idx_term", data_value(int64_t(commit_idx_term.value())), ts);
+    if (config) {
+        m.set_static_cell("config", data_value(serialize_config(config->second)), ts);
+        m.set_static_cell("config_idx", data_value(int64_t(config->first.value())), ts);
+    }
+    return m;
+}
+
+future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
+    // IO-free: no per-committed-batch CQL write on the raft io_fiber. The
+    // value reaches system.raft_groups through the covering mutations below
+    // (durable once the raft_groups memtable flushes) and, after a crash,
+    // through the commit_idx records the replayed raft entries carry.
+    //
+    // The io_fiber calls this *before* pushing entries to the applier_fiber,
+    // so the commit index seen here is always >= the raft index of any entry
+    // that has been applied to a memtable — and the covers attached below
+    // reach the raft_groups memtable before their entries can be applied.
+    // note_commit_idx() also keeps the (index, term) pair of the last
+    // committed entry, which the next batch records as the crash-replay
+    // floor.
+    //
+    // The covers and the configuration are consumed before the first
+    // apply_in_memory(), so a throw from one of them loses them: raft turns an
+    // exception here into a background error and stops the group (see
+    // server_impl::io_fiber), it does not retry. Both losses degrade safely.
+    // A lost cover means the segment can be reclaimed without a durable
+    // covering value, so replay recovers a lower floor and re-commits entries
+    // that were already committed — the direction store_commit_idx() is
+    // allowed to fail in at all (raft treats persisting the commit index as
+    // optional), and re-applying a committed command is idempotent. A lost
+    // configuration is still in its commitlog entry, whose handle is only
+    // released below, past every throw site.
+    _raft_commitlog.note_commit_idx(idx);
+
+    auto covers = _raft_commitlog.take_committed_covers(idx);
+    if (covers.empty()) {
+        co_return;
+    }
+    auto& db = _qp.proxy().local_db();
+    auto& cf = db.find_column_family(db::system_keyspace::raft_groups()->id());
+    for (auto& cover : covers) {
+        // One covering mutation per fully-committed segment, carrying the
+        // highest index the group appended to it. All covers write the same
+        // static cell; values only grow and this fiber is the sole runtime
+        // writer, so per-mutation api::new_timestamp() resolves last-write-wins
+        // to the highest value. The mutation and the segment's claim enter
+        // the raft_groups memtable atomically, so the claim can only be
+        // released by the flush that makes the covering value durable.
+        // A configuration committed in this segment's range rides the same
+        // mutation, so it becomes durable exactly when this segment's claim is
+        // released — the entry carrying it can only be reclaimed once its
+        // configuration is safe. take_committed_config() hands it out at the
+        // first cover whose range contains it, which is that entry's own
+        // segment (SCYLLADB-3842).
+        auto config = _raft_commitlog.take_committed_config(cover.max_idx);
+        auto m = make_commit_idx_mutation(_shard, _group_id, cover.max_idx, cover.max_term,
+                config, api::new_timestamp());
+        co_await db.apply_in_memory(m, cf, std::move(cover.segment_holder), db::no_timeout);
+        // Claims of covers a leader-change truncation invalidated (see
+        // raft_commitlog::truncate_log()); each rides this same mutation, so
+        // whichever memtable generation holds the claim also holds a
+        // covering value for its segment.
+        for (auto& holder : cover.extra_holders) {
+            co_await db.apply_in_memory(m, cf, std::move(holder), db::no_timeout);
+        }
+    }
+    // Nothing else to release: dummy and configuration entries never took a
+    // claim of their own (see batch_claim), and a command's claim is the
+    // target memtable's business once apply() minted it.
+}
+
+// Execute the CQL INSERT that persists (commit_idx, commit_idx_term) to
+// system.raft_groups. Only used during commitlog replay
+// (store_commit_idx_if_higher), before any raft group is running; at runtime
+// the pair is written exclusively by store_commit_idx()'s in-memory covering
+// mutations.
+static future<> store_commit_idx_cql(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
+        raft::index_t commit_idx, raft::term_t commit_idx_term) {
+    static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx, commit_idx_term) VALUES (?, ?, ?, ?)",
+        db::system_keyspace::RAFT_GROUPS);
+    return qp.execute_internal(
+        store_cql,
+        {int16_t(shard), gid.id, int64_t(commit_idx.value()), int64_t(commit_idx_term.value())},
+        cql3::query_processor::cache_internal::yes).discard_result();
+}
+
+future<> raft_groups_storage::store_commit_idx_if_higher(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
+        raft::index_t commit_idx, raft::term_t commit_idx_term) {
+    // Only advance, never regress: a prior run (or an earlier replay) may
+    // already have persisted a value at or beyond the recovered one.
+    const auto persisted = co_await load_commit_idx(qp, gid, shard);
+    if (commit_idx <= persisted) {
+        co_return;
+    }
+    co_await store_commit_idx_cql(qp, gid, shard, commit_idx, commit_idx_term);
 }
 
 future<raft::index_t> raft_groups_storage::load_commit_idx() {
     return load_commit_idx(_qp, _group_id, _shard);
+}
+
+future<std::pair<raft::index_t, std::optional<raft::term_t>>>
+raft_groups_storage::load_commit_idx_and_term(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+    static const auto load_cql = format("SELECT commit_idx, commit_idx_term FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1",
+        db::system_keyspace::RAFT_GROUPS);
+    auto rs = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    if (rs->empty()) {
+        co_return std::pair(raft::index_t(0), std::nullopt);
+    }
+    const auto& row = rs->one();
+    std::optional<raft::term_t> term;
+    if (row.has("commit_idx_term")) {
+        term = raft::term_t(row.get_as<int64_t>("commit_idx_term"));
+    }
+    co_return std::pair(raft::index_t(row.get_or<int64_t>("commit_idx", 0)), term);
 }
 
 future<raft::index_t> raft_groups_storage::load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
@@ -180,8 +316,10 @@ future<> raft_groups_storage::truncate_log(raft::index_t idx) {
 }
 
 future<> raft_groups_storage::abort() {
-    // wait for pending write requests to complete.
-    // TODO: should we wait for all kinds of requests?
+    // Wait for pending write requests to complete. The covering work in
+    // store_commit_idx() needs no guarding here: it runs on the raft
+    // io_fiber, which raft::server::abort() awaits before aborting the
+    // persistence.
     return std::move(_pending_op_fut);
 }
 
@@ -194,6 +332,96 @@ future<> raft_groups_storage::update_snapshot(const raft::snapshot_descriptor &s
         {int16_t(_shard), _group_id.id, snap.id.id},
         cql3::query_processor::cache_internal::yes
     ).discard_result();
+}
+
+future<std::optional<std::pair<raft::index_t, raft::configuration>>>
+raft_groups_storage::load_committed_config(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+    static const auto load_cql = format("SELECT config, config_idx FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1",
+        db::system_keyspace::RAFT_GROUPS);
+    auto rs = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    if (rs->empty()) {
+        co_return std::nullopt;
+    }
+    const auto& row = rs->one();
+    if (!row.has("config") || !row.has("config_idx")) {
+        // No configuration has been covered yet, or the row predates the
+        // columns.
+        co_return std::nullopt;
+    }
+    const auto blob = row.get_blob_unfragmented("config");
+    auto in = ser::as_input_stream(blob);
+    co_return std::pair(
+            raft::index_t(static_cast<uint64_t>(row.get_as<int64_t>("config_idx"))),
+            ser::deserialize(in, std::type_identity<raft::configuration>()));
+}
+
+future<std::pair<raft::index_t, raft::term_t>>
+raft_groups_storage::load_snapshot_idx_and_term(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+    static const auto load_cql = format("SELECT idx, term FROM system.{} WHERE shard = ? AND group_id = ?",
+        db::system_keyspace::RAFT_GROUPS_SNAPSHOTS);
+    auto rs = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    if (rs->empty()) {
+        co_return std::pair(raft::index_t(0), raft::term_t(0));
+    }
+    const auto& row = rs->one();
+    co_return std::pair(
+            raft::index_t(row.get_or<int64_t>("idx", 0)),
+            raft::term_t(row.get_or<int64_t>("term", 0)));
+}
+
+future<> raft_groups_storage::store_committed_config_if_higher(cql3::query_processor& qp, raft::group_id gid,
+        shard_id shard, const raft::configuration& config, raft::index_t config_idx) {
+    // Only advance: a configuration recovered from the replayed entries can be
+    // older than the one the covering mutations already made durable (the
+    // replayed log may end in a discarded tail, or the newer configuration's
+    // own entry may already be gone).
+    if (const auto persisted = co_await load_committed_config(qp, gid, shard);
+            persisted && config_idx <= persisted->first) {
+        co_return;
+    }
+    // A real CQL write, unlike the covering mutations: this runs during
+    // replay, before any group is started, so it must reach the new commitlog
+    // to survive a crash before the raft_groups memtable flushes.
+    static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, config, config_idx) VALUES (?, ?, ?, ?)",
+        db::system_keyspace::RAFT_GROUPS);
+    co_await qp.execute_internal(store_cql,
+            {int16_t(shard), gid.id, data_value(serialize_config(config)), int64_t(config_idx.value())},
+            cql3::query_processor::cache_internal::yes);
+    rgslog.info("group {}: recovered the configuration committed at index {} from the commitlog", gid, config_idx);
+}
+
+future<> raft_groups_storage::store_snapshot_config_if_newer(cql3::query_processor& qp, raft::group_id gid,
+        shard_id shard, const raft::configuration& config, raft::index_t config_idx) {
+    // The persisted snapshot's configuration is the one in effect at its index,
+    // so it already accounts for every configuration entry at or below it.
+    static const auto load_snp_idx_cql = format("SELECT idx FROM system.{} WHERE shard = ? AND group_id = ?",
+        db::system_keyspace::RAFT_GROUPS_SNAPSHOTS);
+    auto rs = co_await qp.execute_internal(load_snp_idx_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    if (!rs->empty() && rs->one().has("idx")) {
+        const auto snap_idx = raft::index_t(static_cast<uint64_t>(rs->one().get_as<int64_t>("idx")));
+        if (config_idx <= snap_idx) {
+            co_return;
+        }
+    }
+    // Replace the stored configuration wholesale: it is a set of members, not
+    // a delta. A crash in the middle only means replay runs again and rewrites
+    // the same rows from the same commitlog entry.
+    static const auto delete_cfg_cql = format("DELETE FROM system.{} WHERE shard = ? AND group_id = ?",
+        db::system_keyspace::RAFT_GROUPS_SNAPSHOT_CONFIG);
+    co_await qp.execute_internal(delete_cfg_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    static const auto store_cfg_cql = format("INSERT INTO system.{} (shard, group_id, disposition, server_id, can_vote) VALUES (?, ?, ?, ?, ?)",
+        db::system_keyspace::RAFT_GROUPS_SNAPSHOT_CONFIG);
+    for (const raft::config_member& srv : config.current) {
+        co_await qp.execute_internal(store_cfg_cql,
+                {int16_t(shard), gid.id, "CURRENT", srv.addr.id.id, srv.can_vote},
+                cql3::query_processor::cache_internal::yes);
+    }
+    for (const raft::config_member& srv : config.previous) {
+        co_await qp.execute_internal(store_cfg_cql,
+                {int16_t(shard), gid.id, "PREVIOUS", srv.addr.id.id, srv.can_vote},
+                cql3::query_processor::cache_internal::yes);
+    }
+    rgslog.info("group {}: restored the snapshot configuration from the one committed at index {}", gid, config_idx);
 }
 
 future<> raft_groups_storage::store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap) {

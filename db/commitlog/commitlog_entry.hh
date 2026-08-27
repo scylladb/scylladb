@@ -93,19 +93,50 @@ public:
     frozen_mutation&& mutation() && { return std::move(_mutation); }
 };
 
-// A Raft log entry (command, configuration change, or dummy) together with
-// its group ID.  Stored in the database commitlog when the strongly-consistent
-// tables experimental feature is enabled and the segment uses the variant
-// serialization format.
-struct raft_commitlog_entry {
-    raft::group_id group_id;
-    raft::log_entry_ptr entry;
+// A raft log position: an entry's index and the term it was appended in.
+// Always the pair of one real entry — the commit_idx entries and the covering
+// raft_groups mutations both persist such a pair, and raft requires the term
+// at a given index to be exact.
+struct raft_term_and_index {
+    raft::index_t idx{0};
+    raft::term_t term{0};
 };
 
-// The on-disk envelope for variant-format commitlog segments. Each
-// entry contains exactly one of the variant alternatives: a mutation_entry
-// (normal table write) or a raft_commitlog_entry (Raft log entry for
-// strongly-consistent tables).
+// One raft batch as it is stored in the commitlog: the group id once, the
+// entries the batch appended (commands, configuration changes, dummies), and
+// how far the group had committed when the batch was written.
+//
+// The whole batch is a single commitlog entry, which is what keeps the group
+// id and the entry envelope from being repeated per raft entry. The batch also
+// carries its own retention: one claim comes back from the write, and
+// raft_commitlog takes one claim per entry from it
+// (commitlog::acquire_cf_count) so each entry's lifetime can be tracked
+// separately even though they share a position.
+//
+// (commit_idx, commit_idx_term) is the crash-replay floor: startup restores
+// the highest surviving value per group into system.raft_groups, so replay
+// applies the entries below it to memtables instead of re-adding them to the
+// raft log. The term is stored next to the index because the entry at that
+// index is normally in an earlier batch, whose segment may already be gone —
+// so the restore cannot look the term up. Zero means this group had not
+// observed a commit index yet; the floor only ever advances, so an
+// unrecoverable batch costs only floor tightness.
+struct raft_commitlog_entry {
+    raft::group_id group_id;
+    std::vector<raft::log_entry_ptr> entries;
+    raft::index_t commit_idx{0};
+    raft::term_t commit_idx_term{0};
+};
+
+// The on-disk envelope for variant-format commitlog segments. Each entry
+// contains exactly one of the variant alternatives: a mutation_entry (normal
+// table write) or a raft_commitlog_entry (one batch of raft entries for a
+// strongly-consistent table).
+//
+// NOTE: the variant alternative index is the on-disk discriminator, so new
+// alternatives must only ever be appended at the end. Reordering or inserting
+// in the middle would change the discriminator of existing alternatives and
+// corrupt the reading of previously written segments.
 using commitlog_entry_variant = std::variant<raft_commitlog_entry, mutation_entry>;
 struct commitlog_entry {
     commitlog_entry_variant item;
@@ -178,15 +209,17 @@ public:
     frozen_mutation&& mutation() && { return std::move(_me).mutation(); }
 };
 
-// Writer for Raft log entries to the database commit log using the commitlog_entry format.
+// Writer for one raft batch in the database commit log, using the
+// commitlog_entry format. Produced by raft_commitlog::write_batches() and
+// accounted to the raft group's target table — the batch's cf.
 class commitlog_raft_log_entry_writer {
-public:
 protected:
     raft_commitlog_entry _item;
     std::size_t _size = std::numeric_limits<std::size_t>::max();
 
     template<typename Output>
     void serialize(Output& out) const;
+
     void compute_size();
 
 public:
@@ -200,7 +233,11 @@ public:
 
     using ostream = typename seastar::memory_output_stream<detail::sector_split_iterator>;
     void write(ostream& out) const;
-    const raft_commitlog_entry& get_log_entry() const {
+
+    raft::group_id group_id() const {
+        return _item.group_id;
+    }
+    const raft_commitlog_entry& item() const {
         return _item;
     }
 };
