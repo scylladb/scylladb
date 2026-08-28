@@ -11,9 +11,40 @@ Choosing a restore method
 
 ScyllaDB supports several restore methods. Choose the one that matches where your backup files are and whether the cluster topology changed since the backup was taken:
 
+* :ref:`Restore with load and stream <restore-load-and-stream>` - upload backed-up SSTable files to a running cluster; the data is streamed to the nodes owning it. Works regardless of cluster topology changes since the backup.
+
 * :ref:`Restore to an identical cluster <restore-procedure>` - copy snapshot files back in place and restart the nodes. Requires a cluster with the same number of nodes and the same token distribution as at the time of the backup, and each node must be restored from the backup of the **same node**. Suitable for vnode-based keyspaces only.
 
 For cluster-wide backup and restore, use `ScyllaDB Manager <https://manager.docs.scylladb.com/stable/restore/>`_, which orchestrates the process across the cluster.
+
+.. _restore-load-and-stream:
+
+----------------------------
+Restore with load and stream
+----------------------------
+
+Use this method when the backed-up SSTable files are available on disk (for example, snapshot files copied back from external storage). The SSTables are read and their contents are streamed to the nodes owning the data, so the method works regardless of cluster topology changes since the backup. Each SSTable needs to be uploaded to only **one** node, any node, and the cluster stays online.
+
+**Procedure**
+
+#. Recreate the schema (if needed) and truncate the target tables, as described in the beginning of :ref:`Restore to an identical cluster <restore-procedure>`.
+
+#. Copy the backed-up SSTable files of a table to that table's ``upload`` directory on one of the nodes, and make sure the files are owned by the ``scylla`` user and group:
+
+   .. code-block:: shell
+
+      sudo cp /path/to/backup/sstables/* /var/lib/scylla/data/mykeyspace/team_players-6e856600017f11e790f4000000000000/upload/
+      sudo chown -R scylla:scylla /var/lib/scylla/data/mykeyspace/team_players-6e856600017f11e790f4000000000000/upload/
+
+   You can distribute the backup files between several nodes to parallelize the restore; make sure each SSTable is uploaded to only one node.
+
+#. Run :doc:`nodetool refresh </operating-scylla/nodetool-commands/refresh>` with the ``--load-and-stream`` option on each node holding uploaded files:
+
+   .. code-block:: shell
+
+      nodetool refresh mykeyspace team_players --load-and-stream
+
+   See :ref:`Load and Stream <nodetool-refresh-load-and-stream>` for the ``--scope`` and ``--primary-replica-only`` options that constrain the set of target replicas. If ``--primary-replica-only`` is used, run a full cluster repair after the restore completes to replicate the data to the remaining replicas: for vnode-based keyspaces, run :doc:`nodetool repair -pr </operating-scylla/nodetool-commands/repair>` on **every** node; for tablet-based keyspaces, run :doc:`nodetool cluster repair </operating-scylla/nodetool-commands/cluster/repair>` on any single node.
 
 .. _restore-procedure:
 
