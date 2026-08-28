@@ -68,6 +68,10 @@ class cf_holder;
 
 using cf_id_type = table_id;
 
+// One reference in a commitlog segment's per-table use count (segment::_cf_dirty).
+// A segment is not discarded or recycled while any reference is outstanding. A
+// handle gives up its reference when it is destroyed, when rp_set::put() moves it
+// into a memtable's own count, or when release() abandons the decrement.
 class rp_handle {
 public:
     rp_handle() noexcept;
@@ -75,6 +79,11 @@ public:
     rp_handle& operator=(rp_handle&&) noexcept;
     ~rp_handle();
 
+    // Take another reference at this handle's position, accounted to `id`, without
+    // writing any bytes. `id` need not be a table the segment was written for.
+    rp_handle clone(const cf_id_type& id) const;
+
+    // Abandon this reference's decrement. The segment is kept, not released.
     replay_position release();
 
     operator bool() const {
