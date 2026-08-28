@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/exception.hh>
 #include <fmt/ranges.h>
 
 #include "api/api.hh"
@@ -88,6 +89,26 @@ static future<json::json_return_type> rest_cleanup_all(sharded<replica::database
     });
 
     co_return json::json_return_type(0);
+}
+
+static future<shared_ptr<compaction::cleanup_keyspace_compaction_task_impl>> force_keyspace_cleanup(http_context& ctx, sharded<replica::database>& db, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
+    const auto& rs = db.local().find_keyspace(keyspace).get_replication_strategy();
+    if (rs.is_local() || !rs.is_vnode_based()) {
+        auto reason = rs.is_local() ? "require" : "support";
+        apilog.info("Keyspace {} does not {} cleanup", keyspace, reason);
+        co_return nullptr;
+    }
+    apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, table_infos);
+    if (!co_await ss.local().is_vnodes_cleanup_allowed(keyspace)) {
+        auto msg = "Can not perform cleanup operation when topology changes";
+        apilog.warn("force_keyspace_cleanup: keyspace={} tables={}: {}", keyspace, table_infos, msg);
+        co_await coroutine::return_exception(std::runtime_error(msg));
+    }
+
+    auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+    co_return co_await compaction_module.make_and_start_task<compaction::cleanup_keyspace_compaction_task_impl>(
+        {}, std::move(keyspace), db, table_infos, compaction::flush_mode::all_tables, tasks::is_user_task::yes);
 }
 
 void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::database>& db, sharded<db::snapshot_ctl>& snap_ctl, sharded<service::storage_service>& ss) {
@@ -174,6 +195,22 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::
         return rest_cleanup_all(db, ss, std::move(req));
     });
 
+    t::force_keyspace_cleanup_async.set(r, [&ctx, &db, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        tasks::task_id id = tasks::task_id::create_null_id();
+        auto task = co_await force_keyspace_cleanup(ctx, db, ss, std::move(req));
+        if (task) {
+            id = task->get_status().id;
+        }
+        co_return json::json_return_type(id.to_sstring());
+    });
+    ss::force_keyspace_cleanup.set(r, [&ctx, &db, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto task = co_await force_keyspace_cleanup(ctx, db, ss, std::move(req));
+        if (task) {
+            co_await task->done();
+        }
+        co_return json::json_return_type(0);
+    });
+
     ss::force_compaction.set(r, [&db] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
         auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
@@ -200,6 +237,8 @@ void unset_tasks_compaction_module(http_context& ctx, httpd::routes& r) {
     t::scrub_async.unset(r);
     ss::scrub.unset(r);
     ss::cleanup_all.unset(r);
+    t::force_keyspace_cleanup_async.unset(r);
+    ss::force_keyspace_cleanup.unset(r);
     ss::force_compaction.unset(r);
 }
 
