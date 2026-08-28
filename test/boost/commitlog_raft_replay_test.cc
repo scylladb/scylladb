@@ -1889,4 +1889,59 @@ BOOST_AUTO_TEST_CASE(test_log_entry_lease_time_round_trip) {
     BOOST_REQUIRE(!ser::deserialize(in2, std::type_identity<raft::log_entry_ptr>())->lease_time);
 }
 
+// Test: rp_handle::clone() takes an extra reference at a live handle's
+// position, under the same or a different column family, any number of times.
+//
+// Asserted through the segment rather than through the handles: a clone that
+// took no reference would satisfy every rp() and bool() check here, and
+// mark_clean() no-ops silently once a cf's count is gone, so an under-counted
+// release raises nothing either. Only the segment's dirty state tells them
+// apart.
+SEASTAR_TEST_CASE(test_rp_handle_clone) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto other_tid = make_table_id();
+
+        auto entry = make_command_entry(raft::term_t(1), raft::index_t(1));
+        std::optional handle = co_await write_raft_entry_to_commitlog(log, tid, gid, entry);
+        BOOST_REQUIRE(bool(*handle));
+
+        // A second reference under the entry's own cf, at the same position.
+        std::optional dup = handle->clone(tid);
+        BOOST_REQUIRE(bool(*dup));
+        BOOST_REQUIRE(dup->rp() == handle->rp());
+
+        // References under a cf the segment was never written for, as
+        // account_batch() takes them for system.raft_groups; repeats are legal.
+        std::optional pin1 = handle->clone(other_tid);
+        std::optional pin2 = handle->clone(other_tid);
+        BOOST_REQUIRE(bool(*pin1));
+        BOOST_REQUIRE(pin1->rp() == handle->rp());
+        BOOST_REQUIRE(bool(*pin2));
+
+        // A reference taken from a reference is just as good a source as the original.
+        std::optional chained = pin1->clone(other_tid);
+        BOOST_REQUIRE(chained->rp() == handle->rp());
+
+        // Seal the segment the references are in: only a sealed segment reports
+        // as dirty, and only then does the count become observable.
+        co_await log.force_new_active_segment();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        // Now drop them one at a time. Every step but the last must leave the
+        // segment dirty — which is what fails if clone() did not count.
+        handle.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        dup.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        pin1.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        pin2.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        chained.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()

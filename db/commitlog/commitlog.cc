@@ -92,6 +92,9 @@ class db::cf_holder {
 public:
     virtual ~cf_holder() {};
     virtual void release_cf_count(const cf_id_type&, const replay_position&) = 0;
+    // Take an additional reference at an already-referenced position, for the given
+    // column family. Symmetric with release_cf_count: the two must balance.
+    virtual rp_handle acquire_cf_count(const cf_id_type&, const replay_position&) = 0;
 };
 
 const db::replay_position db::replay_position::max = db::replay_position(std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max());
@@ -775,7 +778,22 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     size_t _buffer_ostream_size = 0;
     std::unordered_map<cf_id_type, uint64_t> _cf_dirty;
     std::unordered_map<cf_id_type, gc_clock::time_point> _cf_min_time;
-    std::unordered_multimap<replay_position, rp_handle> _extended_segments;
+    // Tail segments of an entry that did not fit in this (head) segment, keyed
+    // by the position the write reported, with a count of the references
+    // outstanding there. Several references can share one position — each entry
+    // of a strongly consistent raft batch takes one
+    // (commitlog::acquire_cf_count) — and without the count the first release
+    // would free the tails while the head is still dirty, leaving a head
+    // fragment whose continuation is gone: unreadable on replay.
+    //
+    // The erase in release_cf_count() never fires today: the store site keys
+    // these by a default-constructed position (SCYLLADB-3986), so tails are
+    // freed only when the whole head segment goes clean.
+    struct extended_entry {
+        uint32_t owners = 1;
+        std::vector<rp_handle> tail_pins;
+    };
+    std::unordered_map<replay_position, extended_entry> _extended_segments;
     time_point _sync_time;
     utils::flush_queue<replay_position, std::less<replay_position>, clock_type> _pending_ops;
 
@@ -866,8 +884,10 @@ public:
             mode = dispose_mode::Delete;
         } else if (_segment_manager->cfg.warn_about_segments_left_on_disk_after_shutdown) {
             clogger.warn("Segment {} is dirty and is left on disk.", *this);
-            for (auto& [rp, h] : _extended_segments) {
-                h.release(); // do not clear out sequential seqments either.
+            for (auto& [rp, e] : _extended_segments) {
+                for (auto& h : e.tail_pins) {
+                    h.release(); // do not clear out sequential seqments either.
+                }
             }
         }
 
@@ -906,8 +926,21 @@ public:
         }
     }
     void release_cf_count(const cf_id_type& cf, const replay_position& rp) override {
-        _extended_segments.erase(rp);
+        // Last owner out frees the tails (see extended_entry).
+        if (auto it = _extended_segments.find(rp); it != _extended_segments.end() && --it->second.owners == 0) {
+            _extended_segments.erase(it);
+        }
         release_cf_count(cf);
+    }
+
+    rp_handle acquire_cf_count(const cf_id_type& cf, const replay_position& rp) override {
+        SCYLLA_ASSERT(contains(rp));
+        _cf_dirty[cf]++; // increase use count for cf.
+        _cf_min_time.emplace(cf, gc_clock::now()); // if value already exists this does nothing.
+        if (auto it = _extended_segments.find(rp); it != _extended_segments.end()) {
+            ++it->second.owners; // a fragmented entry's tails must outlive this reference too
+        }
+        return rp_handle(static_pointer_cast<cf_holder>(shared_from_this()), cf, rp);
     }
 
     bool must_sync() {
@@ -1886,7 +1919,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                         // be replayed, in which case we want to be able to
                         // reconstruct a fragmented entry, if for no other
                         // reason to be able to clear its state (see replay_state).
-                        seg_ptr->_extended_segments.emplace(pw._rp, std::move(pw._h));
+                        seg_ptr->_extended_segments[pw._rp].tail_pins.push_back(std::move(pw._h));
                     }
                 }
             }
@@ -3294,6 +3327,12 @@ future<utils::chunked_vector<db::rp_handle>> db::commitlog::add_raft_entries(
         }
     };
     return _segment_manager->allocate_when_possible(cl_raft_entries_writer(std::move(entry_writers), id), db::no_timeout);
+}
+
+db::rp_handle db::rp_handle::clone(const cf_id_type& id) const {
+    // This handle names the segment and the position, so there is no lookup
+    // and no way to ask for a segment that is already gone.
+    return _h->acquire_cf_count(id, _rp);
 }
 
 db::commitlog::commitlog(config cfg)

@@ -68,6 +68,28 @@ class cf_holder;
 
 using cf_id_type = table_id;
 
+// One reference in a commitlog segment's use count.
+//
+// A segment counts, per table, how many outstanding references there are to it
+// (segment::_cf_dirty — master calls this the "use count"), and it cannot be
+// discarded or recycled while any table's count is non-zero
+// (segment::is_clean() is that map being empty). An rp_handle owns exactly one
+// such reference, so "the segment is still referenced" and "an rp_handle for it
+// exists somewhere" are the same statement.
+//
+// A reference is acquired either by a write, which returns one per entry, or by
+// rp_handle::clone(), which takes another at a live handle's position without
+// writing any bytes. It is given up in one of three ways:
+//
+//   - destroying the handle, which decrements the count
+//     (segment::release_cf_count);
+//   - handing it to a memtable with rp_set::put(), which moves the reference
+//     into the memtable's own per-segment count; that memtable's flush then
+//     decrements it (commitlog::discard_completed_segments);
+//   - calling release(), which *abandons* the decrement: the reference stays
+//     outstanding for the life of the process and the segment is kept. Note
+//     that this is the opposite of what the name suggests. It exists so that
+//     segments can deliberately survive shutdown for replay.
 class rp_handle {
 public:
     rp_handle() noexcept;
@@ -75,6 +97,27 @@ public:
     rp_handle& operator=(rp_handle&&) noexcept;
     ~rp_handle();
 
+    // Take another reference at this handle's position, accounted to `id`.
+    //
+    // No bytes are written and the position is carried over, so the new handle
+    // is a second, independent reference to the same place in the same
+    // segment: each decrements once when destroyed, and the segment lives
+    // while any of them is outstanding. `id` need not be a table the segment
+    // was written for, because the accounting is a pure count (see above).
+    //
+    // Carrying the source's position rather than inventing one matters: a
+    // memtable records the highest position it holds, and that feeds sstable
+    // stats metadata and the truncation and cleanup record filters. A synthetic
+    // position could understate it, in the direction that lets replay
+    // resurrect data those filters are meant to drop.
+    //
+    // Calling it on a live handle is what makes this total: *this is itself
+    // the proof that the segment is still there, so there is no lookup and no
+    // failure mode.
+    rp_handle clone(const cf_id_type& id) const;
+
+    // Abandon this reference's decrement — see the note above: the segment is
+    // *kept*, not released. Returns the position the handle held.
     replay_position release();
 
     operator bool() const {
