@@ -1810,4 +1810,43 @@ SEASTAR_TEST_CASE(test_raft_commitlog_load_log_one_shot) {
     });
 }
 
+
+// Test: commitlog::acquire_cf_count() takes an extra reference at a live handle's
+// position — under the same or a different column family, any number of times
+// — and every reference releases independently (accounting is a pure count; an
+// unbalanced release would trip the segment's internal assert). The new handle
+// carries the source's position, which is what keeps a memtable's recorded
+// replay position truthful when a batch's entries share one record.
+SEASTAR_TEST_CASE(test_commitlog_acquire_cf_count) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto other_tid = make_table_id();
+
+        auto entry = make_command_entry(raft::term_t(1), raft::index_t(1));
+        auto handle = co_await write_raft_entry_to_commitlog(log, tid, gid, entry);
+        BOOST_REQUIRE(bool(handle));
+
+        // A second reference under the entry's own cf, at the same position.
+        auto dup = log.acquire_cf_count(handle, tid);
+        BOOST_REQUIRE(bool(dup));
+        BOOST_REQUIRE(dup.rp() == handle.rp());
+
+        // References under a cf the segment was never written for, as
+        // write_batches() takes them for system.raft_groups; repeats are legal.
+        auto pin1 = log.acquire_cf_count(handle, other_tid);
+        auto pin2 = log.acquire_cf_count(handle, other_tid);
+        BOOST_REQUIRE(bool(pin1));
+        BOOST_REQUIRE(pin1.rp() == handle.rp());
+        BOOST_REQUIRE(bool(pin2));
+
+        // A reference taken from a reference is just as good a source as the original.
+        auto chained = log.acquire_cf_count(pin1, other_tid);
+        BOOST_REQUIRE(chained.rp() == handle.rp());
+
+        // All five references release independently at destruction.
+        co_return;
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()

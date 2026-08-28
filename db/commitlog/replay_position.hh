@@ -68,6 +68,28 @@ class cf_holder;
 
 using cf_id_type = table_id;
 
+// One reference in a commitlog segment's use count.
+//
+// A segment counts, per table, how many outstanding references there are to it
+// (segment::_cf_dirty — master calls this the "use count"), and it cannot be
+// discarded or recycled while any table's count is non-zero
+// (segment::is_clean() is that map being empty). An rp_handle owns exactly one
+// such reference, so "the segment is still referenced" and "an rp_handle for it
+// exists somewhere" are the same statement.
+//
+// A reference is acquired either by a write, which returns one per entry, or by
+// commitlog::acquire_cf_count(), which takes another at a live handle's
+// position without writing any bytes. It is given up in one of three ways:
+//
+//   - destroying the handle, which decrements the count
+//     (segment::release_cf_count);
+//   - handing it to a memtable with rp_set::put(), which moves the reference
+//     into the memtable's own per-segment count; that memtable's flush then
+//     decrements it (commitlog::discard_completed_segments);
+//   - calling release(), which *abandons* the decrement: the reference stays
+//     outstanding for the life of the process and the segment is kept. Note
+//     that this is the opposite of what the name suggests. It exists so that
+//     segments can deliberately survive shutdown for replay.
 class rp_handle {
 public:
     rp_handle() noexcept;
@@ -75,6 +97,8 @@ public:
     rp_handle& operator=(rp_handle&&) noexcept;
     ~rp_handle();
 
+    // Abandon this reference's decrement — see the note above: the segment is
+    // *kept*, not released. Returns the position the handle held.
     replay_position release();
 
     operator bool() const {

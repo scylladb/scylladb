@@ -92,6 +92,9 @@ class db::cf_holder {
 public:
     virtual ~cf_holder() {};
     virtual void release_cf_count(const cf_id_type&, const replay_position&) = 0;
+    // Take an additional reference at an already-referenceed position, for the given
+    // column family. Symmetric with release_cf_count: the two must balance.
+    virtual rp_handle acquire_cf_count(const cf_id_type&, const replay_position&) = 0;
 };
 
 const db::replay_position db::replay_position::max = db::replay_position(std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max());
@@ -775,7 +778,27 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     size_t _buffer_ostream_size = 0;
     std::unordered_map<cf_id_type, uint64_t> _cf_dirty;
     std::unordered_map<cf_id_type, gc_clock::time_point> _cf_min_time;
-    std::unordered_multimap<replay_position, rp_handle> _extended_segments;
+    // Tail segments of an entry that did not fit in this (head) segment, keyed
+    // by the position the write reported for it, with a count of the references
+    // outstanding at that position. The count exists because several references can
+    // share one position: a strongly consistent raft batch is a single
+    // commitlog entry, and each of its entries takes a reference at that entry's
+    // position (commitlog::acquire_cf_count). Without it, the first of those
+    // references to be released would take the tails with it while the head is
+    // still dirty, leaving a head fragment whose continuation has been
+    // reclaimed — unreadable on replay.
+    //
+    // Today the erase-by-position below cannot fire at all, because the store
+    // site keys these by a default-constructed position rather than the head
+    // entry's (SCYLLADB-3986), so the tails are in practice freed only when the
+    // whole head segment goes clean. The count is kept regardless: it makes the
+    // shared ownership explicit, so repairing that keying cannot silently break
+    // the callers that hold several references at one position.
+    struct extended_entry {
+        uint32_t owners = 1;
+        std::vector<rp_handle> tail_pins;
+    };
+    std::unordered_map<replay_position, extended_entry> _extended_segments;
     time_point _sync_time;
     utils::flush_queue<replay_position, std::less<replay_position>, clock_type> _pending_ops;
 
@@ -866,8 +889,10 @@ public:
             mode = dispose_mode::Delete;
         } else if (_segment_manager->cfg.warn_about_segments_left_on_disk_after_shutdown) {
             clogger.warn("Segment {} is dirty and is left on disk.", *this);
-            for (auto& [rp, h] : _extended_segments) {
-                h.release(); // do not clear out sequential seqments either.
+            for (auto& [rp, e] : _extended_segments) {
+                for (auto& h : e.tail_pins) {
+                    h.release(); // do not clear out sequential seqments either.
+                }
             }
         }
 
@@ -906,8 +931,27 @@ public:
         }
     }
     void release_cf_count(const cf_id_type& cf, const replay_position& rp) override {
-        _extended_segments.erase(rp);
+        // Last one out frees the tails (see extended_entry). Positions with no
+        // fragmented entry are absent from the map, which is the common case —
+        // and, per SCYLLADB-3986, currently every position is, so this never
+        // fires today.
+        if (auto it = _extended_segments.find(rp); it != _extended_segments.end() && --it->second.owners == 0) {
+            _extended_segments.erase(it);
+        }
         release_cf_count(cf);
+    }
+
+    rp_handle acquire_cf_count(const cf_id_type& cf, const replay_position& rp) override {
+        SCYLLA_ASSERT(contains(rp));
+        _cf_dirty[cf]++; // increase use count for cf.
+        _cf_min_time.emplace(cf, gc_clock::now()); // if value already exists this does nothing.
+        if (auto it = _extended_segments.find(rp); it != _extended_segments.end()) {
+            ++it->second.owners; // a fragmented entry's tails must outlive this reference too
+        }
+        // References are a pure count, so several may share one position; the only
+        // position-keyed state in the release path is _extended_segments, and
+        // the owner count above is what makes sharing safe there.
+        return rp_handle(static_pointer_cast<cf_holder>(shared_from_this()), cf, rp);
     }
 
     bool must_sync() {
@@ -1886,7 +1930,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                         // be replayed, in which case we want to be able to
                         // reconstruct a fragmented entry, if for no other
                         // reason to be able to clear its state (see replay_state).
-                        seg_ptr->_extended_segments.emplace(pw._rp, std::move(pw._h));
+                        seg_ptr->_extended_segments[pw._rp].tail_pins.push_back(std::move(pw._h));
                     }
                 }
             }
@@ -3276,6 +3320,12 @@ future<utils::chunked_vector<db::rp_handle>> db::commitlog::add_raft_entries(
         }
     };
     return _segment_manager->allocate_when_possible(cl_raft_entries_writer(std::move(entry_writers), id), db::no_timeout);
+}
+
+db::rp_handle db::commitlog::acquire_cf_count(const rp_handle& src, const cf_id_type& id) {
+    // The source handle names the segment and the position, so there is no
+    // lookup and no way to ask for a segment that is already gone.
+    return src._h->acquire_cf_count(id, src._rp);
 }
 
 db::commitlog::commitlog(config cfg)
