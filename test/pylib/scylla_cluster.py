@@ -30,7 +30,7 @@ from test.pylib.scylla_server import (
     make_scylla_conf,
     merge_cmdline_options,
 )
-from test.pylib.util import gather_safely
+from test.pylib.util import gather_safely, graceful_stop_timeout
 
 
 type ClusterFactory = Callable[[logging.Logger | logging.LoggerAdapter], Awaitable[ScyllaCluster]]
@@ -229,7 +229,8 @@ class ScyllaCluster:
             self.logger.info("Cluster %s stopping gracefully", self)
             self.is_dirty = True
             # If self.running is empty, no-op
-            await gather_safely(*(server.stop_gracefully() for server in self.running.values()))
+            await gather_safely(*(server.stop_gracefully(graceful_stop_timeout(self.mode))
+                                  for server in self.running.values()))
             self.stopped.update(self.running)
             self.running.clear()
 
@@ -508,7 +509,7 @@ class ScyllaCluster:
         # Remove the server from `running` only after we successfully stop it.
         # Stopping may fail and if we removed it from `running` now it might leak.
         if gracefully:
-            await server.stop_gracefully()
+            await server.stop_gracefully(graceful_stop_timeout(self.mode))
         else:
             await server.stop()
         if server_id in self.running:

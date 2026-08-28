@@ -1026,9 +1026,11 @@ class ScyllaServer:
 
     @stop_event
     @start_stop_lock
-    async def stop_gracefully(self) -> None:
+    async def stop_gracefully(self, timeout: float) -> None:
         """Stop a running server. No-op if not running. Uses SIGTERM to
-        stop, so it is graceful. Waits for the process to exit before return."""
+        stop, so it is graceful. Waits up to `timeout` seconds for the process
+        to exit, then kills it and raises. The caller picks the timeout because
+        it scales with the build mode, which the server does not know."""
         self.logger.info("gracefully stopping %s", self)
         if not self.cmd:
             return
@@ -1039,17 +1041,16 @@ class ScyllaServer:
         except ProcessLookupError:
             pass
         else:
-            STOP_TIMEOUT_SECONDS = 120
             wait_task = self.cmd.wait()
             try:
-                await asyncio.wait_for(wait_task, timeout=STOP_TIMEOUT_SECONDS)
+                await asyncio.wait_for(wait_task, timeout=timeout)
                 if self.cmd.returncode != 0:
                     raise RuntimeError(f"Server {self} exited with non-zero exit code: {self.cmd.returncode}")
             except asyncio.TimeoutError:
                 self.cmd.kill()
                 await self.cmd.wait()
                 raise RuntimeError(
-                    f"Stopping server {self} gracefully took longer than {STOP_TIMEOUT_SECONDS}s")
+                    f"Stopping server {self} gracefully took longer than {timeout}s")
         finally:
             if self.cmd:
                 self.logger.info("gracefully stopped %s", self)
