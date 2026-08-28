@@ -474,6 +474,240 @@ SEASTAR_TEST_CASE(test_groups_store_load_snapshot_descriptor) {
     });
 }
 
+// Test that a committed configuration is persisted by the covering mutation,
+// without any snapshot: store_log_entries + store_commit_idx must leave the
+// configuration readable through load_committed_config(), and the boot-time
+// restore path must then hand it to the snapshot descriptor (SCYLLADB-3842).
+SEASTAR_TEST_CASE(test_groups_committed_config_persisted_by_coverage) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+
+        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+
+        auto make_member = [] {
+            return raft::config_member{raft::server_address{
+                    raft::server_id::create_random_id(),
+                    ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"))
+                }, raft::is_voter::yes};
+        };
+        // Bootstrap writes a snapshot descriptor carrying the initial
+        // configuration — that is what a group starts from, and what the
+        // committed configuration below has to replace.
+        raft::configuration initial_cfg({make_member()});
+        co_await storage.bootstrap(initial_cfg, false);
+        raft::configuration cfg({make_member()});
+
+        // A configuration entry at idx 1000, followed by a command so the
+        // batch's segment has a higher max index than the configuration.
+        std::vector<raft::log_entry_ptr> entries;
+        entries.push_back(make_lw_shared(raft::log_entry{
+                .term = raft::term_t(3), .idx = raft::index_t(1000), .data = cfg}));
+        raft::command cmd;
+        ser::serialize(cmd, 7);
+        entries.push_back(make_lw_shared(raft::log_entry{
+                .term = raft::term_t(3), .idx = raft::index_t(1001), .data = std::move(cmd)}));
+        co_await storage.store_log_entries(entries);
+
+        // Nothing is persisted until the segment is covered.
+        auto before_commit = co_await raft_groups_storage::load_committed_config(qp, gid, test_shard);
+        BOOST_CHECK(!before_commit.has_value());
+
+        // Committing the range covers the segment, and the covering mutation
+        // carries the configuration with the index of its entry.
+        co_await storage.store_commit_idx(raft::index_t(1001));
+        auto persisted = co_await raft_groups_storage::load_committed_config(qp, gid, test_shard);
+        BOOST_REQUIRE(persisted.has_value());
+        BOOST_CHECK_EQUAL(persisted->first, raft::index_t(1000));
+        BOOST_CHECK(persisted->second == cfg);
+
+        // Until the restore runs, the group would still start from the
+        // bootstrap configuration — that is the loss this closes.
+        auto snap = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK(snap.config == initial_cfg);
+
+        // The boot-time restore path turns the covered configuration into the
+        // snapshot descriptor's configuration, which is what the group starts
+        // from.
+        co_await raft_groups_storage::store_snapshot_config_if_newer(
+                qp, gid, test_shard, persisted->second, persisted->first);
+        snap = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK(snap.config == cfg);
+    });
+}
+
+// Test that a configuration committed but never snapshotted is recoverable:
+// store_snapshot_config_if_newer() replaces the stored configuration when the
+// committed entry is newer than the persisted snapshot index, and leaves it
+// alone when the snapshot already accounts for it (SCYLLADB-3842). This is what
+// commitlog replay uses for the committed configuration entries it drops.
+SEASTAR_TEST_CASE(test_groups_restore_committed_config_only_if_newer) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+
+        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+
+        auto make_config = [] {
+            raft::config_member srv{raft::server_address{
+                    raft::server_id::create_random_id(),
+                    ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"))
+                }, raft::is_voter::yes};
+            return raft::configuration({std::move(srv)});
+        };
+
+        // A snapshot at index 100 carrying config A.
+        const auto snap_cfg = make_config();
+        co_await storage.store_snapshot_descriptor(raft::snapshot_descriptor{
+                .idx = raft::index_t(100), .term = raft::term_t(1),
+                .config = snap_cfg, .id = raft::snapshot_id::create_random_id()}, 0);
+
+        // A configuration committed at index 50 is already accounted for by
+        // that snapshot: it must not overwrite config A.
+        co_await raft_groups_storage::store_snapshot_config_if_newer(
+                qp, gid, test_shard, make_config(), raft::index_t(50));
+        auto loaded = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK(loaded.config == snap_cfg);
+
+        // A configuration committed at index 150 is newer than the snapshot,
+        // so it replaces the stored one — this is the case that would
+        // otherwise be lost when the group never snapshots again.
+        const auto newer_cfg = make_config();
+        co_await raft_groups_storage::store_snapshot_config_if_newer(
+                qp, gid, test_shard, newer_cfg, raft::index_t(150));
+        loaded = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK(loaded.config == newer_cfg);
+        // Only the configuration changed; the snapshot index is untouched.
+        BOOST_CHECK_EQUAL(loaded.idx, raft::index_t(100));
+    });
+}
+
+// Test that a configuration entry which was still uncommitted at a crash is
+// persisted once it commits after the restart. The replay path only restores
+// *committed* configurations, so this one is carried by the rewritten entry
+// alone: the group must track it from construction, or its covering mutation
+// carries no configuration at all and the configuration ends up nowhere
+// durable once the entry's segment is reclaimed (SCYLLADB-3842).
+SEASTAR_TEST_CASE(test_groups_uncommitted_config_persisted_after_restart) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+
+        raft::config_member srv{raft::server_address{
+                raft::server_id::create_random_id(),
+                ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"))
+            }, raft::is_voter::yes};
+        const raft::configuration cfg({std::move(srv)});
+
+        // A configuration entry at idx 1000 and a command at 1001, both
+        // uncommitted — the state a crash leaves behind. Rewrite them to the
+        // commitlog exactly as the replay path does, and hand the result to
+        // the group as its replayed data.
+        raft::log_entry_ptr_list uncommitted;
+        uncommitted.push_back(make_lw_shared(raft::log_entry{
+                .term = raft::term_t(3), .idx = raft::index_t(1000), .data = cfg}));
+        raft::command cmd;
+        ser::serialize(cmd, 7);
+        uncommitted.push_back(make_lw_shared(raft::log_entry{
+                .term = raft::term_t(3), .idx = raft::index_t(1001), .data = std::move(cmd)}));
+
+        replayed_data_per_group replayed;
+        auto batch_handle = co_await raft_commitlog::write_batches(cl, dummy_table,
+                db::system_keyspace::raft_groups()->id(), gid, uncommitted,
+                raft_term_and_index{}, replayed.covers);
+        BOOST_REQUIRE(bool(batch_handle));
+        replayed.rewritten = batch_ref{
+                .first = uncommitted.front()->idx,
+                .last = uncommitted.back()->idx,
+                .reference = std::move(batch_handle)};
+        for (const auto& e : uncommitted) {
+            replayed.entries.push_back(e);
+        }
+
+        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, std::move(replayed));
+
+        // Nothing is persisted while the entries are uncommitted.
+        auto before_commit = co_await raft_groups_storage::load_committed_config(qp, gid, test_shard);
+        BOOST_CHECK(!before_commit.has_value());
+
+        // Committing the range covers the rewritten segment; the covering
+        // mutation has to carry the configuration of the entry it covers.
+        co_await storage.store_commit_idx(raft::index_t(1001));
+        auto persisted = co_await raft_groups_storage::load_committed_config(qp, gid, test_shard);
+        BOOST_REQUIRE(persisted.has_value());
+        BOOST_CHECK_EQUAL(persisted->first, raft::index_t(1000));
+        BOOST_CHECK(persisted->second == cfg);
+    });
+}
+
+// Test that a configuration recovered from the replayed entries and one already
+// durable in system.raft_groups are merged by index, not by write order. Replay
+// writes what the log carried through store_committed_config_if_higher(), so
+// the boot-time snapshot restore reads a single source and cannot regress a
+// newer configuration to an older one (SCYLLADB-3842).
+SEASTAR_TEST_CASE(test_groups_committed_config_restore_keeps_the_newest) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+
+        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+
+        auto make_config = [] {
+            raft::config_member srv{raft::server_address{
+                    raft::server_id::create_random_id(),
+                    ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"))
+                }, raft::is_voter::yes};
+            return raft::configuration({std::move(srv)});
+        };
+
+        // The bootstrap snapshot the group would otherwise come back with.
+        const auto initial_cfg = make_config();
+        co_await storage.bootstrap(initial_cfg, false);
+
+        // The durable state after a crash: a configuration covered at index 10
+        // reached an sstable, while the one covered at index 20 died with the
+        // raft_groups memtable. Replay recovers index 20 from the entry the
+        // segment's reference kept alive.
+        const auto older = make_config();
+        co_await raft_groups_storage::store_committed_config_if_higher(
+                qp, gid, test_shard, older, raft::index_t(10));
+        const auto newer = make_config();
+        co_await raft_groups_storage::store_committed_config_if_higher(
+                qp, gid, test_shard, newer, raft::index_t(20));
+
+        auto persisted = co_await raft_groups_storage::load_committed_config(qp, gid, test_shard);
+        BOOST_REQUIRE(persisted.has_value());
+        BOOST_CHECK_EQUAL(persisted->first, raft::index_t(20));
+        BOOST_CHECK(persisted->second == newer);
+
+        // A configuration recovered from a replayed log that ends in a
+        // discarded tail can be older than the durable one; it must not win.
+        co_await raft_groups_storage::store_committed_config_if_higher(
+                qp, gid, test_shard, make_config(), raft::index_t(15));
+        persisted = co_await raft_groups_storage::load_committed_config(qp, gid, test_shard);
+        BOOST_REQUIRE(persisted.has_value());
+        BOOST_CHECK_EQUAL(persisted->first, raft::index_t(20));
+        BOOST_CHECK(persisted->second == newer);
+
+        // What the boot-time restore then hands to the snapshot descriptor is
+        // that single merged value, replacing the bootstrap configuration.
+        auto snap = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK(snap.config == initial_cfg);
+        co_await raft_groups_storage::store_snapshot_config_if_newer(
+                qp, gid, test_shard, persisted->second, persisted->first);
+        snap = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK(snap.config == newer);
+    });
+}
+
 // Verify partitioner round-trip: token_for_shard -> shard_of returns the original shard
 SEASTAR_TEST_CASE(test_fixed_shard_partitioner_shard_mapping) {
     for (uint16_t shard = 0; shard < 256; ++shard) {

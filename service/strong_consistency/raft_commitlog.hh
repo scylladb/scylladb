@@ -62,7 +62,9 @@ using pending_cover_map = std::map<db::segment_id_type, pending_cover>;
 //
 // Dummy and configuration entries need no reference of their own. The segment's
 // cover has max_idx >= their index, so it is released only once a durable
-// commit index covers them, by which point replay does not need the entries.
+// commit index covers them, by which point replay does not need the entries;
+// and a committed configuration is persisted by the very mutation that
+// carries the cover's reference (take_committed_config()).
 struct batch_ref {
     raft::index_t first;
     raft::index_t last;
@@ -166,6 +168,22 @@ private:
         db::rp_handle segment_holder;
     };
     std::vector<orphaned_holder> _orphaned_holders;
+    // Configurations of the configuration entries appended but not yet known
+    // to be committed, in index order. note_commit_idx() promotes the ones
+    // the commit index has reached into _committed_config, and truncate_log()
+    // drops the discarded tail. A configuration is a handful of members, and
+    // only the in-flight window is held.
+    //
+    // Fed from both sources of an uncommitted entry: store_log_entries() for
+    // entries appended in this run, and the constructor for entries the
+    // commitlog replay rewrote. Missing the second one loses a configuration
+    // that was uncommitted at a crash and commits after the restart, since
+    // the replay-side recovery only handles committed ones (SCYLLADB-3842).
+    std::deque<std::pair<raft::index_t, raft::configuration>> _appended_configs;
+    // The newest committed configuration not yet handed to a covering
+    // mutation, with the index of the entry that carried it. Consumed by
+    // take_committed_config().
+    std::optional<std::pair<raft::index_t, raft::configuration>> _committed_config;
     // (index, term) of the entries appended but not yet known to be
     // committed, in index order. note_commit_idx() consumes the prefix the
     // commit index has reached, keeping the last consumed pair in
@@ -253,6 +271,15 @@ public:
     // mutation and its pin share a memtable generation, so the pin can only
     // be released by the flush that makes the covering value durable.
     std::vector<segment_cover> take_committed_covers(raft::index_t commit_idx);
+
+    // Hand out the newest committed configuration whose entry is at or below
+    // `idx`, if one is pending. The caller must persist it in the same
+    // system.raft_groups mutation as the covering value for that entry's
+    // segment: the configuration then becomes durable exactly when the
+    // segment's reference is released, so the entry can only be reclaimed once
+    // its configuration is safe. Returns nothing when no configuration was
+    // committed in that range, or when it has already been handed out.
+    std::optional<std::pair<raft::index_t, raft::configuration>> take_committed_config(raft::index_t idx);
 
     // Mint a memtable reference for each of the specified command entries from
     // the reference of the batch it was written in, and forget the command. Each

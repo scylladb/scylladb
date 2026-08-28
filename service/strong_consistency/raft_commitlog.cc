@@ -30,6 +30,13 @@ bool is_command_entry(const raft::log_entry& e) {
     return std::holds_alternative<raft::command>(e.data);
 }
 
+// Configuration entries carry state no covering value can reconstruct, so the
+// configuration is persisted by the covering mutation itself and the entry has
+// to stay readable until then; their handles therefore follow a different
+// release rule than commands and dummies (see SCYLLADB-3842).
+bool is_config_entry(const raft::log_entry& e) {
+    return std::holds_alternative<raft::configuration>(e.data);
+}
 } // namespace
 
 raft_commitlog::raft_commitlog(raft::group_id group_id, db::commitlog& commitlog, table_id target_table_id,
@@ -57,6 +64,21 @@ raft_commitlog::raft_commitlog(raft::group_id group_id, db::commitlog& commitlog
         }
         if (is_command_entry(*e)) {
             _pending_commands.push_back(e->idx);
+        } else if (is_config_entry(*e)) {
+            // A configuration that was still uncommitted at the crash commits
+            // after the restart, and only a covering mutation will make it
+            // durable — the replay-time restore handles committed ones only.
+            // Without this seeding it would reach note_commit_idx() unknown,
+            // its covering mutation would carry no configuration, and the
+            // entry would be released anyway: the SCYLLADB-3842 loss on the
+            // one path the replay-time restore does not cover.
+            //
+            // Indexes here are above the recovered commit index, hence above
+            // any config_idx already durable in system.raft_groups (that one
+            // was written by a covering mutation, in the same mutation as a
+            // commit_idx at or below the recovered one), so a covering
+            // mutation can only ever advance the persisted configuration.
+            _appended_configs.emplace_back(e->idx, std::get<raft::configuration>(e->data));
         }
     }
     logger.debug("starting raft_commitlog group_id={}, table_id={}, replayed_entries={}, "
@@ -157,6 +179,8 @@ seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_li
         if (is_command_entry(*log_entry_ptr)) {
             _pending_commands.push_back(log_entry_ptr->idx);
             has_commands = true;
+        } else if (is_config_entry(*log_entry_ptr)) {
+            _appended_configs.emplace_back(log_entry_ptr->idx, std::get<raft::configuration>(log_entry_ptr->data));
         }
     }
     // Only a batch containing commands needs its reference kept: apply() mints
@@ -181,6 +205,14 @@ void raft_commitlog::note_commit_idx(const raft::index_t idx) {
     while (!_appended_terms.empty() && _appended_terms.front().idx <= idx) {
         _last_committed = _appended_terms.front();
         _appended_terms.pop_front();
+    }
+    // Same for the configurations: the newest one the commit index has reached
+    // is the one a covering mutation must persist. An older pending
+    // configuration is superseded and can be dropped — configurations are
+    // whole member sets, not deltas.
+    while (!_appended_configs.empty() && _appended_configs.front().first <= idx) {
+        _committed_config = std::move(_appended_configs.front());
+        _appended_configs.pop_front();
     }
 }
 
@@ -222,6 +254,9 @@ void raft_commitlog::truncate_log(const raft::index_t idx) {
     // not end up in a floor, and their configurations must not be persisted.
     while (!_appended_terms.empty() && _appended_terms.back().idx >= idx) {
         _appended_terms.pop_back();
+    }
+    while (!_appended_configs.empty() && _appended_configs.back().first >= idx) {
+        _appended_configs.pop_back();
     }
     // Covers whose max_idx refers to truncated entries can never pop with a
     // correct (idx, term) pair, and leaving them parked would wedge
@@ -305,6 +340,17 @@ std::vector<segment_cover> raft_commitlog::take_committed_covers(raft::index_t c
                 _group_id, commit_idx, ret.size(), _pending_covers.size());
     }
     return ret;
+}
+
+std::optional<std::pair<raft::index_t, raft::configuration>> raft_commitlog::take_committed_config(const raft::index_t idx) {
+    if (!_committed_config || _committed_config->first > idx) {
+        // Nothing committed in this range, or the configuration belongs to a
+        // segment that is not covered yet — it must ride that segment's
+        // mutation, not an earlier one, or the entry could be reclaimed before
+        // its configuration is durable.
+        return std::nullopt;
+    }
+    return std::exchange(_committed_config, std::nullopt);
 }
 
 std::vector<index_and_replay_position> raft_commitlog::acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries) {
