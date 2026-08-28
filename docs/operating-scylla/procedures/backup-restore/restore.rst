@@ -113,13 +113,13 @@ Repeat the following steps for each node in the cluster:
 
       sudo cp -r * /var/lib/scylla/data/mykeyspace/team_players-6e856600017f11e790f4000000000000
 
-#. If you have incremental backup files, copy them from the **backups** folder ``/var/lib/scylla/data/keyspace_name/table_name-UUID/backups/<backups_name>`` to  the ``/var/lib/scylla/data/keyspace_name/table_name-UUID/`` directory
+#. If you have incremental backup files, copy them from the **backups** folder ``/var/lib/scylla/data/keyspace_name/table_name-UUID/backups`` to  the ``/var/lib/scylla/data/keyspace_name/table_name-UUID/`` directory
 
    For example:
 
    .. code-block:: shell
 
-      sudo cp -r * /var/lib/scylla/data/mykeyspace/team_players-6e856600017f11e790f4000000000000
+      sudo cp -r /var/lib/scylla/data/mykeyspace/team_players-6e856600017f11e790f4000000000000/backups/* /var/lib/scylla/data/mykeyspace/team_players-6e856600017f11e790f4000000000000
 
 #. Make sure that all files are owned by the ``scylla`` user and group:
 
