@@ -394,7 +394,10 @@ class ScyllaClusterManager:
 
     # fence=False: this operation raises the fence itself, and has to stay
     # reachable afterwards to report what the test left behind.
-    @manager_op(fence=False)
+    # timeout=None: the drain below carries its own budget, which scales with
+    # the build mode and so can exceed DEFAULT_OP_TIMEOUT.  A bridge cap
+    # shorter than the drain would abandon the cleanup half-way through.
+    @manager_op(fence=False, timeout=None)
     async def after_test(self, success: bool) -> dict[str, Any]:
         """After-test hook of the manager fixture.
 
@@ -414,12 +417,20 @@ class ScyllaClusterManager:
         current = asyncio.current_task()
         assert current is not None  # ops always run as a task (see manager_op)
         self.tasks_history.pop(current, None)
-        # wait for the operations the test left running
+        # Wait for the operations the test left running.  The budget has to
+        # outlast the longest of them, because asyncio.wait_for() cancels the
+        # task when it expires -- and the task here is the operation itself,
+        # not the shield the caller awaited.  The longest is a graceful stop,
+        # and cancelling one mid-flight is not merely a lost result: the
+        # CancelledError skips stop_gracefully()'s SIGKILL path while its
+        # finally clause still clears self.cmd, disowning a process that is
+        # still shutting down, after which stop() finds nothing left to kill.
+        drain_timeout = graceful_stop_timeout(self.cluster.mode) + 60
         for task, descr in list(self.tasks_history.items()):
             if not task.done():
                 self.logger.info("wait for task:%s, op:%s", task, descr)
                 try:
-                    await asyncio.wait_for(task, timeout=120)
+                    await asyncio.wait_for(task, timeout=drain_timeout)
                 except asyncio.TimeoutError:
                     self.break_manager(f"error on waiting coro {task.get_name()}", self.current_test_case_full_name)
                     break
