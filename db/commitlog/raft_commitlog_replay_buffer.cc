@@ -138,6 +138,11 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
 
     logger.info("processing {} raft groups with {} total entries from commitlog replay", remaining_groups(), total_entries());
 
+    // Shared by all groups: it resolves the table from the mutation itself, and reusing
+    // it lets entries written with the same schema version resolve their schema only once.
+    // No barrier trigger during replay, since group0 is not started yet.
+    service::strong_consistency::schema_store schemas(db, sys_ks);
+
     for (auto& [group_id, entries_list] : _replayed_commitlog_entries_by_group) {
         if (entries_list.empty()) {
             continue;
@@ -179,11 +184,9 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
             // only be deleted after the memtables are flushed. Therefore, the data will either
             // be persisted to SSTables or, in case of a crash, still be available in the old commitlog.
             if (entry->idx <= commit_idx && std::holds_alternative<raft::command>(entry->data)) {
-                utils::chunked_vector<frozen_mutation> muts;
-                muts.emplace_back(service::strong_consistency::detail::deserialize_to_frozen_mutation(entry));
-                // Resolve schema and upgrade mutation if needed (no barrier during replay).
-                auto schemas = co_await service::strong_consistency::resolve_and_upgrade_mutations(muts, table_id, db, sys_ks);
-                co_await db.apply_in_memory(muts[0], schemas[0], db::rp_handle(), db::no_timeout, db::noop_large_data_guardrail::instance());
+                auto mut = service::strong_consistency::detail::deserialize_to_frozen_mutation(entry);
+                auto schema = co_await schemas.resolve_and_upgrade(mut);
+                co_await db.apply_in_memory(mut, std::move(schema), db::rp_handle(), db::no_timeout, db::noop_large_data_guardrail::instance());
                 ++applied;
             }
 
