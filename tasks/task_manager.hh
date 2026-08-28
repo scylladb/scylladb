@@ -227,7 +227,7 @@ public:
             future<> done() const noexcept;
         protected:
             virtual future<> run() = 0;
-            void run_to_completion();
+            future<> run_to_completion();
             future<> maybe_fold_into_parent() const noexcept;
             future<> finish() noexcept;
             future<> finish_failed(std::exception_ptr ex, std::string error) noexcept;
