@@ -11,11 +11,62 @@ Choosing a restore method
 
 ScyllaDB supports several restore methods. Choose the one that matches where your backup files are and whether the cluster topology changed since the backup was taken:
 
+* :ref:`Restore from object storage <restore-object-storage>` - restore SSTables backed up to S3-compatible object storage with :doc:`nodetool backup </operating-scylla/nodetool-commands/backup>`. Runs on a running cluster and works regardless of cluster topology changes since the backup.
+
 * :ref:`Restore with load and stream <restore-load-and-stream>` - upload backed-up SSTable files to a running cluster; the data is streamed to the nodes owning it. Works regardless of cluster topology changes since the backup.
 
 * :ref:`Restore to an identical cluster <restore-procedure>` - copy snapshot files back in place and restart the nodes. Requires a cluster with the same number of nodes and the same token distribution as at the time of the backup, and each node must be restored from the backup of the **same node**. Suitable for vnode-based keyspaces only.
 
 For cluster-wide backup and restore, use `ScyllaDB Manager <https://manager.docs.scylladb.com/stable/restore/>`_, which orchestrates the process across the cluster.
+
+.. _restore-object-storage:
+
+---------------------------
+Restore from object storage
+---------------------------
+
+Use this method to restore SSTables backed up to S3-compatible object storage with :doc:`nodetool backup </operating-scylla/nodetool-commands/backup>`. The node downloads the SSTables from the bucket and streams their contents to the nodes owning the data (load and stream), so the restore works regardless of cluster topology changes since the backup, and the cluster stays online.
+
+The object storage endpoint must be configured on the nodes, as described in :ref:`Configuring Object Storage <object-storage-configuration>`.
+
+**Procedure**
+
+#. Recreate the schema (if needed) and truncate the target tables, as described in the beginning of :ref:`Restore to an identical cluster <restore-procedure>`.
+
+#. List the backed-up SSTables in the bucket under the prefix used during the backup. The restore command takes the paths of the ``TOC.txt`` components of the SSTables to restore, **relative to the prefix** -- the remainder of each object key after the prefix. Note that listing tools print full object keys, from the bucket root, so the prefix needs to be stripped. For example:
+
+   .. code-block:: shell
+
+      aws s3 ls --recursive s3://bucket-foo/ks/cf/24601/ | awk '/-TOC.txt$/ { print $4 }' | sed 's|^ks/cf/24601/||'
+
+#. Run :doc:`nodetool restore </operating-scylla/nodetool-commands/restore>`, passing the endpoint, bucket, prefix, target keyspace and table, and the list of prefix-relative TOC paths:
+
+   .. code-block:: shell
+
+      nodetool restore --endpoint s3.us-east-2.amazonaws.com --bucket bucket-foo --prefix ks/cf/24601 \
+        --keyspace ks --table cf \
+        me-3gdq_0bki_2dy4w2gqj6hoso4mw1-big-TOC.txt \
+        me-3gdq_0bki_2dipc1ysb2x2a3btgh-big-TOC.txt
+
+   Alternatively, put the same prefix-relative TOC paths (newline-separated) in a file and pass it with the ``--sstables-file-list`` option:
+
+   .. code-block:: shell
+
+      cat > sstables.list <<EOF
+      me-3gdq_0bki_2dy4w2gqj6hoso4mw1-big-TOC.txt
+      me-3gdq_0bki_2dipc1ysb2x2a3btgh-big-TOC.txt
+      EOF
+
+      nodetool restore --endpoint s3.us-east-2.amazonaws.com --bucket bucket-foo --prefix ks/cf/24601 \
+        --keyspace ks --table cf --sstables-file-list sstables.list
+
+#. Monitor the restore. By default, the command waits for the restore to finish and reports its final status. With the ``--nowait`` option, it returns a task ID immediately; use the :doc:`nodetool tasks </operating-scylla/nodetool-commands/tasks/index>` commands to track progress or cancel the operation.
+
+**Speeding up the restore**
+
+A single ``nodetool restore`` invocation runs on one node, which downloads and streams all the listed SSTables. To parallelize the work, split the list of SSTables between the nodes and run ``nodetool restore`` on each of them. The ``--scope`` option (``node``, ``rack``, ``dc``, or ``all``) constrains where each node streams the data, so that concurrent restores don't stream the same partition to a replica more than once. See :doc:`nodetool restore </operating-scylla/nodetool-commands/restore>` for details on combining ``--scope`` with per-node SSTable lists.
+
+With the ``--primary-replica-only`` option, each partition is streamed only to its primary replica. This reduces the amount of streamed data, but you **must** run a full cluster repair after the restore completes to replicate the data to the remaining replicas: for vnode-based keyspaces, run :doc:`nodetool repair -pr </operating-scylla/nodetool-commands/repair>` on **every** node; for tablet-based keyspaces, run :doc:`nodetool cluster repair </operating-scylla/nodetool-commands/cluster/repair>` on any single node.
 
 .. _restore-load-and-stream:
 
