@@ -1687,6 +1687,9 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         // component below, causing a file-not-found abort. See SCYLLADB-3263.
         auto lock = get_units(_mutate_sem, 1).get();
 
+        std::unordered_set<component_type> excluded_components = {component, component_type::Scylla};
+        _components_modified_by_rewrite.insert_range(excluded_components);
+
         auto new_sst = creator(shared_from_this());
         auto generation = new_sst->generation();
         auto sid = this->sstable_identifier();
@@ -1707,8 +1710,6 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         // The rest of the sstable is hard-linked and its scylla_metadata is carried over.
         new_sst->mark_created_by_component_rewrite();
 
-        std::unordered_set<component_type> excluded_components = {component, component_type::Scylla};
-        _storage->link_with_excluded_components(*this, generation, excluded_components, *sid).get();
         new_sst->copy_components(*this).get();
 
         new_sst->_metadata_size_on_disk = _metadata_size_on_disk;
@@ -1774,6 +1775,40 @@ future<uint64_t> sstable::component_filesize(component_type type) const noexcept
     return open_file(type, open_flags::ro).then([] (file f) {
         return with_closeable(std::move(f), std::mem_fn(&file::size));
     });
+}
+
+future<> sstable::recover_from_component_rewrite() {
+    auto lock = co_await get_units(_mutate_sem, 1);
+
+    if (_unlinked_at) {
+        co_return;
+    }
+
+    _cloned_to_sstable_filename = std::nullopt;
+
+    if (has_scylla_component() && _components_modified_by_rewrite.contains(component_type::Scylla)) {
+        scylla_metadata metadata;
+        co_await read_simple<component_type::Scylla>(metadata);
+        _components->scylla_metadata = std::move(metadata);
+    }
+
+    for (auto component : _components_modified_by_rewrite) {
+        switch (component) {
+        case component_type::Scylla:
+            // Handled before.
+            break;
+        case component_type::Statistics: {
+            statistics stats{};
+            co_await read_simple_and_verify_digest<component_type::Statistics>(stats);
+            _components->statistics = std::move(stats);
+            break;
+        }
+        default:
+            on_internal_error(sstlog, fmt::format("Rewrite of component {} not supported, cannot recover from changes", component));
+        }
+    }
+
+    _components_modified_by_rewrite.clear();
 }
 
 future<> sstable::read_summary() noexcept {

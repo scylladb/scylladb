@@ -678,6 +678,7 @@ private:
     // with linking or moving the sstable between directories.
     mutable named_semaphore _mutate_sem{1, named_semaphore_exception_factory{"sstable mutate"}};
     std::optional<sstring> _cloned_to_sstable_filename;
+    std::unordered_set<component_type> _components_modified_by_rewrite;
     // Used only for writing sstable.
     scylla_metadata::components_digests _components_digests;
     uint32_t _toc_digest{};
@@ -1268,6 +1269,11 @@ public:
     void write_component_with_metadata(component_type type, scylla_metadata metadata);
 private:
     future<uint64_t> component_filesize(component_type type) const noexcept;
+public:
+    // Component rewrite may modify the in-memory representation of the original
+    // sstable. This function undoes those changes, by re-reading affected
+    // components from file.
+    future<> recover_from_component_rewrite();
 };
 
 // Validate checksums
