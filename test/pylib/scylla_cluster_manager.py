@@ -52,6 +52,7 @@ from test.pylib.util import (
     Host,
     LogPrefixAdapter,
     gather_safely,
+    graceful_stop_timeout,
     universalasync_typed_wrap,
     wait_for,
     wait_for_cql_and_get_hosts,
@@ -1082,8 +1083,16 @@ class ScyllaClusterManager:
                 # In some scenarios errors are expected, e.g. when server_stop() is called concurrently on many servers.
                 pass
 
-    async def server_stop_gracefully(self, server_id: ServerNum, timeout: float = 180) -> None:
-        """Stop specified server gracefully."""
+    async def server_stop_gracefully(self, server_id: ServerNum, timeout: float | None = None) -> None:
+        """Stop specified server gracefully.
+
+        With no timeout given, outlast the server's own graceful-stop timeout
+        for this build mode, so that a slow stop is reported by the server --
+        which knows why it was slow -- instead of timing out here first.
+        """
+        assert self.cluster, "ScyllaClusterManager is not running"
+        if timeout is None:
+            timeout = graceful_stop_timeout(self.cluster.mode) + 60
 
         async with asyncio.timeout(timeout):
             await self._server_stop_gracefully(server_id)
