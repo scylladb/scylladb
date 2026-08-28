@@ -37,7 +37,7 @@ Repeat the following steps for each node in the cluster:
 
 .. note::
 
-   If you are restoring :doc:`encrypted backup files </operating-scylla/security/encryption-at-rest>`, make sure Scylla Enterprise has the same keys used by Scylla to encrypt the data before starting the restore process.
+   If you are restoring :doc:`encrypted backup files </operating-scylla/security/encryption-at-rest>`, make sure ScyllaDB is configured with the same keys that were used to encrypt the data before starting the restore process.
 
 .. note::
 
