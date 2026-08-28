@@ -121,6 +121,10 @@ Repeat the following steps for each node in the cluster:
 
       sudo cp -r * /var/lib/scylla/data/mykeyspace/team_players-6e856600017f11e790f4000000000000
 
+   .. warning::
+
+      Copying files into the table's data directory is only allowed while the ScyllaDB service is **stopped**. To load SSTables into a running node, place them in the table's ``upload`` directory and use :doc:`nodetool refresh </operating-scylla/nodetool-commands/refresh>` instead.
+
 #. If you have incremental backup files, copy them from the **backups** folder ``/var/lib/scylla/data/keyspace_name/table_name-UUID/backups`` to  the ``/var/lib/scylla/data/keyspace_name/table_name-UUID/`` directory
 
    For example:
