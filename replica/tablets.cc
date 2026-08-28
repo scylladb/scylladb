@@ -107,16 +107,10 @@ schema_ptr make_tablets_schema() {
             .build();
 }
 
-schema_ptr make_raft_schema(sstring name, bool is_group0) {
+// Group 0's raft table: the log lives here, as a clustering row per index.
+schema_ptr make_group0_raft_schema(sstring name) {
     auto id = generate_legacy_id(db::system_keyspace::NAME, name);
-    auto builder = schema_builder(this_smp_shard_count(), db::system_keyspace::NAME, name, std::optional(id));
-    if (!is_group0) {
-        if (!strongly_consistent_tables_enabled) {
-            on_internal_error(tablet_logger, "Can't create raft table for strongly consistent tablets when the feature is disabled");
-        }
-        builder.with_column("shard", short_type, column_kind::partition_key);
-    }
-    builder
+    return schema_builder(this_smp_shard_count(), db::system_keyspace::NAME, name, std::optional(id))
         .with_column("group_id", timeuuid_type, column_kind::partition_key)
         // raft log part
         .with_column("index", long_type, column_kind::clustering_key)
@@ -128,21 +122,57 @@ schema_ptr make_raft_schema(sstring name, bool is_group0) {
         // id of the most recent persisted snapshot
         .with_column("snapshot_id", uuid_type, column_kind::static_column)
         .with_column("commit_idx", long_type, column_kind::static_column)
-
         .with_hash_version()
-        .set_caching_options(caching_options::get_disabled_caching_options());
+        .set_caching_options(caching_options::get_disabled_caching_options())
+        .set_comment("Persisted RAFT log, votes and snapshot info")
+        .build();
+}
 
-    if (is_group0) {
-        return builder
-            .set_comment("Persisted RAFT log, votes and snapshot info")
-            .build();
-    } else {
-        return builder
-            .set_comment("Persisted RAFT log, votes and snapshot info for strongly consistent tablets")
-            .with_partitioner(dht::fixed_shard_partitioner::classname)
-            .with_sharder(dht::fixed_shard_sharder::instance())
-            .build();
+// The raft table for strongly consistent tablet groups holds no log: the log
+// lives in the commitlog, and nothing has written index/term/data here since.
+// So there is no clustering key and no static column, and one row per
+// (shard, group_id) holds everything a group remembers.
+//
+//   snapshot_idx    highest index that is committed, applied and safe to drop
+//                   from the log; a restart resumes from it
+//   snapshot_term   term at snapshot_idx, exact: raft reads it for the election
+//                   check (log::is_up_to_date, last_term() on an empty log) and
+//                   for log matching at the snapshot boundary (log::match_term)
+//   snapshot_config configuration at that index, current and previous, IDL-serialized
+//   truncations     time-ordered (segment_id, from, to) records: which indexes a
+//                   leader change discarded from which segment, so replay can drop
+//                   superseded entry copies without consulting terms. Frozen, so
+//                   one release sets the whole history as one cell
+//
+// snapshot_id and commit_idx are still written by CQL and go once the code that
+// writes them does.
+schema_ptr make_tablet_raft_groups_schema(sstring name) {
+    if (!strongly_consistent_tables_enabled) {
+        on_internal_error(tablet_logger, "Can't create raft table for strongly consistent tablets when the feature is disabled");
     }
+    auto id = generate_legacy_id(db::system_keyspace::NAME, name);
+    return schema_builder(this_smp_shard_count(), db::system_keyspace::NAME, name, std::optional(id))
+        .with_column("shard", short_type, column_kind::partition_key)
+        .with_column("group_id", timeuuid_type, column_kind::partition_key)
+        // persisted term and vote
+        .with_column("vote_term", long_type)
+        .with_column("vote", uuid_type)
+        // id of the most recent persisted snapshot
+        .with_column("snapshot_id", uuid_type)
+        .with_column("commit_idx", long_type)
+        // the snapshot descriptor, plus the truncation history replay needs
+        .with_column("snapshot_idx", long_type)
+        .with_column("snapshot_term", long_type)
+        .with_column("snapshot_config", bytes_type)
+        .with_column("truncations",
+                list_type_impl::get_instance(
+                        tuple_type_impl::get_instance({long_type, long_type, long_type}), false))
+        .with_hash_version()
+        .set_caching_options(caching_options::get_disabled_caching_options())
+        .set_comment("Persisted RAFT votes and snapshot info for strongly consistent tablets")
+        .with_partitioner(dht::fixed_shard_partitioner::classname)
+        .with_sharder(dht::fixed_shard_sharder::instance())
+        .build();
 }
 
 schema_ptr make_raft_snapshots_schema(sstring name, bool is_group0) {
