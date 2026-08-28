@@ -131,7 +131,4 @@ Repeat the following steps for each node in the cluster:
 
    .. include:: /rst_include/scylla-commands-start-index.rst
 
-#. Run ``nodetool repair`` command to guarantee that your data is consistent with other nodes.
-
-
-After performing the above on all nodes, repair the cluster with nodetool repair. This makes sure that the data is consistent on all nodes and between each node.
+After performing the above on all nodes, run :doc:`nodetool repair </operating-scylla/nodetool-commands/repair>` on the cluster. This makes sure that the data is consistent on all nodes and between each node.
