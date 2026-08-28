@@ -85,12 +85,14 @@ std::vector<truncation_record> deserialize_truncations(const managed_bytes_view&
 
 raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, replica::database& db, raft::group_id gid,
         raft::server_id server_id, shard_id shard, db::commitlog& commit_log, table_id target_table_id,
-        replayed_data_per_group replayed_data)
+        replayed_data_per_group replayed_data, flush_request_fn request_flush)
     : _group_id(std::move(gid))
     , _server_id(std::move(server_id))
     , _qp(qp)
     , _db(db)
     , _raft_groups_table_id(db::system_keyspace::raft_groups()->id())
+    , _target_table_id(target_table_id)
+    , _request_flush(std::move(request_flush))
     , _raft_commitlog(_group_id, commit_log, target_table_id, _raft_groups_table_id, std::move(replayed_data))
     , _pending_op_fut(make_ready_future<>())
 {
@@ -219,15 +221,46 @@ void raft_groups_storage::note_applied(raft::index_t idx) {
     maybe_release();
 }
 
-void raft_groups_storage::note_closed_up_to(db::replay_position pos) {
-    _raft_commitlog.note_closed_up_to(pos);
+void raft_groups_storage::mark_segment_closed(db::replay_position pos) {
+    _raft_commitlog.mark_segment_closed(pos);
     maybe_release();
 }
 
 void raft_groups_storage::maybe_release() {
     while (auto* rec = _raft_commitlog.front_releasable(_commit_index, _apply_index)) {
+        // Read before the write and the pop, both of which invalidate `rec`.
+        const auto round_already_ran = rec->pin_user_table.rp() <= _raft_commitlog.closed_up_to();
+        const auto segment = rec->segment();
+        // No command means apply() got no reference into this segment, so after
+        // the pop the tablet table holds nothing of ours.
+        const auto has_commands = rec->last_cmd().has_value();
+
         write_snapshot_descriptor(*rec);
         _raft_commitlog.pop_released();
+
+        if (!round_already_ran) {
+            // The round is still ahead, and both tables are dirty in this
+            // segment, so that one round covers every insertion it will get.
+            continue;
+        }
+        if (!_request_flush) {
+            // A test that does not exercise the requests.
+            continue;
+        }
+        // One past the segment names the whole of it, so the table cannot skip
+        // the request (see flush_request_fn). A throw must not break this loop
+        // or escape into the raft persistence path, which treats it as fatal;
+        // losing a request only leaves the segment on disk.
+        const auto pos = db::replay_position(segment + 1, 0);
+        try {
+            if (has_commands) {
+                _request_flush(_target_table_id, pos);
+            }
+            _request_flush(_raft_groups_table_id, pos);
+        } catch (...) {
+            rgslog.warn("group_id={}: flush request for segment {} failed, it stays on disk: {}",
+                    _group_id, segment, std::current_exception());
+        }
     }
 }
 
