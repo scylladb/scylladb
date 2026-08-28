@@ -14,7 +14,9 @@
 #include <seastar/testing/on_internal_error.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
+#include <seastar/util/defer.hh>
 
+#include "clocks-impl.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/commitlog/commitlog_entry.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
@@ -1998,6 +2000,170 @@ BOOST_AUTO_TEST_CASE(test_log_entry_lease_time_round_trip) {
     auto bv2 = buf2.linearize();
     auto in2 = ser::as_input_stream(bv2);
     BOOST_REQUIRE(!ser::deserialize(in2, std::type_identity<raft::log_entry_ptr>())->lease_time);
+}
+
+// Test: clone() takes a reference on the handle's segment under any cf, any number of
+// times. Checked through the dirty count: a clone that took none still passes rp() and bool().
+SEASTAR_TEST_CASE(test_rp_handle_clone) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto other_tid = make_table_id();
+
+        auto entry = make_command_entry(raft::term_t(1), raft::index_t(1));
+        std::optional handle = co_await write_raft_entry_to_commitlog(log, tid, gid, entry);
+        BOOST_REQUIRE(bool(*handle));
+
+        // A clone is at the segment start, which no entry occupies.
+        const db::replay_position segment_start(handle->rp().id, 0);
+        BOOST_REQUIRE(handle->rp() != segment_start);
+
+        std::optional dup = handle->clone(tid);
+        BOOST_REQUIRE(bool(*dup));
+        BOOST_REQUIRE(dup->rp() == segment_start);
+
+        // Only a sealed segment reports as dirty, so the count shows up only now.
+        co_await log.force_new_active_segment();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        // dup holds the segment alone: earlier other_tid clones would hide a dup that took no count.
+        handle.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        // A cf that never wrote to the segment, as system.raft_groups. Repeats are legal.
+        std::optional pin1 = dup->clone(other_tid);
+        std::optional pin2 = dup->clone(other_tid);
+        BOOST_REQUIRE(bool(*pin1));
+        BOOST_REQUIRE(pin1->rp() == segment_start);
+        BOOST_REQUIRE(bool(*pin2));
+
+        std::optional chained = pin1->clone(other_tid);
+        BOOST_REQUIRE(chained->rp() == segment_start);
+
+        // The other_tid clones go last: one that took no reference empties the segment early.
+        dup.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        pin1.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        pin2.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        chained.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+    });
+}
+
+// Test: clone(cf) charges the table it is given. Drop one table's counts and see which
+// reference still holds the segment.
+SEASTAR_TEST_CASE(test_rp_handle_clone_charges_the_given_table) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        auto entry = make_command_entry(raft::term_t(1), raft::index_t(1));
+        auto handle = co_await write_raft_entry_to_commitlog(log, tid, gid, entry);
+        auto cloned = handle.clone(rg_tid);
+
+        // Only a sealed segment reports as dirty.
+        co_await log.force_new_active_segment();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        // A clone() that charged tid would free the segment here.
+        log.discard_completed_segments(tid);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        log.discard_completed_segments(rg_tid);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+    });
+}
+
+// Test: a clone given to a memtable is released by that memtable's flush, so its
+// (segment id, 0) position lands in the right segment's rp_set count.
+SEASTAR_TEST_CASE(test_rp_handle_clone_released_through_rp_set) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        auto entry = make_command_entry(raft::term_t(1), raft::index_t(1));
+        std::optional handle = co_await write_raft_entry_to_commitlog(log, tid, gid, entry);
+
+        // What memtable::update() does with the handle it is given.
+        db::rp_set memtable_set;
+        memtable_set.put(handle->clone(rg_tid));
+        // The source goes first: the memtable's count holds the segment alone.
+        handle.reset();
+
+        co_await log.force_new_active_segment();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        // What the memtable's flush does.
+        log.discard_completed_segments(rg_tid, memtable_set);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+    });
+}
+
+// Test: cloning an empty or a released handle is an internal error.
+SEASTAR_TEST_CASE(test_rp_handle_clone_of_empty_handle) {
+    return cl_test([](commitlog& log) -> future<> {
+        seastar::testing::scoped_no_abort_on_internal_error no_abort;
+        auto tid = make_table_id();
+
+        rp_handle empty;
+        BOOST_REQUIRE_THROW((void)empty.clone(tid), std::runtime_error);
+
+        auto entry = make_command_entry(raft::term_t(1), raft::index_t(1));
+        auto handle = co_await write_raft_entry_to_commitlog(log, tid, make_group_id(), entry);
+        handle.release();
+        BOOST_REQUIRE_THROW((void)handle.clone(tid), std::runtime_error);
+    });
+}
+
+// Test: cloning a handle whose segment the commitlog already discarded is an internal
+// error. A dropped table's counts are wiped while its handles still live.
+SEASTAR_TEST_CASE(test_rp_handle_clone_of_released_segment) {
+    return cl_test([](commitlog& log) -> future<> {
+        seastar::testing::scoped_no_abort_on_internal_error no_abort;
+        auto tid = make_table_id();
+
+        auto entry = make_command_entry(raft::term_t(1), raft::index_t(1));
+        auto handle = co_await write_raft_entry_to_commitlog(log, tid, make_group_id(), entry);
+        co_await log.force_new_active_segment();
+        log.discard_completed_segments(tid);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+
+        BOOST_REQUIRE_THROW((void)handle.clone(make_table_id()), std::runtime_error);
+    });
+}
+
+// Test: the clone's table is dated no later than the source table's first write in
+// the segment, since a clone can outlive every count of the source table.
+SEASTAR_TEST_CASE(test_rp_handle_clone_inherits_write_time) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        auto entry = make_command_entry(raft::term_t(1), raft::index_t(1));
+        auto handle = co_await write_raft_entry_to_commitlog(log, tid, make_group_id(), entry);
+        const auto written_at = log.min_gc_time(tid);
+        BOOST_REQUIRE(written_at != gc_clock::time_point::max());
+
+        // gc_clock counts whole seconds. Without the jump, the clone time equals the
+        // write time and the check below proves nothing.
+        forward_jump_clocks(std::chrono::seconds(1));
+        auto restore_clocks = defer([] noexcept { forward_jump_clocks(-std::chrono::seconds(1)); });
+
+        auto cloned = handle.clone(rg_tid);
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(rg_tid).time_since_epoch().count(), written_at.time_since_epoch().count());
+
+        // A table whose own first write came later moves back to the source table's time.
+        auto own_tid = make_table_id();
+        auto own = co_await write_raft_entry_to_commitlog(log, own_tid, make_group_id(), entry);
+        BOOST_REQUIRE_EQUAL(own.rp().id, handle.rp().id);
+        BOOST_REQUIRE(log.min_gc_time(own_tid) > written_at);
+        auto cloned_to_own = handle.clone(own_tid);
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(own_tid).time_since_epoch().count(), written_at.time_since_epoch().count());
+    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()

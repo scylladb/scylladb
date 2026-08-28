@@ -93,6 +93,7 @@ class db::cf_holder {
 public:
     virtual ~cf_holder() {};
     virtual void release_cf_count(const cf_id_type&, const replay_position&) = 0;
+    virtual rp_handle acquire_cf_count(const cf_id_type& from, const cf_id_type& to) = 0;
 };
 
 const db::replay_position db::replay_position::max = db::replay_position(std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max());
@@ -918,6 +919,24 @@ public:
     void release_cf_count(const cf_id_type& cf, const replay_position& rp) override {
         _extended_segments.erase(rp);
         release_cf_count(cf);
+    }
+
+    rp_handle acquire_cf_count(const cf_id_type& from, const cf_id_type& to) override {
+        // A deletable segment leaves _segments, so no flush would release a new count, and
+        // ~segment would leave the file on disk for replay.
+        if (can_delete()) {
+            on_internal_error(clogger, format("rp_handle::clone({}): segment {} is already discarded", to, *this));
+        }
+        // Dated no later than `from`'s first write, since the clone can outlive every count
+        // of `from`. A live handle's cf always has a time entry: nothing erases _cf_min_time.
+        const auto from_it = _cf_min_time.find(from);
+        if (from_it == _cf_min_time.end()) {
+            on_internal_error(clogger, format("rp_handle::clone({}): segment {} has no time entry for {}", to, *this, from));
+        }
+        mark_dirty(to, from_it->second);
+        // Offset 0 is the segment header, so no entry starts there and the release
+        // of this reference never erases an entry's _extended_segments.
+        return rp_handle(static_pointer_cast<cf_holder>(shared_from_this()), to, replay_position(_desc.id, 0));
     }
 
     bool must_sync() {
@@ -4139,4 +4158,11 @@ db::rp_handle::~rp_handle() {
 
 db::replay_position db::rp_handle::release() {
     return std::exchange(_rp, {});
+}
+
+db::rp_handle db::rp_handle::clone(const cf_id_type& id) const {
+    if (!*this) {
+        on_internal_error(clogger, format("rp_handle::clone({}): the handle is empty or released", id));
+    }
+    return _h->acquire_cf_count(_cf, id);
 }
