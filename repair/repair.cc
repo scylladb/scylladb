@@ -497,7 +497,7 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
                 co_return std::make_tuple(needs_flush_before_repair, hints_batchlog_flushed, flush_time);
             }
             co_await parallel_for_each(waiting_nodes, [this, uuid, start_time, &times, &req] (locator::host_id node) -> future<> {
-                rlogger.info("repair[{}]: Sending repair_flush_hints_batchlog to node={}, started",
+                rlogger.debug("repair[{}]: Sending repair_flush_hints_batchlog to node={}, started",
                         uuid, node);
                 try {
                     auto& ms = get_messaging();
@@ -521,12 +521,12 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
             }
             hints_batchlog_flushed = true;
             auto duration = std::chrono::duration<float>(gc_clock::now() - start_time);
-            rlogger.info("repair[{}]: Finished repair_flush_hints_batchlog flush_times={} flush_time={} flush_duration={}", uuid, times, flush_time, duration);
+            rlogger.debug("repair[{}]: Finished repair_flush_hints_batchlog flush_times={} flush_time={} flush_duration={}", uuid, times, flush_time, duration);
         } catch (...) {
             rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog failed, continue to run repair", uuid);
         }
     } else {
-        rlogger.info("repair[{}]: Skipped sending repair_flush_hints_batchlog", uuid);
+        rlogger.debug("repair[{}]: Skipped sending repair_flush_hints_batchlog", uuid);
     }
     co_return std::make_tuple(needs_flush_before_repair, hints_batchlog_flushed, flush_time);
 }
