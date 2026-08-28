@@ -32,6 +32,14 @@ Procedure
 
 | **Only** a superuser should perform it.
 
+| If the tables you are restoring already exist and contain data, truncate each of them, so that the existing data does not overwrite the restored data. Truncating a base table also truncates its materialized views and secondary indexes, no extra action is needed for them.
+
+``cqlsh -e "TRUNCATE <keyspace_name>.<table_name>"``
+
+| For example:
+
+``cqlsh -e "TRUNCATE mykeyspace.team_players"``
+
 Repeat the following steps for each node in the cluster:
 --------------------------------------------------------
 
