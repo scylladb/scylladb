@@ -26,8 +26,13 @@ void metadata_collector::convert(disk_array<uint32_t, disk_string<uint16_t>>& to
 }
 
 void metadata_collector::update_min_max_components(position_in_partition_view pos) {
+    update_min(pos);
+    update_max(pos);
+}
+
+void metadata_collector::update_min(position_in_partition_view pos) {
     if (pos.region() != partition_region::clustered) {
-        throw std::runtime_error(fmt::format("update_min_max_components() expects positions in the clustering region, got {}", pos));
+        throw std::runtime_error(fmt::format("update_min() expects positions in the clustering region, got {}", pos));
     }
 
     const position_in_partition::tri_compare cmp(_schema);
@@ -42,6 +47,14 @@ void metadata_collector::update_min_max_components(position_in_partition_view po
         mdclogger.trace("{}: setting min_clustering_key={}", _name, position_in_partition_view::printer(_schema, pos));
         _min_clustering_pos.emplace(pos);
     }
+}
+
+void metadata_collector::update_max(position_in_partition_view pos) {
+    if (pos.region() != partition_region::clustered) {
+        throw std::runtime_error(fmt::format("update_max() expects positions in the clustering region, got {}", pos));
+    }
+
+    const position_in_partition::tri_compare cmp(_schema);
 
     if (!_max_clustering_pos || cmp(pos, *_max_clustering_pos) > 0) {
         mdclogger.trace("{}: setting max_clustering_key={}", _name, position_in_partition_view::printer(_schema, pos));
