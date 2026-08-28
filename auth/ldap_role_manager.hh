@@ -107,6 +107,9 @@ class ldap_role_manager : public role_manager {
     /// Macro-expands _query_template, returning the result.
     sstring get_url(std::string_view user) const;
 
+    /// Validates that {USER}, if present, is used only in the LDAP filter component.
+    void validate_query_template() const;
+
     /// Used to auto-create roles returned by ldap.
     future<> create_role(std::string_view role_name);
 
