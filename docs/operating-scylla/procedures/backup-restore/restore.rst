@@ -59,6 +59,10 @@ Use this method to restore SSTables backed up to S3-compatible object storage wi
 
 The object storage endpoint must be configured on the nodes, as described in :ref:`Configuring Object Storage <object-storage-configuration>`.
 
+.. note::
+
+   If the table has any :doc:`Materialized Views (MV) </features/materialized-views>` or :doc:`Secondary Indexes (SI) </features/secondary-indexes>`, view updates are generated automatically as the base table data is streamed. Restore the base table SSTables only; restoring MV or SI SSTables is not supported and will fail.
+
 **Procedure**
 
 #. Complete the :ref:`prerequisites <restore-prerequisites>`.
@@ -105,6 +109,10 @@ Restore with load and stream
 ----------------------------
 
 Use this method when the backed-up SSTable files are available on disk (for example, snapshot files copied back from external storage). The SSTables are read and their contents are streamed to the nodes owning the data, so the method works regardless of cluster topology changes since the backup. Each SSTable needs to be uploaded to only **one** node, any node, and the cluster stays online.
+
+.. note::
+
+   If the table has any :doc:`Materialized Views (MV) </features/materialized-views>` or :doc:`Secondary Indexes (SI) </features/secondary-indexes>`, view updates are generated automatically as the base table data is streamed. Upload the base table SSTables only; uploading MV or SI SSTables is not supported and will fail.
 
 **Procedure**
 
