@@ -55,6 +55,14 @@ public:
 
     future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override;
     future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override;
+    // Records the new commit index and, purely in memory, covers every
+    // commitlog segment whose entries are now all committed: one
+    // system.raft_groups mutation carrying the segment's highest index is
+    // applied to the raft_groups memtable with the segment's parked reference
+    // attached, and dummy handles the covers made redundant are released.
+    // The value becomes durable when the raft_groups memtable flushes, which
+    // is also when the references are released. See raft_commitlog's class
+    // comment for the segment-lifetime invariant this maintains.
     future<> store_commit_idx(raft::index_t) override;
     future<raft::index_t> load_commit_idx() override;
     future<raft::log_entries> load_log() override;
@@ -75,6 +83,19 @@ public:
     // Static version that doesn't require constructing a full raft_groups_storage object.
     // Useful during commitlog replay when only read access to metadata is needed.
     static future<raft::index_t> load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    // Persist (commit_idx, commit_idx_term), but only if commit_idx advances
+    // the currently persisted value. Used during commitlog replay to restore
+    // the floor the replayed entries' commit_idx records carry.
+    static future<> store_commit_idx_if_higher(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
+            raft::index_t commit_idx, raft::term_t commit_idx_term);
+    // Load the persisted (commit_idx, commit_idx_term) pair. The term is
+    // disengaged for rows written before the commit_idx_term column existed.
+    static future<std::pair<raft::index_t, std::optional<raft::term_t>>> load_commit_idx_and_term(
+            cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    // Load the current persisted snapshot's (idx, term) for this group.
+    // Returns (0, 0) if no snapshot has been recorded yet.
+    static future<std::pair<raft::index_t, raft::term_t>> load_snapshot_idx_and_term(
+            cql3::query_processor& qp, raft::group_id gid, shard_id shard);
     // Store snapshot idx and term without updating the configuration.
     // Used to advance the persisted snapshot index so that raft does not
     // re-apply already applied entries on restart. Only writes if the new

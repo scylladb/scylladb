@@ -231,13 +231,19 @@ future<> db::commitlog_replayer::impl::process(
 
         if (std::holds_alternative<raft_commitlog_entry>(read_entry)) {
             // One raft batch: its entries, plus the commit_idx the group had
-            // reached when it was written.
+            // reached when it was written. The latter lets
+            // process_raft_replayed_items() restore a commit_idx that a crash
+            // dropped from the raft_groups memtable before it flushed.
             const auto& batch = std::get<raft_commitlog_entry>(read_entry);
             SCYLLA_ASSERT(_raft_buffer);
             rlogger.debug("Adding raft batch for group {} at {} to replay buffer: {} entries, commit_idx {} (term {})",
                     batch.group_id, rp, batch.entries.size(), batch.commit_idx, batch.commit_idx_term);
             for (const auto& entry : batch.entries) {
                 _raft_buffer->local().add(batch.group_id, entry);
+            }
+            if (batch.commit_idx != raft::index_t{0}) {
+                _raft_buffer->local().add_commit_idx(batch.group_id,
+                        raft_term_and_index{.idx = batch.commit_idx, .term = batch.commit_idx_term});
             }
             co_return;
         } else if (std::holds_alternative<mutation_entry>(read_entry)) {

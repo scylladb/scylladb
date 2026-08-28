@@ -19,6 +19,11 @@
 #include "idl/raft_storage.dist.impl.hh"
 
 #include "cql3/query_processor.hh"
+#include "mutation/mutation.hh"
+#include "mutation/timestamp.hh"
+#include "replica/database.hh"
+#include "service/storage_proxy.hh"
+#include "types/types.hh"
 
 #include <seastar/core/coroutine.hh>
 
@@ -82,8 +87,48 @@ future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
     });
 }
 
+// Execute the CQL INSERT that persists (commit_idx, commit_idx_term) to
+// system.raft_groups. Used during commitlog replay
+// (store_commit_idx_if_higher), before any raft group is running.
+static future<> store_commit_idx_cql(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
+        raft::index_t commit_idx, raft::term_t commit_idx_term) {
+    static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx, commit_idx_term) VALUES (?, ?, ?, ?)",
+        db::system_keyspace::RAFT_GROUPS);
+    return qp.execute_internal(
+        store_cql,
+        {int16_t(shard), gid.id, int64_t(commit_idx.value()), int64_t(commit_idx_term.value())},
+        cql3::query_processor::cache_internal::yes).discard_result();
+}
+
+future<> raft_groups_storage::store_commit_idx_if_higher(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
+        raft::index_t commit_idx, raft::term_t commit_idx_term) {
+    // Only advance, never regress: a prior run (or an earlier replay) may
+    // already have persisted a value at or beyond the recovered one.
+    const auto persisted = co_await load_commit_idx(qp, gid, shard);
+    if (commit_idx <= persisted) {
+        co_return;
+    }
+    co_await store_commit_idx_cql(qp, gid, shard, commit_idx, commit_idx_term);
+}
+
 future<raft::index_t> raft_groups_storage::load_commit_idx() {
     return load_commit_idx(_qp, _group_id, _shard);
+}
+
+future<std::pair<raft::index_t, std::optional<raft::term_t>>>
+raft_groups_storage::load_commit_idx_and_term(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+    static const auto load_cql = format("SELECT commit_idx, commit_idx_term FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1",
+        db::system_keyspace::RAFT_GROUPS);
+    auto rs = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    if (rs->empty()) {
+        co_return std::pair(raft::index_t(0), std::nullopt);
+    }
+    const auto& row = rs->one();
+    std::optional<raft::term_t> term;
+    if (row.has("commit_idx_term")) {
+        term = raft::term_t(row.get_as<int64_t>("commit_idx_term"));
+    }
+    co_return std::pair(raft::index_t(row.get_or<int64_t>("commit_idx", 0)), term);
 }
 
 future<raft::index_t> raft_groups_storage::load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
@@ -187,8 +232,10 @@ future<> raft_groups_storage::truncate_log(raft::index_t idx) {
 }
 
 future<> raft_groups_storage::abort() {
-    // wait for pending write requests to complete.
-    // TODO: should we wait for all kinds of requests?
+    // Wait for pending write requests to complete. The covering work in
+    // store_commit_idx() needs no guarding here: it runs on the raft
+    // io_fiber, which raft::server::abort() awaits before aborting the
+    // persistence.
     return std::move(_pending_op_fut);
 }
 
@@ -201,6 +248,20 @@ future<> raft_groups_storage::update_snapshot(const raft::snapshot_descriptor &s
         {int16_t(_shard), _group_id.id, snap.id.id},
         cql3::query_processor::cache_internal::yes
     ).discard_result();
+}
+
+future<std::pair<raft::index_t, raft::term_t>>
+raft_groups_storage::load_snapshot_idx_and_term(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+    static const auto load_cql = format("SELECT idx, term FROM system.{} WHERE shard = ? AND group_id = ?",
+        db::system_keyspace::RAFT_GROUPS_SNAPSHOTS);
+    auto rs = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    if (rs->empty()) {
+        co_return std::pair(raft::index_t(0), raft::term_t(0));
+    }
+    const auto& row = rs->one();
+    co_return std::pair(
+            raft::index_t(row.get_or<int64_t>("idx", 0)),
+            raft::term_t(row.get_or<int64_t>("term", 0)));
 }
 
 future<> raft_groups_storage::store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap) {

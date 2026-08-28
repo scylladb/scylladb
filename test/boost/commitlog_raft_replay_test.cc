@@ -1818,6 +1818,38 @@ SEASTAR_TEST_CASE(test_raft_commitlog_load_log_one_shot) {
     });
 }
 
+// Test that a group whose only replayed record is a commit_idx entry (no log
+// entries) is still processed: process_raft_replayed_items runs its restore
+// pass even when remaining_groups() == 0, and — since the group is not in
+// tablet metadata — discards the recovered value instead of resurrecting a
+// system.raft_groups row for a moved-away/dropped tablet.
+SEASTAR_TEST_CASE(test_raft_replay_buffer_commit_idx_only_group) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+    return do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                db::raft_commitlog_replay_buffer buffer;
+
+                auto gid = make_group_id();
+                // Only commit_idx entries survived replay for this group (e.g. the
+                // segment holding its raft log entries was already reclaimed).
+                // The highest value wins.
+                buffer.add_commit_idx(gid, raft_term_and_index{.idx = raft::index_t(3), .term = raft::term_t(1)});
+                buffer.add_commit_idx(gid, raft_term_and_index{.idx = raft::index_t(7), .term = raft::term_t(2)});
+                buffer.add_commit_idx(gid, raft_term_and_index{.idx = raft::index_t(5), .term = raft::term_t(2)});
+
+                BOOST_CHECK_EQUAL(buffer.remaining_groups(), 0);
+
+                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local());
+
+                // The group has no tablet metadata, so nothing may be written.
+                const auto persisted = co_await service::strong_consistency::raft_groups_storage::load_commit_idx(
+                        env.local_qp(), gid, this_shard_id());
+                BOOST_CHECK_EQUAL(persisted, raft::index_t(0));
+            },
+            std::move(db_cfg_ptr));
+}
+
 // Test: raft_commitlog::store_log_entries writes one commitlog entry per
 // batch — the group id once, the batch's entries, and the group's last
 // committed (index, term) — and takes one raft_groups reference for the segment

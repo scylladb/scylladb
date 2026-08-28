@@ -2208,10 +2208,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     // uncommitted entries are now in new segments).
                     supervisor::notify("processing raft replay buffer");
                     raft_replay_buffer.invoke_on_all([&db, &qp](db::raft_commitlog_replay_buffer& buffer) mutable {
-                        if (buffer.remaining_groups()) {
-                            return buffer.process_raft_replayed_items(db.local(), qp.local(), sys_ks.local());
-                        }
-                        return make_ready_future<>();
+                        // Called unconditionally — the buffer returns early when it
+                        // holds nothing. A group may have a replayed commit_idx
+                        // record but no log entries (its entries' segments were
+                        // reclaimed while a record's was not); the buffer restores
+                        // those floors too.
+                        return buffer.process_raft_replayed_items(db.local(), qp.local(), sys_ks.local());
                     }).get();
 
                     startlog.info("replaying commit log - flushing memtables");
@@ -2228,6 +2230,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         return make_ready_future<>();
                     }).get();
                 }
+
+                // Reconcile system.raft_groups_snapshots.idx with system.raft_groups.commit_idx
+                // for every known strongly-consistent tablet raft group. Must run unconditionally
+                // (independent of whether there were commitlog segments to replay): after a clean
+                // shutdown all SC tablet segments have been reclaimed, yet the persisted
+                // commit_idx may still be ahead of the persisted snapshot idx, which would
+                // otherwise trip the "committed index cannot be larger then persisted one"
+                // assert in raft::server::start.
+                supervisor::notify("bumping raft snapshot indices");
+                raft_replay_buffer.invoke_on_all([&db, &qp](db::raft_commitlog_replay_buffer& buffer) mutable {
+                    return buffer.bump_snapshot_indices(db.local(), qp.local());
+                }).get();
             }
 
             // Once stuff is replayed, we can empty RP:s from truncation records. 
