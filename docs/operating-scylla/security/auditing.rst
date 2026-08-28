@@ -42,6 +42,12 @@ audit_keyspaces     Comma-separated list of keyspaces that should be audited. Yo
                     If you leave this option empty, no keyspace will be audited.
 ==================  ========================================================================================================================
 
+The default value and liveness of each option are listed in
+:doc:`/reference/configuration-parameters`: see
+:ref:`audit_categories <confprop_audit_categories>`,
+:ref:`audit_tables <confprop_audit_tables>` and
+:ref:`audit_keyspaces <confprop_audit_keyspaces>`.
+
 To audit all the tables in a keyspace, set the ``audit_keyspaces`` with the keyspace you want to audit and leave ``audit_tables`` empty.
 
 You can use DCL, AUTH, and ADMIN audit categories without including any keyspace or table.
