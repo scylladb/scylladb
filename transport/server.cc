@@ -33,6 +33,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/try_future.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/metrics.hh>
@@ -1671,7 +1672,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
 
     utils::result_with_exception_ptr<utils::chunked_string> query_result = in.read_long_chunked_string();
     if (!query_result) {
-        return make_exception_future<std::unique_ptr<cql_server::response>>(std::move(query_result).assume_error());
+        co_return coroutine::exception(std::move(query_result).assume_error());
     }
     auto query = std::move(query_result).assume_value();
     auto dialect = get_dialect();
@@ -1679,20 +1680,33 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
     tracing::add_query(trace_state, query);
     tracing::begin(trace_state, "Preparing CQL3 query", client_state.get_client_address());
 
-    return _server._query_processor.invoke_on_others([query, &client_state, dialect] (auto& qp) mutable {
-            return qp.prepare(std::move(query), client_state, dialect).discard_result();
-    }).then([this, query, stream, &client_state, trace_state, dialect] () mutable {
-        tracing::trace(trace_state, "Done preparing on remote shards");
-        return _server._query_processor.local().prepare(std::move(query), client_state, dialect).then([this, stream, &client_state, trace_state] (auto msg) {
-            tracing::trace(trace_state, "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
-                return messages::result_message::prepared::cql::get_id(msg);
-            }));
-            cql_metadata_id_wrapper metadata_id = is_metadata_id_supported(client_state)
-                ? cql_metadata_id_wrapper(msg->get_metadata_id())
-                : cql_metadata_id_wrapper();
-            return make_result(stream, *msg, trace_state, _version, std::move(metadata_id));
-        });
+    // The statement is prepared on all shards, so client_state has to be passed
+    // to the other shards. It must not be passed by reference, because the
+    // owning shard can modify it concurrently (a USE statement reassigns
+    // _keyspace) while another shard reads it.
+    auto cs_snapshot = client_state.move_to_other_shard();
+
+    co_await _server._query_processor.invoke_on_others([query, cs_snapshot, dialect] (cql3::query_processor& qp) mutable -> future<> {
+        auto local_client_state = cs_snapshot.get();
+        co_await qp.prepare(std::move(query), local_client_state, dialect);
     });
+    tracing::trace(trace_state, "Done preparing on remote shards");
+
+    co_await utils::get_local_injector().inject("cql_server_process_prepare_before_local_prepare",
+            utils::wait_for_message(std::chrono::seconds(60)));
+
+    // Prepare on the local shard with the same snapshot: the statement id is
+    // derived from the keyspace, so a USE arriving in the middle of a PREPARE
+    // would otherwise make this shard return an id the others don't have.
+    auto local_client_state = cs_snapshot.get(&_server._abort_source);
+    auto msg = co_await _server._query_processor.local().prepare(std::move(query), local_client_state, dialect);
+    tracing::trace(trace_state, "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
+        return messages::result_message::prepared::cql::get_id(msg);
+    }));
+    cql_metadata_id_wrapper metadata_id = is_metadata_id_supported(client_state)
+        ? cql_metadata_id_wrapper(msg->get_metadata_id())
+        : cql_metadata_id_wrapper();
+    co_return make_result(stream, *msg, trace_state, _version, std::move(metadata_id));
 }
 
 static future<cql_server::process_fn_return_type>
