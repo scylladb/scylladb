@@ -44,7 +44,8 @@ void set_strongly_consistent_tables_enabled(bool enabled);
 
 schema_ptr make_tablets_schema();
 
-schema_ptr make_raft_schema(sstring name, bool is_group0);
+schema_ptr make_group0_raft_schema(sstring name);
+schema_ptr make_tablet_raft_groups_schema(sstring name);
 schema_ptr make_raft_snapshots_schema(sstring name, bool is_group0);
 schema_ptr make_raft_snapshot_config_schema(sstring name, bool is_group0);
 
