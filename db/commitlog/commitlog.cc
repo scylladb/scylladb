@@ -93,6 +93,9 @@ class db::cf_holder {
 public:
     virtual ~cf_holder() {};
     virtual void release_cf_count(const cf_id_type&, const replay_position&) = 0;
+    // Take another reference on the segment holding the position. Must be balanced
+    // by release_cf_count.
+    virtual rp_handle acquire_cf_count(const cf_id_type&, const replay_position&) = 0;
 };
 
 const db::replay_position db::replay_position::max = db::replay_position(std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max());
@@ -909,6 +912,18 @@ public:
     void release_cf_count(const cf_id_type& cf, const replay_position& rp) override {
         _extended_segments.erase(rp);
         release_cf_count(cf);
+    }
+
+    rp_handle acquire_cf_count(const cf_id_type& cf, const replay_position& rp) override {
+        SCYLLA_ASSERT(contains(rp));
+        // The first count for a cf allocates in both maps, so either statement can throw.
+        // A count left behind by a throw from the other keeps the segment dirty for good.
+        // A time entry with no count is harmless, because nothing ever erases _cf_min_time.
+        _cf_min_time.emplace(cf, gc_clock::now());
+        ++_cf_dirty[cf];
+        // Offset 0 is the segment header, so no entry starts there and the release
+        // of this reference never erases an entry's _extended_segments.
+        return rp_handle(static_pointer_cast<cf_holder>(shared_from_this()), cf, replay_position(_desc.id, 0));
     }
 
     bool must_sync() {
@@ -3291,6 +3306,11 @@ future<utils::chunked_vector<db::rp_handle>> db::commitlog::add_raft_entries(
         }
     };
     return _segment_manager->allocate_when_possible(cl_raft_entries_writer(std::move(entry_writers), id), db::no_timeout);
+}
+
+db::rp_handle db::rp_handle::clone(const cf_id_type& id) const {
+    SCYLLA_ASSERT(*this);
+    return _h->acquire_cf_count(id, _rp);
 }
 
 db::commitlog::commitlog(config cfg)

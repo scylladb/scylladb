@@ -2000,4 +2000,115 @@ BOOST_AUTO_TEST_CASE(test_log_entry_lease_time_round_trip) {
     BOOST_REQUIRE(!ser::deserialize(in2, std::type_identity<raft::log_entry_ptr>())->lease_time);
 }
 
+// Test: rp_handle::clone() takes an extra reference on a live handle's segment,
+// under the same or a different column family, any number of times. Asserted
+// through the segment's dirty state: a clone that took no reference satisfies
+// every rp() and bool() check, and mark_clean() no-ops once a cf's count is gone.
+SEASTAR_TEST_CASE(test_rp_handle_clone) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto other_tid = make_table_id();
+
+        auto entry = make_command_entry(raft::term_t(1), raft::index_t(1));
+        std::optional handle = co_await write_raft_entry_to_commitlog(log, tid, gid, entry);
+        BOOST_REQUIRE(bool(*handle));
+
+        // A clone is at the segment start, which no entry occupies.
+        const db::replay_position segment_start(handle->rp().id, 0);
+        BOOST_REQUIRE(handle->rp() != segment_start);
+
+        // A second reference under the entry's own cf, on the same segment.
+        std::optional dup = handle->clone(tid);
+        BOOST_REQUIRE(bool(*dup));
+        BOOST_REQUIRE(dup->rp() == segment_start);
+
+        // References under a cf the segment was never written for, such as
+        // system.raft_groups; repeats are legal.
+        std::optional pin1 = handle->clone(other_tid);
+        std::optional pin2 = handle->clone(other_tid);
+        BOOST_REQUIRE(bool(*pin1));
+        BOOST_REQUIRE(pin1->rp() == segment_start);
+        BOOST_REQUIRE(bool(*pin2));
+
+        // A reference cloned from a reference works the same.
+        std::optional chained = pin1->clone(other_tid);
+        BOOST_REQUIRE(chained->rp() == segment_start);
+
+        // Only a sealed segment reports as dirty, so the count shows up only now.
+        co_await log.force_new_active_segment();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        // Every step but the last must leave the segment dirty, or clone() did not count.
+        handle.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        dup.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        pin1.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        pin2.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        chained.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+    });
+}
+
+// Test: clone(cf) charges the table it is given. Segment counts alone cannot
+// tell the two tables apart, so drop one table's counts and see which reference
+// still holds the segment.
+SEASTAR_TEST_CASE(test_rp_handle_clone_charges_the_given_table) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        auto entry = make_command_entry(raft::term_t(1), raft::index_t(1));
+        // Both references stay alive to the end. Dropping a table's counts frees
+        // the segment here.
+        auto handle = co_await write_raft_entry_to_commitlog(log, tid, gid, entry);
+        auto cloned = handle.clone(rg_tid);
+
+        // Only a sealed segment reports as dirty.
+        co_await log.force_new_active_segment();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        // Everything charged to the entry's own table goes. A clone() that
+        // charged tid frees the segment here.
+        log.discard_completed_segments(tid);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        // Drop the clone's table. Nothing holds the segment now.
+        log.discard_completed_segments(rg_tid);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+    });
+}
+
+// Test: a clone given to a memtable is released by that memtable's flush. A
+// memtable keeps its references in an rp_set keyed by segment id and hands the
+// set to discard_completed_segments() on flush; the clone's (segment id, 0)
+// position has to land in the right segment's count.
+SEASTAR_TEST_CASE(test_rp_handle_clone_released_through_rp_set) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        auto entry = make_command_entry(raft::term_t(1), raft::index_t(1));
+        std::optional handle = co_await write_raft_entry_to_commitlog(log, tid, gid, entry);
+
+        // What memtable::update() does with the handle it is given.
+        db::rp_set memtable_set;
+        memtable_set.put(handle->clone(rg_tid));
+        // The source goes first: the memtable's count holds the segment alone.
+        handle.reset();
+
+        co_await log.force_new_active_segment();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        // What the memtable's flush does.
+        log.discard_completed_segments(rg_tid, memtable_set);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
