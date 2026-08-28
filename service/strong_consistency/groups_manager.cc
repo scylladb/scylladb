@@ -34,6 +34,27 @@ using namespace locator;
 
 static logging::logger logger("sc_groups_manager");
 
+// Bounds on a group's log, which together bound one batch. max_command_size is
+// enforced per entry: add_entry() rejects a larger command outright. max_log_size
+// is enforced per log: fsm's log_limiter_semaphore holds a leader's accounted log
+// at it, and a batch is a subset of that log. Their sum is the batch bound, the
+// smaller term being headroom for what the accounting leaves out — the
+// serialized envelope, and configurations and dummies, which it counts as zero.
+//
+// That bound is what lets write_raft_batch() assert a batch fits in one
+// commitlog entry: an oversized entry would be fragmented across segments,
+// breaking the rule that a copy of an entry lives in exactly one segment, which
+// the records and the truncation records are built on.
+//
+// The sum clears a default 64MB segment's 32MB max_record_size() comfortably. It
+// does not clear a smaller configured segment, which is why the assert is an
+// internal error rather than a startup check: refusing to boot on
+// commitlog_segment_size_in_mb being small would reject a supported
+// configuration. See write_raft_batch() for the other ways the assert is
+// reachable and what fixing it properly needs.
+static constexpr size_t raft_max_log_size = 20 * 1024 * 1024;
+static constexpr size_t raft_max_command_size = 100 * 1024;
+
 static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
 };
@@ -187,8 +208,9 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // TODO: Revert after snapshots are implemented
         .snapshot_threshold = std::numeric_limits<size_t>::max(),
         .snapshot_threshold_log_size = 10 * 1024 * 1024, // 10MB
-        .max_log_size = 20 * 1024 * 1024, // 20MB
+        .max_log_size = raft_max_log_size,
         .enable_forwarding = false,
+        .max_command_size = raft_max_command_size,
         .on_background_error = [tablet, group_id](std::exception_ptr e) {
             on_internal_error(logger, 
                 ::format("table {}, tablet {} raft group {} background error {}", 
@@ -223,6 +245,19 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         .persistence = persistence_ref,
         .state_machine = state_machine_ref
     }, tick_interval);
+
+    // Only now may the commitlog's flush handler reach this group's
+    // persistence. Publishing the pointer earlier would leave it dangling if
+    // anything above threw: the raft::server owns the persistence, so it is
+    // destroyed on the way out, while the handler would still be holding the
+    // pointer.
+    if (auto it = _raft_groups.find(group_id); it != _raft_groups.end()) {
+        it->second.storage = &persistence_ref;
+        // The commitlog may already have closed segments this group will write
+        // to; without this the group would wait for the next flush round before
+        // it could release its first record.
+        persistence_ref.mark_segment_closed(_closed_up_to);
+    }
 }
 
 void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state) {
@@ -243,6 +278,10 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
     // already destroyed their servers). Aborting the raft server releases those
     // holders by making the stuck operations throw raft::stopped_error.
     auto gate_fut = state.gate->close();
+    // The flush handler must stop reaching into this group's persistence now:
+    // the raft::server that owns it is about to be destroyed, and clearing the
+    // pointer synchronously leaves no window.
+    state.storage = nullptr;
     logger.debug("schedule_raft_group_deletion(): group id {}: gate close initiated", id);
 
     state.server_control_op = futurize_invoke([this, &state, id, g = state.gate, gate_fut = std::move(gate_fut)](this auto) -> future<> {
@@ -537,8 +576,41 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
 void groups_manager::start() {
     _started = true;
 
-    if (!_features.strongly_consistent_tables) {
-        return;
+    // Releasing a group's newest record needs to know that its segment is
+    // closed, and the commitlog says so by asking the dirty tables of a closed
+    // segment to flush. Every segment a group wrote to is dirty under
+    // system.raft_groups (see segment_record::pin_rg), so this shard is told
+    // about all of them.
+    //
+    // Gated on the *configuration* flag rather than on the cluster feature: the
+    // cluster feature can enable while the node runs, and update() would then
+    // start groups without start() running again, so a handler registered only
+    // behind it could be missing. The configuration flag cannot change without a
+    // restart, and it is also what decides whether system.raft_groups has a
+    // schema at all — asking for its id without it aborts.
+    if (auto* commitlog = _db.commitlog();
+            commitlog && _db.get_config().check_experimental(
+                    db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+        // Only system.raft_groups requests carry a closure frontier for us. Every
+        // segment holding a live segment handle is raft_groups-dirty from
+        // allocation until the release's row mutation is flushed, so every round
+        // that walks such a segment reports it under this id; another table's
+        // position says nothing about which of *our* segments are closed.
+        const auto raft_groups_id = db::system_keyspace::raft_groups()->id();
+        _flush_handler.emplace(commitlog->add_flush_handler(
+                [this, raft_groups_id](db::cf_id_type id, db::replay_position pos) {
+            if (id != raft_groups_id) {
+                return;
+            }
+            if (_closed_up_to < pos) {
+                _closed_up_to = pos;
+            }
+            for (auto& [group_id, state] : _raft_groups) {
+                if (state.storage) {
+                    state.storage->mark_segment_closed(_closed_up_to);
+                }
+            }
+        }));
     }
 
     if (_pending_tm) {

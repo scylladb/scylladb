@@ -30,6 +30,8 @@ class migration_manager;
 
 namespace service::strong_consistency {
 
+class raft_groups_storage;
+
 class raft_server;
 
 /// A cache of leader locations for raft groups where this node is not a replica.
@@ -115,6 +117,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         bool has_tablet = false;
         lw_shared_ptr<gate> gate = nullptr;
         raft::server* server = nullptr;
+        // The group's persistence, so that the commitlog's flush handler can
+        // tell it how far segments are closed. Owned by the raft::server;
+        // cleared before that server is destroyed.
+        raft_groups_storage* storage = nullptr;
 
         // Serialized chain of raft::server control operations (start/stop).
         // This serialization handles (rare) cases where a tablet is migrated out
@@ -144,6 +150,13 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     bool _started = false;
 
     tablet_group_leader_cache _leader_cache;
+
+    // How far the commitlog has closed segments on this shard, as reported by
+    // its flush handler, and the anchor keeping that handler registered. A
+    // record whose segment is still open may yet be extended, so this is what
+    // lets a group release its newest record.
+    db::replay_position _closed_up_to;
+    std::optional<db::commitlog::flush_handler_anchor> _flush_handler;
 
     // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,

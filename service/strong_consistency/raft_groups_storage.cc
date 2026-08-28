@@ -226,8 +226,8 @@ void raft_groups_storage::note_applied(raft::index_t idx) {
     maybe_release();
 }
 
-void raft_groups_storage::note_closed_up_to(db::replay_position pos) {
-    _raft_commitlog.note_closed_up_to(pos);
+void raft_groups_storage::mark_segment_closed(db::replay_position pos) {
+    _raft_commitlog.mark_segment_closed(pos);
     maybe_release();
 }
 

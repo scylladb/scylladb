@@ -140,7 +140,7 @@ public:
 
     // Called with the commitlog's flush position: everything at or below it is
     // in a closed segment, which is what lets the newest record be released.
-    void note_closed_up_to(db::replay_position pos);
+    void mark_segment_closed(db::replay_position pos);
 
     // Release every record that is now committed, applied and closed.
     void maybe_release();

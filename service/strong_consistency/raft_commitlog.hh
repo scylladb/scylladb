@@ -179,8 +179,14 @@ class raft_commitlog {
     // cursors need. Records naming segments the commitlog no longer has are
     // dropped.
     std::vector<truncation_record> _truncations;
-    // How far the commitlog has closed segments on this shard, as reported by
-    // its flush handler.
+    // How far the commitlog has closed segments on this shard.
+    //
+    // This is what lets the *newest* record be released. Every other record
+    // learns its segment closed from a later record existing in the queue, but
+    // the newest one has no successor: a group that stops writing would hold its
+    // last segment indefinitely. groups_manager feeds this from the commitlog's
+    // flush rounds, which name only closed segments, so a position at or above a
+    // record's own says that record's segment is closed.
     db::replay_position _closed_up_to;
     // The log entries commitlog replay recovered for this group.
     raft::log_entries _replayed_entries;
@@ -203,8 +209,8 @@ public:
     db::rp_handle pin_for_apply(raft::index_t idx);
 
     // Report the commitlog's flush position: everything at or below it is in a
-    // closed segment.
-    void note_closed_up_to(db::replay_position pos);
+    // closed segment. Backstop only — see _closed_up_to.
+    void mark_segment_closed(db::replay_position pos);
 
     // The oldest record that may now be released, or nullptr. A record is
     // releasable once no more of this group's entries can land in its segment,

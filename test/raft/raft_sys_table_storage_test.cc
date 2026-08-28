@@ -202,7 +202,7 @@ static future<> release_everything(raft_groups_storage& storage,
         }
     }
     co_await storage.store_commit_idx(entries.back()->idx);
-    storage.note_closed_up_to(db::replay_position(
+    storage.mark_segment_closed(db::replay_position(
             std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
 }
 
@@ -593,7 +593,7 @@ SEASTAR_TEST_CASE(test_groups_storage_shard_isolation) {
             }
         }
         co_await storage0.store_commit_idx(entries.back()->idx);
-        storage0.note_closed_up_to(db::replay_position(
+        storage0.mark_segment_closed(db::replay_position(
                 std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
         BOOST_CHECK_EQUAL(entries.back()->idx, co_await storage0.load_commit_idx());
         BOOST_CHECK_EQUAL(raft::index_t(0), co_await storage1.load_commit_idx());
@@ -827,7 +827,7 @@ SEASTAR_TEST_CASE(test_groups_release_persists_the_descriptor) {
 
         // Once the commitlog reports the segment closed, the record is final and
         // is released.
-        storage.note_closed_up_to(db::replay_position(
+        storage.mark_segment_closed(db::replay_position(
                 std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
 
         {
@@ -1093,6 +1093,49 @@ SEASTAR_TEST_CASE(test_groups_unchanged_truncations_are_not_rewritten) {
     });
 }
 
+// Test: a group that stops writing releases its last record on the flush-round
+// signal alone.
+//
+// The flush-round signal, which raft_commitlog::_closed_up_to describes.
+// Deliberately leaves the queue at a single record, so the queue.size() > 1 arm
+// cannot be what releases it.
+SEASTAR_TEST_CASE(test_groups_quiescent_group_releases_on_flush_round) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        std::vector<raft::log_entry_ptr> entries;
+        for (int i = 1; i <= 4; ++i) {
+            entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+        }
+        co_await storage.store_log_entries(entries);
+        for (const auto& e : entries) {
+            storage.note_applied(e->idx);
+        }
+        co_await storage.store_commit_idx(entries.back()->idx);
+
+        // Committed and applied, but nothing has said the segment is closed and
+        // there is no later record to imply it.
+        const auto before = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
+        BOOST_CHECK_EQUAL(before.idx, raft::index_t(0));
+
+        // What groups_manager's flush handler does on a (raft_groups, pos) round.
+        storage.mark_segment_closed(db::replay_position(
+                std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
+
+        const auto persisted = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
+        BOOST_REQUIRE(persisted.exists);
+        BOOST_CHECK_EQUAL(persisted.idx, entries.back()->idx);
+    });
+}
+
 // Test: a batch whose commands are never applied must not wedge the queue.
 //
 // state_machine::apply() swallows no_such_column_family / no_such_keyspace when
@@ -1134,7 +1177,7 @@ SEASTAR_TEST_CASE(test_groups_discarded_batch_does_not_wedge_the_queue) {
         // Committed and closed, but nothing applied: the gate waits for the last
         // command, so the front record cannot be released.
         co_await storage.store_commit_idx(dropped.back()->idx);
-        storage.note_closed_up_to(db::replay_position(
+        storage.mark_segment_closed(db::replay_position(
                 std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
         const auto stuck = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
         BOOST_CHECK_EQUAL(stuck.idx, raft::index_t(0));
