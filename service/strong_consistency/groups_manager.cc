@@ -34,6 +34,27 @@ using namespace locator;
 
 static logging::logger logger("sc_groups_manager");
 
+// Bounds on a group's log, which together bound one batch. max_command_size is
+// enforced per entry: add_entry() rejects a larger command outright. max_log_size
+// is enforced per log: fsm's log_limiter_semaphore holds a leader's accounted log
+// at it, and a batch is a subset of that log. Their sum is the batch bound, the
+// smaller term being headroom for what the accounting leaves out — the
+// serialized envelope, and configurations and dummies, which it counts as zero.
+//
+// That bound is what lets write_raft_batch() assert a batch fits in one
+// commitlog entry: an oversized entry would be fragmented across segments,
+// breaking the rule that a copy of an entry lives in exactly one segment, which
+// the records and the truncation records are built on.
+//
+// The sum clears a default 64MB segment's 32MB max_record_size() comfortably. It
+// does not clear a smaller configured segment, which is why the assert is an
+// internal error rather than a startup check: refusing to boot on
+// commitlog_segment_size_in_mb being small would reject a supported
+// configuration. See write_raft_batch() for the other ways the assert is
+// reachable and what fixing it properly needs.
+static constexpr size_t raft_max_log_size = 20 * 1024 * 1024;
+static constexpr size_t raft_max_command_size = 100 * 1024;
+
 static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
 };
@@ -164,7 +185,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     auto* commitlog = _db.commitlog();
     SCYLLA_ASSERT(commitlog);
     auto storage = std::make_unique<raft_groups_storage>(_qp, _db, group_id, my_id, this_shard_id(),
-        *commitlog, tablet.table, _raft_replay_buffer.take_replayed_group_entries(group_id));
+        *commitlog, tablet.table, _raft_replay_buffer.take_replayed_group_entries(group_id),
+        [this](db::cf_id_type id, db::replay_position pos) { request_flush(id, pos); });
 
     auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage);
 
@@ -196,8 +218,9 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // TODO: Revert after snapshots are implemented
         .snapshot_threshold = std::numeric_limits<size_t>::max(),
         .snapshot_threshold_log_size = 10 * 1024 * 1024, // 10MB
-        .max_log_size = 20 * 1024 * 1024, // 20MB
+        .max_log_size = raft_max_log_size,
         .enable_forwarding = false,
+        .max_command_size = raft_max_command_size,
         .on_background_error = [tablet, group_id](std::exception_ptr e) {
             on_internal_error(logger, 
                 ::format("table {}, tablet {} raft group {} background error {}", 
@@ -225,6 +248,16 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         .persistence = persistence_ref,
         .state_machine = state_machine_ref
     }, get_tick_interval());
+
+    // Publish the persistence only now: the raft::server owns it, so a throw
+    // above would destroy it and leave the flush handler holding a dangling
+    // pointer.
+    if (auto it = _raft_groups.find(group_id); it != _raft_groups.end()) {
+        it->second.storage = &persistence_ref;
+        // Segments holding the replayed tail may have been closed and reported
+        // before this handler existed, and such a round never repeats.
+        persistence_ref.maybe_release();
+    }
 }
 
 void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state) {
@@ -245,6 +278,10 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
     // already destroyed their servers). Aborting the raft server releases those
     // holders by making the stuck operations throw raft::stopped_error.
     auto gate_fut = state.gate->close();
+    // The flush handler must stop reaching into this group's persistence now:
+    // the raft::server that owns it is about to be destroyed, and clearing the
+    // pointer synchronously leaves no window.
+    state.storage = nullptr;
     logger.debug("schedule_raft_group_deletion(): group id {}: gate close initiated", id);
 
     state.server_control_op = futurize_invoke([this, &state, id, g = state.gate, gate_fut = std::move(gate_fut)](this auto) -> future<> {
@@ -539,8 +576,37 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
 void groups_manager::start() {
     _started = true;
 
-    if (!_features.strongly_consistent_tables) {
-        return;
+    // Gate the flush handler on the configuration flag. The cluster feature can
+    // enable while the node runs, and update() then starts groups without
+    // start() running again, so a handler registered behind the feature could be
+    // missing. The flag also decides whether system.raft_groups has a schema at
+    // all: asking for its id without it aborts.
+    if (auto* commitlog = _db.commitlog();
+            commitlog && _db.get_config().check_experimental(
+                    db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+        // Only system.raft_groups positions say which of this group's segments
+        // are closed: a segment holding a live segment record is dirty under
+        // that id (see segment_record::pin_raft_groups). Another table's position does not.
+        const auto raft_groups_id = db::system_keyspace::raft_groups()->id();
+        _flush_handler.emplace(commitlog->add_flush_handler(
+                [this, raft_groups_id](db::cf_id_type id, db::replay_position pos) {
+            if (id != raft_groups_id) {
+                return;
+            }
+            for (auto& [group_id, state] : _raft_groups) {
+                if (!state.storage) {
+                    continue;
+                }
+                // The commitlog catches a throw out of the handler, so one
+                // group's failure would skip every group after it this round.
+                try {
+                    state.storage->mark_segment_closed(pos);
+                } catch (...) {
+                    logger.warn("group_id={}: releasing on a flush round failed: {}",
+                            group_id, std::current_exception());
+                }
+            }
+        }));
     }
 
     if (_pending_tm) {
@@ -590,6 +656,21 @@ future<> groups_manager::stepdown_leaders() {
 
     logger.info("stepdown_leaders(): transferred leadership for {} raft group(s)",
         transferred);
+}
+
+void groups_manager::request_flush(db::cf_id_type id, db::replay_position pos) {
+    auto table = _db.get_tables_metadata().get_table_if_exists(id);
+    if (!table) {
+        // Dropped, so there is nothing to seal. The database's flush handler
+        // frees what the segments still count for a dropped id.
+        return;
+    }
+    // In the background. The continuation holds the table and captures nothing
+    // of ours, so neither this groups_manager nor the table need outlive it.
+    auto flushed = table->flush(pos);
+    (void)flushed.handle_exception([table = std::move(table), id, pos](std::exception_ptr error) {
+        logger.warn("flush request for table {} at {} failed: {}", id, pos, error);
+    });
 }
 
 future<> groups_manager::stop() {

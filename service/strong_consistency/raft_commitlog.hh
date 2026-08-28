@@ -32,23 +32,11 @@ struct truncation_record {
 
 // A segment_record is maintained for each segment in which the Raft group has data.
 struct segment_record {
-    // The group's own reference to the segment. It must outlive every entry
-    // here that is not yet both committed and applied, and it is the source of
-    // the per-command references handed to the target table's memtable.
+    // Reference at the position this record's first batch was written to,
+    // accounted to the group's own table. Source of the per-command references.
     db::rp_handle pin_user_table;
-    // The same segment, referenced under system.raft_groups. Taken when the
-    // record is created rather than when it is released, and that order is what
-    // keeps a quiescent group from deadlocking: releasing the newest record
-    // needs the closed signal (see _closed_up_to), the signal comes only from
-    // flush requests carrying the raft_groups id, and a round names a table only
-    // for segments dirty under it. A segment holding nothing but raft entries is
-    // raft_groups-dirty solely because of this reference — take it at release
-    // instead and the release would be waiting for a signal that only the
-    // release could produce.
-    //
-    // At release it moves into the in-memory mutation that persists the
-    // descriptor, so the segment then lives exactly until the raft_groups
-    // memtable flush that makes that value durable.
+    // A second reference at the same position, accounted to system.raft_groups.
+    // Taken when the record is created, or a quiescent group deadlocks.
     db::rp_handle pin_raft_groups;
     // Index range of this group's entries in the segment, both ends inclusive.
     raft::index_t first{0};
@@ -144,9 +132,8 @@ class raft_commitlog {
     // Truncation history as persisted in the row. Not ordered by segment; within
     // one segment it is chronological, which is all replay's cursors need.
     std::vector<truncation_record> _truncations;
-    // How far the commitlog has closed segments on this shard, as reported by
-    // its flush handler.
-    db::replay_position _closed_up_to;
+    // Furthest flush-round position reported to us; only half of closed_up_to().
+    db::replay_position _reported_up_to;
     raft::log_entries _replayed_entries;
 
 public:
@@ -164,8 +151,8 @@ public:
     db::rp_handle pin_for_apply(raft::index_t idx);
 
     // Report the commitlog's flush position: everything at or below it is in a
-    // closed segment.
-    void note_closed_up_to(db::replay_position pos);
+    // closed segment. Backstop only — see closed_up_to().
+    void mark_segment_closed(db::replay_position pos);
 
     // The oldest record that may now be released, or nullptr. Ownership stays
     // here: the caller persists the descriptor, then calls pop_released().
@@ -189,6 +176,13 @@ public:
 
     size_t segment_count() const {
         return _commitlog_segment_queue.size();
+    }
+
+    // How far the commitlog's flush rounds have got: a record at or below this
+    // has had its segment's round. Both terms are needed, neither alone covers
+    // every round.
+    db::replay_position closed_up_to() const {
+        return std::max(_reported_up_to, _commit_log.flush_position());
     }
 };
 

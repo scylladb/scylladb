@@ -36,33 +36,27 @@ class database;
 
 namespace service::strong_consistency {
 
-// Raft persistence for strongly consistent tablet groups, backed by the
-// database commitlog.
-//
-// The raft log itself lives in the commitlog: store_log_entries() writes one
-// batch as one commitlog entry, and nothing else writes to disk on the raft
-// io_fiber. Everything the group has to remember beyond the log — the snapshot
-// descriptor and the truncation history — is a single row in
-// system.raft_groups, and that row is written by an in-memory mutation: applied
-// straight to the raft_groups memtable, not by a CQL statement.
-//
-// Releasing a record (see raft_commitlog, which owns everything about segments)
-// writes the descriptor from that record's own (max, term) and hands the
-// record's raft_groups reference to the same mutation, so the segment lives
-// exactly until the flush that makes the descriptor durable. That is the whole
-// retention rule: a segment holding a group's raft entries goes away only after
-// a durable descriptor covers them.
+// Ask table `id` to flush, in the background. `pos` only decides whether the
+// table skips the request.
+using flush_request_fn = std::function<void(db::cf_id_type id, db::replay_position pos)>;
+
+// Raft persistence for strongly consistent tablet groups, backed by the database
+// commitlog: the log is one commitlog entry per batch, and the snapshot descriptor
+// and truncation history are one row in system.raft_groups. A segment goes away
+// only once a durable descriptor covers its entries. raft_commitlog owns
+// everything about segments.
 class raft_groups_storage : public raft::persistence {
     raft::group_id _group_id;
     raft::server_id _server_id;
     uint16_t _shard;
     cql3::query_processor& _qp;
     replica::database& _db;
-    // system.raft_groups: the table whose memtable carries the descriptor
-    // mutations.
     const db::cf_id_type _raft_groups_table_id;
+    // The tablet's own table, which apply() puts this group's commands into.
+    const db::cf_id_type _target_table_id;
+    // Empty in tests that do not care which flushes a release asks for.
+    flush_request_fn _request_flush;
 
-    // The group's raft log in the commitlog; see raft_commitlog's class comment.
     raft_commitlog _raft_commitlog;
 
     // Highest index raft has told us is committed. In memory only: recovered
@@ -91,7 +85,7 @@ class raft_groups_storage : public raft::persistence {
 public:
     explicit raft_groups_storage(cql3::query_processor& qp, replica::database& db, raft::group_id gid,
         raft::server_id server_id, shard_id shard, db::commitlog& commit_log, table_id target_table_id,
-        replayed_data_per_group replayed_data);
+        replayed_data_per_group replayed_data, flush_request_fn request_flush = {});
 
 
     future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override;
@@ -121,7 +115,7 @@ public:
     void note_applied(raft::index_t idx);
 
     // Report the commitlog's flush position. Releasing the newest record needs it.
-    void note_closed_up_to(db::replay_position pos);
+    void mark_segment_closed(db::replay_position pos);
 
     // Release every record that is now committed, applied and closed.
     void maybe_release();

@@ -179,10 +179,8 @@ db::rp_handle raft_commitlog::pin_for_apply(raft::index_t idx) {
     return _commitlog_segment_queue.front().pin_user_table.clone(_table_id);
 }
 
-void raft_commitlog::note_closed_up_to(db::replay_position pos) {
-    if (_closed_up_to < pos) {
-        _closed_up_to = pos;
-    }
+void raft_commitlog::mark_segment_closed(db::replay_position pos) {
+    _reported_up_to = std::max(_reported_up_to, pos);
 }
 
 segment_record* raft_commitlog::front_releasable(raft::index_t commit_idx, raft::index_t apply_idx) {
@@ -191,19 +189,11 @@ segment_record* raft_commitlog::front_releasable(raft::index_t commit_idx, raft:
     }
     auto& rec = _commitlog_segment_queue.front();
     // A record is final once no more of this group's entries can land in its
-    // segment. Releasing it earlier would persist an index that a later batch
-    // could extend past.
-    //
-    // There are two ways to know that, and they are the two arms below. Either
-    // the group has already moved on to a newer segment — which is what a later
-    // record in this queue *is*: the previous segment filled up, so the
-    // commitlog allocated a new one for the next batch, and nothing more of this
-    // group can be added to the old one. Or, for the newest record, where no
-    // later record will ever appear because the group has stopped writing, the
-    // commitlog's flush handler has reported that segment sealed
-    // (note_closed_up_to). Without that second arm a quiet group could never
-    // release its last record.
-    const bool final = _commitlog_segment_queue.size() > 1 || rec.pin_user_table.rp() <= _closed_up_to;
+    // segment: a later record in the queue means a newer segment was allocated.
+    // The last record has no successor and relies on the flush rounds, which name
+    // only closed segments (see closed_up_to()).
+    const bool final = _commitlog_segment_queue.size() > 1
+            || rec.pin_user_table.rp() <= closed_up_to();
     if (!final || rec.max > commit_idx) {
         return nullptr;
     }

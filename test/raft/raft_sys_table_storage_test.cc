@@ -164,6 +164,17 @@ static future<> do_with_cql_env_small_segments(std::function<future<>(cql_test_e
     return do_with_cql_env(std::move(func), std::move(db_cfg_ptr));
 }
 
+// Same, with a small disk budget: a few megabytes of held references push the
+// commitlog over its limit, so allocate_segment() runs a flush round of its own.
+static future<> do_with_cql_env_small_commitlog(std::function<future<>(cql_test_env&)> func) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    auto& db_cfg = *db_cfg_ptr;
+    db_cfg.experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+    db_cfg.commitlog_segment_size_in_mb(1);
+    db_cfg.commitlog_total_space_in_mb(16);
+    return do_with_cql_env(std::move(func), std::move(db_cfg_ptr));
+}
+
 // A command entry padded to `payload` bytes, for filling commitlog segments.
 static raft::log_entry_ptr make_command_entry_sized(raft::term_t term, raft::index_t idx, size_t payload) {
     raft::command cmd;
@@ -197,7 +208,7 @@ static future<> release_everything(raft_groups_storage& storage,
         }
     }
     co_await storage.store_commit_idx(entries.back()->idx);
-    storage.note_closed_up_to(db::replay_position(
+    storage.mark_segment_closed(db::replay_position(
             std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
 }
 
@@ -579,7 +590,7 @@ SEASTAR_TEST_CASE(test_groups_storage_shard_isolation) {
             }
         }
         co_await storage0.store_commit_idx(entries.back()->idx);
-        storage0.note_closed_up_to(db::replay_position(
+        storage0.mark_segment_closed(db::replay_position(
                 std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
         BOOST_CHECK_EQUAL(entries.back()->idx, co_await storage0.load_commit_idx());
         BOOST_CHECK_EQUAL(raft::index_t(0), co_await storage1.load_commit_idx());
@@ -805,7 +816,7 @@ SEASTAR_TEST_CASE(test_groups_release_persists_the_descriptor) {
             BOOST_CHECK(bool(pin));
         }
 
-        storage.note_closed_up_to(db::replay_position(
+        storage.mark_segment_closed(db::replay_position(
                 std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
 
         {
@@ -1051,6 +1062,312 @@ SEASTAR_TEST_CASE(test_groups_unchanged_truncations_are_not_rewritten) {
     });
 }
 
+// A group that stops writing releases its last record on the flush-round signal
+// alone; raft_commitlog::closed_up_to() describes that signal. The queue is left
+// at a single record, so the queue.size() > 1 arm cannot be what releases it.
+SEASTAR_TEST_CASE(test_groups_quiescent_group_releases_on_flush_round) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        std::vector<raft::log_entry_ptr> entries;
+        for (int i = 1; i <= 4; ++i) {
+            entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+        }
+        co_await storage.store_log_entries(entries);
+        for (const auto& entry : entries) {
+            storage.note_applied(entry->idx);
+        }
+        co_await storage.store_commit_idx(entries.back()->idx);
+
+        // Nothing has said the segment is closed, and no later record implies it.
+        const auto before = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
+        BOOST_CHECK_EQUAL(before.idx, raft::index_t(0));
+
+        // What groups_manager's flush handler does on a (raft_groups, pos) round.
+        storage.mark_segment_closed(db::replay_position(
+                std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
+
+        const auto persisted = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
+        BOOST_REQUIRE(persisted.exists);
+        BOOST_CHECK_EQUAL(persisted.idx, entries.back()->idx);
+    });
+}
+
+// Records the flush requests a release makes, in place of groups_manager's.
+struct flush_request_log {
+    std::vector<std::pair<db::cf_id_type, db::replay_position>> requests;
+
+    service::strong_consistency::flush_request_fn recorder() {
+        return [this](db::cf_id_type id, db::replay_position pos) {
+            requests.emplace_back(id, pos);
+        };
+    }
+
+    bool asked_for(db::cf_id_type id, db::replay_position pos) const {
+        return std::ranges::find(requests, std::pair(id, pos)) != requests.end();
+    }
+};
+
+// A flush round nobody told the group about still counts. A round can happen
+// with no groups_manager handler registered, since commitlog replay writes a
+// group's recovered tail long before groups_manager::start() registers one, and
+// a round never repeats for the same segment. So the release gate also reads the
+// commitlog's own flush position; without that half of closed_up_to() a record
+// in this state is never releasable.
+SEASTAR_TEST_CASE(test_groups_release_reads_the_commitlogs_flush_position) {
+    return do_with_cql_env_small_commitlog([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto target_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        flush_request_log flushes;
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, target_table, {}, flushes.recorder());
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        std::vector<raft::log_entry_ptr> entries;
+        for (int i = 1; i <= 3; ++i) {
+            entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+        }
+        co_await storage.store_log_entries(entries);
+        const auto record_pos = storage.pin_for_apply(entries.back()->idx).rp();
+
+        // Unrelated writes under a table of their own, until the commitlog runs
+        // a round covering the group's segment. The references are held, not
+        // dropped: a filler segment that goes clean is recycled without ever
+        // costing disk space, and the disk limit is what makes the commitlog flush.
+        const auto filler_table = table_id(utils::UUID_gen::get_time_UUID());
+        const auto payload = bytes(64 * 1024, int8_t('x'));
+        std::vector<db::rp_handle> filler_held;
+        for (int written = 0; !(record_pos <= cl.flush_position()); ++written) {
+            filler_held.push_back(co_await cl.add_mutation(filler_table, payload.size(),
+                    db::commitlog::force_sync::no, [&payload](db::commitlog::output& dst) {
+                dst.write(reinterpret_cast<const char*>(payload.data()), payload.size());
+            }));
+            // 64KB a time against a 16MB budget: a round is due long before this.
+            BOOST_REQUIRE_LT(written, 2048);
+        }
+
+        // Committed and applied, with the closure known only to the commitlog.
+        for (const auto& entry : entries) {
+            storage.note_applied(entry->idx);
+        }
+        co_await storage.store_commit_idx(entries.back()->idx);
+
+        const auto persisted = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
+        BOOST_CHECK_EQUAL(persisted.idx, entries.back()->idx);
+        // And the release knew its round was past, so it asked for the flush.
+        BOOST_CHECK(flushes.asked_for(db::system_keyspace::raft_groups()->id(),
+                db::replay_position(record_pos.id + 1, 0)));
+    });
+}
+
+// A record released after its segment's flush round asks both of its tables to
+// flush, one position past the segment. The commitlog names a closed segment's
+// dirty tables exactly once (segment_manager::_flush_position), and this
+// record's descriptor enters the raft_groups memtable after that round, so
+// without a request of our own the segment would stay on disk for good.
+SEASTAR_TEST_CASE(test_groups_release_after_the_round_asks_for_the_flush) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto target_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        flush_request_log flushes;
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, target_table, {}, flushes.recorder());
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        std::vector<raft::log_entry_ptr> entries;
+        for (int i = 1; i <= 4; ++i) {
+            entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+        }
+        co_await storage.store_log_entries(entries);
+        // The segment the record holds.
+        const auto segment = storage.pin_for_apply(entries.back()->idx).rp().id;
+
+        for (const auto& entry : entries) {
+            storage.note_applied(entry->idx);
+        }
+        co_await storage.store_commit_idx(entries.back()->idx);
+        // Nothing has said the segment is closed, so nothing was released yet.
+        BOOST_REQUIRE(flushes.requests.empty());
+
+        // The round, as groups_manager's flush handler reports it.
+        storage.mark_segment_closed(db::replay_position(
+                std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
+
+        // One past the segment: the record's own position is the first batch in
+        // it, below the per-command references, so asking there leaves them behind.
+        const auto expected = db::replay_position(segment + 1, 0);
+        BOOST_CHECK(flushes.asked_for(target_table, expected));
+        BOOST_CHECK(flushes.asked_for(db::system_keyspace::raft_groups()->id(), expected));
+        // Exactly those two: one record released, one request per table.
+        BOOST_CHECK_EQUAL(flushes.requests.size(), 2u);
+    });
+}
+
+// A record released before its segment's flush round asks for nothing. The
+// record goes because a newer one exists in the queue, so the round is still
+// ahead, and that round covers everything the record put in the segment: both
+// tables are dirty there already. Asking as well would be pure cost.
+SEASTAR_TEST_CASE(test_groups_release_before_the_round_asks_for_nothing) {
+    return do_with_cql_env_small_segments([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto target_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        flush_request_log flushes;
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, target_table, {}, flushes.recorder());
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        // Write, commit and apply until a release happens. mark_segment_closed()
+        // is never called, so only a newer record can make one releasable, which
+        // means the group rolling to a new segment. A non-zero index is the
+        // signal, since bootstrap() above already wrote a descriptor at index 0.
+        raft::index_t next_idx{1};
+        while (true) {
+            std::vector<raft::log_entry_ptr> batch;
+            for (int i = 0; i < 4; ++i) {
+                batch.push_back(make_command_entry_sized(raft::term_t(1), next_idx, 64 * 1024));
+                next_idx = next_idx + raft::index_t{1};
+            }
+            co_await storage.store_log_entries(batch);
+            for (const auto& entry : batch) {
+                storage.note_applied(entry->idx);
+            }
+            co_await storage.store_commit_idx(batch.back()->idx);
+            if ((co_await raft_groups_storage::load_descriptor(qp, gid, test_shard)).idx > raft::index_t(0)) {
+                break;
+            }
+            // A 1MB segment holds far fewer than this many 64KB entries.
+            BOOST_REQUIRE_LT(next_idx.value(), 4096u);
+        }
+
+        BOOST_CHECK(flushes.requests.empty());
+    });
+}
+
+// A record holding no command asks only system.raft_groups to flush. apply()
+// never sees dummies or configurations, so the tablet table got no per-command
+// reference into this segment, and the batch's own reference goes with the pop.
+// Nothing of ours is left there for it to flush.
+SEASTAR_TEST_CASE(test_groups_record_without_commands_asks_only_for_raft_groups) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto target_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        flush_request_log flushes;
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, target_table, {}, flushes.recorder());
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        std::vector<raft::log_entry_ptr> entries;
+        for (int i = 1; i <= 3; ++i) {
+            entries.push_back(make_lw_shared<raft::log_entry>(raft::log_entry{
+                    .term = raft::term_t(1), .idx = raft::index_t(i), .data = raft::log_entry::dummy{}}));
+        }
+        co_await storage.store_log_entries(entries);
+        const auto segment = storage.pin_for_apply(entries.back()->idx).rp().id;
+
+        // last_cmd() is disengaged, so committing and closing is all it waits for.
+        co_await storage.store_commit_idx(entries.back()->idx);
+        storage.mark_segment_closed(db::replay_position(
+                std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
+
+        const auto expected = db::replay_position(segment + 1, 0);
+        BOOST_CHECK(flushes.asked_for(db::system_keyspace::raft_groups()->id(), expected));
+        BOOST_CHECK(!flushes.asked_for(target_table, expected));
+        BOOST_CHECK_EQUAL(flushes.requests.size(), 1u);
+    });
+}
+
+// The flush requests a release makes are enough to reclaim the segment. The
+// tests above check which requests are made; this one performs them the way
+// groups_manager does and requires segments to go clean. Without them nothing
+// is freed: pin_raft_groups moved into the descriptor mutation and the round is past.
+SEASTAR_TEST_CASE(test_groups_requested_flushes_reclaim_the_segment) {
+    return do_with_cql_env_small_segments([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto target_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        flush_request_log flushes;
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, target_table, {}, flushes.recorder());
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        // Fill until two more segments are dirty than the environment already
+        // had. Only closed segments are counted dirty and only they can be
+        // reclaimed; the count is shard-global, hence the relative bound.
+        const auto dirty_before = cl.get_num_dirty_segments();
+        raft::index_t next_idx{1};
+        std::vector<raft::log_entry_ptr> entries;
+        do {
+            std::vector<raft::log_entry_ptr> batch;
+            for (int i = 0; i < 4; ++i) {
+                batch.push_back(make_command_entry_sized(raft::term_t(1), next_idx, 64 * 1024));
+                next_idx = next_idx + raft::index_t{1};
+            }
+            co_await storage.store_log_entries(batch);
+            entries.insert(entries.end(), batch.begin(), batch.end());
+            // A 1MB segment holds far fewer than this many 64KB entries.
+            BOOST_REQUIRE_LT(next_idx.value(), 4096u);
+        } while (cl.get_num_dirty_segments() < dirty_before + 2);
+        BOOST_REQUIRE(!entries.empty());
+
+        // The round for the front record's segment, before anything is releasable.
+        const auto front_segment = storage.pin_for_apply(entries.front()->idx).rp().id;
+        storage.mark_segment_closed(db::replay_position(front_segment + 1, 0));
+
+        const auto dirty_after_round = cl.get_num_dirty_segments();
+        BOOST_REQUIRE_GT(dirty_after_round, 0u);
+
+        // Now the release: it moves pin_raft_groups into the descriptor mutation, so the
+        // segment stays held by the raft_groups memtable, and its round is past.
+        for (const auto& entry : entries) {
+            storage.note_applied(entry->idx);
+        }
+        co_await storage.store_commit_idx(entries.back()->idx);
+        // Its round is past, so its request has to be there.
+        BOOST_REQUIRE(flushes.asked_for(db::system_keyspace::raft_groups()->id(),
+                db::replay_position(front_segment + 1, 0)));
+
+        // What groups_manager::request_flush() does for each of them.
+        for (const auto& [id, pos] : flushes.requests) {
+            if (auto table = env.local_db().get_tables_metadata().get_table_if_exists(id)) {
+                co_await table->flush(pos);
+            }
+        }
+
+        // The check is coarse on purpose: other tables of the test environment
+        // also have data in these segments, and every released record hands its
+        // pin_raft_groups to the same raft_groups memtable, so one flush covers them all.
+        // What it does pin: withholding the requests frees nothing.
+        BOOST_CHECK_LT(cl.get_num_dirty_segments(), dirty_after_round);
+    });
+}
+
 // A batch whose commands are never applied must not wedge the queue.
 // state_machine::apply() swallows no_such_column_family / no_such_keyspace when
 // a DROP races the applier. The gate waits for the record's last command, so
@@ -1088,7 +1405,7 @@ SEASTAR_TEST_CASE(test_groups_discarded_batch_does_not_wedge_the_queue) {
 
         // Nothing applied, so the gate still holds the front record.
         co_await storage.store_commit_idx(dropped.back()->idx);
-        storage.note_closed_up_to(db::replay_position(
+        storage.mark_segment_closed(db::replay_position(
                 std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
         const auto stuck = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
         BOOST_CHECK_EQUAL(stuck.idx, raft::index_t(0));
