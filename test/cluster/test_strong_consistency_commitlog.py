@@ -8,11 +8,12 @@ from cassandra.query import ConsistencyLevel
 from test.cluster.util import FeatureConfig, FeatureConfigurations, feature_configs, get_commitlog_segment_id, new_test_keyspace
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.pylib.util import gather_safely
+from test.pylib.util import gather_safely, wait_for
 
 import asyncio
 
 import pytest
+import time
 
 
 async def active_commitlog_segment_ids(manager: ScyllaClusterManager, server: ServerInfo) -> set[int]:
@@ -320,8 +321,12 @@ async def test_segment_of_applied_entries_is_reclaimed(manager: ScyllaClusterMan
     it, as with logstor. Otherwise, every segment written by such a table is
     kept, and the commitlog runs out of space.
     """
+    # A group's newest record holds its segment until a commitlog flush round
+    # names the segment. A one-second data lifetime makes the commitlog timer
+    # run that round for every segment older than a second.
+    config = feature_config.get_cluster_cfg() | {"commitlog_max_data_lifetime_in_seconds": 1}
     # A single shard has a single active segment, which holds all the writes below.
-    server = await manager.server_add(config=feature_config.get_cluster_cfg(), cmdline=["--smp", "1"])
+    server = await manager.server_add(config=config, cmdline=["--smp", "1"])
     cql, _ = await manager.get_ready_cql([server])
 
     ks_stmt = feature_config.get_keyspace_opts("CREATE KEYSPACE ks WITH replication = "
@@ -345,11 +350,14 @@ async def test_segment_of_applied_entries_is_reclaimed(manager: ScyllaClusterMan
     await gather_safely(*[cql.run_async(stmt, (pk, pk)) for pk in range(1, 10)])
     segment = max(await active_commitlog_segment_ids(manager, server))
 
-    # Flushing closes the active segment and flushes every memtable, after
-    # which nothing holds the segment anymore.
+    # Flushing closes the active segment and flushes every memtable. The next
+    # flush round releases the groups' records of the segment, and the segment
+    # goes once the descriptors the release writes are flushed.
     await manager.api.flush_all_keyspaces(server.ip_addr)
-    segments = await active_commitlog_segment_ids(manager, server)
-    assert segment not in segments
+
+    async def segment_reclaimed():
+        return segment not in await active_commitlog_segment_ids(manager, server) or None
+    await wait_for(segment_reclaimed, time.time() + 60)
 
     rows = await cql.run_async("SELECT c FROM ks.tbl WHERE pk = 9")
     assert [r.c for r in rows] == [9]
