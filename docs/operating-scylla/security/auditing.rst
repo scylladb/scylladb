@@ -29,18 +29,18 @@ Configuring Audit
 
 The audit can be tuned using the following flags or ``scylla.yaml`` entries:
 
-==================  ==================================  ========================================================================================================================
-Flag                Default Value                       Description
-==================  ==================================  ========================================================================================================================
-audit_categories    "DCL,AUTH,ADMIN"                                  Comma-separated list of statement categories that should be audited
-------------------  ----------------------------------  ------------------------------------------------------------------------------------------------------------------------
-audit_tables        “”                                  Comma-separated list of table names that should be audited, in the format ``<keyspace_name>.<table_name>``.
-                                                        
-                                                        For Alternator tables use the ``alternator.<table_name>`` format (see :ref:`alternator-auditing`).
-------------------  ----------------------------------  ------------------------------------------------------------------------------------------------------------------------
-audit_keyspaces     “”                                  Comma-separated list of keyspaces that should be audited. You must specify at least one keyspace.
-                                                        If you leave this option empty, no keyspace will be audited.
-==================  ==================================  ========================================================================================================================
+==================  ========================================================================================================================
+Flag                Description
+==================  ========================================================================================================================
+audit_categories    Comma-separated list of statement categories that should be audited
+------------------  ------------------------------------------------------------------------------------------------------------------------
+audit_tables        Comma-separated list of table names that should be audited, in the format ``<keyspace_name>.<table_name>``.
+
+                    For Alternator tables use the ``alternator.<table_name>`` format (see :ref:`alternator-auditing`).
+------------------  ------------------------------------------------------------------------------------------------------------------------
+audit_keyspaces     Comma-separated list of keyspaces that should be audited. You must specify at least one keyspace.
+                    If you leave this option empty, no keyspace will be audited.
+==================  ========================================================================================================================
 
 To audit all the tables in a keyspace, set the ``audit_keyspaces`` with the keyspace you want to audit and leave ``audit_tables`` empty.
 
