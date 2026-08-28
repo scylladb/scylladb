@@ -2243,33 +2243,6 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         });
     });
 
-    ss::scrub.set(r, [&ctx, &snap_ctl] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto& db = ctx.db;
-        auto info = parse_scrub_options(ctx, std::move(req));
-
-        if (!info.snapshot_tag.empty()) {
-            db::snapshot_options opts = {.skip_flush = false};
-            co_await snap_ctl.local().take_column_family_snapshot(info.keyspace, info.column_families, info.snapshot_tag, opts);
-        }
-
-        compaction::compaction_stats stats;
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<compaction::scrub_sstables_compaction_task_impl>({}, info.keyspace, db, info.column_families, info.opts, &stats);
-        try {
-            co_await task->done();
-            if (stats.validation_errors) {
-                co_return json::json_return_type(static_cast<int>(scrub_status::validation_errors));
-            }
-        } catch (const compaction::compaction_aborted_exception&) {
-            co_return json::json_return_type(static_cast<int>(scrub_status::aborted));
-        } catch (...) {
-            apilog.error("scrub keyspace={} tables={} failed: {}", info.keyspace, info.column_families, std::current_exception());
-            throw;
-        }
-
-        co_return json::json_return_type(static_cast<int>(scrub_status::successful));
-    });
-
     ss::start_backup.set(r, [&snap_ctl] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto endpoint = req->get_query_param("endpoint");
         auto keyspace = req->get_query_param("keyspace");
@@ -2348,7 +2321,6 @@ void unset_snapshot(http_context& ctx, routes& r) {
     ss::take_snapshot.unset(r);
     ss::del_snapshot.unset(r);
     ss::true_snapshots_size.unset(r);
-    ss::scrub.unset(r);
     ss::start_backup.unset(r);
     cf::get_true_snapshots_size.unset(r);
     cf::get_all_true_snapshots_size.unset(r);

@@ -11,6 +11,7 @@
 
 #include "api/api.hh"
 #include "api/storage_service.hh"
+#include "api/scrub_status.hh"
 #include "api/validate.hh"
 #include "api/api-doc/tasks.json.hh"
 #include "api/api-doc/storage_service.json.hh"
@@ -115,6 +116,32 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::
         co_return json::json_return_type(task->get_status().id.to_sstring());
     });
 
+    ss::scrub.set(r, [&ctx, &db, &snap_ctl] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto info = parse_scrub_options(ctx, std::move(req));
+
+        if (!info.snapshot_tag.empty()) {
+            db::snapshot_options opts = {.skip_flush = false};
+            co_await snap_ctl.local().take_column_family_snapshot(info.keyspace, info.column_families, info.snapshot_tag, opts);
+        }
+
+        compaction::compaction_stats stats;
+        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+        auto task = co_await compaction_module.make_and_start_task<compaction::scrub_sstables_compaction_task_impl>({}, info.keyspace, db, info.column_families, info.opts, &stats);
+        try {
+            co_await task->done();
+            if (stats.validation_errors) {
+                co_return json::json_return_type(static_cast<int>(scrub_status::validation_errors));
+            }
+        } catch (const compaction::compaction_aborted_exception&) {
+            co_return json::json_return_type(static_cast<int>(scrub_status::aborted));
+        } catch (...) {
+            apilog.error("scrub keyspace={} tables={} failed: {}", info.keyspace, info.column_families, std::current_exception());
+            throw;
+        }
+
+        co_return json::json_return_type(static_cast<int>(scrub_status::successful));
+    });
+
     ss::force_compaction.set(r, [&db] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
         auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
@@ -139,6 +166,7 @@ void unset_tasks_compaction_module(http_context& ctx, httpd::routes& r) {
     t::upgrade_sstables_async.unset(r);
     ss::upgrade_sstables.unset(r);
     t::scrub_async.unset(r);
+    ss::scrub.unset(r);
     ss::force_compaction.unset(r);
 }
 
