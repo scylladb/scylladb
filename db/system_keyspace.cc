@@ -409,7 +409,7 @@ schema_ptr system_keyspace::cdc_streams_history() {
 }
 
 schema_ptr system_keyspace::raft() {
-    static thread_local auto schema = replica::make_raft_schema(db::system_keyspace::RAFT, true);
+    static thread_local auto schema = replica::make_group0_raft_schema(db::system_keyspace::RAFT);
     return schema;
 }
 
@@ -432,7 +432,7 @@ schema_ptr system_keyspace::raft_snapshot_config() {
 // The raft_groups_partitioner creates tokens that map to the specified shard.
 
 schema_ptr system_keyspace::raft_groups() {
-    static thread_local auto schema = replica::make_raft_schema(db::system_keyspace::RAFT_GROUPS, false);
+    static thread_local auto schema = replica::make_tablet_raft_groups_schema(db::system_keyspace::RAFT_GROUPS);
     return schema;
 }
 
