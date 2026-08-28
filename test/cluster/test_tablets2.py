@@ -522,7 +522,7 @@ async def test_tablet_cleanup(manager: ScyllaClusterManager):
 
         # Wipe data on second node.
         logger.info("Wipe data on second node")
-        await manager.server_stop_gracefully(servers[1].server_id, timeout=120)
+        await manager.server_stop_gracefully(servers[1].server_id)
         await manager.server_wipe_sstables(servers[1].server_id, ks, "test")
         await manager.server_start(servers[1].server_id)
         await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
@@ -617,7 +617,7 @@ async def test_tablet_resharding(manager: ScyllaClusterManager):
     await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY);")
     await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk) VALUES ({k});") for k in range(n_partitions)])
 
-    await manager.server_stop_gracefully(server.server_id, timeout=120)
+    await manager.server_stop_gracefully(server.server_id)
     await manager.server_update_cmdline(server.server_id, ['--smp=2'])
 
     await manager.server_start(
@@ -751,7 +751,7 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: S
         time.sleep(1)
         await manager.disable_tablet_balancing()
 
-        await manager.server_stop_gracefully(servers[1].server_id, timeout=120)
+        await manager.server_stop_gracefully(servers[1].server_id)
         await manager.server_start(servers[1].server_id)
         await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
         await manager.servers_see_each_other(servers)
