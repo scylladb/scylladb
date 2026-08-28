@@ -19,6 +19,36 @@ ScyllaDB supports several restore methods. Choose the one that matches where you
 
 For cluster-wide backup and restore, use `ScyllaDB Manager <https://manager.docs.scylladb.com/stable/restore/>`_, which orchestrates the process across the cluster.
 
+.. _restore-prerequisites:
+
+-------------
+Prerequisites
+-------------
+
+The following steps and notes apply to all restore methods.
+
+| From **one** of the nodes, recreate the schema.
+
+``cqlsh -e "SOURCE '/path_to_schema/<schema_name.cql>'"``
+
+| For example:
+
+``cqlsh -e "SOURCE 'centos/db_schema.cql'"``
+
+| **Only** a superuser should perform it.
+
+| If the tables you are restoring already exist and contain data, truncate each of them, so that the existing data does not overwrite the restored data. Truncating a base table also truncates its materialized views and secondary indexes, no extra action is needed for them.
+
+``cqlsh -e "TRUNCATE <keyspace_name>.<table_name>"``
+
+| For example:
+
+``cqlsh -e "TRUNCATE mykeyspace.team_players"``
+
+.. note::
+
+   If you are restoring :doc:`encrypted backup files </operating-scylla/security/encryption-at-rest>`, make sure ScyllaDB is configured with the same keys that were used to encrypt the data before starting the restore process.
+
 .. _restore-object-storage:
 
 ---------------------------
@@ -31,7 +61,7 @@ The object storage endpoint must be configured on the nodes, as described in :re
 
 **Procedure**
 
-#. Recreate the schema (if needed) and truncate the target tables, as described in the beginning of :ref:`Restore to an identical cluster <restore-procedure>`.
+#. Complete the :ref:`prerequisites <restore-prerequisites>`.
 
 #. List the backed-up SSTables in the bucket under the prefix used during the backup. The restore command takes the paths of the ``TOC.txt`` components of the SSTables to restore, **relative to the prefix** -- the remainder of each object key after the prefix. Note that listing tools print full object keys, from the bucket root, so the prefix needs to be stripped. For example:
 
@@ -78,7 +108,7 @@ Use this method when the backed-up SSTable files are available on disk (for exam
 
 **Procedure**
 
-#. Recreate the schema (if needed) and truncate the target tables, as described in the beginning of :ref:`Restore to an identical cluster <restore-procedure>`.
+#. Complete the :ref:`prerequisites <restore-prerequisites>`.
 
 #. Copy the backed-up SSTable files of a table to that table's ``upload`` directory on one of the nodes, and make sure the files are owned by the ``scylla`` user and group:
 
@@ -115,40 +145,19 @@ This method places the snapshot files directly back into the table directories a
    The procedure restores each node using the backup file of the **same node**.
    If this is not the case, one should use other restoration methods tools like :doc:`sstableloader </operating-scylla/procedures/cassandra-to-scylla-migration-process/>`. This procedure is much slower than restoring to the same topology cluster.
 
-| From **one** of the nodes, recreate the schema.
+Complete the :ref:`prerequisites <restore-prerequisites>` first.
 
-``cqlsh -e "SOURCE '/path_to_schema/<schema_name.cql>'"``
+.. note::
 
-| For example:
+   Best practise is **not** to restore :doc:`Materialized Views (MV) </features/materialized-views>` and :doc:`Secondary Indexes (SI) </features/secondary-indexes>` SSTables.
+   It is recommended to:
 
-``cqlsh -e "SOURCE 'centos/db_schema.cql'"``
-
-| **Only** a superuser should perform it.
-
-| If the tables you are restoring already exist and contain data, truncate each of them, so that the existing data does not overwrite the restored data. Truncating a base table also truncates its materialized views and secondary indexes, no extra action is needed for them.
-
-``cqlsh -e "TRUNCATE <keyspace_name>.<table_name>"``
-
-| For example:
-
-``cqlsh -e "TRUNCATE mykeyspace.team_players"``
+   - Drop the MV and SI using `DROP MATERIALIZED VIEW` or `DROP INDEX`
+   - Restore the base table only (see below)
+   - Recreate the  MV or SI, using the original description from the CQL backup, using `CREATE MATERIALIZED VIEW` or `CREATE INDEX`
 
 Repeat the following steps for each node in the cluster:
 --------------------------------------------------------
-
-.. note::
-
-   If you are restoring :doc:`encrypted backup files </operating-scylla/security/encryption-at-rest>`, make sure ScyllaDB is configured with the same keys that were used to encrypt the data before starting the restore process.
-
-.. note::
-
-      Best practise is **not** to restore :doc:`Materialized Views (MV) </features/materialized-views>` and :doc:`Secondary Indexes (SI) </features/secondary-indexes>` SSTables.
-      It is recommended to:
-
-      - Drop the MV and SI using `DROP MATERIALIZED VIEW` or `DROP INDEX`
-      - Restore the base table only (see below)
-      - Recreate the  MV or SI, using the original description from the CQL backup, using `CREATE MATERIALIZED VIEW` or `CREATE INDEX`
-   
 
 #. Run the :doc:`nodetool drain </operating-scylla/nodetool-commands/drain/>` command to ensure the data is flushed to the SSTables
 
