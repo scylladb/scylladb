@@ -84,6 +84,69 @@ static future<tasks::task_manager::task_ptr> force_keyspace_cleanup(http_context
     co_return co_await compaction_module.start_cleanup_keyspace_compaction(db, std::move(keyspace), table_infos, compaction::flush_mode::all_tables, tasks::is_user_task::yes);
 }
 
+static scrub_info parse_scrub_options(const http_context& ctx, std::unique_ptr<http::request> req) {
+    scrub_info info;
+    auto [ keyspace, table_infos ] = parse_table_infos(ctx, *req, "cf");
+    info.keyspace = std::move(keyspace);
+    info.column_families = table_infos | std::views::transform(&table_info::name) | std::ranges::to<std::vector>();
+    auto scrub_mode_str = req->get_query_param("scrub_mode");
+    auto scrub_mode = compaction::compaction_type_options::scrub::mode::validate;
+
+    if (scrub_mode_str.empty()) {
+        const auto skip_corrupted = get_query_param<bool>(*req, "skip_corrupted");
+
+        if (skip_corrupted) {
+            scrub_mode = compaction::compaction_type_options::scrub::mode::skip;
+        }
+    } else {
+        if (scrub_mode_str == "ABORT") {
+            scrub_mode = compaction::compaction_type_options::scrub::mode::abort;
+        } else if (scrub_mode_str == "SKIP") {
+            scrub_mode = compaction::compaction_type_options::scrub::mode::skip;
+        } else if (scrub_mode_str == "SEGREGATE") {
+            scrub_mode = compaction::compaction_type_options::scrub::mode::segregate;
+        } else if (scrub_mode_str == "VALIDATE") {
+            scrub_mode = compaction::compaction_type_options::scrub::mode::validate;
+        } else {
+            throw httpd::bad_param_exception(fmt::format("Unknown argument for 'scrub_mode' parameter: {}", scrub_mode_str));
+        }
+    }
+
+    if (!get_query_param<bool>(*req, "disable_snapshot") && !info.column_families.empty()) {
+        info.snapshot_tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
+    }
+
+    info.opts = {
+        .operation_mode = scrub_mode,
+    };
+    const sstring quarantine_mode_str = get_query_param<sstring>(*req, "quarantine_mode", "INCLUDE");
+    if (quarantine_mode_str == "INCLUDE") {
+        info.opts.quarantine_operation_mode = compaction::compaction_type_options::scrub::quarantine_mode::include;
+    } else if (quarantine_mode_str == "EXCLUDE") {
+        info.opts.quarantine_operation_mode = compaction::compaction_type_options::scrub::quarantine_mode::exclude;
+    } else if (quarantine_mode_str == "ONLY") {
+        info.opts.quarantine_operation_mode = compaction::compaction_type_options::scrub::quarantine_mode::only;
+    } else {
+        throw httpd::bad_param_exception(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
+    }
+
+    if (get_query_param<bool>(*req, "drop_unfixable_sstables")) {
+        if(scrub_mode != compaction::compaction_type_options::scrub::mode::segregate) {
+            throw httpd::bad_param_exception("The 'drop_unfixable_sstables' parameter is only valid when 'scrub_mode' is 'SEGREGATE'");
+        }
+        info.opts.drop_unfixable = compaction::compaction_type_options::scrub::drop_unfixable_sstables::yes;
+    }
+
+    if (req->get_query_param("quarantine_invalid_sstables") != "") {
+        if (scrub_mode != compaction::compaction_type_options::scrub::mode::validate) {
+            throw httpd::bad_param_exception("The 'quarantine_invalid_sstables' parameter is only valid when 'scrub_mode' is 'VALIDATE'");
+        }
+        info.opts.quarantine_sstables = compaction::compaction_type_options::scrub::quarantine_invalid_sstables(get_query_param<bool>(*req, "quarantine_invalid_sstables", true));
+    }
+
+    return info;
+}
+
 void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::database>& db, sharded<db::snapshot_ctl>& snap_ctl) {
     t::force_keyspace_compaction_async.set(r, [&ctx, &db](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto task = co_await force_keyspace_compaction(ctx, db, std::move(req));
