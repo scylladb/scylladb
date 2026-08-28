@@ -850,15 +850,52 @@ static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_d
     return dht::partition_range(decorated_key);
 }
 
-static query::clustering_range get_clustering_range_for_begins_with(bytes&& target, const clustering_key& ck, schema_ptr schema, data_type t) {
+// Builds the clustering range matching begins_with(col, target) on a sort key.
+//
+// prefix_values holds the raw values of the sort key columns that precede col
+// and were constrained by equality. It is often empty - that is the case for a
+// begins_with() on the first, or only, sort key column.
+//
+// A prefix match is a half-open range: from the prefix itself up to, but not
+// including, the smallest string larger than every string starting with that
+// prefix. That successor is target with its last non-\xFF byte incremented and
+// everything after it dropped - so for target "abc" the range is ["abc", "abd"),
+// which contains "abc", "abcz" and "abcdef", but not "abd" itself.
+//
+// A target made up entirely of \xFF bytes is the special case: no byte can be
+// incremented, so it has no such successor. But \xFF is the largest byte, so
+// every string larger than that target also starts with it, and we can simply
+// end the range at the end of the prefix - see the comments in the if() below.
+//
+// target must not be empty - get_key_from_typed_value() rejects empty key
+// values before we get here.
+static query::clustering_range get_clustering_range_for_begins_with(std::vector<bytes>&& prefix_values, bytes&& target, schema_ptr schema) {
     auto it = boost::range::find_end(target, bytes("\xFF"), std::not_equal_to<bytes::value_type>());
-    if (it != target.end()) {
-        ++*it;
-        target.resize(std::distance(target.begin(), it) + 1);
-        clustering_key upper_limit = clustering_key::from_single_value(*schema, target);
-        return query::clustering_range::make(query::clustering_range::bound(ck), query::clustering_range::bound(upper_limit, false));
+    if (it == target.end()) {
+        // target is \xFF...\xFF, so there is no byte to increment. Instead we
+        // use prefix_values on its own as the upper bound: a clustering key
+        // shorter than the full sort key is a prefix bound, and as an inclusive
+        // upper bound it means "prefix_values followed by +inf in every
+        // remaining column". The range is therefore
+        // [(prefix_values, \xFF...\xFF), (prefix_values, +inf, ..., +inf)],
+        // which holds exactly the rows whose column is >= \xFF...\xFF - and
+        // since \xFF is the largest byte, those are exactly the rows whose
+        // column begins with target.
+        clustering_key upper_bound_key = clustering_key::from_exploded(*schema, prefix_values);
+        prefix_values.push_back(std::move(target));
+        clustering_key ck = clustering_key::from_exploded(*schema, prefix_values);
+        return query::clustering_range::make(query::clustering_range::bound(std::move(ck)), query::clustering_range::bound(std::move(upper_bound_key)));
     }
-    return query::clustering_range::make_starting_with(query::clustering_range::bound(ck));
+    std::vector<bytes> lower_values(prefix_values);
+    lower_values.push_back(target);
+    clustering_key ck = clustering_key::from_exploded(*schema, lower_values);
+    ++*it;
+    target.resize(std::distance(target.begin(), it) + 1);
+    prefix_values.push_back(std::move(target));
+    clustering_key upper_limit = clustering_key::from_exploded(*schema, prefix_values);
+    // The usual case: a half-open range ending at the incremented target, e.g.
+    // [(prefix_values, "abc"), (prefix_values, "abd")) for target "abc".
+    return query::clustering_range::make(query::clustering_range::bound(std::move(ck)), query::clustering_range::bound(std::move(upper_limit), false));
 }
 
 static query::clustering_range calculate_ck_bound(schema_ptr schema, const column_definition& ck_cdef, const rjson::value& comp_definition, const rjson::value& attrs) {
@@ -894,7 +931,9 @@ static query::clustering_range calculate_ck_bound(schema_ptr schema, const colum
         if (!ck_cdef.type->is_compatible_with(*utf8_type)) {
             throw api_error::validation(fmt::format("BEGINS_WITH operator cannot be applied to type {}", type_to_string(ck_cdef.type)));
         }
-        return get_clustering_range_for_begins_with(std::move(raw_value), ck, schema, ck_cdef.type);
+        // KeyConditions supports only a single sort key column, so there are
+        // no preceding equality-constrained columns to pass as a prefix.
+        return get_clustering_range_for_begins_with({}, std::move(raw_value), schema);
     }
     default:
         throw api_error::validation(format("Operator {} not supported for sort key", comp_definition));
