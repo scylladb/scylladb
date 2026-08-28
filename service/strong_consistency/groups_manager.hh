@@ -35,6 +35,8 @@ class migration_manager;
 
 namespace service::strong_consistency {
 
+class raft_groups_storage;
+
 class raft_server;
 
 // What separates a raft group's live configuration from the one its tablet's current
@@ -138,6 +140,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         bool has_tablet = false;
         lw_shared_ptr<gate> gate = nullptr;
         raft::server* server = nullptr;
+        // Owned by the raft::server. Cleared before that server is destroyed,
+        // so the commitlog's flush handler never sees a dangling pointer.
+        raft_groups_storage* storage = nullptr;
+
         shared_future<> server_control_op = make_ready_future<>();
 
         // Populated only when this node thinks it's a tablet raft group leader.
@@ -181,6 +187,14 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     bool _started = false;
 
     tablet_group_leader_cache _leader_cache;
+
+    // Keeps the flush handler registered. The handler forwards each round's
+    // position to every group; see raft_commitlog::closed_up_to().
+    std::optional<db::commitlog::flush_handler_anchor> _flush_handler;
+
+    // Ask table `id` to flush, in the background. `pos` only decides whether the
+    // table skips the request.
+    void request_flush(db::cf_id_type id, db::replay_position pos);
 
     // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,
