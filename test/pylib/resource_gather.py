@@ -243,18 +243,33 @@ class ResourceGatherOn(ResourceGatherRecord):
         return result
 
 
-def gather_host_info() -> HostInfo:
-    """Collect static hardware information about the current host."""
+def _get_cpu_model() -> str:
     try:
-        cpu_model = "unknown"
         with open("/proc/cpuinfo") as f:
             for line in f:
                 if line.startswith("model name"):
-                    cpu_model = line.split(":", 1)[1].strip()
-                    break
+                    return line.split(":", 1)[1].strip()
     except OSError:
-        cpu_model = platform.processor() or "unknown"
+        pass
+    # aarch64 /proc/cpuinfo has no "model name" line; lscpu decodes the
+    # implementer/part ids into one (e.g. "Neoverse-N1").  LC_ALL=C keeps the
+    # label we match untranslated: lscpu calls setlocale() and its labels go
+    # through gettext, so "Model name" is localized where util-linux
+    # translations are installed.
+    try:
+        lscpu = subprocess.run(["lscpu"], capture_output=True, text=True, check=True,
+                               env={**os.environ, "LC_ALL": "C"})
+        for line in lscpu.stdout.splitlines():
+            if line.startswith("Model name"):
+                return line.split(":", 1)[1].strip()
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    return platform.processor() or "unknown"
 
+
+def gather_host_info() -> HostInfo:
+    """Collect static hardware information about the current host."""
+    cpu_model = _get_cpu_model()
     cpu_cores = psutil.cpu_count(logical=False) or os.cpu_count() or 0
     ram_bytes = psutil.virtual_memory().total
     return HostInfo(host_id=HOST_ID, cpu_model=cpu_model, cpu_cores=cpu_cores, ram_bytes=ram_bytes)
