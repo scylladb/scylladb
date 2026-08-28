@@ -70,26 +70,85 @@ future<std::pair<raft::term_t, raft::server_id>> raft_groups_storage::load_term_
     co_return std::pair(vote_term, vote);
 }
 
+// Build a static-only system.raft_groups mutation that sets commit_idx and
+// commit_idx_term for the (shard, group_id) partition. Both cells are set at
+// one timestamp, so a reader never sees a mismatched (index, term) pair.
+// Applied in-memory (see store_commit_idx) with the covered segment's
+// reference attached so it rides the raft_groups memtable flush.
+static mutation make_commit_idx_mutation(shard_id shard, raft::group_id group_id,
+        raft::index_t commit_idx, raft::term_t commit_idx_term,
+        api::timestamp_type ts) {
+    auto schema = db::system_keyspace::raft_groups();
+    auto pk = partition_key::from_exploded(*schema, {
+        short_type->decompose(int16_t(shard)),
+        timeuuid_type->decompose(group_id.id),
+    });
+    mutation m(schema, std::move(pk));
+    m.set_static_cell("commit_idx", data_value(int64_t(commit_idx.value())), ts);
+    m.set_static_cell("commit_idx_term", data_value(int64_t(commit_idx_term.value())), ts);
+    return m;
+}
+
 future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
-    // Keep the (index, term) pair of the last committed entry, which the next
-    // batch records in the commitlog as the crash-replay floor. Raft calls
-    // this before the entries are applied, so the entry at idx is still
-    // tracked and its term is exact.
+    // IO-free: no per-committed-batch CQL write on the raft io_fiber. The
+    // value reaches system.raft_groups through the covering mutations below
+    // (durable once the raft_groups memtable flushes) and, after a crash,
+    // through the commit_idx records the replayed raft entries carry.
+    //
+    // The io_fiber calls this *before* pushing entries to the applier_fiber,
+    // so the commit index seen here is always >= the raft index of any entry
+    // that has been applied to a memtable — and the covers attached below
+    // reach the raft_groups memtable before their entries can be applied.
+    // note_commit_idx() also keeps the (index, term) pair of the last
+    // committed entry, which the next batch records as the crash-replay
+    // floor.
+    //
+    // The covers are consumed before the first apply_in_memory(), so a throw
+    // from one of them loses them: raft turns an
+    // exception here into a background error and stops the group (see
+    // server_impl::io_fiber), it does not retry. Both losses degrade safely.
+    // A lost cover means the segment can be reclaimed without a durable
+    // covering value, so replay recovers a lower floor and re-commits entries
+    // that were already committed — the direction store_commit_idx() is
+    // allowed to fail in at all (raft treats persisting the commit index as
+    // optional), and re-applying a committed command is idempotent.
     _raft_commitlog.note_commit_idx(idx);
 
-    return execute_with_linearization_point([this, idx] {
-        static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?)",
-            db::system_keyspace::RAFT_GROUPS);
-        return _qp.execute_internal(
-            store_cql,
-            {int16_t(_shard), _group_id.id, int64_t(idx.value())},
-            cql3::query_processor::cache_internal::yes).discard_result();
-    });
+    auto covers = _raft_commitlog.take_committed_covers(idx);
+    if (covers.empty()) {
+        co_return;
+    }
+    auto& db = _qp.proxy().local_db();
+    auto& cf = db.find_column_family(db::system_keyspace::raft_groups()->id());
+    for (auto& cover : covers) {
+        // One covering mutation per fully-committed segment, carrying the
+        // highest index the group appended to it. All covers write the same
+        // static cell; values only grow and this fiber is the sole runtime
+        // writer, so per-mutation api::new_timestamp() resolves last-write-wins
+        // to the highest value. The mutation and the segment's reference enter
+        // the raft_groups memtable atomically, so the reference can only be
+        // released by the flush that makes the covering value durable.
+        auto m = make_commit_idx_mutation(_shard, _group_id, cover.max_idx, cover.max_term,
+                api::new_timestamp());
+        co_await db.apply_in_memory(m, cf, std::move(cover.segment_holder), db::no_timeout);
+        // References of covers a leader-change truncation invalidated (see
+        // raft_commitlog::truncate_log()); each rides this same mutation, so
+        // whichever memtable generation holds the reference also holds a
+        // covering value for its segment.
+        for (auto& holder : cover.extra_holders) {
+            co_await db.apply_in_memory(m, cf, std::move(holder), db::no_timeout);
+        }
+    }
+    // Nothing else to release: dummy and configuration entries never took a
+    // reference of their own (see batch_ref), and a command's reference is the
+    // target memtable's business once apply() minted it.
 }
 
 // Execute the CQL INSERT that persists (commit_idx, commit_idx_term) to
-// system.raft_groups. Used during commitlog replay
-// (store_commit_idx_if_higher), before any raft group is running.
+// system.raft_groups. Only used during commitlog replay
+// (store_commit_idx_if_higher), before any raft group is running; at runtime
+// the pair is written exclusively by store_commit_idx()'s in-memory covering
+// mutations.
 static future<> store_commit_idx_cql(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
         raft::index_t commit_idx, raft::term_t commit_idx_term) {
     static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx, commit_idx_term) VALUES (?, ?, ?, ?)",

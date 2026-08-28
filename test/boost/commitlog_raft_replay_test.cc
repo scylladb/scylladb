@@ -50,6 +50,12 @@ raft::log_entry_ptr make_command_entry(raft::term_t term, raft::index_t idx) {
     return make_lw_shared<raft::log_entry>(raft::log_entry{.term = term, .idx = idx, .data = std::move(cmd)});
 }
 
+raft::log_entry_ptr make_command_entry_sized(raft::term_t term, raft::index_t idx, size_t payload_size) {
+    raft::command cmd;
+    ser::serialize(cmd, bytes(payload_size, 'x'));
+    return make_lw_shared<raft::log_entry>(raft::log_entry{.term = term, .idx = idx, .data = std::move(cmd)});
+}
+
 raft::log_entry_ptr make_config_entry(raft::term_t term, raft::index_t idx) {
     return make_lw_shared<raft::log_entry>(raft::log_entry{.term = term,
             .idx = idx,
@@ -1907,6 +1913,14 @@ SEASTAR_TEST_CASE(test_raft_commitlog_store_log_entries_records_commit_idx) {
         // The second carries the floor the first batch's entries established.
         BOOST_REQUIRE_EQUAL(batches[1].commit_idx, raft::index_t(2));
         BOOST_REQUIRE_EQUAL(batches[1].commit_idx_term, raft::term_t(1));
+
+        // Both batches landed in the same segment, covered by its single reference,
+        // which sits at the position of the batch that created it.
+        auto covers = persistence.take_committed_covers(raft::index_t(4));
+        BOOST_REQUIRE_EQUAL(covers.size(), 1);
+        BOOST_REQUIRE_EQUAL(covers[0].max_idx, raft::index_t(4));
+        BOOST_REQUIRE(bool(covers[0].segment_holder));
+        BOOST_REQUIRE_GT(covers[0].segment_holder.rp().pos, 0u);
     });
 }
 
@@ -1959,6 +1973,370 @@ SEASTAR_TEST_CASE(test_raft_commitlog_acquire_skips_non_command_entries) {
         // those above (11, 12) remain. Must not crash and the class'
         // destructor must succeed.
         persistence.truncate_log_tail(raft::index_t(10));
+    });
+}
+
+// Test: take_committed_covers() returns one cover per commitlog segment
+// whose entries are all committed — carrying the segment's highest index and
+// the reference taken for that segment as the pin. Covering the batch releases
+// nothing else: dummy and configuration entries never took a reference of their
+// own, and the batch's reference stays until apply() has minted from it for every
+// command it holds.
+//
+// Note this exercises the code paths but cannot *observe* segment retention:
+// commitlog::get_num_dirty_segments() only counts segments that have stopped
+// allocating, and this test writes a single still-allocating segment, so it
+// reads 0 whether or not a reference is held. End-to-end coverage comes from
+// test/cluster/test_strong_consistency_commitlog.py.
+SEASTAR_TEST_CASE(test_raft_commitlog_take_committed_covers_and_release) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+
+        service::strong_consistency::replayed_data_per_group replayed_data;
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, make_table_id(), std::move(replayed_data));
+
+        raft::log_entry_ptr_list entries;
+        entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(1)));
+        entries.push_back(make_config_entry (raft::term_t(1), raft::index_t(2)));
+        entries.push_back(make_dummy_entry  (raft::term_t(1), raft::index_t(3)));
+        entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(4)));
+        entries.push_back(make_dummy_entry  (raft::term_t(1), raft::index_t(5)));
+
+        co_await persistence.store_log_entries(entries);
+
+        // Grab a command handle to learn the batch's segment (this also
+        // mirrors the real flow: apply() acquires before coverage runs).
+        auto cmd_handles = persistence.acquire_replay_position_handles_for({entries[0]});
+        const auto batch_segment = cmd_handles[0].replay_position_handle.rp().id;
+
+        // The batch's highest index is 5, so at commit_idx=3 it is not yet
+        // fully committed and nothing is covered — the segment's hold stays
+        // parked.
+        auto covers = persistence.take_committed_covers(raft::index_t(3));
+        BOOST_REQUIRE(covers.empty());
+
+        // At commit_idx=5 the batch is fully committed: one cover, max_idx=5,
+        // pinned by the reference taken for the batch's segment (offset 0 —
+        // dirty-count accounting is per segment).
+        covers = persistence.take_committed_covers(raft::index_t(5));
+        BOOST_REQUIRE_EQUAL(covers.size(), 1);
+        BOOST_REQUIRE_EQUAL(covers[0].max_idx, raft::index_t(5));
+        BOOST_REQUIRE_EQUAL(covers[0].max_term, raft::term_t(1));
+        BOOST_REQUIRE(bool(covers[0].segment_holder));
+        BOOST_REQUIRE_EQUAL(covers[0].segment, batch_segment);
+        BOOST_REQUIRE_EQUAL(covers[0].segment_holder.rp().id, batch_segment);
+        BOOST_REQUIRE_GT(covers[0].segment_holder.rp().pos, 0u);
+
+        // Popped: asking again returns nothing.
+        BOOST_REQUIRE(persistence.take_committed_covers(raft::index_t(5)).empty());
+
+        // A later batch lands in the same (still active) segment. Its cover
+        // was taken, so the segment is no longer in the map and the batch
+        // mints a fresh reference for it — a second, independent reference on the
+        // same segment.
+        raft::log_entry_ptr_list more;
+        more.push_back(make_command_entry(raft::term_t(1), raft::index_t(6)));
+        co_await persistence.store_log_entries(more);
+        auto covers2 = persistence.take_committed_covers(raft::index_t(6));
+        BOOST_REQUIRE_EQUAL(covers2.size(), 1);
+        BOOST_REQUIRE_EQUAL(covers2[0].segment, covers[0].segment);
+        BOOST_REQUIRE_EQUAL(covers2[0].max_idx, raft::index_t(6));
+        BOOST_REQUIRE(bool(covers2[0].segment_holder));
+        BOOST_REQUIRE_EQUAL(covers2[0].segment_holder.rp().id, covers[0].segment);
+
+        // Dummies and configurations took no reference of their own, so covering
+        // the batch released nothing for them; command@4 must still be
+        // acquirable, minted from its batch's reference.
+        auto cmd4 = persistence.acquire_replay_position_handles_for({entries[3]});
+        BOOST_REQUIRE_EQUAL(cmd4.size(), 1);
+        BOOST_REQUIRE_EQUAL(cmd4[0].index, raft::index_t(4));
+        BOOST_REQUIRE(bool(cmd4[0].replay_position_handle));
+        BOOST_REQUIRE_EQUAL(cmd4[0].replay_position_handle.rp().id, batch_segment);
+
+        // truncate_log_tail() drops whatever a snapshot covered. It must
+        // accept the whole range without error, and the destructor below must
+        // then find nothing left to release.
+        persistence.truncate_log_tail(raft::index_t(6));
+    });
+}
+
+// Test: a batch landing in an already-parked segment extends that segment's
+// cover in place (the segment's existing reference is retained, no second reference
+// is created), so covering the segment yields exactly one cover
+// carrying the later batch's max index.
+SEASTAR_TEST_CASE(test_raft_commitlog_covers_coalesce_per_segment) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+
+        service::strong_consistency::replayed_data_per_group replayed_data;
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, make_table_id(), std::move(replayed_data));
+
+        raft::log_entry_ptr_list batch1 = {make_command_entry(raft::term_t(1), raft::index_t(1))};
+        raft::log_entry_ptr_list batch2 = {make_command_entry(raft::term_t(1), raft::index_t(2))};
+        co_await persistence.store_log_entries(batch1);
+        co_await persistence.store_log_entries(batch2);
+
+        // Both batches went to the same (still allocating) segment, so
+        // write_batches() extended the parked cover; at commit_idx=2 there is
+        // one cover with the later batch's max index, pinned by the first
+        // batch's own reference (retained because it has existed
+        // continuously).
+        auto covers = persistence.take_committed_covers(raft::index_t(2));
+        BOOST_REQUIRE_EQUAL(covers.size(), 1);
+        BOOST_REQUIRE_EQUAL(covers[0].max_idx, raft::index_t(2));
+        BOOST_REQUIRE(bool(covers[0].segment_holder));
+    });
+}
+
+// Test: truncate_log() removes covers whose max index was truncated —
+// leaving them parked would wedge take_committed_covers()'s prefix pop for
+// the covers of the reused indexes — and their references ride the first cover
+// popped afterwards that reaches their floor (the truncation point minus
+// one), so the truncated batches' segments stay pinned until a covering
+// value at or above every entry they may still hold is on its way to
+// durability.
+SEASTAR_TEST_CASE(test_raft_commitlog_truncated_covers_ride_next_cover) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+
+        service::strong_consistency::replayed_data_per_group replayed_data;
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, make_table_id(), std::move(replayed_data));
+
+        // A batch at term 1 whose tail gets truncated by a leader change.
+        raft::log_entry_ptr_list batch1;
+        for (int i = 1; i <= 3; ++i) {
+            batch1.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+        }
+        co_await persistence.store_log_entries(batch1);
+        persistence.truncate_log(raft::index_t(2));
+
+        // The new leader reuses idx 2 at term 2. Without the truncation
+        // handling, the parked cover (max_idx=3) would sit ahead of this
+        // batch's cover (max_idx=2) and block it at commit_idx=2.
+        raft::log_entry_ptr_list batch2;
+        batch2.push_back(make_command_entry(raft::term_t(2), raft::index_t(2)));
+        co_await persistence.store_log_entries(batch2);
+
+        auto covers = persistence.take_committed_covers(raft::index_t(2));
+        BOOST_REQUIRE_EQUAL(covers.size(), 1);
+        BOOST_REQUIRE_EQUAL(covers[0].max_idx, raft::index_t(2));
+        BOOST_REQUIRE_EQUAL(covers[0].max_term, raft::term_t(2));
+        BOOST_REQUIRE(bool(covers[0].segment_holder));
+        // The truncated batch's segment reference rides this cover.
+        BOOST_REQUIRE_EQUAL(covers[0].extra_holders.size(), 1);
+        BOOST_REQUIRE(bool(covers[0].extra_holders[0]));
+        BOOST_REQUIRE(persistence.take_committed_covers(raft::index_t(3)).empty());
+    });
+}
+
+// Test: an orphaned reference must NOT ride a pop of surviving pre-truncation
+// covers whose value is below its floor. Two segments: seg1's cover survives
+// a truncation that orphans seg2's, and committing only seg1's range must
+// pop seg1's cover with no extra pins — seg2 may still hold live entries
+// between seg1's max and the truncation point, so releasing its reference at
+// seg1's value would break the coverage invariant. The reference rides the next
+// cover that reaches the floor.
+SEASTAR_TEST_CASE(test_raft_commitlog_orphaned_pins_wait_for_their_floor) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+
+        service::strong_consistency::replayed_data_per_group replayed_data;
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, make_table_id(), std::move(replayed_data));
+
+        // Three ~490KB batches (below the 512KB oversized threshold, so each
+        // is placed atomically): the first two fill seg1, the third rolls
+        // over to seg2. Covers: seg1 {max 14}, seg2 {max 21}.
+        for (int b = 0; b < 3; ++b) {
+            raft::log_entry_ptr_list batch;
+            for (int i = 1; i <= 7; ++i) {
+                batch.push_back(make_command_entry_sized(raft::term_t(1), raft::index_t(b * 7 + i), 70 * 1024));
+            }
+            co_await persistence.store_log_entries(batch);
+        }
+
+        // Leader change truncates from idx 18: seg2's cover (max 21 >= 18) is
+        // orphaned with floor 17; seg1's cover (max 14) survives. The new
+        // leader reuses idx 18.
+        persistence.truncate_log(raft::index_t(18));
+        raft::log_entry_ptr_list batch4;
+        batch4.push_back(make_command_entry(raft::term_t(2), raft::index_t(18)));
+        batch4.push_back(make_command_entry(raft::term_t(2), raft::index_t(19)));
+        co_await persistence.store_log_entries(batch4);
+
+        // Committing through 14 pops seg1's surviving cover only; the
+        // orphaned reference (floor 17) must stay parked.
+        auto covers = persistence.take_committed_covers(raft::index_t(14));
+        BOOST_REQUIRE_EQUAL(covers.size(), 1);
+        BOOST_REQUIRE_EQUAL(covers[0].max_idx, raft::index_t(14));
+        BOOST_REQUIRE(covers[0].extra_holders.empty());
+
+        // Committing the new leader's entries pops their cover (max 19 >=
+        // floor 17) and the orphaned reference rides it.
+        covers = persistence.take_committed_covers(raft::index_t(19));
+        BOOST_REQUIRE_EQUAL(covers.size(), 1);
+        BOOST_REQUIRE_EQUAL(covers[0].max_idx, raft::index_t(19));
+        BOOST_REQUIRE_EQUAL(covers[0].max_term, raft::term_t(2));
+        BOOST_REQUIRE_EQUAL(covers[0].extra_holders.size(), 1);
+        BOOST_REQUIRE(bool(covers[0].extra_holders[0]));
+        BOOST_REQUIRE(persistence.take_committed_covers(raft::index_t(21)).empty());
+    });
+}
+
+// Test: covers accumulate one per segment as the active segment rolls over,
+// and each batch touches exactly one — its own position — however many
+// segments its bytes span. The map key order is the max-index order that
+// take_committed_covers()'s prefix pop relies on. A segment that already has a
+// cover never gets a second reference; its cover is extended in place. Uses a tiny
+// segment size so a moderate batch fills segments quickly, and enables
+// fragmented entries as production does (the fragmented_commitlog_entries
+// cluster feature).
+SEASTAR_TEST_CASE(test_raft_commitlog_write_batches_covers_one_per_segment) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.allow_fragmented_entries = true;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        service::strong_consistency::pending_cover_map covers;
+
+        // A small batch first: takes one reference for the segment it lands in.
+        raft::log_entry_ptr_list small;
+        small.push_back(make_command_entry(raft::term_t(1), raft::index_t(1)));
+        auto small_handle = co_await service::strong_consistency::raft_commitlog::write_batches(
+                log, tid, rg_tid, gid, small, raft_term_and_index{}, covers);
+        BOOST_REQUIRE_EQUAL(covers.size(), 1);
+        const auto small_seg = covers.begin()->first;
+        BOOST_REQUIRE(bool(covers.begin()->second.segment_holder));
+        BOOST_REQUIRE_EQUAL(covers.begin()->second.segment_holder.rp().id, small_seg);
+
+        // A second batch in the same still-active segment extends that cover
+        // rather than adding one.
+        raft::log_entry_ptr_list same_segment;
+        same_segment.push_back(make_command_entry(raft::term_t(1), raft::index_t(2)));
+        auto same_handle = co_await service::strong_consistency::raft_commitlog::write_batches(
+                log, tid, rg_tid, gid, same_segment, raft_term_and_index{}, covers);
+        BOOST_REQUIRE_EQUAL(covers.size(), 1);
+        BOOST_REQUIRE_EQUAL(covers.begin()->first, small_seg);
+        BOOST_REQUIRE_EQUAL(covers.begin()->second.max_idx, raft::index_t(2));
+
+        // Now fill past the segment size in several batches, so later ones land
+        // in new segments and each contributes its own cover.
+        utils::chunked_vector<db::rp_handle> batch_handles;
+        uint64_t next = 3;
+        for (int batch = 0; batch < 6; ++batch) {
+            raft::log_entry_ptr_list entries;
+            for (int i = 0; i < 4; ++i, ++next) {
+                entries.push_back(make_command_entry_sized(raft::term_t(1), raft::index_t(next), 64 * 1024));
+            }
+            auto handle = co_await service::strong_consistency::raft_commitlog::write_batches(
+                    log, tid, rg_tid, gid, entries, raft_term_and_index{}, covers);
+            BOOST_REQUIRE(bool(handle));
+            batch_handles.emplace_back(std::move(handle));
+        }
+        BOOST_REQUIRE_GT(covers.size(), 1);
+
+        // One cover per segment (the map key), max indexes ascending with the
+        // segments, every reference at its own segment and at a real entry
+        // position — the batch record's, never offset 0.
+        BOOST_REQUIRE_EQUAL(covers.begin()->first, small_seg);
+        raft::index_t prev_idx{0};
+        for (const auto& [segment, c] : covers) {
+            BOOST_REQUIRE(bool(c.segment_holder));
+            BOOST_REQUIRE_EQUAL(c.segment_holder.rp().id, segment);
+            BOOST_REQUIRE_GT(c.segment_holder.rp().pos, 0u);
+            BOOST_REQUIRE_GT(c.max_idx, prev_idx);
+            prev_idx = c.max_idx;
+        }
+        BOOST_REQUIRE_EQUAL(std::prev(covers.end())->second.max_idx, raft::index_t(next - 1));
+
+        // Every batch's segment is covered by some reference.
+        for (const auto& h : batch_handles) {
+            BOOST_REQUIRE(covers.contains(h.rp().id));
+        }
+
+        // Release everything (this test manages the handles directly).
+        small_handle = {};
+        same_handle = {};
+        for (auto& h : batch_handles) {
+            h = {};
+        }
+        for (auto& [segment, c] : covers) {
+            c.segment_holder = {};
+        }
+    });
+}
+
+// Test: a batch large enough to be fragmented is still one commitlog entry at
+// one position, so it yields exactly one cover however many segments its bytes
+// span — and the segments holding those bytes are retained until that one
+// position is released. The tails are held by the commitlog's own head-segment
+// chaining (segment::_extended_segments), which frees them only when the head
+// segment goes clean, so the several references sharing the head's position —
+// the batch's own, the cover's, and the ones apply() mints — can be released in
+// any order without stranding a head fragment whose continuation is gone.
+SEASTAR_TEST_CASE(test_commitlog_fragmented_batch_is_one_cover) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.allow_fragmented_entries = true;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        // ~2.5MB in one batch, well past the oversized threshold (half of a
+        // 1MB segment), so the entry is fragmented across several segments.
+        service::strong_consistency::pending_cover_map covers;
+        raft::log_entry_ptr_list entries;
+        for (int i = 1; i <= 40; ++i) {
+            entries.push_back(make_command_entry_sized(raft::term_t(1), raft::index_t(i), 64 * 1024));
+        }
+        auto batch_handle = co_await service::strong_consistency::raft_commitlog::write_batches(
+                log, tid, rg_tid, gid, entries, raft_term_and_index{}, covers);
+
+        // One batch, one position, hence exactly one cover — and the cover's
+        // reference sits at the batch's own position.
+        BOOST_REQUIRE_EQUAL(covers.size(), 1);
+        BOOST_REQUIRE(bool(batch_handle));
+        const auto batch_rp = batch_handle.rp();
+        BOOST_REQUIRE(covers.begin()->second.segment_holder.rp() == batch_rp);
+
+        // References minted from the batch for apply() all carry that position, so
+        // the target memtable records the position the mutations were really
+        // written at.
+        std::vector<db::rp_handle> minted;
+        for (size_t i = 0; i < entries.size(); ++i) {
+            minted.push_back(log.acquire_cf_count(batch_handle, tid));
+            BOOST_REQUIRE(minted.back().rp() == batch_rp);
+        }
+
+        // Sealed segments carrying the batch's bytes are retained.
+        const auto sealed_dirty = log.get_num_dirty_segments();
+        BOOST_REQUIRE_GT(sealed_dirty, 0u);
+        BOOST_REQUIRE_EQUAL(log.get_num_segments_destroyed(), 0u);
+
+        // Releasing the minted references one at a time — as the target memtable's
+        // flush would — must not let a segment go while the batch's own reference
+        // and the cover still hold the position.
+        for (auto& h : minted) {
+            h = {};
+            BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), sealed_dirty);
+            BOOST_REQUIRE_EQUAL(log.get_num_segments_destroyed(), 0u);
+        }
+        batch_handle = {};
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), sealed_dirty);
+
+        // The cover's reference is the last one at that position: releasing it is
+        // what finally lets the head segment — and with it the tails — go.
+        covers.begin()->second.segment_holder = {};
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0u);
     });
 }
 

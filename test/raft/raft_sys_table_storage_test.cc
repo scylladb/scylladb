@@ -546,6 +546,12 @@ SEASTAR_TEST_CASE(test_groups_storage_shard_isolation) {
 
         auto idx0 = co_await storage0.load_commit_idx();
         BOOST_CHECK_EQUAL(raft::index_t(2000), idx0);
+        // The covering mutation persists the exact term of the entry at
+        // commit_idx alongside the value.
+        auto [pair_idx, pair_term] = co_await raft_groups_storage::load_commit_idx_and_term(qp, iso_gid, 0);
+        BOOST_CHECK_EQUAL(raft::index_t(2000), pair_idx);
+        BOOST_REQUIRE(pair_term.has_value());
+        BOOST_CHECK_EQUAL(raft::term_t(1), *pair_term);
 
         auto idx1 = co_await storage1.load_commit_idx();
         BOOST_CHECK_EQUAL(raft::index_t(0), idx1);

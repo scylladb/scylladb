@@ -223,18 +223,15 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
 
         // Rewrite uncommitted entries to the new commitlog the same way
         // store_log_entries() does: one batch, whose reference keeps the new
-        // segment alive until the group's own apply() mints from it.
-        //
-        // The cover map write_batches() fills is local for now — the
-        // references it collects are released as soon as it goes out of scope,
-        // and the batch's own reference is what keeps the segment. A later
-        // commit hands the map to raft_commitlog instead, so that the
-        // rewritten entries are covered at commit time like any others.
+        // segment alive until the group's own apply() mints from it, and
+        // whose raft_groups reference goes straight into group_data.covers — the
+        // segment->cover map that seeds the group's parked covers when its
+        // raft_commitlog is constructed, for commit-time coverage of the
+        // rewritten entries (see raft_commitlog).
         if (!uncommitted.empty()) {
-            service::strong_consistency::pending_cover_map covers;
             auto batch_handle = co_await service::strong_consistency::raft_commitlog::write_batches(
                     *new_commitlog_ptr, table_id, db::system_keyspace::raft_groups()->id(), group_id, uncommitted,
-                    raft_term_and_index{}, covers);
+                    raft_term_and_index{}, group_data.covers);
             group_data.rewritten = service::strong_consistency::batch_ref{
                     .first = uncommitted.front()->idx,
                     .last = uncommitted.back()->idx,

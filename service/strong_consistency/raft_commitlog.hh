@@ -30,8 +30,7 @@ struct index_and_replay_position {
 // value; the segment is the key), parked until every entry at or below that
 // index is committed. The reference is taken (commitlog::acquire_cf_count) when
 // the group first writes to the segment and pins it from that moment until
-// the map that holds it goes away. A later commit keeps the map across
-// batches and attaches the reference to a covering raft_groups mutation.
+// take_committed_covers() attaches it to a covering raft_groups mutation.
 struct pending_cover {
     // Highest raft index the group has written to the reference's segment, and
     // that entry's term. The pair is persisted together by the covering
@@ -45,9 +44,9 @@ struct pending_cover {
 // A group's covers, keyed by commitlog segment: one reference per segment,
 // updated in place by write_batches(). Batches arrive in index order and
 // segments advance monotonically, so the key order is also the max_idx
-// order — the fully-committed covers always form a prefix and the covers a
-// truncation invalidates form a suffix, which is what lets a later commit
-// consume them from the front.
+// order — the fully-committed covers always form a prefix
+// (take_committed_covers()) and the covers a truncation invalidates form a
+// suffix (truncate_log()).
 using pending_cover_map = std::map<db::segment_id_type, pending_cover>;
 
 // One reference on the commitlog entry a batch was written as, with the batch's
@@ -76,6 +75,26 @@ struct replayed_data_per_group {
     // `entries` are the rewritten (uncommitted) ones.
     std::optional<batch_ref> rewritten;
     raft::log_entries entries;
+    // The cover map write_batches() built while the commitlog replay
+    // rewrote the group's batches into the new commitlog; moved wholesale
+    // into the group's _pending_covers on construction.
+    pending_cover_map covers;
+};
+
+// A commitlog segment all of whose entries (for this group) are committed,
+// together with the highest raft index the group appended to it and the reference
+// that has held the segment since the group first wrote to it. Produced by
+// take_committed_covers(); see its comment for the contract.
+struct segment_cover {
+    db::segment_id_type segment;
+    raft::index_t max_idx;
+    raft::term_t max_term;
+    db::rp_handle segment_holder;
+    // References of covers removed by truncate_log() (see _orphaned_holders),
+    // attached once this cover's max_idx reaches their floors. Each must
+    // enter the raft_groups memtable with the same covering mutation as
+    // segment_holder.
+    std::vector<db::rp_handle> extra_holders;
 };
 
 // This class implements the persistence for raft log using database commit log.
@@ -86,14 +105,20 @@ struct replayed_data_per_group {
 // applied index in that segment exists — otherwise a restart would recover a
 // commit index behind data already flushed to SSTables. That invariant is
 // maintained with plain dirty-count references and no flush hooks:
-//  - each batch is one commitlog entry, and its reference is held here
-//    (_batch_refs) until every command in it has been handed to a
-//    memtable;
+//  - the first time the group writes to a segment, a raft_groups-accounted
+//    reference for it is taken (commitlog::acquire_cf_count) and
+//    parked here (_pending_covers), pinning the segment from that moment;
 //  - applied command entries pin their segment through the target table's
-//    memtable (apply() mints their handles from the batch's reference),
-//    released by that memtable's flush once the data is durable.
-// A later commit adds the raft_groups-accounted cover that makes the
-// commit_idx value itself durable before a segment may go.
+//    memtable (their handles move there in apply()), released by that
+//    memtable's flush once the data is durable;
+//  - once every entry in a segment is committed, a covering
+//    system.raft_groups mutation carrying the segment's max index enters the
+//    raft_groups memtable together with the parked reference
+//    (take_committed_covers(), driven by store_commit_idx()), released by
+//    that memtable's flush once the value is durable.
+// The reference exists continuously from write to the raft_groups flush that
+// persists its covering value, so there is no window in which the target
+// table's memtable is a segment's sole owner.
 class raft_commitlog {
 private:
     const raft::group_id _group_id;
@@ -117,6 +142,30 @@ private:
     // pending command left is dropped. Eight bytes per in-flight command
     // rather than a handle each, and nothing at all for the other kinds.
     std::deque<raft::index_t> _pending_commands;
+    // The group's parked references (see pending_cover_map). Updated in place
+    // by write_batches() and seeded by the constructor (the map built while
+    // the commitlog replay rewrote the group's batches); consumed by
+    // take_committed_covers() once the whole index range is committed;
+    // covers invalidated by truncate_log() move their references to
+    // _orphaned_holders.
+    pending_cover_map _pending_covers;
+    // References of covers truncate_log() removed from _pending_covers: their
+    // max_idx referred to truncated entries, and leaving them parked would
+    // wedge take_committed_covers()'s prefix pop, but their segments may
+    // still hold this group's earlier entries and must stay pinned. Each
+    // reference carries the release floor a covering value must reach before the
+    // reference may ride it: the truncation point minus one, an upper bound on the
+    // live entries left in the orphaned segment (everything at or above the
+    // truncation point was discarded). It is unrelated to the commit index
+    // recovered at startup, which this code also calls a floor.
+    // take_committed_covers() attaches a reference to the last cover of the first
+    // pop that reaches its release floor; a pop of lower, pre-truncation
+    // covers leaves it parked.
+    struct orphaned_holder {
+        raft::index_t release_floor;
+        db::rp_handle segment_holder;
+    };
+    std::vector<orphaned_holder> _orphaned_holders;
     // (index, term) of the entries appended but not yet known to be
     // committed, in index order. note_commit_idx() consumes the prefix the
     // commit index has reached, keeping the last consumed pair in
@@ -161,13 +210,13 @@ public:
     // in the batch has been applied (see batch_ref).
     //
     // Static so the commitlog replay's rewrite path can write the same
-    // format, building the caller's cover map as it goes.
+    // format, building the map that seeds the group's _pending_covers.
     static future<db::rp_handle> write_batches(db::commitlog& cl, db::cf_id_type table_id,
             db::cf_id_type raft_groups_table_id, raft::group_id group_id,
             const raft::log_entry_ptr_list& entries, raft_term_and_index committed, pending_cover_map& covers);
 
-    // Persist the given log entries in the commit log via write_batches(),
-    // keeping the batch's reference and the
+    // Persist the given log entries in the commit log via write_batches()
+    // (which maintains _pending_covers), keeping the batch's reference and the
     // indexes of its command entries. The batch header carries the pair
     // note_commit_idx() last saw.
     future<> store_log_entries(const raft::log_entry_ptr_list& entries);
@@ -190,6 +239,20 @@ public:
     // segments holding those entries to be reclaimed.
     // Called from store_snapshot_descriptor after the snapshot is persisted.
     void truncate_log_tail(raft::index_t index);
+
+    // Pop and return covers for the segments whose entries are all committed
+    // at `commit_idx` (write_batches() keeps one cover per segment, so no
+    // coalescing happens here). Commitment — not application — is the gate:
+    // the covering value only claims that entries at or below it are
+    // committed, and a committed entry stays recoverable whether or not it
+    // has been applied, because its batch's reference is held until apply()
+    // mints from it and the target table's memtable then holds that reference
+    // until the data is durable. Contract for the caller (raft_groups_storage): for each
+    // cover, apply a system.raft_groups mutation carrying a commit index >=
+    // max_idx to the raft_groups memtable together with the pin. The
+    // mutation and its pin share a memtable generation, so the pin can only
+    // be released by the flush that makes the covering value durable.
+    std::vector<segment_cover> take_committed_covers(raft::index_t commit_idx);
 
     // Mint a memtable reference for each of the specified command entries from
     // the reference of the batch it was written in, and forget the command. Each

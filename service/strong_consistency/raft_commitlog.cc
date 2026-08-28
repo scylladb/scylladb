@@ -39,6 +39,7 @@ raft_commitlog::raft_commitlog(raft::group_id group_id, db::commitlog& commitlog
     , _raft_groups_table_id(raft_groups_table_id)
     , _commit_log(commitlog)
     , _replayed_entries(std::move(replayed_data.entries)) {
+    _pending_covers = std::move(replayed_data.covers);
     // The rewritten batch, if replay rewrote anything, holds the reference on the
     // entries above the recovered commit index. Its range is what tells us
     // which replayed entries those are: everything below was already applied
@@ -59,9 +60,9 @@ raft_commitlog::raft_commitlog(raft::group_id group_id, db::commitlog& commitlog
         }
     }
     logger.debug("starting raft_commitlog group_id={}, table_id={}, replayed_entries={}, "
-            "rewritten_from={}, pending_commands={}",
+            "rewritten_from={}, pending_commands={}, pending_covers={}",
             _group_id, _table_id, _replayed_entries.size(), rewritten_from,
-            _pending_commands.size());
+            _pending_commands.size(), _pending_covers.size());
 }
 
 raft_commitlog::~raft_commitlog() {
@@ -72,7 +73,14 @@ raft_commitlog::~raft_commitlog() {
     for (auto& batch : _batch_refs) {
         batch.reference.release();
     }
-    logger.debug("released {} batch references for group_id={}", _batch_refs.size(), _group_id);
+    for (auto& [segment, cover] : _pending_covers) {
+        cover.segment_holder.release();
+    }
+    for (auto& orphan : _orphaned_holders) {
+        orphan.segment_holder.release();
+    }
+    logger.debug("released {} batch references, {} parked covers and {} orphaned holders for group_id={}",
+            _batch_refs.size(), _pending_covers.size(), _orphaned_holders.size(), _group_id);
 }
 
 seastar::future<db::rp_handle> raft_commitlog::write_batches(db::commitlog& cl,
@@ -140,14 +148,8 @@ seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_li
         co_return;
     }
 
-    // The cover map is local for now: the references it collects are released as
-    // soon as this call returns (the batch's own reference keeps the segment
-    // alive), and commit_idx is still persisted by store_commit_idx()'s CQL
-    // write. A later commit keeps the map across batches and hands the references
-    // to covering raft_groups mutations.
-    pending_cover_map covers;
     auto batch_handle = co_await write_batches(_commit_log, _table_id, _raft_groups_table_id, _group_id, entries,
-            _last_committed, covers);
+            _last_committed, _pending_covers);
 
     bool has_commands = false;
     for (const auto& log_entry_ptr : entries) {
@@ -167,8 +169,8 @@ seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_li
                 .last = entries.back()->idx,
                 .reference = std::move(batch_handle)});
     }
-    logger.debug("store_log_entries completed: batch_refs={}, pending_commands={}",
-            _batch_refs.size(), _pending_commands.size());
+    logger.debug("store_log_entries completed: batch_refs={}, pending_commands={}, pending_covers={}",
+            _batch_refs.size(), _pending_commands.size(), _pending_covers.size());
 }
 
 void raft_commitlog::note_commit_idx(const raft::index_t idx) {
@@ -221,6 +223,26 @@ void raft_commitlog::truncate_log(const raft::index_t idx) {
     while (!_appended_terms.empty() && _appended_terms.back().idx >= idx) {
         _appended_terms.pop_back();
     }
+    // Covers whose max_idx refers to truncated entries can never pop with a
+    // correct (idx, term) pair, and leaving them parked would wedge
+    // take_committed_covers()'s prefix pop for every later cover (the reused
+    // indexes land in new, smaller-max covers behind them). Their references
+    // must survive, though — the segments may still hold this group's earlier
+    // entries — so the references move to _orphaned_holders, each tagged with the
+    // release floor it must wait for: idx - 1 bounds the live entries left
+    // in its segment from above, and a lower value must not release it (a
+    // surviving pre-truncation cover can pop first, and its value would leave
+    // entries between it and the truncation point uncovered).
+    while (!_pending_covers.empty() && std::prev(_pending_covers.end())->second.max_idx >= idx) {
+        const auto last = std::prev(_pending_covers.end());
+        if (last->second.segment_holder) {
+            _orphaned_holders.push_back(orphaned_holder{
+                .release_floor = idx - raft::index_t{1},
+                .segment_holder = std::move(last->second.segment_holder),
+            });
+        }
+        _pending_covers.erase(last);
+    }
 }
 
 void raft_commitlog::truncate_log_tail(const raft::index_t index) {
@@ -236,8 +258,53 @@ void raft_commitlog::truncate_log_tail(const raft::index_t index) {
     while (!_batch_refs.empty() && _batch_refs.front().last <= index) {
         _batch_refs.pop_front();
     }
+    // _pending_covers is left alone: covers up to the snapshot index (<= the
+    // applied <= the commit index) were already taken by
+    // take_committed_covers(), which store_commit_idx() drives before entries
+    // can be applied, let alone snapshotted; segments still pending extend
+    // beyond it.
     logger.debug("truncate_log_tail completed: batch_refs={}, pending_commands={}",
             _batch_refs.size(), _pending_commands.size());
+}
+
+std::vector<segment_cover> raft_commitlog::take_committed_covers(raft::index_t commit_idx) {
+    std::vector<segment_cover> ret;
+    // The map's key order is also its max_idx order (see pending_cover_map),
+    // so the fully-committed covers form a prefix.
+    while (!_pending_covers.empty() && _pending_covers.begin()->second.max_idx <= commit_idx) {
+        auto node = _pending_covers.extract(_pending_covers.begin());
+        auto& cover = node.mapped();
+        if (!cover.segment_holder) {
+            // Replayed data constructed without real handles (tests); there
+            // is no reference to manage and nothing for a pin to guarantee.
+            continue;
+        }
+        ret.push_back(segment_cover{
+            .segment = node.key(),
+            .max_idx = cover.max_idx,
+            .max_term = cover.max_term,
+            .segment_holder = std::move(cover.segment_holder),
+        });
+    }
+    if (!ret.empty()) {
+        // References parked by truncate_log() whose floor this pop reaches ride
+        // the last cover's mutation: its value is >= their floors, hence >=
+        // any index remaining in their segments. References with higher floors
+        // stay parked for a later pop.
+        for (auto it = _orphaned_holders.begin(); it != _orphaned_holders.end(); ) {
+            if (it->release_floor <= ret.back().max_idx) {
+                ret.back().extra_holders.push_back(std::move(it->segment_holder));
+                it = _orphaned_holders.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    if (!ret.empty()) {
+        logger.debug("take_committed_covers: group_id={}, commit_idx={}, covers={}, remaining_pending={}",
+                _group_id, commit_idx, ret.size(), _pending_covers.size());
+    }
+    return ret;
 }
 
 std::vector<index_and_replay_position> raft_commitlog::acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries) {
