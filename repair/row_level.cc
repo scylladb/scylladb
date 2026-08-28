@@ -2672,7 +2672,7 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
             return rs.repair_flush_hints_batchlog_handler(from, std::move(req));
         });
     }
-    rlogger.info("repair[{}]: Started to process repair_flush_hints_batchlog_request from node={} hints_timeout={}s batchlog_timeout={}s",
+    rlogger.debug("repair[{}]: Started to process repair_flush_hints_batchlog_request from node={} hints_timeout={}s batchlog_timeout={}s",
             req.repair_uuid, from, req.hints_timeout.count(), req.batchlog_timeout.count());
     auto permit = co_await seastar::get_units(_flush_hints_batchlog_sem, 1);
     bool updated = false;
@@ -2742,7 +2742,11 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
         updated = true;
     }
     auto duration = std::chrono::duration<float>(gc_clock::now() - now);
-    rlogger.info("repair[{}]: Finished to process repair_flush_hints_batchlog_request from node={} updated={} flush_hints_batchlog_time={} flush_cache_time={} flush_duration={}",
+    // Log at info level only when a flush was actually performed, which is
+    // bounded by the flush cache time. The cache hit path is logged at debug
+    // level since it is performed for each tablet repair and can flood the log.
+    auto level = updated ? seastar::log_level::info : seastar::log_level::debug;
+    rlogger.log(level, "repair[{}]: Finished to process repair_flush_hints_batchlog_request from node={} updated={} flush_hints_batchlog_time={} flush_cache_time={} flush_duration={}",
             req.repair_uuid, from, updated, _flush_hints_batchlog_time, cache_time, duration);
     repair_flush_hints_batchlog_response resp{ .flush_time = _flush_hints_batchlog_time };
     co_return resp;
@@ -2954,7 +2958,7 @@ future<> repair_service::init_ms_handlers() {
             auto range = tmap.get_token_range(gid.tablet);
             co_await table.clear_being_repaired_for_range(range);
             auto removed = local_repair._repair_compaction_locks.erase(gid);
-            rlogger.info("Got repair_update_compaction_ctrl gid={} session_id={} removed={}", gid, topo_guard, removed);
+            rlogger.debug("Got repair_update_compaction_ctrl gid={} session_id={} removed={}", gid, topo_guard, removed);
         });
     });
 
