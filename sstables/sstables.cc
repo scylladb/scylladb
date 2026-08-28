@@ -1645,11 +1645,11 @@ bool sstable::should_update_repaired_at(int64_t repaired_at) const {
 // This efficiently creates a modified SSTable without copying all files.
 // 1. Create a new SSTable object with a new generation number
 //    - The creator function determines the new generation
-// 2. Hard-link all components EXCEPT the one being rewritten and Scylla metadata
+// 2. Copy in-memory component metadata from the source SSTable
+//    - This doesn't deep copy _components, just copies the foreign_ptr
+// 3. Hard-link all components EXCEPT the one being rewritten and Scylla metadata
 //    - The component being rewritten will be written fresh (not linked)
 //    - Scylla metadata must be rewritten to include the new component's digest
-// 3. Copy in-memory component metadata from the source SSTable
-//    - This doesn't deep copy _components, just copies the foreign_ptr
 // 4. Apply the modifier function to the new SSTable's components
 // 5. Re-read the Scylla metadata from disk
 //    - Ensures we have the latest on-disk metadata (not potentially modified in-memory state)
@@ -1712,6 +1712,12 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 
         new_sst->copy_components(*this).get();
 
+        if (new_sst->_marked_for_deletion == mark_for_deletion::none) {
+            new_sst->_marked_for_deletion = mark_for_deletion::implicit;
+        }
+
+        _storage->link_with_excluded_components(*this, generation, excluded_components, *sid).get();
+
         new_sst->_metadata_size_on_disk = _metadata_size_on_disk;
         parallel_for_each(excluded_components, coroutine::lambda([this, new_sst] (component_type type) -> future<> {
             new_sst->_metadata_size_on_disk -= co_await component_filesize(type);
@@ -1728,9 +1734,18 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 
         new_sst->_shards = this->_shards;
         new_sst->seal_sstable(false).get();
-        new_sst->open_data().get();
 
-        _cloned_to_sstable_filename = new_sst->component_basename(component_type::Data);
+        try {
+            new_sst->open_data().get();
+
+            _cloned_to_sstable_filename = new_sst->component_basename(component_type::Data);
+        } catch (...) {
+            if (new_sst->_marked_for_deletion == mark_for_deletion::none) {
+                new_sst->_marked_for_deletion = mark_for_deletion::implicit;
+            }
+            throw;
+        }
+
         return new_sst;
     });
 }
