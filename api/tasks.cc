@@ -61,7 +61,7 @@ static future<shared_ptr<compaction::upgrade_sstables_compaction_task_impl>> upg
     return compaction_module.make_and_start_task<compaction::upgrade_sstables_compaction_task_impl>({}, std::move(keyspace), db, table_infos, exclude_current_version);
 }
 
-void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::database>& db, sharded<db::snapshot_ctl>& snap_ctl) {
+void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::database>& db, sharded<db::snapshot_ctl>& snap_ctl, sharded<service::storage_service>& ss) {
     t::force_keyspace_compaction_async.set(r, [&ctx, &db](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto task = co_await force_keyspace_compaction(ctx, db, std::move(req));
         co_return json::json_return_type(task->get_status().id.to_sstring());

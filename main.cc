@@ -2390,7 +2390,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_snapshot(ctx).get();
             });
 
-            api::set_server_tasks_compaction_module(ctx, db, snapshot_ctl).get();
+            api::set_server_tasks_compaction_module(ctx, db, snapshot_ctl, ss).get();
             auto stop_tasks_api = defer_verbose_shutdown("tasks API", [&ctx] {
                 api::unset_server_tasks_compaction_module(ctx).get();
             });

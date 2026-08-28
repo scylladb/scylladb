@@ -19,10 +19,14 @@ namespace replica {
 class database;
 }
 
+namespace service {
+class storage_service;
+}
+
 namespace api {
 
 struct http_context;
-void set_tasks_compaction_module(http_context& ctx, httpd::routes& r, sharded<replica::database>& db, sharded<db::snapshot_ctl>& snap_ctl);
+void set_tasks_compaction_module(http_context& ctx, httpd::routes& r, sharded<replica::database>& db, sharded<db::snapshot_ctl>& snap_ctl, sharded<service::storage_service>& ss);
 void unset_tasks_compaction_module(http_context& ctx, httpd::routes& r);
 
 }
