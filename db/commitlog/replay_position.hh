@@ -68,12 +68,20 @@ class cf_holder;
 
 using cf_id_type = table_id;
 
+// One reference in a commitlog segment's per-table use count (segment::_cf_dirty). The
+// destructor drops it; after rp_set::put() or release() the reference outlives the handle.
 class rp_handle {
 public:
     rp_handle() noexcept;
     rp_handle(rp_handle&&) noexcept;
     rp_handle& operator=(rp_handle&&) noexcept;
     ~rp_handle();
+
+    // A new reference on this handle's segment for table `id`, which must use this commitlog,
+    // dated no later than this handle's table's first write there. The clone sits at
+    // (segment id, 0), below every entry, so it only holds the segment. Flush requests that
+    // already covered the segment do not ask `id` to flush: the caller must.
+    [[nodiscard]] rp_handle clone(const cf_id_type& id) const;
 
     replay_position release();
 
