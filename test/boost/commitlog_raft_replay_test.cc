@@ -14,6 +14,7 @@
 #include <seastar/testing/on_internal_error.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/util/defer.hh>
 
 #include "clocks-impl.hh"
@@ -2502,6 +2503,11 @@ static future<> segment_of_applied_entries_is_reclaimed_impl(const bool use_logs
     }
 
     db_cfg_ptr->experimental_features(std::move(features));
+    // A group's newest record holds its segment until a commitlog flush round
+    // names the segment. With a one-second data lifetime, the commitlog timer,
+    // here every 100 ms, runs that round for every segment older than a second.
+    db_cfg_ptr->commitlog_max_data_lifetime_in_seconds(1);
+    db_cfg_ptr->commitlog_sync_period_in_ms(100);
 
     return do_with_cql_env([table_opts = std::move(table_opts)] (cql_test_env& env) -> future<> {
         co_await env.get_storage_service().local().set_tablet_balancing_enabled(false);
@@ -2556,12 +2562,16 @@ static future<> segment_of_applied_entries_is_reclaimed_impl(const bool use_logs
             return commitlog::descriptor(name).id;
         });
 
-        // Flushing closes the active segment and flushes every memtable, after
-        // which nothing holds the segment anymore.
+        // Flushing closes the active segment and flushes every memtable. The next
+        // flush round releases the groups' records of the segment, and the segment
+        // goes once the descriptors the release writes are flushed.
         co_await flush();
-        const auto segments_after = co_await get_active_segment_names();
-        BOOST_REQUIRE_MESSAGE(!std::ranges::contains(segments_after, segment),
-                "segment " << segment << " of applied entries was not reclaimed");
+        const auto deadline = lowres_clock::now() + std::chrono::seconds(60);
+        while (std::ranges::contains(co_await get_active_segment_names(), segment)) {
+            BOOST_REQUIRE_MESSAGE(lowres_clock::now() < deadline,
+                    "segment " << segment << " of applied entries was not reclaimed");
+            co_await sleep(std::chrono::milliseconds(100));
+        }
 
         // Reclaiming the segment must not have lost the applied rows.
         for (int pk = 0; pk < 10; ++pk) {
