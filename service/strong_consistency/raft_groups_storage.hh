@@ -37,6 +37,10 @@ class database;
 
 namespace service::strong_consistency {
 
+// Ask table `id` to flush, in the background. `pos` only decides whether the
+// table skips the request.
+using flush_request_fn = std::function<void(db::cf_id_type id, db::replay_position pos)>;
+
 // Raft persistence for strongly consistent tablet groups: the raft log is stored
 // in the commitlog, one commitlog entry per batch, and system.raft_groups keeps
 // the snapshot details. raft_commitlog owns everything about segments.
@@ -49,6 +53,10 @@ class raft_groups_storage : public raft::persistence {
     // system.raft_groups: the table whose memtable carries the descriptor
     // mutations.
     const db::cf_id_type _raft_groups_table_id;
+    // The tablet's own table, which apply() puts this group's commands into.
+    const db::cf_id_type _target_table_id;
+    // Empty in tests that do not care which flushes a release asks for.
+    flush_request_fn _request_flush;
 
     // The group's raft log in the commitlog; see raft_commitlog's class comment.
     raft_commitlog _raft_commitlog;
@@ -77,7 +85,7 @@ class raft_groups_storage : public raft::persistence {
 public:
     explicit raft_groups_storage(cql3::query_processor& qp, replica::database& db, raft::group_id gid,
         raft::server_id server_id, shard_id shard, db::commitlog& commit_log, table_id target_table_id,
-        replayed_data_per_group replayed_data);
+        replayed_data_per_group replayed_data, flush_request_fn request_flush = {});
 
     future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override;
     future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override;

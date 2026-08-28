@@ -91,9 +91,11 @@ struct replayed_data_per_group {
     raft::log_entries entries;
 };
 
-// Bound on a group's log: fsm's log_limiter_semaphore holds a leader's accounted
-// log at raft_max_log_size, and a batch is a subset of that log.
+// Bounds on a group's log, which together bound one raft batch. raft's add_entry()
+// rejects a command over raft_max_command_size, and fsm's log_limiter_semaphore
+// holds a leader's accounted log at raft_max_log_size, of which a batch is a subset.
 inline constexpr size_t raft_max_log_size = 20 * 1024 * 1024;
+inline constexpr size_t raft_max_command_size = 100 * 1024;
 
 // Write `entries` to `cl` under `table` as one raft batch carrying `commit_idx`,
 // and return the reference that write produced. `entries` must not be empty.
@@ -119,6 +121,55 @@ void account_batch(std::deque<segment_record>& segment_queue, const db::cf_id_ty
 // each holds, which references keep them, and what a truncation superseded.
 // raft_groups_storage owns the group's row and the raft::persistence interface,
 // and asks raft_commitlog what may be released.
+//
+// A lifetime of a segment containing a SC record:
+//
+//  WRITE        store_log_entries(entries, commit_idx)
+//    |            `- write_raft_batch --> commitlog.add(force_sync=yes)
+//    |                 one batch = one commitlog entry = ONE position
+//    v            `- account_batch --> new record, or extend the newest
+//  +------------------------------------------------------------------+
+//  | segment held by: pin_user_table + pin_raft_groups                |
+//  +------------------------------------------------------------------+
+//    |
+//    +- COMMIT  store_commit_idx(i) --> _commit_index --> maybe_release()
+//    |            no IO at all
+//    |
+//    +- APPLY   state_machine::apply()
+//    |            pin_for_apply(idx) = pin_user_table.clone(tablet table)
+//    |            --> the clone lands in the TABLET TABLE's memtable
+//    |            note_applied(idx) --> _apply_index --> maybe_release()
+//    |
+//    +- CLOSE   commitlog round --> groups_manager handler
+//    |            --> mark_segment_closed(pos) --> maybe_release()
+//    v
+//  RELEASE GATE  front_releasable(commit_idx, apply_idx)
+//  +------------------------------------------------------------------+
+//  | final      size()>1  OR  rp <= closed_up_to()                    |
+//  | committed  max_index <= commit_idx                               |
+//  | applied    !last_cmd()  OR  *last_cmd() <= apply_idx             |
+//  +------------------------------------------------------------------+
+//    | all three
+//    v
+//  WRITE DESCRIPTOR  mutation --> system.raft_groups memtable
+//    |                 snapshot_idx  = max_index
+//    |                 snapshot_term = max_term()
+//    |                 snapshot_config, truncations
+//    |                 carrying pin_raft_groups  <== MOVED IN
+//    v
+//  pop_released()    record destroyed, pin_user_table dropped
+//  +------------------------------------------------------------------+
+//  | segment now held ONLY by memtable contents:                      |
+//  |   tablet table  <- the per-command clones                        |
+//  |   raft_groups   <- the descriptor mutation's handle              |
+//  +------------------------------------------------------------------+
+//    |
+//    +- round already ran?  --yes--> _request_flush(seg+1:0) for raft_groups,
+//    |                               and the tablet table if the record held
+//    |                               any command
+//    |                      --no--> the round ahead covers it
+//    v
+//  BOTH MEMTABLES FLUSH --> refcount 0 --> SEGMENT RECLAIMED
 class raft_commitlog {
     const raft::group_id _group_id;
     // The tablet's own table: batches are written under it, and the per-command
@@ -135,7 +186,7 @@ class raft_commitlog {
     std::vector<truncation_record> _truncations;
     // Furthest flush-round position reported to us, via mark_segment_closed(); a
     // round is the commitlog asking a segment's dirty tables to flush (see
-    // db::commitlog::flush_position).
+    // db::commitlog::flush_position). Only half of closed_up_to().
     db::replay_position _reported_up_to;
     raft::log_entries _replayed_entries;
 
@@ -158,7 +209,7 @@ public:
     db::rp_handle pin_for_apply(raft::index_t idx);
 
     // Report a flush round's position: everything at or below it is in a closed
-    // segment.
+    // segment. One of the two inputs of closed_up_to().
     void mark_segment_closed(db::replay_position pos);
 
     // The oldest record that may now be released, or nullptr. Ownership stays
@@ -180,6 +231,29 @@ public:
 
     // The entries commitlog replay recovered, handed over once.
     raft::log_entries load_log();
+
+    // How far the commitlog's flush rounds have got: a record at or below the
+    // returned position has had its segment's round. _reported_up_to and
+    // flush_position() are both needed: _reported_up_to carries the round now
+    // running, whose handler runs before flush_position() advances, and
+    // flush_position() carries rounds whose handler never reached this group,
+    // as in the boot window.
+    //
+    // A round reaching a record means the record's segment stopped allocating, so
+    // nothing more of this group can land there. Two commitlog details carry that:
+    //
+    // flush_position() is the start of the still-allocating segment while one
+    // exists, so it names a live segment. A record is never at offset 0, because a
+    // segment opens with its descriptor header, so no record of a live segment
+    // compares at or below it.
+    //
+    // The max-data-lifetime sweep reports a segment it closes in the same pass,
+    // discarding the close's future. segment::close() sets _closed before its first
+    // co_await, so is_still_allocating() is already false when the round is
+    // reported; only the file work is deferred.
+    db::replay_position closed_up_to() const {
+        return std::max(_reported_up_to, _commit_log.flush_position());
+    }
 };
 
 } // namespace service::strong_consistency

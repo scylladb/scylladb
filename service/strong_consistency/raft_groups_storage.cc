@@ -96,12 +96,14 @@ std::vector<truncation_record> deserialize_truncations(const managed_bytes_view&
 
 raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, replica::database& db, raft::group_id gid,
         raft::server_id server_id, shard_id shard, db::commitlog& commit_log, table_id target_table_id,
-        replayed_data_per_group replayed_data)
+        replayed_data_per_group replayed_data, flush_request_fn request_flush)
     : _group_id(std::move(gid))
     , _server_id(std::move(server_id))
     , _qp(qp)
     , _db(db)
     , _raft_groups_table_id(db::system_keyspace::raft_groups()->id())
+    , _target_table_id(target_table_id)
+    , _request_flush(std::move(request_flush))
     , _raft_commitlog(_group_id, commit_log, target_table_id, _raft_groups_table_id, std::move(replayed_data))
     , _pending_op_fut(make_ready_future<>())
 {
@@ -263,6 +265,15 @@ void raft_groups_storage::mark_segment_closed(db::replay_position pos) {
 
 void raft_groups_storage::maybe_release() {
     while (auto* record = _raft_commitlog.front_releasable(_commit_index, _apply_index)) {
+        // Read before the write and the pop, both of which invalidate `record`.
+        // The commitlog asks a segment's dirty tables to flush once, when the segment
+        // closes; that request is the round (see raft_commitlog::closed_up_to).
+        const bool flush_round_already_ran = record->pin_user_table.rp() <= _raft_commitlog.closed_up_to();
+        const db::segment_id_type segment = record->segment();
+        // No command means apply() got no reference into this segment, so after
+        // the pop the tablet table holds nothing of ours.
+        const bool has_commands = record->last_cmd().has_value();
+
         try {
             write_descriptor_and_purge_stale_truncations(*record);
         } catch (...) {
@@ -274,6 +285,34 @@ void raft_groups_storage::maybe_release() {
             return;
         }
         _raft_commitlog.pop_released();
+
+        if (!flush_round_already_ran) {
+            // The round is still ahead, and both tables are dirty in this
+            // segment, so that one round covers every insertion it will get.
+            continue;
+        }
+        if (!_request_flush) {
+            // Empty only in the tests that do not check the requests; groups_manager
+            // always passes one. This segment's round has passed and a segment gets
+            // just the one, so skipping the request leaves the segment dirty until
+            // something else flushes the tablet table and system.raft_groups.
+            continue;
+        }
+        // The start of the next segment: a replay position above everything written in
+        // this one, so the table cannot skip the request (see flush_request_fn).
+        const auto pos = db::replay_position(segment + 1, 0);
+        try {
+            if (has_commands) {
+                _request_flush(_target_table_id, pos);
+            }
+            _request_flush(_raft_groups_table_id, pos);
+        } catch (...) {
+            // Swallowed: a throw would abandon the loop, leaving the records behind this
+            // one unreleased, and raft treats an exception on the persistence path as
+            // fatal. A lost request only leaves the segment on disk.
+            rgslog.warn("group_id={}: flush request for segment {} failed, it stays on disk: {}",
+                    _group_id, segment, std::current_exception());
+        }
     }
 }
 

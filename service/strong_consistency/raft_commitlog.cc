@@ -262,9 +262,9 @@ segment_record* raft_commitlog::front_releasable(raft::index_t commit_idx, raft:
     // A record is final once no more of this group's entries can land in its
     // segment: a later record in the queue means a newer segment was allocated.
     // The last record has no successor and relies on the flush rounds, which name
-    // only closed segments (see mark_segment_closed()).
+    // only closed segments (see closed_up_to()).
     const bool is_final = _commitlog_segment_queue.size() > 1
-            || record.pin_user_table.rp() <= _reported_up_to;
+            || record.pin_user_table.rp() <= closed_up_to();
     if (!is_final || record.max_index > commit_idx) {
         return nullptr;
     }
