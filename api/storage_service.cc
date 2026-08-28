@@ -773,36 +773,6 @@ rest_cdc_streams_check_and_repair(sharded<service::storage_service>& ss, std::un
         });
 }
 
-static
-future<json::json_return_type>
-rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-        bool global = true;
-        if (auto global_param = req->get_query_param("global"); !global_param.empty()) {
-            global = validate_bool(global_param);
-        }
-
-        apilog.info("cleanup_all global={}", global);
-
-        if (global) {
-            co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<> {
-                co_return co_await ss.do_clusterwide_vnodes_cleanup();
-            });
-            co_return json::json_return_type(0);
-        }
-        // fall back to the local cleanup if local cleanup is requested
-        auto& db = ctx.db;
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<compaction::global_cleanup_compaction_task_impl>({}, db);
-        co_await task->done();
-
-        // Mark this node as clean
-        co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<> {
-            co_await ss.reset_cleanup_needed();
-        });
-
-        co_return json::json_return_type(0);
-}
-
 static future<shared_ptr<compaction::cleanup_keyspace_compaction_task_impl>> force_keyspace_cleanup(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         auto& db = ctx.db;
         auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
@@ -1936,7 +1906,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_natural_endpoints.set(r, gated(ss, rest_bind(rest_get_natural_endpoints, ctx, ss)));
     ss::get_natural_endpoints_v2.set(r, gated(ss, rest_bind(rest_get_natural_endpoints_v2, ctx, ss)));
     ss::cdc_streams_check_and_repair.set(r, gated(ss, rest_bind(rest_cdc_streams_check_and_repair, ss)));
-    ss::cleanup_all.set(r, gated(ss, rest_bind(rest_cleanup_all, ctx, ss)));
     ss::reset_cleanup_needed.set(r, gated(ss, rest_bind(rest_reset_cleanup_needed, ctx, ss)));
     t::force_keyspace_cleanup_async.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         tasks::task_id id = tasks::task_id::create_null_id();
@@ -2032,7 +2001,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_current_generation_number.unset(r);
     ss::get_natural_endpoints.unset(r);
     ss::cdc_streams_check_and_repair.unset(r);
-    ss::cleanup_all.unset(r);
     ss::reset_cleanup_needed.unset(r);
     t::force_keyspace_cleanup_async.unset(r);
     ss::force_keyspace_cleanup.unset(r);

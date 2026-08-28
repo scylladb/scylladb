@@ -19,6 +19,7 @@
 #include "compaction/task_manager_module.hh"
 #include "tasks/task_manager.hh"
 #include "replica/database.hh"
+#include "service/storage_service.hh"
 
 using namespace seastar::httpd;
 
@@ -60,6 +61,33 @@ static future<shared_ptr<compaction::upgrade_sstables_compaction_task_impl>> upg
 
     auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
     return compaction_module.make_and_start_task<compaction::upgrade_sstables_compaction_task_impl>({}, std::move(keyspace), db, table_infos, exclude_current_version);
+}
+
+static future<json::json_return_type> rest_cleanup_all(sharded<replica::database>& db, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    bool global = true;
+    if (auto global_param = req->get_query_param("global"); !global_param.empty()) {
+        global = validate_bool(global_param);
+    }
+
+    apilog.info("cleanup_all global={}", global);
+
+    if (global) {
+        co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<> {
+            co_return co_await ss.do_clusterwide_vnodes_cleanup();
+        });
+        co_return json::json_return_type(0);
+    }
+    // fall back to the local cleanup if local cleanup is requested
+    auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+    auto task = co_await compaction_module.make_and_start_task<compaction::global_cleanup_compaction_task_impl>({}, db);
+    co_await task->done();
+
+    // Mark this node as clean
+    co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<> {
+        co_await ss.reset_cleanup_needed();
+    });
+
+    co_return json::json_return_type(0);
 }
 
 void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::database>& db, sharded<db::snapshot_ctl>& snap_ctl, sharded<service::storage_service>& ss) {
@@ -142,6 +170,10 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::
         co_return json::json_return_type(static_cast<int>(scrub_status::successful));
     });
 
+    ss::cleanup_all.set(r, [&db, &ss] (std::unique_ptr<http::request> req) {
+        return rest_cleanup_all(db, ss, std::move(req));
+    });
+
     ss::force_compaction.set(r, [&db] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
         auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
@@ -167,6 +199,7 @@ void unset_tasks_compaction_module(http_context& ctx, httpd::routes& r) {
     ss::upgrade_sstables.unset(r);
     t::scrub_async.unset(r);
     ss::scrub.unset(r);
+    ss::cleanup_all.unset(r);
     ss::force_compaction.unset(r);
 }
 
