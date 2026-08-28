@@ -5,6 +5,23 @@ Restoring a keyspace from a backup requires all snapshot files of the tables, an
 
 .. include:: _common/manager.rst
 
+-------------------------
+Choosing a restore method
+-------------------------
+
+ScyllaDB supports several restore methods. Choose the one that matches where your backup files are and whether the cluster topology changed since the backup was taken:
+
+* :ref:`Restore to an identical cluster <restore-procedure>` - copy snapshot files back in place and restart the nodes. Requires a cluster with the same number of nodes and the same token distribution as at the time of the backup, and each node must be restored from the backup of the **same node**. Suitable for vnode-based keyspaces only.
+
+For cluster-wide backup and restore, use `ScyllaDB Manager <https://manager.docs.scylladb.com/stable/restore/>`_, which orchestrates the process across the cluster.
+
+.. _restore-procedure:
+
+-------------------------------
+Restore to an identical cluster
+-------------------------------
+
+This method places the snapshot files directly back into the table directories and restarts the nodes.
 
 .. note::
 
@@ -15,12 +32,6 @@ Restoring a keyspace from a backup requires all snapshot files of the tables, an
 
    The procedure restores each node using the backup file of the **same node**.
    If this is not the case, one should use other restoration methods tools like :doc:`sstableloader </operating-scylla/procedures/cassandra-to-scylla-migration-process/>`. This procedure is much slower than restoring to the same topology cluster.
-
-.. _restore-procedure:
-
----------
-Procedure
----------
 
 | From **one** of the nodes, recreate the schema.
 
