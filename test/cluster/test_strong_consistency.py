@@ -406,12 +406,17 @@ async def test_sc_multishard_metadata_reads(manager: ScyllaClusterManager):
                 raft_partition_keys.append((shard, row.raft_group_id))
             assert len(raft_partition_keys) == 8, f"Expected 8 tablets, got {len(raft_partition_keys)}"
 
+            # system.raft_groups has a collection column, and a Row holding a list
+            # cannot go in a set, so compare normalized tuples instead.
+            def hashable(row):
+                return tuple(tuple(v) if isinstance(v, list) else v for v in row)
+
             # Collect raft metadata for all tablets using single-shard queries
             raft_data = {}
             for (shard, group_id) in raft_partition_keys:
-                raft_data[(shard, group_id)] = set(await cql.run_async(f"SELECT * FROM system.raft_groups WHERE shard = {shard} AND group_id = {group_id}"))
+                raft_data[(shard, group_id)] = {hashable(r) for r in await cql.run_async(f"SELECT * FROM system.raft_groups WHERE shard = {shard} AND group_id = {group_id}")}
                 # Verify that we can also obtain the same data without knowing the shard using ALLOW FILTERING
-                filtered_data = set(await cql.run_async(f"SELECT * FROM system.raft_groups WHERE group_id = {group_id} ALLOW FILTERING"))
+                filtered_data = {hashable(r) for r in await cql.run_async(f"SELECT * FROM system.raft_groups WHERE group_id = {group_id} ALLOW FILTERING")}
                 assert raft_data[(shard, group_id)] == filtered_data, f"Data mismatch for group {group_id} when read by shard vs ALLOW FILTERING: {raft_data[(shard, group_id)]} vs {filtered_data}"
 
             # Now read raft metadata using multi-shard queries and verify correctness
@@ -424,19 +429,20 @@ async def test_sc_multishard_metadata_reads(manager: ScyllaClusterManager):
                 # Instead, we read using a product of all involved shards and group_ids. This should return the same rows because every group_id
                 # is only assigned to one shard.
                 rows = await cql.run_async(f"SELECT * FROM system.raft_groups WHERE shard IN {shards} AND group_id IN ({group_ids})")
+                read_rows = {hashable(r) for r in rows}
                 for key in sample_keys:
                     for row_data in raft_data[key]:
-                        assert row_data in rows, f"Missing data for raft group {key} in multi-shard read: {row_data}"
+                        assert row_data in read_rows, f"Missing data for raft group {key} in multi-shard read: {row_data}"
                 for row in rows:
-                    assert row in raft_data[(row.shard, row.group_id)], f"Unexpected data for raft group {(row.shard, row.group_id)} in multi-shard read: {row}"
+                    assert hashable(row) in raft_data[(row.shard, row.group_id)], f"Unexpected data for raft group {(row.shard, row.group_id)} in multi-shard read: {row}"
 
             # Read ranges of partitions using TOKEN()
             for (boundary_shard, boundary_group_id) in raft_partition_keys:
                 ith_token = await cql.run_async(f"SELECT TOKEN(shard, group_id) as t FROM system.raft_groups WHERE shard = {boundary_shard} AND group_id = {boundary_group_id} LIMIT 1")
                 token_value = ith_token[0].t
-                range_below = await cql.run_async(f"SELECT * FROM system.raft_groups WHERE TOKEN(shard, group_id) <= {token_value}")
-                range_above = await cql.run_async(f"SELECT * FROM system.raft_groups WHERE TOKEN(shard, group_id) > {token_value}")
-                assert set(range_below) & set(range_above) == set(), f"Overlapping data in range reads up to and above token {token_value}"
+                range_below = {hashable(r) for r in await cql.run_async(f"SELECT * FROM system.raft_groups WHERE TOKEN(shard, group_id) <= {token_value}")}
+                range_above = {hashable(r) for r in await cql.run_async(f"SELECT * FROM system.raft_groups WHERE TOKEN(shard, group_id) > {token_value}")}
+                assert range_below & range_above == set(), f"Overlapping data in range reads up to and above token {token_value}"
                 for (shard, group_id) in raft_partition_keys:
                     for row_data in raft_data[(shard, group_id)]:
                         if shard < boundary_shard:

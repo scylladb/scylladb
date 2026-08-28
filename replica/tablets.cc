@@ -127,8 +127,45 @@ schema_ptr make_raft_schema(sstring name, bool is_group0) {
         .with_column("vote", uuid_type, column_kind::static_column)
         // id of the most recent persisted snapshot
         .with_column("snapshot_id", uuid_type, column_kind::static_column)
-        .with_column("commit_idx", long_type, column_kind::static_column)
+        .with_column("commit_idx", long_type, column_kind::static_column);
 
+    if (!is_group0) {
+        // The whole snapshot descriptor of a strongly consistent group, plus
+        // the truncation history replay needs, all in this one static row.
+        //
+        // These are written by the fake mutation that releases a commitlog
+        // segment's record (see raft_groups_storage::write_snapshot_descriptor),
+        // so they reach the sstable through the raft_groups memtable rather
+        // than through a synchronous write, and every cell is set at one
+        // timestamp: a reader never sees a mismatched (idx, term) pair, nor a
+        // configuration paired with the wrong index.
+        //
+        //   snapshot_idx    highest index whose entries are committed, applied
+        //                   and safe to drop from the log
+        //   snapshot_term   term of the entry at snapshot_idx, exact: it feeds
+        //                   both raft's election check (log::is_up_to_date via
+        //                   last_term() on an empty log) and log matching at
+        //                   the snapshot boundary (log::match_term)
+        //   snapshot_config the group's configuration at that index, current
+        //                   and previous, IDL-serialized
+        //   truncations     time-ordered (segment_id, from, to) records saying
+        //                   which indexes a leader change discarded from which
+        //                   segment, so replay can drop superseded copies of
+        //                   an entry without consulting terms. A frozen list, so
+        //                   it reads in cqlsh and needs no encoding of its own
+        builder.with_column("snapshot_idx", long_type, column_kind::static_column);
+        builder.with_column("snapshot_term", long_type, column_kind::static_column);
+        builder.with_column("snapshot_config", bytes_type, column_kind::static_column);
+        // Frozen, so the whole history is one cell: it is rewritten wholesale by
+        // each release, never element by element, and a frozen collection is what
+        // a mutation can set directly.
+        builder.with_column("truncations",
+                list_type_impl::get_instance(
+                        tuple_type_impl::get_instance({long_type, long_type, long_type}), false),
+                column_kind::static_column);
+    }
+
+    builder
         .with_hash_version()
         .set_caching_options(caching_options::get_disabled_caching_options());
 
