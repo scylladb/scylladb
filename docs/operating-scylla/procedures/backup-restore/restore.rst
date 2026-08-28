@@ -151,7 +151,9 @@ This method places the snapshot files directly back into the table directories a
    - same token range per node
 
    The procedure restores each node using the backup file of the **same node**.
-   If this is not the case, one should use other restoration methods tools like :doc:`sstableloader </operating-scylla/procedures/cassandra-to-scylla-migration-process/>`. This procedure is much slower than restoring to the same topology cluster.
+   If this is not the case, use the :ref:`load and stream <restore-load-and-stream>` method described above instead. It works regardless of topology changes, but is slower than restoring to an identical cluster.
+
+   This method is suitable for vnode-based keyspaces only. For :doc:`tablet-based </architecture/tablets>` keyspaces, use the :ref:`object storage <restore-object-storage>` or :ref:`load and stream <restore-load-and-stream>` method instead.
 
 Complete the :ref:`prerequisites <restore-prerequisites>` first.
 
