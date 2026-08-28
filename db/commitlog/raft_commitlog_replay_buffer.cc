@@ -153,24 +153,23 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
         }
         const auto table_id = table_it->second;
 
-        // Query commit_idx from raft system tables. We treat commit_idx as
-        // the effective snapshot index: all entries up to commit_idx are committed
-        // and will be applied to memtables during replay.
-        const auto commit_idx = co_await service::strong_consistency::raft_groups_storage::load_commit_idx(qp, group_id, this_shard_id());
-
-        logger.debug("group {}: {} entries, commit_idx={}", group_id, entries_list.size(), commit_idx);
-
         // First pass: filter entries (leader changes, out-of-order tails).
         // This must be done before any database writes to avoid applying entries that would
         // later be discarded due to leader changes.
         auto filtered = filter_entries(entries_list, group_id);
 
-        // Second pass: Apply committed entries to database and rewrite uncommitted entries to commitlog.
-        uint64_t applied = 0;
-        uint64_t rewritten = 0;
-        auto& group_data = _per_group_data[group_id];
+        // Query commit_idx from raft system tables. We treat commit_idx as the
+        // effective snapshot index: all entries up to commit_idx are committed
+        // and will be applied to memtables during replay.
+        const auto commit_idx = co_await service::strong_consistency::raft_groups_storage::load_commit_idx(qp, group_id, this_shard_id());
 
-        // Track the term of the last committed entry to update the snapshot descriptor.
+        logger.debug("group {}: {} entries, commit_idx={}", group_id, entries_list.size(), commit_idx);
+
+        // Second pass: Apply committed entries to database and collect uncommitted entries.
+        uint64_t applied = 0;
+        auto& group_data = _per_group_data[group_id];
+        raft::log_entry_ptr_list uncommitted;
+        // Term of the last committed entry, for the snapshot descriptor below.
         std::optional<raft::term_t> last_committed_term;
 
         for (auto& entry : filtered.entries) {
@@ -191,28 +190,40 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
                 last_committed_term = entry->term;
             }
 
-            // Rewrite uncommitted entries to the new commitlog to obtain rp_handles
-            // that ensure the commitlog segments won't be deleted.
+            // Only uncommitted entries go back to the raft log (and to the new
+            // commitlog, below). Committed entries have already been applied to
+            // memtables above and are covered by the snapshot descriptor
+            // advanced below.
             if (entry->idx > commit_idx) {
-                commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = group_id, .entry = entry});
-                const auto write_fn = [&writer](auto& out) {
-                    return writer.write(out);
-                };
-                const auto target_size = writer.size();
-                auto handle = co_await new_commitlog_ptr->add(table_id, target_size, db::no_timeout, db::commitlog_force_sync::yes, write_fn);
-                group_data.replay_positions.push_back(service::strong_consistency::index_and_replay_position{.index = entry->idx, .replay_position_handle = std::move(handle)});
-                ++rewritten;
-            }
-
-            // Only add uncommitted entries to the raft log. Committed entries have
-            // already been applied to memtables above and will be covered by the
-            // updated snapshot descriptor (see below).
-            if (entry->idx > commit_idx) {
-                group_data.entries.push_back(std::move(entry));
+                uncommitted.push_back(std::move(entry));
             }
 
             co_await seastar::coroutine::maybe_yield();
         }
+
+        // Rewrite uncommitted entries to the new commitlog the same way
+        // store_log_entries() does: one batch, whose reference keeps the new
+        // segment alive until the group's own apply() mints from it.
+        //
+        // The cover map write_batches() fills is local for now — the
+        // references it collects are released as soon as it goes out of scope,
+        // and the batch's own reference is what keeps the segment. A later
+        // commit hands the map to raft_commitlog instead, so that the
+        // rewritten entries are covered at commit time like any others.
+        if (!uncommitted.empty()) {
+            service::strong_consistency::pending_cover_map covers;
+            auto batch_handle = co_await service::strong_consistency::raft_commitlog::write_batches(
+                    *new_commitlog_ptr, table_id, db::system_keyspace::raft_groups()->id(), group_id, uncommitted,
+                    raft_term_and_index{}, covers);
+            group_data.rewritten = service::strong_consistency::batch_ref{
+                    .first = uncommitted.front()->idx,
+                    .last = uncommitted.back()->idx,
+                    .reference = std::move(batch_handle)};
+            for (auto& entry : uncommitted) {
+                group_data.entries.push_back(std::move(entry));
+            }
+        }
+
 
         // Advance the persisted snapshot index to commit_idx. This tells the raft
         // server (which sets _applied_idx = snapshot.idx on restart) that all
@@ -231,13 +242,14 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
         }
 
         logger.debug("group {}: discarded_leader_change={}, applied={}, rewritten={}, total_in_log={}", group_id, filtered.discarded_leader_change, applied,
-                rewritten, group_data.entries.size());
+                uncommitted.size(), group_data.entries.size());
     }
 
     // The old items are not needed anymore.
     _replayed_commitlog_entries_by_group.clear();
     logger.info("Raft groups commit log replayed data processing complete");
 }
+
 namespace raft_buffer_detail {
 entry_ordering_check_result check_entry_ordering(raft_term_and_idx current, raft_term_and_idx last) {
     if (last.idx == raft::index_t{0}) {
