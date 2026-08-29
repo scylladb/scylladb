@@ -231,7 +231,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         replayed_data = replayed_data_per_group{};
     }
 
-    auto storage = std::make_unique<raft_groups_storage>(_qp, group_id, my_id, this_shard_id(),
+    auto storage = std::make_unique<raft_groups_storage>(_qp, _db, group_id, my_id, this_shard_id(),
         *commitlog, tablet.table, std::move(replayed_data));
 
     auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage);
