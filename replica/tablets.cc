@@ -129,9 +129,11 @@ schema_ptr make_group0_raft_schema(sstring name) {
 }
 
 // The raft table for strongly consistent tablet groups holds no log: the log
-// lives in the commitlog, and nothing has written index/term/data here since.
-// So there is no clustering key and no static column, and one row per
-// (shard, group_id) holds everything a group remembers.
+// lives in the commitlog. So there is no index/term/data, no clustering key and
+// no static column, and one row per (shard, group_id) holds everything a group
+// remembers. A record release writes that row at one timestamp (see
+// raft_groups_storage::write_snapshot_descriptor), so a reader never sees a
+// mismatched (idx, term) pair or a configuration paired with the wrong index.
 //
 //   snapshot_idx    highest index that is committed, applied and safe to drop
 //                   from the log; a restart resumes from it
@@ -143,9 +145,6 @@ schema_ptr make_group0_raft_schema(sstring name) {
 //                   leader change discarded from which segment, so replay can drop
 //                   superseded entry copies without consulting terms. Frozen, so
 //                   one release sets the whole history as one cell
-//
-// snapshot_id and commit_idx are still written by CQL and go once the code that
-// writes them does.
 schema_ptr make_tablet_raft_groups_schema(sstring name) {
     if (!strongly_consistent_tables_enabled) {
         on_internal_error(tablet_logger, "Can't create raft table for strongly consistent tablets when the feature is disabled");
@@ -157,10 +156,10 @@ schema_ptr make_tablet_raft_groups_schema(sstring name) {
         // persisted term and vote
         .with_column("vote_term", long_type)
         .with_column("vote", uuid_type)
-        // id of the most recent persisted snapshot
-        .with_column("snapshot_id", uuid_type)
-        .with_column("commit_idx", long_type)
-        // the snapshot descriptor, plus the truncation history replay needs
+        // the snapshot descriptor, plus the truncation history replay needs.
+        // No snapshot_id: raft only checks that one is set, so
+        // load_snapshot_descriptor() synthesizes it. Presence of snapshot_idx
+        // marks that this node has hosted the group before.
         .with_column("snapshot_idx", long_type)
         .with_column("snapshot_term", long_type)
         .with_column("snapshot_config", bytes_type)

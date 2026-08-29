@@ -81,6 +81,14 @@ namespace {
     const auto set_wait_for_sync_to_commitlog = schema_builder::register_schema_initializer([](schema_builder& builder) {
         static const std::unordered_set<sstring> tables = {
             system_keyspace::PAXOS,
+            // Strongly consistent groups persist their votes and their initial
+            // descriptor here by CQL, and both must be durable before the write
+            // that depends on them is acknowledged: a lost vote lets a node vote
+            // twice in one term, and a lost bootstrap row leaves raft batches on
+            // disk with no row to replay them against. The internal query
+            // processor has no per-statement force-sync, so the table asks for it
+            // (SCYLLADB-3828).
+            system_keyspace::RAFT_GROUPS,
         };
         if (builder.ks_name() == system_keyspace::NAME && tables.contains(builder.cf_name())) {
             builder.set_wait_for_sync_to_commitlog(true);

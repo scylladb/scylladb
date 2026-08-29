@@ -67,8 +67,6 @@ class raft_groups_storage : public raft::persistence {
     // The configuration the last release persisted, so that a record carrying
     // no configuration of its own re-persists it instead of clearing it.
     raft::configuration _snapshot_config;
-    // The snapshot id in the row. Raft only checks it for being set.
-    raft::snapshot_id _snapshot_id;
     // Timestamp of the last descriptor mutation, kept strictly increasing so two
     // releases in one reactor task cannot tie.
     api::timestamp_type _last_row_timestamp = api::min_timestamp;

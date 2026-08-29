@@ -413,6 +413,8 @@ SEASTAR_TEST_CASE(test_groups_store_snapshot_descriptor_is_a_noop) {
             }, raft::is_voter::yes};
         co_await storage.bootstrap(raft::configuration({srv}), false);
         const auto after_bootstrap = co_await storage.load_snapshot_descriptor();
+        // Raft checks id to decide whether to call the state machine's
+        // load_snapshot(). It is synthesized per load, so its value means nothing.
         BOOST_CHECK(bool(after_bootstrap.id));
         BOOST_CHECK_EQUAL(after_bootstrap.idx, raft::index_t(0));
 
@@ -426,7 +428,7 @@ SEASTAR_TEST_CASE(test_groups_store_snapshot_descriptor_is_a_noop) {
         const auto loaded = co_await storage.load_snapshot_descriptor();
         BOOST_CHECK_EQUAL(loaded.idx, after_bootstrap.idx);
         BOOST_CHECK_EQUAL(loaded.term, after_bootstrap.term);
-        BOOST_CHECK(loaded.id == after_bootstrap.id);
+        BOOST_CHECK(bool(loaded.id));
     });
 }
 
