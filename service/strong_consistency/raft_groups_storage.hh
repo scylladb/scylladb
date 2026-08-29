@@ -33,10 +33,11 @@ namespace service::strong_consistency {
 
 // Raft persistence for strongly consistent tablet groups.
 //
-// Similar to raft_sys_table_storage but uses the tablet-specific tables
-// (raft_groups, raft_groups_snapshots, raft_groups_snapshot_config) which
-// have a (shard, group_id) composite partition key allowing data to reside
-// on the same shard as the tablet replica.
+// Similar to raft_sys_table_storage, but the state lives in one table,
+// system.raft_groups, whose (shard, group_id) composite partition key lets a
+// group's data reside on the same shard as the tablet replica. The whole
+// snapshot descriptor — index, term and configuration — is in that group's
+// static row, so it is read with one query and written by one statement.
 class raft_groups_storage : public raft::persistence {
     raft_commitlog _raft_commitlog;
     raft::group_id _group_id;
@@ -84,8 +85,6 @@ public:
     std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
 
 private:
-
-    future<> update_snapshot(const raft::snapshot_descriptor &snap);
 
     future<> execute_with_linearization_point(std::function<future<>()> f);
 };
