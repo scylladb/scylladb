@@ -205,5 +205,15 @@ public:
     // segments to survive into the next replay; releasing them would lose
     // entries already acknowledged to a leader. Same rule as ~raft_commitlog.
     future<> stop();
+
+    // The same rule again, because the implicit destructor would do the
+    // opposite. Reaching here with records left means stop() was skipped — an
+    // exception between start() and its shutdown hook, say — and the default
+    // behaviour there would be to decrement, delete the segments holding a
+    // rewritten tail, and lose entries a leader already counted as committed.
+    // A crash cannot do that (destructors never run, so the files survive for
+    // replay); only a live process can, which is why this path has to be
+    // explicit rather than left to the compiler.
+    ~raft_commitlog_replay_buffer();
 };
 } // namespace db

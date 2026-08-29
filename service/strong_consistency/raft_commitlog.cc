@@ -236,6 +236,16 @@ void raft_commitlog::purge_stale_truncations() {
     });
 }
 
+void raft_commitlog::release_all() {
+    // Destroying the handles decrements the segments' use counts, which is the
+    // opposite of what the destructor does. Clearing the queue first means a
+    // destructor running afterwards has nothing left to detach.
+    const auto n = _commitlog_segment_queue.size();
+    _commitlog_segment_queue.clear();
+    _truncations.clear();
+    logger.debug("released the references of {} records for group_id={}", n, _group_id);
+}
+
 raft::log_entries raft_commitlog::load_log() {
     return std::move(_replayed_entries);
 }

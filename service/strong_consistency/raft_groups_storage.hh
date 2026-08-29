@@ -138,6 +138,11 @@ public:
     // May release records, so it must be called after the apply, not before.
     void note_applied(raft::index_t idx);
 
+    // Give up every commitlog segment reference this group holds, because the
+    // group is being destroyed deliberately and nothing will replay its log.
+    // See raft_commitlog::release_all().
+    void release_all();
+
     // Called with the commitlog's flush position: everything at or below it is
     // in a closed segment, which is what lets the newest record be released.
     void mark_segment_closed(db::replay_position pos);

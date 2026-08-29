@@ -779,6 +779,7 @@ SEASTAR_TEST_CASE(test_groups_truncate_log_then_get_handles_for_remaining) {
     });
 }
 
+
 // Test the release: once every index in a record is committed, its commands
 // applied, and its segment closed, the record's (max, term) becomes the group's
 // persisted descriptor — written by a mutation, so it is readable straight back

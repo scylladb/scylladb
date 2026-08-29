@@ -260,7 +260,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     }
 }
 
-void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state) {
+void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state,
+        log_disposition disposition) {
     if (state.gate->is_closed()) {
         return;
     }
@@ -278,18 +279,32 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
     // already destroyed their servers). Aborting the raft server releases those
     // holders by making the stuck operations throw raft::stopped_error.
     auto gate_fut = state.gate->close();
-    // The flush handler must stop reaching into this group's persistence now:
-    // the raft::server that owns it is about to be destroyed, and clearing the
-    // pointer synchronously leaves no window.
-    state.storage = nullptr;
     logger.debug("schedule_raft_group_deletion(): group id {}: gate close initiated", id);
 
-    state.server_control_op = futurize_invoke([this, &state, id, g = state.gate, gate_fut = std::move(gate_fut)](this auto) -> future<> {
+    state.server_control_op = futurize_invoke([this, &state, id, disposition, g = state.gate, gate_fut = std::move(gate_fut)](this auto) -> future<> {
         co_await state.server_control_op.get_future();
         logger.debug("schedule_raft_group_deletion(): group id {}: starting", id);
 
         co_await _raft_gr.abort_server(id);
         logger.debug("schedule_raft_group_deletion(): group id {}: server aborted", id);
+
+        // The server is aborted, so nothing can append to this group any more.
+        // A group going away deliberately gives up its commitlog segment
+        // references rather than detaching them at destruction: nothing will
+        // ever replay its log, so detaching would keep those segments until the
+        // node restarts. At shutdown the opposite holds — the segments have to
+        // survive for replay — so the references are left to the destructor,
+        // which detaches them.
+        //
+        // Clearing the pointer stops the flush handler reaching into the
+        // persistence before the server that owns it is destroyed below, and is
+        // needed either way.
+        if (state.storage) {
+            if (disposition == log_disposition::release) {
+                state.storage->release_all();
+            }
+            state.storage = nullptr;
+        }
 
         co_await std::move(gate_fut);
         logger.debug("schedule_raft_group_deletion(): group id {}: gate closed", id);
@@ -308,12 +323,12 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
     });
 }
 
-void groups_manager::schedule_raft_groups_deletion(bool all) {
+void groups_manager::schedule_raft_groups_deletion(bool all, log_disposition disposition) {
     for (auto it = _raft_groups.begin(); it != _raft_groups.end(); ) {
         const auto next = std::next(it);
         auto& [group_id, group_state] = *it;
         if (all || !group_state.has_tablet) {
-            schedule_raft_group_deletion(group_id, group_state);
+            schedule_raft_group_deletion(group_id, group_state, disposition);
         }
         it = next;
     }
@@ -527,7 +542,8 @@ void groups_manager::update(token_metadata_ptr new_tm) {
         }
     }
 
-    schedule_raft_groups_deletion(false);
+    // These groups no longer have a tablet here, so nothing will replay them.
+    schedule_raft_groups_deletion(false, log_disposition::release);
     _leader_cache.end_sweep();
 }
 
@@ -627,7 +643,10 @@ future<> groups_manager::stop() {
 
     logger.info("stop() enter");
 
-    schedule_raft_groups_deletion(true);
+    // The node is going down, not giving up these groups: their segments have to
+    // survive so replay can recover the log, so the references are detached
+    // rather than released.
+    schedule_raft_groups_deletion(true, log_disposition::keep);
 
     while (!_raft_groups.empty()) {
         co_await _raft_groups.begin()->second.server_control_op.get_future();

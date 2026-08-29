@@ -313,6 +313,21 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
     logger.info("Raft groups commit log replayed data processing complete");
 }
 
+raft_commitlog_replay_buffer::~raft_commitlog_replay_buffer() {
+    size_t records = 0;
+    for (auto& [group_id, data] : _per_group_data) {
+        for (auto& rec : data.records) {
+            rec.detach();
+            ++records;
+        }
+    }
+    if (records) {
+        logger.error("destroyed with {} unclaimed records in {} groups: stop() did not run. "
+                "Their references are detached, so the segments survive for the next replay, "
+                "but this should not happen.", records, _per_group_data.size());
+    }
+}
+
 future<> raft_commitlog_replay_buffer::stop() {
     size_t records = 0;
     for (auto& [group_id, data] : _per_group_data) {

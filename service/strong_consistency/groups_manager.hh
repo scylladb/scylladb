@@ -163,9 +163,17 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         raft::group_id group_id,
         locator::token_metadata_ptr tm);
 
-    void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
+    // What becomes of a group's commitlog segment references when its server
+    // goes away. At shutdown they must be detached, so the segments outlive the
+    // group and replay can recover its log; a group destroyed deliberately —
+    // its tablet migrated away, or its table dropped — will never be replayed,
+    // so its references are given up instead (SCYLLADB-3827).
+    enum class log_disposition { keep, release };
 
-    void schedule_raft_groups_deletion(bool all);
+    void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state,
+        log_disposition disposition);
+
+    void schedule_raft_groups_deletion(bool all, log_disposition disposition);
 
     future<> leader_info_updater(raft_group_state& state, locator::global_tablet_id tablet, raft::group_id gid);
 

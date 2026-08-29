@@ -235,6 +235,20 @@ public:
         return _truncations;
     }
 
+    // Give up every reference this group holds, for good.
+    //
+    // The destructor detaches instead, because at shutdown the segments must
+    // survive so that the entries they hold can be replayed. That is wrong for a
+    // group being destroyed deliberately — a tablet migrating away, or its table
+    // dropped — because nothing will ever replay its log, so detaching leaks
+    // those segments until the node restarts (SCYLLADB-3827). The data the group
+    // applied is unaffected: each command's reference belongs to the target
+    // table's memtable and is released by its flush.
+    //
+    // Must be called only once no more entries can be appended, i.e. after the
+    // raft server has been aborted.
+    void release_all();
+
     // The entries commitlog replay recovered, handed over once.
     raft::log_entries load_log();
 
