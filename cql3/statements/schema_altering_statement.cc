@@ -42,11 +42,6 @@ future<> schema_altering_statement::grant_permissions_to_creator(const service::
     return make_ready_future<>();
 }
 
-bool schema_altering_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const
-{
-    return false;
-}
-
 uint32_t schema_altering_statement::get_bound_terms() const
 {
     return 0;

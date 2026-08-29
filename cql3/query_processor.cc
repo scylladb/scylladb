@@ -1316,7 +1316,12 @@ bool query_processor::migration_subscriber::should_invalidate(
         sstring ks_name,
         std::optional<sstring> cf_name,
         ::shared_ptr<cql_statement> statement) {
-    return statement->depends_on(ks_name, cf_name);
+    for (const dependent_table& t : statement->dependent_tables()) {
+        if (t.ks_name == ks_name && (!cf_name || t.cf_name == *cf_name)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 future<> query_processor::query_internal(

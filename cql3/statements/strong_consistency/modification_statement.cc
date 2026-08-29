@@ -124,8 +124,4 @@ void modification_statement::validate(query_processor& qp, const service::client
 uint32_t modification_statement::get_bound_terms() const {
     return _statement->get_bound_terms();
 }
-
-bool modification_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const {
-    return _statement->depends_on(ks_name, cf_name);
-}
 }
