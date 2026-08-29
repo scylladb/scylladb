@@ -772,6 +772,7 @@ SEASTAR_TEST_CASE(test_groups_truncate_log_then_get_handles_for_remaining) {
     });
 }
 
+
 // A record is released once its indexes are committed, its commands applied and
 // its segment closed. The release writes the record's (max, term) as the group's
 // persisted descriptor and drops the record.
@@ -1103,6 +1104,115 @@ struct flush_request_log {
         return std::ranges::find(requests, std::pair(id, pos)) != requests.end();
     }
 };
+
+// Giving up a group's segments asks the tablet table to flush what apply() left
+// in them. release_all() is the teardown path, a tablet migrating away or its
+// table dropped, and it writes no descriptor, so the records' raft_groups
+// references just go. The per-command references apply() put in the tablet
+// table's memtable are not ours to drop, and a segment's flush round happens
+// once, so once it is past nothing else asks for them.
+SEASTAR_TEST_CASE(test_groups_giving_up_the_segments_asks_the_table_to_flush) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto target_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        flush_request_log flushes;
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, target_table, {}, flushes.recorder());
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        std::vector<raft::log_entry_ptr> entries;
+        for (int i = 1; i <= 4; ++i) {
+            entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+        }
+        co_await storage.store_log_entries(entries);
+        const auto segment = storage.pin_for_apply(entries.back()->idx).rp().id;
+
+        // Applied 2 of 4: the gate still waits for the last command, but two
+        // per-command references are already in the tablet table's memtable.
+        storage.note_applied(raft::index_t(2));
+        co_await storage.store_commit_idx(entries.back()->idx);
+        storage.mark_segment_closed(db::replay_position(
+                std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
+        BOOST_REQUIRE_EQUAL((co_await raft_groups_storage::load_descriptor(qp, gid, test_shard)).idx,
+                raft::index_t(0));
+        BOOST_REQUIRE(flushes.requests.empty());
+
+        storage.release_all();
+
+        // Only the tablet table: no descriptor was written, so raft_groups holds nothing.
+        const auto expected = db::replay_position(segment + 1, 0);
+        BOOST_CHECK(flushes.asked_for(target_table, expected));
+        BOOST_CHECK(!flushes.asked_for(db::system_keyspace::raft_groups()->id(), expected));
+        BOOST_CHECK_EQUAL(flushes.requests.size(), 1u);
+    });
+}
+
+// Test: giving up segments whose flush round is still ahead asks for nothing.
+// That round names the tablet table by itself, so asking as well is pure cost.
+SEASTAR_TEST_CASE(test_groups_giving_up_before_the_round_asks_for_nothing) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto target_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        flush_request_log flushes;
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, target_table, {}, flushes.recorder());
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        std::vector<raft::log_entry_ptr> entries;
+        for (int i = 1; i <= 4; ++i) {
+            entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+        }
+        co_await storage.store_log_entries(entries);
+        storage.note_applied(raft::index_t(2));
+
+        // Deliberately no mark_segment_closed(), and the commitlog's own flush
+        // position is still below this segment, so the round is ahead.
+        storage.release_all();
+
+        BOOST_CHECK(flushes.requests.empty());
+    });
+}
+
+// Test: a record with no command asks for nothing when the segments are given
+// up, because apply() never put a reference into the tablet table for it.
+SEASTAR_TEST_CASE(test_groups_giving_up_a_command_free_segment_asks_for_nothing) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto target_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        flush_request_log flushes;
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, target_table, {}, flushes.recorder());
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        std::vector<raft::log_entry_ptr> entries;
+        for (int i = 1; i <= 3; ++i) {
+            entries.push_back(make_lw_shared<raft::log_entry>(raft::log_entry{
+                    .term = raft::term_t(1), .idx = raft::index_t(i), .data = raft::log_entry::dummy{}}));
+        }
+        co_await storage.store_log_entries(entries);
+
+        // Past its round, so only the missing command keeps it from asking.
+        storage.mark_segment_closed(db::replay_position(
+                std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
+        flushes.requests.clear();
+
+        storage.release_all();
+
+        BOOST_CHECK(flushes.requests.empty());
+    });
+}
 
 // A flush round nobody told the group about still counts. A round can happen
 // with no groups_manager handler registered, since commitlog replay writes a

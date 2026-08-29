@@ -147,5 +147,11 @@ public:
     // A rewritten tail nobody took must survive into the next replay: decrementing
     // would retire its segments and lose entries already acknowledged to a leader.
     future<> stop();
+
+    // Detaches the same way. The implicit destructor would decrement instead,
+    // retiring the segments that hold a rewritten tail and losing entries a leader
+    // already counted toward a quorum. Only an allocation failure in the submit_to
+    // of sharded::stop()'s first phase reaches it; stop() runs otherwise.
+    ~raft_commitlog_replay_buffer();
 };
 } // namespace db

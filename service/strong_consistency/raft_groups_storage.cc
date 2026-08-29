@@ -221,6 +221,23 @@ void raft_groups_storage::note_applied(raft::index_t idx) {
     maybe_release();
 }
 
+void raft_groups_storage::release_all() {
+    // Compute before dropping the references: the queue is what says which
+    // segments need the flush. Request after, so the references are gone when
+    // the flush completes and the segment can go clean.
+    const auto pos = _raft_commitlog.flush_needed_on_release_all();
+    _raft_commitlog.release_all();
+    if (!pos || !_request_flush) {
+        return;
+    }
+    try {
+        _request_flush(_target_table_id, *pos);
+    } catch (...) {
+        rgslog.warn("group_id={}: flush request while giving up the segments failed, "
+                "they stay on disk: {}", _group_id, std::current_exception());
+    }
+}
+
 void raft_groups_storage::mark_segment_closed(db::replay_position pos) {
     _raft_commitlog.mark_segment_closed(pos);
     maybe_release();

@@ -171,6 +171,15 @@ public:
         return _truncations;
     }
 
+    // Give up every reference this group holds, for good: for a group destroyed
+    // deliberately, whose log nothing will ever replay. Call only after the raft
+    // server has been aborted.
+    void release_all();
+
+    // The position the tablet table must flush to after release_all(), or
+    // disengaged when no record is past its segment's flush round.
+    std::optional<db::replay_position> flush_needed_on_release_all() const;
+
     // The entries commitlog replay recovered, handed over once.
     raft::log_entries load_log();
 

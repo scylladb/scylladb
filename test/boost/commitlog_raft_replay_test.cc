@@ -417,32 +417,6 @@ SEASTAR_TEST_CASE(test_commitlog_mixed_raft_and_mutation_entries) {
     });
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// Test that uncommitted raft entries survive destruction of raft_commitlog.
-// When raft_commitlog is destroyed, release() is called on remaining handles
-// to prevent segment dirty count from being decremented. This keeps commitlog
-// segments alive so entries can be replayed after restart.
-//
-// Without release(), the destructors would decrement dirty counts to zero,
-// making segments eligible for deletion on the next discard_completed_segments call.
-// =============================================================================
-// New tests: end-to-end, replay buffer integration, persistence, multi-segment
-// =============================================================================
-
 // End-to-end commitlog persistence roundtrip with full field verification.
 // Writes raft entries from two groups (with command, config, and dummy types)
 // to a commitlog, reads active segments back, and verifies every entry's
@@ -852,6 +826,119 @@ SEASTAR_TEST_CASE(test_replay_buffer_stop_detaches_unclaimed_records) {
         }
         // Asserted after the buffer is gone: a stop() that only cleared the map
         // would leave the destructor to decrement, and this would go clean.
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), dirty);
+    });
+}
+
+// Test: the same holds when stop() never runs. No production path reaches this
+// today (see the destructor's comment), but a destructor that decremented the
+// pins would retire the segments holding a rewritten tail.
+SEASTAR_TEST_CASE(test_replay_buffer_destructor_detaches_unclaimed_records) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        service::strong_consistency::replayed_data_per_group data;
+        raft::index_t next{1};
+        while (log.get_num_dirty_segments() == 0) {
+            raft::log_entry_ptr_list batch;
+            for (int i = 0; i < 4; ++i) {
+                batch.push_back(make_command_entry_sized(raft::term_t(1), next, 64 * 1024));
+                next = next + raft::index_t{1};
+            }
+            auto handle = co_await service::strong_consistency::write_raft_batch(
+                    log, tid, gid, raft::index_t(0), batch);
+            service::strong_consistency::account_batch(data.records, rg_tid, std::move(handle), batch);
+        }
+        const auto dirty = log.get_num_dirty_segments();
+        BOOST_REQUIRE_GT(dirty, 0);
+        BOOST_REQUIRE(!data.records.empty());
+
+        {
+            db::raft_commitlog_replay_buffer buffer;
+            raft_replay_buffer_tester::seed(buffer, gid, std::move(data));
+            // Deliberately no stop().
+        }
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), dirty);
+    });
+}
+
+// Test: a group destroyed deliberately gives up its segment references instead
+// of detaching them — see raft_commitlog::release_all() (SCYLLADB-3827).
+SEASTAR_TEST_CASE(test_raft_commitlog_release_all_frees_the_segments) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        {
+            service::strong_consistency::raft_commitlog rc(gid, log, tid, rg_tid, {});
+
+            // Fill past one segment: only sealed ones are dirty and reclaimable.
+            raft::index_t next{1};
+            while (log.get_num_dirty_segments() == 0) {
+                raft::log_entry_ptr_list batch;
+                for (int i = 0; i < 4; ++i) {
+                    batch.push_back(make_command_entry_sized(raft::term_t(1), next, 64 * 1024));
+                    next = next + raft::index_t{1};
+                }
+                co_await rc.store_log_entries(batch, raft::index_t(0));
+            }
+            BOOST_REQUIRE_GT(log.get_num_dirty_segments(), 0);
+            BOOST_REQUIRE(bool(rc.pin_for_apply(raft::index_t(1))));
+
+            rc.release_all();
+
+            // No record holds anything any more...
+            {
+                seastar::testing::scoped_no_abort_on_internal_error no_abort;
+                try {
+                    rc.pin_for_apply(raft::index_t(1));
+                    BOOST_FAIL("Expected the records to have been released");
+                } catch (...) {
+                    // Expected.
+                }
+            }
+            // ...and the segments it kept dirty are clean, as detaching would not do.
+            BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+        }
+    });
+}
+
+// Test: destroying a group without release_all() detaches its references, so the
+// segments stay dirty (the shutdown path, log_disposition::keep). Pairs with the
+// test above: either alone passes if both paths behave the same.
+SEASTAR_TEST_CASE(test_raft_commitlog_destructor_detaches_the_segments) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        uint64_t dirty = 0;
+        {
+            service::strong_consistency::raft_commitlog rc(gid, log, tid, rg_tid, {});
+
+            raft::index_t next{1};
+            while (log.get_num_dirty_segments() == 0) {
+                raft::log_entry_ptr_list batch;
+                for (int i = 0; i < 4; ++i) {
+                    batch.push_back(make_command_entry_sized(raft::term_t(1), next, 64 * 1024));
+                    next = next + raft::index_t{1};
+                }
+                co_await rc.store_log_entries(batch, raft::index_t(0));
+            }
+            dirty = log.get_num_dirty_segments();
+            BOOST_REQUIRE_GT(dirty, 0);
+        }
+        // Asserted after the group is gone: a destructor that dropped the
+        // handles instead of detaching them would bring this to zero.
         BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), dirty);
     });
 }
