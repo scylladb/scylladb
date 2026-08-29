@@ -24,15 +24,16 @@ class config;
 /// Description of a single client-facing listening socket.
 ///
 /// A listener is derived from the per-protocol configuration options
-/// (native_transport_port and friends).
+/// (native_transport_port, alternator_https_port, and friends).
 struct listener_config {
     enum class protocol_type {
         cql,
+        alternator,
     };
 
     protocol_type protocol = protocol_type::cql;
-    /// Address to listen on. Empty means the protocol's default address,
-    /// rpc_address.
+    /// Address to listen on. Empty means the protocol's default address:
+    /// rpc_address for CQL, alternator_address for Alternator.
     sstring address;
     uint16_t port = 0;
     /// Serve the shard-aware variant of the protocol. CQL only.
@@ -45,8 +46,9 @@ struct listener_config {
     /// Expect a PROXY protocol header on incoming connections.
     bool proxy_protocol = false;
     /// Encrypt the connections with TLS. When set, but tls_options is empty,
-    /// the protocol's default encryption options are used,
-    /// client_encryption_options.
+    /// the protocol's default encryption options are used:
+    /// client_encryption_options for CQL, alternator_encryption_options for
+    /// Alternator.
     bool tls = false;
     std::unordered_map<sstring, sstring> tls_options;
     /// Enable TCP keepalive. Unset means the rpc_keepalive default.

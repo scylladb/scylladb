@@ -17,6 +17,8 @@ std::string_view to_string(listener_config::protocol_type p) {
     switch (p) {
     case listener_config::protocol_type::cql:
         return "cql";
+    case listener_config::protocol_type::alternator:
+        return "alternator";
     }
     return "unknown";
 }
@@ -115,10 +117,38 @@ static listener_configs legacy_cql_listeners(const config& cfg) {
     return listeners;
 }
 
+static listener_configs legacy_alternator_listeners(const config& cfg) {
+    using protocol_type = listener_config::protocol_type;
+
+    listener_configs listeners;
+    auto add = [&] (uint16_t port, bool tls, bool proxy_protocol) {
+        if (!port) {
+            return;
+        }
+        auto name = fmt::format("alternator{}{}", tls ? "_https" : "", proxy_protocol ? "_proxy_protocol" : "");
+        listeners.emplace(std::move(name), listener_config{
+            .protocol = protocol_type::alternator,
+            .address = cfg.alternator_address(),
+            .port = port,
+            .proxy_protocol = proxy_protocol,
+            .tls = tls,
+        });
+    };
+
+    add(cfg.alternator_port(), false, false);
+    add(cfg.alternator_port_proxy_protocol(), false, true);
+    add(cfg.alternator_https_port(), true, false);
+    add(cfg.alternator_https_port_proxy_protocol(), true, true);
+
+    return listeners;
+}
+
 listener_configs get_listeners(const config& cfg, listener_config::protocol_type protocol) {
     switch (protocol) {
     case listener_config::protocol_type::cql:
         return legacy_cql_listeners(cfg);
+    case listener_config::protocol_type::alternator:
+        return legacy_alternator_listeners(cfg);
     }
     return {};
 }
