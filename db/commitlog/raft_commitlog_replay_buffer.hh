@@ -164,18 +164,21 @@ public:
         return _total_entries;
     }
 
-    // A segment the replay could not read whole: a bad sector, or a header that did not
-    // check out and skipped the file. The indexes decide whether that cost a raft group
-    // anything, in finish_replay(); the segments named here only go into the warning. A
-    // truncated tail is where the writing stopped, which every crash leaves behind, and
-    // is not recorded.
+    // A segment the replay could not read whole: a bad sector, or a header that failed
+    // its check and skipped the file. finish_replay() decides from the indexes whether
+    // the loss cost a raft group anything; the segments named here only go into the
+    // warning. A truncated tail, where writing stopped at the crash, is not recorded.
     void note_unreadable_segment(db::segment_id_type segment) {
         _unreadable_segments.push_back(segment);
     }
 
     // Detach the references of anything no group claimed, as ~raft_commitlog does.
-    // A rewritten tail nobody took must survive into the next replay: decrementing
-    // would retire its segments and lose entries already acknowledged to a leader.
+    // A rewritten tail nobody took must survive into the next replay: a decrement
+    // retires its segments and loses entries already acknowledged to a leader.
     future<> stop();
+
+    // Detaches the unclaimed references, as stop() does, for the one path that skips
+    // stop(): an allocation failure in the submit_to of sharded::stop()'s first phase.
+    ~raft_commitlog_replay_buffer();
 };
 } // namespace db
