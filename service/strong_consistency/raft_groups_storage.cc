@@ -34,7 +34,7 @@ raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, raft::group_
     , _qp(qp)
     , _pending_op_fut(make_ready_future<>())
 {
-    rgslog.trace("Creating raft_groups_storage for group_id={}, server_id={}, shard={}", _group_id, _server_id, _shard);
+    rgslog.trace("Creating raft_groups_storage for group_id={}, server_id={}, shard={}", _group_id, _server_id, shard);
     if (shard > std::numeric_limits<int16_t>::max()) {
         // The shard should fit in int16_t since that's the column type (smallint) we use in the Raft tables
         on_internal_error(rgslog, fmt::format("Shard value {} exceeds maximum allowed {}", shard, std::numeric_limits<int16_t>::max()));
