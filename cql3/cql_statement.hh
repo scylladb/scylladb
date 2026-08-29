@@ -18,6 +18,8 @@
 #include "service/raft/group0_fwd.hh"
 #include "audit/audit.hh"
 #include "utils/chunked_string.hh"
+#include "schema/schema_fwd.hh"
+#include "cql3/dependent_table.hh"
 
 namespace service {
 
@@ -122,7 +124,8 @@ public:
     virtual seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>
             execute_without_checking_exception_message(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const;
 
-    virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const = 0;
+    // The tables this statement depends on, used to index the prepared-statement cache.
+    virtual std::vector<dependent_table> dependent_tables() const = 0;
 
     // The plan this statement scans, to be checked against the one a paging state
     // pins. Disengaged for statements that are never paged. See #18992.
