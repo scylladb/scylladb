@@ -93,6 +93,13 @@ public:
         std::erase_if(_entries, [](const auto& p) { return !p.second.seen; });
     }
 };
+// Whether `replica` still hosts the group's raft log at this stage. The running
+// group and commitlog replay both apply the rule: a replica that answers no has
+// had its raft server torn down and its segment references given up, so replay must
+// not recover a log for it.
+bool hosts_raft_group(const locator::tablet_info& tinfo,
+        const locator::tablet_transition_info* trinfo, const locator::tablet_replica& replica);
+
 
 /// A sharded service responsible for the lifecycle and access
 /// management of all Raft groups for strongly consistent tablets hosted on this node.
@@ -201,9 +208,15 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         raft::group_id group_id,
         locator::token_metadata_ptr tm);
 
-    void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
+    // What becomes of a group's commitlog segment references when its server goes
+    // away: keep at shutdown so replay can recover the log, release for a group
+    // destroyed deliberately.
+    enum class log_disposition { keep, release };
 
-    void schedule_raft_groups_deletion(bool all);
+    void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state,
+        log_disposition disposition);
+
+    void schedule_raft_groups_deletion(bool all, log_disposition disposition);
 
     // Queues a start or deletion of the group's raft::server behind the
     // previous one; at most one control operation runs per group. `op` is

@@ -32,6 +32,7 @@
 #include "idl/commitlog.dist.impl.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
+#include "service/strong_consistency/groups_manager.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
 #include "db/system_keyspace.hh"
 #include "locator/tablets.hh"
@@ -955,14 +956,127 @@ SEASTAR_TEST_CASE(test_replay_buffer_stop_detaches_unclaimed_records) {
             co_await buffer.stop();
         }
         // Asserted after the buffer is gone: a stop() that only cleared the map
-        // would leave the destructor to decrement, and this would go clean.
+        // leaves the destructor to decrement, and the segment goes clean.
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), dirty);
+    });
+}
+
+// Test: the records are also detached when stop() never runs. No production path
+// reaches the destructor with records (see its comment), but a destructor that
+// decremented the pins retires the segments holding a rewritten tail.
+SEASTAR_TEST_CASE(test_replay_buffer_destructor_detaches_unclaimed_records) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        service::strong_consistency::replayed_data_per_group data;
+        raft::index_t next{1};
+        while (log.get_num_dirty_segments() == 0) {
+            raft::log_entry_ptr_list batch;
+            for (int i = 0; i < 4; ++i) {
+                batch.push_back(make_command_entry_sized(raft::term_t(1), next, 64 * 1024));
+                next = next + raft::index_t{1};
+            }
+            auto handle = co_await service::strong_consistency::write_raft_batch(
+                    log, tid, gid, raft::index_t(0), batch);
+            service::strong_consistency::account_batch(data.records, rg_tid, std::move(handle), batch);
+        }
+        const auto dirty = log.get_num_dirty_segments();
+        BOOST_REQUIRE_GT(dirty, 0);
+        BOOST_REQUIRE(!data.records.empty());
+
+        {
+            db::raft_commitlog_replay_buffer buffer;
+            raft_replay_buffer_tester::seed(buffer, gid, std::move(data));
+            // Deliberately no stop().
+        }
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), dirty);
+    });
+}
+
+// Test: a group destroyed deliberately gives up its segment references instead
+// of detaching them: see raft_commitlog::release_all() (SCYLLADB-3827).
+SEASTAR_TEST_CASE(test_raft_commitlog_release_all_frees_the_segments) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        {
+            service::strong_consistency::raft_commitlog rc(gid, log, tid, rg_tid, {});
+
+            // Fill past one segment: only sealed ones are dirty and reclaimable.
+            raft::index_t next{1};
+            while (log.get_num_dirty_segments() == 0) {
+                raft::log_entry_ptr_list batch;
+                for (int i = 0; i < 4; ++i) {
+                    batch.push_back(make_command_entry_sized(raft::term_t(1), next, 64 * 1024));
+                    next = next + raft::index_t{1};
+                }
+                co_await rc.store_log_entries(batch, raft::index_t(0));
+            }
+            BOOST_REQUIRE_GT(log.get_num_dirty_segments(), 0);
+            BOOST_REQUIRE(bool(rc.pin_for_apply(raft::index_t(1))));
+
+            rc.release_all();
+
+            // No record holds anything any more...
+            {
+                seastar::testing::scoped_no_abort_on_internal_error no_abort;
+                try {
+                    rc.pin_for_apply(raft::index_t(1));
+                    BOOST_FAIL("Expected the records to have been released");
+                } catch (...) {
+                    // Expected.
+                }
+            }
+            // ...and the segments it kept dirty are clean; detaching leaves them dirty.
+            BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+        }
+    });
+}
+
+// Test: destroying a group without release_all() detaches its references, so the
+// segments stay dirty (the shutdown path, log_disposition::keep). Pairs with the
+// test above: each test alone passes if both paths behave the same.
+SEASTAR_TEST_CASE(test_raft_commitlog_destructor_detaches_the_segments) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        uint64_t dirty = 0;
+        {
+            service::strong_consistency::raft_commitlog rc(gid, log, tid, rg_tid, {});
+
+            raft::index_t next{1};
+            while (log.get_num_dirty_segments() == 0) {
+                raft::log_entry_ptr_list batch;
+                for (int i = 0; i < 4; ++i) {
+                    batch.push_back(make_command_entry_sized(raft::term_t(1), next, 64 * 1024));
+                    next = next + raft::index_t{1};
+                }
+                co_await rc.store_log_entries(batch, raft::index_t(0));
+            }
+            dirty = log.get_num_dirty_segments();
+            BOOST_REQUIRE_GT(dirty, 0);
+        }
+        // Asserted after the group is gone: a destructor that dropped the
+        // handles instead of detaching them brings the count to zero.
         BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), dirty);
     });
 }
 
 // The other encoding of lease_time: the plain ser::serialize/ser::deserialize
 // pair, which is what idl/raft.idl.hh uses for append_request::entries. That is
-// the replication path, and for LeaseGuard it is the primary one -- "the log is
+// the replication path, and for LeaseGuard it is the primary one: "the log is
 // the lease" reaches a new leader over append_entries, not off disk. The
 // persisted encoding is a different byte format and is covered by
 // test_commitlog_raft_batch_writer above; neither test substitutes for the
@@ -1681,9 +1795,64 @@ SEASTAR_TEST_CASE(test_replay_starts_on_a_damaged_segment_when_the_override_is_s
     }, sc_replay_config_starting_on_damage());
 }
 
+// hosts_raft_group() answers both "should this shard run the group" and "should replay
+// recover its log", so a stage it gets wrong either tears down a group that is still a
+// member or resurrects a group that is not. The rollback stages matter most: the
+// pending replica may be the leader driving its own removal.
+BOOST_AUTO_TEST_CASE(test_hosts_raft_group_per_stage) {
+    using namespace locator;
+    using service::strong_consistency::hosts_raft_group;
+
+    const tablet_replica leaving{host_id{utils::UUID_gen::get_time_UUID()}, 0};
+    const tablet_replica staying{host_id{utils::UUID_gen::get_time_UUID()}, 0};
+    const tablet_replica pending{host_id{utils::UUID_gen::get_time_UUID()}, 0};
+
+    tablet_info tinfo;
+    tinfo.replicas = {leaving, staying};
+
+    const auto at = [&](tablet_transition_stage stage) {
+        return tablet_transition_info(stage, tablet_transition_kind::migration,
+                tablet_replica_set{staying, pending}, pending);
+    };
+
+    // No transition: the replica set is the whole answer.
+    BOOST_CHECK(hosts_raft_group(tinfo, nullptr, leaving));
+    BOOST_CHECK(!hosts_raft_group(tinfo, nullptr, pending));
+
+    // Before the removal is confirmed both replicas are members: the leaving replica's vote can
+    // be needed to commit its own removal, and the pending one can be the leader.
+    for (const auto stage : {tablet_transition_stage::start_migration,
+                             tablet_transition_stage::sc_add_nonvoter,
+                             tablet_transition_stage::sc_snapshot_transfer,
+                             tablet_transition_stage::sc_become_voter,
+                             tablet_transition_stage::sc_rollback}) {
+        const auto trinfo = at(stage);
+        BOOST_CHECK_MESSAGE(hosts_raft_group(tinfo, &trinfo, leaving), fmt::format("{}", stage));
+        BOOST_CHECK_MESSAGE(hosts_raft_group(tinfo, &trinfo, pending), fmt::format("{}", stage));
+    }
+
+    // The leaving replica is out from use_new on. Replay must agree, since the
+    // teardown has given up its segment references by then.
+    for (const auto stage : {tablet_transition_stage::use_new,
+                             tablet_transition_stage::cleanup,
+                             tablet_transition_stage::end_migration}) {
+        const auto trinfo = at(stage);
+        BOOST_CHECK_MESSAGE(!hosts_raft_group(tinfo, &trinfo, leaving), fmt::format("{}", stage));
+        BOOST_CHECK_MESSAGE(hosts_raft_group(tinfo, &trinfo, pending), fmt::format("{}", stage));
+    }
+
+    // The mirror case: a rolled-back migration drops the pending replica instead.
+    for (const auto stage : {tablet_transition_stage::cleanup_target,
+                             tablet_transition_stage::revert_migration}) {
+        const auto trinfo = at(stage);
+        BOOST_CHECK_MESSAGE(hosts_raft_group(tinfo, &trinfo, leaving), fmt::format("{}", stage));
+        BOOST_CHECK_MESSAGE(!hosts_raft_group(tinfo, &trinfo, pending), fmt::format("{}", stage));
+    }
+}
+
 // Test that replay discards a group whose tablet has no replica on this shard, even
 // though the group is still present in tablet metadata because it lives on its other
-// replicas. Applying its entries here would resurrect data on a node that gave the
+// replicas. Applying its entries here resurrects data on a node that gave the
 // range up.
 SEASTAR_TEST_CASE(test_replay_discards_groups_without_local_replica) {
     return do_with_cql_env_thread([] (cql_test_env& env) {

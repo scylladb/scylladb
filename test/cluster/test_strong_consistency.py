@@ -2594,10 +2594,13 @@ async def test_no_raft_replay_into_a_tablet_that_moved_away(manager: ScyllaClust
             # Replay must have refused the group, on either of the two counts: the
             # tablet has no replica here anymore, or the cleanup erased its raft state.
             discarded = await log.grep(
-                rf"raft_commitlog_replay - group {group_id} has no (tablet replica|persisted raft state) on this shard, discarding",
+                rf"raft_commitlog_replay - group {group_id} (is no longer hosted by this shard"
+                rf"|has no persisted raft state on this shard), discarding",
                 from_mark=mark)
+            # resolve_group() logs the recovered floor for a group it accepts, so its
+            # absence is what says the entries were not replayed.
             entries_replayed = await log.grep(
-                rf"raft_commitlog_replay - group {group_id}: \d+ entries", from_mark=mark)
+                rf"raft_commitlog_replay - group {group_id}: recovered floor", from_mark=mark)
             assert not entries_replayed, \
                 f"Replay processed entries of group {group_id} on a node that left it: {entries_replayed}"
             assert discarded, f"Expected replay to discard the entries of group {group_id}"
