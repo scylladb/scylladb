@@ -644,6 +644,111 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
     });
 }
 
+// Like make_sstable_for_all_shards(), but works for tablets too (no static sharder needed).
+sstables::shared_sstable
+make_unsharded_sstable_spanning_all_shards(replica::table& table, sstables::sstable_state state, sstables::generation_type generation) {
+    auto s = table.schema();
+    auto mt = make_lw_shared<replica::memtable>(s);
+    auto keys = tests::generate_partition_keys(std::max<size_t>(1000, this_smp_shard_count() * 100), s, std::optional<shard_id>(std::nullopt));
+    for (auto& key : keys) {
+        mutation m(s, key);
+        m.set_clustered_cell(clustering_key::make_empty(), bytes("c"), data_value(int32_t(0)), api::timestamp_type(0));
+        mt->apply(std::move(m));
+    }
+    auto sst = table.get_sstables_manager().make_sstable(s, table.get_storage_options(), generation, state);
+    write_memtable_to_sstable(*mt, sst).get();
+    mt->clear_gently().get();
+    // Pretend it came from Cassandra: we can't write a badly-sharded sstable ourselves.
+    sstables::test(sst).remove_component(sstables::component_type::Scylla).get();
+    sstables::test(sst).rewrite_toc_without_component(sstables::component_type::Scylla);
+    return sst;
+}
+
+// Every partition of every sstable on this shard must be owned by this shard per the table's tablet sharder.
+// Returns {number of sstables, number of shards holding sstables}.
+future<std::pair<unsigned, unsigned>> verify_tablet_sstables_are_sharded_correctly(sharded<sstable_directory>& sstdir, sharded<replica::database>& db) {
+    co_return co_await sstdir.map_reduce0([&db] (sstable_directory& d) -> future<std::pair<unsigned, unsigned>> {
+        auto& table = db.local().find_column_family("ks", "cf");
+        auto s = table.schema();
+        auto erm = table.get_effective_replication_map();
+        const dht::sharder& sharder = erm->get_sharder(*s);
+        unsigned count = 0;
+        co_await d.do_for_each_sstable([&] (sstables::shared_sstable sst) -> future<> {
+            count++;
+            auto permit = db.local().get_reader_concurrency_semaphore().make_tracking_only_permit(s, "test", db::no_timeout, {});
+            auto reader = sst->make_reader(s, std::move(permit), query::full_partition_range, s->full_slice());
+            unsigned partitions = 0;
+            std::exception_ptr ex;
+            try {
+                while (auto mo = co_await read_mutation_from_mutation_reader(reader)) {
+                    partitions++;
+                    THREADSAFE_BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(mo->decorated_key().token()), this_shard_id());
+                }
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            co_await reader.close();
+            if (ex) {
+                std::rethrow_exception(std::move(ex));
+            }
+            THREADSAFE_BOOST_REQUIRE(partitions > 0);
+        });
+        co_return std::pair(count, unsigned(count > 0));
+    }, std::pair(0u, 0u), [] (auto a, auto b) { return std::pair(a.first + b.first, a.second + b.second); });
+}
+
+// Regression test: reshard() must not assume static (vnode) sharding.
+SEASTAR_TEST_CASE(sstable_directory_reshard_works_for_tablets) {
+    if (this_smp_shard_count() == 1) {
+        fmt::print("Skipping sstable_directory_reshard_works_for_tablets, smp == 1\n");
+        return make_ready_future<>();
+    }
+
+    cql_test_config cfg;
+    cfg.initial_tablets = this_smp_shard_count() * 4;
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table cf (p text PRIMARY KEY, c int)").get();
+        auto& cf = e.local_db().find_column_family("ks", "cf");
+
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& cf = db.find_column_family("ks", "cf");
+            return cf.disable_auto_compaction();
+        }).get();
+
+        unsigned num_sstables = 10 * this_smp_shard_count();
+
+        sharded<sstables::sstable_generation_generator> sharded_gen;
+        sharded_gen.start().get();
+        auto stop_generator = deferred_stop(sharded_gen);
+
+        for (unsigned nr = 0; nr < num_sstables; ++nr) {
+            auto generation = sharded_gen.invoke_on(nr % this_smp_shard_count(), [] (auto& gen) {
+                return gen();
+            }).get();
+            make_unsharded_sstable_spanning_all_shards(cf, sstables::sstable_state::upload, generation);
+        }
+
+        with_sstable_directory(e.db(), "ks", "cf", sstables::sstable_state::upload, [&] (sharded<sstables::sstable_directory>& sstdir) {
+            distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
+            verify_that_all_sstables_are_local(sstdir, 0).get();
+
+            auto make_sstable = [&e, &sharded_gen] (shard_id shard) {
+                auto generation = sharded_gen.invoke_on(shard, [] (auto& gen) {
+                    return gen();
+                }).get();
+                auto& cf = e.local_db().find_column_family("ks", "cf");
+                return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sstables::sstable_state::upload);
+            };
+            distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", std::move(make_sstable)).get();
+
+            auto [sstables, shards] = verify_tablet_sstables_are_sharded_correctly(sstdir, e.db()).get();
+            BOOST_REQUIRE_GT(sstables, 0);
+            BOOST_REQUIRE_GT(shards, 1);
+        });
+    }, cfg);
+}
+
 // Regression test for #14618 - resharding with non-empty owned_ranges_ptr.
 SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly_with_owned_ranges) {
     if (this_smp_shard_count() == 1) {
