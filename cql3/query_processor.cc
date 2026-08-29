@@ -1307,21 +1307,7 @@ void query_processor::migration_subscriber::on_drop_view(const sstring& ks_name,
 void query_processor::migration_subscriber::remove_invalid_prepared_statements(
         sstring ks_name,
         std::optional<sstring> cf_name) {
-    _qp->_prepared_cache.remove_if([&] (::shared_ptr<cql_statement> stmt) {
-        return this->should_invalidate(ks_name, cf_name, stmt);
-    });
-}
-
-bool query_processor::migration_subscriber::should_invalidate(
-        sstring ks_name,
-        std::optional<sstring> cf_name,
-        ::shared_ptr<cql_statement> statement) {
-    for (const dependent_table& t : statement->dependent_tables()) {
-        if (t.ks_name == ks_name && (!cf_name || t.cf_name == *cf_name)) {
-            return true;
-        }
-    }
-    return false;
+    _qp->_prepared_cache.remove_for_table(ks_name, cf_name);
 }
 
 future<> query_processor::query_internal(
