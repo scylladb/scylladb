@@ -644,11 +644,6 @@ public:
 
 private:
     void remove_invalid_prepared_statements(sstring ks_name, std::optional<sstring> cf_name);
-
-    bool should_invalidate(
-            sstring ks_name,
-            std::optional<sstring> cf_name,
-            ::shared_ptr<cql_statement> statement);
 };
 
 }
