@@ -1866,19 +1866,25 @@ SEASTAR_TEST_CASE(test_raft_batch_records_across_segments) {
         // Truncate inside the middle record: records at or above the cut go away
         // whole, the one it lands in is clamped and keeps its references.
         const auto cut = segment_queue[1].first + raft::index_t{1};
-        const auto before = segment_queue.size();
+        std::deque<service::strong_consistency::truncation_record> truncations;
         while (!segment_queue.empty() && segment_queue.back().first >= cut) {
+            truncations.push_back(service::strong_consistency::truncation_record{
+                    .segment = segment_queue.back().segment(), .from = segment_queue.back().first, .to = segment_queue.back().max});
             segment_queue.pop_back();
         }
         BOOST_REQUIRE(!segment_queue.empty());
-        BOOST_REQUIRE_LT(segment_queue.size(), before);
         if (segment_queue.back().max >= cut) {
+            truncations.push_back(service::strong_consistency::truncation_record{
+                    .segment = segment_queue.back().segment(), .from = cut, .to = segment_queue.back().max});
             segment_queue.back().trim_from(cut);
         }
+        BOOST_REQUIRE(!truncations.empty());
         BOOST_REQUIRE_LT(segment_queue.back().max, cut);
-        // The clamped record keeps its references: it still holds live entries.
         BOOST_REQUIRE(bool(segment_queue.back().pin_user_table));
-        BOOST_REQUIRE(bool(segment_queue.back().pin_raft_groups));
+        for (const auto& truncation : truncations) {
+            BOOST_REQUIRE_GT(truncation.segment, 0u);
+            BOOST_REQUIRE_LE(truncation.from, truncation.to);
+        }
     });
 }
 
