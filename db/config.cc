@@ -32,6 +32,7 @@
 #include "db/per_partition_rate_limit_extension.hh"
 #include "db/paxos_grace_seconds_extension.hh"
 #include "db/tags/extension.hh"
+#include "db/listener_config.hh"
 #include "db/object_storage_endpoint_param.hh"
 #include "audit/audit_rule.hh"
 #include "audit/audit.hh"
@@ -357,6 +358,22 @@ const config_type& config_type_for<std::vector<db::object_storage_endpoint_param
     return ct;
 }
 
+static
+json::json_return_type
+listeners_to_json(const db::listener_configs& listeners) {
+    std::unordered_map<sstring, sstring> m;
+    for (auto& [name, listener] : listeners) {
+        m[name] = format("{}", listener);
+    }
+    return value_to_json(m);
+}
+
+template <>
+const config_type& config_type_for<db::listener_configs>() {
+    static config_type ct("listener configuration", listeners_to_json);
+    return ct;
+}
+
 static json::json_return_type
 audit_rules_list_to_json(const std::vector<audit::audit_rule>& rules) {
     // Return the raw JSON string directly — audit_rules_to_json_string already
@@ -588,6 +605,14 @@ public:
         } catch (boost::program_options::invalid_option_value&) {
             return false;
         }
+        return true;
+    }
+};
+
+template<>
+struct convert<db::listener_config> {
+    static bool decode(const Node& node, db::listener_config& lc) {
+        lc = db::listener_config::decode(node);
         return true;
     }
 };
@@ -1216,6 +1241,25 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     /**
     * @Group Native transport (CQL Binary Protocol)
     */
+    , listeners(this, "listeners", value_status::Used, {},
+        "The client-facing sockets to listen on, as a map of listener name to listener configuration.\n"
+        "The name is what other listeners refer to a listener by. Every listener takes the following keys:\n"
+        "\n"
+        "\tprotocol: mandatory, the protocol to serve - one of 'cql' and 'alternator'.\n"
+        "\tport: mandatory, the TCP port to listen on.\n"
+        "\taddress: the address to listen on. Defaults to rpc_address for cql, and to alternator_address for alternator.\n"
+        "\tshard_aware: serve the shard-aware variant of the protocol (cql only). Defaults to false.\n"
+        "\tshard_aware_listener: the name of the shard-aware listener to hand this listener's clients over to,\n"
+        "\t\tadvertised in the CQL SUPPORTED message (cql only). Defaults to none, that is, the clients of this\n"
+        "\t\tlistener are not offered a shard-aware port.\n"
+        "\tproxy_protocol: expect a PROXY protocol header on incoming connections. Defaults to false.\n"
+        "\ttls: encrypt the connections with TLS. Either a boolean, selecting the protocol's default encryption\n"
+        "\t\toptions (client_encryption_options for cql, alternator_encryption_options for alternator), or a map\n"
+        "\t\tspelling the encryption options out. Defaults to false.\n"
+        "\tkeepalive: enable TCP keepalive. Defaults to rpc_keepalive.\n"
+        "\n"
+        "If this option is set, it is the sole source of truth, and the per-protocol options such as\n"
+        "native_transport_port or alternator_https_port are ignored.")
     , start_native_transport(this, "start_native_transport", value_status::Used, true,
         "Enable or disable the native transport server. Uses the same address as the rpc_address, but the port is different from the rpc_port. See native_transport_port.")
     , native_transport_port(this, "native_transport_port", "cql_port", value_status::Used, 9042,
@@ -2197,6 +2241,7 @@ template struct utils::config_file::named_value<std::vector<db::error_injection_
 template struct utils::config_file::named_value<std::vector<std::unordered_map<sstring, sstring>>>;
 template struct utils::config_file::named_value<std::unordered_map<sstring, seastar::log_level>>;
 template struct utils::config_file::named_value<std::vector<db::object_storage_endpoint_param>>;
+template struct utils::config_file::named_value<db::listener_configs>;
 template struct utils::config_file::named_value<std::vector<audit::audit_rule>>;
 
 namespace utils {

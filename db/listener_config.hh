@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstdint>
+#include <iosfwd>
 #include <optional>
 #include <unordered_map>
 
@@ -17,13 +18,18 @@
 
 #include "seastarx.hh"
 
+namespace YAML {
+class Node;
+}
+
 namespace db {
 
 class config;
 
 /// Description of a single client-facing listening socket.
 ///
-/// A listener is derived from the per-protocol configuration options
+/// A listener is either spelled out by the user in the "listeners"
+/// configuration option, or derived from the legacy per-protocol options
 /// (native_transport_port, alternator_https_port, and friends).
 struct listener_config {
     enum class protocol_type {
@@ -55,17 +61,24 @@ struct listener_config {
     std::optional<bool> keepalive;
 
     bool operator==(const listener_config&) const = default;
+
+    static listener_config decode(const YAML::Node&);
 };
 
 /// A set of listeners, keyed by the name that they are known - and referred
 /// to - by.
 using listener_configs = std::unordered_map<sstring, listener_config>;
 
-/// The listeners the given protocol is to serve, as derived from the
-/// per-protocol configuration options.
+/// The listeners the given protocol is to serve.
+///
+/// If the "listeners" option is set, it is the sole source of truth and the
+/// legacy options are ignored. Otherwise the listeners are derived from the
+/// legacy options.
 listener_configs get_listeners(const config&, listener_config::protocol_type);
 
 std::string_view to_string(listener_config::protocol_type);
+
+std::istream& operator>>(std::istream&, listener_config&);
 
 }
 
