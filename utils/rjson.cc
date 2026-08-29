@@ -7,6 +7,8 @@
  */
 
 #include "rjson.hh"
+#include <malloc.h>
+#include <utility>
 #include <seastar/core/format.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/thread.hh>
@@ -103,6 +105,9 @@ public:
     explicit guarded_yieldable_json_handler(size_t max_nested_level) : _max_nested_level(max_nested_level) {}
     guarded_yieldable_json_handler(Buffer& buf, size_t max_nested_level)
             : handler_base(buf), _max_nested_level(max_nested_level) {}
+    template <typename... Args>
+    guarded_yieldable_json_handler(std::in_place_t, size_t max_nested_level, Args&&... args)
+            : handler_base(std::forward<Args>(args)...), _max_nested_level(max_nested_level) {}
 
     // Parse any stream fitting https://rapidjson.org/classrapidjson_1_1_stream.html
     template<typename Stream>
@@ -201,6 +206,9 @@ void* internal::throwing_allocator::Malloc(size_t size) {
     if (size > 0 && !ret) {
         throw rjson::error(format("Failed to allocate {} bytes", size));
     }
+    if (ret && _allocated_memory) {
+        *_allocated_memory += malloc_usable_size(ret);
+    }
     return ret;
 }
 
@@ -212,9 +220,16 @@ void* internal::throwing_allocator::Realloc(void* orig_ptr, size_t orig_size, si
         throw rjson::error(format("Failed to allocate {} bytes", new_size));
     }
     #endif
+    const size_t old_size = _allocated_memory && orig_ptr ? malloc_usable_size(orig_ptr) : 0;
     void* ret = base::Realloc(orig_ptr, orig_size, new_size);
     if (new_size > 0 && !ret) {
         throw rjson::error(format("Failed to reallocate {} bytes to {} bytes from {}", orig_size, new_size, orig_ptr));
+    }
+    if (_allocated_memory) {
+        *_allocated_memory -= old_size;
+        if (ret) {
+            *_allocated_memory += malloc_usable_size(ret);
+        }
     }
     return ret;
 }
@@ -228,6 +243,56 @@ std::string print(const rjson::value& value, size_t max_nested_level) {
     guarded_yieldable_json_handler<writer, false> writer(buffer, max_nested_level);
     value.Accept(writer);
     return std::string(buffer.GetString());
+}
+
+class exact_output_stream {
+    char* _output;
+    size_t _capacity;
+    size_t _size = 0;
+public:
+    using Ch = char;
+
+    exact_output_stream(char* output = nullptr, size_t capacity = 0) noexcept
+        : _output(output)
+        , _capacity(capacity)
+    {}
+
+    void Put(Ch c) {
+        if (_output) {
+            if (_size >= _capacity) {
+                throw rjson::error("Exact JSON output exceeded its measured size");
+            }
+            _output[_size] = c;
+        }
+        ++_size;
+    }
+
+    void Flush() noexcept {}
+    size_t size() const noexcept { return _size; }
+};
+
+serialized_size measure_serialized_size(const rjson::value& value, size_t max_nested_level) {
+    using exact_writer = rapidjson::Writer<exact_output_stream, encoding, encoding, allocator>;
+
+    exact_output_stream counter;
+    guarded_yieldable_json_handler<exact_writer, false, exact_output_stream> size_writer(counter, max_nested_level);
+    value.Accept(size_writer);
+    return serialized_size{counter.size()};
+}
+
+std::string print_exact(const rjson::value& value, serialized_size size_limit, size_t max_nested_level) {
+    using exact_writer = rapidjson::Writer<exact_output_stream, encoding, encoding, allocator>;
+
+    std::string result(size_limit.value, '\0');
+    exact_output_stream output(result.data(), result.size());
+    guarded_yieldable_json_handler<exact_writer, false, exact_output_stream> result_writer(output, max_nested_level);
+    value.Accept(result_writer);
+    result.resize(output.size());
+    return result;
+}
+
+std::string print_exact(const rjson::value& value, size_t max_nested_level) {
+    return print_exact(value, measure_serialized_size(value, max_nested_level), max_nested_level);
 }
 
 // This class implements RapidJSON Handler and batches Put() calls into output_stream writes.
@@ -340,15 +405,21 @@ rjson::value parse(std::string_view str, size_t max_nested_level) {
     return std::move(v);
 }
 
-rjson::value parse(chunked_content&& content, size_t max_nested_level) {
-    guarded_yieldable_json_handler<document, false> d(max_nested_level);
+parsed_value parse_with_memory_usage(chunked_content&& content, size_t max_nested_level) {
+    size_t memory_usage = 0;
+    allocator dom_allocator(memory_usage);
+    guarded_yieldable_json_handler<document, false> d(std::in_place, max_nested_level, &dom_allocator);
     d.Parse(std::move(content));
     if (d.HasParseError()) {
         throw rjson::error(format("Parsing JSON failed: {} at {}",
             GetParseError_En(d.GetParseError()), d.GetErrorOffset()));
     }
     rjson::value& v = d;
-    return std::move(v);
+    return parsed_value{std::move(v), memory_usage};
+}
+
+rjson::value parse(chunked_content&& content, size_t max_nested_level) {
+    return std::move(parse_with_memory_usage(std::move(content), max_nested_level).value);
 }
 
 std::optional<rjson::value> try_parse(std::string_view str, size_t max_nested_level) {
@@ -376,15 +447,21 @@ rjson::value parse_yieldable(std::string_view str, size_t max_nested_level) {
     return std::move(v);
 }
 
-rjson::value parse_yieldable(chunked_content&& content, size_t max_nested_level) {
-    guarded_yieldable_json_handler<document, true> d(max_nested_level);
+parsed_value parse_yieldable_with_memory_usage(chunked_content&& content, size_t max_nested_level) {
+    size_t memory_usage = 0;
+    allocator dom_allocator(memory_usage);
+    guarded_yieldable_json_handler<document, true> d(std::in_place, max_nested_level, &dom_allocator);
     d.Parse(std::move(content));
     if (d.HasParseError()) {
         throw rjson::error(format("Parsing JSON failed: {} at {}",
             GetParseError_En(d.GetParseError()), d.GetErrorOffset()));
     }
     rjson::value& v = d;
-    return std::move(v);
+    return parsed_value{std::move(v), memory_usage};
+}
+
+rjson::value parse_yieldable(chunked_content&& content, size_t max_nested_level) {
+    return std::move(parse_yieldable_with_memory_usage(std::move(content), max_nested_level).value);
 }
 
 rjson::value& get(rjson::value& value, std::string_view name) {
