@@ -75,8 +75,6 @@ class raft_groups_storage : public raft::persistence {
     // carrying no configuration of its own re-persists the current one rather
     // than clearing it.
     raft::configuration _snapshot_config;
-    // The snapshot id in the row. Raft only checks it for being set.
-    raft::snapshot_id _snapshot_id;
     // Timestamp of the last descriptor mutation. api::new_timestamp() is the
     // microsecond wall clock and is neither unique per call nor monotonic across
     // a clock step, and two releases in one reactor task routinely land in the

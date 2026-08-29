@@ -47,11 +47,13 @@ async def wait_for_leader(manager: ScyllaClusterManager, s: ServerInfo, group_id
 
 async def collect_all_raft_state(cql, host):
     state = {}
-    rows = await cql.run_async(f"SELECT DISTINCT shard, group_id, vote_term, commit_idx FROM system.raft_groups", host=host)
+    # Not DISTINCT: vote_term and snapshot_idx are regular columns now, and
+    # the table has no clustering key, so there is exactly one row per group.
+    rows = await cql.run_async(f"SELECT shard, group_id, vote_term, snapshot_idx FROM system.raft_groups", host=host)
     logger.info(f"Collected raft state from host {host}:")
     for row in rows:
         assert str(row.group_id) not in state, f"Duplicate raft state for group {row.group_id} shard {row.shard}"
-        state[str(row.group_id)] = (row.shard, row.vote_term, row.commit_idx)
+        state[str(row.group_id)] = (row.shard, row.vote_term, row.snapshot_idx)
     return state
 
 
@@ -390,13 +392,16 @@ async def test_sc_multishard_metadata_reads(manager: ScyllaClusterManager):
             logger.info(f"Tablet distribution: {tablets}")
             assert set(shard for tablet in tablets for _, shard in tablet.replicas) != set([0]), "Strongly consistent tables shoud be allocated also on non-0 shards"
 
-            # Verify we have non-empty state
+            # Verify we have non-empty state. vote_term, not snapshot_idx: the
+            # latter only advances when a record is released, which needs the
+            # segment holding it to be closed, so after a handful of small
+            # writes it is legitimately still 0.
             state = await collect_all_raft_state(cql, hosts[0])
             has_nonempty_state = any(
-                commit_idx is not None and commit_idx > 0
-                for _, commit_idx, _ in state.values()
+                vote_term is not None and vote_term > 0
+                for _, vote_term, _ in state.values()
             )
-            assert has_nonempty_state, "Expected at least one group to have commit_idx > 0 before crash"
+            assert has_nonempty_state, "Expected at least one group to have vote_term > 0 before crash"
 
             # Prepare the list of (shard, group_id) pairs for all tablets of the table.
             raft_partition_keys = []
