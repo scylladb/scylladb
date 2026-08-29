@@ -132,6 +132,10 @@ schema_ptr make_group0_raft_schema(sstring name) {
 // The raft log lives in the commitlog; this table holds what a group must
 // remember besides it.
 //
+// One record release writes the row at a single timestamp (see
+// raft_groups_storage::write_descriptor_and_purge_stale_truncations). A reader
+// sees a matching (idx, term) pair and a configuration that belongs to that index.
+//
 //   vote_term       term this node last voted in
 //   vote            server it voted for
 //   snapshot_idx    highest index that is committed, applied and safe to drop
@@ -144,9 +148,6 @@ schema_ptr make_group0_raft_schema(sstring name) {
 //                   leader change discarded from which segment, so replay can drop
 //                   superseded entry copies without consulting terms. Frozen, so
 //                   one release sets the whole history as one cell
-//
-// snapshot_id and commit_idx are still written by CQL and go once the code that
-// writes them does.
 schema_ptr make_tablet_raft_groups_schema(sstring name) {
     if (!strongly_consistent_tables_enabled) {
         on_internal_error(tablet_logger, "Can't create raft table for strongly consistent tablets when the feature is disabled");
@@ -158,15 +159,18 @@ schema_ptr make_tablet_raft_groups_schema(sstring name) {
         // persisted term and vote
         .with_column("vote_term", long_type)
         .with_column("vote", uuid_type)
-        // id of the most recent persisted snapshot
-        .with_column("snapshot_id", uuid_type)
-        .with_column("commit_idx", long_type)
-        // the snapshot descriptor, plus the truncation history replay needs
+        // the snapshot descriptor, plus the truncation history replay needs.
+        // No snapshot_id: raft only checks that a snapshot id is set, so
+        // load_snapshot_descriptor() synthesizes it. Presence of snapshot_idx
+        // marks that this node has hosted the group before.
         .with_column("snapshot_idx", long_type)
         .with_column("snapshot_term", long_type)
         .with_column("snapshot_config", bytes_type)
         .with_column("truncations",
                 list_type_impl::get_instance(
+                        // The same triple as truncation_tuple_type() in
+                        // raft_groups_storage.cc, which serializes the cell; drift
+                        // between them surfaces on the first row read.
                         tuple_type_impl::get_instance({long_type, long_type, long_type}), false))
         .with_hash_version()
         .set_caching_options(caching_options::get_disabled_caching_options())
