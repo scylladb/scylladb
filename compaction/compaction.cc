@@ -2061,7 +2061,7 @@ public:
 
     mutation_reader_consumer make_interposer_consumer(mutation_reader_consumer end_consumer) override {
         auto owned_ranges = _reshard_vnodes ? _owned_ranges : nullptr;
-        return [end_consumer = std::move(end_consumer), owned_ranges = std::move(owned_ranges)] (mutation_reader reader) mutable -> future<> {
+        return [this, end_consumer = std::move(end_consumer), owned_ranges = std::move(owned_ranges)] (mutation_reader reader) mutable -> future<> {
             if (owned_ranges) {
                 auto classify = [owned_ranges, it = owned_ranges->begin(), idx = mutation_writer::token_group_id(0)] (dht::token t) mutable -> mutation_writer::token_group_id {
                     dht::token_comparator cmp;
@@ -2077,7 +2077,7 @@ public:
                 };
                 return mutation_writer::segregate_by_token_group(std::move(reader), std::move(classify), std::move(end_consumer));
             } else {
-                return mutation_writer::segregate_by_shard(std::move(reader), std::move(end_consumer));
+                return mutation_writer::segregate_by_shard(std::move(reader), *_sharder, std::move(end_consumer));
             }
         };
     }
