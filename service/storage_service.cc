@@ -5794,10 +5794,9 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
                 //
                 // Before the storage below rather than after, so that no ordering of a
                 // crash in between leaves raft state describing a tablet whose storage is
-                // already gone. It is not a guarantee: system.raft_groups goes through the
-                // ordinary commitlog with periodic sync, so a crash can lose this delete
-                // while the storage removal below survives. What covers that is commitlog
-                // replay refusing a group whose tablet has no replica on the shard.
+                // already gone. system.raft_groups asks for wait_for_sync_to_commitlog, so
+                // the delete is durable once it returns. Commitlog replay also discards the
+                // entries of a group that hosts_raft_group() says this shard no longer hosts.
                 co_await gm.erase_raft_group_state(group_id);
             });
         }
