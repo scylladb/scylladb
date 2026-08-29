@@ -373,6 +373,10 @@ future<> db::commitlog_replayer::impl::process(
         }
     } catch (replica::no_such_column_family&) {
         // No such CF now? Origin just ignores this.
+    } catch (raft_batch_decode_error&) {
+        // A mutation entry that will not decode is counted and skipped below.
+        // A raft batch is not interchangeable with one: see raft_replay_error.
+        throw;
     } catch (raft_replay_error&) {
         // Skipping one raft batch takes its state transitions with it. The rest
         // of the pass then runs against a floor and truncation cursors that never
