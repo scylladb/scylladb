@@ -300,7 +300,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     }
 }
 
-void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state) {
+void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state,
+        log_disposition disposition) {
     if (state.gate->is_closed()) {
         return;
     }
@@ -320,7 +321,7 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
     auto gate_fut = state.gate->close();
     logger.debug("schedule_raft_group_deletion(): group id {}: gate close initiated", id);
 
-    chain_control_op(state, id, [this, &state, id, g = state.gate, gate_fut = std::move(gate_fut)] () mutable -> future<> {
+    chain_control_op(state, id, [this, &state, id, disposition, g = state.gate, gate_fut = std::move(gate_fut)] () mutable -> future<> {
         logger.debug("schedule_raft_group_deletion(): group id {}: starting", id);
 
         co_await _raft_gr.abort_server(id);
@@ -329,9 +330,16 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         co_await utils::get_local_injector().inject("sc_raft_group_deletion_pause",
                 utils::wait_for_message(std::chrono::minutes(1)));
 
-        // Clearing the pointer keeps the flush handler out of the persistence
-        // before the raft::server that owns it destroys it below.
-        state.storage = nullptr;
+        // The server is aborted, so nothing can append to this group any more,
+        // which release_all() requires. Clearing the pointer keeps the flush
+        // handler out of the persistence before the raft::server that owns it
+        // destroys it below.
+        if (state.storage) {
+            if (disposition == log_disposition::release) {
+                state.storage->release_all();
+            }
+            state.storage = nullptr;
+        }
 
         co_await std::move(gate_fut);
         logger.debug("schedule_raft_group_deletion(): group id {}: gate closed", id);
@@ -398,12 +406,12 @@ void groups_manager::drop_dropped_tables_metrics() {
     });
 }
 
-void groups_manager::schedule_raft_groups_deletion(bool all) {
+void groups_manager::schedule_raft_groups_deletion(bool all, log_disposition disposition) {
     for (auto it = _raft_groups.begin(); it != _raft_groups.end(); ) {
         const auto next = std::next(it);
         auto& [group_id, group_state] = *it;
         if (all || !group_state.has_tablet) {
-            schedule_raft_group_deletion(group_id, group_state);
+            schedule_raft_group_deletion(group_id, group_state, disposition);
         }
         it = next;
     }
@@ -641,7 +649,7 @@ static raft::config_member_set expected_raft_config(
 // is cleanup, after use_new drained and removed it. For the pending one it is
 // cleanup_target, after sc_remove_pending did. So no request holds the server when it
 // is torn down, and the leader never replicates into a server that is gone.
-static bool hosts_raft_group(const locator::tablet_info& tinfo,
+bool hosts_raft_group(const locator::tablet_info& tinfo,
         const locator::tablet_transition_info* trinfo,
         const locator::tablet_replica& replica) {
     if (!trinfo) {
@@ -993,7 +1001,8 @@ void groups_manager::update(token_metadata_ptr new_tm) {
     }
     _leader_cache.end_sweep();
 
-    schedule_raft_groups_deletion(false);
+    // A group whose tablet left this shard is never replayed, so release its segments.
+    schedule_raft_groups_deletion(false, log_disposition::release);
 }
 
 future<raft_server> groups_manager::acquire_server(table_id table_id, raft::group_id group_id, abort_source& as) {
@@ -1147,7 +1156,8 @@ future<> groups_manager::stop() {
 
     logger.info("stop() enter");
 
-    schedule_raft_groups_deletion(true);
+    // The segments must survive so replay can recover the log.
+    schedule_raft_groups_deletion(true, log_disposition::keep);
 
     while (!_raft_groups.empty()) {
         co_await _raft_groups.begin()->second.server_control_op.get_future();
