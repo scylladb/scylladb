@@ -167,6 +167,46 @@ static std::vector<raft::log_entry_ptr> create_test_command_log(size_t count) {
     return entries;
 }
 
+// Same, with small commitlog segments so that a group's entries span several
+// segments, and so several records, without writing 64MB.
+static future<> do_with_cql_env_small_segments(std::function<future<>(cql_test_env&)> func) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    auto& db_cfg = *db_cfg_ptr;
+    db_cfg.experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+    db_cfg.commitlog_segment_size_in_mb(1);
+    return do_with_cql_env(std::move(func), std::move(db_cfg_ptr));
+}
+
+// A command entry padded to `payload` bytes, for filling commitlog segments.
+static raft::log_entry_ptr make_command_entry_sized(raft::term_t term, raft::index_t idx, size_t payload) {
+    raft::command cmd;
+    ser::serialize(cmd, int32_t(idx.value()));
+    ser::serialize(cmd, bytes(bytes::initialized_later(), payload));
+    return make_lw_shared<raft::log_entry>(
+            raft::log_entry{.term = term, .idx = idx, .data = std::move(cmd)});
+}
+
+static raft::log_entry_ptr make_command_entry(raft::term_t term, raft::index_t idx) {
+    raft::command cmd;
+    ser::serialize(cmd, int32_t(idx.value()));
+    return make_lw_shared<raft::log_entry>(
+            raft::log_entry{.term = term, .idx = idx, .data = std::move(cmd)});
+}
+
+// Do everything a record waits for before it can be released: commit, apply, close.
+static future<> release_everything(raft_groups_storage& storage,
+        const std::vector<raft::log_entry_ptr>& entries) {
+    BOOST_REQUIRE(!entries.empty());
+    for (const auto& entry : entries) {
+        if (std::holds_alternative<raft::command>(entry->data)) {
+            storage.note_applied(entry->idx);
+        }
+    }
+    co_await storage.store_commit_idx(entries.back()->idx);
+    storage.mark_segment_closed(db::replay_position(
+            std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
+}
+
 //
 // Templated test implementations for common storage tests
 //
@@ -936,6 +976,339 @@ SEASTAR_TEST_CASE(test_groups_release_persists_the_descriptor) {
     });
 }
 
+// truncate_log() clamps the record it lands inside and persists what it
+// discarded. The commitlog is append-only, so the discarded entries stay on
+// disk and that record is all a later replay has to spot the stale copies.
+SEASTAR_TEST_CASE(test_groups_truncate_persists_the_truncation_record) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
 
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
 
+        std::vector<raft::log_entry_ptr> entries;
+        for (int i = 1; i <= 10; ++i) {
+            entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+        }
+        co_await storage.store_log_entries(entries);
+
+        // A new leader overwrites from 6.
+        co_await storage.truncate_log(raft::index_t(6));
+
+        // 1..5 survive, so the record is still there and still holds them.
+        {
+            auto pin = storage.pin_for_apply(raft::index_t(5));
+            BOOST_CHECK(bool(pin));
+        }
+
+        // The release writes both the clamped index and the truncation record.
+        std::vector<raft::log_entry_ptr> survivors(entries.begin(), entries.begin() + 5);
+        co_await release_everything(storage, survivors);
+
+        const auto persisted = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
+        BOOST_CHECK(persisted.exists);
+        BOOST_CHECK_EQUAL(persisted.idx, raft::index_t(5));
+        BOOST_REQUIRE_EQUAL(persisted.truncations.size(), 1);
+        BOOST_CHECK_EQUAL(persisted.truncations[0].from, raft::index_t(6));
+        BOOST_CHECK_EQUAL(persisted.truncations[0].to, raft::index_t(10));
+        BOOST_CHECK_GT(persisted.truncations[0].segment, 0u);
+    });
+}
+
+// A truncation reaching back past the newest segment pops those records whole,
+// one truncation record each, and clamps the one it lands inside. All of them
+// reach the row.
+SEASTAR_TEST_CASE(test_groups_truncate_pops_whole_records) {
+    return do_with_cql_env_small_segments([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        // Fill more than one 1MB segment, so the group ends up with several records.
+        std::vector<raft::log_entry_ptr> all;
+        raft::index_t next{1};
+        for (int batch = 0; batch < 8; ++batch) {
+            std::vector<raft::log_entry_ptr> entries;
+            for (int i = 0; i < 4; ++i) {
+                entries.push_back(make_command_entry_sized(raft::term_t(1), next, 64 * 1024));
+                next = next + raft::index_t{1};
+            }
+            co_await storage.store_log_entries(entries);
+            all.insert(all.end(), entries.begin(), entries.end());
+        }
+
+        // Index 6 is inside the first batch, so several later records go too.
+        const auto cut = raft::index_t(6);
+        co_await storage.truncate_log(cut);
+
+        // Everything from the cut on is gone from the log...
+        {
+            seastar::testing::scoped_no_abort_on_internal_error no_abort;
+            try {
+                storage.pin_for_apply(cut);
+                BOOST_FAIL("Expected no record to hold a truncated index");
+            } catch (...) {
+            }
+        }
+        // ...and 1..5 are still held.
+        {
+            auto pin = storage.pin_for_apply(raft::index_t(5));
+            BOOST_CHECK(bool(pin));
+        }
+
+        std::vector<raft::log_entry_ptr> survivors(all.begin(), all.begin() + 5);
+        co_await release_everything(storage, survivors);
+
+        const auto persisted = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
+        BOOST_CHECK_EQUAL(persisted.idx, raft::index_t(5));
+        // The records tile exactly what was discarded. Their order in the row is
+        // not part of the contract: replay keys a cursor on each record's own
+        // segment.
+        BOOST_REQUIRE_GT(persisted.truncations.size(), 1);
+        auto sorted = persisted.truncations;
+        std::ranges::sort(sorted, {}, &service::strong_consistency::truncation_record::from);
+        BOOST_CHECK_EQUAL(sorted.front().from, cut);
+        BOOST_CHECK_EQUAL(sorted.back().to, all.back()->idx);
+        raft::index_t expected_next = cut;
+        std::unordered_set<db::segment_id_type> segments;
+        for (const auto& truncation : sorted) {
+            BOOST_CHECK_EQUAL(truncation.from, expected_next);
+            BOOST_CHECK_LE(truncation.from, truncation.to);
+            BOOST_CHECK_GT(truncation.segment, 0u);
+            // One record per segment: a segment's live tail is one range.
+            BOOST_CHECK(segments.insert(truncation.segment).second);
+            expected_next = truncation.to + raft::index_t{1};
+        }
+        // Later entries went to later segments, so ranges ascend with segment ids.
+        for (size_t i = 0; i + 1 < sorted.size(); ++i) {
+            BOOST_CHECK_LT(sorted[i].segment, sorted[i + 1].segment);
+        }
+    });
+}
+
+// Truncating everything leaves no record to release, so the truncation records
+// wait in memory for the next release. Losing them lets stale copies replay.
+SEASTAR_TEST_CASE(test_groups_truncations_survive_until_the_next_release) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        std::vector<raft::log_entry_ptr> first;
+        for (int i = 1; i <= 4; ++i) {
+            first.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+        }
+        co_await storage.store_log_entries(first);
+
+        // Nothing is left to release, so the row is untouched for now.
+        co_await storage.truncate_log(raft::index_t(1));
+        auto after_truncate = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
+        BOOST_CHECK_EQUAL(after_truncate.idx, raft::index_t(0));
+        BOOST_CHECK(after_truncate.truncations.empty());
+
+        std::vector<raft::log_entry_ptr> second;
+        for (int i = 1; i <= 3; ++i) {
+            second.push_back(make_command_entry(raft::term_t(2), raft::index_t(i)));
+        }
+        co_await storage.store_log_entries(second);
+        co_await release_everything(storage, second);
+
+        // The release carries the earlier truncation to disk.
+        const auto persisted = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
+        BOOST_CHECK_EQUAL(persisted.idx, raft::index_t(3));
+        BOOST_CHECK_EQUAL(persisted.term, raft::term_t(2));
+        BOOST_REQUIRE_EQUAL(persisted.truncations.size(), 1);
+        BOOST_CHECK_EQUAL(persisted.truncations[0].from, raft::index_t(1));
+        BOOST_CHECK_EQUAL(persisted.truncations[0].to, raft::index_t(4));
+    });
+}
+
+// A release leaves the truncations cell alone when the history has not moved. A
+// release rewrites the whole list, and the list grows with every leader change.
+// The cell is independent of the other cells, so skipping it keeps the last value.
+SEASTAR_TEST_CASE(test_groups_unchanged_truncations_are_not_rewritten) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        // A truncation, then a release that carries it to the row.
+        std::vector<raft::log_entry_ptr> first;
+        for (int i = 1; i <= 4; ++i) {
+            first.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+        }
+        co_await storage.store_log_entries(first);
+        co_await storage.truncate_log(raft::index_t(1));
+
+        std::vector<raft::log_entry_ptr> second;
+        for (int i = 1; i <= 3; ++i) {
+            second.push_back(make_command_entry(raft::term_t(2), raft::index_t(i)));
+        }
+        co_await storage.store_log_entries(second);
+        co_await release_everything(storage, second);
+
+        const auto writetime_of_truncations = [&] () -> future<int64_t> {
+            const auto cql = format("SELECT WRITETIME(truncations) AS wt FROM system.{} "
+                    "WHERE shard = ? AND group_id = ?", db::system_keyspace::RAFT_GROUPS);
+            auto rs = co_await qp.execute_internal(cql, {int16_t(test_shard), gid.id},
+                    cql3::query_processor::cache_internal::no);
+            BOOST_REQUIRE(!rs->empty());
+            co_return rs->one().get_as<api::timestamp_type>("wt");
+        };
+
+        const auto after_first = co_await writetime_of_truncations();
+
+        // A second release, with no truncation in between.
+        std::vector<raft::log_entry_ptr> third;
+        for (int i = 4; i <= 6; ++i) {
+            third.push_back(make_command_entry(raft::term_t(2), raft::index_t(i)));
+        }
+        co_await storage.store_log_entries(third);
+        co_await release_everything(storage, third);
+
+        const auto persisted = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
+        BOOST_CHECK_EQUAL(persisted.idx, raft::index_t(6));
+        // The history is still there, read back intact...
+        BOOST_REQUIRE_EQUAL(persisted.truncations.size(), 1);
+        BOOST_CHECK_EQUAL(persisted.truncations[0].from, raft::index_t(1));
+        BOOST_CHECK_EQUAL(persisted.truncations[0].to, raft::index_t(4));
+        // ...but the cell was not written again.
+        BOOST_CHECK_EQUAL(co_await writetime_of_truncations(), after_first);
+    });
+}
+
+// An index is pinned from the record holding it, wherever that record sits in the
+// queue. Demanding the front record would turn an unreleased front, which a failed
+// descriptor write leaves behind, into an internal error that stops the group.
+SEASTAR_TEST_CASE(test_groups_pin_for_apply_finds_an_index_past_the_front_record) {
+    return do_with_cql_env_small_segments([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        std::vector<raft::log_entry_ptr> entries;
+        raft::index_t next_idx{1};
+        const auto write_batch = [&] () -> future<> {
+            std::vector<raft::log_entry_ptr> batch;
+            for (int i = 0; i < 4; ++i) {
+                batch.push_back(make_command_entry_sized(raft::term_t(1), next_idx, 64 * 1024));
+                next_idx = next_idx + raft::index_t{1};
+            }
+            co_await storage.store_log_entries(batch);
+            entries.insert(entries.end(), batch.begin(), batch.end());
+        };
+        // Write until the newest entry pins a different segment from the first, so the
+        // group holds a second record behind the front one. Nothing is applied and the
+        // commit index stays at 0, so neither record is released.
+        co_await write_batch();
+        const auto front_segment = storage.pin_for_apply(entries.front()->idx).rp().id;
+        while (storage.pin_for_apply(entries.back()->idx).rp().id == front_segment) {
+            co_await write_batch();
+            BOOST_REQUIRE_LT(next_idx.value(), 4096u);
+        }
+
+        // Each index pins the record holding it. The first entry still pins the front
+        // record, the ids only move forward, and the last entry is past the front.
+        BOOST_REQUIRE_EQUAL(storage.pin_for_apply(entries.front()->idx).rp().id, front_segment);
+        auto previous_segment = front_segment;
+        for (const auto& entry : entries) {
+            auto pin = storage.pin_for_apply(entry->idx);
+            BOOST_REQUIRE(bool(pin));
+            BOOST_REQUIRE_GE(pin.rp().id, previous_segment);
+            previous_segment = pin.rp().id;
+        }
+        BOOST_CHECK_GT(previous_segment, front_segment);
+    });
+}
+
+// A batch whose commands are never applied must not wedge the queue. The gate waits
+// for the record's last command, so an unapplied batch holds its record and every
+// record behind it, and the segments stay dirty. note_applied() on the batch's last
+// index is what the discard paths reach through note_batch_discarded();
+// test_groups_dropped_table_batch_is_reported_as_applied drives the same release
+// through state_machine::apply() instead.
+SEASTAR_TEST_CASE(test_groups_discarded_batch_does_not_wedge_the_queue) {
+    return do_with_cql_env_small_segments([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        // Write until a segment is dirty, so the records hold real commands and the
+        // gate has something to wait for.
+        std::vector<raft::log_entry_ptr> dropped;
+        raft::index_t next_idx{1};
+        while (cl.get_num_dirty_segments() == 0) {
+            std::vector<raft::log_entry_ptr> batch;
+            for (int i = 0; i < 4; ++i) {
+                batch.push_back(make_command_entry_sized(raft::term_t(1), next_idx, 64 * 1024));
+                next_idx = next_idx + raft::index_t{1};
+            }
+            co_await storage.store_log_entries(batch);
+            for (auto& entry : batch) {
+                dropped.push_back(entry);
+            }
+        }
+        BOOST_REQUIRE(!dropped.empty());
+
+        // Nothing applied, so the gate still holds the front record.
+        co_await storage.store_commit_idx(dropped.back()->idx);
+        storage.mark_segment_closed(db::replay_position(
+                std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
+        const auto stuck = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
+        BOOST_CHECK_EQUAL(stuck.idx, raft::index_t(0));
+
+        // note_applied() is the call the swallow paths make.
+        storage.note_applied(dropped.back()->idx);
+
+        // The record is gone, so no index it held pins any more. A pin of a later
+        // index proves nothing: pin_for_apply() searches the queue.
+        {
+            seastar::testing::scoped_no_abort_on_internal_error no_abort;
+            try {
+                storage.pin_for_apply(dropped.front()->idx);
+                BOOST_FAIL("Expected the discarded batch's record to have been released");
+            } catch (...) {
+                // Expected: no record holds the index any more.
+            }
+        }
+
+        const auto released = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
+        BOOST_CHECK_EQUAL(released.idx, dropped.back()->idx);
+    });
+}
 
