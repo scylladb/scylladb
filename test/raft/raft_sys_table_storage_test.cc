@@ -212,6 +212,17 @@ static raft::log_entry_ptr make_command_entry(raft::term_t term, raft::index_t i
             raft::log_entry{.term = term, .idx = idx, .data = std::move(cmd)});
 }
 
+// The vote and the bootstrap row reach disk through CQL, and raft acts on a vote
+// as soon as the store resolves. Without this flag the write returns before the
+// commitlog sync, so a crash can lose a vote the node already cast and let it
+// vote twice in one term (SCYLLADB-3828).
+SEASTAR_TEST_CASE(test_groups_table_waits_for_the_commitlog_sync) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env&) -> future<> {
+        BOOST_REQUIRE(db::system_keyspace::raft_groups()->wait_for_sync_to_commitlog());
+        co_return;
+    });
+}
+
 // A command carrying one real mutation, encoded as the coordinator encodes it.
 // apply() deserializes this shape to reach schema resolution.
 static raft::log_entry_ptr make_mutation_entry(const schema_ptr& s, raft::term_t term,
@@ -442,6 +453,8 @@ SEASTAR_TEST_CASE(test_groups_store_snapshot_descriptor_is_a_noop) {
             }, raft::is_voter::yes};
         co_await storage.bootstrap(raft::configuration({srv}), false);
         const auto after_bootstrap = co_await storage.load_snapshot_descriptor();
+        // Raft checks id to decide whether to call the state machine's
+        // load_snapshot(). It is synthesized per load, so its value means nothing.
         BOOST_CHECK(bool(after_bootstrap.id));
         BOOST_CHECK_EQUAL(after_bootstrap.idx, raft::index_t(0));
 
@@ -455,7 +468,7 @@ SEASTAR_TEST_CASE(test_groups_store_snapshot_descriptor_is_a_noop) {
         const auto loaded = co_await storage.load_snapshot_descriptor();
         BOOST_CHECK_EQUAL(loaded.idx, after_bootstrap.idx);
         BOOST_CHECK_EQUAL(loaded.term, after_bootstrap.term);
-        BOOST_CHECK(loaded.id == after_bootstrap.id);
+        BOOST_CHECK(bool(loaded.id));
     });
 }
 

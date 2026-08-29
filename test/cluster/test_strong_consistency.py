@@ -59,13 +59,13 @@ async def wait_for_leader(manager: ScyllaClusterManager, s: ServerInfo, group_id
 
 async def collect_all_raft_state(cql, host):
     state = {}
-    # Not DISTINCT: the table has no clustering key and no static column, so
-    # there is exactly one row per group.
-    rows = await cql.run_async(f"SELECT shard, group_id, vote_term, commit_idx FROM system.raft_groups", host=host)
+    # Not DISTINCT: vote_term and snapshot_idx are regular columns now, and
+    # the table has no clustering key, so there is exactly one row per group.
+    rows = await cql.run_async(f"SELECT shard, group_id, vote_term, snapshot_idx FROM system.raft_groups", host=host)
     logger.info(f"Collected raft state from host {host}:")
     for row in rows:
         assert str(row.group_id) not in state, f"Duplicate raft state for group {row.group_id} shard {row.shard}"
-        state[str(row.group_id)] = (row.shard, row.vote_term, row.commit_idx)
+        state[str(row.group_id)] = (row.shard, row.vote_term, row.snapshot_idx)
     return state
 
 
@@ -73,13 +73,13 @@ async def collect_all_raft_state(cql, host):
 # - All raft groups present before an event are still present after the event.
 # - For each raft group, the shard did not change.
 # - For each raft group, vote_term did not decrease (if present).
-# - For each raft group, commit_idx did not decrease (if present).
+# - For each raft group, snapshot_idx did not decrease (if present).
 def assert_raft_state_continuity(state_before: dict, state_after: dict, context: str):
-    for group_id, (shard_before, vote_term_before, commit_idx_before) in state_before.items():
+    for group_id, (shard_before, vote_term_before, snapshot_idx_before) in state_before.items():
         assert group_id in state_after, (
             f"Raft state for group {group_id} shard {shard_before} missing after {context}."
         )
-        shard_after, vote_term_after, commit_idx_after = state_after[group_id]
+        shard_after, vote_term_after, snapshot_idx_after = state_after[group_id]
 
         assert shard_before == shard_after, (
             f"Raft state for group {group_id} changed shard from {shard_before} to {shard_after} after {context}."
@@ -91,10 +91,10 @@ def assert_raft_state_continuity(state_before: dict, state_after: dict, context:
                 f"{vote_term_before} -> {vote_term_after}."
             )
 
-        if commit_idx_before is not None:
-            assert commit_idx_after is not None and commit_idx_after >= commit_idx_before, (
-                f"commit_idx decreased for group {group_id} shard {shard_before} after {context}: "
-                f"{commit_idx_before} -> {commit_idx_after}."
+        if snapshot_idx_before is not None:
+            assert snapshot_idx_after is not None and snapshot_idx_after >= snapshot_idx_before, (
+                f"snapshot_idx decreased for group {group_id} shard {shard_before} after {context}: "
+                f"{snapshot_idx_before} -> {snapshot_idx_after}."
             )
 
 # Verify that reads and writes to raft tables for strongly consistent tablets
@@ -404,13 +404,16 @@ async def test_sc_multishard_metadata_reads(manager: ScyllaClusterManager):
             logger.info(f"Tablet distribution: {tablets}")
             assert set(shard for tablet in tablets for _, shard in tablet.replicas) != set([0]), "Strongly consistent tables shoud be allocated also on non-0 shards"
 
-            # Verify we have non-empty state
+            # Verify we have non-empty state. vote_term, not snapshot_idx: the
+            # latter only advances when a record is released, which needs the
+            # segment holding it to be closed, so after a handful of small
+            # writes it is legitimately still 0.
             state = await collect_all_raft_state(cql, hosts[0])
             has_nonempty_state = any(
-                commit_idx is not None and commit_idx > 0
-                for _, commit_idx, _ in state.values()
+                vote_term is not None and vote_term > 0
+                for _, vote_term, _ in state.values()
             )
-            assert has_nonempty_state, "Expected at least one group to have commit_idx > 0 before crash"
+            assert has_nonempty_state, "Expected at least one group to have vote_term > 0 before crash"
 
             # Prepare the list of (shard, group_id) pairs for all tablets of the table.
             raft_partition_keys = []
