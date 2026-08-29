@@ -119,9 +119,9 @@ public:
             // It means that the Raft group is being removed.
             //
             // No note_batch_discarded() here, unlike the two arms above. abort() is
-            // called only while the group is torn down, and ~raft_commitlog gives up
-            // the whole queue, so there is no front record left for a later batch to
-            // wedge behind.
+            // called only while the group is torn down, and the teardown gives up the
+            // whole queue (raft_commitlog::release_all(), or the destructor), so there
+            // is no front record left for a later batch to wedge behind.
             //
             // Technically, throwing an exception from a state machine
             // may result in killing the corresponding Raft instance:

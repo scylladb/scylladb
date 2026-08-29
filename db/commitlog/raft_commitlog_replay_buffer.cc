@@ -17,6 +17,7 @@
 #include "schema/schema_registry.hh"
 #include "db/system_keyspace.hh"
 #include "service/strong_consistency/state_machine.hh"
+#include "service/strong_consistency/tablet_replica_sets.hh"
 #include "serializer_impl.hh"
 #include "idl/strong_consistency/state_machine.dist.hh"
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
@@ -42,9 +43,11 @@ namespace {
 // The ownership test is what keeps replay from applying a group's entries into a tablet
 // that has moved away: the group still exists in tablet metadata - it lives on its other
 // replicas - so its presence there says nothing about whether this shard should be
-// replaying it. has_replica() covers the old replica set and, through the transition's
-// next set, the pending replica, so a replica in the middle of joining still replays what
-// it received before the restart.
+// replaying it. hosts_raft_group() is the same rule the running group is torn down by,
+// which is what matters: a replica that has stopped hosting the group has already given
+// up its segment references, so a wider test here would try to recover a log whose
+// segments are being reclaimed. A replica in the middle of joining still answers yes, so
+// it replays what it received before the restart.
 std::unordered_map<raft::group_id, table_id> build_group_to_table_map(replica::database& db) {
     const auto token_metadata = db.get_shared_token_metadata().get();
     const auto& tm = *token_metadata;
@@ -68,7 +71,9 @@ std::unordered_map<raft::group_id, table_id> build_group_to_table_map(replica::d
             continue;
         }
         for (const auto& tablet_id : tablet_map.tablet_ids()) {
-            if (!tablet_map.has_replica(tablet_id, this_replica)) {
+            if (!service::strong_consistency::hosts_raft_group(
+                        tablet_map.get_tablet_info(tablet_id),
+                        tablet_map.get_tablet_transition_info(tablet_id), this_replica)) {
                 continue;
             }
             const auto gid = tablet_map.get_tablet_raft_info(tablet_id).group_id;
@@ -143,7 +148,7 @@ future<> raft_commitlog_replay_buffer::resolve_group(replica::database& db, cql3
     const auto table_it = _group_to_table->find(group_id);
     if (table_it == _group_to_table->end()) {
         // Nothing may be resurrected for this group, including its row.
-        logger.info("group {} has no tablet replica on this shard, discarding its entries", group_id);
+        logger.info("group {} is no longer hosted by this shard, discarding its entries", group_id);
         co_return;
     }
     // The floor: every index at or below it is committed.
@@ -380,6 +385,21 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
     }
     _groups.clear();
     logger.info("Raft groups commit log replayed data processing complete");
+}
+
+raft_commitlog_replay_buffer::~raft_commitlog_replay_buffer() {
+    size_t records = 0;
+    for (auto& [group_id, data] : _per_group_data) {
+        for (auto& record : data.records) {
+            record.detach();
+            ++records;
+        }
+    }
+    if (records) {
+        logger.error("destroyed with {} unclaimed records in {} groups: stop() did not run. "
+                "Their references are detached, so the segments survive for the next replay, "
+                "but this should not happen.", records, _per_group_data.size());
+    }
 }
 
 future<> raft_commitlog_replay_buffer::stop() {

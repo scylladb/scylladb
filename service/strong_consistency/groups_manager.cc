@@ -325,7 +325,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     }
 }
 
-void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state) {
+void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state,
+        log_disposition disposition) {
     if (state.gate->is_closed()) {
         return;
     }
@@ -345,7 +346,7 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
     auto gate_fut = state.gate->close();
     logger.debug("schedule_raft_group_deletion(): group id {}: gate close initiated", id);
 
-    chain_control_op(state, id, [this, &state, id, g = state.gate, gate_fut = std::move(gate_fut)] () mutable -> future<> {
+    chain_control_op(state, id, [this, &state, id, disposition, g = state.gate, gate_fut = std::move(gate_fut)] () mutable -> future<> {
         logger.debug("schedule_raft_group_deletion(): group id {}: starting", id);
 
         co_await _raft_gr.abort_server(id);
@@ -354,9 +355,16 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         co_await utils::get_local_injector().inject("sc_raft_group_deletion_pause",
                 utils::wait_for_message(std::chrono::minutes(1)));
 
-        // Clearing the pointer keeps the flush handler out of the persistence
-        // before the raft::server that owns it destroys it below.
-        state.storage = nullptr;
+        // The server is aborted, so nothing can append to this group any more,
+        // which release_all() requires. Clearing the pointer keeps the flush
+        // handler out of the persistence before the raft::server that owns it
+        // destroys it below.
+        if (state.storage) {
+            if (disposition == log_disposition::release) {
+                state.storage->release_all();
+            }
+            state.storage = nullptr;
+        }
 
         co_await std::move(gate_fut);
         logger.debug("schedule_raft_group_deletion(): group id {}: gate closed", id);
@@ -404,12 +412,12 @@ std::optional<raft_server> groups_manager::try_acquire_server(raft_group_state& 
     return raft_server(state, std::move(*h));
 }
 
-void groups_manager::schedule_raft_groups_deletion(bool all) {
+void groups_manager::schedule_raft_groups_deletion(bool all, log_disposition disposition) {
     for (auto it = _raft_groups.begin(); it != _raft_groups.end(); ) {
         const auto next = std::next(it);
         auto& [group_id, group_state] = *it;
         if (all || !group_state.has_tablet) {
-            schedule_raft_group_deletion(group_id, group_state);
+            schedule_raft_group_deletion(group_id, group_state, disposition);
         }
         it = next;
     }
@@ -698,68 +706,6 @@ static raft::config_member_set expected_raft_config(
 static bool is_expected_voter(const raft::config_member_set& expected, raft::server_id id) {
     const auto it = expected.find(id);
     return it != expected.end() && it->can_vote == raft::is_voter::yes;
-}
-
-// Should this node host a raft server for the tablet's group at the tablet's current
-// migration stage?
-//
-// This is a wider set than expected_raft_config(): a replica keeps hosting the group
-// while a configuration change that removes it is merely *intended*, and stops only
-// once the change has been *confirmed* by the barrier of the preceding transition.
-// The distinction matters in both directions:
-//
-//  - The leaving replica is still a member of the committed configuration during
-//    sc_become_voter, and its vote may be required to commit the change that removes
-//    it - with RF=2 the old configuration has no majority without it. It may also be
-//    the leader that has to drive its own removal.
-//  - The pending replica is in the same position during sc_rollback: the rollback
-//    removes it, and it may be the current leader, the only node able to drive that.
-//
-// Once the removal is confirmed - use_new for the leaving replica, cleanup_target for
-// the pending one - the replica stops hosting the group, so that its raft server is
-// torn down before the tablet cleanup of the same migration touches its storage.
-// Neither stage can be rolled back to a stage that would need the group again.
-static bool hosts_raft_group(const locator::tablet_info& tinfo,
-        const locator::tablet_transition_info* trinfo,
-        const locator::tablet_replica& replica) {
-    if (!trinfo) {
-        return locator::contains(tinfo.replicas, replica);
-    }
-
-    const auto is_pending = trinfo->pending_replica == replica;
-
-    switch (trinfo->stage) {
-        case tablet_transition_stage::start_migration:
-        case tablet_transition_stage::sc_add_nonvoter:
-        case tablet_transition_stage::sc_snapshot_transfer:
-        case tablet_transition_stage::sc_become_voter:
-        // The rollback may be entered from sc_become_voter, where the pending replica
-        // can already be a voter and the leader.
-        case tablet_transition_stage::sc_rollback:
-            return locator::contains(tinfo.replicas, replica) || is_pending;
-
-        case tablet_transition_stage::use_new:
-        case tablet_transition_stage::cleanup:
-        case tablet_transition_stage::end_migration:
-            // The leaving replica has been removed from the configuration, and the
-            // transition into use_new observed it.
-            return locator::contains(trinfo->next, replica);
-
-        case tablet_transition_stage::cleanup_target:
-        case tablet_transition_stage::revert_migration:
-            // The pending replica has been removed from the configuration, and the
-            // transition into cleanup_target observed it.
-            return locator::contains(tinfo.replicas, replica);
-
-        case tablet_transition_stage::write_both_read_old_fallback_cleanup:
-        case tablet_transition_stage::rebuild_repair:
-        case tablet_transition_stage::repair:
-        case tablet_transition_stage::end_repair:
-        case tablet_transition_stage::restore:
-            return locator::contains(tinfo.replicas, replica);
-    }
-    on_internal_error(logger, format("hosts_raft_group: unknown tablet transition stage {}",
-            static_cast<int>(trinfo->stage)));
 }
 
 // What separates a raft group's live configuration from the one its tablet's current
@@ -1261,7 +1207,8 @@ void groups_manager::update(token_metadata_ptr new_tm) {
         }
     }
 
-    schedule_raft_groups_deletion(false);
+    // These groups no longer have a tablet here, so nothing will replay them.
+    schedule_raft_groups_deletion(false, log_disposition::release);
     _leader_cache.end_sweep();
 }
 
@@ -1417,7 +1364,8 @@ future<> groups_manager::stop() {
 
     logger.info("stop() enter");
 
-    schedule_raft_groups_deletion(true);
+    // The segments must survive so replay can recover the log.
+    schedule_raft_groups_deletion(true, log_disposition::keep);
 
     while (!_raft_groups.empty()) {
         co_await _raft_groups.begin()->second.server_control_op.get_future();

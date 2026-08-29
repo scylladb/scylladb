@@ -287,6 +287,34 @@ void raft_commitlog::purge_stale_truncations() {
     });
 }
 
+std::optional<db::replay_position> raft_commitlog::flush_position_for_release_all() const {
+    const db::replay_position reported = closed_up_to();
+    std::optional<db::segment_id_type> newest;
+    // Oldest first, and segment ids increase, so the last match is the newest.
+    for (const auto& record : _commitlog_segment_queue) {
+        // With no command, apply() got no reference into this segment, so the
+        // tablet table holds nothing there.
+        if (record.last_cmd() && record.pin_user_table.rp() <= reported) {
+            newest = record.segment();
+        }
+    }
+    if (!newest) {
+        return std::nullopt;
+    }
+    // The start of the segment after the newest match, so it is above everything
+    // written in any of them.
+    return db::replay_position(*newest + 1, 0);
+}
+
+void raft_commitlog::release_all() {
+    // Destroying the handles decrements the segments' use counts, and the emptied
+    // queue leaves the destructor nothing to detach.
+    const auto released = _commitlog_segment_queue.size();
+    _commitlog_segment_queue.clear();
+    _truncations.clear();
+    logger.debug("released the references of {} records for group_id={}", released, _group_id);
+}
+
 raft::log_entries raft_commitlog::load_log() {
     return std::move(_replayed_entries);
 }
