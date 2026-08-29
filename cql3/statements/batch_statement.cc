@@ -91,9 +91,16 @@ batch_statement::batch_statement(type type_,
 {
 }
 
-bool batch_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const
+std::vector<dependent_table> batch_statement::dependent_tables() const
 {
-    return std::ranges::any_of(_statements, [&ks_name, &cf_name] (auto&& s) { return s.statement->depends_on(ks_name, cf_name); });
+    auto tables = _statements
+        | std::views::transform([] (auto&& s) { return s.statement->dependent_tables(); })
+        | std::views::join
+        | std::ranges::to<std::vector>();
+    std::ranges::sort(tables, {}, &dependent_table::id);
+    auto dup = std::ranges::unique(tables, {}, &dependent_table::id);
+    tables.erase(dup.begin(), dup.end());
+    return tables;
 }
 
 uint32_t batch_statement::get_bound_terms() const

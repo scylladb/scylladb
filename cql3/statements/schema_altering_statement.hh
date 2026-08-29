@@ -44,7 +44,8 @@ protected:
     
     virtual bool needs_guard(query_processor& qp, service::query_state& state) const override;
 
-    virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
+    // DDL resolves its table by name at execute time, so nothing to invalidate.
+    virtual std::vector<dependent_table> dependent_tables() const override { return {}; }
 
     virtual uint32_t get_bound_terms() const override;
 
