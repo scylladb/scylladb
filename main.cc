@@ -2208,7 +2208,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 auto paths = cl->get_segments_to_replay().get();
                 if (!paths.empty()) {
                     checkpoint(stop_signal, "replaying commit log");
-                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, &raft_replay_buffer).get();
+                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, &raft_replay_buffer, &qp).get();
                     rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
 
                     // Process raft replay buffer: apply committed mutations to memtables,
@@ -2219,10 +2219,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     // uncommitted entries are now in new segments).
                     supervisor::notify("processing raft replay buffer");
                     raft_replay_buffer.invoke_on_all([&db, &qp](db::raft_commitlog_replay_buffer& buffer) mutable {
-                        if (buffer.remaining_groups()) {
-                            return buffer.process_raft_replayed_items(db.local(), qp.local(), sys_ks.local());
-                        }
-                        return make_ready_future<>();
+                        return buffer.finish_replay(db.local(), qp.local());
                     }).get();
 
                     startlog.info("replaying commit log - flushing memtables");
