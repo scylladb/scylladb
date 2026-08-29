@@ -41,10 +41,10 @@ namespace service::strong_consistency {
 //
 // The raft log itself lives in the commitlog: store_log_entries() writes one
 // batch as one commitlog entry, and nothing else writes to disk on the raft
-// io_fiber. The snapshot descriptor the group has to remember beyond the log is
-// a single static row in system.raft_groups, and from here on that row is
-// written by a mutation applied straight to the raft_groups memtable rather
-// than by a CQL statement.
+// io_fiber. Everything the group has to remember beyond the log — the snapshot
+// descriptor and the truncation history — is a single row in
+// system.raft_groups, and that row is written by a mutation applied straight to
+// the raft_groups memtable rather than by a CQL statement.
 //
 // Releasing a record (see raft_commitlog, which owns everything about segments)
 // writes the descriptor from that record's own (max, term) and hands the
@@ -85,6 +85,18 @@ class raft_groups_storage : public raft::persistence {
     // could end up pairing one release's index with another's configuration.
     // Keeping our own strictly increasing value removes that.
     api::timestamp_type _last_row_timestamp = api::min_timestamp;
+    // The truncation history as the row currently holds it, so a release can
+    // leave that cell alone when nothing changed.
+    //
+    // Every release rewrites the whole list, and the list grows with leader
+    // changes — a group that loses leadership once per entry would rewrite an
+    // ever-longer cell on every segment it fills, for a history that did not
+    // move. Skipping is safe because the cell is independent of the others: what
+    // was written last stays until it is written again.
+    //
+    // Compared against what was *written*, not against the live list, since
+    // purge_stale_truncations() edits the latter in place.
+    std::vector<truncation_record> _persisted_truncations;
 
     // The future of the currently executing (or already finished) write operation.
     //
@@ -133,10 +145,20 @@ public:
     // Release every record that is now committed, applied and closed.
     void maybe_release();
 
-    // Static version that doesn't require constructing a full
-    // raft_groups_storage object. Used during commitlog replay, when only read
-    // access to a group's metadata is needed.
+    // Everything one group's row holds, as commitlog replay needs to read it.
+    struct persisted_descriptor {
+        bool exists = false;
+        raft::index_t idx{0};
+        raft::term_t term{0};
+        raft::configuration config;
+        std::vector<truncation_record> truncations;
+    };
+
+    // Static versions that don't require constructing a full raft_groups_storage
+    // object. Used during commitlog replay, before any group is running; at
+    // runtime the row is written exclusively by the record releases.
     static future<raft::index_t> load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    static future<persisted_descriptor> load_descriptor(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
     // Persist a snapshot descriptor by CQL. Only used during commitlog replay,
     // before any group is running; at runtime the row is written exclusively by
     // the record releases. Only advances the index, so repeated replays are

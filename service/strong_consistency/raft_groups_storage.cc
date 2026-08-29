@@ -9,6 +9,8 @@
 
 #include "cql3/untyped_result_set.hh"
 #include "db/system_keyspace.hh"
+#include "types/list.hh"
+#include "types/tuple.hh"
 #include "raft/raft.hh"
 #include "replica/database.hh"
 #include "utils/UUID.hh"
@@ -41,6 +43,46 @@ raft::configuration deserialize_config(const bytes& blob) {
     return ser::deserialize(in, std::type_identity<raft::configuration>());
 }
 
+// The truncation history is a frozen list of (segment_id, from, to) tuples, so
+// it reads in cqlsh and carries no encoding of its own. Frozen because a release
+// rewrites the whole list rather than editing it, and because a frozen
+// collection is one cell — which is what a mutation can set directly.
+// thread_local, not a plain static: data_type is a seastar::shared_ptr, whose
+// reference count is a plain long. One instance shared by every shard would have
+// them racing on that count, and would be destroyed at exit off-shard.
+data_type truncations_type() {
+    static thread_local const data_type t = list_type_impl::get_instance(
+            tuple_type_impl::get_instance({long_type, long_type, long_type}), false);
+    return t;
+}
+
+data_value serialize_truncations(const std::vector<truncation_record>& truncations) {
+    const auto element = tuple_type_impl::get_instance({long_type, long_type, long_type});
+    std::vector<data_value> values;
+    values.reserve(truncations.size());
+    for (const auto& t : truncations) {
+        values.push_back(make_tuple_value(element, tuple_type_impl::native_type{
+                data_value(int64_t(t.segment)),
+                data_value(int64_t(t.from.value())),
+                data_value(int64_t(t.to.value()))}));
+    }
+    return make_list_value(truncations_type(), std::move(values));
+}
+
+std::vector<truncation_record> deserialize_truncations(const managed_bytes_view& blob) {
+    std::vector<truncation_record> ret;
+    const auto value = value_cast<list_type_impl::native_type>(
+            truncations_type()->deserialize(blob));
+    ret.reserve(value.size());
+    for (const auto& element : value) {
+        const auto& fields = value_cast<tuple_type_impl::native_type>(element);
+        ret.push_back(truncation_record{
+                .segment = db::segment_id_type(value_cast<int64_t>(fields[0])),
+                .from = raft::index_t(value_cast<int64_t>(fields[1])),
+                .to = raft::index_t(value_cast<int64_t>(fields[2]))});
+    }
+    return ret;
+}
 
 } // namespace
 
@@ -116,7 +158,7 @@ future<raft::log_entries> raft_groups_storage::load_log() {
 
 future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor() {
     static const auto load_cql = format(
-            "SELECT snapshot_id, snapshot_idx, snapshot_term, snapshot_config FROM system.{} "
+            "SELECT snapshot_id, snapshot_idx, snapshot_term, snapshot_config, truncations FROM system.{} "
             "WHERE shard = ? AND group_id = ? LIMIT 1",
             db::system_keyspace::RAFT_GROUPS);
     ::shared_ptr<cql3::untyped_result_set> rs = co_await _qp.execute_internal(load_cql,
@@ -136,16 +178,23 @@ future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor(
         snap.config = deserialize_config(row.get_blob_unfragmented("snapshot_config"));
     }
 
-    // This runs once, before the group starts, so it is also where the state
-    // the releases carry forward is seeded: the configuration a record without
-    // one of its own re-persists, and the indexes the release gate compares
-    // against.
+    // Runs before the group starts, and runs twice — groups_manager reads the
+    // descriptor to decide whether to bootstrap, raft::server reads it again as
+    // it starts — so the seeding below has to be idempotent, which it is: every
+    // assignment is a plain overwrite with what the row says. The second read is
+    // what picks up a bootstrap written between the two.
     _snapshot_id = snap.id;
     _snapshot_config = snap.config;
+    if (row.has("truncations")) {
+        // The row already holds this, so the first release after a restart has
+        // no reason to write it again.
+        _persisted_truncations = deserialize_truncations(row.get_view("truncations"));
+        _raft_commitlog.seed_truncations(_persisted_truncations);
+    }
     _commit_index = std::max(_commit_index, snap.idx);
     _apply_index = std::max(_apply_index, snap.idx);
-    rgslog.debug("loaded descriptor for group_id={}: idx={}, term={}",
-            _group_id, snap.idx, snap.term);
+    rgslog.debug("loaded descriptor for group_id={}: idx={}, term={}, truncations={}",
+            _group_id, snap.idx, snap.term, _raft_commitlog.truncations().size());
     co_return snap;
 }
 
@@ -192,6 +241,9 @@ void raft_groups_storage::maybe_release() {
 }
 
 void raft_groups_storage::write_snapshot_descriptor(segment_record& rec) {
+    // Truncation records are only needed while the segments they name are still
+    // on disk; raft_commitlog knows which those are.
+    _raft_commitlog.purge_stale_truncations();
     // A record carrying no configuration of its own re-persists the current
     // one: the descriptor is written whole, and a group's membership does not
     // become unknown just because the last segment held no configuration entry.
@@ -217,6 +269,12 @@ void raft_groups_storage::write_snapshot_descriptor(segment_record& rec) {
     m.set_static_cell("snapshot_idx", data_value(int64_t(rec.max.value())), ts);
     m.set_static_cell("snapshot_term", data_value(int64_t(rec.max_term().value())), ts);
     m.set_static_cell("snapshot_config", data_value(serialize_config(_snapshot_config)), ts);
+    // Only when it actually moved — see _persisted_truncations.
+    const auto& truncations = _raft_commitlog.truncations();
+    const bool rewrite_truncations = truncations != _persisted_truncations;
+    if (rewrite_truncations) {
+        m.set_static_cell("truncations", serialize_truncations(truncations), ts);
+    }
 
     auto& cf = _db.find_column_family(_raft_groups_table_id);
     try {
@@ -232,8 +290,39 @@ void raft_groups_storage::write_snapshot_descriptor(segment_record& rec) {
         rec.pin_rg = rec.pin_table.clone(_raft_groups_table_id);
         throw;
     }
-    rgslog.debug("released record for group_id={}: segment={}, snapshot=({}, {})",
-            _group_id, rec.segment(), rec.max, rec.max_term());
+    // Only once the mutation has landed, so a failed release does not leave us
+    // believing the row holds a history it never received.
+    if (rewrite_truncations) {
+        _persisted_truncations = truncations;
+    }
+    rgslog.debug("released record for group_id={}: segment={}, snapshot=({}, {}), truncations={}{}",
+            _group_id, rec.segment(), rec.max, rec.max_term(), truncations.size(),
+            rewrite_truncations ? "" : " (unchanged, not rewritten)");
+}
+
+future<raft_groups_storage::persisted_descriptor> raft_groups_storage::load_descriptor(
+        cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+    static const auto load_cql = format(
+            "SELECT snapshot_idx, snapshot_term, snapshot_config, truncations FROM system.{} "
+            "WHERE shard = ? AND group_id = ? LIMIT 1",
+            db::system_keyspace::RAFT_GROUPS);
+    auto rs = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id},
+            cql3::query_processor::cache_internal::yes);
+    persisted_descriptor ret;
+    if (rs->empty()) {
+        co_return ret;
+    }
+    const auto& row = rs->one();
+    ret.exists = true;
+    ret.idx = raft::index_t(row.get_or<int64_t>("snapshot_idx", 0));
+    ret.term = raft::term_t(row.get_or<int64_t>("snapshot_term", 0));
+    if (row.has("snapshot_config")) {
+        ret.config = deserialize_config(row.get_blob_unfragmented("snapshot_config"));
+    }
+    if (row.has("truncations")) {
+        ret.truncations = deserialize_truncations(row.get_view("truncations"));
+    }
+    co_return ret;
 }
 
 future<> raft_groups_storage::store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap) {
@@ -277,12 +366,13 @@ future<> raft_groups_storage::bootstrap(raft::configuration initial_configuation
     _commit_index = std::max(_commit_index, init_index);
     _apply_index = std::max(_apply_index, init_index);
     static const auto store_cql = format(
-            "INSERT INTO system.{} (shard, group_id, snapshot_id, snapshot_idx, snapshot_term, snapshot_config) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO system.{} (shard, group_id, snapshot_id, snapshot_idx, snapshot_term, snapshot_config, truncations) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             db::system_keyspace::RAFT_GROUPS);
     co_await _qp.execute_internal(store_cql,
             {int16_t(_shard), _group_id.id, _snapshot_id.id, int64_t(init_index.value()), int64_t(0),
-             data_value(serialize_config(_snapshot_config))},
+             data_value(serialize_config(_snapshot_config)),
+             serialize_truncations({})},
             cql3::query_processor::cache_internal::yes);
 }
 

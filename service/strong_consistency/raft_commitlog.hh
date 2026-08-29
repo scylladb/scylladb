@@ -21,6 +21,20 @@ struct raft_term_and_index {
     raft::term_t term{0};
 };
 
+// One truncation, as it is persisted in system.raft_groups.truncations:
+// "in this segment, the then-current copies of indexes [from, to] were
+// truncated". truncate_log() removes entries from the raft log but not from
+// disk, so an index can have several copies on disk and only the last one
+// written is current; replay uses these records to drop the superseded ones
+// without having to reason about terms.
+struct truncation_record {
+    db::segment_id_type segment{0};
+    raft::index_t from{0};
+    raft::index_t to{0};
+
+    bool operator==(const truncation_record&) const = default;
+};
+
 // What one group remembers about its own entries in one commitlog segment.
 //
 // One record per segment rather than per batch: batches keep landing in the
@@ -142,8 +156,8 @@ void account_batch(std::deque<segment_record>& queue, const db::cf_id_type& raft
 // the segments holding it.
 //
 // This is the only place that knows a group's entries live in commitlog
-// segments: which segments they are, what index range each holds, and which
-// references keep them.
+// segments: which segments they are, what index range each holds, which
+// references keep them, and which indexes a truncation superseded.
 // raft_groups_storage owns the group's row and the raft::persistence interface,
 // and asks this class what may be released; it does not itself reason about
 // segments.
@@ -158,6 +172,13 @@ class raft_commitlog {
 
     // One record per segment this group has entries in, oldest first.
     std::deque<segment_record> _commitlog_segment_queue;
+    // Truncation history as it is persisted in the row. Not globally ordered by
+    // segment: one truncate_log() call pops the queue from the back, so it
+    // appends the newest segment's record first. Order within one segment is
+    // still the order the truncations happened, which is all replay's per-segment
+    // cursors need. Records naming segments the commitlog no longer has are
+    // dropped.
+    std::vector<truncation_record> _truncations;
     // How far the commitlog has closed segments on this shard, as reported by
     // its flush handler.
     db::replay_position _closed_up_to;
@@ -174,7 +195,8 @@ public:
     future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries, raft::index_t commit_idx);
 
     // Discard the entries at or above `idx`: the records they were the whole of
-    // go away, and the one the point lands inside is clamped.
+    // go away, the one the point lands inside is clamped, and in both cases a
+    // truncation_record remembers what was superseded.
     void truncate_log(raft::index_t idx);
 
     // Take a reference for the command at `idx` from the record that holds it.
@@ -192,6 +214,20 @@ public:
     segment_record* front_releasable(raft::index_t commit_idx, raft::index_t apply_idx);
     void pop_released();
 
+    // Seed the truncation history from the group's row, once, before it starts.
+    // A release re-writes the whole list, so what was persisted by a previous
+    // run has to be here or it would be dropped.
+    void seed_truncations(std::vector<truncation_record> truncations) {
+        _truncations = std::move(truncations);
+    }
+
+    // Drop the truncation records whose segment the commitlog no longer has:
+    // once it cannot hand out a position that low, no replay can see those
+    // copies again.
+    void purge_stale_truncations();
+    const std::vector<truncation_record>& truncations() const {
+        return _truncations;
+    }
 
     // The entries commitlog replay recovered, handed over once.
     raft::log_entries load_log();

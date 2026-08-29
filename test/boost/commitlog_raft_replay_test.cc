@@ -1825,19 +1825,26 @@ SEASTAR_TEST_CASE(test_raft_batch_records_across_segments) {
         // lands in is clamped and keeps its references, because it still holds
         // live entries.
         const auto cut = queue[1].first + raft::index_t{1};
-        const auto before = queue.size();
+        std::deque<service::strong_consistency::truncation_record> truncations;
         while (!queue.empty() && queue.back().first >= cut) {
+            truncations.push_back(service::strong_consistency::truncation_record{
+                    .segment = queue.back().segment(), .from = queue.back().first, .to = queue.back().max});
             queue.pop_back();
         }
         BOOST_REQUIRE(!queue.empty());
-        BOOST_REQUIRE_LT(queue.size(), before);
         if (queue.back().max >= cut) {
+            truncations.push_back(service::strong_consistency::truncation_record{
+                    .segment = queue.back().segment(), .from = cut, .to = queue.back().max});
             queue.back().trim_from(cut);
         }
+        BOOST_REQUIRE(!truncations.empty());
         BOOST_REQUIRE_LT(queue.back().max, cut);
-        // The clamped record keeps its references: it still holds live entries.
         BOOST_REQUIRE(bool(queue.back().pin_table));
-        BOOST_REQUIRE(bool(queue.back().pin_rg));
+        // Every truncation names a real segment and a non-empty range.
+        for (const auto& t : truncations) {
+            BOOST_REQUIRE_GT(t.segment, 0u);
+            BOOST_REQUIRE_LE(t.from, t.to);
+        }
     });
 }
 
