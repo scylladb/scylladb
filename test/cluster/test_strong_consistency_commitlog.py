@@ -547,15 +547,14 @@ async def test_truncated_copies_are_dropped_on_replay(manager: ScyllaClusterMana
 @pytest.mark.asyncio
 async def test_migrated_group_is_not_resurrected_on_replay(manager: ScyllaClusterManager):
     """A tablet that migrates away leaves its raft entries behind in the commitlog
-    of the node that lost it, and on the way out the group gives up its segment
-    references, so the segments still holding those entries can be reclaimed while
-    the group's row keeps the index it reached.
+    of the node that lost it. On the way out the group gives up its segment
+    references, so the segments still holding those entries can be reclaimed, and
+    the tablet cleanup erases the group's row.
 
     Replay on that node must notice it no longer hosts the tablet and discard the
-    entries. Resolving the group instead applies them into a range the node no
-    longer owns. Once the older segments are gone and only the tail survives,
-    resolving also leaves a hole below the row's floor, which replay refuses to
-    start on.
+    entries. Replay checks ownership before it reads the row, and the test waits
+    for the ownership message. A crash while the row is still there is
+    test_replay_after_a_crash_before_the_cleanup_erased_the_row.
 
     Between nodes, not between shards of one node: intra-node migration of a
     strongly consistent tablet is not implemented (SCYLLADB-2497), so a tablet

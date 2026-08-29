@@ -5952,9 +5952,10 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
                 // replica's hosting was applied, which do_tablet_operation()'s read barrier
                 // guarantees here. The persisted raft state goes too, or a later return of
                 // the tablet would rejoin the group claiming a commit index whose entries it
-                // no longer holds. A crash can still lose that delete (system.raft_groups
-                // uses the periodic commitlog); commitlog replay then refuses the group,
-                // because the tablet has no replica on this shard.
+                // no longer holds. system.raft_groups asks for wait_for_sync_to_commitlog,
+                // so the delete is durable once it returns. Commitlog replay also discards
+                // the entries of a group that hosts_raft_group() says this shard no longer
+                // hosts.
                 co_await gm.local().cleanup_group(tablet, *group_id);
             }
             auto& table = db.find_column_family(tablet.table);
