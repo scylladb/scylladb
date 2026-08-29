@@ -191,25 +191,134 @@ static std::string_view table_status_to_sstring(table_status tbl_status) {
     return "UNKNOWN";
 }
 
+audit::statement_category executor::audit_category_for(std::string_view operation) {
+    static constexpr std::pair<std::string_view, audit::statement_category> categories[] = {
+        {"CreateTable", audit::statement_category::DDL},
+        {"DescribeTable", audit::statement_category::QUERY},
+        {"DeleteTable", audit::statement_category::DDL},
+        {"UpdateTable", audit::statement_category::DDL},
+        {"PutItem", audit::statement_category::DML},
+        {"UpdateItem", audit::statement_category::DML},
+        {"GetItem", audit::statement_category::QUERY},
+        {"DeleteItem", audit::statement_category::DML},
+        {"ListTables", audit::statement_category::QUERY},
+        {"Scan", audit::statement_category::QUERY},
+        {"DescribeEndpoints", audit::statement_category::QUERY},
+        {"BatchWriteItem", audit::statement_category::DML},
+        {"BatchGetItem", audit::statement_category::QUERY},
+        {"Query", audit::statement_category::QUERY},
+        {"SearchVectors", audit::statement_category::QUERY},
+        {"TagResource", audit::statement_category::DDL},
+        {"UntagResource", audit::statement_category::DDL},
+        {"ListTagsOfResource", audit::statement_category::QUERY},
+        {"UpdateTimeToLive", audit::statement_category::DDL},
+        {"DescribeTimeToLive", audit::statement_category::QUERY},
+        {"ListStreams", audit::statement_category::QUERY},
+        {"DescribeStream", audit::statement_category::QUERY},
+        {"GetShardIterator", audit::statement_category::QUERY},
+        {"GetRecords", audit::statement_category::QUERY},
+        {"DescribeContinuousBackups", audit::statement_category::QUERY},
+        {"ExportTableToPointInTime", audit::statement_category::QUERY},
+        {"ListExports", audit::statement_category::QUERY},
+        {"UpdateContinuousBackups", audit::statement_category::DDL},
+        {"DescribeExport", audit::statement_category::QUERY},
+    };
+    for (const auto& [name, category] : categories) {
+        if (name == operation) {
+            return category;
+        }
+    }
+    throw std::invalid_argument(format("No audit category for Alternator operation {}", operation));
+}
+
+void executor::skip_audit(std::unique_ptr<audit::audit_info_alternator>& audit_info, service_permit& permit) {
+    if (!audit_info || !audit_info->is_pending()) {
+        return;
+    }
+    throwing_assert(audit_info->request_shard() == this_shard_id());
+    permit.return_units(audit_info->mark_skipped());
+    constexpr std::string_view injection_name = "alternator_request_before_audit";
+    auto& injector = utils::get_local_injector();
+    if (injector.is_enabled(injection_name)) {
+        injector.set_parameter(injection_name, "request_permit_units_after_audit_decision", format("{}", permit.count()));
+    }
+}
+
+void executor::prepare_audit_reservation(std::unique_ptr<audit::audit_info_alternator>& audit_info,
+        service_permit& permit, const rjson::value& request) {
+    if (!audit_info || !audit_info->is_pending() || audit_info->serialized_size_known()) {
+        return;
+    }
+    throwing_assert(audit_info->request_shard() == this_shard_id());
+    const auto serialized_size = rjson::measure_serialized_size(request);
+    const auto memory_copy_counts = audit_info->memory_copy_counts();
+    // Keep the measured parsed DOM charge during request processing. Batch
+    // filtering's later reparse has a separate peak estimate below.
+    const size_t request_processing_estimate = audit_info->request_memory()
+            + serialized_size.value * memory_copy_counts.request_processing
+            + audit_info->request_processing_extra();
+    const size_t batch_reparse_estimate = audit_info->batch_reparse_memory()
+            ? audit_info->batch_reparse_memory() + serialized_size.value + audit_info->audit_write_extra()
+            : 0;
+    const size_t audit_write_estimate = serialized_size.value * memory_copy_counts.audit_write
+            + audit_info->audit_write_extra();
+    const size_t exact_mem_estimate = std::max({request_processing_estimate, batch_reparse_estimate, audit_write_estimate}) + 8000;
+    const size_t unaudited_mem_estimate = audit_info->request_memory() + 8000;
+    throwing_assert(unaudited_mem_estimate <= exact_mem_estimate);
+    throwing_assert(exact_mem_estimate <= permit.count());
+    audit_info->set_serialized_size(serialized_size.value, exact_mem_estimate - unaudited_mem_estimate);
+    permit.return_units(permit.count() - exact_mem_estimate);
+}
+
 void executor::maybe_audit(
     std::unique_ptr<audit::audit_info_alternator>& audit_info,
-    audit::statement_category category,
+    client_state& client_state,
+    service_permit& permit,
     std::string_view ks_name,
     std::string_view table_name,
     std::string_view operation_name,
     const rjson::value& request,
     std::optional<db::consistency_level> cl,
-    std::optional<audit::audit_table_set> alternator_batch_tables)
+    std::optional<audit::audit_table_set> alternator_batch_tables,
+    bool request_filtered)
 {
-    if (_audit.local_is_initialized() && (alternator_batch_tables || _audit.local().will_log(category, ks_name, table_name))) {
+    if (audit_info && !audit_info->is_pending()) {
+        return;
+    }
+    const auto category = audit_info ? audit_info->category() : audit_category_for(operation_name);
+    if (!_audit.local_is_initialized()
+            || (alternator_batch_tables ? alternator_batch_tables->empty() : !_audit.local().should_log(category, ks_name, table_name, client_state))) {
+        skip_audit(audit_info, permit);
+        return;
+    }
+
+    prepare_audit_reservation(audit_info, permit, request);
+    std::string serialized_request;
+    if (audit_info) {
+        throwing_assert(audit_info->request_shard() == this_shard_id());
+        // Filtering can remove most of a batch. Keep the original reservation,
+        // but allocate the serialized buffer only for the surviving request.
+        auto serialized_size = request_filtered
+                ? rjson::measure_serialized_size(request)
+                : rjson::serialized_size{audit_info->serialized_size()};
+        throwing_assert(serialized_size.value <= audit_info->serialized_size());
+        serialized_request = rjson::print_exact(request, serialized_size);
+        audit_info->activate(category, sstring(ks_name), sstring(table_name), cl);
+    } else {
+        serialized_request = rjson::print_exact(request);
         audit_info = std::make_unique<audit::audit_info_alternator>(
             category, sstring(ks_name), sstring(table_name), cl);
-        if (alternator_batch_tables) {
-            audit_info->set_alternator_batch_tables(std::move(*alternator_batch_tables));
-        }
-        // FIXME: rjson::print(request) serializes the entire JSON request body, which
-        // can be up to 16 MB for BatchWriteItem.
-        audit_info->set_query_string(sstring(rjson::print(request)), sstring(operation_name));
+    }
+    if (alternator_batch_tables) {
+        audit_info->set_alternator_batch_tables(std::move(*alternator_batch_tables));
+    }
+    const auto serialized_request_capacity = serialized_request.capacity();
+    audit_info->set_query_string(std::move(serialized_request), operation_name);
+    constexpr std::string_view injection_name = "alternator_request_before_audit";
+    auto& injector = utils::get_local_injector();
+    if (injector.is_enabled(injection_name)) {
+        injector.set_parameter(injection_name, "audit_serialization_shard", format("{}", this_shard_id()));
+        injector.set_parameter(injection_name, "audit_serialized_request_capacity", format("{}", serialized_request_capacity));
     }
 }
 
@@ -866,7 +975,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
 
     schema_ptr schema = get_table(_proxy, request);
 
-    maybe_audit(audit_info, audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), "DescribeTable", request);
+    maybe_audit(audit_info, client_state, permit, schema->ks_name(), schema->cf_name(), "DescribeTable", request);
 
     get_stats_from_schema(_proxy, *schema)->api_operations.describe_table++;
     tracing::add_alternator_table_name(trace_state, schema->cf_name());
@@ -887,13 +996,22 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
 
     std::string table_name = get_table_name(request);
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
-
-    maybe_audit(audit_info, audit::statement_category::DDL, keyspace_name, table_name, "DeleteTable", request);
+    auto table = _proxy.data_dictionary().try_find_table(keyspace_name, table_name);
+    if (!table) {
+        // Existing tables can predate the current name limits. Validate only
+        // after lookup misses, and only then expose the request name to audit.
+        validate_table_name(table_name);
+        maybe_audit(audit_info, client_state, permit,
+                keyspace_name, table_name, "DeleteTable", request);
+        throw api_error::resource_not_found(fmt::format("Requested resource not found: Table: {} not found", table_name));
+    }
+    schema_ptr schema = table->schema();
+    maybe_audit(audit_info, client_state, permit,
+            schema->ks_name(), schema->cf_name(), "DeleteTable", request);
 
     tracing::add_alternator_table_name(trace_state, table_name);
     auto& p = _proxy.container();
 
-    schema_ptr schema = get_table(_proxy, request);
     std::variant<rjson::value, api_error> table_description_result = co_await fill_table_description(schema, table_status::deleting, client_state, trace_state, permit);
     if (auto error = std::get_if<api_error>(&table_description_result)) {
         co_return std::move(*error);
@@ -1367,7 +1485,7 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
     }
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
 
-    maybe_audit(audit_info, audit::statement_category::DDL, schema->ks_name(), schema->cf_name(), "TagResource", request);
+    maybe_audit(audit_info, client_state, permit, schema->ks_name(), schema->cf_name(), "TagResource", request);
 
     get_stats_from_schema(_proxy, *schema)->api_operations.tag_resource++;
     const rjson::value* tags = rjson::find(request, "Tags");
@@ -1398,7 +1516,7 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
     }
 
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
-    maybe_audit(audit_info, audit::statement_category::DDL, schema->ks_name(), schema->cf_name(), "UntagResource", request);
+    maybe_audit(audit_info, client_state, permit, schema->ks_name(), schema->cf_name(), "UntagResource", request);
 
     get_stats_from_schema(_proxy, *schema)->api_operations.untag_resource++;
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, schema, auth::permission::ALTER, _stats);
@@ -1416,7 +1534,7 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
     }
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
 
-    maybe_audit(audit_info, audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), "ListTagsOfResource", request);
+    maybe_audit(audit_info, client_state, permit, schema->ks_name(), schema->cf_name(), "ListTagsOfResource", request);
 
     get_stats_from_schema(_proxy, *schema)->api_operations.list_tags_of_resource++;
     auto tags_map = get_tags_of_table_or_throw(schema);
@@ -2205,7 +2323,7 @@ static void validate_and_store_gsi_provisioned_throughput(std::map<sstring, sstr
 }
 
 future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization,
-            const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+            const db::tablets_mode_t::mode tablets_mode) {
     throwing_assert(this_shard_id() == 0);
 
     // We begin by parsing and validating the content of the CreateTable
@@ -2219,8 +2337,6 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         co_return api_error::validation(fmt::format("Prefix {} is reserved for accessing internal tables", executor::INTERNAL_TABLE_PREFIX));
     }
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
-
-    maybe_audit(audit_info, audit::statement_category::DDL, keyspace_name, table_name, "CreateTable", request);
 
     const rjson::value* attribute_definitions = rjson::find(request, "AttributeDefinitions");
     if (attribute_definitions == nullptr) {
@@ -2695,15 +2811,19 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     _stats.api_operations.create_table++;
     elogger.trace("Creating table {}", request);
 
-    // Note: audit_info is captured by reference into the invoke_on() lambda and written on shard 0.
-    // This is safe because co_await keeps the caller's coroutine frame (and audit_info) alive for
-    // the entire duration of invoke_on(). Only the unique_ptr itself is read/written cross-shard —
-    // no concurrent access occurs since the caller is suspended during invoke_on().
+    std::string table_name = get_table_name(request);
+    validate_table_name(table_name);
+    if (table_name.find(executor::INTERNAL_TABLE_PREFIX) == 0) {
+        co_return api_error::validation(fmt::format("Prefix {} is reserved for accessing internal tables", executor::INTERNAL_TABLE_PREFIX));
+    }
+    std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
+    maybe_audit(audit_info, client_state, permit, keyspace_name, table_name, "CreateTable", request);
+
     co_return co_await _mm.container().invoke_on(0, [&, tr = tracing::global_trace_state_ptr(trace_state), request = std::move(request), &e = this->container(), client_state_other_shard = client_state.move_to_other_shard(), enforce_authorization = bool(_enforce_authorization), warn_authorization = bool(_warn_authorization)]
                                         (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
         const db::tablets_mode_t::mode tablets_mode = _proxy.data_dictionary().get_config().tablets_mode_for_new_keyspaces(); // type cast
         // `invoke_on` hopped us to shard 0, but `this` points to `executor` is from 'old' shard, we need to hop it too.
-        co_return co_await e.local().create_table_on_shard0(client_state_other_shard.get(), tr, std::move(request), enforce_authorization, warn_authorization, std::move(tablets_mode), audit_info);
+        co_return co_await e.local().create_table_on_shard0(client_state_other_shard.get(), tr, std::move(request), enforce_authorization, warn_authorization, std::move(tablets_mode));
     });
 }
 
@@ -2832,12 +2952,23 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         billing_mode = verify_billing_mode(request);
     }
 
-    // Note: audit_info is captured by reference into the invoke_on() lambda and written on shard 0.
-    // This is safe because co_await keeps the caller's coroutine frame (and audit_info) alive for
-    // the entire duration of invoke_on(). Only the unique_ptr itself is read/written cross-shard —
-    // no concurrent access occurs since the caller is suspended during invoke_on().
+    // Keep the authoritative table lookup under the shard-0 group0 guard. The
+    // request names are sufficient for auditing, including failed attempts.
+    std::string table_name = get_table_name(request);
+    std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
+    auto table = _proxy.data_dictionary().try_find_table(keyspace_name, table_name);
+    if (!table) {
+        // Existing tables can predate the current name limits.
+        validate_table_name(table_name);
+    }
+    schema_ptr audit_schema = table ? table->schema() : nullptr;
+    maybe_audit(audit_info, client_state, permit,
+            audit_schema ? std::string_view(audit_schema->ks_name()) : std::string_view(keyspace_name),
+            audit_schema ? std::string_view(audit_schema->cf_name()) : std::string_view(table_name),
+            "UpdateTable", request);
+
     co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), enforce_authorization = bool(_enforce_authorization),
-                warn_authorization = bool(_warn_authorization), client_state_other_shard = client_state.move_to_other_shard(), empty_request, billing_mode, &e = this->container(), &audit_info]
+                warn_authorization = bool(_warn_authorization), client_state_other_shard = client_state.move_to_other_shard(), empty_request, billing_mode, &e = this->container()]
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
         // Materialize the shard-local copy once; every get() creates a whole
         // new client_state.
@@ -2849,8 +2980,6 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             auto group0_guard = co_await mm.start_group0_operation(std::nullopt, stop_as);
 
             schema_ptr tab = get_table(p.local(), request);
-
-            e.local().maybe_audit(audit_info, audit::statement_category::DDL, tab->ks_name(), tab->cf_name(), "UpdateTable", request);
 
             tracing::add_alternator_table_name(gt, tab->cf_name());
 
@@ -4276,7 +4405,8 @@ public:
     virtual ~put_item_operation() = default;
 };
 
-future<executor::request_return_type> executor::put_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+future<executor::request_return_type> executor::put_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request,
+        std::unique_ptr<audit::audit_info_alternator>& audit_info, bool audit_request) {
     _stats.api_operations.put_item++;
     auto start_time = std::chrono::steady_clock::now();
     elogger.trace("put_item {}", request);
@@ -4285,13 +4415,9 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
     per_table_stats->api_operations.put_item++;
 
-    if (!audit_info) {
-        // On LWT shard bounce, audit_info is already set on the originating shard.
-        // The reference captured in the bounce lambda points back to the original
-        // coroutine frame, which remains alive for the entire cross-shard call.
-        // Only reads of this pointer occur on the target shard — no writes or frees.
-        maybe_audit(audit_info, audit::statement_category::DML, op->schema()->ks_name(),
-                    op->schema()->cf_name(), "PutItem", op->request(), db::consistency_level::LOCAL_QUORUM);
+    if (audit_request) {
+        maybe_audit(audit_info, client_state, permit, op->schema()->ks_name(),
+                op->schema()->cf_name(), "PutItem", op->request(), db::consistency_level::LOCAL_QUORUM);
     }
 
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
@@ -4307,14 +4433,15 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
         _stats.shard_bounce_for_lwt++;
         per_table_stats->shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
-                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info]
+                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit)]
                 (executor& e) mutable {
-            return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt), &audit_info]
-                                     (service::client_state& client_state) mutable {
+            return do_with(cs.get(), std::unique_ptr<audit::audit_info_alternator>{},
+                    [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
+                    (service::client_state& client_state, std::unique_ptr<audit::audit_info_alternator>& audit_info) mutable {
                 //FIXME: Instead of passing empty_service_permit() to the background operation,
                 // the current permit's lifetime should be prolonged, so that it's destructed
                 // only after all background operations are finished as well.
-                return e.put_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request), audit_info);
+                return e.put_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request), audit_info, false);
             });
         });
     }
@@ -4391,20 +4518,17 @@ public:
     virtual ~delete_item_operation() = default;
 };
 
-future<executor::request_return_type> executor::delete_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+future<executor::request_return_type> executor::delete_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request,
+        std::unique_ptr<audit::audit_info_alternator>& audit_info, bool audit_request) {
     _stats.api_operations.delete_item++;
     auto start_time = std::chrono::steady_clock::now();
     elogger.trace("delete_item {}", request);
 
     auto op = make_shared<delete_item_operation>(*_parsed_expression_cache, _proxy, std::move(request));
 
-    if (!audit_info) {
-        // On LWT shard bounce, audit_info is already set on the originating shard.
-        // The reference captured in the bounce lambda points back to the original
-        // coroutine frame, which remains alive for the entire cross-shard call.
-        // Only reads of this pointer occur on the target shard — no writes or frees.
-        maybe_audit(audit_info, audit::statement_category::DML, op->schema()->ks_name(),
-                    op->schema()->cf_name(), "DeleteItem", op->request(), db::consistency_level::LOCAL_QUORUM);
+    if (audit_request) {
+        maybe_audit(audit_info, client_state, permit, op->schema()->ks_name(),
+                op->schema()->cf_name(), "DeleteItem", op->request(), db::consistency_level::LOCAL_QUORUM);
     }
 
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
@@ -4422,14 +4546,15 @@ future<executor::request_return_type> executor::delete_item(client_state& client
         _stats.shard_bounce_for_lwt++;
         per_table_stats->shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
-                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info]
+                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit)]
                 (executor& e) mutable {
-            return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt), &audit_info]
-                                     (service::client_state& client_state) mutable {
+            return do_with(cs.get(), std::unique_ptr<audit::audit_info_alternator>{},
+                    [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
+                    (service::client_state& client_state, std::unique_ptr<audit::audit_info_alternator>& audit_info) mutable {
                 //FIXME: Instead of passing  empty_service_permit() to the background operation,
                 // the current permit's lifetime should be prolonged, so that it's destructed
                 // only after all background operations are finished as well.
-                return e.delete_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request), audit_info);
+                return e.delete_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request), audit_info, false);
             });
         });
     }
@@ -4632,18 +4757,6 @@ future<> executor::do_batch_write(
     }
 }
 
-sstring print_names_for_audit(const audit::audit_table_set& names) {
-    sstring res;
-    // Might have been useful to loop twice, with the 1st loop learning the total size of the names for the res to then reserve()
-    for (const auto& [_, name] : names) {
-        if (!res.empty()) {
-            res += "|";
-        }
-        res += name;
-    }
-    return res;
-}
-
 future<executor::request_return_type> executor::batch_write_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.batch_write_item++;
     auto start_time = std::chrono::steady_clock::now();
@@ -4677,7 +4790,10 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
 
     audit::audit_table_set audited_table_names;
     bool only_audited_tables = true;
-    bool should_audit = _audit.local_is_initialized() && _audit.local().will_log(audit::statement_category::DML);
+    const bool audit_pending = audit_info && audit_info->is_pending();
+    const auto audit_category = audit_info ? audit_info->category() : audit_category_for("BatchWriteItem");
+    const bool should_audit = _audit.local_is_initialized()
+            && (audit_pending || (!audit_info && _audit.local().will_log(audit_category)));
     mutation_builders.reserve(request_items.MemberCount());
     per_table_wcu.reserve(request_items.MemberCount());
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
@@ -4688,7 +4804,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         per_table_stats->api_operations.batch_write_item_histogram.add(it->value.Size());
         tracing::add_alternator_table_name(trace_state, schema->cf_name());
         if (should_audit) {
-            if (_audit.local().will_log(audit::statement_category::DML, schema->ks_name(), schema->cf_name())) {
+            if (_audit.local().should_log(audit_category, schema->ks_name(), schema->cf_name(), client_state)) {
                 audited_table_names.emplace(schema->ks_name(), schema->cf_name());
             } else {
                 only_audited_tables = false;
@@ -4735,6 +4851,13 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
             }
         }
         per_table_wcu.emplace_back(std::make_pair(per_table_stats, schema));
+    }
+    if (audit_pending) {
+        if (audited_table_names.empty()) {
+            skip_audit(audit_info, permit);
+        } else {
+            prepare_audit_reservation(audit_info, permit, request);
+        }
     }
     for (const auto& b : mutation_builders) {
         co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, b.first, auth::permission::MODIFY, _stats);
@@ -4822,7 +4945,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     _stats.wcu_total[stats::DELETE_ITEM] += wcu_delete_units;
     _stats.api_operations.batch_write_item_batch_total += total_items;
     _stats.api_operations.batch_write_item_histogram.add(total_items);
-    co_await do_batch_write(std::move(mutation_builders), client_state, trace_state, std::move(permit));
+    co_await do_batch_write(std::move(mutation_builders), client_state, trace_state, permit);
     // FIXME: Issue #5650: If we failed writing some of the updates,
     // need to return a list of these failed updates in UnprocessedItems
     // rather than fail the whole write (issue #5650).
@@ -4841,9 +4964,8 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
             // Filter out non-audited tables from the request body for privacy
             filter_batch_request_items_by_tbl_name(request, audited_table_names);
         }
-        auto audit_table_names = print_names_for_audit(audited_table_names);
-        maybe_audit(audit_info, audit::statement_category::DML, "",
-                    audit_table_names, "BatchWriteItem", request, db::consistency_level::LOCAL_QUORUM, std::move(audited_table_names));
+        maybe_audit(audit_info, client_state, permit, "",
+                    "", "BatchWriteItem", request, db::consistency_level::LOCAL_QUORUM, std::move(audited_table_names), !only_audited_tables);
     }
     co_return rjson::print(std::move(ret));
 }
@@ -5592,7 +5714,8 @@ std::optional<mutation> update_item_operation::apply(std::unique_ptr<rjson::valu
     return m;
 }
 
-future<executor::request_return_type> executor::update_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+future<executor::request_return_type> executor::update_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request,
+        std::unique_ptr<audit::audit_info_alternator>& audit_info, bool audit_request) {
     _stats.api_operations.update_item++;
     auto start_time = std::chrono::steady_clock::now();
     elogger.trace("update_item {}", request);
@@ -5601,13 +5724,9 @@ future<executor::request_return_type> executor::update_item(client_state& client
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
     per_table_stats->api_operations.update_item++;
 
-    if (!audit_info) {
-        // On LWT shard bounce, audit_info is already set on the originating shard.
-        // The reference captured in the bounce lambda points back to the original
-        // coroutine frame, which remains alive for the entire cross-shard call.
-        // Only reads of this pointer occur on the target shard — no writes or frees.
-        maybe_audit(audit_info, audit::statement_category::DML, op->schema()->ks_name(),
-                    op->schema()->cf_name(), "UpdateItem", op->request(), db::consistency_level::LOCAL_QUORUM);
+    if (audit_request) {
+        maybe_audit(audit_info, client_state, permit, op->schema()->ks_name(),
+                op->schema()->cf_name(), "UpdateItem", op->request(), db::consistency_level::LOCAL_QUORUM);
     }
 
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
@@ -5623,14 +5742,15 @@ future<executor::request_return_type> executor::update_item(client_state& client
         _stats.shard_bounce_for_lwt++;
         per_table_stats->shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
-                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info]
+                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit)]
                 (executor& e) mutable {
-            return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt), &audit_info]
-                                     (service::client_state& client_state) mutable {
+            return do_with(cs.get(), std::unique_ptr<audit::audit_info_alternator>{},
+                    [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
+                    (service::client_state& client_state, std::unique_ptr<audit::audit_info_alternator>& audit_info) mutable {
                 //FIXME: Instead of passing empty_service_permit() to the background operation,
                 // the current permit's lifetime should be prolonged, so that it's destructed
                 // only after all background operations are finished as well.
-                return e.update_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request), audit_info);
+                return e.update_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request), audit_info, false);
             });
         });
     }
@@ -5648,7 +5768,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
     _stats.api_operations.list_tables++;
     elogger.trace("Listing tables {}", request);
 
-    maybe_audit(audit_info, audit::statement_category::QUERY, "", "", "ListTables", request);
+    maybe_audit(audit_info, client_state, permit, "", "", "ListTables", request);
 
     co_await utils::get_local_injector().inject("alternator_list_tables", utils::wait_for_message(5min));
 
@@ -5706,7 +5826,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
 future<executor::request_return_type> executor::describe_endpoints(client_state& client_state, service_permit permit, rjson::value request, std::string host_header, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.describe_endpoints++;
 
-    maybe_audit(audit_info, audit::statement_category::QUERY, "", "", "DescribeEndpoints", request);
+    maybe_audit(audit_info, client_state, permit, "", "", "DescribeEndpoints", request);
 
     // The alternator_describe_endpoints configuration can be used to disable
     // the DescribeEndpoints operation, or set it to return a fixed string
@@ -5751,7 +5871,6 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
     // So we can't use the usual get_table() wrapper and need a bit more code:
     std::string table_name = get_table_name(request);
     sstring ks_name = seastar::format("{}{}", executor::KEYSPACE_NAME_PREFIX, table_name);
-    maybe_audit(audit_info, audit::statement_category::QUERY, ks_name, table_name, "DescribeContinuousBackups", request);
     schema_ptr schema;
     try {
         schema = _proxy.data_dictionary().find_schema(ks_name, table_name);
@@ -5759,10 +5878,13 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
         // DynamoDB returns validation error even when table does not exist
         // and the table name is invalid.
         validate_table_name(table_name);
-
+        maybe_audit(audit_info, client_state, permit,
+                ks_name, table_name, "DescribeContinuousBackups", request);
         throw api_error::table_not_found(
                 fmt::format("Table {} not found", table_name));
     }
+    maybe_audit(audit_info, client_state, permit,
+            schema->ks_name(), schema->cf_name(), "DescribeContinuousBackups", request);
     rjson::value desc = rjson::empty_object();
     rjson::add(desc, "ContinuousBackupsStatus", "DISABLED");
     rjson::value pitr = rjson::empty_object();

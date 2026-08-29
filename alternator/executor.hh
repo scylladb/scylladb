@@ -116,6 +116,8 @@ class executor : public peering_sharded_service<executor> {
     future<> fill_table_size(rjson::value &table_description, schema_ptr schema, bool deleting);
 public:
     using client_state = service::client_state;
+    // Shared by admission and execution; unknown operations fail during server setup.
+    static audit::statement_category audit_category_for(std::string_view operation);
     // request_return_type is the return type of the executor methods, which
     // can be one of:
     // 1. A string, which is the response body for the request.
@@ -152,10 +154,13 @@ public:
     future<request_return_type> describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> delete_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> update_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
-    future<request_return_type> put_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
+    future<request_return_type> put_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request,
+            std::unique_ptr<audit::audit_info_alternator>& audit_info, bool audit_request = true);
     future<request_return_type> get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
-    future<request_return_type> delete_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
-    future<request_return_type> update_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
+    future<request_return_type> delete_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request,
+            std::unique_ptr<audit::audit_info_alternator>& audit_info, bool audit_request = true);
+    future<request_return_type> update_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request,
+            std::unique_ptr<audit::audit_info_alternator>& audit_info, bool audit_request = true);
     future<request_return_type> list_tables(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> scan(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> describe_endpoints(client_state& client_state, service_permit permit, rjson::value request, std::string host_header, std::unique_ptr<audit::audit_info_alternator>& audit_info);
@@ -185,21 +190,25 @@ private:
     static thread_local utils::updateable_value<uint32_t> s_default_timeout_in_ms;
     friend class rmw_operation;
 
-    // Helper to set up auditing for an Alternator operation. Checks whether
-    // the operation should be audited (via will_log()) and if so, allocates
-    // and populates audit_info. No allocation occurs when auditing is disabled.
+    // Resolve the table-level audit decision for an Alternator operation and,
+    // when it matches, populate the pending audit_info prepared by the server.
     void maybe_audit(std::unique_ptr<audit::audit_info_alternator>& audit_info,
-                     audit::statement_category category,
+                     client_state& client_state,
+                     service_permit& permit,
                      std::string_view ks_name,
                      std::string_view table_name,
                      std::string_view operation_name,
                      const rjson::value& request,
                      std::optional<db::consistency_level> cl = std::nullopt,
-                     std::optional<audit::audit_table_set> alternator_batch_tables = std::nullopt);
+                     std::optional<audit::audit_table_set> alternator_batch_tables = std::nullopt,
+                     bool request_filtered = false);
+    void prepare_audit_reservation(std::unique_ptr<audit::audit_info_alternator>& audit_info,
+            service_permit& permit, const rjson::value& request);
+    void skip_audit(std::unique_ptr<audit::audit_info_alternator>& audit_info, service_permit& permit);
 
     future<std::variant<rjson::value, api_error>> fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit);
     future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization,
-            bool warn_authorization, const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info);
+            bool warn_authorization, const db::tablets_mode_t::mode tablets_mode);
 
     future<> do_batch_write(
         std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders,
@@ -241,6 +250,4 @@ struct arn_parts {
 //    if not empty - postfix value must start with expected_postfix, but might be longer
 arn_parts parse_arn(std::string_view arn, std::string_view arn_field_name, std::string_view type_name, std::string_view expected_postfix);
 
-// The format is table1|table2|table3...
-sstring print_names_for_audit(const audit::audit_table_set& names);
 }
