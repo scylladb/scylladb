@@ -2271,11 +2271,12 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
         opts.insert({"SCYLLA_SHARD", format("{:d}", this_shard_id())});
         opts.insert({"SCYLLA_NR_SHARDS", format("{:d}", this_smp_shard_count())});
         opts.insert({"SCYLLA_SHARDING_ALGORITHM", dht::cpu_sharding_algorithm_name()});
-        if (_server._config.shard_aware_transport_port) {
-            opts.insert({"SCYLLA_SHARD_AWARE_PORT", format("{:d}", *_server._config.shard_aware_transport_port)});
-        }
-        if (_server._config.shard_aware_transport_port_ssl) {
-            opts.insert({"SCYLLA_SHARD_AWARE_PORT_SSL", format("{:d}", *_server._config.shard_aware_transport_port_ssl)});
+        // Point the client at the shard-aware listener that serves this
+        // listener's clients, if there is one. Note it is advertised under the
+        // key matching its own encryption, which need not match this one's.
+        if (auto it = _server._listener_configs.find(_server_addr); it != _server._listener_configs.end() && it->second.shard_aware_port) {
+            opts.insert({it->second.shard_aware_port_tls ? "SCYLLA_SHARD_AWARE_PORT_SSL" : "SCYLLA_SHARD_AWARE_PORT",
+                    format("{:d}", *it->second.shard_aware_port)});
         }
         opts.insert({"SCYLLA_SHARDING_IGNORE_MSB", format("{:d}", _server._config.sharding_ignore_msb)});
         opts.insert({"SCYLLA_PARTITIONER", _server._config.partitioner_name});
@@ -2925,6 +2926,17 @@ const cql3::cql_metadata_id_type& cql_metadata_id_wrapper::get_response_metadata
         on_internal_error(clogger, "response metadata_id is empty");
     }
     return _response_metadata_id.value();
+}
+
+future<> cql_server::listen(socket_address addr, cql_listener_config listener_config,
+        std::shared_ptr<seastar::tls::credentials_builder> creds,
+        bool is_shard_aware, bool keepalive,
+        std::optional<file_permissions> unix_domain_socket_permissions,
+        bool proxy_protocol,
+        std::function<generic_server::server&()> get_shard_instance) {
+    _listener_configs[addr] = listener_config;
+    return generic_server::server::listen(addr, std::move(creds), is_shard_aware, keepalive,
+            unix_domain_socket_permissions, proxy_protocol, std::move(get_shard_instance));
 }
 
 future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> cql_server::get_client_data() {

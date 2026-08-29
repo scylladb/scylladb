@@ -734,6 +734,7 @@ inline bool is_true(sstring val) {
 
 future<> configure_tls_creds_builder(seastar::tls::credentials_builder& creds, db::config::string_map options);
 future<gms::inet_address> resolve(const config_file::named_value<sstring>&, gms::inet_address::opt_family family = {}, gms::inet_address::opt_family preferred = {});
+future<gms::inet_address> resolve(const sstring& address, std::string_view name, gms::inet_address::opt_family family = {}, gms::inet_address::opt_family preferred = {});
 
 /*!
  * \brief read the the relabel config from a file

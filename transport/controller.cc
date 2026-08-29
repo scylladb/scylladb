@@ -13,6 +13,7 @@
 #include <seastar/net/socket_defs.hh>
 #include <seastar/net/unix_address.hh>
 #include <seastar/core/file-types.hh>
+#include <ranges>
 #include <seastar/core/with_scheduling_group.hh>
 #include "transport/server.hh"
 #include "service/memory_limiter.hh"
@@ -32,9 +33,11 @@ controller::controller(sharded<auth::service>& auth, sharded<service::migration_
         sharded<gms::gossiper>& gossiper, sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
         sharded<qos::service_level_controller>& sl_controller, sharded<service::endpoint_lifecycle_notifier>& elc_notif,
         sharded<netw::messaging_service>& ms, sharded<updateable_timeout_config>& timeout_config,
-        const db::config& cfg, scheduling_group_key cql_opcode_stats_key, maintenance_socket_enabled used_by_maintenance_socket,
+        const db::config& cfg, db::listener_configs listeners, scheduling_group_key cql_opcode_stats_key,
+        maintenance_socket_enabled used_by_maintenance_socket,
         seastar::scheduling_group sg)
     : protocol_server(sg)
+    , _listeners(std::move(listeners))
     , _ops_sem(1)
     , _bg_stops("transport::controller::bg_stops")
     , _auth_service(auth)
@@ -76,96 +79,97 @@ future<> controller::start_server() {
     return do_start_server().finally([this] { _ops_sem.signal(); });
 }
 
-static future<> listen_on_all_shards(sharded<cql_server>& cserver, socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions, bool proxy_protocol = false) {
-    co_await cserver.invoke_on_all([addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, proxy_protocol] (cql_server& server) {
-        return server.listen(addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, proxy_protocol, [&c = server.container()]() -> auto& { return c.local(); });
+static future<> listen_on_all_shards(sharded<cql_server>& cserver, socket_address addr, cql_listener_config lcfg, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions, bool proxy_protocol = false) {
+    co_await cserver.invoke_on_all([addr, lcfg, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, proxy_protocol] (cql_server& server) {
+        return server.listen(addr, lcfg, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, proxy_protocol, [&c = server.container()]() -> generic_server::server& { return c.local(); });
     });
+}
+
+// The shard-aware listener a listener hands its clients over to, resolved by
+// name into what the accepted connections need to advertise.
+cql_listener_config controller::shard_aware_sibling(const sstring& name, const db::listener_config& listener) const {
+    if (listener.shard_aware_listener.empty()) {
+        return {};
+    }
+    auto sibling = _listeners.find(listener.shard_aware_listener);
+    if (sibling == _listeners.end()) {
+        throw std::runtime_error(fmt::format("Listener {}: shard_aware_listener names a listener that doesn't serve CQL: {}",
+                name, listener.shard_aware_listener));
+    }
+    if (!sibling->second.shard_aware) {
+        throw std::runtime_error(fmt::format("Listener {}: shard_aware_listener names a listener that isn't shard-aware: {}",
+                name, listener.shard_aware_listener));
+    }
+    return cql_listener_config{
+        .shard_aware_port = sibling->second.port,
+        .shard_aware_port_tls = sibling->second.tls,
+    };
 }
 
 future<> controller::start_listening_on_tcp_sockets(sharded<cql_server>& cserver) {
     auto& cfg = _config;
     auto preferred = cfg.rpc_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
     auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
-    auto ceo = cfg.client_encryption_options();
-    auto keepalive = cfg.rpc_keepalive();
+    auto default_keepalive = cfg.rpc_keepalive();
 
     struct listen_cfg {
+        sstring name;
         socket_address addr;
+        cql_listener_config lcfg;
         bool is_shard_aware;
         std::shared_ptr<seastar::tls::credentials_builder> cred;
-        bool proxy_protocol = false;
+        bool proxy_protocol;
+        bool keepalive;
     };
 
     _listen_addresses.clear();
     std::vector<listen_cfg> configs;
 
-    const seastar::net::inet_address ip = utils::resolve(cfg.rpc_address, family, preferred).get();
-    int native_port_idx = -1, native_shard_aware_port_idx = -1;
+    // Listeners sharing the same address, or the same set of TLS options, share
+    // the resolved address and the credentials built out of those options.
+    std::unordered_map<sstring, net::inet_address> resolved_addresses;
+    std::vector<std::pair<db::config::string_map, std::shared_ptr<seastar::tls::credentials_builder>>> creds;
 
-    if (cfg.native_transport_port.is_set() ||
-            (!cfg.native_transport_port_ssl.is_set() && !cfg.native_transport_port.is_set())) {
-        // Non-SSL port is specified || neither SSL nor non-SSL ports are specified
-        configs.emplace_back(listen_cfg{ socket_address{ip, cfg.native_transport_port()}, false });
-        _listen_addresses.push_back(configs.back().addr);
-        native_port_idx = 0;
-    }
-    if (cfg.native_shard_aware_transport_port.is_set() ||
-            (!cfg.native_shard_aware_transport_port_ssl.is_set() && !cfg.native_shard_aware_transport_port.is_set())) {
-        configs.emplace_back(listen_cfg{ socket_address{ip, cfg.native_shard_aware_transport_port()}, true });
-        _listen_addresses.push_back(configs.back().addr);
-        native_shard_aware_port_idx = native_port_idx + 1;
-    }
-
-    // main should have made sure values are clean and neatish
-    std::shared_ptr<seastar::tls::credentials_builder> cred;
-    if (utils::is_true(utils::get_or_default(ceo, "enabled", "false"))) {
-        cred = std::make_shared<seastar::tls::credentials_builder>();
-        utils::configure_tls_creds_builder(*cred, std::move(ceo)).get();
-
-        logger.info("Enabling encrypted CQL connections between client and server");
-
-        if (cfg.native_transport_port_ssl.is_set() &&
-                (!cfg.native_transport_port.is_set() ||
-                cfg.native_transport_port_ssl() != cfg.native_transport_port())) {
-            // SSL port is specified && non-SSL port is either left out or set to a different value
-            configs.emplace_back(listen_cfg{{ip, cfg.native_transport_port_ssl()}, false, cred});
-            _listen_addresses.push_back(configs.back().addr);
-        } else if (native_port_idx >= 0) {
-            configs[native_port_idx].cred = cred;
+    for (auto& [name, l] : _listeners) {
+        auto addr_name = l.address.empty() ? cfg.rpc_address() : l.address;
+        auto [addr_it, inserted] = resolved_addresses.try_emplace(addr_name);
+        if (inserted) {
+            addr_it->second = co_await utils::resolve(addr_name, "listener address", family, preferred);
         }
-        if (cfg.native_shard_aware_transport_port_ssl.is_set() &&
-                (!cfg.native_shard_aware_transport_port.is_set() ||
-                cfg.native_shard_aware_transport_port_ssl() != cfg.native_shard_aware_transport_port())) {
-            configs.emplace_back(listen_cfg{{ip, cfg.native_shard_aware_transport_port_ssl()}, true, cred});
-            _listen_addresses.push_back(configs.back().addr);
-        } else if (native_shard_aware_port_idx >= 0) {
-            configs[native_shard_aware_port_idx].cred = cred;
+
+        std::shared_ptr<seastar::tls::credentials_builder> cred;
+        if (l.tls) {
+            // An empty set of options means the CQL-wide defaults.
+            auto opts = l.tls_options.empty() ? cfg.client_encryption_options() : l.tls_options;
+            opts.erase("enabled");
+            auto it = std::ranges::find_if(creds, [&] (auto& c) { return c.first == opts; });
+            if (it == creds.end()) {
+                cred = std::make_shared<seastar::tls::credentials_builder>();
+                co_await utils::configure_tls_creds_builder(*cred, opts);
+                creds.emplace_back(std::move(opts), cred);
+                logger.info("Enabling encrypted CQL connections between client and server");
+            } else {
+                cred = it->second;
+            }
         }
-    }
 
-    // Proxy protocol ports (disabled by default, port 0 means disabled)
-    if (cfg.native_transport_port_proxy_protocol()) {
-        configs.emplace_back(listen_cfg{{ip, cfg.native_transport_port_proxy_protocol()}, false, nullptr, true});
-        _listen_addresses.push_back(configs.back().addr);
-    }
-    if (cfg.native_shard_aware_transport_port_proxy_protocol()) {
-        configs.emplace_back(listen_cfg{{ip, cfg.native_shard_aware_transport_port_proxy_protocol()}, true, nullptr, true});
-        _listen_addresses.push_back(configs.back().addr);
-    }
-    if (cfg.native_transport_port_ssl_proxy_protocol() && cred) {
-        configs.emplace_back(listen_cfg{{ip, cfg.native_transport_port_ssl_proxy_protocol()}, false, cred, true});
-        _listen_addresses.push_back(configs.back().addr);
-    }
-    if (cfg.native_shard_aware_transport_port_ssl_proxy_protocol() && cred) {
-        configs.emplace_back(listen_cfg{{ip, cfg.native_shard_aware_transport_port_ssl_proxy_protocol()}, true, cred, true});
+        configs.emplace_back(listen_cfg{
+            .name = name,
+            .addr = socket_address{addr_it->second, l.port},
+            .lcfg = shard_aware_sibling(name, l),
+            .is_shard_aware = l.shard_aware,
+            .cred = std::move(cred),
+            .proxy_protocol = l.proxy_protocol,
+            .keepalive = l.keepalive.value_or(default_keepalive),
+        });
         _listen_addresses.push_back(configs.back().addr);
     }
 
-    co_await parallel_for_each(configs, [&cserver, keepalive](const listen_cfg & cfg) -> future<> {
-        co_await listen_on_all_shards(cserver, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive, std::nullopt, cfg.proxy_protocol);
+    co_await parallel_for_each(configs, [&cserver](const listen_cfg & cfg) -> future<> {
+        co_await listen_on_all_shards(cserver, cfg.addr, cfg.lcfg, cfg.cred, cfg.is_shard_aware, cfg.keepalive, std::nullopt, cfg.proxy_protocol);
 
-        logger.info("Starting listening for CQL clients on {} ({}, {}{})"
-                , cfg.addr, cfg.cred ? "encrypted" : "unencrypted", cfg.is_shard_aware ? "shard-aware" : "non-shard-aware"
+        logger.info("Starting listening for CQL clients on {} as {} ({}, {}{})"
+                , cfg.addr, cfg.name, cfg.cred ? "encrypted" : "unencrypted", cfg.is_shard_aware ? "shard-aware" : "non-shard-aware"
                 , cfg.proxy_protocol ? ", proxy-protocol" : ""
         );
     });
@@ -204,7 +208,7 @@ future<> controller::start_listening_on_maintenance_socket(sharded<cql_server>& 
         file_permissions::user_read | file_permissions::user_write |
         file_permissions::group_read | file_permissions::group_write;
 
-    co_await listen_on_all_shards(cserver, addr, nullptr, false, _config.rpc_keepalive(), unix_domain_socket_permissions);
+    co_await listen_on_all_shards(cserver, addr, cql_listener_config{}, nullptr, false, _config.rpc_keepalive(), unix_domain_socket_permissions);
 
     if (_config.maintenance_socket_group.is_set()) {
         auto group_name = _config.maintenance_socket_group();
@@ -245,23 +249,11 @@ future<> controller::do_start_server() {
         cql_server_smp_service_group_config.max_nonlocal_requests = 5000;
         auto bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get();
         auto get_cql_server_config = sharded_parameter([&] {
-            std::optional<uint16_t> shard_aware_transport_port;
-            if (cfg.native_shard_aware_transport_port.is_set()) {
-                // Needed for "SUPPORTED" message
-                shard_aware_transport_port = cfg.native_shard_aware_transport_port();
-            }
-            std::optional<uint16_t> shard_aware_transport_port_ssl;
-            if (cfg.native_shard_aware_transport_port_ssl.is_set()) {
-                // Needed for "SUPPORTED" message
-                shard_aware_transport_port_ssl = cfg.native_shard_aware_transport_port_ssl();
-            }
             return cql_server_config {
               .timeout_config = _timeout_config.local(),
               .max_request_size = _mem_limiter.local().total_memory(),
               .partitioner_name = cfg.partitioner(),
               .sharding_ignore_msb = cfg.murmur3_partitioner_ignore_msb_bits(),
-              .shard_aware_transport_port = shard_aware_transport_port,
-              .shard_aware_transport_port_ssl = shard_aware_transport_port_ssl,
               .allow_shard_aware_drivers = cfg.enable_shard_aware_drivers(),
               .bounce_request_smp_service_group = bounce_request_smp_service_group,
               .max_concurrent_requests = cfg.max_concurrent_requests_per_shard,
