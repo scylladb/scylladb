@@ -83,8 +83,15 @@ auto read_variant_commitlog_entry(const fragmented_temporary_buffer& buffer) {
     auto view = ser::deserialize(in, std::type_identity<ser::commitlog_entry_view>());
     return seastar::visit(
             view.item(),
-            [](raft_commitlog_batch batch) {
-                return commitlog_entry{.item = std::move(batch)};
+            [](const ser::raft_commitlog_batch_view& batch_view) {
+                // Past this point the entry is a raft batch, whatever the payload
+                // turns out to be.
+                try {
+                    return commitlog_entry{.item = raft_commitlog_batch(batch_view)};
+                } catch (...) {
+                    std::throw_with_nested(
+                            raft_batch_decode_error("cannot decode the raft batch in a commitlog entry"));
+                }
             },
             [](const ser::mutation_entry_view& entry_view) {
                 return commitlog_entry{.item = mutation_entry(entry_view.mapping(), entry_view.mutation())};
