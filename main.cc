@@ -1622,7 +1622,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
               auto paths = sch_cl->get_segments_to_replay().get();
               if (!paths.empty()) {
                   checkpoint(stop_signal, "replaying schema commit log");
-                  auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr, {}, "schema").get();
+                  auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr, nullptr, {}, "schema").get();
                   rp.recover(paths, db::schema_tables::COMMITLOG_FILENAME_PREFIX).get();
                   startlog.info("replaying schema commit log - flushing memtables");
                   // The schema commitlog lives only on the null shard.
@@ -2256,6 +2256,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // the memtable when the second pass re-applies it, and the two
             // squash into the same rows.  A flush forced by memory pressure in
             // between would cost an extra sstable, not correctness.
+            //
+            // Raft replay relies on this pass too: a group's first batch reads
+            // its system.raft_groups row, and a row deleted by tablet cleanup
+            // must read as deleted, or finish_replay() writes the row back.
             if (auto* cl = db.local().commitlog(); cl != nullptr) {
                 auto paths = cl->get_segments_to_replay().get();
                 if (!paths.empty()) {
@@ -2266,7 +2270,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                             system_tables.insert(id);
                         }
                     });
-                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr,
+                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr, nullptr,
                             [tables = std::move(system_tables)] (table_id id) { return tables.contains(id); },
                             "system tables").get();
                     rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
@@ -2291,21 +2295,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 auto paths = cl->get_segments_to_replay().get();
                 if (!paths.empty()) {
                     checkpoint(stop_signal, "replaying commit log");
-                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, &raft_replay_buffer).get();
+                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, &raft_replay_buffer, &qp).get();
                     rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
 
-                    // Process raft replay buffer: apply committed mutations to memtables,
-                    // rewrite uncommitted entries to the new commitlog,
-                    // and discard entries that precede the last snapshot index.
-                    // Must happen after replay (entries are in the buffer) but before flushing
-                    // and deleting old segments (committed mutations need to be flushed,
-                    // uncommitted entries are now in new segments).
+                    // Persist each group's recovered descriptor and rewrite its
+                    // uncommitted tail to the new commitlog. The committed entries were
+                    // applied to memtables as replay read them. Must run after replay and
+                    // before the memtable flush and the deletion of the old segments: the
+                    // applied mutations still need flushing, and the rewritten tail makes
+                    // the old segments expendable.
                     supervisor::notify("processing raft replay buffer");
                     raft_replay_buffer.invoke_on_all([&db, &qp](db::raft_commitlog_replay_buffer& buffer) mutable {
-                        if (buffer.remaining_groups()) {
-                            return buffer.process_raft_replayed_items(db.local(), qp.local(), sys_ks.local());
-                        }
-                        return make_ready_future<>();
+                        return buffer.finish_replay(db.local(), qp.local());
                     }).get();
 
                     startlog.info("replaying commit log - flushing memtables");
