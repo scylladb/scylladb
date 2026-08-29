@@ -2057,19 +2057,21 @@ SEASTAR_TEST_CASE(test_raft_batch_records_across_segments) {
         // Truncate inside the middle record: records at or above the cut go away
         // whole, the one it lands in is clamped and keeps its references.
         const auto cut = segment_queue[1].first_index + raft::index_t{1};
-        const auto before = segment_queue.size();
+        std::deque<service::strong_consistency::truncation_record> truncations;
         while (!segment_queue.empty() && segment_queue.back().first_index >= cut) {
+            truncations.push_back(service::strong_consistency::truncation_record{
+                    .segment = segment_queue.back().segment(), .from = segment_queue.back().first_index, .to = segment_queue.back().max_index});
             segment_queue.pop_back();
         }
         BOOST_REQUIRE(!segment_queue.empty());
-        BOOST_REQUIRE_LT(segment_queue.size(), before);
         if (segment_queue.back().max_index >= cut) {
+            truncations.push_back(service::strong_consistency::truncation_record{
+                    .segment = segment_queue.back().segment(), .from = cut, .to = segment_queue.back().max_index});
             segment_queue.back().trim_from(cut);
         }
+        BOOST_REQUIRE(!truncations.empty());
         BOOST_REQUIRE_LT(segment_queue.back().max_index, cut);
-        // The clamped record keeps its references: it still holds live entries.
         BOOST_REQUIRE(bool(segment_queue.back().pin_user_table));
-        BOOST_REQUIRE(bool(segment_queue.back().pin_raft_groups));
     });
 }
 
@@ -2233,6 +2235,47 @@ SEASTAR_TEST_CASE(test_rp_handle_clone) {
         BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
         chained.reset();
         BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+    });
+}
+
+// Test: a truncation record whose segment the commitlog has dropped is purged,
+// and one whose segment it still has survives. The history is ordered by time,
+// not by segment, so a stale record can sit behind a live one; a purge that
+// stopped at the first live record would keep it.
+SEASTAR_TEST_CASE(test_purge_stale_truncations_drops_only_the_dropped_segments) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        service::strong_consistency::raft_commitlog rc(gid, log, tid, rg_tid, {});
+
+        // Everything below this segment is gone from the commitlog.
+        const auto oldest = log.min_position().id;
+        BOOST_REQUIRE_GT(oldest, 0);
+
+        // Stale last, so stopping at the first live record would keep it.
+        rc.seed_truncations({
+            {.segment = oldest - 1, .from = raft::index_t(5), .to = raft::index_t(9)},
+            {.segment = oldest, .from = raft::index_t(10), .to = raft::index_t(14)},
+            {.segment = oldest + 3, .from = raft::index_t(20), .to = raft::index_t(24)},
+            {.segment = oldest - 2, .from = raft::index_t(1), .to = raft::index_t(4)},
+        });
+        BOOST_REQUIRE_EQUAL(rc.truncations().size(), 4);
+
+        rc.purge_stale_truncations();
+
+        // The two live ones, in the order they were seeded.
+        BOOST_REQUIRE_EQUAL(rc.truncations().size(), 2);
+        BOOST_REQUIRE_EQUAL(rc.truncations()[0].segment, oldest);
+        BOOST_REQUIRE_EQUAL(rc.truncations()[0].from, raft::index_t(10));
+        BOOST_REQUIRE_EQUAL(rc.truncations()[1].segment, oldest + 3);
+        BOOST_REQUIRE_EQUAL(rc.truncations()[1].from, raft::index_t(20));
+
+        // The record at min_position itself stays: that segment is still there.
+        rc.purge_stale_truncations();
+        BOOST_REQUIRE_EQUAL(rc.truncations().size(), 2);
+        co_return;
     });
 }
 

@@ -20,6 +20,16 @@ struct raft_term_and_index {
     raft::term_t term{0};
 };
 
+// One truncation as persisted in system.raft_groups.truncations: in this
+// segment, the then-current copies of indexes [from, to] were truncated.
+struct truncation_record {
+    db::segment_id_type segment{0};
+    raft::index_t from{0};
+    raft::index_t to{0};
+
+    bool operator==(const truncation_record&) const = default;
+};
+
 // One record per commitlog segment holding this group's entries.
 struct segment_record {
     // Reference at the position this record's first batch was written to,
@@ -105,13 +115,10 @@ std::vector<size_t> split_raft_batch(const db::commitlog& cl, raft::group_id gro
 void account_batch(std::deque<segment_record>& segment_queue, const db::cf_id_type& raft_groups_table_id,
         db::rp_handle&& handle, std::span<const raft::log_entry_ptr> entries);
 
-// One group's raft log in the commitlog, and everything the group knows about
-// the segments holding it.
-//
-// raft_commitlog is the only place that knows a group's entries live in commitlog
-// segments: which segments they are, what index range each holds, and which
-// references keep them. raft_groups_storage owns the group's row and the
-// raft::persistence interface, and asks this class what may be released.
+// One group's raft log in the commitlog: which segments hold it, what index range
+// each holds, which references keep them, and what a truncation superseded.
+// raft_groups_storage owns the group's row and the raft::persistence interface,
+// and asks raft_commitlog what may be released.
 class raft_commitlog {
     const raft::group_id _group_id;
     // The tablet's own table: batches are written under it, and the per-command
@@ -123,6 +130,9 @@ class raft_commitlog {
 
     // One record per segment this group has entries in, oldest first.
     std::deque<segment_record> _commitlog_segment_queue;
+    // Truncation history as persisted in the row. Not ordered by segment; within
+    // one segment it is chronological, which is all replay's cursors need.
+    std::vector<truncation_record> _truncations;
     // Furthest flush-round position reported to us, via mark_segment_closed(); a
     // round is the commitlog asking a segment's dirty tables to flush (see
     // db::commitlog::flush_position).
@@ -137,8 +147,8 @@ public:
     // Write the entries as one batch (see write_raft_batch) and account it.
     future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries, raft::index_t commit_idx);
 
-    // Discard the entries at or above `idx`. A record holding only discarded entries
-    // is dropped; the record containing `idx` is clamped.
+    // Discard the entries at or above `idx`, dropping or clamping the records
+    // that held them and remembering in _truncations what was superseded.
     void truncate_log(raft::index_t idx);
 
     // Another reference to the segment holding `idx`, accounted to the tablet's
@@ -155,6 +165,18 @@ public:
     // here: the caller persists the descriptor, then calls pop_released().
     segment_record* front_releasable(raft::index_t commit_idx, raft::index_t apply_idx);
     void pop_released();
+
+    // Seed the truncation history from the group's row, once, before it starts.
+    void seed_truncations(std::vector<truncation_record> truncations) {
+        _truncations = std::move(truncations);
+    }
+
+    // Drop the truncation records whose segment the commitlog no longer has: it
+    // cannot hand out a position that low, so no replay can see those copies.
+    void purge_stale_truncations();
+    const std::vector<truncation_record>& truncations() const {
+        return _truncations;
+    }
 
     // The entries commitlog replay recovered, handed over once.
     raft::log_entries load_log();

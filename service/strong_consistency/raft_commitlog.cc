@@ -221,14 +221,18 @@ future<> raft_commitlog::store_log_entries(const std::vector<raft::log_entry_ptr
 void raft_commitlog::truncate_log(const raft::index_t idx) {
     logger.debug("truncate_log: group_id={}, idx={}", _group_id, idx);
     // Raft calls this right before appending the conflicting entries, so the
-    // copies being discarded are the current ones for their indexes. The commitlog
-    // is append-only, so those bytes stay on disk, and replay tells them apart from
-    // the copies that replaced them by comparing terms.
+    // copies being discarded are the current ones for their indexes.
     while (!_commitlog_segment_queue.empty() && _commitlog_segment_queue.back().first_index >= idx) {
+        auto& record = _commitlog_segment_queue.back();
+        _truncations.push_back(truncation_record{
+                .segment = record.segment(), .from = record.first_index, .to = record.max_index});
         _commitlog_segment_queue.pop_back();
     }
     if (!_commitlog_segment_queue.empty() && _commitlog_segment_queue.back().max_index >= idx) {
-        _commitlog_segment_queue.back().trim_from(idx);
+        auto& record = _commitlog_segment_queue.back();
+        _truncations.push_back(truncation_record{
+                .segment = record.segment(), .from = idx, .to = record.max_index});
+        record.trim_from(idx);
     }
 }
 
@@ -272,6 +276,15 @@ segment_record* raft_commitlog::front_releasable(raft::index_t commit_idx, raft:
 
 void raft_commitlog::pop_released() {
     _commitlog_segment_queue.pop_front();
+}
+
+void raft_commitlog::purge_stale_truncations() {
+    const db::segment_id_type oldest_segment = _commit_log.min_position().id;
+    // The list is not sorted by segment (see _truncations), so a stale record can
+    // sit after a live one.
+    std::erase_if(_truncations, [oldest_segment](const truncation_record& t) {
+        return t.segment < oldest_segment;
+    });
 }
 
 raft::log_entries raft_commitlog::load_log() {

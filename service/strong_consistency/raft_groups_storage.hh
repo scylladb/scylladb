@@ -64,6 +64,9 @@ class raft_groups_storage : public raft::persistence {
     // Timestamp of the last descriptor mutation, kept strictly increasing so two
     // releases in one reactor task cannot tie.
     api::timestamp_type _last_row_timestamp = api::min_timestamp;
+    // The truncation history as the row currently holds it, so a release can leave
+    // that cell alone when nothing changed.
+    std::vector<truncation_record> _persisted_truncations;
 
     // The future of the currently executing (or already finished) write operation.
     //
@@ -108,9 +111,17 @@ public:
     // Release every record that is now committed, applied and closed.
     void maybe_release();
 
-    // Static version that doesn't require constructing a full
-    // raft_groups_storage object. Used during commitlog replay, when only read
-    // access to a group's metadata is needed.
+    // Everything one group's row holds, as commitlog replay needs to read it.
+    struct persisted_descriptor {
+        bool exists = false;
+        raft::index_t idx{0};
+        raft::term_t term{0};
+        raft::configuration config;
+        std::vector<truncation_record> truncations;
+    };
+
+    // The statics below read and write a group's row without a raft_groups_storage,
+    // which commitlog replay needs: it runs before any group exists.
     static future<raft::index_t> load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
 
     // The persisted commit index, or nullopt when this shard persists nothing about the
@@ -133,6 +144,9 @@ public:
     // is the absence of the row this erases - see raft_commitlog_replay_buffer and
     // groups_manager::start_raft_group().
     static future<> erase_persisted_state(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+
+    // The whole row, for a replay that has to decide what to keep.
+    static future<persisted_descriptor> load_descriptor(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
     // Persist a snapshot descriptor by CQL. Only used during commitlog replay,
     // before any group is running; at runtime the row is written exclusively by
     // the record releases. Only advances the index, so repeated replays are
@@ -141,9 +155,9 @@ public:
         const raft::snapshot_descriptor& snap);
 
 private:
-    // Write the released record's descriptor into the raft_groups memtable, moving
-    // the record's raft_groups reference into the mutation that carries it.
-    void write_descriptor(segment_record& record);
+    // Write the released record's descriptor and the group's truncation history into
+    // the raft_groups memtable, pruning truncations whose segment is already gone.
+    void write_descriptor_and_purge_stale_truncations(segment_record& record);
 
     future<> execute_with_linearization_point(std::function<future<>()> f);
 };
