@@ -8,6 +8,8 @@
 
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/on_internal_error.hh>
+#include <unordered_set>
+#include <ranges>
 #include <seastar/core/coroutine.hh>
 
 #include "db/config.hh"
@@ -141,7 +143,7 @@ static service::raft_sys_table_storage make_sys_table_storage(cql_test_env& env,
 }
 
 static raft_groups_storage make_groups_storage(cql_test_env& env, raft::group_id group_id) {
-    return raft_groups_storage(env.local_qp(), group_id, raft::server_id::create_random_id(), test_shard,
+    return raft_groups_storage(env.local_qp(), env.local_db(), group_id, raft::server_id::create_random_id(), test_shard,
             *env.local_db().commitlog(), table_id(utils::UUID_gen::get_time_UUID()), {});
 }
 
@@ -342,8 +344,34 @@ SEASTAR_TEST_CASE(test_groups_store_load_term_and_vote) {
     return test_store_load_term_and_vote_impl(make_groups_storage);
 }
 
-SEASTAR_TEST_CASE(test_groups_store_load_snapshot) {
-    return test_store_load_snapshot_impl(make_groups_storage);
+// The descriptor a strongly consistent group persists is written by its record
+// releases, not by raft asking for it: store_snapshot_descriptor() is a no-op,
+// and what loads is what bootstrap() (or the last release) put in the row.
+SEASTAR_TEST_CASE(test_groups_store_snapshot_descriptor_is_a_noop) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        auto storage = make_groups_storage(env, gid);
+
+        raft::config_member srv{raft::server_address{
+                raft::server_id::create_random_id(), {}
+            }, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+        const auto after_bootstrap = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK(bool(after_bootstrap.id));
+        BOOST_CHECK_EQUAL(after_bootstrap.idx, raft::index_t(0));
+
+        // Asking to store a descriptor at a higher index changes nothing.
+        raft::snapshot_descriptor snp{
+            .idx = raft::index_t(1000),
+            .term = raft::term_t(7),
+            .config = raft::configuration({srv}),
+            .id = raft::snapshot_id::create_random_id()};
+        co_await storage.store_snapshot_descriptor(snp, 10);
+
+        const auto loaded = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK_EQUAL(loaded.idx, after_bootstrap.idx);
+        BOOST_CHECK_EQUAL(loaded.term, after_bootstrap.term);
+        BOOST_CHECK(loaded.id == after_bootstrap.id);
+    });
 }
 
 // Test that load_log returns entries from the replayed data provided at construction
@@ -361,7 +389,7 @@ SEASTAR_TEST_CASE(test_groups_load_log_from_replayed_data) {
             replayed_data.entries.push_back(e);
         }
 
-        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
                 cl, dummy_table, std::move(replayed_data));
 
         raft::log_entries loaded_entries = co_await storage.load_log();
@@ -373,74 +401,68 @@ SEASTAR_TEST_CASE(test_groups_load_log_from_replayed_data) {
     });
 }
 
-// Test that store_log_entries writes to the commitlog and truncate_log removes
-// entries from the in-memory replay position map
+// Test that store_log_entries writes to the commitlog and truncate_log drops the
+// entries at or above the truncation point: the surviving indexes still have a
+// record holding them, the truncated ones do not.
 SEASTAR_TEST_CASE(test_groups_truncate_log) {
     return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
         auto& cl = *env.local_db().commitlog();
         auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
 
-        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
                 cl, dummy_table, {});
 
         std::vector<raft::log_entry_ptr> entries = create_test_log(3, 20);
         co_await storage.store_log_entries(entries);
 
-        // Truncate the last entry from the log (entries with idx >= entries.back()->idx)
         co_await storage.truncate_log(entries.back()->idx);
 
-        // Verify we can get replay position handles only for the remaining entries
-        raft::log_entry_ptr_list entries_to_get(entries.begin(), entries.end() - 1);
-        auto handles = storage.acquire_replay_position_handles_for(entries_to_get);
-        BOOST_CHECK_EQUAL(handles.size(), entries.size() - 1);
-        for (size_t i = 0; i < handles.size(); ++i) {
-            BOOST_CHECK_EQUAL(handles[i].index, entries[i]->idx);
+        // Every surviving index is still held by a record, so a reference for it
+        // can be taken.
+        for (size_t i = 0; i + 1 < entries.size(); ++i) {
+            auto pin = storage.pin_for_apply(entries[i]->idx);
+            BOOST_CHECK(bool(pin));
+        }
+
+        // The truncated index is not held by any record.
+        {
+            seastar::testing::scoped_no_abort_on_internal_error no_abort;
+            try {
+                storage.pin_for_apply(entries.back()->idx);
+                BOOST_FAIL("Expected on_internal_error for a truncated index");
+            } catch (...) {
+                // Expected.
+            }
         }
     });
 }
 
-// Test that store_snapshot_descriptor works correctly (snapshot metadata is CQL-based)
-SEASTAR_TEST_CASE(test_groups_store_load_snapshot_descriptor) {
+// A group's descriptor tracks what its records have made durable, so storing
+// log entries alone does not move it: the release does, and that is covered by
+// test_groups_release_persists_the_descriptor.
+SEASTAR_TEST_CASE(test_groups_descriptor_unmoved_by_log_writes) {
     return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
         auto& cl = *env.local_db().commitlog();
         auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
 
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+
+        raft::config_member srv{raft::server_address{
+                raft::server_id::create_random_id(), {}
+            }, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
         std::vector<raft::log_entry_ptr> entries = create_test_log(3, 20);
-
-        // Simulate replayed entries so load_log returns them
-        replayed_data_per_group replayed_data;
-        for (auto& e : entries) {
-            replayed_data.entries.push_back(e);
-        }
-
-        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
-                cl, dummy_table, std::move(replayed_data));
-
-        // Also store entries to have replay position handles in the commitlog
         co_await storage.store_log_entries(entries);
 
-        raft::term_t snp_term = entries.back()->term;
-        raft::index_t snp_idx = entries.back()->idx;
-        raft::config_member srv{raft::server_address{
-                raft::server_id::create_random_id(),
-                ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"))
-            }, raft::is_voter::yes};
-        raft::configuration snp_cfg({std::move(srv)});
-        auto snp_id = raft::snapshot_id::create_random_id();
-
-        raft::snapshot_descriptor snp{
-            .idx = snp_idx,
-            .term = snp_term,
-            .config = std::move(snp_cfg),
-            .id = std::move(snp_id)};
-
-        co_await storage.store_snapshot_descriptor(snp, 2 /* preserve_log_entries */);
-
-        // Verify the snapshot was stored correctly
-        raft::snapshot_descriptor loaded_snp = co_await storage.load_snapshot_descriptor();
-        BOOST_CHECK(snp == loaded_snp);
+        // The entries are in the commitlog and held by a record, but nothing
+        // has been released, so the persisted index is still the bootstrap one.
+        const auto loaded = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK_EQUAL(loaded.idx, raft::index_t(0));
+        BOOST_CHECK_EQUAL(co_await raft_groups_storage::load_commit_idx(qp, gid, test_shard), raft::index_t(0));
     });
 }
 
@@ -475,15 +497,16 @@ SEASTAR_TEST_CASE(test_groups_storage_shard_isolation) {
         auto& cl = *env.local_db().commitlog();
         auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
 
-        // Simulate replayed entries for shard 0 only
-        std::vector<raft::log_entry_ptr> entries = create_test_log();
+        // Simulate replayed entries for shard 0 only. At least one entry, since
+        // the release below needs an index to commit to.
+        std::vector<raft::log_entry_ptr> entries = create_test_log(1, 20);
         replayed_data_per_group replayed_data0;
         for (auto& e : entries) {
             replayed_data0.entries.push_back(e);
         }
 
-        raft_groups_storage storage0(qp, iso_gid, raft::server_id::create_random_id(), 0, cl, dummy_table, std::move(replayed_data0));
-        raft_groups_storage storage1(qp, iso_gid, raft::server_id::create_random_id(), 1, cl, dummy_table, {});
+        raft_groups_storage storage0(qp, env.local_db(), iso_gid, raft::server_id::create_random_id(), 0, cl, dummy_table, std::move(replayed_data0));
+        raft_groups_storage storage1(qp, env.local_db(), iso_gid, raft::server_id::create_random_id(), 1, cl, dummy_table, {});
 
         // Log entries - shard 0 has replayed entries, shard 1 does not
         auto loaded0 = co_await storage0.load_log();
@@ -501,14 +524,27 @@ SEASTAR_TEST_CASE(test_groups_storage_shard_isolation) {
         auto vote1 = co_await storage1.load_term_and_vote();
         BOOST_CHECK_EQUAL(raft::term_t{}, vote1.first);
 
-        // Commit index
+        // Commit index: store_commit_idx() is in-memory, so it writes nothing —
+        // the row only moves when a record is released.
         co_await storage0.store_commit_idx(raft::index_t(42));
+        BOOST_CHECK_EQUAL(raft::index_t(0), co_await storage0.load_commit_idx());
+        BOOST_CHECK_EQUAL(raft::index_t(0), co_await storage1.load_commit_idx());
 
-        auto idx0 = co_await storage0.load_commit_idx();
-        BOOST_CHECK_EQUAL(raft::index_t(42), idx0);
-
-        auto idx1 = co_await storage1.load_commit_idx();
-        BOOST_CHECK_EQUAL(raft::index_t(0), idx1);
+        // Releasing shard 0's record writes shard 0's row and leaves shard 1's
+        // alone: the two are separate partitions of system.raft_groups. This
+        // shard's entries came from replay as log entries only, so give it a
+        // record of its own to release.
+        co_await storage0.store_log_entries(entries);
+        for (const auto& e : entries) {
+            if (std::holds_alternative<raft::command>(e->data)) {
+                storage0.note_applied(e->idx);
+            }
+        }
+        co_await storage0.store_commit_idx(entries.back()->idx);
+        storage0.note_closed_up_to(db::replay_position(
+                std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
+        BOOST_CHECK_EQUAL(entries.back()->idx, co_await storage0.load_commit_idx());
+        BOOST_CHECK_EQUAL(raft::index_t(0), co_await storage1.load_commit_idx());
     });
 }
 
@@ -521,7 +557,7 @@ SEASTAR_TEST_CASE(test_groups_store_snapshot_index) {
         auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
         raft::group_id gid{utils::UUID_gen::get_time_UUID()};
 
-        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
                 cl, dummy_table, {});
 
         // Initially no snapshot
@@ -574,169 +610,148 @@ SEASTAR_TEST_CASE(test_groups_store_snapshot_index) {
     });
 }
 
-// Test store_log_entries -> acquire_replay_position_handles_for roundtrip:
-// entries written to the commitlog produce valid replay position handles.
+// Test store_log_entries -> pin_for_apply roundtrip: every stored index is held
+// by a record, and the reference it hands out sits at the position the batch was
+// really written at.
 SEASTAR_TEST_CASE(test_groups_store_and_get_replay_positions) {
     return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
         auto& cl = *env.local_db().commitlog();
         auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
 
-        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
                 cl, dummy_table, {});
 
         std::vector<raft::log_entry_ptr> entries = create_test_log(3, 20);
         co_await storage.store_log_entries(entries);
 
-        // Acquire replay position handles for all entries.
-        // The handles are moved out of the internal map, transferring
-        // ownership to the caller (for attaching to memtables on apply).
-        raft::log_entry_ptr_list entries_to_get(entries.begin(), entries.end());
-        auto handles = storage.acquire_replay_position_handles_for(entries_to_get);
-        BOOST_CHECK_EQUAL(handles.size(), entries.size());
-        for (size_t i = 0; i < handles.size(); ++i) {
-            BOOST_CHECK_EQUAL(handles[i].index, entries[i]->idx);
+        // One batch, so one position, and every entry's reference reports it.
+        std::optional<db::replay_position> batch_pos;
+        for (const auto& e : entries) {
+            auto pin = storage.pin_for_apply(e->idx);
+            BOOST_CHECK(bool(pin));
+            BOOST_CHECK_GT(pin.rp().pos, 0u);
+            if (!batch_pos) {
+                batch_pos = pin.rp();
+            } else {
+                BOOST_CHECK(pin.rp() == *batch_pos);
+            }
         }
-
     });
 }
 
-// Test that acquire_replay_position_handles_for returns a partial set of handles
-// when called with an index less than the maximum stored index.
+// Test that taking a reference does not consume anything: the record keeps its
+// own, so the same index can be pinned again, and the references are
+// independent of each other.
 SEASTAR_TEST_CASE(test_groups_get_partial_replay_positions) {
     return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
         auto& cl = *env.local_db().commitlog();
         auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
 
-        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
                 cl, dummy_table, {});
 
         std::vector<raft::log_entry_ptr> entries = create_test_log(3, 20);
         co_await storage.store_log_entries(entries);
 
-        // Get handles only for the first half of entries
-        size_t split = entries.size() / 2;
-        raft::log_entry_ptr_list entries_batch1(entries.begin(), entries.begin() + split);
-        auto handles1 = storage.acquire_replay_position_handles_for(entries_batch1);
-        BOOST_CHECK_EQUAL(handles1.size(), split);
-        for (size_t i = 0; i < split; ++i) {
-            BOOST_CHECK_EQUAL(handles1[i].index, entries[i]->idx);
-        }
+        const auto idx = entries.front()->idx;
+        auto first = storage.pin_for_apply(idx);
+        auto second = storage.pin_for_apply(idx);
+        BOOST_CHECK(bool(first));
+        BOOST_CHECK(bool(second));
+        BOOST_CHECK(first.rp() == second.rp());
 
-        // Get handles for the remaining entries.
-        raft::log_entry_ptr_list entries_batch2(entries.begin() + split, entries.end());
-        auto handles2 = storage.acquire_replay_position_handles_for(entries_batch2);
-        BOOST_CHECK_EQUAL(handles2.size(), entries.size() - split);
-        for (size_t i = 0; i < handles2.size(); ++i) {
-            BOOST_CHECK_EQUAL(handles2[i].index, entries[split + i]->idx);
-        }
+        // Dropping one leaves the other, and the record, holding the segment.
+        { auto dropped = std::move(first); }
+        auto third = storage.pin_for_apply(idx);
+        BOOST_CHECK(bool(third));
+        BOOST_CHECK(third.rp() == second.rp());
     });
 }
 
-// Test that acquire_replay_position_handles_for correctly handles non-contiguous
-// command entries when configuration/dummy entries are interleaved.
-// This simulates what happens in practice: the raft server filters out non-command
-// entries before calling state_machine::apply(), so acquire_replay_position_handles_for
-// receives only command entries which may have gaps in their indices.
+// Test that commands interleaved with dummy and configuration entries can each
+// be pinned: the record holds a whole index range, so a command's index does not
+// have to be contiguous with the previous one.
 SEASTAR_TEST_CASE(test_groups_acquire_handles_skips_non_command_entries) {
     return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
         auto& cl = *env.local_db().commitlog();
         auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
 
-        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
                 cl, dummy_table, {});
 
-        // Create a log with interleaved entry types:
-        // idx=1: command, idx=2: configuration, idx=3: command, idx=4: dummy, idx=5: command
-        raft::command cmd1, cmd3, cmd5;
-        ser::serialize(cmd1, 100);
-        ser::serialize(cmd3, 300);
-        ser::serialize(cmd5, 500);
-
-        std::vector<raft::log_entry_ptr> entries = {
-            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(1), .data = std::move(cmd1)}),
-            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(2),
-                .data = raft::configuration{{raft::config_member{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes}}}}),
-            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(3), .data = std::move(cmd3)}),
-            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(4), .data = raft::log_entry::dummy()}),
-            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(5), .data = std::move(cmd5)}),
-        };
-
-        co_await storage.store_log_entries(entries);
-
-        // Simulate what the raft server does: filter only command entries for apply().
-        raft::log_entry_ptr_list command_entries;
-        for (auto& e : entries) {
-            if (std::holds_alternative<raft::command>(e->data)) {
-                command_entries.push_back(e);
+        // A log whose commands sit at non-contiguous indexes.
+        std::vector<raft::log_entry_ptr> entries;
+        const uint64_t base = 100;
+        for (uint64_t i = 0; i < 6; ++i) {
+            const auto idx = raft::index_t(base + i);
+            if (i % 2 == 0) {
+                raft::command cmd;
+                ser::serialize(cmd, int32_t(i));
+                entries.push_back(make_lw_shared<raft::log_entry>(
+                        raft::log_entry{.term = raft::term_t(1), .idx = idx, .data = std::move(cmd)}));
+            } else {
+                entries.push_back(make_lw_shared<raft::log_entry>(
+                        raft::log_entry{.term = raft::term_t(1), .idx = idx, .data = raft::log_entry::dummy{}}));
             }
         }
-        BOOST_CHECK_EQUAL(command_entries.size(), 3);
+        co_await storage.store_log_entries(entries);
 
-        // acquire_replay_position_handles_for should succeed even though
-        // the command indices (1, 3, 5) are not contiguous in the replay position list.
-        auto handles = storage.acquire_replay_position_handles_for(command_entries);
-        BOOST_CHECK_EQUAL(handles.size(), 3);
-        BOOST_CHECK_EQUAL(handles[0].index, raft::index_t(1));
-        BOOST_CHECK_EQUAL(handles[1].index, raft::index_t(3));
-        BOOST_CHECK_EQUAL(handles[2].index, raft::index_t(5));
+        for (uint64_t i = 0; i < 6; i += 2) {
+            auto pin = storage.pin_for_apply(raft::index_t(base + i));
+            BOOST_CHECK(bool(pin));
+        }
     });
 }
 
-// Test truncate_log (head truncation) then verify remaining handles.
-// Store N>=3 entries, truncate at the second entry's idx (removes entries with idx >= second idx),
-// verify only the first entry can produce a valid handle, and later entries cannot.
+// Test truncate_log at an index inside the record's range: the record is clamped,
+// so the indexes below the cut are still held and the ones at or above it are not.
 SEASTAR_TEST_CASE(test_groups_truncate_log_then_get_handles_for_remaining) {
     return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
         auto& cl = *env.local_db().commitlog();
         auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
 
-        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
                 cl, dummy_table, {});
 
         std::vector<raft::log_entry_ptr> entries = create_test_log(3, 20);
         co_await storage.store_log_entries(entries);
 
-        // Truncate at the second entry's idx — entries with idx >= entries[1]->idx are removed.
         co_await storage.truncate_log(entries[1]->idx);
 
-        // First entry should still have a valid handle.
-        raft::log_entry_ptr_list first_entry = {entries[0]};
-        auto handles = storage.acquire_replay_position_handles_for(first_entry);
-        BOOST_CHECK_EQUAL(handles.size(), 1);
-        BOOST_CHECK_EQUAL(handles[0].index, entries[0]->idx);
+        auto pin = storage.pin_for_apply(entries[0]->idx);
+        BOOST_CHECK(bool(pin));
 
-        // Entries from index 1 onward should trigger an error (their replay positions were removed).
         {
             seastar::testing::scoped_no_abort_on_internal_error no_abort;
-            raft::log_entry_ptr_list truncated_entries(entries.begin() + 1, entries.end());
-            try {
-                storage.acquire_replay_position_handles_for(truncated_entries);
-                BOOST_FAIL("Expected on_internal_error for truncated entries");
-            } catch (...) {
-                // Expected — entries from index 1 onward were truncated.
+            for (size_t i = 1; i < entries.size(); ++i) {
+                try {
+                    storage.pin_for_apply(entries[i]->idx);
+                    BOOST_FAIL("Expected on_internal_error for a truncated index");
+                } catch (...) {
+                    // Expected.
+                }
             }
         }
     });
 }
 
-// Test store_snapshot_descriptor (which truncates the log tail) then verify handles.
-// Store N>=3 entries, store a snapshot at the second entry's idx with preserve_log_entries=1
-// (truncates entries with idx <= second_idx - 1 = first_idx), verify first entry is gone
-// but remaining entries are still accessible.
-SEASTAR_TEST_CASE(test_groups_store_snapshot_truncate_tail_then_get_handles) {
+// Test the release: once every index in a record is committed, its commands
+// applied, and its segment closed, the record's (max, term) becomes the group's
+// persisted descriptor — written by a mutation, so it is readable straight back
+// out of system.raft_groups — and the record is gone.
+SEASTAR_TEST_CASE(test_groups_release_persists_the_descriptor) {
     return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
         auto& cl = *env.local_db().commitlog();
         auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
 
-        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
                 cl, dummy_table, {});
 
-        // Bootstrap so we can store a snapshot later.
         raft::config_member srv{raft::server_address{
                 raft::server_id::create_random_id(), {}
             }, raft::is_voter::yes};
@@ -745,33 +760,45 @@ SEASTAR_TEST_CASE(test_groups_store_snapshot_truncate_tail_then_get_handles) {
         std::vector<raft::log_entry_ptr> entries = create_test_log(3, 20);
         co_await storage.store_log_entries(entries);
 
-        // Store snapshot at entries[1]->idx with preserve_log_entries=1.
-        // This truncates the tail: entries with idx <= (entries[1]->idx - 1) = entries[0]->idx are removed.
-        raft::snapshot_descriptor snp{
-            .idx = entries[1]->idx,
-            .term = entries[1]->term,
-            .config = raft::configuration({srv}),
-            .id = raft::snapshot_id::create_random_id()};
-        co_await storage.store_snapshot_descriptor(snp, 1 /* preserve_log_entries */);
-
-        // Entries from index 1 onward should still have valid handles.
-        raft::log_entry_ptr_list remaining(entries.begin() + 1, entries.end());
-        auto handles = storage.acquire_replay_position_handles_for(remaining);
-        BOOST_CHECK_EQUAL(handles.size(), entries.size() - 1);
-        for (size_t i = 0; i < handles.size(); ++i) {
-            BOOST_CHECK_EQUAL(handles[i].index, entries[i + 1]->idx);
-        }
-
-        // First entry should trigger an error (tail-truncated by snapshot).
-        {
-            seastar::testing::scoped_no_abort_on_internal_error no_abort;
-            raft::log_entry_ptr_list truncated_entry = {entries[0]};
-            try {
-                storage.acquire_replay_position_handles_for(truncated_entry);
-                BOOST_FAIL("Expected on_internal_error for tail-truncated entry");
-            } catch (...) {
-                // Expected — first entry was tail-truncated by snapshot.
+        // Committed, but the segment is still the newest and still open, so the
+        // record cannot be released yet and its entries stay pinned.
+        co_await storage.store_commit_idx(entries.back()->idx);
+        for (const auto& e : entries) {
+            if (std::holds_alternative<raft::command>(e->data)) {
+                storage.note_applied(e->idx);
             }
         }
+        {
+            auto pin = storage.pin_for_apply(entries.front()->idx);
+            BOOST_CHECK(bool(pin));
+        }
+
+        // Once the commitlog reports the segment closed, the record is final and
+        // is released.
+        storage.note_closed_up_to(db::replay_position(
+                std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
+
+        {
+            seastar::testing::scoped_no_abort_on_internal_error no_abort;
+            try {
+                storage.pin_for_apply(entries.front()->idx);
+                BOOST_FAIL("Expected the record to have been released");
+            } catch (...) {
+                // Expected: no record holds the index any more.
+            }
+        }
+
+        // The descriptor the release wrote is in the row, and it is the record's
+        // own (max, term).
+        const auto persisted = co_await raft_groups_storage::load_commit_idx(qp, gid, test_shard);
+        BOOST_CHECK_EQUAL(persisted, entries.back()->idx);
+        const auto snap = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK_EQUAL(snap.idx, entries.back()->idx);
+        BOOST_CHECK_EQUAL(snap.term, entries.back()->term);
+        BOOST_CHECK(bool(snap.id));
     });
 }
+
+
+
+

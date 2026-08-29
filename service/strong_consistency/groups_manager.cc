@@ -154,7 +154,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
 
     auto* commitlog = _db.commitlog();
     SCYLLA_ASSERT(commitlog);
-    auto storage = std::make_unique<raft_groups_storage>(_qp, group_id, my_id, this_shard_id(),
+    auto storage = std::make_unique<raft_groups_storage>(_qp, _db, group_id, my_id, this_shard_id(),
         *commitlog, tablet.table, _raft_replay_buffer.take_replayed_group_entries(group_id));
 
     auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage);

@@ -10,7 +10,9 @@
 #include "cql3/untyped_result_set.hh"
 #include "db/system_keyspace.hh"
 #include "raft/raft.hh"
+#include "replica/database.hh"
 #include "utils/UUID.hh"
+#include "utils/UUID_gen.hh"
 #include "utils/log.hh"
 
 #include "serializer.hh"
@@ -28,9 +30,6 @@ logging::logger rgslog("raft_groups_storage");
 
 namespace {
 
-// Serialize a raft::configuration for the system.raft_groups snapshot_config
-// cell, using the IDL serializer the log entries' data variant already uses
-// (idl/raft_storage.idl.hh).
 bytes serialize_config(const raft::configuration& config) {
     bytes_ostream out;
     ser::serialize(out, config);
@@ -42,23 +41,28 @@ raft::configuration deserialize_config(const bytes& blob) {
     return ser::deserialize(in, std::type_identity<raft::configuration>());
 }
 
+
 } // namespace
 
-raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id, shard_id shard, db::commitlog& commit_log,
-        table_id target_table_id, replayed_data_per_group replayed_data)
-    : _raft_commitlog(gid, commit_log, target_table_id, std::move(replayed_data))
-    , _group_id(std::move(gid))
+raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, replica::database& db, raft::group_id gid,
+        raft::server_id server_id, shard_id shard, db::commitlog& commit_log, table_id target_table_id,
+        replayed_data_per_group replayed_data)
+    : _group_id(std::move(gid))
     , _server_id(std::move(server_id))
     , _qp(qp)
+    , _db(db)
+    , _raft_groups_table_id(db::system_keyspace::raft_groups()->id())
+    , _raft_commitlog(_group_id, commit_log, target_table_id, _raft_groups_table_id, std::move(replayed_data))
     , _pending_op_fut(make_ready_future<>())
 {
-    rgslog.trace("Creating raft_groups_storage for group_id={}, server_id={}, shard={}", _group_id, _server_id, _shard);
+    rgslog.trace("Creating raft_groups_storage for group_id={}, server_id={}, shard={}", _group_id, _server_id, shard);
     if (shard > std::numeric_limits<int16_t>::max()) {
         // The shard should fit in int16_t since that's the column type (smallint) we use in the Raft tables
         on_internal_error(rgslog, fmt::format("Shard value {} exceeds maximum allowed {}", shard, std::numeric_limits<int16_t>::max()));
     }
     _shard = static_cast<uint16_t>(shard);
 }
+
 
 future<> raft_groups_storage::store_term_and_vote(raft::term_t term, raft::server_id vote) {
     return execute_with_linearization_point([this, term, vote] {
@@ -83,14 +87,11 @@ future<std::pair<raft::term_t, raft::server_id>> raft_groups_storage::load_term_
 }
 
 future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
-    return execute_with_linearization_point([this, idx] {
-        static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?)",
-            db::system_keyspace::RAFT_GROUPS);
-        return _qp.execute_internal(
-            store_cql,
-            {int16_t(_shard), _group_id.id, int64_t(idx.value())},
-            cql3::query_processor::cache_internal::yes).discard_result();
-    });
+    // No IO: the commit index reaches the row through the record releases
+    // below, and after a crash through the commit_idx the batch headers carry.
+    _commit_index = idx;
+    maybe_release();
+    return make_ready_future<>();
 }
 
 future<raft::index_t> raft_groups_storage::load_commit_idx() {
@@ -98,13 +99,15 @@ future<raft::index_t> raft_groups_storage::load_commit_idx() {
 }
 
 future<raft::index_t> raft_groups_storage::load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
-    static const auto load_cql = format("SELECT commit_idx FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1", db::system_keyspace::RAFT_GROUPS);
+    // The persisted snapshot index *is* the commit index: a record is released
+    // only once every index it covers is committed, so what the row says is
+    // committed by definition.
+    static const auto load_cql = format("SELECT snapshot_idx FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1", db::system_keyspace::RAFT_GROUPS);
     ::shared_ptr<cql3::untyped_result_set> rs = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
     if (rs->empty()) {
         co_return raft::index_t(0);
     }
-    const auto& static_row = rs->one();
-    co_return raft::index_t(static_row.get_or<int64_t>("commit_idx", raft::index_t{}.value()));
+    co_return raft::index_t(rs->one().get_or<int64_t>("snapshot_idx", raft::index_t{}.value()));
 }
 
 future<raft::log_entries> raft_groups_storage::load_log() {
@@ -112,9 +115,6 @@ future<raft::log_entries> raft_groups_storage::load_log() {
 }
 
 future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor() {
-    // The whole descriptor is in the group's own row: one read, and the index,
-    // the term and the configuration are always the ones that were written
-    // together.
     static const auto load_cql = format(
             "SELECT snapshot_id, snapshot_idx, snapshot_term, snapshot_config FROM system.{} "
             "WHERE shard = ? AND group_id = ? LIMIT 1",
@@ -122,43 +122,40 @@ future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor(
     ::shared_ptr<cql3::untyped_result_set> rs = co_await _qp.execute_internal(load_cql,
             {int16_t(_shard), _group_id.id}, cql3::query_processor::cache_internal::yes);
     if (rs->empty() || !rs->one().has("snapshot_id")) {
+        // No descriptor yet: this node has not hosted the group before, and
+        // groups_manager will bootstrap() it.
         co_return raft::snapshot_descriptor();
     }
     const auto& row = rs->one();
-    raft::snapshot_descriptor s{
+    raft::snapshot_descriptor snap{
         .idx = raft::index_t(row.get_or<int64_t>("snapshot_idx", 0)),
         .term = raft::term_t(row.get_or<int64_t>("snapshot_term", 0)),
-        .id = raft::snapshot_id(row.get_as<utils::UUID>("snapshot_id"))};
+        .id = raft::snapshot_id(row.get_as<utils::UUID>("snapshot_id")),
+    };
     if (row.has("snapshot_config")) {
-        s.config = deserialize_config(row.get_blob_unfragmented("snapshot_config"));
+        snap.config = deserialize_config(row.get_blob_unfragmented("snapshot_config"));
     }
-    co_return s;
+
+    // This runs once, before the group starts, so it is also where the state
+    // the releases carry forward is seeded: the configuration a record without
+    // one of its own re-persists, and the indexes the release gate compares
+    // against.
+    _snapshot_id = snap.id;
+    _snapshot_config = snap.config;
+    _commit_index = std::max(_commit_index, snap.idx);
+    _apply_index = std::max(_apply_index, snap.idx);
+    rgslog.debug("loaded descriptor for group_id={}: idx={}, term={}",
+            _group_id, snap.idx, snap.term);
+    co_return snap;
 }
 
 future<> raft_groups_storage::store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) {
-    return execute_with_linearization_point([this, &snap, preserve_log_entries] () -> future<> {
-        // One row, one statement: index, term, configuration and id are written
-        // together, so a reader cannot see a mismatched pair.
-        static const auto store_cql = format(
-                "INSERT INTO system.{} (shard, group_id, snapshot_id, snapshot_idx, snapshot_term, snapshot_config) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                db::system_keyspace::RAFT_GROUPS);
-        co_await _qp.execute_internal(store_cql,
-                {int16_t(_shard), _group_id.id, snap.id.id, int64_t(snap.idx.value()), int64_t(snap.term.value()),
-                 data_value(serialize_config(snap.config))},
-                cql3::query_processor::cache_internal::yes);
-
-        // Release replay position handles for entries covered by the snapshot.
-        // state_machine::apply() only acquires handles for command entries;
-        // configuration and dummy entries retain their handles in the map
-        // and are cleaned up here.
-        raft::index_t log_tail_index(snap.idx.value() - preserve_log_entries);
-        _raft_commitlog.truncate_log_tail(log_tail_index);
-    });
+    // Nothing to do: see the declaration.
+    return make_ready_future<>();
 }
 
 future<> raft_groups_storage::store_log_entries(const std::vector<raft::log_entry_ptr>& entries) {
-    return _raft_commitlog.store_log_entries(entries);
+    return _raft_commitlog.store_log_entries(entries, _commit_index);
 }
 
 future<> raft_groups_storage::truncate_log(raft::index_t idx) {
@@ -168,10 +165,76 @@ future<> raft_groups_storage::truncate_log(raft::index_t idx) {
 
 future<> raft_groups_storage::abort() {
     // wait for pending write requests to complete.
-    // TODO: should we wait for all kinds of requests?
     return std::move(_pending_op_fut);
 }
 
+db::rp_handle raft_groups_storage::pin_for_apply(raft::index_t idx) {
+    return _raft_commitlog.pin_for_apply(idx);
+}
+
+void raft_groups_storage::note_applied(raft::index_t idx) {
+    _apply_index = std::max(_apply_index, idx);
+    maybe_release();
+}
+
+void raft_groups_storage::note_closed_up_to(db::replay_position pos) {
+    _raft_commitlog.note_closed_up_to(pos);
+    maybe_release();
+}
+
+void raft_groups_storage::maybe_release() {
+    // pop only after the write: a record whose descriptor write threw stays in
+    // place to be retried rather than dropping its segment reference.
+    while (auto* rec = _raft_commitlog.front_releasable(_commit_index, _apply_index)) {
+        write_snapshot_descriptor(*rec);
+        _raft_commitlog.pop_released();
+    }
+}
+
+void raft_groups_storage::write_snapshot_descriptor(segment_record& rec) {
+    // A record carrying no configuration of its own re-persists the current
+    // one: the descriptor is written whole, and a group's membership does not
+    // become unknown just because the last segment held no configuration entry.
+    if (auto conf = rec.last_conf()) {
+        _snapshot_config = std::move(conf->second);
+    }
+    if (!_snapshot_id) {
+        _snapshot_id = raft::snapshot_id(utils::make_random_uuid());
+    }
+
+    auto schema = db::system_keyspace::raft_groups();
+    auto pk = partition_key::from_exploded(*schema, {
+        short_type->decompose(int16_t(_shard)),
+        timeuuid_type->decompose(_group_id.id),
+    });
+    mutation m(schema, std::move(pk));
+    // Strictly increasing per group, so successive releases never tie (see
+    // _last_row_timestamp). Across a restart the clock is all we have; a
+    // backwards step there is the same exposure any write in the system has.
+    _last_row_timestamp = std::max(api::new_timestamp(), _last_row_timestamp + 1);
+    const auto ts = _last_row_timestamp;
+    m.set_static_cell("snapshot_id", data_value(_snapshot_id.id), ts);
+    m.set_static_cell("snapshot_idx", data_value(int64_t(rec.max.value())), ts);
+    m.set_static_cell("snapshot_term", data_value(int64_t(rec.max_term().value())), ts);
+    m.set_static_cell("snapshot_config", data_value(serialize_config(_snapshot_config)), ts);
+
+    auto& cf = _db.find_column_family(_raft_groups_table_id);
+    try {
+        // Synchronous and IO-free: the mutation goes straight into the
+        // raft_groups memtable, carrying the segment's raft_groups reference, so
+        // the flush that makes this descriptor durable is the same flush that
+        // lets the segment go.
+        cf.apply(m, std::move(rec.pin_rg));
+    } catch (...) {
+        // The reference was moved into a mutation that did not land. Take
+        // another one so the segment is still held, and leave the record for
+        // the next attempt.
+        rec.pin_rg = rec.pin_table.clone(_raft_groups_table_id);
+        throw;
+    }
+    rgslog.debug("released record for group_id={}: segment={}, snapshot=({}, {})",
+            _group_id, rec.segment(), rec.max, rec.max_term());
+}
 
 future<> raft_groups_storage::store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap) {
     // Guard against repeated replays (e.g. a crash after writing but before the
@@ -206,15 +269,21 @@ future<> raft_groups_storage::execute_with_linearization_point(std::function<fut
 }
 
 future<> raft_groups_storage::bootstrap(raft::configuration initial_configuation, bool nontrivial_snapshot) {
-    auto init_index = nontrivial_snapshot ? raft::index_t{1} : raft::index_t{0};
-    raft::snapshot_descriptor snapshot{.idx{init_index}};
-    snapshot.id = raft::snapshot_id::create_random_id();
-    snapshot.config = std::move(initial_configuation);
-    co_await store_snapshot_descriptor(snapshot, 0);
-}
-
-std::vector<index_and_replay_position> raft_groups_storage::acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries) {
-    return _raft_commitlog.acquire_replay_position_handles_for(entries);
+    // The one descriptor written by CQL: there is no record to release yet, and
+    // no group running whose memtable mutation could carry it.
+    const auto init_index = nontrivial_snapshot ? raft::index_t{1} : raft::index_t{0};
+    _snapshot_id = raft::snapshot_id(utils::make_random_uuid());
+    _snapshot_config = std::move(initial_configuation);
+    _commit_index = std::max(_commit_index, init_index);
+    _apply_index = std::max(_apply_index, init_index);
+    static const auto store_cql = format(
+            "INSERT INTO system.{} (shard, group_id, snapshot_id, snapshot_idx, snapshot_term, snapshot_config) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            db::system_keyspace::RAFT_GROUPS);
+    co_await _qp.execute_internal(store_cql,
+            {int16_t(_shard), _group_id.id, _snapshot_id.id, int64_t(init_index.value()), int64_t(0),
+             data_value(serialize_config(_snapshot_config))},
+            cql3::query_processor::cache_internal::yes);
 }
 
 } // namespace service::strong_consistency

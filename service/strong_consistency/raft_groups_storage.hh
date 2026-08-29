@@ -10,6 +10,7 @@
 #include "raft/raft.hh"
 
 #include <vector>
+#include <deque>
 #include <functional>
 
 #include <seastar/core/future.hh>
@@ -29,21 +30,62 @@ class modification_statement;
 
 } // namespace cql3
 
+namespace replica {
+class database;
+}
+
 namespace service::strong_consistency {
 
-// Raft persistence for strongly consistent tablet groups.
+// Raft persistence for strongly consistent tablet groups, backed by the
+// database commitlog.
 //
-// Similar to raft_sys_table_storage, but the state lives in one table,
-// system.raft_groups, whose (shard, group_id) composite partition key lets a
-// group's data reside on the same shard as the tablet replica. The whole
-// snapshot descriptor — index, term and configuration — is in that group's
-// static row, so it is read with one query and written by one statement.
+// The raft log itself lives in the commitlog: store_log_entries() writes one
+// batch as one commitlog entry, and nothing else writes to disk on the raft
+// io_fiber. The snapshot descriptor the group has to remember beyond the log is
+// a single static row in system.raft_groups, and from here on that row is
+// written by a mutation applied straight to the raft_groups memtable rather
+// than by a CQL statement.
+//
+// Releasing a record (see raft_commitlog, which owns everything about segments)
+// writes the descriptor from that record's own (max, term) and hands the
+// record's raft_groups reference to the same mutation, so the segment lives
+// exactly until the flush that makes the descriptor durable. That is the whole
+// retention rule: a segment holding a group's raft entries goes away only after
+// a durable descriptor covers them.
 class raft_groups_storage : public raft::persistence {
-    raft_commitlog _raft_commitlog;
     raft::group_id _group_id;
     raft::server_id _server_id;
     uint16_t _shard;
     cql3::query_processor& _qp;
+    replica::database& _db;
+    // system.raft_groups: the table whose memtable carries the descriptor
+    // mutations.
+    const db::cf_id_type _raft_groups_table_id;
+
+    // The group's raft log in the commitlog; see raft_commitlog's class comment.
+    raft_commitlog _raft_commitlog;
+
+    // Highest index raft has told us is committed. In memory only: it is
+    // recovered after a crash from the batch headers, and after a clean
+    // shutdown from the persisted snapshot index.
+    raft::index_t _commit_index{0};
+    // Highest index whose command has been handed to a memtable by apply().
+    raft::index_t _apply_index{0};
+    // The configuration the last released record persisted, so that a record
+    // carrying no configuration of its own re-persists the current one rather
+    // than clearing it.
+    raft::configuration _snapshot_config;
+    // The snapshot id in the row. Raft only checks it for being set.
+    raft::snapshot_id _snapshot_id;
+    // Timestamp of the last descriptor mutation. api::new_timestamp() is the
+    // microsecond wall clock and is neither unique per call nor monotonic across
+    // a clock step, and two releases in one reactor task routinely land in the
+    // same microsecond. At equal timestamps cells reconcile by value, and for
+    // the two blob cells that means the larger blob wins per cell — so a row
+    // could end up pairing one release's index with another's configuration.
+    // Keeping our own strictly increasing value removes that.
+    api::timestamp_type _last_row_timestamp = api::min_timestamp;
+
     // The future of the currently executing (or already finished) write operation.
     //
     // Used to linearize write operations to system.raft_groups table.
@@ -51,8 +93,10 @@ class raft_groups_storage : public raft::persistence {
     future<> _pending_op_fut;
 
 public:
-    explicit raft_groups_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id, shard_id shard,
-        db::commitlog& commit_log, table_id target_table_id, replayed_data_per_group replayed_data);
+    explicit raft_groups_storage(cql3::query_processor& qp, replica::database& db, raft::group_id gid,
+        raft::server_id server_id, shard_id shard, db::commitlog& commit_log, table_id target_table_id,
+        replayed_data_per_group replayed_data);
+
 
     future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override;
     future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override;
@@ -61,30 +105,49 @@ public:
     future<raft::log_entries> load_log() override;
     future<raft::snapshot_descriptor> load_snapshot_descriptor() override;
 
-    // Store a snapshot `snap` and preserve the most recent `preserve_log_entries` log entries,
-    // i.e. truncate all entries with `idx <= (snap.idx - preserve_log_entries)`
+    // A no-op: the descriptor is written by the record releases, from the
+    // indexes the group has actually made durable, and raft's own idea of when
+    // to snapshot has nothing to add to that.
     future<> store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) override;
-    // Pre-checks that no log truncation is in process before dispatching to the actual implementation
     future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) override;
     future<> truncate_log(raft::index_t idx) override;
     future<> abort() override;
 
-    // Persist initial configuration of a new Raft group.
-    // To be called before start for the new group.
+    // Persist the initial descriptor of a new raft group. To be called before
+    // start for a group this node has not hosted before.
     future<> bootstrap(raft::configuration initial_configuation, bool nontrivial_snapshot);
 
-    // Static version that doesn't require constructing a full raft_groups_storage object.
-    // Useful during commitlog replay when only read access to metadata is needed.
-    static future<raft::index_t> load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
-    // Store snapshot idx and term without updating the configuration.
-    // Used to advance the persisted snapshot index so that raft does not
-    // re-apply already applied entries on restart. Only writes if the new
-    // index is higher than the existing one (safe to call on repeated replays).
-    static future<> store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap);
+    // Take a reference for the command at `idx` from the record that holds it,
+    // to be attached to the mutation apply() is about to put in the target
+    // table's memtable. The segment then lives until that memtable's flush.
+    db::rp_handle pin_for_apply(raft::index_t idx);
 
-    std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
+    // Tell the storage that the command at `idx` has been handed to a memtable.
+    // May release records, so it must be called after the apply, not before.
+    void note_applied(raft::index_t idx);
+
+    // Called with the commitlog's flush position: everything at or below it is
+    // in a closed segment, which is what lets the newest record be released.
+    void note_closed_up_to(db::replay_position pos);
+
+    // Release every record that is now committed, applied and closed.
+    void maybe_release();
+
+    // Static version that doesn't require constructing a full
+    // raft_groups_storage object. Used during commitlog replay, when only read
+    // access to a group's metadata is needed.
+    static future<raft::index_t> load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    // Persist a snapshot descriptor by CQL. Only used during commitlog replay,
+    // before any group is running; at runtime the row is written exclusively by
+    // the record releases. Only advances the index, so repeated replays are
+    // idempotent.
+    static future<> store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
+        const raft::snapshot_descriptor& snap);
 
 private:
+    // Write the group's snapshot descriptor from `rec` and hand the record's
+    // raft_groups reference to that mutation.
+    void write_snapshot_descriptor(segment_record& rec);
 
     future<> execute_with_linearization_point(std::function<future<>()> f);
 };

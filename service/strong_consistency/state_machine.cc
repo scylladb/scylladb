@@ -55,14 +55,25 @@ public:
     {
     }
 
+    // Tell the persistence that a batch it is holding segment references for is
+    // never going to be applied, because its table or keyspace is gone.
+    //
+    // Without this the record holding those entries stays at the front of the
+    // queue for good: its release gate waits for the last *command* to be
+    // applied, and nothing else will ever apply it. A later batch would then
+    // hit pin_for_apply() with an index past the front record and abort the
+    // process. Discarding costs nothing — there is no memtable left to keep the
+    // data for, and the segment is what we are trying to let go of.
+    void note_batch_discarded(const raft::log_entry_ptr_list& command) {
+        if (!command.empty()) {
+            _persistence.note_applied(command.back()->idx);
+        }
+    }
+
     future<> apply(raft::log_entry_ptr_list command) override {
         static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(10));
         try {
             co_await utils::get_local_injector().inject("strong_consistency_state_machine_wait_before_apply", utils::wait_for_message(20min));
-            // Get replay positions for the commands.
-            auto replay_positions = _persistence.acquire_replay_position_handles_for(command);
-            // Make sure we got replay positions for all commands.
-            throwing_assert(replay_positions.size() == command.size());
             // One store for the whole batch, so that commands written with the same
             // schema version resolve their schema only once.
             schema_store schemas(_db, _sys_ks, [this]() -> future<> {
@@ -75,13 +86,21 @@ public:
             // E.g., for writes A-B-C-D, a reader must observe
             // them in that order and never see A-C or A-D skipping intermediate values.
             for (size_t i = 0; i < command.size(); ++i) {
-                throwing_assert(replay_positions[i].index == command[i]->idx);
                 auto mut = detail::deserialize_to_frozen_mutation(command[i]);
                 auto schema = co_await schemas.resolve_and_upgrade(mut);
+                // The reference comes from the record holding this entry, so the
+                // segment lives until the target memtable's flush makes the data
+                // durable. Taken after the schema resolution above, which may
+                // yield on the group0 barrier.
+                auto pin = _persistence.pin_for_apply(command[i]->idx);
                 // Concurrent apply_in_memory() calls can complete out of order under memory pressure
                 // (suspended at run_when_memory_available()), making mutations visible out of Raft log order.
                 // Therefore we must await each apply_in_memory() sequentially to preserve Raft log order.
-                co_await _db.apply_in_memory(mut, std::move(schema), std::move(replay_positions[i].replay_position_handle), db::no_timeout, db::noop_large_data_guardrail::instance());
+                co_await _db.apply_in_memory(mut, std::move(schema), std::move(pin), db::no_timeout, db::noop_large_data_guardrail::instance());
+                // Only now may the record holding this entry be released: the
+                // data it covers is in a memtable that owns a reference of its
+                // own.
+                _persistence.note_applied(command[i]->idx);
             }
         } catch (replica::no_such_column_family&) {
             // If the table doesn't exist, it means it was already dropped.
@@ -90,6 +109,7 @@ public:
             // (see `schema_applier::commit_on_shard()` and `storage_service::commit_token_metadata_change()`).
             // In this case, we should just ignore mutations without throwing an error.
             logger.log(log_level::warn, rate_limit, "apply(): table {} was already dropped, ignoring mutations", _tablet.table);
+            note_batch_discarded(command);
         } catch (replica::no_such_keyspace&) {
             // Thrown when DROP KEYSPACE races with the raft applier fiber.
             // The path: schema_store::resolve_and_upgrade() calls
@@ -102,6 +122,7 @@ public:
             // Safe to ignore: the table's raft group is about to be destroyed
             // by schedule_raft_group_deletion() anyway.
             logger.log(log_level::warn, rate_limit, "apply(): keyspace for table {} was already dropped, ignoring mutations", _tablet.table);
+            note_batch_discarded(command);
         } catch (const abort_requested_exception& ex) {
             // The exception can be thrown by schema_store::resolve_and_upgrade.
             // It means that the Raft group is being removed.

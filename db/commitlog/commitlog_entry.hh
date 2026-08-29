@@ -93,20 +93,32 @@ public:
     frozen_mutation&& mutation() && { return std::move(_mutation); }
 };
 
-// A Raft log entry (command, configuration change, or dummy) together with
-// its group ID.  Stored in the database commitlog when the strongly-consistent
-// tables experimental feature is enabled and the segment uses the variant
-// serialization format.
-struct raft_commitlog_entry {
+// One raft batch as it is stored in the commitlog: the group id once, how far
+// the group had committed when the batch was written, and the entries the
+// batch appended (commands, configuration changes, dummies).
+//
+// The whole batch is a single commitlog entry, so the group id and the entry
+// envelope are written once per batch rather than once per raft entry, and the
+// batch has exactly one position. A batch too large for one commitlog entry is
+// rejected rather than fragmented: a copy of an entry has to live in exactly
+// one segment. Replay therefore never reassembles a batch from parts.
+//
+// commit_idx is the group's commit index at write time. Replay uses it to
+// decide which of the entries it reads are already committed, which bounds how
+// much it has to buffer: everything at or below the highest commit_idx it has
+// seen can be applied and dropped instead of held (SCYLLADB-1539). Zero means
+// the group had not committed anything yet.
+struct raft_commitlog_batch {
     raft::group_id group_id;
-    raft::log_entry_ptr entry;
+    raft::index_t commit_idx;
+    std::vector<raft::log_entry_ptr> entries;
 };
 
 // The on-disk envelope for variant-format commitlog segments. Each
 // entry contains exactly one of the variant alternatives: a mutation_entry
-// (normal table write) or a raft_commitlog_entry (Raft log entry for
-// strongly-consistent tables).
-using commitlog_entry_variant = std::variant<raft_commitlog_entry, mutation_entry>;
+// (normal table write) or a raft_commitlog_batch (one batch of raft log
+// entries for strongly-consistent tables).
+using commitlog_entry_variant = std::variant<raft_commitlog_batch, mutation_entry>;
 struct commitlog_entry {
     commitlog_entry_variant item;
 };
@@ -178,11 +190,12 @@ public:
     frozen_mutation&& mutation() && { return std::move(_me).mutation(); }
 };
 
-// Writer for Raft log entries to the database commit log using the commitlog_entry format.
-class commitlog_raft_log_entry_writer {
+// Writer for one raft batch to the database commit log using the
+// commitlog_entry format.
+class commitlog_raft_batch_writer {
 public:
 protected:
-    raft_commitlog_entry _item;
+    raft_commitlog_batch _item;
     std::size_t _size = std::numeric_limits<std::size_t>::max();
 
     template<typename Output>
@@ -190,7 +203,7 @@ protected:
     void compute_size();
 
 public:
-    explicit commitlog_raft_log_entry_writer(raft_commitlog_entry item)
+    explicit commitlog_raft_batch_writer(raft_commitlog_batch item)
         : _item(std::move(item)) { compute_size(); }
 
     size_t size() const {
@@ -200,7 +213,7 @@ public:
 
     using ostream = typename seastar::memory_output_stream<detail::sector_split_iterator>;
     void write(ostream& out) const;
-    const raft_commitlog_entry& get_log_entry() const {
+    const raft_commitlog_batch& get_batch() const {
         return _item;
     }
 };
