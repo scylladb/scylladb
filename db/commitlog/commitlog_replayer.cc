@@ -229,11 +229,16 @@ future<> db::commitlog_replayer::impl::process(
         commitlog_entry_reader cer(buf, entry_format);
         const auto& read_entry = cer.entry().item;
 
-        if (std::holds_alternative<raft_commitlog_entry>(read_entry)) {
-            const auto& raft_entry = std::get<raft_commitlog_entry>(read_entry);
+        if (std::holds_alternative<raft_commitlog_batch>(read_entry)) {
+            // One raft batch: its entries, and how far the group had committed
+            // when it was written.
+            const auto& batch = std::get<raft_commitlog_batch>(read_entry);
             SCYLLA_ASSERT(_raft_buffer);
-            rlogger.debug("Adding raft log entry for group {} at {} to replay buffer", raft_entry.group_id, rp);
-            _raft_buffer->local().add(raft_entry.group_id, raft_entry.entry);
+            rlogger.debug("Adding raft batch for group {} at {} to replay buffer: {} entries, commit_idx {}",
+                    batch.group_id, rp, batch.entries.size(), batch.commit_idx);
+            for (const auto& entry : batch.entries) {
+                _raft_buffer->local().add(batch.group_id, entry);
+            }
             co_return;
         } else if (std::holds_alternative<mutation_entry>(read_entry)) {
             const auto& mut_entry = std::get<mutation_entry>(read_entry);
