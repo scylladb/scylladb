@@ -157,12 +157,12 @@ future<raft::log_entries> raft_groups_storage::load_log() {
 
 future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor() {
     static const auto load_cql = format(
-            "SELECT snapshot_id, snapshot_idx, snapshot_term, snapshot_config, truncations FROM system.{} "
+            "SELECT snapshot_idx, snapshot_term, snapshot_config, truncations FROM system.{} "
             "WHERE shard = ? AND group_id = ? LIMIT 1",
             db::system_keyspace::RAFT_GROUPS);
     ::shared_ptr<cql3::untyped_result_set> result = co_await _qp.execute_internal(load_cql,
             {int16_t(_shard), _group_id.id}, cql3::query_processor::cache_internal::yes);
-    if (result->empty() || !result->one().has("snapshot_id")) {
+    if (result->empty() || !result->one().has("snapshot_idx")) {
         // No descriptor yet; groups_manager will bootstrap() the group.
         co_return raft::snapshot_descriptor();
     }
@@ -170,7 +170,9 @@ future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor(
     raft::snapshot_descriptor snap{
         .idx = raft::index_t(row.get_or<int64_t>("snapshot_idx", 0)),
         .term = raft::term_t(row.get_or<int64_t>("snapshot_term", 0)),
-        .id = raft::snapshot_id(row.get_as<utils::UUID>("snapshot_id")),
+        // Synthesized, not persisted: raft only checks that an id is set before
+        // calling the state machine's load_snapshot(), a no-op here.
+        .id = raft::snapshot_id(utils::make_random_uuid()),
     };
     if (row.has("snapshot_config")) {
         snap.config = deserialize_config(row.get_blob_unfragmented("snapshot_config"));
@@ -179,7 +181,6 @@ future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor(
     // Called twice before the group starts: groups_manager reads the descriptor
     // to decide whether to bootstrap, raft::server reads it again as it starts.
     // The seeding below must stay idempotent.
-    _snapshot_id = snap.id;
     _snapshot_config = snap.config;
     if (row.has("truncations")) {
         // The row already holds this, so the first release need not rewrite it.
@@ -286,9 +287,6 @@ void raft_groups_storage::write_snapshot_descriptor(segment_record& rec) {
     if (auto conf = rec.last_conf()) {
         _snapshot_config = std::move(conf->second);
     }
-    if (!_snapshot_id) {
-        _snapshot_id = raft::snapshot_id(utils::make_random_uuid());
-    }
 
     auto schema = db::system_keyspace::raft_groups();
     auto pk = partition_key::from_exploded(*schema, {
@@ -301,7 +299,6 @@ void raft_groups_storage::write_snapshot_descriptor(segment_record& rec) {
     // Strictly increasing per group; see _last_row_timestamp.
     _last_row_timestamp = std::max(api::new_timestamp(), _last_row_timestamp + 1);
     const auto ts = _last_row_timestamp;
-    m.set_clustered_cell(ckey, "snapshot_id", data_value(_snapshot_id.id), ts);
     m.set_clustered_cell(ckey, "snapshot_idx", data_value(int64_t(rec.max.value())), ts);
     m.set_clustered_cell(ckey, "snapshot_term", data_value(int64_t(rec.max_term().value())), ts);
     m.set_clustered_cell(ckey, "snapshot_config", data_value(serialize_config(_snapshot_config)), ts);
@@ -373,13 +370,11 @@ future<> raft_groups_storage::store_descriptor(cql3::query_processor& qp, raft::
         co_return;
     }
     static const auto store_cql = format(
-            "INSERT INTO system.{} (shard, group_id, snapshot_id, snapshot_idx, snapshot_term, snapshot_config, truncations) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO system.{} (shard, group_id, snapshot_idx, snapshot_term, snapshot_config, truncations) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             db::system_keyspace::RAFT_GROUPS);
-    // A descriptor raft will accept has to have an id; replay is as good a place
-    // to mint one as bootstrap, and only its being set is ever checked.
     co_await qp.execute_internal(store_cql,
-            {int16_t(shard), gid.id, utils::make_random_uuid(), int64_t(idx.value()), int64_t(term.value()),
+            {int16_t(shard), gid.id, int64_t(idx.value()), int64_t(term.value()),
              data_value(serialize_config(config)), serialize_truncations(truncations)},
             cql3::query_processor::cache_internal::yes);
 }
@@ -401,16 +396,16 @@ future<> raft_groups_storage::bootstrap(raft::configuration initial_configuation
     // The one descriptor written by CQL: there is no record to release yet, and
     // no group running whose memtable mutation could carry it.
     const auto init_index = nontrivial_snapshot ? raft::index_t{1} : raft::index_t{0};
-    _snapshot_id = raft::snapshot_id(utils::make_random_uuid());
     _snapshot_config = std::move(initial_configuation);
     _commit_index = std::max(_commit_index, init_index);
     _apply_index = std::max(_apply_index, init_index);
     static const auto store_cql = format(
-            "INSERT INTO system.{} (shard, group_id, snapshot_id, snapshot_idx, snapshot_term, snapshot_config, truncations) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO system.{} (shard, group_id, snapshot_idx, snapshot_term, snapshot_config, truncations) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             db::system_keyspace::RAFT_GROUPS);
+    // snapshot_idx being present is what marks the group as bootstrapped.
     co_await _qp.execute_internal(store_cql,
-            {int16_t(_shard), _group_id.id, _snapshot_id.id, int64_t(init_index.value()), int64_t(0),
+            {int16_t(_shard), _group_id.id, int64_t(init_index.value()), int64_t(0),
              data_value(serialize_config(_snapshot_config)),
              serialize_truncations({})},
             cql3::query_processor::cache_internal::yes);
