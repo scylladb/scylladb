@@ -208,6 +208,15 @@ public:
     const std::vector<raft::log_entry_ptr>& entries() const { return _entries; }
 };
 
+// Thrown when the variant tag says raft batch but its payload will not decode.
+// The tag is read before the payload, so the entry is known to be a raft batch
+// and replay must fail instead of counting it as one bad mutation and going on:
+// the entries it holds are gone with the old segments once startup finishes.
+class raft_batch_decode_error : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 class commitlog_entry_reader {
     commitlog_entry _entry;
 
