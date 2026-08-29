@@ -26,6 +26,7 @@
 #include "idl/raft_storage.dist.impl.hh"
 
 #include <algorithm>
+#include <unordered_map>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -44,7 +45,16 @@ namespace {
 // replaying it. has_replica() covers the old replica set and, through the transition's
 // next set, the pending replica, so a replica in the middle of joining still replays what
 // it received before the restart.
-std::unordered_map<raft::group_id, table_id> build_group_to_table_map(const locator::token_metadata& tm) {
+std::unordered_map<raft::group_id, table_id> build_group_to_table_map(replica::database& db) {
+    const auto token_metadata = db.get_shared_token_metadata().get();
+    const auto& tm = *token_metadata;
+    if (!tm.get_my_id()) {
+        // Every answer below is "this shard holds no replica" without our own host id, so
+        // replay would silently discard committed entries that were never flushed. The id
+        // reaches the topology config early in boot, long before replay, so an absent one
+        // means the boot sequence changed under us. Fail loudly instead.
+        on_internal_error(logger, "processing the raft replay buffer before the local host id is known");
+    }
     const auto this_replica = locator::tablet_replica {
         .host = tm.get_my_id(),
         .shard = this_shard_id()
@@ -67,200 +77,295 @@ std::unordered_map<raft::group_id, table_id> build_group_to_table_map(const loca
     }
     return result;
 }
-
-struct filter_entries_result {
-    std::vector<raft::log_entry_ptr> entries;
-    uint64_t discarded_leader_change = 0;
-};
-
-// First pass: Filter entries by handling leader changes and out-of-order tails.
-// This function does not perform any database or commitlog writes.
-// Returns the filtered entries along with discard statistics.
-//
-// Handles crash recovery scenarios where both old and new commitlog segments are replayed:
-// - Detects leader changes and discards replaced uncommitted entries (idx >= new entry's idx)
-// - Stops processing when an out-of-order entry is encountered (idx <= last_idx with same or
-//   lower term), which indicates the start of a duplicate tail from an older segment
-//
-// Note: This function does NOT filter by snapshot_idx. All entries pass through so that
-// the caller can apply committed entries to memtables even if they are already snapshotted.
-// After a crash, snapshotted entries may not have been flushed to sstables, so they must
-// be re-applied during replay.
-filter_entries_result filter_entries(utils::chunked_vector<raft::log_entry_ptr>& entries_list, raft::group_id group_id) {
-    filter_entries_result result;
-
-    raft::index_t last_idx{0};
-    raft::term_t last_term{0};
-
-    for (auto& entry : entries_list) {
-        // Check for out-of-order indices which indicate either a leader change
-        // (term changed) or a duplicate tail from an older segment.
-        const auto ordering = raft_buffer_detail::check_entry_ordering({.term = entry->term, .idx = entry->idx}, {.term = last_term, .idx = last_idx});
-
-        switch (ordering) {
-        case raft_buffer_detail::entry_ordering_check_result::in_order:
-            break;
-        case raft_buffer_detail::entry_ordering_check_result::leader_change: {
-            // Leader changed — discard all entries with idx >= entry->idx from
-            // the previous term. These were uncommitted entries from the old leader
-            // that were replaced by the new leader.
-            //
-            // Since entries are sorted by idx, we can use binary search to find
-            // the first entry with idx >= entry->idx and erase from there to the end.
-            auto it = std::ranges::lower_bound(result.entries, entry->idx, {}, [](const raft::log_entry_ptr& e) {
-                return e->idx;
-            });
-            auto removed_count = std::distance(it, result.entries.end());
-            result.entries.erase(it, result.entries.end());
-            result.discarded_leader_change += removed_count;
-
-            logger.debug("group {}: leader change detected at idx={} term={} (previous term={}), "
-                         "discarded {} entries with idx >= {}",
-                    group_id, entry->idx, entry->term, last_term, removed_count, entry->idx);
-            break;
-        }
-        case raft_buffer_detail::entry_ordering_check_result::out_of_order:
-            // Smaller index and same/smaller term - we hit the start of a duplicate
-            // range from an older commitlog segment.  This happens after a crash
-            // when uncommitted entries were re-written to a new segment and then
-            // the old segment is replayed first.  All remaining entries from this
-            // point are duplicates, so stop processing.
-            logger.debug("group {}: detected duplicate tail from older segment at idx={} term={} "
-                        "(last_idx={}), stopping entry processing",
-                    group_id, entry->idx, entry->term, last_idx);
-            return result;
-        }
-
-        last_idx = entry->idx;
-        last_term = entry->term;
-
-        result.entries.push_back(std::move(entry));
-    }
-    return result;
-}
-
 } // anonymous namespace
 
-future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks) {
-    if (remaining_groups() == 0) {
+namespace raft_buffer_detail {
+
+std::vector<raft::log_entry_ptr> drop_truncated_copies(segment_cursors& cursors,
+        const std::vector<raft::log_entry_ptr>& entries) {
+    std::vector<raft::log_entry_ptr> remaining_entries;
+    remaining_entries.reserve(entries.size());
+    for (const auto& entry : entries) {
+        bool is_truncated = false;
+        // Overlapping truncations leave several cursors live at one index. Only
+        // the cursor waiting for that index claims the copy.
+        for (auto& cursor : cursors) {
+            if (cursor.exhausted() || cursor.next != entry->idx) {
+                continue;
+            }
+            ++cursor.next;
+            is_truncated = true;
+            break;
+        }
+        if (!is_truncated) {
+            remaining_entries.push_back(entry);
+        }
+    }
+    return remaining_entries;
+}
+
+size_t superseded_by(const std::deque<buffered_entry>& buf, const raft::log_entry_ptr& first) {
+    if (buf.empty() || first->idx < buf.front().entry->idx) {
+        // The buffer starts one past the floor, so a batch below it holds copies of
+        // committed entries, which are never replaced. No caller hands one over: the
+        // rewritten tail a later replay reads starts at the floor it was written
+        // with. Without the guard the term test below compares against a buffered
+        // entry at a different index, and a mismatch there drops the live tail and
+        // records it as truncated.
+        return 0;
+    }
+    size_t count = 0;
+    for (auto entry_it = buf.rbegin(); entry_it != buf.rend() && entry_it->entry->idx >= first->idx; ++entry_it) {
+        ++count;
+    }
+    if (count == 0) {
+        return 0;
+    }
+    // The buffered copy at the same index. Equal terms mean the same entry, so
+    // this batch is a second copy of what is buffered. A crash between the runs
+    // of a split rewrite leaves exactly that, and superseding on it would drop
+    // the tail above the run.
+    if (buf[buf.size() - count].entry->term == first->term) {
+        return 0;
+    }
+    return count;
+}
+
+} // namespace raft_buffer_detail
+
+future<> raft_commitlog_replay_buffer::resolve_group(replica::database& db, cql3::query_processor& qp,
+        raft::group_id group_id, group_state& group) {
+    group.resolved = true;
+
+    if (!_group_to_table) {
+        _group_to_table = build_group_to_table_map(db);
+    }
+    const auto table_it = _group_to_table->find(group_id);
+    if (table_it == _group_to_table->end()) {
+        // Nothing may be resurrected for this group, including its row.
+        logger.info("group {} has no tablet replica on this shard, discarding its entries", group_id);
+        co_return;
+    }
+    // The floor: every index at or below it is committed.
+    auto persisted = co_await service::strong_consistency::raft_groups_storage::load_descriptor(qp, group_id, this_shard_id());
+    if (!persisted.exists) {
+        // Tablet cleanup erased this shard's raft state for the group, and crashed or was
+        // interrupted before it finished removing the tablet's storage; the tablet metadata
+        // read above is from before that. The replica has left the group, so its entries
+        // are not ours to apply - the coordinator retries the cleanup.
+        logger.info("group {} has no persisted raft state on this shard, discarding its entries", group_id);
+        co_return;
+    }
+    group.known = true;
+    group.table = table_it->second;
+    group.commit_idx = persisted.idx;
+    group.commit_term = persisted.term;
+    group.config = std::move(persisted.config);
+    // The persisted configuration sits at the floor, so only a configuration entry
+    // above the floor supersedes it.
+    group.config_idx = persisted.idx;
+    group.truncations = std::move(persisted.truncations);
+    for (const auto& truncation : group.truncations) {
+        group.cursors[truncation.segment].push_back(raft_buffer_detail::truncation_cursor{
+                .from = truncation.from, .to = truncation.to, .next = truncation.from});
+    }
+    logger.debug("group {}: recovered floor ({}, {}), {} truncation records",
+            group_id, group.commit_idx, group.commit_term, group.truncations.size());
+}
+
+void raft_commitlog_replay_buffer::note_committed(group_state& group, const raft::log_entry_ptr& entry) {
+    if (entry->idx > group.commit_idx) {
+        return;
+    }
+    // Only the entry at the floor: raft reads snapshot_term as the term at
+    // snapshot_idx, for the election check and for log matching at the snapshot
+    // boundary. A copy of an older committed index read later would otherwise pair
+    // that index's term with the floor's index.
+    if (entry->idx == group.commit_idx) {
+        group.commit_term = entry->term;
+    }
+    if (std::holds_alternative<raft::configuration>(entry->data) && entry->idx >= group.config_idx) {
+        group.config = std::get<raft::configuration>(entry->data);
+        group.config_idx = entry->idx;
+    }
+}
+
+future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db::system_keyspace& sys_ks,
+        const raft::log_entry_ptr& entry) {
+    if (!std::holds_alternative<raft::command>(entry->data)) {
+        co_return;
+    }
+    if (!_schemas) {
+        _schemas.emplace(db, sys_ks);
+    }
+    auto mut = service::strong_consistency::detail::deserialize_to_frozen_mutation(entry);
+    auto schema = co_await _schemas->resolve_and_upgrade(mut);
+    co_await db.apply_in_memory(mut, std::move(schema), db::rp_handle(), db::no_timeout,
+            db::noop_large_data_guardrail::instance());
+}
+
+future<> raft_commitlog_replay_buffer::drain_committed(replica::database& db, db::system_keyspace& sys_ks,
+        group_state& group) {
+    while (!group.buf.empty() && group.buf.front().entry->idx <= group.commit_idx) {
+        auto entry = std::move(group.buf.front().entry);
+        group.buf.pop_front();
+        note_committed(group, entry);
+        co_await apply_committed(db, sys_ks, entry);
+        ++group.applied;
+        co_await seastar::coroutine::maybe_yield();
+    }
+}
+
+future<> raft_commitlog_replay_buffer::add_batch(replica::database& db, cql3::query_processor& qp,
+        db::system_keyspace& sys_ks, raft::group_id group_id, db::segment_id_type segment,
+        raft::index_t commit_idx, const std::vector<raft::log_entry_ptr>& entries) {
+    auto& group = _groups[group_id];
+    if (!group.resolved) {
+        co_await resolve_group(db, qp, group_id, group);
+    }
+    if (!group.known) {
+        co_return;
+    }
+    _total_entries += entries.size();
+
+    group.commit_idx = std::max(group.commit_idx, commit_idx);
+    // Raft never replaces a committed entry, so every index at or below this
+    // header's commit_idx had its current copy written before the batch and
+    // already read by replay. The entries the buffer holds there are final.
+    co_await drain_committed(db, sys_ks, group);
+
+    // Drop the copies a truncation superseded.
+    std::vector<raft::log_entry_ptr> remaining_entries = entries;
+    if (auto cursors_it = group.cursors.find(segment); cursors_it != group.cursors.end()) {
+        remaining_entries = raft_buffer_detail::drop_truncated_copies(
+                cursors_it->second, entries);
+        group.dropped_truncated += entries.size() - remaining_entries.size();
+    }
+
+    if (remaining_entries.empty()) {
         co_return;
     }
 
-    const auto token_metadata = db.get_shared_token_metadata().get();
-    if (!token_metadata->get_my_id()) {
-        // Everything below decides what to replay by asking whether this node holds a
-        // replica, so without our own host id the answer is "nothing" for every group and
-        // we would silently discard committed entries that were never flushed. The id is
-        // published into the topology config early in boot, long before replay, so this
-        // means the boot sequence changed under us. Fail loudly instead.
-        on_internal_error(logger, "processing the raft replay buffer before the local host id is known");
+    // Record per segment what the supersede dropped. The floor persisted at
+    // the end of replay makes those indexes look committed. That row is
+    // durable before the old segments are deleted, so a second replay of the
+    // same segments would apply a copy no leader ever committed.
+    const auto superseded_count = raft_buffer_detail::superseded_by(
+            group.buf, remaining_entries.front());
+    std::unordered_map<db::segment_id_type, std::pair<raft::index_t, raft::index_t>> dropped;
+    for (size_t i = 0; i < superseded_count; ++i) {
+        const auto& back = group.buf.back();
+        auto [dropped_it, inserted] = dropped.try_emplace(back.segment,
+                std::pair(back.entry->idx, back.entry->idx));
+        if (!inserted) {
+            dropped_it->second.first = std::min(dropped_it->second.first, back.entry->idx);
+            dropped_it->second.second = std::max(dropped_it->second.second, back.entry->idx);
+        }
+        group.buf.pop_back();
     }
-    const auto group_to_table = build_group_to_table_map(*token_metadata);
+    // A dropped copy can come from an older segment than this batch's.
+    for (const auto& [dropped_segment, range] : dropped) {
+        group.truncations.push_back(service::strong_consistency::truncation_record{
+                .segment = dropped_segment, .from = range.first, .to = range.second});
+    }
+    group.superseded += superseded_count;
 
+    // What a truncation superseded is gone from the buffer, so this only bites
+    // on the copies of a duplicate batch: keep the buffered ones and the tail
+    // above them.
+    if (!group.buf.empty()) {
+        const raft::index_t buffered_up_to = group.buf.back().entry->idx;
+        std::erase_if(remaining_entries,
+                [buffered_up_to](const auto& entry) { return entry->idx <= buffered_up_to; });
+        if (remaining_entries.empty()) {
+            co_return;
+        }
+    }
+
+    for (auto& entry : remaining_entries) {
+        if (entry->idx <= group.commit_idx) {
+            // A copy of a committed entry is identical, so re-applying it is a no-op by timestamp.
+            note_committed(group, entry);
+            co_await apply_committed(db, sys_ks, entry);
+            ++group.applied;
+        } else {
+            group.buf.push_back(raft_buffer_detail::buffered_entry{.entry = entry, .segment = segment});
+        }
+        co_await seastar::coroutine::maybe_yield();
+    }
+}
+
+future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3::query_processor& qp) {
+    // Before the early return below: a group whose batches all sat behind the damage
+    // never reached _groups, and that is the group this guards.
+    if (!_unreadable_segments.empty()) {
+        if (!_group_to_table) {
+            _group_to_table = build_group_to_table_map(db);
+        }
+        // A batch lost with an unreadable segment leaves nothing behind: a later header
+        // raises the floor past its indexes, and the descriptor written below would claim
+        // entries that were never applied. Replay cannot tell whether the unread bytes
+        // held any, so hosting a group at all is what makes it fatal.
+        if (!_group_to_table->empty()) {
+            throw std::runtime_error(fmt::format(
+                    "cannot replay the raft log: segments {} could not be read in full, and "
+                    "this shard hosts {} strongly consistent raft group(s) whose entries may "
+                    "have been among the lost bytes. Recovering means restoring or removing "
+                    "those segment files; starting without them would persist a commit index "
+                    "covering entries that were never applied",
+                    _unreadable_segments, _group_to_table->size()));
+        }
+    }
+    if (_groups.empty()) {
+        co_return;
+    }
     auto* new_commitlog_ptr = db.commitlog();
     SCYLLA_ASSERT(new_commitlog_ptr);
 
-    logger.info("processing {} raft groups with {} total entries from commitlog replay", remaining_groups(), total_entries());
+    logger.info("processing {} raft groups with {} total entries from commitlog replay",
+            _groups.size(), _total_entries);
 
-    // Shared by all groups: it resolves the table from the mutation itself, and reusing
-    // it lets entries written with the same schema version resolve their schema only once.
-    // No barrier trigger during replay, since group0 is not started yet.
-    service::strong_consistency::schema_store schemas(db, sys_ks);
-
-    for (auto& [group_id, entries_list] : _replayed_commitlog_entries_by_group) {
-        if (entries_list.empty()) {
+    for (auto& [group_id, group] : _groups) {
+        if (!group.known) {
             continue;
         }
+        // The recovered floor is a real descriptor: every index at or below
+        // commit_idx is committed, and commit_term is the term of the entry there.
+        co_await service::strong_consistency::raft_groups_storage::store_descriptor(
+                qp, group_id, this_shard_id(), group.commit_idx, group.commit_term, group.config, group.truncations);
 
-        // Look up table_id for this group.
-        auto table_it = group_to_table.find(group_id);
-        if (table_it == group_to_table.end()) {
-            // Either the group is gone from tablet metadata - the table was dropped - or
-            // the tablet has no replica on this shard anymore. Discard the entries: the
-            // tablet's storage here is on its way out, and applying them would resurrect
-            // data on a node that no longer owns the range.
-            logger.info("group {} has no tablet replica on this shard, discarding {} entries", group_id, entries_list.size());
-            continue;
-        }
-        const auto table_id = table_it->second;
-
-        // Query commit_idx from raft system tables. We treat commit_idx as
-        // the effective snapshot index: all entries up to commit_idx are committed
-        // and will be applied to memtables during replay.
-        const auto persisted_commit_idx = co_await service::strong_consistency::raft_groups_storage::load_commit_idx_if_persisted(
-                qp, group_id, this_shard_id());
-        if (!persisted_commit_idx) {
-            // Tablet cleanup erased this shard's raft state for the group, and crashed or
-            // was interrupted before it finished removing the tablet's storage; the tablet
-            // metadata we are reading is from before that. The replica has left the group,
-            // so its entries are not ours to apply - the coordinator retries the cleanup.
-            logger.info("group {} has no persisted raft state on this shard, discarding {} entries",
-                    group_id, entries_list.size());
-            continue;
-        }
-        const auto commit_idx = *persisted_commit_idx;
-
-        logger.debug("group {}: {} entries, commit_idx={}", group_id, entries_list.size(), commit_idx);
-
-        // First pass: filter entries (leader changes, out-of-order tails).
-        // This must be done before any database writes to avoid applying entries that would
-        // later be discarded due to leader changes.
-        auto filtered = filter_entries(entries_list, group_id);
-
-        // Second pass: apply the committed entries and collect the uncommitted
-        // ones, which are rewritten below as a single batch.
-        uint64_t applied = 0;
         auto& group_data = _per_group_data[group_id];
-        raft::log_entry_ptr_list uncommitted;
-
-        // Track the term of the last committed entry to update the snapshot descriptor.
-        std::optional<raft::term_t> last_committed_term;
-
-        for (auto& entry : filtered.entries) {
-            // Apply committed command entries to the memtables. It is safe not to append them
-            // to the new commitlog, because the old commitlog (currently being replayed) will
-            // only be deleted after the memtables are flushed. Therefore, the data will either
-            // be persisted to SSTables or, in case of a crash, still be available in the old commitlog.
-            if (entry->idx <= commit_idx && std::holds_alternative<raft::command>(entry->data)) {
-                auto mut = service::strong_consistency::detail::deserialize_to_frozen_mutation(entry);
-                auto schema = co_await schemas.resolve_and_upgrade(mut);
-                co_await db.apply_in_memory(mut, std::move(schema), db::rp_handle(), db::no_timeout, db::noop_large_data_guardrail::instance());
-                ++applied;
+        if (!group.buf.empty()) {
+            if (group.buf.front().entry->idx != group.commit_idx + raft::index_t{1}) {
+                on_internal_error(logger, fmt::format(
+                        "group {}: replayed log starts at {} with a floor of {}",
+                        group_id, group.buf.front().entry->idx, group.commit_idx));
             }
-
-            if (entry->idx <= commit_idx) {
-                last_committed_term = entry->term;
+            raft::log_entry_ptr_list uncommitted;
+            uncommitted.reserve(group.buf.size());
+            for (auto& buffered : group.buf) {
+                uncommitted.push_back(buffered.entry);
             }
-
-            // Only uncommitted entries go back to the raft log, and to the new
-            // commitlog below. Committed entries have already been applied to
-            // memtables above and are covered by the snapshot index this
-            // function persists.
-            if (entry->idx > commit_idx) {
-                uncommitted.push_back(std::move(entry));
+            for (size_t i = 1; i < uncommitted.size(); ++i) {
+                if (uncommitted[i]->idx != uncommitted[i - 1]->idx + raft::index_t{1}) {
+                    on_internal_error(logger, fmt::format(
+                            "group {}: gap in the replayed log between {} and {}",
+                            group_id, uncommitted[i - 1]->idx, uncommitted[i]->idx));
+                }
             }
-
-            co_await seastar::coroutine::maybe_yield();
-        }
-
-        // Rewrite the uncommitted entries as one batch, in the same format
-        // store_log_entries() writes: its records are the queue the group starts
-        // with, so those entries are held by a reference and released by a
-        // descriptor exactly like the ones appended after startup. The header
-        // carries the floor this replay recovered.
-        if (!uncommitted.empty()) {
-            // Split into runs that each fit one commitlog entry: the tail is
-            // bounded by raft_max_log_size, which a single entry need not hold,
-            // and an oversized rewrite would abort this replay and every one
-            // after it.
+            // Batches in the format store_log_entries() writes, so a reference
+            // holds their records and a descriptor releases them, as after
+            // startup. The tail is split into runs that each fit one commitlog
+            // entry. raft_max_log_size bounds it, which one entry need not hold,
+            // and an oversized rewrite would abort every replay from here on.
             const auto batch_ends = service::strong_consistency::split_raft_batch(
-                    *new_commitlog_ptr, group_id, commit_idx, uncommitted);
+                    *new_commitlog_ptr, group_id, group.commit_idx, uncommitted);
             size_t batch_begin = 0;
             for (const auto batch_end : batch_ends) {
                 const raft::log_entry_ptr_list batch(
                         uncommitted.begin() + batch_begin, uncommitted.begin() + batch_end);
                 auto handle = co_await service::strong_consistency::write_raft_batch(
-                        *new_commitlog_ptr, table_id, group_id, commit_idx, batch);
+                        *new_commitlog_ptr, group.table, group_id, group.commit_idx, batch);
                 service::strong_consistency::account_batch(group_data.records,
                         db::system_keyspace::raft_groups()->id(), std::move(handle), batch);
                 batch_begin = batch_end;
@@ -269,44 +374,31 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
                 group_data.entries.push_back(std::move(entry));
             }
         }
-
-        // Advance the persisted snapshot index to commit_idx. This tells the raft
-        // server (which sets _applied_idx = snapshot.idx on restart) that all
-        // committed entries have already been applied, preventing double-application
-        // through the state machine.
-        if (last_committed_term) {
-            // Strongly-consistent tablet raft groups don't use real snapshots,
-            // so we generate a random snapshot ID just to satisfy the schema requirement.
-            co_await service::strong_consistency::raft_groups_storage::store_snapshot_index(
-                    qp, group_id, this_shard_id(), raft::snapshot_descriptor{
-                        .idx = commit_idx,
-                        .term = *last_committed_term,
-                        .id = raft::snapshot_id(utils::make_random_uuid()),
-                    });
-            logger.debug("group {}: advanced snapshot to idx={}, term={}", group_id, commit_idx, *last_committed_term);
-        }
-
-        logger.debug("group {}: discarded_leader_change={}, applied={}, total_in_log={}", group_id,
-                filtered.discarded_leader_change, applied, group_data.entries.size());
+        logger.debug("group {}: floor=({}, {}), applied={}, dropped_truncated={}, superseded={}, in_log={}",
+                group_id, group.commit_idx, group.commit_term, group.applied, group.dropped_truncated, group.superseded,
+                group_data.entries.size());
     }
-
-    // The old items are not needed anymore.
-    _replayed_commitlog_entries_by_group.clear();
+    _groups.clear();
     logger.info("Raft groups commit log replayed data processing complete");
 }
-namespace raft_buffer_detail {
-entry_ordering_check_result check_entry_ordering(raft_term_and_idx current, raft_term_and_idx last) {
-    if (last.idx == raft::index_t{0}) {
-        return entry_ordering_check_result::in_order;
+
+future<> raft_commitlog_replay_buffer::stop() {
+    size_t records = 0;
+    for (auto& [group_id, data] : _per_group_data) {
+        for (auto& record : data.records) {
+            record.detach();
+            ++records;
+        }
+        if (!data.records.empty()) {
+            logger.info("group {} never started; detaching the references of {} records so its "
+                    "replayed entries can be recovered again", group_id, data.records.size());
+        }
     }
-    if (current.idx > last.idx) {
-        return entry_ordering_check_result::in_order;
+    _per_group_data.clear();
+    if (records) {
+        logger.info("detached the references of {} unclaimed records", records);
     }
-    if (current.term > last.term) {
-        return entry_ordering_check_result::leader_change;
-    }
-    return entry_ordering_check_result::out_of_order;
+    return make_ready_future<>();
 }
-} // namespace raft_buffer_detail
 
 } // namespace db

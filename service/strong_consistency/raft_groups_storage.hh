@@ -155,12 +155,11 @@ public:
 
     // The whole row, for a replay that has to decide what to keep.
     static future<persisted_descriptor> load_descriptor(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
-    // Persist a snapshot descriptor by CQL. Only used during commitlog replay,
-    // before any group is running; at runtime the row is written exclusively by
-    // the record releases. Only advances the index, so repeated replays are
-    // idempotent.
-    static future<> store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
-        const raft::snapshot_descriptor& snap);
+    // Persist a descriptor by CQL. Only advances the index, so a replay that
+    // runs twice cannot move the group backwards.
+    static future<> store_descriptor(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
+        raft::index_t idx, raft::term_t term, const raft::configuration& config,
+        const std::vector<truncation_record>& truncations);
 
 private:
     // Write the released record's descriptor and the group's truncation history into

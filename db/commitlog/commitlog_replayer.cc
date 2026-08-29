@@ -33,6 +33,13 @@
 
 static logging::logger rlogger("commitlog_replayer");
 
+// Thrown when a raft batch cannot be replayed. Unlike a bad mutation entry this
+// must not be skipped: see the catch in impl::process().
+class raft_replay_error : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 class db::commitlog_replayer::impl {
     struct column_mappings {
         std::unordered_map<table_schema_version, column_mapping> map;
@@ -48,7 +55,8 @@ class db::commitlog_replayer::impl {
 
     friend class db::commitlog_replayer;
 public:
-    impl(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer);
+    impl(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks,
+            seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer, seastar::sharded<cql3::query_processor>* qp);
 
     future<> init();
 
@@ -117,16 +125,19 @@ public:
     seastar::sharded<replica::database>& _db;
     seastar::sharded<db::system_keyspace>& _sys_ks;
     seastar::sharded<raft_commitlog_replay_buffer>* _raft_buffer;
+    seastar::sharded<cql3::query_processor>* _qp;
     shard_rpm_map _rpm;
     db::system_keyspace::commitlog_cleanup_map _cleanup_map;
     shard_rp_map _min_pos;
 };
 
 db::commitlog_replayer::impl::impl(
-        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer)
+        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks,
+        seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer, seastar::sharded<cql3::query_processor>* qp)
     : _db(db)
     , _sys_ks(sys_ks)
     , _raft_buffer(raft_buffer)
+    , _qp(qp)
 {}
 
 future<> db::commitlog_replayer::impl::init() {
@@ -196,17 +207,32 @@ db::commitlog_replayer::impl::recover(const commitlog::descriptor& d, const comm
 
     return db::commitlog::read_log_file(rpstate, f, d.filename_prefix,
             std::bind(&impl::process, this, s.get(), entry_format, std::placeholders::_1),
-            p, &exts).then_wrapped([s](future<> f) {
+            p, &exts).then_wrapped([this, s, id = db::replay_position(d).id](future<> f) {
+        bool unreadable = false;
         try {
             f.get();
         } catch (commitlog::segment_data_corruption_error& e) {
+            // Counted and skipped, as before this series. Every batch raft was told
+            // was persisted had been synced before any later sector existed, so a
+            // tear at the end of a file hides nothing that was acknowledged, and the
+            // reader cannot tell that from rot further back. Refusing the boot here
+            // would take the node down for damage to some other table's writes.
             s->corrupt_bytes += e.bytes();
         } catch (commitlog::segment_truncation& e) {
+            // Where the writing stopped, which every crash leaves behind: an EOF, a
+            // short read, or a recycled sector still carrying its old segment id.
+            // Nothing was lost, so it is not a hole in a raft log.
             s->truncated_at = e.position();
         } catch (commitlog::header_checksum_error&) {
             ++s->broken_files;
+            unreadable = true;
         } catch (...) {
             throw;
+        }
+        if (unreadable && _raft_buffer) {
+            // What the unread part held is unknowable, so the raft side decides,
+            // where it knows whether this shard hosts a group at all.
+            _raft_buffer->local().note_unreadable_segment(id);
         }
         return make_ready_future<stats>(*s);
     });
@@ -236,8 +262,15 @@ future<> db::commitlog_replayer::impl::process(
             SCYLLA_ASSERT(_raft_buffer);
             rlogger.debug("Adding raft batch for group {} at {} to replay buffer: {} entries, commit_idx {}",
                     batch.group_id, rp, batch.entries.size(), batch.commit_idx);
-            for (const auto& entry : batch.entries) {
-                _raft_buffer->local().add(batch.group_id, entry);
+            SCYLLA_ASSERT(_qp);
+            // Everything for this batch is decided as it arrives: see
+            // raft_commitlog_replay_buffer.
+            try {
+                co_await _raft_buffer->local().add_batch(_db.local(), _qp->local(), _sys_ks.local(),
+                        batch.group_id, rp.id, batch.commit_idx, batch.entries);
+            } catch (...) {
+                std::throw_with_nested(raft_replay_error(fmt::format(
+                        "failed to replay raft batch for group {} at {}", batch.group_id, rp)));
             }
             co_return;
         } else if (std::holds_alternative<mutation_entry>(read_entry)) {
@@ -340,6 +373,12 @@ future<> db::commitlog_replayer::impl::process(
         }
     } catch (replica::no_such_column_family&) {
         // No such CF now? Origin just ignores this.
+    } catch (raft_replay_error&) {
+        // Skipping one raft batch takes its state transitions with it. The rest
+        // of the pass then runs against a floor and truncation cursors that never
+        // saw it, which can hole a group's log. Startup deletes the old segments,
+        // so the skipped copy goes with them. Fail the replay instead.
+        throw;
     } catch (...) {
         s->invalid_mutations++;
         // TODO: write mutation to file like origin.
@@ -348,8 +387,9 @@ future<> db::commitlog_replayer::impl::process(
 }
 
 db::commitlog_replayer::commitlog_replayer(
-        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer)
-    : _impl(std::make_unique<impl>(db, sys_ks, raft_buffer))
+        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks,
+        seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer, seastar::sharded<cql3::query_processor>* qp)
+    : _impl(std::make_unique<impl>(db, sys_ks, raft_buffer, qp))
 {}
 
 db::commitlog_replayer::commitlog_replayer(commitlog_replayer&& r) noexcept
@@ -360,8 +400,9 @@ db::commitlog_replayer::~commitlog_replayer()
 {}
 
 future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(
-        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer) {
-    return do_with(commitlog_replayer(db, sys_ks, raft_buffer), [](auto&& rp) {
+        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks,
+        seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer, seastar::sharded<cql3::query_processor>* qp) {
+    return do_with(commitlog_replayer(db, sys_ks, raft_buffer, qp), [](auto&& rp) {
         auto f = rp._impl->init();
         return f.then([rp = std::move(rp)]() mutable {
             return make_ready_future<commitlog_replayer>(std::move(rp));
