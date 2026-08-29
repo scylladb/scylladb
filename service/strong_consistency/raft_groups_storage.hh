@@ -112,8 +112,12 @@ public:
     db::rp_handle pin_for_apply(raft::index_t idx);
 
     // Tell the storage that the command at `idx` has been handed to a memtable.
-    // May release records, so it must be called after the apply, not before.
+    // May release records, so call it after the apply.
     void note_applied(raft::index_t idx);
+
+    // Give up every segment reference this group holds, for a group being destroyed
+    // deliberately; see raft_commitlog::release_all().
+    void release_all();
 
     // Report the commitlog's flush position. Releasing the newest record needs it.
     void mark_segment_closed(db::replay_position pos);

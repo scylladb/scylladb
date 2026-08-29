@@ -9,6 +9,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_tablet_replica
 
+import aiohttp
 import asyncio
 import logging
 import pytest
@@ -606,11 +607,105 @@ async def test_migrated_group_is_not_resurrected_on_replay(manager: ScyllaCluste
         await reconnect_driver(manager)
         cql = manager.get_cql()
 
-        # The node that no longer hosts the tablet must have dropped them.
-        await log.wait_for(rf"group {group_id} has no tablet replica on this shard",
+        # The node that no longer hosts the tablet must have dropped the entries.
+        await log.wait_for(rf"group {group_id} is no longer hosted by this shard",
                            from_mark=mark, timeout=120)
 
         # And the data must be intact, served from the node that now owns it.
+        for pk in range(5):
+            rows = await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk = {pk};")
+            assert len(rows) == 1, f"Expected 1 row for pk={pk}, got {len(rows)}"
+            assert rows[0].c == pk * 10, f"pk={pk}: expected c={pk * 10}, got c={rows[0].c}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_replay_after_a_crash_before_the_cleanup_erased_the_row(manager: ScyllaClusterManager):
+    """A migration stops the leaving replica from hosting the group when the cleanup
+    stage is published, and the teardown then gives up its segment references. The
+    tablet cleanup erases the group's row only after that teardown, so a crash in
+    between leaves the row behind with the segments reclaimable.
+
+    Replay on that node must still decline the group. Tablet metadata alone says
+    yes, because the leaving replica stays in tablet_info::replicas until
+    end_migration. Replay then recovers a log whose segments are going away, and
+    aborts the boot when the recovered tail no longer starts one past the row's
+    floor."""
+    config = {
+        'experimental_features': ['strongly-consistent-tables'],
+        'commitlog_total_space_in_mb': 10000,
+        # The coordinator sleeps while the cleanup below is held. The load stats
+        # refresh wakes it once the hold is lifted.
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+    }
+    cmdline = [
+        '--logger-log-level', 'raft_commitlog_replay=debug',
+        '--logger-log-level', 'sc_groups_manager=debug',
+    ]
+    servers = await manager.servers_add(2, config=config, cmdline=cmdline)
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = [await manager.get_host_id(s.server_id) for s in servers]
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
+                                 "'replication_factor': 1} AND tablets = {'initial': 1} "
+                                 "AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        for pk in range(5):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({pk}, {pk * 10})")
+
+        table_id = await manager.get_table_id(ks.replace('"', ''), "test")
+        tablet_rows = await cql.run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")
+        assert len(tablet_rows) == 1
+        group_id = str(tablet_rows[0].raft_group_id)
+
+        tablet_token = 0  # only one tablet
+        src_host_id, src_shard = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)
+        src_server = next(s for s, hid in zip(servers, host_ids) if hid == src_host_id)
+        dst_host_id = next(hid for hid in host_ids if hid != src_host_id)
+        dst_server = next(s for s, hid in zip(servers, host_ids) if hid == dst_host_id)
+
+        # Hold the coordinator at cleanup until the leaving replica has torn the group
+        # down. The cleanup RPC follows the stage's publish with no barrier, so without
+        # the hold the replica can crash before it applies the stage that ends its hosting.
+        await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "cleanup_tablet_wait", one_shot=False)
+                               for s in servers])
+        log = await manager.server_open_log(src_server.server_id)
+        mark = await log.mark()
+        migration = asyncio.create_task(
+            manager.api.move_tablet(dst_server.ip_addr, ks, "test",
+                                    src_host_id, src_shard, dst_host_id, 0, tablet_token))
+        # The teardown gives up the segment references before it destroys the server.
+        await log.wait_for(rf"raft server for group id {group_id} is destroyed", from_mark=mark, timeout=120)
+
+        # Crash the leaving replica as the tablet cleanup starts, before it erases the row.
+        # The hold is lifted on src first: the resumed coordinator crashes src, and dst stays up.
+        # When src is the coordinator, src can exit before it answers the request that lifts its hold.
+        await manager.api.enable_injection(src_server.ip_addr, "cleanup_tablet_crash", one_shot=True)
+        try:
+            await manager.api.disable_injection(src_server.ip_addr, "cleanup_tablet_wait")
+        except aiohttp.ClientError as e:
+            logger.info(f"lifting src's hold failed, src may have exited: {e}")
+        await manager.api.disable_injection(dst_server.ip_addr, "cleanup_tablet_wait")
+        await log.wait_for('Crashing tablet cleanup', from_mark=mark, timeout=120)
+
+        # The process is gone already; server_stop lets the manager catch up with the
+        # exit before the restart.
+        await manager.server_stop(src_server.server_id, convict=False)
+        await manager.server_start(src_server.server_id)
+        # The row is still there, so only the ownership rule keeps replay off the group.
+        await log.wait_for(rf"group {group_id} is no longer hosted by this shard",
+                           from_mark=mark, timeout=120)
+
+        await manager.api.quiesce_topology(dst_server.ip_addr)
+        # The move was asked of dst, which stayed up, so the call returns once the
+        # coordinator's retried cleanup lets the migration end.
+        await migration
+        await reconnect_driver(manager)
+        cql = manager.get_cql()
+        # With RF=1 the rows stay readable after a rollback too, so check where the tablet is.
+        replica_host_id, _ = await get_tablet_replica(manager, dst_server, ks, 'test', tablet_token)
+        assert replica_host_id == dst_host_id, "the migration did not finish after the crash"
         for pk in range(5):
             rows = await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk = {pk};")
             assert len(rows) == 1, f"Expected 1 row for pk={pk}, got {len(rows)}"

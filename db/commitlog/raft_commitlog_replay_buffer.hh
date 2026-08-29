@@ -114,9 +114,9 @@ class raft_commitlog_replay_buffer {
     // across all groups. Created on first use.
     std::optional<service::strong_consistency::schema_store> _schemas;
 
-    // Which group each of this shard's tablet replicas belongs to. Built once, on
-    // first use, by walking every tablet in the cluster's metadata; replay changes
-    // no tablet.
+    // The table of each raft group this shard hosts, by hosts_raft_group(). Built
+    // once, on first use, by walking every tablet in the cluster's metadata; replay
+    // changes no tablet.
     std::optional<std::unordered_map<raft::group_id, table_id>> _group_to_table;
 
     // Segments a replay could not read in full; see note_unreadable_segment().
@@ -174,8 +174,12 @@ public:
     }
 
     // Detach the references of anything no group claimed, as ~raft_commitlog does.
-    // A rewritten tail nobody took must survive into the next replay: decrementing
-    // would retire its segments and lose entries already acknowledged to a leader.
+    // A rewritten tail nobody took must survive into the next replay: a decrement
+    // retires its segments and loses entries already acknowledged to a leader.
     future<> stop();
+
+    // Detaches the unclaimed references, as stop() does, for the one path that skips
+    // stop(): an allocation failure in the submit_to of sharded::stop()'s first phase.
+    ~raft_commitlog_replay_buffer();
 };
 } // namespace db
