@@ -600,9 +600,9 @@ SEASTAR_TEST_CASE(test_groups_storage_shard_isolation) {
     });
 }
 
-// Test store_snapshot_index: advances persisted snapshot index atomically,
+// Test store_descriptor: advances the persisted descriptor,
 // and refuses to go backwards (guard against repeated replays).
-SEASTAR_TEST_CASE(test_groups_store_snapshot_index) {
+SEASTAR_TEST_CASE(test_groups_store_descriptor) {
     return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
         auto& cl = *env.local_db().commitlog();
@@ -617,44 +617,32 @@ SEASTAR_TEST_CASE(test_groups_store_snapshot_index) {
         BOOST_CHECK(!snp0.id);
 
         // Advance snapshot index to 10
-        co_await raft_groups_storage::store_snapshot_index(qp, gid, test_shard, raft::snapshot_descriptor{
-            .idx = raft::index_t(10),
-            .term = raft::term_t(3),
-            .id = raft::snapshot_id(utils::make_random_uuid()),
-        });
+        co_await raft_groups_storage::store_descriptor(qp, gid, test_shard,
+                raft::index_t(10), raft::term_t(3), raft::configuration{}, {});
 
         auto snp1 = co_await storage.load_snapshot_descriptor();
         BOOST_CHECK_EQUAL(snp1.idx, raft::index_t(10));
         BOOST_CHECK_EQUAL(snp1.term, raft::term_t(3));
 
         // Advance further to 20
-        co_await raft_groups_storage::store_snapshot_index(qp, gid, test_shard, raft::snapshot_descriptor{
-            .idx = raft::index_t(20),
-            .term = raft::term_t(4),
-            .id = raft::snapshot_id(utils::make_random_uuid()),
-        });
+        co_await raft_groups_storage::store_descriptor(qp, gid, test_shard,
+                raft::index_t(20), raft::term_t(4), raft::configuration{}, {});
 
         auto snp2 = co_await storage.load_snapshot_descriptor();
         BOOST_CHECK_EQUAL(snp2.idx, raft::index_t(20));
         BOOST_CHECK_EQUAL(snp2.term, raft::term_t(4));
 
         // Attempt to go backwards to 15 — should be a no-op
-        co_await raft_groups_storage::store_snapshot_index(qp, gid, test_shard, raft::snapshot_descriptor{
-            .idx = raft::index_t(15),
-            .term = raft::term_t(3),
-            .id = raft::snapshot_id(utils::make_random_uuid()),
-        });
+        co_await raft_groups_storage::store_descriptor(qp, gid, test_shard,
+                raft::index_t(15), raft::term_t(3), raft::configuration{}, {});
 
         auto snp3 = co_await storage.load_snapshot_descriptor();
         BOOST_CHECK_EQUAL(snp3.idx, raft::index_t(20));
         BOOST_CHECK_EQUAL(snp3.term, raft::term_t(4));
 
         // Same index — should also be a no-op
-        co_await raft_groups_storage::store_snapshot_index(qp, gid, test_shard, raft::snapshot_descriptor{
-            .idx = raft::index_t(20),
-            .term = raft::term_t(5),
-            .id = raft::snapshot_id(utils::make_random_uuid()),
-        });
+        co_await raft_groups_storage::store_descriptor(qp, gid, test_shard,
+                raft::index_t(20), raft::term_t(5), raft::configuration{}, {});
 
         auto snp4 = co_await storage.load_snapshot_descriptor();
         BOOST_CHECK_EQUAL(snp4.idx, raft::index_t(20));
@@ -1201,3 +1189,52 @@ SEASTAR_TEST_CASE(test_groups_discarded_batch_does_not_wedge_the_queue) {
     });
 }
 
+// Test: the truncation records a release persists are exactly what replay needs
+// to drop the superseded copies. This closes the loop between the two halves —
+// the write side above and the read side in the replay buffer — by feeding one's
+// output to the other.
+SEASTAR_TEST_CASE(test_groups_persisted_truncations_drive_the_replay_drop) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        // A leader writes 1..6, a new leader truncates from 4 and rewrites 4..5.
+        std::vector<raft::log_entry_ptr> old_leader;
+        for (int i = 1; i <= 6; ++i) {
+            old_leader.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+        }
+        co_await storage.store_log_entries(old_leader);
+        co_await storage.truncate_log(raft::index_t(4));
+
+        std::vector<raft::log_entry_ptr> new_leader;
+        for (int i = 4; i <= 5; ++i) {
+            new_leader.push_back(make_command_entry(raft::term_t(2), raft::index_t(i)));
+        }
+        co_await storage.store_log_entries(new_leader);
+        co_await release_everything(storage, new_leader);
+
+        const auto persisted = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
+        BOOST_REQUIRE_EQUAL(persisted.truncations.size(), 1);
+
+        // Replay would read the copies in write order: first the old leader's
+        // 1..6, then the new leader's 4..5. Feed the persisted record to the
+        // rule replay uses and check it drops exactly the old 4..6.
+        db::raft_buffer_detail::segment_cursors cursors;
+        for (const auto& t : persisted.truncations) {
+            cursors.push_back(db::raft_buffer_detail::truncation_cursor{
+                    .from = t.from, .to = t.to, .next = t.from});
+        }
+        auto survivors = db::raft_buffer_detail::drop_stale_copies(cursors, old_leader);
+        BOOST_REQUIRE_EQUAL(survivors.size(), 3);
+        BOOST_CHECK_EQUAL(survivors.back()->idx, raft::index_t(3));
+        // The new leader's copies are not covered by any record, so they stand.
+        BOOST_CHECK_EQUAL(drop_stale_copies(cursors, new_leader).size(), 2);
+    });
+}

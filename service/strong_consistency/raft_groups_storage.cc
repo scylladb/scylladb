@@ -325,22 +325,33 @@ future<raft_groups_storage::persisted_descriptor> raft_groups_storage::load_desc
     co_return ret;
 }
 
-future<> raft_groups_storage::store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap) {
-    // Guard against repeated replays (e.g. a crash after writing but before the
-    // raft groups start): only advance the index, never go backwards.
-    static const auto load_cql = format("SELECT snapshot_idx FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1",
-            db::system_keyspace::RAFT_GROUPS);
-    auto rs = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
-    if (!rs->empty() && rs->one().has("snapshot_idx")) {
-        if (raft::index_t(rs->one().get_as<int64_t>("snapshot_idx")) >= snap.idx) {
-            co_return;
-        }
+future<> raft_groups_storage::store_descriptor(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
+        raft::index_t idx, raft::term_t term, const raft::configuration& config,
+        const std::vector<truncation_record>& truncations) {
+    // Only advance, never regress: a prior run (or an earlier replay) may
+    // already have persisted a value at or beyond this one. An equal index is a
+    // no-op too — index and term are written atomically, so the same index
+    // cannot legitimately arrive with a different term.
+    //
+    // Index 0 is the exception, and only when the row also holds 0: a group
+    // whose recovered floor is 0 still has replay-computed truncations to
+    // persist, and treating that as a no-op would drop them. Written this way
+    // rather than as a blanket `idx != 0` carve-out so that the guarantee above
+    // holds for every input, not just the ones replay happens to produce.
+    const auto persisted = co_await load_descriptor(qp, gid, shard);
+    if (persisted.exists
+            && (persisted.idx > idx || (persisted.idx == idx && idx != raft::index_t{0}))) {
+        co_return;
     }
     static const auto store_cql = format(
-            "INSERT INTO system.{} (shard, group_id, snapshot_id, snapshot_idx, snapshot_term) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO system.{} (shard, group_id, snapshot_id, snapshot_idx, snapshot_term, snapshot_config, truncations) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             db::system_keyspace::RAFT_GROUPS);
+    // A descriptor raft will accept has to have an id; replay is as good a place
+    // to mint one as bootstrap, and only its being set is ever checked.
     co_await qp.execute_internal(store_cql,
-            {int16_t(shard), gid.id, snap.id.id, int64_t(snap.idx.value()), int64_t(snap.term.value())},
+            {int16_t(shard), gid.id, utils::make_random_uuid(), int64_t(idx.value()), int64_t(term.value()),
+             data_value(serialize_config(config)), serialize_truncations(truncations)},
             cql3::query_processor::cache_internal::yes);
 }
 
