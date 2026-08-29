@@ -1428,6 +1428,13 @@ private:
     timer<> _off_strategy_trigger;
     void do_update_off_strategy_trigger();
 
+    // Keeps _stats.pending_compactions (the "pending_compaction" gauge) fresh;
+    // estimate_pending_compactions() can yield, so it can't run in the gauge callback itself.
+    // Coalesced: a refresh already in flight absorbs later requests instead of racing with them.
+    bool _pending_compactions_refresh_in_progress = false;
+    bool _pending_compactions_refresh_requested = false;
+    void refresh_pending_compactions_stat();
+
     compaction_group* try_get_compaction_group_with_static_sharding() const;
 public:
     void update_off_strategy_trigger();

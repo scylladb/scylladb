@@ -467,6 +467,10 @@ future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& 
         if (do_allow_offstrategy_compaction) {
             _global_table->trigger_offstrategy_compaction();
         }
+        // Startup doesn't go through flush/compaction, so the gauge needs an explicit refresh here.
+        if (_global_table->_config.enable_metrics_reporting) {
+            _global_table->refresh_pending_compactions_stat();
+        }
     });
 }
 
