@@ -761,7 +761,7 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
 
     auto [schema, table_type] = get_table_or_view(_proxy, request);
     db::consistency_level cl = get_read_consistency(request);
-    maybe_audit(audit_info, audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), "Scan", request, cl);
+    maybe_audit(audit_info, client_state, permit, audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), "Scan", request, cl);
     tracing::add_alternator_table_name(trace_state, schema->cf_name());
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *schema);
     per_table_stats->api_operations.scan++;
@@ -1845,7 +1845,7 @@ future<executor::request_return_type> executor::query(client_state& client_state
 
     auto [schema, table_type] = get_table_or_view(_proxy, request);
     db::consistency_level cl = get_read_consistency(request);
-    maybe_audit(audit_info, audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), "Query", request, cl);
+    maybe_audit(audit_info, client_state, permit, audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), "Query", request, cl);
 
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *schema);
     per_table_stats->api_operations.query++;
@@ -2069,7 +2069,8 @@ static api_error api_error_from_vector_store_error(const vector_search::vector_s
 future<executor::request_return_type> executor::search_vectors(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.search_vectors++;
     schema_ptr base_schema = get_table(_proxy, request);
-    maybe_audit(audit_info, audit::statement_category::QUERY, base_schema->ks_name(), base_schema->cf_name(), "SearchVectors", request, db::consistency_level::LOCAL_ONE);
+    maybe_audit(audit_info, client_state, permit, audit::statement_category::QUERY,
+            base_schema->ks_name(), base_schema->cf_name(), "SearchVectors", request, db::consistency_level::LOCAL_ONE);
     lw_shared_ptr<alternator::stats> per_table_stats = get_stats_from_schema(_proxy, *base_schema);
     per_table_stats->api_operations.search_vectors++;
     tracing::add_alternator_table_name(trace_state, base_schema->cf_name());
@@ -2719,7 +2720,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     rjson::value& query_key = request["Key"];
     db::consistency_level cl = get_read_consistency(request);
 
-    maybe_audit(audit_info, audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), "GetItem", request, cl);
+    maybe_audit(audit_info, client_state, permit, audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), "GetItem", request, cl);
 
     partition_key pk = pk_from_json(query_key, schema);
     dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*schema, pk))};
@@ -2817,11 +2818,23 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     };
     std::vector<table_requests> requests;
     uint batch_size = 0;
+    audit::audit_table_set audited_table_names;
+    bool only_audited_tables = true;
+    const bool audit_pending = audit_info && audit_info->is_pending();
+    const bool should_audit = _audit.local_is_initialized()
+            && (audit_pending || (!audit_info && _audit.local().will_log(audit::statement_category::QUERY)));
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
         table_requests rs(get_table_from_batch_request(_proxy, it));
         lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
         per_table_stats->api_operations.batch_get_item++;
         tracing::add_alternator_table_name(trace_state, rs.schema->cf_name());
+        if (should_audit) {
+            if (_audit.local().should_log(audit::statement_category::QUERY, rs.schema->ks_name(), rs.schema->cf_name(), client_state)) {
+                audited_table_names.emplace(rs.schema->ks_name(), rs.schema->cf_name());
+            } else {
+                only_audited_tables = false;
+            }
+        }
         rs.cl = get_read_consistency(it->value);
         std::unordered_set<std::string> used_attribute_names;
         rs.attrs_to_get = ::make_shared<const std::optional<attrs_to_get>>(calculate_attrs_to_get(it->value, *_parsed_expression_cache, used_attribute_names));
@@ -2834,6 +2847,13 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         }
         batch_size += rs.requests.size();
         requests.emplace_back(std::move(rs));
+    }
+    if (audit_pending) {
+        if (audited_table_names.empty()) {
+            skip_audit(audit_info, permit);
+        } else {
+            prepare_audit_reservation(audit_info, permit, request);
+        }
     }
 
     for (const table_requests& tr : requests) {
@@ -2900,9 +2920,6 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     bool some_succeeded = false;
     std::optional<exceptions::coordinator_exception_container> query_error;
     std::exception_ptr eptr;
-    audit::audit_table_set audited_table_names;
-    bool only_audited_tables = true;
-    bool should_audit = _audit.local_is_initialized() && _audit.local().will_log(audit::statement_category::QUERY);
     rjson::value response = rjson::empty_object();
     rjson::add(response, "Responses", rjson::empty_object());
     rjson::add(response, "UnprocessedKeys", rjson::empty_object());
@@ -2932,13 +2949,6 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     for (size_t i = 0; i < requests.size(); i++) {
         const table_requests& rs = requests[i];
         std::string table = rs.schema->cf_name();
-        if (should_audit) {
-            if (_audit.local().will_log(audit::statement_category::QUERY, rs.schema->ks_name(), table)) {
-                audited_table_names.emplace(rs.schema->ks_name(), table);
-            } else {
-                only_audited_tables = false;
-            }
-        }
         for (const auto& [_, cks] : rs.requests) {
             auto& fut = *fut_it;
             ++fut_it;
@@ -2992,9 +3002,8 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             // Filter out non-audited tables from the request body for privacy
             filter_batch_request_items_by_tbl_name(request, audited_table_names);
         }
-        auto audit_table_names = print_names_for_audit(audited_table_names);
-        maybe_audit(audit_info, audit::statement_category::QUERY, "",
-                    audit_table_names, "BatchGetItem", request, db::consistency_level::ANY, std::move(audited_table_names));
+        maybe_audit(audit_info, client_state, permit, audit::statement_category::QUERY, "",
+                    "", "BatchGetItem", request, db::consistency_level::ANY, std::move(audited_table_names));
     }
     if (!some_succeeded && eptr) {
         co_await coroutine::return_exception_ptr(std::move(eptr));

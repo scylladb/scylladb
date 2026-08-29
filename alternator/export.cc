@@ -233,7 +233,8 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         }
         co_return std::move(e);
     }
-    maybe_audit(audit_info, audit::statement_category::QUERY, parts.keyspace_name, parts.table_name, "ExportTableToPointInTime", request);
+    maybe_audit(audit_info, client_state, permit, audit::statement_category::QUERY,
+            parts.keyspace_name, parts.table_name, "ExportTableToPointInTime", request);
 
     if (!parts.keyspace_name.starts_with(executor::KEYSPACE_NAME_PREFIX)) {
         co_return api_error::table_not_found(

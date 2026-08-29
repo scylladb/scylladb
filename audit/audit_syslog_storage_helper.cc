@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <syslog.h>
+#include <utility>
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/seastar.hh>
@@ -39,15 +40,50 @@ static auto syslog_address_helper(const db::config& cfg)
         : unix_domain_addr(_PATH_LOG);
 }
 
-static std::string json_escape(std::string_view str) {
-    std::string result;
-    result.reserve(str.size() * 1.2);
-    for (auto c : str) {
-        if (c == '"' || c == '\\') {
-            result.push_back('\\');
+}
+
+std::string escape_syslog_field(std::string_view str) {
+    size_t escaped_size = str.size();
+    for (unsigned char c : str) {
+        if (c == '"' || c == '\\' || c == '\b' || c == '\f' || c == '\n' || c == '\r' || c == '\t') {
+            ++escaped_size;
+        } else if (c < 0x20) {
+            escaped_size += 5;
         }
-        result.push_back(c);
     }
+
+    std::string result;
+    result.reserve(escaped_size);
+    static constexpr char hex[] = "0123456789ABCDEF";
+    for (unsigned char c : str) {
+        switch (c) {
+        case '"': result += "\\\""; break;
+        case '\\': result += "\\\\"; break;
+        case '\b': result += "\\b"; break;
+        case '\f': result += "\\f"; break;
+        case '\n': result += "\\n"; break;
+        case '\r': result += "\\r"; break;
+        case '\t': result += "\\t"; break;
+        default:
+            if (c < 0x20) {
+                result += "\\u00";
+                result.push_back(hex[c >> 4]);
+                result.push_back(hex[c & 0x0f]);
+            } else {
+                result.push_back(static_cast<char>(c));
+            }
+        }
+    }
+    return result;
+}
+
+namespace {
+
+template <typename... Args>
+static sstring format_exactly(fmt::format_string<Args...> format_string, Args&&... args) {
+    auto size = fmt::formatted_size(format_string, std::forward<Args>(args)...);
+    sstring result(sstring::initialized_later(), size);
+    fmt::format_to(result.begin(), format_string, std::forward<Args>(args)...);
     return result;
 }
 
@@ -112,18 +148,18 @@ future<> audit_syslog_storage_helper::write(audit_sink_set sinks,
     tm time;
     localtime_r(&now, &time);
     auto cl_str = cl ? format("{}", *cl) : sstring("");
-    sstring msg = seastar::format(R"(<{}>{:%h %e %T} scylla-audit: node="{}", category="{}", cl="{}", error="{}", keyspace="{}", query="{}", client_ip="{}", table="{}", username="{}")",
+    sstring msg = format_exactly(R"(<{}>{:%h %e %T} scylla-audit: node="{}", category="{}", cl="{}", error="{}", keyspace="{}", query="{}", client_ip="{}", table="{}", username="{}")",
                                     LOG_NOTICE | LOG_USER,
                                     time,
                                     node_ip,
                                     audit_info->category_string(),
                                     cl_str,
                                     (error ? "true" : "false"),
-                                    audit_info->keyspace(),
-                                    json_escape(audit_info->query()),
+                                    escape_syslog_field(audit_info->keyspace()),
+                                    escape_syslog_field(audit_info->query()),
                                     client_ip,
-                                    audit_info->table(),
-                                    username);
+                                    escape_syslog_field(audit_info->table()),
+                                    escape_syslog_field(username));
 
     co_await syslog_send_helper(std::move(msg).release());
 }
@@ -140,13 +176,13 @@ future<> audit_syslog_storage_helper::write_login(audit_sink_set sinks,
     auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     tm time;
     localtime_r(&now, &time);
-    sstring msg = seastar::format(R"(<{}>{:%h %e %T} scylla-audit: node="{}", category="AUTH", cl="", error="{}", keyspace="", query="", client_ip="{}", table="", username="{}")",
+    sstring msg = format_exactly(R"(<{}>{:%h %e %T} scylla-audit: node="{}", category="AUTH", cl="", error="{}", keyspace="", query="", client_ip="{}", table="", username="{}")",
                                     LOG_NOTICE | LOG_USER,
                                     time,
                                     node_ip,
                                     (error ? "true" : "false"),
                                     client_ip,
-                                    username);
+                                    escape_syslog_field(username));
 
     co_await syslog_send_helper(std::move(msg).release());
 }

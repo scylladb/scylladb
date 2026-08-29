@@ -6,15 +6,19 @@
 # Audit is a Scylla-only feature, so every test in this file is
 # Scylla-only (will be skipped when running against AWS DynamoDB).
 
+from concurrent.futures import ThreadPoolExecutor
+import gzip
 import json
+import struct
 import time
 
 from botocore.exceptions import ClientError
 import pytest
+import requests
 from cassandra import ConsistencyLevel, InvalidRequest
 from cassandra.query import SimpleStatement
 
-from test.alternator.util import new_test_table, unique_table_name
+from test.alternator.util import get_signed_request, new_test_table, scylla_inject_error, unique_table_name
 from test.alternator.test_vector import need_vector_search_in_botocore
 
 
@@ -180,6 +184,16 @@ def _set_audit_rules(cql, rules):
     cql.execute("UPDATE system.config SET value=%s WHERE name='audit_rules'", (json.dumps(rules),))
 
 
+def _batch_audit_metadata_memory(request):
+    table_names = list(request["RequestItems"])
+    table_name_bytes = sum(len(name.encode()) for name in table_names)
+    table_count = len(table_names)
+    joined_table_names = table_name_bytes + max(table_count - 1, 0)
+    retained_table_set = 2 * table_name_bytes + table_count * (len("alternator_") + 2 + 128)
+    sink_table_refs = 2 * table_count * struct.calcsize("P")
+    return retained_table_set, retained_table_set + sink_table_refs + 6 * joined_table_names
+
+
 # A fixture to enable auditing for all audit categories for the duration of the test.
 # The main config flag "audit" is not live updatable, so it is required to be already enabled.
 # After the test, the previous audit settings are restored.
@@ -255,6 +269,434 @@ def test_audit_dml_operations(dynamodb, cql, alternator_audit_enabled):
         # Each individual Alternator call above must be audited.
         new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=len(expected))
         _assert_audit_entries(new_rows, expected, ks_name, table.name)
+
+
+def _request_permit_before_audit(
+        dynamodb, rest_api, operation, payload, transport,
+        expected_status=200, expect_audit_serialization=True, expected_audit_decision_units=None,
+        return_measurements=False):
+    injection = "alternator_request_before_audit"
+    encoded_payload = gzip.compress(payload) if transport == "gzip" else payload
+    extra_headers = {"Content-Encoding": "gzip"} if transport == "gzip" else None
+    signed_request = get_signed_request(dynamodb, operation, encoded_payload, extra_headers)
+    headers = {key: value for key, value in signed_request.headers.items() if key.lower() != "content-length"}
+    if transport == "chunked":
+        request_body = iter((signed_request.body,))
+    else:
+        headers["Content-Length"] = str(len(signed_request.body))
+        request_body = signed_request.body
+
+    with ThreadPoolExecutor(max_workers=1) as executor, scylla_inject_error(rest_api, injection):
+        request = executor.submit(
+            requests.post,
+            signed_request.url,
+            headers=headers,
+            data=request_body,
+            verify=False,
+            cert=signed_request.cert,
+            timeout=60,
+        )
+        try:
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                if request.done():
+                    response = request.result()
+                    pytest.fail(f"Request completed before reaching permit injection: {response.status_code} {response.text}")
+                response = requests.get(f"{rest_api}/v2/error_injection/injection/{injection}/enters", timeout=5)
+                response.raise_for_status()
+                if response.json() > 0:
+                    break
+                time.sleep(0.1)
+            else:
+                pytest.fail("Request did not reach the pre-audit injection")
+
+            response = requests.get(f"{rest_api}/v2/error_injection/injection/{injection}", timeout=5)
+            response.raise_for_status()
+            injection_info = response.json()
+            def parameters_named(name):
+                return [
+                    (shard_id, int(parameter["value"]))
+                    for shard_id, shard in enumerate(injection_info)
+                    for parameter in shard.get("parameters", [])
+                    if parameter["key"] == name
+                ]
+
+            permit_units = parameters_named("request_permit_units")
+            assert len(permit_units) == 1, f"Expected one request permit measurement, got {permit_units}"
+            audit_serialization_shards = [
+                shard_id
+                for shard_id, shard in enumerate(injection_info)
+                for parameter in shard.get("parameters", [])
+                if parameter["key"] == "audit_serialization_shard"
+            ]
+            if expect_audit_serialization:
+                assert audit_serialization_shards == [permit_units[0][0]]
+            else:
+                assert not audit_serialization_shards
+            dom_memory = parameters_named("request_dom_memory_bytes")
+            assert len(dom_memory) == 1, f"Expected one DOM memory measurement, got {dom_memory}"
+            before_parse_units = parameters_named("request_permit_units_before_parse")
+            assert len(before_parse_units) == 1, f"Expected one pre-parse permit measurement, got {before_parse_units}"
+            batch_reparse_memory = parameters_named("batch_reparse_memory_bytes")
+            assert len(batch_reparse_memory) == 1, f"Expected one batch reparse memory measurement, got {batch_reparse_memory}"
+            audit_decision_units = parameters_named("request_permit_units_after_audit_decision")
+            if expected_audit_decision_units is not None:
+                assert audit_decision_units == [(permit_units[0][0], expected_audit_decision_units)]
+        finally:
+            response = requests.post(f"{rest_api}/v2/error_injection/injection/{injection}/message", timeout=5)
+            response.raise_for_status()
+        response = request.result(timeout=30)
+        assert response.status_code == expected_status, response.text
+    if return_measurements:
+        return {
+            "permit_units": permit_units[0][1],
+            "before_parse_units": before_parse_units[0][1],
+            "dom_memory": dom_memory[0][1],
+            "batch_reparse_memory": batch_reparse_memory[0][1],
+            "audit_decision_units": audit_decision_units[0][1] if audit_decision_units else None,
+        }
+    return permit_units[0][1]
+
+
+# A large request must remain covered by its memory permit until the audit
+# write completes. This reproduces issue #31297 for Content-Length, chunked,
+# and compressed requests.
+@pytest.mark.parametrize("transport", ["content-length", "chunked", "gzip"])
+def test_audit_large_request(dynamodb, cql, rest_api, alternator_audit_enabled, transport):
+    with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table:
+        ks_name = f"alternator_{table.name}"
+        cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", (ks_name,))
+        before_rows = _get_audit_log_rows(cql)
+        marker = "audit-large-request-end"
+        payload = json.dumps({
+            "TableName": table.name,
+            "Item": {"p": {"S": "pk"}, "v": {"S": "x" * (256 * 1024) + marker}},
+        }, separators=(",", ":")).encode()
+        permit_units = _request_permit_before_audit(dynamodb, rest_api, "PutItem", payload, transport)
+        assert permit_units == len(payload) * 6 + 8000
+        new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
+        expected = [("DML", "LOCAL_QUORUM", False, ks_name, table.name, ["PutItem", marker])]
+        _assert_audit_entries(new_rows, expected, ks_name, table.name)
+
+
+# Batch audit filtering reparses the retained request and serializes a filtered
+# copy. Verify that this path retains its larger reservation through auditing.
+def test_audit_large_batch_request(dynamodb, cql, rest_api, alternator_audit_enabled):
+    with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table:
+        ks_name = f"alternator_{table.name}"
+        cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", (ks_name,))
+        before_rows = _get_audit_log_rows(cql)
+        marker = "audit-large-batch-request-end"
+        request = {
+            "RequestItems": {
+                table.name: [{
+                    "PutRequest": {
+                        "Item": {"p": {"S": "pk"}, "v": {"S": "x" * (256 * 1024) + marker}},
+                    },
+                }],
+            },
+        }
+        payload = json.dumps(request, separators=(",", ":")).encode()
+        measurements = _request_permit_before_audit(
+            dynamodb, rest_api, "BatchWriteItem", payload, "content-length", return_measurements=True)
+        request_metadata, audit_metadata = _batch_audit_metadata_memory(request)
+        request_memory = max(len(payload) * 2, measurements["dom_memory"])
+        assert measurements["permit_units"] == max(
+            request_memory + len(payload) * 6 + request_metadata,
+            measurements["batch_reparse_memory"] + len(payload) + audit_metadata,
+            len(payload) * 7 + audit_metadata,
+        ) + 8000
+        new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
+        expected = [("DML", "LOCAL_QUORUM", False, "", table.name, ["BatchWriteItem", marker])]
+        _assert_audit_entries(new_rows, expected, table_name=table.name)
+
+
+# Canonical JSON can be larger than the request encoding. Issue #31297 requires
+# the permit to cover both request processing and the later table-audit write.
+def test_audit_expanding_json_request(dynamodb, cql, rest_api, alternator_audit_enabled):
+    before_rows = _get_audit_log_rows(cql)
+    value_count = 1024
+    payload = b'{"unused":[' + b",".join([b"1e20"] * value_count) + b"]}"
+    serialized_number = b"100000000000000000000.0"
+    serialized_size = len(b'{"unused":[') + value_count * len(serialized_number) + value_count - 1 + len(b"]}")
+    assert serialized_size > len(payload)
+
+    permit_units = _request_permit_before_audit(dynamodb, rest_api, "ListTables", payload, "content-length")
+    # Request parsing/retention needs 2L + 2S. The table audit write can peak
+    # at six canonical-size copies while its mutation is being frozen.
+    assert permit_units == max(len(payload) * 2 + serialized_size * 2, serialized_size * 6) + 8000
+
+    new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
+    expected = [("QUERY", "", False, "", "", ["ListTables", serialized_number.decode()])]
+    _assert_audit_entries(new_rows, expected, ks_name="", table_name="")
+
+
+# Dense scalar arrays retain much more RapidJSON DOM memory than their wire
+# size. Keep that measured DOM charge while serializing and writing the audit.
+def test_audit_dense_json_request_memory(dynamodb, rest_api, alternator_audit_enabled):
+    value_count = 32 * 1024
+    payload = b'{"unused":[' + b",".join([b"0"] * value_count) + b"]}"
+    measurements = _request_permit_before_audit(
+        dynamodb, rest_api, "ListTables", payload, "content-length", return_measurements=True)
+
+    request_memory = max(len(payload) * 2, measurements["dom_memory"])
+    assert measurements["dom_memory"] > len(payload) * 2
+    assert measurements["permit_units"] == max(
+        request_memory + len(payload) * 2,
+        len(payload) * 6,
+    ) + 8000
+
+
+# Batch table auditing keeps the original request while writing its filtered
+# request. Use expanding numbers so this seven-copy audit-write peak exceeds
+# the intentionally conservative 2L + 6S batch request reservation.
+def test_audit_expanding_json_batch_request(dynamodb, cql, rest_api, alternator_audit_enabled):
+    with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table:
+        ks_name = f"alternator_{table.name}"
+        cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", (ks_name,))
+        before_rows = _get_audit_log_rows(cql)
+        value_count = 1024
+        payload_prefix = (
+            b'{"RequestItems":{"' + table.name.encode() +
+            b'":[{"PutRequest":{"Item":{"p":{"S":"pk"}}}}]},"unused":['
+        )
+        payload = payload_prefix + b",".join([b"1e20"] * value_count) + b"]}"
+        serialized_number = b"100000000000000000000.0"
+        serialized_size = len(payload) + value_count * (len(serialized_number) - len(b"1e20"))
+        assert serialized_size > len(payload) * 2
+
+        measurements = _request_permit_before_audit(
+            dynamodb, rest_api, "BatchWriteItem", payload, "content-length", return_measurements=True)
+        request_metadata, audit_metadata = _batch_audit_metadata_memory({"RequestItems": {table.name: None}})
+        request_memory = max(len(payload) * 2, measurements["dom_memory"])
+        assert measurements["permit_units"] == max(
+            request_memory + serialized_size * 6 + request_metadata,
+            measurements["batch_reparse_memory"] + serialized_size + audit_metadata,
+            serialized_size * 7 + audit_metadata,
+        ) + 8000
+
+        new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
+        expected = [("DML", "LOCAL_QUORUM", False, "", table.name, ["BatchWriteItem", serialized_number.decode()])]
+        _assert_audit_entries(new_rows, expected, table_name=table.name)
+
+
+# Batch filtering reparses the retained query. Its reservation must cover the
+# rebuilt DOM and RapidJSON construction stack while the canonical query is
+# still retained.
+def test_audit_dense_json_batch_request_memory(dynamodb, cql, rest_api, alternator_audit_enabled):
+    with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table:
+        ks_name = f"alternator_{table.name}"
+        cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", (ks_name,))
+        value_count = 32 * 1024
+        payload_prefix = (
+            b'{"RequestItems":{"' + table.name.encode() +
+            b'":[{"PutRequest":{"Item":{"p":{"S":"pk"}}}}]},"unused":['
+        )
+        payload = payload_prefix + b",".join([b"0"] * value_count) + b"]}"
+        measurements = _request_permit_before_audit(
+            dynamodb, rest_api, "BatchWriteItem", payload, "content-length", return_measurements=True)
+
+        request_metadata, audit_metadata = _batch_audit_metadata_memory({"RequestItems": {table.name: None}})
+        request_memory = max(len(payload) * 2, measurements["dom_memory"])
+        assert measurements["dom_memory"] > len(payload) * 2
+        assert measurements["batch_reparse_memory"] > measurements["dom_memory"] * 2
+        assert measurements["before_parse_units"] >= measurements["permit_units"]
+        assert measurements["permit_units"] == max(
+            request_memory + len(payload) * 6 + request_metadata,
+            measurements["batch_reparse_memory"] + len(payload) + audit_metadata,
+            len(payload) * 7 + audit_metadata,
+        ) + 8000
+
+
+# Insignificant whitespace is discarded by canonical serialization. Keep the
+# request-processing reservation when it is larger than the later audit-write
+# peak; the two phase estimates must not be added together.
+def test_audit_shrinking_json_request(dynamodb, cql, rest_api, alternator_audit_enabled):
+    before_rows = _get_audit_log_rows(cql)
+    canonical_payload = b'{"unused":[]}'
+    payload = canonical_payload + b" " * (256 * 1024)
+    assert len(canonical_payload) < len(payload)
+
+    permit_units = _request_permit_before_audit(dynamodb, rest_api, "ListTables", payload, "content-length")
+    assert permit_units == len(payload) * 2 + len(canonical_payload) * 2 + 8000
+
+    new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
+    expected = [("QUERY", "", False, "", "", ["ListTables", canonical_payload.decode()])]
+    _assert_audit_entries(new_rows, expected, ks_name="", table_name="")
+
+
+def test_audit_ddl_serialization_matches_request_shard(dynamodb, cql, rest_api, alternator_audit_enabled):
+    # CreateTable audits after validating TableName but before requiring the
+    # remaining schema, so this request does not create a table.
+    table_name = unique_table_name()
+    cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", (f"alternator_{table_name}",))
+    payload = json.dumps({"TableName": table_name}, separators=(",", ":")).encode()
+    _request_permit_before_audit(dynamodb, rest_api, "CreateTable", payload, "content-length", expected_status=400)
+
+    # An otherwise empty UpdateTable request is audited before its validation
+    # error and likewise avoids making a schema change.
+    with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table:
+        cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", (f"alternator_{table.name}",))
+        payload = json.dumps({"TableName": table.name}, separators=(",", ":")).encode()
+        _request_permit_before_audit(dynamodb, rest_api, "UpdateTable", payload, "content-length", expected_status=400)
+
+    # Reject invalid table names before they can populate audit metadata. In
+    # particular, syslog does not escape its keyspace and table fields.
+    cql.execute("UPDATE system.config SET value=%s WHERE name='audit_categories'", ("",))
+    cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", ("",))
+    cql.execute("UPDATE system.config SET value=%s WHERE name='audit_tables'", ("",))
+    _set_audit_rules(cql, [{
+        "sinks": ["table"],
+        "categories": ["DDL", "QUERY"],
+        "qualified_table_names": ["*"],
+        "roles": ["*"],
+    }])
+    invalid_table_name = 'invalid\n"table'
+    payload = json.dumps({"TableName": invalid_table_name}, separators=(",", ":")).encode()
+    for operation in ["UpdateTable", "DeleteTable", "DescribeContinuousBackups"]:
+        _request_permit_before_audit(
+            dynamodb, rest_api, operation, payload, "content-length",
+            expected_status=400, expect_audit_serialization=False)
+
+
+def test_audit_update_existing_legacy_table_name(dynamodb, cql, rest_api, alternator_audit_enabled):
+    # CQL can create a table whose two-byte name predates/does not satisfy the
+    # current Alternator minimum, without exceeding today's keyspace limit.
+    table_name = "zz"
+    ks_name = f"alternator_{table_name}"
+    this_dc = cql.execute("SELECT data_center FROM system.local").one().data_center
+    cql.execute(
+        f'CREATE KEYSPACE "{ks_name}" WITH REPLICATION = '
+        f"{{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}}")
+    try:
+        cql.execute(f'CREATE TABLE "{ks_name}"."{table_name}" (p text PRIMARY KEY)')
+        cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", (ks_name,))
+        payload = json.dumps({"TableName": table_name}, separators=(",", ":")).encode()
+        # Current validation rejects creating a two-byte name, but operations
+        # on an existing table must continue to work and audit.
+        _request_permit_before_audit(
+            dynamodb, rest_api, "UpdateTable", payload, "content-length", expected_status=400)
+    finally:
+        cql.execute(f'DROP KEYSPACE "{ks_name}"')
+
+
+# An initialized audit service should not impose audit-copy reservations on an
+# operation whose category cannot be logged.
+def test_unaudited_request_memory(dynamodb, cql, rest_api, alternator_audit_enabled):
+    with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table:
+        cql.execute("UPDATE system.config SET value=%s WHERE name='audit_categories'", ("DDL",))
+        _set_audit_rules(cql, [])
+        payload = json.dumps({
+            "TableName": table.name,
+            "Item": {"p": {"S": "pk"}, "v": {"S": "x" * (256 * 1024)}},
+        }, separators=(",", ":")).encode()
+        measurements = _request_permit_before_audit(
+            dynamodb, rest_api, "PutItem", payload, "content-length",
+            expect_audit_serialization=False, return_measurements=True)
+        request_memory = max(len(payload) * 2, measurements["dom_memory"])
+        assert measurements["permit_units"] == request_memory + 8000
+
+    value_count = 32 * 1024
+    payload = b'{"unused":[' + b",".join([b"0"] * value_count) + b"]}"
+    measurements = _request_permit_before_audit(
+        dynamodb, rest_api, "ListTables", payload, "content-length",
+        expect_audit_serialization=False, return_measurements=True)
+    request_memory = max(len(payload) * 2, measurements["dom_memory"])
+    assert measurements["before_parse_units"] > measurements["dom_memory"]
+    assert measurements["permit_units"] == request_memory + 8000
+
+
+# A category-level admission decision is necessarily conservative because the
+# table is known only after parsing. Once table or role filtering excludes the
+# request, return the audit-only part of the permit before doing database work.
+def test_filtered_request_releases_audit_memory(dynamodb, cql, rest_api, alternator_audit_enabled):
+    with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as audited_table:
+        with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as filtered_table:
+            audited_ks = f"alternator_{audited_table.name}"
+            cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", (audited_ks,))
+            cql.execute("UPDATE system.config SET value=%s WHERE name='audit_tables'", ("",))
+            _set_audit_rules(cql, [])
+
+            requests_to_check = [
+                ("PutItem", {
+                    "TableName": filtered_table.name,
+                    "Item": {"p": {"S": "pk"}, "padding": {"S": "x" * (256 * 1024)}},
+                }, 200),
+                ("BatchWriteItem", {
+                    "RequestItems": {
+                        filtered_table.name: [{"PutRequest": {"Item": {"p": {"S": "batch-pk"}}}}],
+                    },
+                    "padding": "x" * (256 * 1024),
+                }, 200),
+                ("BatchGetItem", {
+                    "RequestItems": {
+                        filtered_table.name: {"Keys": [{"p": {"S": "missing-pk"}}]},
+                    },
+                    "padding": "x" * (256 * 1024),
+                }, 200),
+                # This fails inside vector-query validation.
+                # VectorSearch auditing predates this PR and is not implemented;
+                # it must still resolve the pending audit reservation first.
+                ("Query", {
+                    "TableName": audited_table.name,
+                    "VectorSearch": {},
+                    "padding": "x" * (256 * 1024),
+                }, 400),
+            ]
+
+            for operation, request, expected_status in requests_to_check:
+                payload = json.dumps(request, separators=(",", ":")).encode()
+                measurements = _request_permit_before_audit(
+                    dynamodb, rest_api, operation, payload, "content-length",
+                    expected_status=expected_status, expect_audit_serialization=False, return_measurements=True)
+                request_memory = max(len(payload) * 2, measurements["dom_memory"])
+                assert measurements["audit_decision_units"] == request_memory + 8000
+                assert measurements["permit_units"] == request_memory + 8000
+
+
+def test_filtered_dense_request_retains_dom_memory(dynamodb, cql, rest_api, alternator_audit_enabled):
+    with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as audited_table:
+        with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as filtered_table:
+            cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", (f"alternator_{audited_table.name}",))
+            value_count = 32 * 1024
+            payload_prefix = json.dumps({
+                "TableName": filtered_table.name,
+                "Item": {"p": {"S": "pk"}},
+            }, separators=(",", ":"))[:-1].encode()
+            payload = payload_prefix + b',"unused":[' + b",".join([b"0"] * value_count) + b"]}"
+
+            measurements = _request_permit_before_audit(
+                dynamodb, rest_api, "PutItem", payload, "content-length",
+                expect_audit_serialization=False, return_measurements=True)
+            request_memory = max(len(payload) * 2, measurements["dom_memory"])
+            assert measurements["dom_memory"] > len(payload) * 2
+            assert measurements["audit_decision_units"] == request_memory + 8000
+            assert measurements["permit_units"] == request_memory + 8000
+
+
+def test_role_filtered_request_releases_audit_memory(dynamodb, cql, rest_api, alternator_audit_enabled):
+    with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table:
+        ks_name = f"alternator_{table.name}"
+        cql.execute("UPDATE system.config SET value=%s WHERE name='audit_categories'", ("",))
+        cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", ("",))
+        cql.execute("UPDATE system.config SET value=%s WHERE name='audit_tables'", ("",))
+        _set_audit_rules(cql, [{
+            "sinks": ["table"],
+            "categories": ["DML"],
+            "qualified_table_names": [f"{ks_name}.*"],
+            "roles": ["role_that_does_not_match_the_test_client"],
+        }])
+        payload = json.dumps({
+            "TableName": table.name,
+            "Item": {"p": {"S": "pk"}, "padding": {"S": "x" * (256 * 1024)}},
+        }, separators=(",", ":")).encode()
+
+        measurements = _request_permit_before_audit(
+            dynamodb, rest_api, "PutItem", payload, "content-length", expect_audit_serialization=False,
+            return_measurements=True)
+        request_memory = max(len(payload) * 2, measurements["dom_memory"])
+        assert measurements["audit_decision_units"] == request_memory + 8000
+        assert measurements["permit_units"] == request_memory + 8000
 
 
 # Test auditing of the DML batch operation: BatchWriteItem.

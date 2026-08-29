@@ -7,6 +7,9 @@
  */
 #pragma once
 
+#include <string>
+#include <string_view>
+
 #include <seastar/net/api.hh>
 
 #include "audit/audit.hh"
@@ -20,6 +23,9 @@ class migration_manager;
 };
 
 namespace audit {
+
+/// Escape a value embedded in a quoted syslog audit field.
+std::string escape_syslog_field(std::string_view str);
 
 class audit_syslog_storage_helper : public storage_helper {
     socket_address _syslog_address;
