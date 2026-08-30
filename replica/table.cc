@@ -899,6 +899,10 @@ private:
         };
     }
 
+    locator::tablet_replica this_tablet_replica() const {
+        return {_my_host_id, this_shard_id()};
+    }
+
     storage_group_ptr allocate_storage_group(const locator::tablet_map& tmap, locator::tablet_id tid, dht::token_range range) const {
         auto cg = make_lw_shared<compaction_group>(_t, tid.value(), std::move(range), make_repair_sstable_classifier_func());
         auto sg = make_lw_shared<storage_group>(std::move(cg));
@@ -918,7 +922,7 @@ public:
         storage_group_map ret;
 
         auto& tmap = tablet_map();
-        auto local_replica = locator::tablet_replica{_my_host_id, this_shard_id()};
+        auto local_replica = this_tablet_replica();
 
         for (auto tid : tmap.tablet_ids()) {
             if (!tmap.has_replica(tid, local_replica)) {
@@ -3889,10 +3893,7 @@ void tablet_storage_group_manager::update_effective_replication_map(
     }
 
     // Allocate storage group if tablet is migrating in, or deallocate if it's migrating out.
-    auto this_replica = locator::tablet_replica{
-        .host = erm.get_token_metadata().get_my_id(),
-        .shard = this_shard_id()
-    };
+    auto this_replica = this_tablet_replica();
     auto tablet_migrates_in = [this_replica] (locator::tablet_transition_info& transition_info) {
         return transition_info.stage == locator::tablet_transition_stage::allow_write_both_read_old && transition_info.pending_replica == this_replica;
     };
