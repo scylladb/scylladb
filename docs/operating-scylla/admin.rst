@@ -112,7 +112,7 @@ should follow this format:
 
    object_storage_endpoints:
      - name: http[s]://<endpoint_address_or_domain_name>[:<port_number>]
-       aws_region: <region_name> # optional, e.g. us-east-1
+       aws_region: <region_name> # required unless AWS_DEFAULT_REGION is set, e.g. us-east-1
        iam_role_arn: <iam_role> # optional
 
 
@@ -126,7 +126,9 @@ Example:
        iam_role_arn: arn:aws:iam::123456789012:instance-profile/my-instance-instance-profile
 
 The ``aws_region`` option can also be specified using 
-the ``AWS_DEFAULT_REGION`` environment variable.
+the ``AWS_DEFAULT_REGION`` environment variable. An S3 endpoint needs a region
+from one of the two. If neither supplies a non-empty value, ScyllaDB logs an
+error and ignores that endpoint.
 
 The AWS-related credentials options (``aws_access_key_id``,
 ``aws_secret_access_key``, ``aws_session_token``) can be configured using
