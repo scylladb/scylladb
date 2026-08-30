@@ -3146,13 +3146,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
                     st->cres.emplace_back(co_await cm.stop_and_disable_compaction("truncate", ts));
                 });
             });
-
-            if (cf.uses_logstor()) {
-                auto& logstor_cm = cf.get_logstor_compaction_manager();
-                co_await cf.parallel_foreach_logstor_compaction_group([&logstor_cm, &st] (replica::compaction_group& cg) -> future<> {
-                    st->logstor_cres.emplace_back(co_await logstor_cm.disable_compaction(cg.as_logstor_group()));
-                });
-            }
+            // for logstor tables, we disable compaction only after the flush. see below.
 
             co_return make_foreign(std::move(st));
         });
@@ -3186,7 +3180,15 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         co_await coroutine::parallel_for_each(views, [&] (lw_shared_ptr<replica::table> v) -> future<> {
             co_await flush_or_clear(*v);
         });
-        co_await cf.flush_separator();
+        if (cf.uses_logstor()) {
+            // flush and only then disable the compaction. flush writes to new segments, and the compaction
+            // is what generates free segments for new writes.
+            co_await cf.flush_separator();
+            auto& logstor_cm = cf.get_logstor_compaction_manager();
+            co_await cf.parallel_foreach_logstor_compaction_group([&logstor_cm, &st] (replica::compaction_group& cg) -> future<> {
+                st.logstor_cres.emplace_back(co_await logstor_cm.disable_compaction(cg.as_logstor_group()));
+            });
+        }
         // Since writes could be appended to active memtable between getting low_mark above
         // and flush, the low_mark has to be adjusted to account for those writes, where
         // memtable was flushed with a higher replay position than the one obtained above.
