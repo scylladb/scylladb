@@ -804,7 +804,7 @@ def modify_pytest_item(item: pytest.Item, run_ids: defaultdict[tuple[str, str], 
             and not any(mark.name == "tier2" for mark in item.iter_markers("tier2"))):
         item.add_marker(pytest.mark.tier2)
 
-    if (any(mark.name in ("perf", "manual", "unstable", "no_parallel") for mark in item.iter_markers())
+    if (any(mark.name in ("perf", "manual", "no_parallel") for mark in item.iter_markers())
             and not any(mark.name == "non_gating" for mark in item.iter_markers("non_gating"))):
         item.add_marker(pytest.mark.non_gating)
 
