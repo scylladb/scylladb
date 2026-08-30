@@ -332,6 +332,15 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         co_await state.config_sync.get_future();
 
         _raft_gr.destroy_server(id);
+        // destroy_server() frees the server, so the state must not name it anymore.
+        // This matters when the entry outlives the deletion, which is the case right
+        // below when a start was chained behind it: until that start assigns a new
+        // server, the entry has an open gate, and everything that looks at a group
+        // checks the gate and the pointer rather than draining server_control_op -
+        // a stale pointer here would be dereferenced by the next update() or
+        // topology barrier.
+        // No scheduling point between the two, so nobody can observe the gap.
+        state.server = nullptr;
         logger.info("schedule_raft_group_deletion(): raft server for group id {} is destroyed", id);
 
         // We need to erase the raft group state only if we are still the last operation on it.
