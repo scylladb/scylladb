@@ -1962,7 +1962,7 @@ class CQLAuditTester(AuditTester):
     async def _test_config_no_liveupdate(self, helper_class, audit_config_changer):
         """
         Test audit config parameters that don't allow config changes.
-        Modification of "audit", "audit_unix_socket_path", and "audit_syslog_write_buffer_size" should be forbidden.
+        Modification of "audit" and "audit_unix_socket_path" should be forbidden.
         """
         with helper_class() as helper, audit_config_changer() as config_changer:
             session = await self.prepare(helper=helper)
@@ -1980,10 +1980,9 @@ class CQLAuditTester(AuditTester):
             auditted_query = SimpleStatement("INSERT INTO test_config_no_lifeupdate (userid, password, name) VALUES ('user2', 'password2', 'second user');", consistency_level=ConsistencyLevel.QUORUM)
             expected_new_entries = [AuditEntry(category="DML", statement=auditted_query.query_string, table="test_config_no_lifeupdate", ks="ks", user="anonymous", cl="QUORUM", error=False)]
 
-            # Modifications of "audit", "audit_unix_socket_path", "audit_syslog_write_buffer_size" are forbidden and will fail
+            # Modifications of "audit" and "audit_unix_socket_path" are forbidden and will fail
             await config_changer.change_config(self, {"audit": "none"}, expected_result=self.AuditConfigChanger.ExpectedResult.FAILURE_UNUPDATABLE_PARAM)
             await config_changer.change_config(self, {"audit_unix_socket_path": "/path/"}, expected_result=self.AuditConfigChanger.ExpectedResult.FAILURE_UNUPDATABLE_PARAM)
-            await config_changer.change_config(self, {"audit_syslog_write_buffer_size": "123123123"}, expected_result=self.AuditConfigChanger.ExpectedResult.FAILURE_UNUPDATABLE_PARAM)
 
             # Despite unsuccesful attempts to change config, audit works as expected
             with self.assert_entries_were_added(session, expected_new_entries, merge_duplicate_rows=False):
@@ -2690,7 +2689,7 @@ _composite = functools.partial(AuditBackendComposite, socket_path=syslog_socket_
     pytest.param(_composite, CQLAuditTester.AuditCqlConfigChanger, id="composite-cql"),
 ])
 async def test_config_no_liveupdate(manager: ScyllaClusterManager, helper_class, config_changer):
-    """Non-live audit config params (audit, audit_unix_socket_path, audit_syslog_write_buffer_size) must be unmodifiable."""
+    """Non-live audit config params (audit, audit_unix_socket_path) must be unmodifiable."""
     await CQLAuditTester(manager)._test_config_no_liveupdate(helper_class, config_changer)
 
 
