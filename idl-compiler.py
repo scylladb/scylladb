@@ -1471,7 +1471,13 @@ def add_view(cout, cls):
 
     skip = "" if cls.final else "ser::skip(in, std::type_identity<size_type>());"
     local_names = {}
-    for m in members:
+    # Single-pass reader (read_all()) accumulators; see emit below.
+    all_types = []
+    all_body = []
+    all_locals = []
+    all_local_names = {}
+    for idx, m in enumerate(members):
+        is_last = idx == len(members) - 1
         name = get_member_name(m.name)
         local_names[name] = "this->" + name + "()"
         full_type = param_view_type(m.type)
@@ -1507,6 +1513,50 @@ def add_view(cout, cls):
             """).format(f=DESERIALIZER, **locals()))
 
         skip = skip + f"\n       ser::skip(in, std::type_identity<{full_type}>());"
+
+        # read_all(): single walk in member order, avoiding per-accessor re-skips.
+        local = "__all_" + name
+        if is_vector(m.type):
+            elem_type = element_type(m.type)
+            all_types.append(f"vector_deserializer<{elem_type}>")
+            # A vector is read from a saved position, so `in` only needs advancing past it if a member follows.
+            if m.attribute:
+                if is_last:
+                    all_body.append(f"auto {local} = (in.size()>0) ? vector_deserializer<{elem_type}>(in) : vector_deserializer<{elem_type}>();")
+                else:
+                    all_body.append(
+                        f"bool {local}_present = in.size() > 0;\n"
+                        f"       auto {local}_in = in;\n"
+                        f"       if ({local}_present) {{ ser::skip(in, std::type_identity<{full_type}>()); }}\n"
+                        f"       auto {local} = {local}_present ? vector_deserializer<{elem_type}>({local}_in) : vector_deserializer<{elem_type}>();")
+            elif is_last:
+                all_body.append(f"auto {local} = vector_deserializer<{elem_type}>(in);")
+            else:
+                all_body.append(f"auto {local}_in = in;\n       ser::skip(in, std::type_identity<{full_type}>());\n       auto {local} = vector_deserializer<{elem_type}>({local}_in);")
+        else:
+            all_types.append(f"decltype({DESERIALIZER}(std::declval<utils::input_stream&>(), std::type_identity<{full_type}>()))")
+            if m.attribute:
+                deflt = m.default_value if m.default_value else param_type(m.type) + "()"
+                deflt = all_local_names.get(deflt, deflt)
+                all_body.append(f"auto {local} = (in.size()>0) ? {DESERIALIZER}(in, std::type_identity<{full_type}>()) : {deflt};")
+            else:
+                all_body.append(f"auto {local} = {DESERIALIZER}(in, std::type_identity<{full_type}>());")
+        all_locals.append(f"std::move({local})")
+        all_local_names[name] = local
+
+    if members:
+        head_skip = "" if cls.final else "ser::skip(in, std::type_identity<size_type>());"
+        body = ("\n       ".join([head_skip] + all_body)).strip()
+        fprintln(cout, reindent(4, """
+            using all_type = std::tuple<{types}>;
+            all_type read_all() const {{
+              return seastar::with_serialized_stream(v, [] (auto& v) -> all_type {{
+               auto in = v;
+               {body}
+               return all_type({locals});
+              }});
+            }}
+        """).format(types=", ".join(all_types), body=body, locals=", ".join(all_locals)))
 
     fprintln(cout, "};")
     skip_impl = "auto& in = v;\n       " + skip if cls.final else "v.skip(read_frame_size(v));"
