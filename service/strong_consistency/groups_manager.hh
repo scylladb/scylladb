@@ -32,6 +32,10 @@ namespace service::strong_consistency {
 
 class raft_server;
 
+// What separates a raft group's live configuration from the one its tablet's current
+// migration stage implies. Defined in groups_manager.cc.
+struct config_sync_work;
+
 /// A cache of leader locations for raft groups where this node is not a replica.
 /// Populated by the CQL transport layer after a redirect reveals the actual leader.
 ///
@@ -127,6 +131,13 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         std::optional<leader_info> leader_info = std::nullopt;
         condition_variable leader_info_cond = condition_variable();
         future<> leader_info_updater = make_ready_future<>();
+
+        // At most one raft configuration change attempt is in flight per group.
+        // Deliberately kept out of server_control_op: a configuration change must
+        // never delay starting or stopping the server, nor be queued behind a
+        // deletion that is waiting for it. The attempt never resolves to an
+        // exception, so waiters don't have to handle one.
+        shared_future<> config_sync = make_ready_future<>();
     };
 
     netw::messaging_service& _ms;
@@ -158,6 +169,22 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     void init_messaging_service();
     future<> uninit_messaging_service();
+
+    // Schedules a single attempt to move the group's raft configuration to the one
+    // the tablet's current migration stage implies, unless an attempt is already in
+    // flight or this node can't drive one.
+    //
+    // Cheap, synchronous and best-effort: a skipped attempt is never a correctness
+    // problem, because the delta is derived again on every token metadata update, so
+    // a change that is still needed is scheduled again.
+    void maybe_schedule_config_sync(raft_group_state& state, locator::global_tablet_id tablet,
+        raft::group_id group_id, const locator::tablet_map& tmap);
+
+    // Performs the configuration change scheduled by maybe_schedule_config_sync().
+    // Runs only on the group leader and is internally bounded; errors are logged and
+    // never propagated.
+    future<> run_config_sync(raft_group_state& state, locator::global_tablet_id tablet,
+        raft::group_id group_id, config_sync_work work, gate::holder holder);
 
 public:
     groups_manager(netw::messaging_service& ms, raft_group_registry& raft_gr,
