@@ -4108,11 +4108,11 @@ future<> storage_service::update_tablet_metadata(const locator::tablet_metadata_
     wake_up_topology_state_machine();
 }
 
-locator::tablet_map storage_service::build_tablet_map_for_migration(
-        const locator::token_metadata& tm,
+future<locator::tablet_map> storage_service::build_tablet_map_for_migration(
+        locator::token_metadata_ptr tm,
         const locator::static_effective_replication_map_ptr& erm,
-        size_t target_pow2) const {
-    const auto& sorted_tokens = tm.sorted_tokens();
+        size_t target_pow2) {
+    const auto& sorted_tokens = tm->sorted_tokens();
 
     // Construct token boundaries: union of vnode tokens + optional pow2 boundaries.
     // target_pow2 == 0 means no pow2 convergence target and only wrap-around pre-split.
@@ -4136,38 +4136,74 @@ locator::tablet_map storage_service::build_tablet_map_for_migration(
     locator::tablet_map tmap(std::move(last_tokens));
     auto tablet_count = tmap.tablet_count();
 
-    // Stateful lambdas for round-robin shard assignment per node.
-    std::unordered_map<locator::host_id, std::function<shard_id()>> next_shard_for;
-    tm.for_each_token_owner([&] (const locator::node& node) {
-        auto host = node.host_id();
-        next_shard_for[host] = [num_shards = node.get_shard_count(), idx = 0u] () mutable {
-            return shard_id(idx++ % num_shards);
-        };
-    });
+    struct tablet_desc {
+        locator::tablet_id id;
+        dht::token vnode_token;
+        uint64_t token_range_size;
+    };
+    utils::chunked_vector<tablet_desc> tablets;
+    tablets.reserve(tablet_count);
 
     size_t vnode_idx = 0;
+    // unbias() maps tokens monotonically onto [0, 2^64), so the distance between
+    // consecutive tablet boundaries is the size of the range a tablet owns.
+    // unbias(minimum_token()) is 0, the lower bound of the first tablet.
+    uint64_t prev_boundary = dht::minimum_token().unbias();
     for (size_t i = 0; i < tablet_count; ++i) {
-        auto tablet = locator::tablet_id(i);
-        auto tablet_last = dht::raw_token(tmap.get_last_token(tablet));
-        while (vnode_idx < sorted_tokens.size() && dht::raw_token(sorted_tokens[vnode_idx]) < tablet_last) {
+        auto tablet_last = tmap.get_last_token(locator::tablet_id(i));
+        while (vnode_idx < sorted_tokens.size() && dht::raw_token(sorted_tokens[vnode_idx]) < dht::raw_token(tablet_last)) {
             ++vnode_idx;
         }
         auto vnode_token = (vnode_idx < sorted_tokens.size())
             ? sorted_tokens[vnode_idx]
             : sorted_tokens[0]; // wrap-around vnode
-        auto vnode_replica_hosts = erm->get_natural_replicas(vnode_token, true);
-        locator::tablet_replica_set tablet_replicas;
-        for (auto host : vnode_replica_hosts) {
-            tablet_replicas.push_back(locator::tablet_replica{host, next_shard_for[host]()});
+        auto boundary = tablet_last.unbias();
+        tablets.push_back(tablet_desc{locator::tablet_id(i), vnode_token, boundary - prev_boundary});
+        prev_boundary = boundary;
+        co_await coroutine::maybe_yield();
+    }
+
+    // Aggregate token range assigned to each shard of a node, kept as a min-heap
+    // ordered by (range, shard). A tablet is placed on at most one shard per node,
+    // so the per-shard sums add up to the size of the ring at most, which uint64_t
+    // holds exactly.
+    using shard_range = std::pair<uint64_t, shard_id>;
+    std::unordered_map<locator::host_id, std::vector<shard_range>> shard_load;
+    tm->for_each_token_owner([&] (const locator::node& node) {
+        auto shard_count = node.get_shard_count();
+        if (!shard_count) {
+            throw std::runtime_error(fmt::format("Shard count not known for node {}", node.host_id()));
         }
-        tmap.set_tablet(tablet, locator::tablet_info(std::move(tablet_replicas)));
+        std::vector<shard_range> shards;
+        shards.reserve(shard_count);
+        for (shard_id shard = 0; shard < shard_count; ++shard) {
+            shards.emplace_back(0, shard);
+        }
+        std::ranges::make_heap(shards, std::greater<>{});
+        shard_load.emplace(node.host_id(), std::move(shards));
+    });
+
+    std::ranges::sort(tablets, std::ranges::greater(), &tablet_desc::token_range_size);
+
+    for (const auto& tablet : tablets) {
+        locator::tablet_replica_set tablet_replicas;
+        for (auto host : erm->get_natural_replicas(tablet.vnode_token, true)) {
+            auto& shards = shard_load.at(host);
+            std::ranges::pop_heap(shards, std::greater<>{});
+            auto& [range, shard] = shards.back();
+            range += tablet.token_range_size;
+            tablet_replicas.push_back(locator::tablet_replica{host, shard});
+            std::ranges::push_heap(shards, std::greater<>{});
+        }
+        tmap.set_tablet(tablet.id, locator::tablet_info(std::move(tablet_replicas)));
+        co_await coroutine::maybe_yield();
     }
 
     if (target_pow2 && tablet_count != target_pow2) {
         tmap.set_target_pow2_tablet_count(target_pow2);
     }
 
-    return tmap;
+    co_return tmap;
 }
 
 future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_sizes_for_migration(
@@ -4261,9 +4297,10 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // vnode range. If the last vnode token is not MAX_TOKEN, an additional
         // tablet is created to cover the wrap-around range
         // (last_vnode_token, MAX_TOKEN].
-        // Tablets inherit their replica hosts from their corresponding vnode
-        // and shards are assigned in round-robin fashion per node so that
-        // tablets are evenly distributed within each node.
+        // Tablets inherit their replica hosts from their corresponding vnode.
+        // Shards are picked per node so that the aggregate token range owned by
+        // each shard is as even as possible, since vnode-derived tablets differ
+        // widely in size and counting them alone would misrepresent the load.
         //
         // However, this direct 1:1 mapping is not sufficient in terms of
         // performance because vnode token ranges vary in size, producing
@@ -4299,7 +4336,8 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         //  min           P1            P2            P3          max
         //   |------------|-------------|-------------|------------|
 
-        const auto& tm = get_token_metadata();
+        const auto tmptr = get_token_metadata_ptr();
+        const auto& tm = *tmptr;
 
         // Estimate table sizes when pow2 convergence is enabled.
         // The estimates are used by the tablet allocator to determine the
@@ -4354,11 +4392,11 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
                     if (auto it = target_pow2s.find(tid); it != target_pow2s.end()) {
                         target_pow2 = it->second;
                     }
-                    auto tmap = build_tablet_map_for_migration(tm, erm, target_pow2);
+                    auto tmap = co_await build_tablet_map_for_migration(tmptr, erm, target_pow2);
                     co_await append_tablet_map_mutations(tid, cf_name, tmap, target_pow2);
                 }
             } else {
-                auto shared_tmap = build_tablet_map_for_migration(tm, erm, 0);
+                auto shared_tmap = co_await build_tablet_map_for_migration(tmptr, erm, 0);
                 for (const auto& [tid, cf_name] : tables_to_migrate) {
                     co_await append_tablet_map_mutations(tid, cf_name, shared_tmap, 0);
                 }
