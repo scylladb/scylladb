@@ -2051,6 +2051,61 @@ SEASTAR_TEST_CASE(test_large_tablet_metadata) {
     }, tablet_cql_test_config());
 }
 
+// Compaction groups must come out of creation with a counter id and tombstone-GC flag set,
+// because the update_effective_replication_map() sweep that used to set them can be skipped.
+SEASTAR_THREAD_TEST_CASE(test_compaction_group_counter_id_and_gc_flag_set_at_creation) {
+    auto cfg = tablet_cql_test_config();
+    cfg.initial_tablets = std::bit_floor(this_smp_shard_count());
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE cf (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
+
+        // Groups allocated with the table carry the rack's id and have tombstone GC enabled.
+        // A shard may own no tablet, so only the totals across shards must be non-zero.
+        auto groups = e.db().map_reduce0([] (replica::database& db) {
+            auto& t = db.find_column_family("ks", "cf");
+            const counter_id rack_id(t.get_effective_replication_map()->get_topology().get_rack_uuid());
+            size_t groups = 0;
+            column_family_test::get_storage_group_manager(t)->for_each_storage_group([&] (size_t, replica::storage_group& sg) {
+                sg.for_each_compaction_group([&] (const compaction_group_ptr& cg) {
+                    groups++;
+                    THREADSAFE_BOOST_REQUIRE(bool(cg->get_counter_id()));
+                    THREADSAFE_BOOST_REQUIRE(cg->get_counter_id() == rack_id);
+                    THREADSAFE_BOOST_REQUIRE(cg->tombstone_gc_enabled());
+                });
+            });
+            return groups;
+        }, size_t(0), std::plus<>()).get();
+        BOOST_REQUIRE_GT(groups, 0);
+
+        // Split-ready groups inherit both from the group being split, whatever it holds.
+        const counter_id sentinel(utils::UUID_gen::get_time_UUID());
+        e.db().invoke_on_all([sentinel] (replica::database& db) {
+            auto& t = db.find_column_family("ks", "cf");
+            column_family_test::get_storage_group_manager(t)->for_each_storage_group([&] (size_t, replica::storage_group& sg) {
+                sg.for_each_compaction_group([&] (const compaction_group_ptr& cg) {
+                    cg->set_tombstone_gc_enabled(false);
+                    cg->set_counter_id(sentinel);
+                });
+            });
+            return t.split_all_storage_groups(tasks::make_empty_task_info());
+        }).get();
+
+        auto split_ready = e.db().map_reduce0([sentinel] (replica::database& db) {
+            auto& t = db.find_column_family("ks", "cf");
+            size_t split_ready = 0;
+            column_family_test::get_storage_group_manager(t)->for_each_storage_group([&] (size_t, replica::storage_group& sg) {
+                for (const auto& cg : sg.split_ready_compaction_groups()) {
+                    split_ready++;
+                    THREADSAFE_BOOST_REQUIRE(cg->get_counter_id() == sentinel);
+                    THREADSAFE_BOOST_REQUIRE(!cg->tombstone_gc_enabled());
+                }
+            });
+            return split_ready;
+        }, size_t(0), std::plus<>()).get();
+        BOOST_REQUIRE_GT(split_ready, 0);
+    }, std::move(cfg)).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_token_ownership_splitting) {
     const auto real_min_token = dht::token::first();
     const auto real_max_token = dht::token::last();
