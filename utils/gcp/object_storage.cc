@@ -19,6 +19,7 @@
 
 #include <seastar/core/align.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/metrics.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/units.hh>
@@ -31,6 +32,7 @@
 #include "utils/exceptions.hh"
 #include "utils/http.hh"
 #include "utils/http_client_error_processing.hh"
+#include "utils/object_storage_metrics.hh"
 #include "utils/overloaded_functor.hh"
 
 static logger gcp_storage("gcp_storage");
@@ -300,6 +302,7 @@ class utils::gcp::storage::client::impl {
     seastar::http::client _client;
     uint64_t _read_bytes = 0;
     uint64_t _write_bytes = 0;
+    std::optional<utils::http_client_metrics> _metrics;
     shared_ptr<seastar::tls::certificate_credentials> _certs;
     seastar::gate _gate;
     future<> authorize(request_wrapper& req, const std::string& scope);
@@ -323,6 +326,11 @@ public:
     void count_write_bytes(uint64_t bytes) {
         _write_bytes += bytes;
     }
+    utils::object_storage_bytes bytes() const {
+        return {.read = _read_bytes, .written = _write_bytes};
+    }
+    void register_metrics(utils::object_storage_metrics_labels);
+    void unregister_metrics();
     future<> close();
 };
 
@@ -661,6 +669,14 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
         res.reply._version = r._version;
     }, op, headers, as);
     co_return res;
+}
+
+void utils::gcp::storage::client::impl::register_metrics(utils::object_storage_metrics_labels labels) {
+    _metrics.emplace(_client, std::move(labels));
+}
+
+void utils::gcp::storage::client::impl::unregister_metrics() {
+    _metrics.reset();
 }
 
 future<> utils::gcp::storage::client::impl::close() {
@@ -1512,6 +1528,18 @@ future<utils::gcp::storage::object_info> storage::client::get_object_info(std::s
             fmt::format("Could not retrieve object metadata {}:{}: {} ({})", bucket, object_name, res.result(), get_gcp_error_message(res.body())));
     }
     co_return create_info(rjson::parse(res.body()));
+}
+
+utils::object_storage_bytes utils::gcp::storage::client::bytes() const {
+    return _impl->bytes();
+}
+
+void utils::gcp::storage::client::register_metrics(utils::object_storage_metrics_labels labels) {
+    _impl->register_metrics(std::move(labels));
+}
+
+void utils::gcp::storage::client::unregister_metrics() {
+    _impl->unregister_metrics();
 }
 
 future<> utils::gcp::storage::client::close() {
