@@ -163,6 +163,24 @@ void client::update_connections_per_shard(unsigned connections_per_shard) {
     });
 }
 
+utils::object_storage_bytes client::bytes() const {
+    utils::object_storage_bytes total;
+    for (auto& [sg, gc] : _https) {
+        total.read += gc.read_bytes;
+        total.written += gc.write_bytes;
+    }
+    return total;
+}
+
+void client::report_object_storage_metrics(utils::object_storage_metrics_labels labels) {
+    _object_storage_metrics_labels = std::move(labels);
+    for (auto& [sg, gc] : _https) {
+        auto group_labels = *_object_storage_metrics_labels;
+        group_labels.class_name = sg.name();
+        gc.object_storage_metrics.emplace(gc.http, std::move(group_labels));
+    }
+}
+
 shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf) {
     return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{});
 }
@@ -309,7 +327,19 @@ void client::group_client::register_metrics(std::string class_name, std::string 
                 (sm::skip_when_empty::yes));
     }
 
-    metrics.add_group("s3", defs);
+    // TODO: every metric here except total_read_prefetch_bytes and
+    // downloads_starving_on_max_concurrency now has a counterpart in the
+    // object_storage group. Once the dashboards read that group, shrink this one
+    // to those two, which describe the S3 client alone. Note that the bytes lose
+    // the class label on the way, being reported above the scheduling groups.
+    try {
+        metrics.add_group("s3", defs);
+    } catch (const seastar::metrics::double_registration& e) {
+        // Reached when a second client serves one endpoint on this shard, which
+        // happens while an endpoint dropped from the configuration is still
+        // referenced. This runs on the request path, so it must not throw.
+        s3l.warn("Not reporting s3 metrics for {}: {}", host, e.what());
+    }
 }
 
 future<client::group_client&> client::find_or_create_client() {
@@ -337,6 +367,11 @@ future<client::group_client&> client::find_or_create_client_slow() {
         std::forward_as_tuple(std::move(factory), max_connections)
     ).first;
     it->second.register_metrics(sg.name(), _host);
+    if (_object_storage_metrics_labels) {
+        auto labels = *_object_storage_metrics_labels;
+        labels.class_name = sg.name();
+        it->second.object_storage_metrics.emplace(it->second.http, std::move(labels));
+    }
     if (!_cfg->max_connections) {
         co_await rebalance_connections();
     }

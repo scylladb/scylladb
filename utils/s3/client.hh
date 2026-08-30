@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <unordered_map>
 #include "utils/lister.hh"
+#include "utils/object_storage_metrics.hh"
 #include "utils/s3/creds.hh"
 #include "credentials_providers/aws_credentials_provider_chain.hh"
 #include "utils/s3/client_fwd.hh"
@@ -141,10 +142,14 @@ class client : public enable_shared_from_this<client> {
         uint64_t prefetch_bytes = 0;
         uint64_t downloads_starving_on_max_concurrency = 0;
         seastar::metrics::metric_groups metrics;
+        std::optional<utils::http_client_metrics> object_storage_metrics;
         group_client(std::unique_ptr<http::connection_factory> f, unsigned max_conn);
         void register_metrics(std::string class_name, std::string host);
     };
     std::unordered_map<seastar::scheduling_group, group_client> _https;
+    // Set by the owner that knows this client is the only one for its endpoint
+    // on this shard. Unset means no object_storage metrics are reported.
+    std::optional<utils::object_storage_metrics_labels> _object_storage_metrics_labels;
     semaphore _rebalance_sem{1};
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
@@ -233,6 +238,12 @@ public:
 
     void update_config_sync(std::string reg, std::string ira);
     void update_connections_per_shard(unsigned connections_per_shard);
+    // Bytes moved to and from objects by this client, for its owner to report.
+    utils::object_storage_bytes bytes() const;
+    // Reports the http client metrics under the labels the caller supplies. The
+    // client keeps one http client per scheduling group and names the class
+    // label after it, so the caller supplies only the type and the endpoint.
+    void report_object_storage_metrics(utils::object_storage_metrics_labels labels);
 
     struct handle {
         std::string _host;
