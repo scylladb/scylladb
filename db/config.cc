@@ -588,6 +588,27 @@ struct convert<utils::UUID> {
 };
 
 template<>
+struct convert<std::vector<db::object_storage_endpoint_param>> {
+    // Decode each entry on its own, so a malformed entry costs its own
+    // endpoint rather than the whole option.
+    static bool decode(const Node& node, std::vector<db::object_storage_endpoint_param>& endpoints) {
+        if (!node.IsSequence()) {
+            return false;
+        }
+
+        endpoints.clear();
+        for (size_t i = 0; i < node.size(); ++i) {
+            try {
+                endpoints.push_back(db::object_storage_endpoint_param::decode(node[i]));
+            } catch (const std::exception& e) {
+                cfglogger.error("Ignoring object_storage_endpoints entry {}: {}", i, e.what());
+            }
+        }
+        return true;
+    }
+};
+
+template<>
 struct convert<compression_parameters> {
     static bool decode(const Node& node, compression_parameters& cp) {
         if (!node.IsMap()) {
