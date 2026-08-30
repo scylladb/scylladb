@@ -948,6 +948,10 @@ private:
         };
     }
 
+    locator::tablet_replica this_tablet_replica() const {
+        return {_my_host_id, this_shard_id()};
+    }
+
     storage_group_ptr allocate_storage_group(const locator::tablet_map& tmap, locator::tablet_id tid, dht::token_range range) const {
         auto cg = make_lw_shared<compaction_group>(_t, tid.value(), std::move(range), make_repair_sstable_classifier_func());
         auto sg = make_lw_shared<storage_group>(std::move(cg));
@@ -967,7 +971,7 @@ public:
         storage_group_map ret;
 
         auto& tmap = tablet_map();
-        auto local_replica = locator::tablet_replica{_my_host_id, this_shard_id()};
+        auto local_replica = this_tablet_replica();
 
         for (auto tid : tmap.tablet_ids()) {
             if (locator::get_tablet_storage_state(local_replica, tmap.get_tablet_info(tid), tmap.get_tablet_transition_info(tid))
