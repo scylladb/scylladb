@@ -175,8 +175,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // flight or this node can't drive one.
     //
     // Cheap, synchronous and best-effort: a skipped attempt is never a correctness
-    // problem, because the delta is derived again on every token metadata update, so
-    // a change that is still needed is scheduled again.
+    // problem, because converge_group_config() both observes whether the group
+    // converged and reschedules until its deadline.
     void maybe_schedule_config_sync(raft_group_state& state, locator::global_tablet_id tablet,
         raft::group_id group_id, const locator::tablet_map& tmap);
 
@@ -185,6 +185,12 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // never propagated.
     future<> run_config_sync(raft_group_state& state, locator::global_tablet_id tablet,
         raft::group_id group_id, config_sync_work work, gate::holder holder);
+
+    // Drives one raft group's configuration to the one the tablet's current migration
+    // stage implies and doesn't return until it got there. On behalf of
+    // local_topology_barrier(); see there for what a failure means.
+    future<> converge_group_config(locator::global_tablet_id tablet, raft::group_id group_id,
+        const locator::tablet_map& tmap, lowres_clock::time_point deadline);
 
 public:
     groups_manager(netw::messaging_service& ms, raft_group_registry& raft_gr,
@@ -211,6 +217,16 @@ public:
     future<> stop();
 
     future<> wait_for_groups_to_start(lowres_clock::time_point timeout);
+
+    // Makes sure every raft group whose tablet has a replica on this node has the
+    // configuration its current migration stage implies, repairing it if it doesn't.
+    //
+    // This is the only place where a configuration mismatch becomes an error. The
+    // topology coordinator receives it as a failed barrier and its stage logic
+    // decides what to do about it: retry, exclude a replica, or roll back. Nothing
+    // observes convergence in the background, so there is no unbounded wait for a
+    // configuration change to get stuck in.
+    future<> local_topology_barrier(locator::token_metadata_ptr tm, lowres_clock::time_point deadline);
 
     // Sends an RPC to every host that holds a tablet replica of the given table, asking it to wait
     // until the raft groups for those tablets are started and ready to serve queries.

@@ -4949,6 +4949,9 @@ future<> storage_service::local_topology_barrier() {
         rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: stale versions released, draining closing sessions", version);
         co_await get_topology_session_manager().drain_closing_sessions();
 
+        rtlogger.debug("raft_topology_cmd::barrier_and_drain version {}: waiting for strongly consistent tablet raft groups to converge", version);
+        co_await ss._groups_manager.local_topology_barrier(ss._shared_token_metadata.get(), lowres_clock::now() + std::chrono::minutes(1));
+
         rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: done", version);
     });
 }
