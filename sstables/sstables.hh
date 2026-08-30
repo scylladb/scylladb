@@ -685,6 +685,9 @@ public:
     bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }
     const sstables_manager& manager() const { return _manager; }
+    bool opened_for_reading() const {
+        return _open_mode && _open_mode.value() == open_flags::ro;
+    }
 
     static future<std::pair<std::vector<sstring>, uint32_t>> read_and_parse_toc(file f);
 private:

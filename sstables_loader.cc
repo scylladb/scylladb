@@ -656,6 +656,13 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
     auto& tbl = _db.local().find_column_family(table_id);
     auto stream_guard = tbl.stream_in_progress();
 
+    // The streamer unlinks the sstables only if it was asked to and only if
+    // streaming succeeded: on failure, or for tablets outside the stream scope,
+    // their files are left in place on purpose so the operation can be retried.
+    // So releasing a live sstable is expected here. Declared before the streamer,
+    // which owns the sstables, so that it outlives them.
+    auto leakage_pause = tbl.get_sstables_manager().pause_leakage_detection(table_id);
+
     std::unique_ptr<sstable_streamer> streamer;
     if (tbl.uses_tablets()) {
         streamer =
@@ -986,6 +993,9 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     sstring snapshot_name = trinfo->snapshot_name;
 
     auto s = _db.local().find_schema(tid.table);
+    // The downloaded sstables are traded for a minimal_sst_info descriptor and
+    // released while their files stay in place, so this isn't a leak either.
+    auto leakage_pause = _db.local().get_sstables_manager(*s).pause_leakage_detection(tid.table);
     auto tablet_range = tmap.get_token_range(tid.tablet);
     const auto& topo = guard.get_token_metadata()->get_topology();
     auto keyspace_name = s->ks_name();
