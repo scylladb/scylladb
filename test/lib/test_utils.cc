@@ -97,6 +97,22 @@ tmp_set_env::~tmp_set_env() {
     }
 }
 
+tmp_unset_env::tmp_unset_env(std::string_view var)
+    : _var(var)
+    , _old(getenv_or_default(_var))
+    , _was_set(std::getenv(_var.c_str()) != nullptr)
+{
+    ::unsetenv(_var.c_str());
+}
+
+tmp_unset_env::tmp_unset_env(tmp_unset_env&&) = default;
+
+tmp_unset_env::~tmp_unset_env() {
+    if (_was_set) {
+        ::setenv(_var.c_str(), _old.c_str(), 1);
+    }
+}
+
 bool check_run_test(std::string_view var, bool defval) {
     auto do_test = getenv_or_default(var, std::to_string(defval));
 
