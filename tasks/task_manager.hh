@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <list>
 #include <ranges>
 #include <seastar/core/on_internal_error.hh>
