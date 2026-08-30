@@ -2161,34 +2161,38 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(mut
         // Precalculate new effective_replication_map for all keyspaces
         // and clone to all shards;
         //
+        // The base shard goes first so its ERMs are already cached on shard 0
+        // for create_static_effective_replication_map() on the other shards to clone.
+        //
         // TODO: at the moment create on shard 0 first
         // but in the future we may want to use hash() % this_smp_shard_count()
         // to evenly distribute the load.
-        auto replications = schema_getter.get_keyspaces_replication();
-        for (const auto& [ks_name, rs] : replications) {
-            if (rs->is_per_table()) {
-                continue;
-            }
-            auto erm = co_await get_erm_factory().create_static_effective_replication_map(rs, tmptr);
-            change.pending_effective_replication_maps[base_shard].emplace(ks_name, std::move(erm));
-        }
-        co_await container().invoke_on_others([&] (storage_service& ss) -> future<> {
-            auto replications = schema_getter.get_keyspaces_replication();
+        auto make_keyspace_erms = [&change] (storage_service& ss,
+                const flat_hash_map<sstring, locator::replication_strategy_ptr>& replications) -> future<> {
+            auto tmptr = change.pending_token_metadata_ptr[this_shard_id()];
             for (const auto& [ks_name, rs] : replications) {
                 if (rs->is_per_table()) {
                     continue;
                 }
-                auto tmptr = change.pending_token_metadata_ptr[this_shard_id()];
                 auto erm = co_await ss.get_erm_factory().create_static_effective_replication_map(rs, tmptr);
                 change.pending_effective_replication_maps[this_shard_id()].emplace(ks_name, std::move(erm));
             }
-        });
-        // Prepare per-table erms.
+        };
+        auto replications = schema_getter.get_keyspaces_replication();
+        co_await make_keyspace_erms(*this, replications);
+        // Prepare per-table erms, plus remaining per-keyspace erms on non-base shards.
         co_await container().invoke_on_all([&] (storage_service& ss) -> future<> {
             auto tmptr = change.pending_token_metadata_ptr[this_shard_id()];
-            auto replications = schema_getter.get_keyspaces_replication();
+            // `replications` holds the base shard's shard-local strategy pointers;
+            // every other shard must fetch its own.
+            std::optional<flat_hash_map<sstring, locator::replication_strategy_ptr>> shard_replications;
+            if (this_shard_id() != base_shard) {
+                shard_replications = schema_getter.get_keyspaces_replication();
+                co_await make_keyspace_erms(ss, *shard_replications);
+            }
+            const auto& local_replications = shard_replications ? *shard_replications : replications;
             co_await schema_getter.for_each_table_schema_gently([&] (table_id id, schema_ptr table_schema) {
-                auto rs = replications.at(table_schema->ks_name());
+                auto rs = local_replications.at(table_schema->ks_name());
                 locator::effective_replication_map_ptr erm;
                 if (auto pt_rs = rs->maybe_as_per_table()) {
                     erm = pt_rs->make_replication_map(id, tmptr);
