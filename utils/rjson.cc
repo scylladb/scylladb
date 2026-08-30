@@ -419,7 +419,14 @@ parsed_value parse_with_memory_usage(chunked_content&& content, size_t max_neste
 }
 
 rjson::value parse(chunked_content&& content, size_t max_nested_level) {
-    return std::move(parse_with_memory_usage(std::move(content), max_nested_level).value);
+    guarded_yieldable_json_handler<document, false> d(max_nested_level);
+    d.Parse(std::move(content));
+    if (d.HasParseError()) {
+        throw rjson::error(format("Parsing JSON failed: {} at {}",
+            GetParseError_En(d.GetParseError()), d.GetErrorOffset()));
+    }
+    rjson::value& v = d;
+    return std::move(v);
 }
 
 std::optional<rjson::value> try_parse(std::string_view str, size_t max_nested_level) {
@@ -461,7 +468,14 @@ parsed_value parse_yieldable_with_memory_usage(chunked_content&& content, size_t
 }
 
 rjson::value parse_yieldable(chunked_content&& content, size_t max_nested_level) {
-    return std::move(parse_yieldable_with_memory_usage(std::move(content), max_nested_level).value);
+    guarded_yieldable_json_handler<document, true> d(max_nested_level);
+    d.Parse(std::move(content));
+    if (d.HasParseError()) {
+        throw rjson::error(format("Parsing JSON failed: {} at {}",
+            GetParseError_En(d.GetParseError()), d.GetErrorOffset()));
+    }
+    rjson::value& v = d;
+    return std::move(v);
 }
 
 rjson::value& get(rjson::value& value, std::string_view name) {
