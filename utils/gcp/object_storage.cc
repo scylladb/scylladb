@@ -298,6 +298,8 @@ class utils::gcp::storage::client::impl {
     seastar::semaphore _unlimited;
     seastar::semaphore& _limits;
     seastar::http::client _client;
+    uint64_t _read_bytes = 0;
+    uint64_t _write_bytes = 0;
     shared_ptr<seastar::tls::certificate_credentials> _certs;
     seastar::gate _gate;
     future<> authorize(request_wrapper& req, const std::string& scope);
@@ -314,6 +316,12 @@ public:
     }
     auto try_get_units(size_t s) const {
         return seastar::try_get_units(_limits, s);
+    }
+    void count_read_bytes(uint64_t bytes) {
+        _read_bytes += bytes;
+    }
+    void count_write_bytes(uint64_t bytes) {
+        _write_bytes += bytes;
     }
     future<> close();
 };
@@ -399,6 +407,7 @@ public:
                         auto n = std::min(buf.size(), len - result);
                         std::copy_n(buf.get(), n, dst + result);
                         result += n;
+                        _impl->count_read_bytes(n);
                     }
                 },
                 httpclient::method_type::GET,
@@ -792,12 +801,14 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
             case status_type::ok:
             case status_type::created:
                 _completed = true;
+                _impl->count_write_bytes(len);
                 gcp_storage.debug("{}:{} completed ({} bytes)", _bucket, _object_name, offset+len);
                 co_return; // done and happy
             default:
                 if (int(res.result()) == 308) {
                     uint64_t first = 0, new_last = 0;
-                    if (parse_response_range(res.reply, first, new_last) && last != new_last) {
+                    auto acknowledged = parse_response_range(res.reply, first, new_last);
+                    if (acknowledged && last != new_last) {
                         auto written = (new_last + 1) - offset;
 
                         gcp_storage.debug("{}:{} partial upload ({} bytes)", _bucket, _object_name, written);
@@ -805,6 +816,11 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
                         if (!final && (len - written) < min_gcp_storage_chunk_size) {
                             written = len - std::min(min_gcp_storage_chunk_size, len);
                         }
+
+                        // The rewind above can put some acknowledged bytes back in
+                        // the queue to keep the next chunk aligned, so they go over
+                        // the wire twice. Count the bytes the object keeps, once.
+                        _impl->count_write_bytes(written);
 
                         auto to_remove = written;
                         while (to_remove) {
@@ -825,6 +841,12 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
                         continue;
                     }
                     // incomplete. ok for partial
+                    if (acknowledged) {
+                        // Acknowledged through our last byte. A 308 without a
+                        // Range header means GCS persisted none of this chunk,
+                        // and then there is nothing to count.
+                        _impl->count_write_bytes(len);
+                    }
                     gcp_storage.debug("{}:{} chunk {}:{} done", _bucket, _object_name, offset, offset+len);
                     co_return;
                 }
@@ -955,6 +977,7 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                     auto bufs = co_await util::read_entire_stream(in);
                     for (auto&& buf : bufs) {
                         s.position += buf.size();
+                        _impl->count_read_bytes(buf.size());
                         s.buffers.emplace_back(std::move(buf));
                     }
                     gcp_storage.debug("Read object {}:{} ({}-{}/{})", _bucket, _object_name, old, s.position, _size);
