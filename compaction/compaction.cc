@@ -1109,6 +1109,55 @@ private:
         _unused_garbage_collected_sstables.clear();
     }
 protected:
+    // Commits the deletion of sstables this compaction created but never attached
+    // to the table, using sstables::atomic_deletion, so that a restart finishes it
+    // if we crash before execute_deletion_of_unattached_sstables() unlinks them.
+    //
+    // Only sealed sstables belong here: create_pending_deletion_log() reads the
+    // real TOC, and an unsealed sstable is garbage collected on restart anyway.
+    //
+    // Runs in a seastar thread. Does not throw.
+    std::optional<sstables::atomic_deletion> commit_deletion_of_unattached_sstables(std::vector<sstables::shared_sstable> ssts) {
+        if (ssts.empty()) {
+            return std::nullopt;
+        }
+        try {
+            log_debug("Deleting sstable(s) [{}] that were created but never attached",
+                    fmt::join(ssts | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
+            auto deletion = _table_s.get_sstables_manager().make_atomic_deletion(ssts);
+            deletion.commit().get();
+            return deletion;
+        } catch (...) {
+            // The commit may have failed before or after publishing the log, so
+            // a restart cannot be relied on to finish the job. Fall back to the
+            // in-memory mark -- what we did before the log existed -- which
+            // removes the files as long as we stay alive. A log that did get
+            // published is harmless: replaying it finds no TOC, warns and removes
+            // the log.
+            for (auto& sst : ssts) {
+                sst->mark_for_deletion();
+            }
+            // Logged after marking, which must not be skipped: this allocates.
+            try {
+                log_warning("Failed to commit deletion of sstable(s) that were never attached: {}."
+                        " Marked them for deletion instead.", std::current_exception());
+            } catch (...) {
+            }
+            return std::nullopt;
+        }
+    }
+
+    // Unlinks the sstables of a deletion returned by
+    // commit_deletion_of_unattached_sstables(). Cannot fail: past commit() the files
+    // are deleted on restart even if this step doesn't complete.
+    //
+    // Runs in a seastar thread. Does not throw.
+    void execute_deletion_of_unattached_sstables(std::optional<sstables::atomic_deletion> deletion) {
+        if (deletion) {
+            deletion->execute().get();
+        }
+    }
+
     template <typename... Args>
     void log(log_level level, std::string_view fmt, const Args&... args) const {
         if (clogger.is_enabled(level)) {
