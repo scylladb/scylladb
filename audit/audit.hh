@@ -239,4 +239,8 @@ future<> inspect(shared_ptr<cql3::cql_statement> statement, const service::query
 
 future<> inspect_login(const sstring& username, socket_address client_ip, bool error);
 
+// Whether the configured sinks include the table backend, which is the only
+// one that creates the "audit" keyspace.
+bool table_sink_configured(const db::config& cfg);
+
 }
