@@ -753,12 +753,6 @@ class load_balancer {
 
         utils::chunked_vector<skipped_candidate> skipped_candidates;
 
-        std::optional<double> capacity_per_shard() const {
-            return dusage.transform([&] (auto du) {
-                return load_type(du.capacity) / shard_count;
-            });
-        }
-
         const sstring& dc() const {
             return node->dc_rack().dc;
         }
@@ -847,6 +841,7 @@ class load_balancer {
     const uint64_t _target_tablet_size = default_target_tablet_size;
 
     const unsigned _tablets_per_shard_goal;
+    const locator::group0_leader_shard_skew _group0_leader_shard_skew;
 
     uint64_t target_max_tablet_size(uint64_t target_tablet_size) const noexcept {
         return target_tablet_size * 2;
@@ -1077,9 +1072,11 @@ public:
             load_balancer_stats_manager& stats,
             uint64_t target_tablet_size,
             unsigned tablets_per_shard_goal,
+            locator::group0_leader_shard_skew group0_leader_shard_skew,
             std::unordered_set<host_id> skiplist)
         : _target_tablet_size(target_tablet_size)
         , _tablets_per_shard_goal(tablets_per_shard_goal)
+        , _group0_leader_shard_skew(group0_leader_shard_skew)
         , _db(db)
         , _cluster_config_manager(cluster_config_manager)
         , _tm(std::move(tm))
@@ -1302,8 +1299,11 @@ public:
 
         load.shards.resize(load.shard_count);
         if (load.dusage) {
-            for (auto& sload : load.shards) {
-                sload.dusage = disk_usage{ load.dusage->capacity / load.shard_count, 0 };
+            uint64_t shard_capacity = load.dusage->capacity / load.shard_count;
+            unsigned group0_leader_shard_ratio = _group0_leader_shard_skew.ratio_for(host);
+            for (shard_id i = 0; i < load.shard_count; ++i) {
+                load.shards[i].dusage = disk_usage{
+                    locator::apply_group0_leader_shard_ratio(shard_capacity, i, load.shard_count, group0_leader_shard_ratio, _target_tablet_size), 0 };
             }
         }
     }
@@ -1514,13 +1514,15 @@ public:
         // Consider load that is about to be scheduled.
         co_await consider_planned_load(nodes, mplan);
 
-        // Rebuild the load sketch for this DC so that get_least_loaded_shard()
+        // Rebuild the load sketch for this DC so that get_best_shard_for()
         // returns accurate results for nodes in this DC. Without this, the sketch
         // may contain stale data from the last DC processed by make_plan(), causing
         // shard 0 to always be selected for nodes in other DCs.
         _load_sketch = locator::load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
         _load_sketch->set_minimal_tablet_size(_minimal_tablet_size);
         _load_sketch->set_force_capacity_based_load(_force_capacity_based_balancing);
+        _load_sketch->set_group0_leader_shard_skew(_group0_leader_shard_skew);
+        _load_sketch->set_min_shard0_capacity(_target_tablet_size);
         co_await _load_sketch->populate_dc(dc);
 
         for (auto& [rack, colocation_sources] : racks) {
@@ -1566,15 +1568,15 @@ public:
 
                 lblogger.debug("target node: {}, avg_load={}", target, target_info.avg_load);
 
-                auto dst = global_shard_id {target, _load_sketch->get_least_loaded_shard(target)};
+                auto& src_tmap = tmeta.get_tablet_map(source.gid.table);
+                auto src_tablet_size = get_tablet_group_size(src_tmap, source.gid.table, source.gid.tablet, source.replica.host);
+                auto dst = global_shard_id {target, _load_sketch->get_best_shard_for(target, src_tablet_size)};
 
                 lblogger.trace("target shard: {}, tablets={}, load={}", dst.shard,
                             target_info.shards[dst.shard].tablet_count,
                             target_info.shard_load(dst.shard, _target_tablet_size));
 
                 tablet_transition_kind kind = tablet_transition_kind::migration;
-                auto& src_tmap = tmeta.get_tablet_map(source.gid.table);
-                auto src_tablet_size = get_tablet_group_size(src_tmap, source.gid.table, source.gid.tablet, source.replica.host);
                 migration_tablet_set source_tablets {
                     .tablet_s = source.gid,     // Ignore the merge co-location.
                     .tablet_set_disk_size = src_tablet_size,
@@ -1942,7 +1944,7 @@ public:
 
                         lblogger.debug("target node: {}, avg_load={}", target, nodes[target].avg_load);
 
-                        auto dst = global_shard_id {target, _load_sketch->get_least_loaded_shard(target)};
+                        auto dst = global_shard_id {target, _load_sketch->get_best_shard_for(target, rf_tablet_size)};
 
                         lblogger.trace("target shard: {}, tablets={}, load={}", dst.shard,
                                     nodes[target].shards[dst.shard].tablet_count,
@@ -3473,6 +3475,14 @@ public:
         std::make_heap(src_shards.begin(), src_shards.end(), node_load.shards_by_load_cmp());
 
         load_type max_load = 0; // Tracks max load among shards which ran out of candidates.
+        // Only a node with a skewed shard (tablets_group0_leader_shard_ratio) tries other dsts/srcs after a rejection.
+        const bool skewed = node_load.dusage && std::ranges::any_of(node_load.shards, [&] (const auto& s) {
+            return s.dusage->capacity != node_load.shards[0].dusage->capacity;
+        });
+        // Per src, the capacities of the dsts that rejected its current candidate (e.g. a skewed shard 0
+        // near its floor); shards of those capacities are skipped for it. Reset on every emitted migration.
+        std::vector<utils::small_vector<uint64_t, 2>> rejected_capacities(skewed ? node_load.shard_count : 0);
+        bool any_rejected = false;
 
         while (true) {
             co_await coroutine::maybe_yield();
@@ -3497,7 +3507,27 @@ public:
             } else {
                 std::pop_heap(src_shards.begin(), src_shards.end(), node_load.shards_by_load_cmp());
                 src = src_shards.back();
-                dst = sketch.get_least_loaded_shard(host);
+                auto dst_opt = sketch.get_least_loaded_shard(host, [&] (shard_id shard) {
+                    return skewed && !rejected_capacities[src].empty()
+                            && (shard == src || std::ranges::contains(rejected_capacities[src], node_load.shards[shard].dusage->capacity));
+                });
+                // After a rejection the next dst is not the least-loaded shard, so "balanced" says nothing
+                // about the node; if it wouldn't improve balance, src is done, try the remaining sources.
+                auto dst_no_improvement = [&] {
+                    auto dst_load = node_load.shard_load(*dst_opt);
+                    auto src_load = node_load.shard_load(src);
+                    return skewed && !rejected_capacities[src].empty() && dst_load && src_load
+                            && (*dst_load >= *src_load || is_balanced(*dst_load, *src_load));
+                };
+                if (!dst_opt || dst_no_improvement()) {
+                    lblogger.debug("No shard can accept the current candidate from shard {} of {}", src, host);
+                    if (node_load.shards[src].dusage) {
+                        max_load = std::max(max_load, node_load.shards[src].dusage->get_load());
+                    }
+                    src_shards.pop_back();
+                    continue;
+                }
+                dst = *dst_opt;
             }
 
             auto push_back = seastar::defer([&] noexcept {
@@ -3539,9 +3569,17 @@ public:
             auto candidate = co_await peek_candidate(nodes, src_info, tablet_replica{host, src}, tablet_replica{host, dst});
             auto tablets = candidate.tablets;
 
-            if (!shuffle && (src == dst || !check_intranode_convergence(node_load, src, dst, tablets))) {
-                lblogger.debug("Node {} is balanced", host);
-                break;
+            // src == dst was already handled above and can't happen here.
+            if (!shuffle && !check_intranode_convergence(node_load, src, dst, tablets)) {
+                if (!skewed) {
+                    lblogger.debug("Node {} is balanced", host);
+                    break;
+                }
+                // Same-capacity shards are at least as loaded as dst and would reject too. Exclude
+                // them and src, so only a differently-sized shard is left to try, then src is popped.
+                rejected_capacities[src].push_back(node_load.shards[dst].dusage->capacity);
+                any_rejected = true;
+                continue;
             }
 
             // Emit migration.
@@ -3563,6 +3601,11 @@ public:
             _current_stats->intranode_migrations_produced++;
             mark_as_scheduled(mig);
             plan.add(std::move(mig));
+            if (std::exchange(any_rejected, false)) {
+                for (auto& caps : rejected_capacities) {
+                    caps.clear();
+                }
+            }
 
             erase_candidates(nodes, tmap, tablets);
 
@@ -4020,7 +4063,7 @@ public:
             for (shard_id shard = 0; shard < node.shard_count; shard++) {
                 co_await coroutine::maybe_yield();
                 load_type load = double(node.shards[shard].tablet_count_per_table[table]) * _target_tablet_size
-                        / *node.capacity_per_shard();
+                        / node.shards[shard].dusage->capacity;
                 total_load += load;
                 node_load += load;
                 max_shard_load = std::max(max_shard_load, load);
@@ -4202,7 +4245,11 @@ public:
 
             // Pick best target shard.
 
-            auto dst = global_shard_id {target, _load_sketch->get_least_loaded_shard(target)};
+            // The candidate is picked relative to dst, so its size isn't known yet: assume the largest
+            // tablet (the sketch counts target-sized ones when forcing capacity-based balancing).
+            // Only matters for non-uniform shard capacities.
+            const auto assumed_size = _force_capacity_based_balancing ? _target_tablet_size : target_max_tablet_size(_target_tablet_size);
+            auto dst = global_shard_id {target, _load_sketch->get_best_shard_for(target, assumed_size)};
             lblogger.trace("target shard: {}, tablets={}, load={}", dst.shard,
                            target_info.shards[dst.shard].tablet_count,
                            target_info.shard_load(dst.shard));
@@ -4555,6 +4602,8 @@ public:
         _load_sketch = locator::load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
         _load_sketch->set_minimal_tablet_size(_minimal_tablet_size);
         _load_sketch->set_force_capacity_based_load(_force_capacity_based_balancing);
+        _load_sketch->set_group0_leader_shard_skew(_group0_leader_shard_skew);
+        _load_sketch->set_min_shard0_capacity(_target_tablet_size);
         co_await _load_sketch->populate_dc(dc);
 
         // If we don't have nodes to drain, remove nodes which don't have complete tablet sizes
@@ -4798,7 +4847,14 @@ class tablet_allocator_impl : public tablet_allocator::impl
     bool _stopped = false;
     bool _use_tablet_aware_balancing = true;
     locator::load_stats_ptr _load_stats;
+    seastar::noncopyable_function<std::optional<host_id>()> _group0_leader_provider;
 private:
+    // Looked up per call, not cached: tests that inject registry options invalidate find() pointers.
+    unsigned group0_leader_shard_ratio() const {
+        return unsigned(_cluster_config_manager.local().resolve_integer_config(
+                db::cluster_config_registry::option_name::tablets_group0_leader_shard_ratio, {}));
+    }
+
     load_balancer make_load_balancer(token_metadata_ptr tm,
             service::topology* topology,
             db::system_keyspace* sys_ks,
@@ -4807,6 +4863,7 @@ private:
         load_balancer lb(_db, _cluster_config_manager.local(), tm, topology, sys_ks, std::move(table_load_stats), _load_balancer_stats,
             _db.get_config().target_tablet_size_in_bytes(),
             _db.get_config().tablets_per_shard_goal(),
+            group0_leader_shard_skew(),
             std::move(skiplist));
         lb.set_use_table_aware_balancing(_use_tablet_aware_balancing);
         lb.set_initial_scale(_db.get_config().tablets_initial_scale_factor());
@@ -4853,6 +4910,24 @@ public:
         _use_tablet_aware_balancing = use_tablet_aware_balancing;
     }
 
+    void set_group0_leader_provider(seastar::noncopyable_function<std::optional<host_id>()> provider) {
+        _group0_leader_provider = std::move(provider);
+    }
+
+    locator::group0_leader_shard_skew group0_leader_shard_skew() const {
+        // Without load stats v2 per-shard capacity is one tablet, so a skew can't take effect.
+        if (!_db.features().tablet_load_stats_v2) {
+            return {};
+        }
+        const auto ratio = group0_leader_shard_ratio();
+        // The leader is only known on shard 0.
+        if (this_shard_id() != 0 && ratio < 100) {
+            on_internal_error_noexcept(lblogger, "group0_leader_shard_skew() called off shard 0, skew ignored");
+            return {};
+        }
+        return {_group0_leader_provider ? _group0_leader_provider() : std::nullopt, ratio};
+    }
+
     // Allocates new tablets for a table which is not co-located with another table.
     tablet_map allocate_tablets_for_new_base_table(const tablet_aware_replication_strategy* tablet_rs, const schema& s) {
         auto tm = _db.get_shared_token_metadata().get();
@@ -4860,7 +4935,7 @@ public:
         auto plan = lb.make_sizing_plan({{s.shared_from_this(), tablet_rs}}).get();
         auto& table_plan = plan.tables[s.id()];
         auto tablet_count = table_plan.target_tablet_count_aligned;
-        auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, tablet_count).get();
+        auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, tablet_count, group0_leader_shard_skew()).get();
         return map;
     }
 
@@ -5167,6 +5242,14 @@ tablet_allocator_impl& tablet_allocator::impl() {
 
 void tablet_allocator::on_leadership_lost() {
     impl().on_leadership_lost();
+}
+
+void tablet_allocator::set_group0_leader_provider(seastar::noncopyable_function<std::optional<locator::host_id>()> provider) {
+    impl().set_group0_leader_provider(std::move(provider));
+}
+
+locator::group0_leader_shard_skew tablet_allocator::group0_leader_shard_skew() {
+    return impl().group0_leader_shard_skew();
 }
 
 load_balancer_stats_manager& tablet_allocator::stats() {

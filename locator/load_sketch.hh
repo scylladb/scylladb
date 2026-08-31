@@ -9,6 +9,7 @@
 #pragma once
 
 #include "service/tablet_allocator_fwd.hh"
+#include "locator/group0_leader_shard_skew.hh"
 #include "locator/topology.hh"
 #include "locator/token_metadata.hh"
 #include "locator/tablets.hh"
@@ -20,7 +21,10 @@
 #include <absl/container/btree_set.h>
 #include <seastar/util/defer.hh>
 
+#include <algorithm>
+#include <limits>
 #include <optional>
+#include <unordered_set>
 #include <vector>
 
 namespace locator {
@@ -38,6 +42,29 @@ struct disk_usage {
         return load_type(used) / capacity;
     }
 };
+
+// Gives shard 0 group0_leader_shard_ratio% of the uniform per-shard capacity; the rest is spread
+// evenly across the other shards. Shard 0 is floored at min_shard0_capacity and at 0.1% of the
+// uniform capacity, so a tiny shard 0 can't dominate load normalization. ratio=100 / 1 shard: no-op.
+inline uint64_t apply_group0_leader_shard_ratio(uint64_t uniform_shard_capacity, seastar::shard_id shard,
+        size_t shard_count, unsigned group0_leader_shard_ratio, uint64_t min_shard0_capacity) {
+    if (shard_count <= 1 || group0_leader_shard_ratio >= 100 || uniform_shard_capacity == 0) {
+        return uniform_shard_capacity;
+    }
+    // Never 0: get_load() reads capacity==0 as "no data" (load 0), which would make shard 0
+    // look permanently least-loaded. min_shard0_capacity is 0 when the tablet size is unknown
+    // (size-based balancing passes 0), so the floor has to hold on its own.
+    uint64_t floor = std::max<uint64_t>({1, min_shard0_capacity, uniform_shard_capacity / 1000});
+    uint64_t shard0_capacity = std::max(floor, uniform_shard_capacity * group0_leader_shard_ratio / 100);
+    if (shard0_capacity >= uniform_shard_capacity) {
+        // Floor exceeds the uniform share: skew would be a no-op, keep capacity uniform.
+        return uniform_shard_capacity;
+    }
+    if (shard == 0) {
+        return shard0_capacity;
+    }
+    return uniform_shard_capacity + (uniform_shard_capacity - shard0_capacity) / (shard_count - 1);
+}
 
 /// A data structure which keeps track of load associated with data ownership
 /// on shards of the whole cluster.
@@ -74,14 +101,18 @@ class load_sketch {
         // These can be false only when _load_stats != nullptr
         bool _has_valid_disk_capacity = true;
         bool _has_all_tablet_sizes = true;
+        bool _uniform_capacity = true; // no skewed shard 0
 
-        node_load(size_t shard_count, uint64_t capacity)
+        // min_shard0_capacity has no default on purpose: a 0 floor at ratio=0 would drive
+        // shard 0's capacity to 0, which get_load() reads as "no data" (load 0) forever.
+        node_load(size_t shard_count, uint64_t capacity, unsigned group0_leader_shard_ratio, uint64_t min_shard0_capacity)
                 : _shards(shard_count) {
             _du.capacity = capacity;
             uint64_t shard_capacity = capacity / shard_count;
             for (shard_id i = 0; i < shard_count; ++i) {
                 _shards[i].id = i;
-                _shards[i].du.capacity = shard_capacity;
+                _shards[i].du.capacity = apply_group0_leader_shard_ratio(shard_capacity, i, shard_count, group0_leader_shard_ratio, min_shard0_capacity);
+                _uniform_capacity &= _shards[i].du.capacity == _shards[0].du.capacity;
             }
         }
 
@@ -116,11 +147,14 @@ class load_sketch {
     token_metadata_ptr _tm;
     load_stats_ptr _load_stats;
     uint64_t _default_tablet_size = service::default_target_tablet_size;
+    uint64_t _min_shard0_capacity = service::default_target_tablet_size;
     uint64_t _minimal_tablet_size = 0;
 
     // When set to true, it will use gross disk capacity instead of effective_capacity and
     // treat all tablet as having the same size: _default_tablet_size
     bool _force_capacity_based_load = false;
+
+    group0_leader_shard_skew _skew;
 
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
@@ -166,7 +200,7 @@ private:
                         continue;
                     }
                     auto disk_capacity_opt = get_disk_capacity_for_node(replica.host);
-                    auto [i, _] = _nodes.emplace(replica.host, node_load{node->get_shard_count(), disk_capacity_opt.value_or(_default_tablet_size)});
+                    auto [i, _] = _nodes.emplace(replica.host, node_load{node->get_shard_count(), disk_capacity_opt.value_or(_default_tablet_size), _skew.ratio_for(replica.host), _min_shard0_capacity});
                     if (!disk_capacity_opt && _load_stats) {
                         i->second._has_valid_disk_capacity = false;
                     }
@@ -199,7 +233,8 @@ public:
     load_sketch(token_metadata_ptr tm, load_stats_ptr load_stats = {}, uint64_t default_tablet_size = service::default_target_tablet_size)
         : _tm(std::move(tm))
         , _load_stats(std::move(load_stats))
-        , _default_tablet_size(default_tablet_size) {
+        , _default_tablet_size(default_tablet_size)
+        , _min_shard0_capacity(default_tablet_size) {
     }
 
     future<> clear() {
@@ -255,7 +290,7 @@ public:
     }
 
     shard_id next_shard(host_id node, size_t tablet_count, uint64_t tablet_size_sum) {
-        auto shard = get_least_loaded_shard(node);
+        auto shard = get_best_shard_for(node, tablet_count ? tablet_size_sum / tablet_count : 0);
         pick(node, shard, tablet_count, tablet_size_sum);
         return shard;
     }
@@ -285,6 +320,14 @@ public:
         _force_capacity_based_load = force_capacity_based_load;
     }
 
+    void set_group0_leader_shard_skew(group0_leader_shard_skew skew) {
+        _skew = skew;
+    }
+
+    void set_min_shard0_capacity(uint64_t capacity) {
+        _min_shard0_capacity = capacity;
+    }
+
     node_load& ensure_node(host_id node) {
         if (!_nodes.contains(node)) {
             const topology& topo = _tm->get_topology();
@@ -293,7 +336,7 @@ public:
                 throw std::runtime_error(format("Shard count not known for node {}", node));
             }
             auto disk_capacity_opt = get_disk_capacity_for_node(node);
-            auto [i, _] = _nodes.emplace(node, node_load{shard_count, disk_capacity_opt.value_or(_default_tablet_size)});
+            auto [i, _] = _nodes.emplace(node, node_load{shard_count, disk_capacity_opt.value_or(_default_tablet_size), _skew.ratio_for(node), _min_shard0_capacity});
             i->second.populate_shards_by_load();
             if (!disk_capacity_opt && _load_stats) {
                 i->second._has_valid_disk_capacity = false;
@@ -306,6 +349,40 @@ public:
         auto& n = ensure_node(node);
         throw_on_incomplete_data(node);
         return n._shards_by_load.begin()->id;
+    }
+
+    // Shard with the lowest load after receiving the tablet, so an empty small-capacity shard 0 isn't
+    // mistaken for the best target. Same as get_least_loaded_shard() with uniform capacities.
+    shard_id get_best_shard_for(host_id node, uint64_t tablet_size) {
+        auto& n = ensure_node(node);
+        throw_on_incomplete_data(node);
+        if (n._uniform_capacity) {
+            return n._shards_by_load.begin()->id;
+        }
+        const uint64_t size = std::max(tablet_size, _minimal_tablet_size);
+        shard_id best = n._shards_by_load.begin()->id;
+        load_type best_load = std::numeric_limits<load_type>::max();
+        for (auto&& sl : n._shards_by_load) {
+            auto load_after = disk_usage{sl.du.capacity, sl.du.used + size}.get_load();
+            if (load_after < best_load) {
+                best = sl.id;
+                best_load = load_after;
+            }
+        }
+        return best;
+    }
+
+    // Least-loaded shard for which `excluded(shard)` is false, or nullopt if all are excluded.
+    template <typename Pred>
+    std::optional<shard_id> get_least_loaded_shard(host_id node, Pred&& excluded) {
+        auto& n = ensure_node(node);
+        throw_on_incomplete_data(node);
+        for (auto&& sl : n._shards_by_load) {
+            if (!excluded(sl.id)) {
+                return sl.id;
+            }
+        }
+        return std::nullopt;
     }
 
     shard_id get_most_loaded_shard(host_id node) {

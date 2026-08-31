@@ -3142,7 +3142,7 @@ alter_result alter_replication(cql_test_env& e,
     auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy(
             "NetworkTopologyStrategy", params, tmptr->get_topology());
     auto s = e.local_db().find_schema(table);
-    auto new_tablet_map = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, tmptr, old_tablets.clone_gently().get()).get();
+    auto new_tablet_map = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, tmptr, old_tablets.clone_gently().get(), {}).get();
     return alter_result{std::move(new_tablet_map), std::move(new_options)};
 }
 
@@ -6937,7 +6937,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
         return make_ready_future<>();
     }).get();
 
-    auto allocated_map = tablet_aware_ptr->allocate_tablets_for_new_table(s, stm.get(), tablet_count).get();
+    auto allocated_map = tablet_aware_ptr->allocate_tablets_for_new_table(s, stm.get(), tablet_count, {}).get();
 
     BOOST_REQUIRE_EQUAL(allocated_map.tablet_count(), tablet_count);
 
@@ -6982,7 +6982,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
         tablet_map old_tablets = stm.get()->tablets().get_tablet_map(s->id()).clone_gently().get();
         locator::replication_strategy_params params{test_config.new_dc_rep_factor, old_tablets.tablet_count(), std::nullopt};
         auto new_strategy = abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, stm.get()->get_topology());
-        auto tmap = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, stm.get(), std::move(old_tablets)).get();
+        auto tmap = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, stm.get(), std::move(old_tablets), {}).get();
 
         auto const& ts = tmap.tablets();
         BOOST_REQUIRE_EQUAL(ts.size(), tablet_count);

@@ -13,6 +13,7 @@
 #include "message/messaging_service_fwd.hh"
 #include "raft/raft.hh"
 #include "raft/server.hh"
+#include "locator/host_id.hh"
 #include "raft_timeout.hh"
 #include "utils/recent_entries_map.hh"
 #include "service/direct_failure_detector/failure_detector.hh"
@@ -131,6 +132,7 @@ private:
     raft::server_id _my_id;
 
     bool _group0_is_alive = false;
+    std::optional<locator::host_id> _last_group0_leader; // shard 0 only
 public:
     raft_group_registry(raft::server_id my_id, netw::messaging_service& ms,
             direct_failure_detector::failure_detector& fd);
@@ -181,6 +183,11 @@ public:
     // after boot/upgrade is complete
     raft::server& group0();
     raft::group_id group0_id() const;
+
+    // The host of the current group0 leader as seen by shard 0's server (group0 server ids are
+    // host ids). During an election it returns the last known leader; nullopt on other shards,
+    // while group0 isn't running, or before any leader was seen.
+    std::optional<locator::host_id> group0_leader();
 
     // Return an instance of group 0 server with timeouts support. Valid only on shard 0,
     // after boot/upgrade is complete

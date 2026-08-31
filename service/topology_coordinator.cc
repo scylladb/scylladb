@@ -1505,7 +1505,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                         continue;
                                     }
                                     auto old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
-                                    new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently());
+                                    new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently(), _tablet_allocator.group0_leader_shard_skew());
 
                                     replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
                                     co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
@@ -5553,7 +5553,7 @@ future<bool> topology_coordinator::maybe_retry_failed_rf_change_tablet_rebuilds(
             }
 
             auto& tablet_map = tmptr->tablets().get_tablet_map(table_or_mv->id());
-            auto new_tablet_map = co_await strategy.maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await tablet_map.clone_gently());
+            auto new_tablet_map = co_await strategy.maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await tablet_map.clone_gently(), _tablet_allocator.group0_leader_shard_skew());
 
             replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
             co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {

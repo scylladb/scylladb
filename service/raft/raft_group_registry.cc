@@ -357,6 +357,18 @@ raft::server& raft_group_registry::group0() {
     return get_server(*_group0_id);
 }
 
+std::optional<locator::host_id> raft_group_registry::group0_leader() {
+    // _group0_is_alive is set once the group0 server is registered and cleared before it is aborted.
+    if (this_shard_id() != 0 || !_group0_is_alive) {
+        return std::nullopt;
+    }
+    const auto leader = group0().current_leader();
+    if (leader) {
+        _last_group0_leader = locator::host_id(leader.uuid());
+    }
+    return _last_group0_leader;
+}
+
 raft::group_id raft_group_registry::group0_id() const {
     if (!_group0_id) {
         on_internal_error(rslog, "group0_id(): _group0_id not present");
@@ -419,6 +431,7 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
     co_await container().invoke_on_all([is_group0, shard = this_shard_id(), gid] (raft_group_registry& rg) {
         if (is_group0) {
             rg._group0_is_alive = true;
+            rg._last_group0_leader.reset();
         }
         rg._group_shards[gid] = shard;
     });
@@ -447,6 +460,7 @@ future<> raft_group_registry::do_abort_server(raft::group_id gid, raft_server_fo
         co_await container().invoke_on_all([is_group0, gid] (raft_group_registry& rg) {
             if (is_group0) {
                 rg._group0_is_alive = false;
+                rg._last_group0_leader.reset();
             }
             rg._group_shards.erase(gid);
         });
