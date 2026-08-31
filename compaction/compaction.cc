@@ -1467,17 +1467,6 @@ private:
     }
 
     void replace_remaining_exhausted_sstables() {
-        if (!_sstables.empty() || !used_garbage_collected_sstables().empty()) {
-            std::vector<sstables::shared_sstable> old_sstables;
-            std::move(_sstables.begin(), _sstables.end(), std::back_inserter(old_sstables));
-
-            // Remove Garbage Collected SSTables from the SSTable set if any was previously added.
-            auto& used_gc_sstables = used_garbage_collected_sstables();
-            old_sstables.insert(old_sstables.end(), used_gc_sstables.begin(), used_gc_sstables.end());
-
-            _replacer(get_compaction_completion_desc(std::move(old_sstables), std::move(_new_unused_sstables)));
-         }
-
         // A GC sstable can still be unused at this point: mutation_compactor seals
         // the GC writer *before* the regular one at end of stream, so if the
         // regular writer had already rotated shut (e.g. the tail of the stream is
@@ -1488,19 +1477,31 @@ private:
         // Such an sstable was never added to the table, so it cannot be handed to
         // the replacer as an old_sstable (that would fail to be removed from the
         // sstable set).  It is sealed, so seal_sstable() already cleared
-        // mark_for_deletion::implicit and ~sstable() will not unlink it.  Mark it
-        // explicitly, or its files stay on disk forever -- neither attached nor
-        // deleted, and invisible until the next restart rescans the data
+        // mark_for_deletion::implicit and ~sstable() will not unlink it.  It has to
+        // be deleted here, or its files stay on disk forever -- neither attached
+        // nor deleted, and invisible until the next restart rescans the data
         // directory.
         //
-        // Done after the replacement above so the GC sstable, which guards against
-        // data resurrection, outlives the atomic swap of inputs for outputs.
-        for (auto& sst : _unused_garbage_collected_sstables) {
-            log_debug("Deleting unused garbage collected sstable {} for {}.{}",
-                      sst->get_filename(), _schema->ks_name(), _schema->cf_name());
-            sst->mark_for_deletion();
-        }
-        _unused_garbage_collected_sstables.clear();
+        // The deletion is committed before the final replacement below because from
+        // this point on the sstable can no longer be attached, so committing first
+        // keeps a crash during the replacement from leaking it. The files are
+        // unlinked only afterwards, so the GC sstable, which guards against data
+        // resurrection, outlives the atomic swap of inputs for outputs.
+        auto unused_gc_deletion = commit_deletion_of_unattached_sstables(std::exchange(_unused_garbage_collected_sstables, {}));
+
+        if (!_sstables.empty() || !used_garbage_collected_sstables().empty()) {
+            std::vector<sstables::shared_sstable> old_sstables;
+            old_sstables.reserve(_sstables.size() + used_garbage_collected_sstables().size());
+            std::move(_sstables.begin(), _sstables.end(), std::back_inserter(old_sstables));
+
+            // Remove Garbage Collected SSTables from the SSTable set if any was previously added.
+            auto& used_gc_sstables = used_garbage_collected_sstables();
+            old_sstables.insert(old_sstables.end(), used_gc_sstables.begin(), used_gc_sstables.end());
+
+            _replacer(get_compaction_completion_desc(std::move(old_sstables), std::move(_new_unused_sstables)));
+         }
+
+        execute_deletion_of_unattached_sstables(std::move(unused_gc_deletion));
     }
 
     void update_pending_ranges() {
