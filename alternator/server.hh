@@ -10,8 +10,9 @@
 
 #include "alternator/executor.hh"
 #include "utils/scoped_item_list.hh"
-#include <seastar/core/future.hh>
 #include <seastar/core/condition-variable.hh>
+#include <seastar/core/future.hh>
+#include <seastar/core/scheduling.hh>
 #include <seastar/http/httpd.hh>
 #include <seastar/net/tls.hh>
 #include <optional>
@@ -88,6 +89,10 @@ public:
     // Public so unit tests can exercise the threshold decision and both
     // threaded parser paths directly.
     class json_parser {
+        // In production the parser is constructed with the server in
+        // statement_scheduling_group, which the service-level controller reuses
+        // as sl:default.
+        scheduling_group _worker_scheduling_group;
         chunked_content _raw_document;
         rjson::value _parsed_document;
         std::exception_ptr _current_exception;
@@ -99,6 +104,7 @@ public:
     public:
         static constexpr size_t yieldable_parsing_threshold = 16*KB;
 
+        static bool should_parse_json_yieldably(const chunked_content& content);
         json_parser();
         // Moving a chunked_content into parse() allows parse() to free each
         // chunk as soon as it is parsed, so when chunks are relatively small,
