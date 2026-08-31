@@ -221,6 +221,9 @@ struct params {
     int scale1 = 1;
     int scale2 = 1;
     double tablet_size_deviation_factor = 0.5;
+    // See tablets_group0_leader_shard_ratio. 100 = disabled (default): all hosts are simulated
+    // via topology_builder, none of which is ever the group0 leader.
+    unsigned group0_leader_shard_ratio = 100;
 };
 
 struct table_balance {
@@ -265,11 +268,11 @@ struct fmt::formatter<params> : fmt::formatter<string_view> {
     auto format(const params& p, FormatContext& ctx) const {
         auto tablets1_per_shard = double(p.tablets1.value_or(0)) * p.rf1 / (p.nodes * p.shards);
         auto tablets2_per_shard = double(p.tablets2.value_or(0)) * p.rf2 / (p.nodes * p.shards);
-        return fmt::format_to(ctx.out(), "{{iterations={}, nodes={}, tablets1={} ({:0.1f}/sh), tablets2={} ({:0.1f}/sh), rf1={}, rf2={}, shards={}, tablet_size_deviation_factor={}}}",
+        return fmt::format_to(ctx.out(), "{{iterations={}, nodes={}, tablets1={} ({:0.1f}/sh), tablets2={} ({:0.1f}/sh), rf1={}, rf2={}, shards={}, tablet_size_deviation_factor={}, group0_leader_shard_ratio={}}}",
                          p.iterations, p.nodes,
                          p.tablets1.value_or(0), tablets1_per_shard,
                          p.tablets2.value_or(0), tablets2_per_shard,
-                         p.rf1, p.rf2, p.shards, p.tablet_size_deviation_factor);
+                         p.rf1, p.rf2, p.shards, p.tablet_size_deviation_factor, p.group0_leader_shard_ratio);
     }
 };
 
@@ -314,6 +317,7 @@ void generate_tablet_sizes(double tablet_size_deviation_factor, locator::load_st
 
 future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware) {
     auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_group0_leader_shard_ratio.set(unsigned(p.group0_leader_shard_ratio));
     results global_res;
     co_await do_with_cql_env_thread([&] (auto& e) {
         SCYLLA_ASSERT(p.nodes > 0);
@@ -353,22 +357,51 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
         const size_t rack_count = racks.size();
         std::unordered_map<sstring, uint64_t> rack_capacity;
+        auto& stm = e.shared_token_metadata().local();
 
-        auto add_host = [&] (endpoint_dc_rack dc_rack) {
-            auto host = topo.add_node(service::node_state::normal, shard_count, dc_rack);
+        auto register_host = [&] (host_id host, endpoint_dc_rack dc_rack, const char* label) {
             hosts.emplace_back(host, dc_rack);
             const uint64_t capacity = shard_capacity * shard_count;
             stats.capacity[host] = capacity;
             stats.tablet_stats[host].effective_capacity = capacity;
             rack_capacity[dc_rack.rack] += capacity;
-            testlog.info("Added new node: {} / {}:{}", host, dc_rack.dc, dc_rack.rack);
+            testlog.info("Added {} node: {} / {}:{}", label, host, dc_rack.dc, dc_rack.rack);
+        };
+
+        auto add_host = [&] (endpoint_dc_rack dc_rack) {
+            auto host = topo.add_node(service::node_state::normal, shard_count, dc_rack);
+            register_host(host, dc_rack, "new");
+        };
+
+        // Registers the real local host (topology::my_host_id()) as a cluster member instead
+        // of creating a topology_builder-simulated one, so tablets_group0_leader_shard_ratio
+        // (which only ever applies to the local host) actually has an effect on it.
+        std::optional<host_id> local_host;
+        auto add_local_host = [&] (endpoint_dc_rack dc_rack) {
+            auto host = e.get_storage_service().local().get_token_metadata_ptr()->get_topology().my_host_id();
+            local_host = host;
+            // Applied as a group0 mutation (like topology_builder::add_node()), not a direct
+            // token_metadata poke: any later group0 topology change (e.g. bootstrap() below)
+            // reloads token_metadata from the group0-tracked state, which would otherwise
+            // revert an unpersisted direct override back to this host's original shard_count.
+            topo.modify_topology([&] (service::topology_mutation_builder& builder) {
+                builder.with_node(raft::server_id(host.uuid()))
+                        .set("datacenter", dc_rack.dc)
+                        .set("rack", dc_rack.rack)
+                        .set("shard_count", (uint32_t) shard_count);
+            });
+            register_host(host, dc_rack, "local (group0-leader)");
         };
 
         for (size_t i = 0; i < n_hosts; ++i) {
-            add_host(racks[i % rack_count]);
+            // Placed last so it survives longer under the bootstrap/decommission churn below,
+            // which always removes whatever is currently hosts[0].
+            if (p.group0_leader_shard_ratio != 100 && i == n_hosts - 1) {
+                add_local_host(racks[i % rack_count]);
+            } else {
+                add_host(racks[i % rack_count]);
+            }
         }
-
-        auto& stm = e.shared_token_metadata().local();
 
         auto bootstrap = [&] (endpoint_dc_rack dc_rack) {
             add_host(std::move(dc_rack));
@@ -554,12 +587,20 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
         global_res.init = global_res.worst = check_balance();
 
         for (int i = 0; i < cycles; i++) {
-            const auto [id, dc_rack] = hosts[0];
+            const auto [_, dc_rack] = hosts[0];
 
             bootstrap(dc_rack);
             check_balance();
 
-            decommission(id);
+            // Never churn the local host: it's the sole real raft/group0 member of this test
+            // process, and decommissioning it leaves an empty raft configuration. bootstrap()
+            // just added a non-local host, so there's always one to find here, even when
+            // hosts[0] above was the local host itself (e.g. with a single-node cluster).
+            auto churn_it = std::ranges::find_if(hosts, [&] (const host_info& h) {
+                return !local_host || h.id != *local_host;
+            });
+            SCYLLA_ASSERT(churn_it != hosts.end());
+            decommission(churn_it->id);
             global_res.last = check_balance();
         }
     }, cfg);
@@ -683,7 +724,8 @@ future<> run_simulations(const boost::program_options::variables_map& app_cfg) {
             .shards = shards,
             .scale1 = scale1,
             .scale2 = scale2,
-            .tablet_size_deviation_factor = tablet_size_deviation_factor
+            .tablet_size_deviation_factor = tablet_size_deviation_factor,
+            .group0_leader_shard_ratio = static_cast<unsigned>(app_cfg["group0-leader-shard-ratio"].as<int>()),
         };
 
         auto name = format("#{}", i);
@@ -706,6 +748,7 @@ void run_add_dec(const bpo::variables_map& opts) {
             .rf2 = opts["rf2"].as<int>(),
             .shards = opts["shards"].as<int>(),
             .tablet_size_deviation_factor = opts["tablet-size-deviation-factor"].as<double>(),
+            .group0_leader_shard_ratio = static_cast<unsigned>(opts["group0-leader-shard-ratio"].as<int>()),
         };
         run_simulation(p).get();
     }
@@ -730,7 +773,10 @@ const std::map<operation, operation_func> operations_with_func{
             typed_option<int>("rf2", 1, "Replication factor for the second table."),
             typed_option<int>("nodes", 3, "Number of nodes in the cluster."),
             typed_option<int>("shards", 30, "Number of shards per node."),
-            typed_option<double>("tablet-size-deviation-factor", 0.5, "Deviation factor for the tablet size random generator.")
+            typed_option<double>("tablet-size-deviation-factor", 0.5, "Deviation factor for the tablet size random generator."),
+            typed_option<int>("group0-leader-shard-ratio", 100,
+                "Percentage (0-100) of normal shard capacity given to the last node's shard 0, "
+                "simulating it as the group0 leader. 100 = disabled (default).")
           }
         }, &run_add_dec},
 
