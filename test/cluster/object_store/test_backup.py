@@ -21,7 +21,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
 from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace, new_test_table
 from test.pylib.rest_client import read_barrier, HTTPError
-from test.pylib.util import unique_name, wait_all
+from test.pylib.util import unique_name, wait_all, wait_for_view
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from cassandra import ReadFailure
 from cassandra.cluster import ConsistencyLevel
@@ -255,9 +255,13 @@ async def test_backup_is_abortable_in_s3_client(manager: ScyllaClusterManager, o
     await do_test_backup_abort(manager, object_storage, breakpoint_name="backup_task_pre_upload", min_files=0, max_files=1)
 
 
-@pytest.mark.parametrize(("do_encrypt", "do_abort"), [(False, False), (False, True), (True, False)])
-async def test_simple_backup_and_restore(manager: ScyllaClusterManager, object_storage, tmpdir, do_encrypt, do_abort):
+@pytest.mark.parametrize("flavor", ['plain', 'abort', 'encrypt', 'view'])
+async def test_simple_backup_and_restore(manager: ScyllaClusterManager, object_storage, tmpdir, flavor):
     '''check that restoring from backed up snapshot for a keyspace:table works'''
+
+    do_abort = flavor == 'abort'
+    do_encrypt = flavor == 'encrypt'
+    with_view = flavor == 'view'
 
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
@@ -283,9 +287,22 @@ async def test_simple_backup_and_restore(manager: ScyllaClusterManager, object_s
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
         await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('{name}', '{value}');") for name, value in [('0', 'zero'), ('1', 'one'), ('2', 'two')]))
+
         snap_name, toc_names = await take_snapshot_on_one_server(ks, server, manager, logger)
 
         cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+
+        # A backup only ever captures the base table's sstables -- a view has no sstables
+        # of its own worth backing up, since it can always be rebuilt from the base table.
+        # So restoring the base table alone must eventually repopulate the view too.
+        # The view is created only after the snapshot/cf_dir are captured above, since
+        # otherwise it would create a second column-family directory under data/{ks} and
+        # make the os.listdir(...)[0] picks above racy/ambiguous.
+        view = 'test_cf_by_value'
+        if with_view:
+            await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.{view} AS SELECT * FROM {ks}.{cf} "
+                            "WHERE value IS NOT NULL AND name IS NOT NULL PRIMARY KEY (value, name)")
+            await wait_for_view(cql, view, 1)
 
         def list_sstables():
             return [f for f in os.scandir(f'{workdir}/data/{ks}/{cf_dir}') if f.is_file()]
@@ -363,6 +380,14 @@ async def test_simple_backup_and_restore(manager: ScyllaClusterManager, object_s
             res = cql.execute(f"SELECT * FROM {ks}.{cf};")
             rows = { x.name: x.value for x in res }
             assert rows == orig_rows, "Unexpected table contents after restore"
+
+            if with_view:
+                print('Check that the view eventually gets repopulated from the restored base table')
+                async def view_repopulated():
+                    res = await cql.run_async(f"SELECT * FROM {ks}.{view};")
+                    got = {x.name: x.value for x in res}
+                    return got == orig_rows or None
+                await wait_for(view_repopulated, time.time() + 60)
 
         print('Check that backup files are still there')  # regression test for #20938
         post_objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.filter(Prefix=prefix))
@@ -779,7 +804,10 @@ async def do_test_streaming_scopes(build_mode: str, manager: ScyllaClusterManage
     ])
 async def test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, object_storage, topology, num_tables, num_restore_nodes):
     '''Check that tablet-aware restore works for multiple tables backed up from multiple nodes'''
+    await do_test_restore_tablets(build_mode, manager, object_storage, topology, num_tables, num_restore_nodes)
 
+
+async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, object_storage, topology, num_tables, num_restore_nodes, with_views=False):
     servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
 
     cql = manager.get_cql()
@@ -787,6 +815,9 @@ async def test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, o
     num_keys = 10
     tablet_count=5
     tables = [f'test{i}' for i in range(num_tables)]
+    # A view over the first table only -- one is enough to prove the point, and it
+    # keeps this helper's cost down when with_views isn't what the caller is after.
+    view = 'test0_by_value'
 
     # Create the keyspace, populate multiple tables, and back them all up
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as src_ks:
@@ -797,6 +828,13 @@ async def test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, o
             await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
 
         await asyncio.gather(*(create_table(cf) for cf in tables))
+
+        # A backup only ever captures the base table's sstables -- a view has no sstables
+        # of its own worth backing up, since it can always be rebuilt from the base table.
+        if with_views:
+            await cql.run_async(f"CREATE MATERIALIZED VIEW {src_ks}.{view} AS SELECT * FROM {src_ks}.{tables[0]} "
+                            "WHERE value IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (value, pk)")
+            await wait_for_view(cql, view, len(servers))
 
         snap_name, _ = await take_snapshot(src_ks, servers, manager, logger)
 
@@ -820,6 +858,14 @@ async def test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, o
             await asyncio.gather(*(create_dst_table(i, cf) for i, cf in enumerate(tables)))
             for cf in tables:
                 assert not await cql.run_async(f"SELECT pk FROM {dst_ks}.{cf}_restored;"), f'{dst_ks}.{cf}_restored is not empty before the restore'
+
+            # The view is re-created here too, before any data exists, so its initial build
+            # is trivially over an empty table -- this is what distinguishes checking for
+            # eventual repopulation from merely checking the view's initial build succeeds.
+            if with_views:
+                await cql.run_async(f"CREATE MATERIALIZED VIEW {dst_ks}.{view} AS SELECT * FROM {dst_ks}.{tables[0]} "
+                                "WHERE value IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (value, pk)")
+                await wait_for_view(cql, view, len(servers))
 
             restore_nodes = servers[:num_restore_nodes]
 
@@ -849,6 +895,27 @@ async def test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, o
 
                 kept = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {src_ks}.{cf};")}
                 assert kept == expected, f'Restore into {dst_ks} modified the source table {src_ks}.{cf}: {len(kept)} rows'
+
+            if with_views:
+                print('Check that the view eventually gets repopulated from the restored base table')
+                async def view_repopulated():
+                    res = await cql.run_async(f"SELECT COUNT(*) FROM {dst_ks}.{view}")
+                    return (res[0][0] == num_keys) or None
+                await wait_for(view_repopulated, time.time() + 60)
+
+
+@pytest.mark.xfail(reason="download_tablet_sstables()'s attach_sstable() hardcodes "
+                           "sstables::sstable_state::normal for restored sstables, so neither "
+                           "the view update generator nor view_building_worker is ever told "
+                           "about the newly-restored data")
+async def test_restore_tablets_repopulates_view(build_mode: str, manager: ScyllaClusterManager, object_storage):
+    '''Check that tablet-aware restore repopulates a view over the restored base table.
+
+    A backup only ever captures the base table's sstables -- a view has no sstables of
+    its own worth backing up, since it can always be rebuilt from the base table.'''
+    await do_test_restore_tablets(build_mode, manager, object_storage,
+                                   topo(rf=1, nodes=2, racks=1, dcs=1), num_tables=1, num_restore_nodes=1,
+                                   with_views=True)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
