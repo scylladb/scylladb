@@ -2023,8 +2023,20 @@ public:
     }
 
     void drop_unfixable_sstables() {
+        // This runs instead of replace_remaining_exhausted_sstables(), so nothing
+        // else will clean up after the compaction. None of the new sstables was
+        // attached, and the sealed ones have a complete TOC, so they go through the
+        // pending deletion log. Committed before the replacement below for the same
+        // reason as in replace_remaining_exhausted_sstables(): from here on they
+        // cannot be attached, and the replacer yields.
+        auto unattached = std::exchange(_new_unused_sstables, {});
+        auto unused_gc = std::exchange(_unused_garbage_collected_sstables, {});
+        unattached.insert(unattached.end(), std::make_move_iterator(unused_gc.begin()), std::make_move_iterator(unused_gc.end()));
+        auto deletion = commit_deletion_of_unattached_sstables(std::move(unattached));
+
         if (!_sstables.empty() || !used_garbage_collected_sstables().empty()) {
             std::vector<sstables::shared_sstable> old_sstables;
+            old_sstables.reserve(_sstables.size() + used_garbage_collected_sstables().size());
             std::move(_sstables.begin(), _sstables.end(), std::back_inserter(old_sstables));
 
             // Remove Garbage Collected SSTables from the SSTable set if any was previously added.
@@ -2034,10 +2046,14 @@ public:
             _replacer(get_compaction_completion_desc(std::move(old_sstables), {}));
         }
 
-        // Mark new sstables for deletion as well
-        for (auto& sst : boost::range::join(_new_partial_sstables, _new_unused_sstables)) {
+        // _new_partial_sstables were never sealed, so a restart garbage collects
+        // them on the strength of their temporary TOC and an in-memory mark is
+        // enough.
+        for (auto& sst : _new_partial_sstables) {
             sst->mark_for_deletion();
         }
+
+        execute_deletion_of_unattached_sstables(std::move(deletion));
     }
 
     virtual void on_end_of_compaction() override {
