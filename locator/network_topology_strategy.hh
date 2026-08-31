@@ -61,8 +61,8 @@ public:
 
 public: // tablet_aware_replication_strategy
     virtual effective_replication_map_ptr make_replication_map(table_id, token_metadata_ptr) const override;
-    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr, size_t tablet_count) const override;
-    virtual future<tablet_map> reallocate_tablets(schema_ptr, token_metadata_ptr, tablet_map cur_tablets) const override;
+    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr, size_t tablet_count, const group0_leader_shard_skew&) const override;
+    virtual future<tablet_map> reallocate_tablets(schema_ptr, token_metadata_ptr, tablet_map cur_tablets, const group0_leader_shard_skew&) const override;
 protected:
     /**
      * calculate endpoints in one pass through the tokens by tracking our
