@@ -6387,7 +6387,7 @@ future<> storage_service::do_await_topology_quiesced() {
         if (error.starts_with("quiesce request failed")) {
             slogger.warn("quiesce request {}: {}", request_id, error);
         } else {
-            slogger.debug("quiesce request {}: topology not idle: {}", request_id, error);
+            slogger.info("quiesce request {}: topology not idle: {}", request_id, error);
         }
         // Wait locally for topology to settle before resubmitting.
         co_await _topology_state_machine.await_not_busy();
