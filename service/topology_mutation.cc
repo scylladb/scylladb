@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <algorithm>
 #include "utils/assert.hh"
 #include "db/system_keyspace.hh"
 #include "topology_mutation.hh"
@@ -267,6 +268,19 @@ topology_mutation_builder& topology_mutation_builder::drop_first_global_topology
     }
 }
 
+topology_mutation_builder& topology_mutation_builder::drop_first_global_topology_request_ids(const std::vector<utils::UUID>& queue,
+        const std::vector<utils::UUID>& ids) {
+    if (ids.empty()) {
+        return *this;
+    }
+    if (ids.size() > queue.size() || !std::equal(ids.begin(), ids.end(), queue.begin())) {
+        on_internal_error(rtlogger, fmt::format("global topology requests queue [{}] does not start with the completed requests [{}]",
+                fmt::join(queue, ", "), fmt::join(ids, ", ")));
+    }
+    return apply_set("global_requests", collection_apply_mode::overwrite,
+            std::span(queue.begin() + ids.size(), queue.size() - ids.size()));
+}
+
 topology_mutation_builder& topology_mutation_builder::pause_rf_change_request(const utils::UUID& id) {
     return apply_set("paused_rf_change_requests", collection_apply_mode::update, std::vector<data_value>{id});
 }
@@ -379,8 +393,9 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
     return set("error", error);
 }
 
-topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::done(std::optional<sstring> error) {
-    set("end_time", db_clock::now());
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::done(std::optional<sstring> error,
+        std::optional<db_clock::time_point> end_time) {
+    set("end_time", end_time.value_or(db_clock::now()));
     if (error) {
         set("error", *error);
     }
