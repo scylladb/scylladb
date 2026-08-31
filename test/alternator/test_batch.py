@@ -17,6 +17,7 @@ import requests
 import urllib3
 from botocore.exceptions import ClientError, HTTPClientError
 
+from test.alternator.test_metrics import check_increases_metric_exact, metrics
 from test.alternator.util import random_string, full_query, multiset, scylla_inject_error, client_no_transform
 
 
@@ -679,7 +680,7 @@ def test_batch_get_item_launch_failure(scylla_only, rest_api, test_table_sn):
 
 # Response processing must wait for every read, because it can throw while a
 # later read still references request-owned state. Reproduces #31295.
-def test_batch_get_item_response_failure_drains_reads(scylla_only, rest_api, test_table_sn):
+def test_batch_get_item_response_failure_drains_reads(scylla_only, rest_api, test_table_sn, metrics):
     prefix = random_string()
     items = [{'p': prefix + str(i), 'c': i} for i in range(2)]
     with test_table_sn.batch_writer() as batch:
@@ -692,7 +693,9 @@ def test_batch_get_item_response_failure_drains_reads(scylla_only, rest_api, tes
     response_failure_injection = "alternator_batch_get_item_response_failure"
     table_parameters = {'table_name': test_table_sn.name}
     pause_parameters = {**table_parameters, 'position': 'later'}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+    expected_rcu = [[2, {'cf': test_table_sn.name}]]
+    with check_increases_metric_exact(metrics, 'scylla_alternator_table_rcu_total', expected_rcu), \
+            concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         with scylla_inject_error(rest_api, response_failure_injection, parameters=table_parameters):
             with scylla_inject_error(rest_api, pause_injection, parameters=pause_parameters):
                 request_future = executor.submit(
