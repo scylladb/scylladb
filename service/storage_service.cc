@@ -2368,6 +2368,8 @@ future<> storage_service::stop() {
     co_await _global_topology_requests_module->stop();
     co_await _vnodes_to_tablets_migration_module->stop();
     co_await _async_gate.close();
+    // The quiesce action runs detached from its callers, so it can outlive the gate.
+    co_await _quiesce_topology.join();
     _tablet_split_monitor_event.signal();
     co_await std::move(_tablet_split_monitor);
 }
@@ -6372,6 +6374,29 @@ future<utils::UUID> storage_service::submit_quiesce_topology_request() {
     }
 }
 
+// Submit a topology request and retry until the coordinator observes an empty tablet
+// balance plan with fresh stats. Runs as _quiesce_topology, so at most one of these is
+// in flight at a time, see await_topology_quiesced().
+future<> storage_service::do_await_topology_quiesced() {
+    while (true) {
+        auto request_id = co_await submit_quiesce_topology_request();
+        auto error = co_await wait_for_topology_request_completion(request_id);
+        if (error.empty()) {
+            co_return;
+        }
+        if (error.starts_with("quiesce request failed")) {
+            slogger.warn("quiesce request {}: {}", request_id, error);
+        } else {
+            slogger.debug("quiesce request {}: topology not idle: {}", request_id, error);
+        }
+        // Wait locally for topology to settle before resubmitting.
+        co_await _topology_state_machine.await_not_busy();
+        co_await _topology_state_machine.event.when([this] {
+            return get_token_metadata_ptr()->tablets().is_idle();
+        });
+    }
+}
+
 future<> storage_service::await_topology_quiesced() {
     auto holder = _async_gate.hold();
 
@@ -6391,25 +6416,16 @@ future<> storage_service::await_topology_quiesced() {
         co_return;
     }
 
-    // New behavior — submit a topology request and retry until the
-    // coordinator observes an empty tablet balance plan with fresh stats.
-    while (true) {
-        auto request_id = co_await submit_quiesce_topology_request();
-        auto error = co_await wait_for_topology_request_completion(request_id);
-        if (error.empty()) {
-            co_return;
-        }
-        if (error.starts_with("quiesce request failed")) {
-            slogger.warn("quiesce request {}: {}", request_id, error);
-        } else {
-            slogger.debug("quiesce request {}: topology not idle: {}", request_id, error);
-        }
-        // Wait locally for topology to settle before resubmitting.
-        co_await _topology_state_machine.await_not_busy();
-        co_await _topology_state_machine.event.when([this] {
-            return get_token_metadata_ptr()->tablets().is_idle();
-        });
-    }
+    // Whether the topology has quiesced is a question about the cluster, so concurrent
+    // callers all want the same answer. load_and_stream() asks it from every shard at
+    // once, which used to put smp::count requests into the cluster-wide group0 queue,
+    // each one costing the coordinator a load stats collection and a full balance.
+    //
+    // trigger_later() defers the run briefly so that callers forwarded from other shards
+    // join the same one. Callers which arrive once a run has already started are served
+    // by the next run rather than by that one, so nobody is given an answer which was
+    // computed before it asked.
+    co_await _quiesce_topology.trigger_later();
 }
 
 future<bool> storage_service::verify_topology_quiesced(token_metadata::version_t expected_version) {
