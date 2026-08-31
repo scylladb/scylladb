@@ -2,19 +2,19 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
-# Tests for the on-disk encoding of Alternator data. Specifically, these
-# tests verify that the internal format used to store DynamoDB attribute
-# values in the underlying Scylla table hasn't accidentally changed. If
-# Alternator's encoding were to change, sstables written by an older version
-# would become unreadable by a newer version - an unacceptable compatibility
-# breakage. So if any of these tests fail, the reason should be carefully
-# analyzed, and the test should only be updated if the encoding change was
-# intentional and backward compatibility was handled.
+# Tests for the way Alternator stores its data in Scylla: the encoding of the
+# attribute values, and the CQL schema holding them. These tests verify that
+# this internal representation hasn't accidentally changed - if it did, data
+# written by an older version would become unreadable or inaccessible to a
+# newer version, an unacceptable compatibility breakage. So if any of these
+# tests fail, the reason should be carefully analyzed, and the test should
+# only be updated if the change was intentional and backward compatibility
+# was handled.
 #
 # Background on the encoding (see also issue #19770):
 # Alternator stores each DynamoDB table in keyspace "alternator_{table_name}",
 # table "{table_name}". The key attributes (hash key and optional range key)
-# are stored as regular CQL columns with their native CQL types (text for S,
+# are stored as separate CQL columns with their native CQL types (text for S,
 # blob for B, decimal for N). All other (non-key) attributes are stored
 # together in a single CQL column named ":attrs" of type map<text, blob>.
 # The map key is the attribute name; the map value encodes the type and value
@@ -38,11 +38,15 @@
 # This file is related to issue #19770.
 
 import json
+from contextlib import contextmanager
 from decimal import Decimal
 
 import pytest
 
-from .util import new_test_table, random_string
+from .util import new_test_table, random_string, scylla_config_read, unique_table_name, wait_for_gsi
+from .test_scylla import this_dc
+from test.cqlpy.util import keyspace_has_tablets
+from test.pylib.skip_types import skip_env
 
 # All tests in this file are scylla-only (they access CQL internals)
 @pytest.fixture(scope="function", autouse=True)
@@ -309,3 +313,62 @@ def test_index_key_not_schema_column(dynamodb, cql, table_with_indexes):
     # (type byte 0x00 followed by raw UTF-8 bytes).
     assert attrs['x'] == b'\x00' + b'hello'
     assert attrs['y'] == b'\x00' + b'world'
+
+# Pre-create with CQL the keyspace "alternator_{name}" which Alternator uses
+# for a table named {name}, with tablets enabled or disabled - so that a table
+# created afterwards has a pre-configured keyspace to re-use.
+@contextmanager
+def precreated_keyspace(cql, this_dc, name, tablets):
+    cql.execute(f'CREATE KEYSPACE "alternator_{name}" WITH REPLICATION = '
+        f"{{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} "
+        f"AND TABLETS = {{'enabled': {str(tablets).lower()}}}")
+    try:
+        yield
+    finally:
+        # DeleteTable drops the keyspace, so this only matters if the table
+        # was never created.
+        cql.execute(f'DROP KEYSPACE IF EXISTS "alternator_{name}"')
+
+# A user may pre-create the keyspace "alternator_{name}" with CQL to configure
+# it differently from what Alternator would have picked. Check that a table
+# created afterwards re-uses that keyspace, in both directions - the keyspace's
+# choice of tablets or vnodes must be the one that survives.
+@pytest.mark.parametrize('tablets', [False, True])
+def test_precreated_keyspace(dynamodb, cql, this_dc, tablets):
+    if scylla_config_read(dynamodb, 'tablets_mode_for_new_keyspaces') == '"enforced"':
+        skip_env('This test requests vnodes, which the enforced tablets mode forbids')
+    name = unique_table_name()
+    with precreated_keyspace(cql, this_dc, name, tablets):
+        # Ask, via the tag, for the opposite of what the keyspace was
+        # pre-created with.
+        with new_test_table(dynamodb, name=name,
+                Tags=[{'Key': 'system:initial_tablets', 'Value': 'none' if tablets else '0'}],
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+            assert keyspace_has_tablets(cql, 'alternator_' + name) == tablets
+            # Sanity check that the table in this keyspace is usable.
+            p = random_string()
+            table.put_item(Item={'p': p, 'x': 'hello'})
+            assert table.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'x': 'hello'}
+
+# Whether CreateTable needs to mark the views implementing a table's GSIs as
+# built depends on the replication strategy of the keyspace the table actually
+# lands in, not on the one Alternator would have picked for a new keyspace.
+# Here the pre-created keyspace uses tablets while the table's tag asks for
+# vnodes - if the views are left unmarked, the GSI remains in IndexStatus
+# CREATING forever. Reproduces SCYLLADB-3976.
+def test_precreated_tablets_keyspace_gsi(dynamodb, cql, this_dc):
+    if scylla_config_read(dynamodb, 'tablets_mode_for_new_keyspaces') == '"enforced"':
+        skip_env('This test requests vnodes, which the enforced tablets mode forbids')
+    name = unique_table_name()
+    with precreated_keyspace(cql, this_dc, name, tablets=True):
+        with new_test_table(dynamodb, name=name,
+                Tags=[{'Key': 'system:initial_tablets', 'Value': 'none'}],
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'},
+                                      {'AttributeName': 'x', 'AttributeType': 'S'}],
+                GlobalSecondaryIndexes=[{'IndexName': 'gsi',
+                    'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                    'Projection': {'ProjectionType': 'ALL'}}]) as table:
+            assert keyspace_has_tablets(cql, 'alternator_' + name)
+            wait_for_gsi(table, 'gsi')
