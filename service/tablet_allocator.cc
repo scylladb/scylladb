@@ -843,6 +843,7 @@ class load_balancer {
     const uint64_t _target_tablet_size = default_target_tablet_size;
 
     const unsigned _tablets_per_shard_goal;
+    const unsigned _group0_leader_shard_ratio;
 
     uint64_t target_max_tablet_size(uint64_t target_tablet_size) const noexcept {
         return target_tablet_size * 2;
@@ -1068,9 +1069,11 @@ public:
             load_balancer_stats_manager& stats,
             uint64_t target_tablet_size,
             unsigned tablets_per_shard_goal,
+            unsigned group0_leader_shard_ratio,
             std::unordered_set<host_id> skiplist)
         : _target_tablet_size(target_tablet_size)
         , _tablets_per_shard_goal(tablets_per_shard_goal)
+        , _group0_leader_shard_ratio(group0_leader_shard_ratio)
         , _db(db)
         , _tm(std::move(tm))
         , _topology(topology)
@@ -1269,8 +1272,11 @@ public:
 
         load.shards.resize(load.shard_count);
         if (load.dusage) {
-            for (auto& sload : load.shards) {
-                sload.dusage = disk_usage{ load.dusage->capacity / load.shard_count, 0 };
+            uint64_t shard_capacity = load.dusage->capacity / load.shard_count;
+            unsigned group0_leader_shard_ratio = (host == topo.my_host_id()) ? _group0_leader_shard_ratio : 100u;
+            for (shard_id i = 0; i < load.shard_count; ++i) {
+                load.shards[i].dusage = disk_usage{
+                    locator::apply_group0_leader_shard_ratio(shard_capacity, i, load.shard_count, group0_leader_shard_ratio), 0 };
             }
         }
     }
@@ -1488,6 +1494,7 @@ public:
         _load_sketch = locator::load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
         _load_sketch->set_minimal_tablet_size(_minimal_tablet_size);
         _load_sketch->set_force_capacity_based_load(_force_capacity_based_balancing);
+        _load_sketch->set_group0_leader_shard_ratio(_group0_leader_shard_ratio);
         co_await _load_sketch->populate_dc(dc);
 
         for (auto& [rack, colocation_sources] : racks) {
@@ -3062,6 +3069,20 @@ public:
         return (load_delta / max_load) < _size_based_balance_threshold;
     }
 
+    // Like is_balanced(), but shard capacities may differ (tablets_group0_leader_shard_ratio),
+    // so exact equality under force_capacity_based_balancing may be unreachable and would
+    // oscillate forever. Balanced once the gap is within one tablet's load on either shard.
+    bool is_intranode_balanced(const node_load& node_info, shard_id src_shard, shard_id dst_shard,
+            load_type min_load, load_type max_load) const {
+        if (!_force_capacity_based_balancing) {
+            return is_balanced(min_load, max_load);
+        }
+        uint64_t min_capacity = std::min(node_info.shards[src_shard].dusage->capacity,
+                                          node_info.shards[dst_shard].dusage->capacity);
+        load_type one_tablet_load = load_type(_target_tablet_size) / min_capacity;
+        return (max_load - min_load) <= one_tablet_load;
+    }
+
     // If cluster cannot agree on tablet merge feature, then merge will not be finalized since
     // not all nodes in the cluster can handle the finalization step.
     bool bypass_merge_completion() const {
@@ -3481,7 +3502,7 @@ public:
                 if (!min_load || !max_load) {
                     return true;
                 }
-                return is_balanced(*min_load, *max_load);
+                return is_intranode_balanced(node_load, src, dst, *min_load, *max_load);
             };
             if (!shuffle && (src == dst || node_is_balanced())) {
                 lblogger.debug("Node {} is balanced", host);
@@ -4496,6 +4517,7 @@ public:
         _load_sketch = locator::load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
         _load_sketch->set_minimal_tablet_size(_minimal_tablet_size);
         _load_sketch->set_force_capacity_based_load(_force_capacity_based_balancing);
+        _load_sketch->set_group0_leader_shard_ratio(_group0_leader_shard_ratio);
         co_await _load_sketch->populate_dc(dc);
 
         // If we don't have nodes to drain, remove nodes which don't have complete tablet sizes
@@ -4747,6 +4769,7 @@ private:
         load_balancer lb(_db, tm, topology, sys_ks, std::move(table_load_stats), _load_balancer_stats,
             _db.get_config().target_tablet_size_in_bytes(),
             _db.get_config().tablets_per_shard_goal(),
+            _db.get_config().tablets_group0_leader_shard_ratio(),
             std::move(skiplist));
         lb.set_use_table_aware_balancing(_use_tablet_aware_balancing);
         lb.set_initial_scale(_db.get_config().tablets_initial_scale_factor());
