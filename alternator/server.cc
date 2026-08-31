@@ -809,15 +809,20 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     }
     _pending_requests.enter();
     auto leave = defer([this] () noexcept { _pending_requests.leave(); });
-    // Reserve for JSON parsing and, when applicable, for serializing,
-    // retaining, filtering, and formatting the audited request.
+    // Reserve for buffering/decompression, JSON parsing and, when applicable,
+    // for serializing, retaining, filtering, and formatting the audited request.
     // If the uncompressed length is unknown, reserve for the largest possible
     // request and return the excess after reading and decompressing its body.
     const sstring content_encoding = req->get_header("Content-Encoding");
     const bool compressed = content_encoding == "gzip" || content_encoding == "deflate";
-    const bool content_length_unknown = !req->content_length;
-    const bool uncompressed_length_unknown = content_length_unknown || compressed;
-    const bool audit_may_log = callback_it != _callbacks.end()
+    const bool has_transfer_encoding = !req->get_header("Transfer-Encoding").empty();
+    const bool content_length_unknown = has_transfer_encoding;
+    const bool known_empty = !has_transfer_encoding && req->content_length == 0;
+    const bool request_will_be_parsed = !known_empty
+            && callback_it != _callbacks.end()
+            && (content_encoding.empty() || compressed);
+    const bool uncompressed_length_unknown = content_length_unknown || (compressed && !known_empty);
+    const bool audit_may_log = request_will_be_parsed
             && audit::audit::audit_instance().local_is_initialized()
             && audit::audit::local_audit_instance().will_log(callback_it->second.audit_category);
     const auto memory_copy_counts = audit_may_log
@@ -836,6 +841,9 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     // work for both 16-byte and 24-byte rjson::value layouts.
     static constexpr size_t max_parsed_memory_multiplier = 2 + sizeof(rjson::value) / 2;
     static constexpr size_t max_parsing_memory_multiplier = 4 + 5 * sizeof(rjson::value) / 4;
+    // Requests rejected before parsing only need to retain their raw body or,
+    // for a supported compression encoding, the input and decompressed body.
+    static constexpr size_t max_unparsed_memory_multiplier = 2;
     // Batch audit filtering reparses the retained request while its canonical
     // query string remains live. Keep that as a separate memory phase.
     const size_t batch_reparse_memory_multiplier = audit_may_log && callback_it->second.audit_batch
@@ -847,8 +855,10 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
             ? batch_reparse_memory_multiplier + max_serialized_size_multiplier
             : 0;
     const size_t audit_write_multiplier = memory_copy_counts.audit_write * max_serialized_size_multiplier;
-    const size_t memory_multiplier = std::max({max_parsing_memory_multiplier, request_processing_multiplier,
-            batch_reparse_multiplier, audit_write_multiplier});
+    const size_t memory_multiplier = request_will_be_parsed
+            ? std::max({max_parsing_memory_multiplier, request_processing_multiplier,
+                    batch_reparse_multiplier, audit_write_multiplier})
+            : max_unparsed_memory_multiplier;
     const size_t estimated_content_length = uncompressed_length_unknown ? request_content_length_limit : req->content_length;
     size_t content_length = estimated_content_length;
     const size_t mem_estimate = estimated_content_length * memory_multiplier + 8000;
@@ -863,6 +873,12 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     }
     auto units = co_await std::move(units_fut);
     units.adopt(consume_units(memory_semaphore, mem_estimate - units_to_wait_for));
+    constexpr std::string_view admission_injection_name = "alternator_request_memory_admission";
+    auto& injector = utils::get_local_injector();
+    if (injector.is_enabled(admission_injection_name)) {
+        injector.set_parameter(admission_injection_name, "request_permit_units", format("{}", units.count()));
+        co_await injector.inject(admission_injection_name, utils::wait_for_message(std::chrono::seconds(60)));
+    }
     throwing_assert(req->content_stream);
     chunked_content content = co_await read_entire_stream(*req->content_stream, request_content_length_limit);
     if (content_length_unknown && !compressed) {

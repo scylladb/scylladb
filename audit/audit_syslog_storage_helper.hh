@@ -7,9 +7,11 @@
  */
 #pragma once
 
+#include <exception>
 #include <string>
 #include <string_view>
 
+#include <seastar/core/semaphore.hh>
 #include <seastar/net/api.hh>
 
 #include "audit/audit.hh"
@@ -24,7 +26,7 @@ class migration_manager;
 
 namespace audit {
 
-/// Escape a value embedded in a quoted syslog audit field.
+/// Escape a query embedded in the quoted syslog audit field.
 std::string escape_syslog_field(std::string_view str);
 
 class audit_syslog_storage_helper : public storage_helper {
@@ -32,7 +34,9 @@ class audit_syslog_storage_helper : public storage_helper {
     net::datagram_channel _sender;
     seastar::semaphore _semaphore;
 
-    future<> syslog_send_helper(seastar::temporary_buffer<char> msg);
+    future<seastar::semaphore_units<>> acquire_syslog_unit();
+    future<> syslog_send_helper(seastar::temporary_buffer<char> msg, seastar::semaphore_units<>);
+    [[noreturn]] void throw_syslog_error(const std::exception& error) const;
 public:
     explicit audit_syslog_storage_helper(cql3::query_processor&, service::migration_manager&);
     virtual ~audit_syslog_storage_helper();

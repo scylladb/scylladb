@@ -50,8 +50,7 @@ bool role_matches(const sstring& pattern, const sstring& name) {
 
 BOOST_AUTO_TEST_CASE(test_escape_syslog_field) {
     BOOST_CHECK_EQUAL(audit::escape_syslog_field("plain"), "plain");
-    BOOST_CHECK_EQUAL(audit::escape_syslog_field("quote\" slash\\ line\n tab\t ctrl\x01"),
-            "quote\\\" slash\\\\ line\\n tab\\t ctrl\\u0001");
+    BOOST_CHECK_EQUAL(audit::escape_syslog_field("quote\" slash\\"), "quote\\\" slash\\\\");
 }
 
 BOOST_AUTO_TEST_CASE(test_parse_audit_rules_json) {

@@ -358,6 +358,87 @@ def _request_permit_before_audit(
     return permit_units[0][1]
 
 
+def _request_permit_at_admission(dynamodb, rest_api, operation, payload, transport, content_encoding=None):
+    injection = "alternator_request_memory_admission"
+    extra_headers = {"Content-Encoding": content_encoding} if content_encoding else None
+    signed_request = get_signed_request(dynamodb, operation, payload, extra_headers)
+    headers = {key: value for key, value in signed_request.headers.items() if key.lower() != "content-length"}
+    if transport == "chunked":
+        request_body = iter((signed_request.body,))
+    else:
+        headers["Content-Length"] = str(len(signed_request.body))
+        request_body = signed_request.body
+
+    with ThreadPoolExecutor(max_workers=1) as executor, scylla_inject_error(rest_api, injection):
+        request = executor.submit(
+            requests.post,
+            signed_request.url,
+            headers=headers,
+            data=request_body,
+            verify=False,
+            cert=signed_request.cert,
+            timeout=60,
+        )
+        try:
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                if request.done():
+                    response = request.result()
+                    pytest.fail(f"Request completed before reaching admission injection: {response.status_code} {response.text}")
+                response = requests.get(f"{rest_api}/v2/error_injection/injection/{injection}/enters", timeout=5)
+                response.raise_for_status()
+                if response.json() > 0:
+                    break
+                time.sleep(0.1)
+            else:
+                pytest.fail("Request did not reach the admission injection")
+
+            response = requests.get(f"{rest_api}/v2/error_injection/injection/{injection}", timeout=5)
+            response.raise_for_status()
+            permit_units = [
+                int(parameter["value"])
+                for shard in response.json()
+                for parameter in shard.get("parameters", [])
+                if parameter["key"] == "request_permit_units"
+            ]
+            assert len(permit_units) == 1, f"Expected one request permit measurement, got {permit_units}"
+        finally:
+            response = requests.post(f"{rest_api}/v2/error_injection/injection/{injection}/message", timeout=5)
+            response.raise_for_status()
+        response = request.result(timeout=30)
+    return permit_units[0], response.status_code
+
+
+# Regression test for PR #31303: requests rejected before JSON parsing must
+# reserve only for buffering/decompression, not for constructing a DOM.
+@pytest.mark.parametrize("transport", ["content-length", "chunked"])
+@pytest.mark.parametrize("operation,content_encoding,expected_status", [
+    ("DefinitelyNotAnOperation", None, 400),
+    ("ListTables", "garbage", 500),
+])
+def test_rejected_request_memory_admission(dynamodb, rest_api, transport, operation, content_encoding, expected_status):
+    payload = b"{}"
+    permit_units, status = _request_permit_at_admission(
+        dynamodb, rest_api, operation, payload, transport, content_encoding)
+    estimated_content_length = 16 * 1024 * 1024 if transport == "chunked" else len(payload)
+    assert permit_units == estimated_content_length * 2 + 8000
+    assert status == expected_status
+
+
+# A non-chunked zero-length body cannot produce parser input, even when its
+# Content-Encoding would otherwise make decoded size unknown.
+@pytest.mark.parametrize("content_encoding,expected_status", [
+    (None, 400),
+    ("gzip", 500),
+    ("deflate", 500),
+])
+def test_zero_content_length_memory_admission(dynamodb, rest_api, content_encoding, expected_status):
+    permit_units, status = _request_permit_at_admission(
+        dynamodb, rest_api, "ListTables", b"", "content-length", content_encoding)
+    assert permit_units == 8000
+    assert status == expected_status
+
+
 # A large request must remain covered by its memory permit until the audit
 # write completes. This reproduces issue #31297 for Content-Length, chunked,
 # and compressed requests.
