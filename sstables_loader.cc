@@ -1018,3 +1018,499 @@ future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets_for_test
                                                                                   std::vector<dht::token_range>&& tablets_ranges) {
     return tablet_sstable_streamer::get_sstables_for_tablets(sstables, std::move(tablets_ranges));
 }
+<<<<<<< HEAD
+||||||| parent of 5295fa0bdc (service: let alter_table_with_tablet_hints remove unset tablet hints)
+
+static future<manifest_summary> process_manifest(input_stream<char>& is, sstring keyspace, sstring table,
+                                 const sstring& expected_snapshot_name,
+                                 const sstring& manifest_prefix, db::system_distributed_keyspace& sys_dist_ks,
+                                 db::consistency_level cl) {
+    // Read the entire JSON content
+    rjson::chunked_content content = co_await util::read_entire_stream(is);
+
+    rjson::value parsed = rjson::parse(std::move(content));
+
+    // Basic validation that tablet_count is a power of 2, as expected by our restore process
+    auto& table_obj = rjson::get(parsed, "table");
+    size_t tablet_count = rjson::get<uint64_t>(table_obj, "tablet_count");
+
+    if (!std::has_single_bit(tablet_count)) {
+        on_internal_error(llog, fmt::format("Invalid tablet_count {} in manifest {}, expected a power of 2", tablet_count, manifest_prefix));
+    }
+
+    // Extract the necessary fields from the manifest
+    // Expected JSON structure documented in docs/dev/object_storage.md
+    auto& snapshot_obj = rjson::get(parsed, "snapshot");
+    auto snapshot_name = rjson::get<std::string>(snapshot_obj, "name");
+    if (snapshot_name != expected_snapshot_name) {
+        throw std::runtime_error(fmt::format("Manifest {} belongs to snapshot '{}', expected '{}'",
+            manifest_prefix, snapshot_name, expected_snapshot_name));
+    }
+    if (keyspace.empty()) {
+        keyspace = rjson::get<std::string>(table_obj, "keyspace_name");
+    }
+    if (table.empty()) {
+        table = rjson::get<std::string>(table_obj, "table_name");
+    }
+    auto& node_obj = rjson::get(parsed, "node");
+    auto datacenter = rjson::get<std::string>(node_obj, "datacenter");
+    auto rack = rjson::get<std::string>(node_obj, "rack");
+
+    // Process each sstable entry in the manifest
+    // FIXME: cleanup of the snapshot-related rows is needed in case anything throws in here.
+    auto sstables = rjson::find(parsed, "sstables");
+    if (!sstables) {
+        co_return manifest_summary{tablet_count, 0};
+    }
+    if (!sstables->IsArray()) {
+        throw std::runtime_error("Malformed manifest, 'sstables' is not array");
+    }
+
+    db::snapshot_table_helper sth(sys_dist_ks.qp());
+
+    for (auto& sstable_entry : sstables->GetArray()) {
+        // rjson::get functions assert if the passed value is not an object
+        if (!sstable_entry.IsObject()) {
+            throw std::runtime_error("Malformed manifest, the entry in the 'sstables' array is not an object");
+        }
+        auto id = rjson::to_sstable_id(rjson::get(sstable_entry, "id"));
+        auto first_token = rjson::to_token(rjson::get(sstable_entry, "first_token"));
+        auto last_token = rjson::to_token(rjson::get(sstable_entry, "last_token"));
+        auto toc_name = rjson::to_sstring(rjson::get(sstable_entry, "toc_name"));
+        auto tablet_id = rjson::get<size_t>(sstable_entry, "tablet_id");
+        auto repaired_at = rjson::get<int64_t>(sstable_entry, "repaired_at");
+        auto data_size = rjson::get<int64_t>(sstable_entry, "data_size");
+        auto index_size = rjson::get<int64_t>(sstable_entry, "index_size");
+        auto prefix = sstring(std::filesystem::path(manifest_prefix).parent_path().string());
+        // Insert the snapshot sstable metadata into system_distributed.snapshot_sstables with a TTL of 3 days, that should be enough
+        // for any snapshot restore operation to complete, and after that the metadata will be automatically cleaned up from the table
+        co_await sth.insert_snapshot_sstable(snapshot_name, keyspace, table, datacenter, rack, id, first_token, last_token,
+                                             toc_name, prefix, locator::host_id::create_null_id(), tablet_id, db::snapshot_state::remote,
+                                             repaired_at, data_size, index_size, cl);
+    }
+
+    co_return manifest_summary{tablet_count, sstables->Size()};
+}
+
+future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring expected_snapshot_name, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
+    if (manifest_prefixes.empty()) {
+        throw std::invalid_argument("manifest prefixes list must not be empty");
+    }
+
+    // Download manifests in parallel and populate system_distributed.snapshot_sstables
+    // with the content extracted from each manifest
+    auto client = sm.get_endpoint_client(endpoint);
+
+    // tablet_count to be returned by this function, we also validate that all manifests passed contain the same tablet count
+    std::optional<size_t> tablet_count;
+    size_t nr_sstables = 0;
+
+    co_await seastar::max_concurrent_for_each(manifest_prefixes, 16, [&] (const sstring& manifest_prefix) {
+        // Download the manifest JSON file
+        sstables::object_name name(bucket, manifest_prefix);
+        auto source = client->make_download_source(name);
+        return seastar::with_closeable(input_stream<char>(std::move(source)), [&] (input_stream<char>& is) {
+            return process_manifest(is, keyspace, table, expected_snapshot_name, manifest_prefix, sys_dist_ks, cl).then([&](manifest_summary ms) {
+                size_t count = ms.tablet_count;
+                if (!tablet_count) {
+                    tablet_count = count;
+                } else if (*tablet_count != count) {
+                    throw std::runtime_error(fmt::format("Inconsistent tablet_count values in manifest {}: expected {}, got {}", manifest_prefix, *tablet_count, count));
+                }
+                nr_sstables += ms.nr_sstables;
+            });
+        });
+    });
+
+    co_return manifest_summary{
+        .tablet_count = *tablet_count,
+        .nr_sstables = nr_sstables,
+    };
+}
+
+class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::task::impl {
+    sharded<sstables_loader>& _loader;
+    table_id _tid;
+    sstring _snap_name;
+    size_t _tablet_count;
+    tasks::task_manager::task::progress _progress;
+    seastar::named_gate _gate{"progress_updater"};
+    timer<seastar::lowres_clock> _progress_update_timer;
+
+    future<> update_progress() {
+        auto& loader = _loader.local();
+        auto& db = loader._db.local();
+        auto s = db.find_schema(_tid);
+        auto md = db.get_token_metadata_ptr();
+        const auto& topo = md->get_topology();
+        auto dc = topo.get_datacenter();
+        auto dc_racks_it = topo.get_datacenter_racks().find(dc);
+        if (dc_racks_it == topo.get_datacenter_racks().end()) {
+            co_return;
+        }
+
+        db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
+        tasks::task_manager::task::progress progress = {};
+        co_await max_concurrent_for_each(dc_racks_it->second, 16, [&](const auto& rack_entry) -> future<> {
+            auto p = co_await sth.get_snapshot_sstables_progress(_snap_name, s->ks_name(), s->cf_name(), dc, rack_entry.first);
+            progress.total += p.nr_sstables;
+            progress.completed += p.nr_downloaded_sstables;
+        });
+        _progress = progress;
+    }
+
+public:
+    tablet_restore_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader, sstring ks,
+            table_id tid, sstring snap_name, manifest_summary ms) noexcept
+        : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
+        , _loader(loader)
+        , _tid(std::move(tid))
+        , _snap_name(std::move(snap_name))
+        , _tablet_count(ms.tablet_count)
+        , _progress_update_timer([this] {
+            if (auto gh = _gate.try_hold()) {
+                std::ignore = update_progress().finally([this, gh = std::move(*gh)] {
+                    if (!_gate.is_closed()) {
+                        _progress_update_timer.rearm(lowres_clock::now() + 5s);
+                    }
+                });
+            }
+        })
+    {
+        _status.progress_units = "sstables";
+        _progress.total = ms.nr_sstables;
+        _progress_update_timer.arm(lowres_clock::now());
+    }
+
+    virtual std::string type() const override {
+        return "restore_tablets";
+    }
+
+    virtual tasks::is_internal is_internal() const noexcept override {
+        return tasks::is_internal::no;
+    }
+
+    virtual tasks::is_user_task is_user_task() const noexcept override {
+        return tasks::is_user_task::yes;
+    }
+
+    tasks::is_abortable is_abortable() const noexcept override {
+        return tasks::is_abortable::yes;
+    }
+
+    void abort() noexcept override {
+        tasks::task_manager::task::impl::abort();
+        // Closing the restore sessions makes the in-flight download RPCs fail and the
+        // topology coordinator clear the restore transitions, which lets run() (waiting
+        // on the topology request) return. Fire-and-forget: the task's own abort source,
+        // already triggered above, surfaces the abort_requested error to the caller.
+        (void)_loader.local()._ss.local().abort_restore_tablets(_tid).handle_exception([tid = _tid] (std::exception_ptr ex) {
+            llog.warn("Failed to abort restore for table {}: {}", tid, ex);
+        });
+    }
+
+    future<tasks::task_manager::task::progress> get_progress() const override {
+        co_return _progress;
+    }
+
+    future<> release_resources() noexcept override {
+        _progress_update_timer.cancel();
+        co_await _gate.close();
+    }
+
+protected:
+    virtual future<> run() override {
+        auto& loader = _loader.local();
+
+        auto current_schema = loader.local_db().find_schema(_tid);
+        auto min_tablet_count = current_schema->tablet_options().min_tablet_count;
+        auto max_tablet_count = current_schema->tablet_options().max_tablet_count;
+        co_await loader._ss.local().alter_table_with_tablet_hints(_tid, _tablet_count, _tablet_count);
+
+        std::exception_ptr eptr;
+        try {
+            co_await loader._ss.local().restore_tablets(_tid, _snap_name);
+        } catch (...) {
+            llog.error("Failed to restore tablets for table_id {}. Error: {}", _tid, std::current_exception());
+            eptr = std::current_exception();
+        }
+
+        try {
+            llog.info("Restoring table with tid {} to the original schema", _tid);
+            co_await loader._ss.local().alter_table_with_tablet_hints(_tid, min_tablet_count, max_tablet_count, false);
+        } catch (...) {
+            llog.error("Failed to restore original schema for table_id {}. Error: {}", _tid, std::current_exception());
+        }
+
+        if (eptr) {
+            std::rethrow_exception(eptr);
+        }
+
+        // Restore complete. The total was known upfront from manifest parsing.
+        // Mark all progress as complete and stop the background update timer.
+        _progress_update_timer.cancel();
+        _progress.completed = _progress.total;
+    }
+};
+
+future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, sstring endpoint, sstring bucket, sstring prefix, utils::chunked_vector<sstring> manifests) {
+    auto summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, endpoint, bucket, snap_name, std::move(manifests));
+
+    auto datacenter = _db.local().get_token_metadata().get_topology().get_datacenter();
+
+    db::snapshot_table_helper sth(_sys_dist_ks.qp());
+    // TODO: update state when all restored...
+    co_await sth.insert_snapshot_remote_location(snap_name, datacenter, endpoint, bucket, prefix, db::snapshot_state::remote);
+
+    auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>({}, container(), keyspace, tid, std::move(snap_name), summary);
+    co_return task->id();
+}
+=======
+
+static future<manifest_summary> process_manifest(input_stream<char>& is, sstring keyspace, sstring table,
+                                 const sstring& expected_snapshot_name,
+                                 const sstring& manifest_prefix, db::system_distributed_keyspace& sys_dist_ks,
+                                 db::consistency_level cl) {
+    // Read the entire JSON content
+    rjson::chunked_content content = co_await util::read_entire_stream(is);
+
+    rjson::value parsed = rjson::parse(std::move(content));
+
+    // Basic validation that tablet_count is a power of 2, as expected by our restore process
+    auto& table_obj = rjson::get(parsed, "table");
+    size_t tablet_count = rjson::get<uint64_t>(table_obj, "tablet_count");
+
+    if (!std::has_single_bit(tablet_count)) {
+        on_internal_error(llog, fmt::format("Invalid tablet_count {} in manifest {}, expected a power of 2", tablet_count, manifest_prefix));
+    }
+
+    // Extract the necessary fields from the manifest
+    // Expected JSON structure documented in docs/dev/object_storage.md
+    auto& snapshot_obj = rjson::get(parsed, "snapshot");
+    auto snapshot_name = rjson::get<std::string>(snapshot_obj, "name");
+    if (snapshot_name != expected_snapshot_name) {
+        throw std::runtime_error(fmt::format("Manifest {} belongs to snapshot '{}', expected '{}'",
+            manifest_prefix, snapshot_name, expected_snapshot_name));
+    }
+    if (keyspace.empty()) {
+        keyspace = rjson::get<std::string>(table_obj, "keyspace_name");
+    }
+    if (table.empty()) {
+        table = rjson::get<std::string>(table_obj, "table_name");
+    }
+    auto& node_obj = rjson::get(parsed, "node");
+    auto datacenter = rjson::get<std::string>(node_obj, "datacenter");
+    auto rack = rjson::get<std::string>(node_obj, "rack");
+
+    // Process each sstable entry in the manifest
+    // FIXME: cleanup of the snapshot-related rows is needed in case anything throws in here.
+    auto sstables = rjson::find(parsed, "sstables");
+    if (!sstables) {
+        co_return manifest_summary{tablet_count, 0};
+    }
+    if (!sstables->IsArray()) {
+        throw std::runtime_error("Malformed manifest, 'sstables' is not array");
+    }
+
+    db::snapshot_table_helper sth(sys_dist_ks.qp());
+
+    for (auto& sstable_entry : sstables->GetArray()) {
+        // rjson::get functions assert if the passed value is not an object
+        if (!sstable_entry.IsObject()) {
+            throw std::runtime_error("Malformed manifest, the entry in the 'sstables' array is not an object");
+        }
+        auto id = rjson::to_sstable_id(rjson::get(sstable_entry, "id"));
+        auto first_token = rjson::to_token(rjson::get(sstable_entry, "first_token"));
+        auto last_token = rjson::to_token(rjson::get(sstable_entry, "last_token"));
+        auto toc_name = rjson::to_sstring(rjson::get(sstable_entry, "toc_name"));
+        auto tablet_id = rjson::get<size_t>(sstable_entry, "tablet_id");
+        auto repaired_at = rjson::get<int64_t>(sstable_entry, "repaired_at");
+        auto data_size = rjson::get<int64_t>(sstable_entry, "data_size");
+        auto index_size = rjson::get<int64_t>(sstable_entry, "index_size");
+        auto prefix = sstring(std::filesystem::path(manifest_prefix).parent_path().string());
+        // Insert the snapshot sstable metadata into system_distributed.snapshot_sstables with a TTL of 3 days, that should be enough
+        // for any snapshot restore operation to complete, and after that the metadata will be automatically cleaned up from the table
+        co_await sth.insert_snapshot_sstable(snapshot_name, keyspace, table, datacenter, rack, id, first_token, last_token,
+                                             toc_name, prefix, locator::host_id::create_null_id(), tablet_id, db::snapshot_state::remote,
+                                             repaired_at, data_size, index_size, cl);
+    }
+
+    co_return manifest_summary{tablet_count, sstables->Size()};
+}
+
+future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring expected_snapshot_name, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
+    if (manifest_prefixes.empty()) {
+        throw std::invalid_argument("manifest prefixes list must not be empty");
+    }
+
+    // Download manifests in parallel and populate system_distributed.snapshot_sstables
+    // with the content extracted from each manifest
+    auto client = sm.get_endpoint_client(endpoint);
+
+    // tablet_count to be returned by this function, we also validate that all manifests passed contain the same tablet count
+    std::optional<size_t> tablet_count;
+    size_t nr_sstables = 0;
+
+    co_await seastar::max_concurrent_for_each(manifest_prefixes, 16, [&] (const sstring& manifest_prefix) {
+        // Download the manifest JSON file
+        sstables::object_name name(bucket, manifest_prefix);
+        auto source = client->make_download_source(name);
+        return seastar::with_closeable(input_stream<char>(std::move(source)), [&] (input_stream<char>& is) {
+            return process_manifest(is, keyspace, table, expected_snapshot_name, manifest_prefix, sys_dist_ks, cl).then([&](manifest_summary ms) {
+                size_t count = ms.tablet_count;
+                if (!tablet_count) {
+                    tablet_count = count;
+                } else if (*tablet_count != count) {
+                    throw std::runtime_error(fmt::format("Inconsistent tablet_count values in manifest {}: expected {}, got {}", manifest_prefix, *tablet_count, count));
+                }
+                nr_sstables += ms.nr_sstables;
+            });
+        });
+    });
+
+    co_return manifest_summary{
+        .tablet_count = *tablet_count,
+        .nr_sstables = nr_sstables,
+    };
+}
+
+class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::task::impl {
+    sharded<sstables_loader>& _loader;
+    table_id _tid;
+    sstring _snap_name;
+    size_t _tablet_count;
+    tasks::task_manager::task::progress _progress;
+    seastar::named_gate _gate{"progress_updater"};
+    timer<seastar::lowres_clock> _progress_update_timer;
+
+    future<> update_progress() {
+        auto& loader = _loader.local();
+        auto& db = loader._db.local();
+        auto s = db.find_schema(_tid);
+        auto md = db.get_token_metadata_ptr();
+        const auto& topo = md->get_topology();
+        auto dc = topo.get_datacenter();
+        auto dc_racks_it = topo.get_datacenter_racks().find(dc);
+        if (dc_racks_it == topo.get_datacenter_racks().end()) {
+            co_return;
+        }
+
+        db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
+        tasks::task_manager::task::progress progress = {};
+        co_await max_concurrent_for_each(dc_racks_it->second, 16, [&](const auto& rack_entry) -> future<> {
+            auto p = co_await sth.get_snapshot_sstables_progress(_snap_name, s->ks_name(), s->cf_name(), dc, rack_entry.first);
+            progress.total += p.nr_sstables;
+            progress.completed += p.nr_downloaded_sstables;
+        });
+        _progress = progress;
+    }
+
+public:
+    tablet_restore_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader, sstring ks,
+            table_id tid, sstring snap_name, manifest_summary ms) noexcept
+        : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
+        , _loader(loader)
+        , _tid(std::move(tid))
+        , _snap_name(std::move(snap_name))
+        , _tablet_count(ms.tablet_count)
+        , _progress_update_timer([this] {
+            if (auto gh = _gate.try_hold()) {
+                std::ignore = update_progress().finally([this, gh = std::move(*gh)] {
+                    if (!_gate.is_closed()) {
+                        _progress_update_timer.rearm(lowres_clock::now() + 5s);
+                    }
+                });
+            }
+        })
+    {
+        _status.progress_units = "sstables";
+        _progress.total = ms.nr_sstables;
+        _progress_update_timer.arm(lowres_clock::now());
+    }
+
+    virtual std::string type() const override {
+        return "restore_tablets";
+    }
+
+    virtual tasks::is_internal is_internal() const noexcept override {
+        return tasks::is_internal::no;
+    }
+
+    virtual tasks::is_user_task is_user_task() const noexcept override {
+        return tasks::is_user_task::yes;
+    }
+
+    tasks::is_abortable is_abortable() const noexcept override {
+        return tasks::is_abortable::yes;
+    }
+
+    void abort() noexcept override {
+        tasks::task_manager::task::impl::abort();
+        // Closing the restore sessions makes the in-flight download RPCs fail and the
+        // topology coordinator clear the restore transitions, which lets run() (waiting
+        // on the topology request) return. Fire-and-forget: the task's own abort source,
+        // already triggered above, surfaces the abort_requested error to the caller.
+        (void)_loader.local()._ss.local().abort_restore_tablets(_tid).handle_exception([tid = _tid] (std::exception_ptr ex) {
+            llog.warn("Failed to abort restore for table {}: {}", tid, ex);
+        });
+    }
+
+    future<tasks::task_manager::task::progress> get_progress() const override {
+        co_return _progress;
+    }
+
+    future<> release_resources() noexcept override {
+        _progress_update_timer.cancel();
+        co_await _gate.close();
+    }
+
+protected:
+    virtual future<> run() override {
+        auto& loader = _loader.local();
+
+        auto current_schema = loader.local_db().find_schema(_tid);
+        auto min_tablet_count = current_schema->tablet_options().min_tablet_count;
+        auto max_tablet_count = current_schema->tablet_options().max_tablet_count;
+        co_await loader._ss.local().alter_table_with_tablet_hints(_tid, _tablet_count, _tablet_count);
+
+        std::exception_ptr eptr;
+        try {
+            co_await loader._ss.local().restore_tablets(_tid, _snap_name);
+        } catch (...) {
+            llog.error("Failed to restore tablets for table_id {}. Error: {}", _tid, std::current_exception());
+            eptr = std::current_exception();
+        }
+
+        try {
+            llog.info("Restoring table with tid {} to the original schema", _tid);
+            // remove_unset: the table saved nullopt because it had no hint of its own, and
+            // passing nullopt back would leave it pinned at min == max forever.
+            co_await loader._ss.local().alter_table_with_tablet_hints(_tid, min_tablet_count, max_tablet_count, false, true);
+        } catch (...) {
+            llog.error("Failed to restore original schema for table_id {}. Error: {}", _tid, std::current_exception());
+        }
+
+        if (eptr) {
+            std::rethrow_exception(eptr);
+        }
+
+        // Restore complete. The total was known upfront from manifest parsing.
+        // Mark all progress as complete and stop the background update timer.
+        _progress_update_timer.cancel();
+        _progress.completed = _progress.total;
+    }
+};
+
+future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, sstring endpoint, sstring bucket, sstring prefix, utils::chunked_vector<sstring> manifests) {
+    auto summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, endpoint, bucket, snap_name, std::move(manifests));
+
+    auto datacenter = _db.local().get_token_metadata().get_topology().get_datacenter();
+
+    db::snapshot_table_helper sth(_sys_dist_ks.qp());
+    // TODO: update state when all restored...
+    co_await sth.insert_snapshot_remote_location(snap_name, datacenter, endpoint, bucket, prefix, db::snapshot_state::remote);
+
+    auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>({}, container(), keyspace, tid, std::move(snap_name), summary);
+    co_return task->id();
+}
+>>>>>>> 5295fa0bdc (service: let alter_table_with_tablet_hints remove unset tablet hints)
