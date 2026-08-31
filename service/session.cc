@@ -58,6 +58,11 @@ void session_manager::initiate_close_of_sessions_except(const std::unordered_set
     }
 }
 
+// Called on every shard for every raft_topology_cmd::barrier_and_drain, so on a
+// cluster with a heavy stream of tablet migrations this runs constantly and has
+// nothing to do most of the time. All of the routine progress is therefore
+// logged at debug level; a session that fails to close is still reported by the
+// periodic warnings below, and the barrier itself is reported by its caller.
 future<> session_manager::drain_closing_sessions() {
     slogger.debug("drain_closing_sessions: waiting for lock");
     seastar::timer<lowres_clock> lock_timer([this] {
@@ -84,7 +89,7 @@ future<> session_manager::drain_closing_sessions() {
         co_await s.close();
         warn_timer.reset();
         if (_sessions.erase(id)) {
-            slogger.info("drain_closing_sessions: session {} closed", id);
+            slogger.debug("drain_closing_sessions: session {} closed", id);
         }
     }
     slogger.debug("drain_closing_sessions: done");

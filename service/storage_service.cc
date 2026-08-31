@@ -4845,9 +4845,18 @@ future<> storage_service::local_topology_barrier() {
 
     co_await container().invoke_on_all([version] (storage_service& ss) -> future<> {
         const auto current_version = ss._shared_token_metadata.get()->get_version();
-        rtlogger.info("Got raft_topology_cmd::barrier_and_drain, version {}, "
-                      "current version {}, stale versions (version: use_count): {}",
-                      version, current_version, ss._shared_token_metadata.describe_stale_versions());
+        // This handler runs on every shard of every node for every barrier, so
+        // under a heavy stream of tablet migrations it dominates the log. Keep
+        // the arrival line at info level, since it carries the version
+        // diagnostics, but rate-limit it; the progress lines below are traces
+        // and carry nothing in the common case where the barrier completes
+        // immediately, so they are logged at debug level. A barrier that does
+        // get stuck is still reported by the periodic warning below.
+        static thread_local logging::logger::rate_limit rate_limit{std::chrono::seconds(1)};
+        rtlogger.log(logging::log_level::info, rate_limit,
+                     "Got raft_topology_cmd::barrier_and_drain, version {}, "
+                     "current version {}, stale versions (version: use_count): {}",
+                     version, current_version, ss._shared_token_metadata.describe_stale_versions());
 
         // This shouldn't happen under normal operation, it's only plausible
         // if the topology change coordinator has
@@ -4864,7 +4873,7 @@ future<> storage_service::local_topology_barrier() {
                              version, current_version)));
         }
 
-        rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: waiting for stale token metadata versions to be released", version);
+        rtlogger.debug("raft_topology_cmd::barrier_and_drain version {}: waiting for stale token metadata versions to be released", version);
         {
             seastar::timer<lowres_clock> warn_timer([&ss, version] {
                 rtlogger.warn("raft_topology_cmd::barrier_and_drain version {}: still waiting for stale versions, "
@@ -4874,10 +4883,10 @@ future<> storage_service::local_topology_barrier() {
             warn_timer.arm_periodic(std::chrono::minutes(5));
             co_await ss._shared_token_metadata.stale_versions_in_use();
         }
-        rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: stale versions released, draining closing sessions", version);
+        rtlogger.debug("raft_topology_cmd::barrier_and_drain version {}: stale versions released, draining closing sessions", version);
         co_await get_topology_session_manager().drain_closing_sessions();
 
-        rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: done", version);
+        rtlogger.debug("raft_topology_cmd::barrier_and_drain version {}: done", version);
     });
 }
 
