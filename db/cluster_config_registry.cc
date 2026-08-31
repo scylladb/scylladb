@@ -109,6 +109,13 @@ constexpr std::array registry_options = {
         .kind = option_kind::db_config,
         .valid_range = integer_range{.min = 1, .max = std::numeric_limits<uint32_t>::max()},
     },
+    option{
+        .name = option_name::tablets_group0_leader_shard_ratio,
+        .description = "Percentage (0-100) of the normal per-shard tablet capacity given to shard 0 of the group0 leader node (follows the current leader), freeing it up for raft/topology work. 100 (default) is no skew; 0 leaves shard 0 at most about one tablet",
+        .scopes = scope_set::of<scope::cluster>(),
+        .default_value = int64_t(100),
+        .valid_range = integer_range{.min = 0, .max = 100},
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {

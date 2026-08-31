@@ -11,6 +11,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/token_metadata.hh"
 #include "locator/tablets.hh"
+#include "locator/group0_leader_shard_skew.hh"
 
 #include <seastar/core/sstring.hh>
 
@@ -42,13 +43,13 @@ public:
 
     /// Generates tablet_map for a new table.
     /// Runs under group0 guard.
-    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr, size_t tablet_count) const = 0;
+    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr, size_t tablet_count, const group0_leader_shard_skew&) const = 0;
 
     /// Generates tablet_map for a new table or when increasing replication factor.
     /// For a new table, cur_tablets is initialized with the tablet_count,
     /// otherwise, cur_tablets is a copy of the current tablet_map.
     /// Runs under group0 guard.
-    virtual future<tablet_map> reallocate_tablets(schema_ptr, token_metadata_ptr, tablet_map cur_tablets) const = 0;
+    virtual future<tablet_map> reallocate_tablets(schema_ptr, token_metadata_ptr, tablet_map cur_tablets, const group0_leader_shard_skew&) const = 0;
 
     /// Returns replication factor (as replica count) in a given DC.
     /// Note that individual tablets may lag behind desired replication factor in their
