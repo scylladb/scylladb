@@ -754,7 +754,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         }
 
         rtlogger.debug("topology_state_load: replicating token metadata to all cores");
-        co_await replicate_to_all_cores(std::move(tmptr));
+        co_await replicate_to_all_cores(std::move(tmptr), hint.tablets_hint ? &*hint.tablets_hint : nullptr);
         rtlogger.debug("topology_state_load: notifying nodes after token metadata replication");
         co_await notify_nodes_after_sync(std::move(nodes_to_notify));
         rtlogger.debug("topology_state_load: token metadata replication to all cores finished");
@@ -2389,7 +2389,8 @@ void storage_service::commit_token_metadata_change(token_metadata_change& change
     });
 }
 
-future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept {
+future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmptr,
+        const locator::tablet_metadata_change_hint* tablet_hint) noexcept {
     SCYLLA_ASSERT(this_shard_id() == 0);
     slogger.debug("Replicating token_metadata to all cores");
 
@@ -2416,8 +2417,8 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 
     db_schema_getter getter{_db};
     auto change = co_await prepare_token_metadata_change(tmptr, getter);
-    co_await container().invoke_on_all([&change] (storage_service& ss) {
-        ss.commit_token_metadata_change(change, nullptr);
+    co_await container().invoke_on_all([&change, tablet_hint] (storage_service& ss) {
+        ss.commit_token_metadata_change(change, tablet_hint);
     });
     co_await change.destroy();
     co_await _db.local().get_compaction_manager().get_shared_tombstone_gc_state().
@@ -4200,7 +4201,7 @@ void storage_service::wake_up_topology_state_machine() noexcept {
 future<> storage_service::update_tablet_metadata(const locator::tablet_metadata_change_hint& hint) {
     auto change = co_await prepare_tablet_metadata(hint,
             co_await get_mutable_token_metadata_ptr());
-    co_await replicate_to_all_cores(std::move(change));
+    co_await replicate_to_all_cores(std::move(change), &hint);
     wake_up_topology_state_machine();
 }
 
