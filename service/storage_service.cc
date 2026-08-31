@@ -6431,16 +6431,47 @@ future<> storage_service::await_topology_quiesced() {
 
     // New behavior — submit a topology request and retry until the
     // coordinator observes an empty tablet balance plan with fresh stats.
+    //
+    // This loop can retry for a long time: on a cluster whose tablet load
+    // never settles within size_based_balance_threshold_percentage, the
+    // coordinator keeps deferring the request and the caller (e.g.
+    // load-and-stream) makes no progress at all. Report that at info level so
+    // the wait is diagnosable from a default-level log rather than only from
+    // the coordinator's own deferral messages.
+    const auto start_time = lowres_clock::now();
+    unsigned attempts = 0;
+    auto elapsed_s = [start_time] {
+        return std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start_time).count();
+    };
     while (true) {
+        ++attempts;
         auto request_id = co_await submit_quiesce_topology_request();
         auto error = co_await wait_for_topology_request_completion(request_id);
         if (error.empty()) {
+            if (attempts > 1) {
+                slogger.info("quiesce request {}: topology quiesced after {} attempts in {} s",
+                             request_id, attempts, elapsed_s());
+            }
             co_return;
         }
         if (error.starts_with("quiesce request failed")) {
             slogger.warn("quiesce request {}: {}", request_id, error);
+        } else if (attempts == 1) {
+            // Always report the first attempt of a wait. The rate limiter below
+            // is shared by every wait on this shard, so an unconditional line
+            // here is what guarantees that each wait is recorded as having
+            // started; otherwise a fresh wait could be silently swallowed by
+            // the tail of a preceding one.
+            slogger.info("quiesce request {}: topology not idle: {}", request_id, error);
         } else {
-            slogger.debug("quiesce request {}: topology not idle: {}", request_id, error);
+            // Retries are rate-limited, and add the attempt count and elapsed
+            // time: a bare "not idle" line is not actionable, whereas
+            // "attempt 812, waiting for 2700 s" tells an operator that the
+            // topology is never going to quiesce.
+            static thread_local logging::logger::rate_limit rate_limit{std::chrono::seconds(30)};
+            slogger.log(logging::log_level::info, rate_limit,
+                        "quiesce request {}: topology not idle: {} (attempt {}, waiting for {} s)",
+                        request_id, error, attempts, elapsed_s());
         }
         // Wait locally for topology to settle before resubmitting.
         co_await _topology_state_machine.await_not_busy();
