@@ -32,6 +32,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/config.hh"
+#include "audit/audit.hh"
 #include "db/extensions.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_function.hh"
@@ -1496,6 +1497,40 @@ std::vector<sstring> database::get_user_keyspaces() const {
         }
     }
     return res;
+}
+
+// is_internal_keyspace() misses two keyspaces Scylla also creates itself:
+// "audit", which the table-based audit backend creates on demand, and
+// "system_distributed_everywhere", present only on an upgraded cluster.
+static bool is_always_local_keyspace(std::string_view name, bool audit_table_configured) {
+    return is_internal_keyspace(name) || (audit_table_configured && name == "audit") || name == "system_distributed_everywhere";
+}
+
+database::user_storage_kind database::get_user_storage_kind() const {
+    bool local = false;
+    bool object_storage = false;
+    // the "audit" keyspace exists only while the table sink is configured;
+    // otherwise the name is free for a user to take
+    const bool audit_table_configured = audit::table_sink_configured(_cfg);
+    for (auto const& i : _keyspaces) {
+        if (i.second.metadata()->get_storage_options().is_object_storage_type()) {
+            // Nothing but a user request ever asks for object storage, so there
+            // is no internal keyspace to filter out here.
+            object_storage = true;
+        } else if (!is_always_local_keyspace(i.first, audit_table_configured)) {
+            local = true;
+        }
+    }
+    if (local && object_storage) {
+        return user_storage_kind::mixed;
+    }
+    if (object_storage) {
+        return user_storage_kind::object_storage;
+    }
+    if (local) {
+        return user_storage_kind::local;
+    }
+    return user_storage_kind::none;
 }
 
 std::vector<sstring> database::get_all_keyspaces() const {

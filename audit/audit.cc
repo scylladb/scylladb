@@ -87,6 +87,10 @@ static audit_sink_set parse_audit_sinks(const sstring& data) {
     return result;
 }
 
+bool table_sink_configured(const db::config& cfg) {
+    return parse_audit_sinks(cfg.audit()).contains(audit_sink::table);
+}
+
 static void warn_on_sink_mismatch(const std::vector<audit_rule>& rules, audit_sink_set enabled_sinks) {
     for (size_t i = 0; i < rules.size(); ++i) {
         for (const auto& sink_name : rules[i].sinks) {
