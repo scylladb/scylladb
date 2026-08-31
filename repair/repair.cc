@@ -562,6 +562,13 @@ void repair::task_manager_module::done(repair_uniq_id id, bool succeeded) {
     _done_cond.broadcast();
 }
 
+repair_uniq_id repair::task_manager_module::get_repair_uniq_id(tasks::task_manager::task::impl& task) const noexcept {
+    return repair_uniq_id{
+        .id = task.get_status().sequence_number,
+        .task_id = task.get_status().id,
+    };
+}
+
 repair_status repair::task_manager_module::get(int id) const {
     if (std::cmp_greater(id, _sequence_number)) {
         throw std::runtime_error(format("unknown repair id {}", id));
@@ -2532,9 +2539,28 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     bool sched_by_scheduler = true;
     tablet_repair_sched_info sched_info{sched_by_scheduler, stage == locator::tablet_transition_stage::rebuild_repair, incremental_mode};
     task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
-    auto task = co_await _repair_module->make_and_start_task<repair::tablet_repair_task_impl>(global_tablet_repair_task_info, id, keyspace_name, global_tablet_repair_task_info.get_id(), table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, topo_guard, std::move(sched_info), rebuild_replicas.has_value());
+
+    gc_clock::time_point flush_time = gc_clock::time_point();
+    bool should_flush_and_flush_failed = false;
+    tasks::task_manager::task_builder task_builder{_repair_module, format("{}", streaming::stream_reason::repair), id.uuid()};
+    task_builder.set_sequence_number(id.id)
+                .set_scope("keyspace")
+                .set_progress_units("ranges")
+                .set_keyspace(keyspace_name)
+                .set_parent_info(global_tablet_repair_task_info)
+                .set_is_abortable(tasks::is_abortable::yes)
+                .set_is_user_task(tasks::is_user_task::yes)
+                .set_workload_fn([metas_size = task_metas.size()] () { return make_ready_future<std::optional<double>>(metas_size); });
+    auto task = co_await std::move(task_builder).build([module = _repair_module, id, keyspace_name, table_names, metas = std::move(task_metas), ranges_parallelism, &flush_time, &should_flush_and_flush_failed, &topo_guard, sched_info = std::move(sched_info), skip_flush = rebuild_replicas.has_value()] (tasks::task_manager::task::impl& self) mutable {
+        auto& rs = module->get_repair_service();
+        return rs.run_tablet_repair(flush_time, should_flush_and_flush_failed, std::move(keyspace_name), std::move(table_names), std::move(metas), std::move(ranges_parallelism), topo_guard, skip_flush, std::move(sched_info), streaming::stream_reason::repair, self.info(), id);
+    });
     co_await task->done();
-    auto flush_time = task->get_flush_time();
+
+    if (should_flush_and_flush_failed) {
+        throw std::runtime_error(fmt::format("Flush is needed for repair {} with parent {}, but failed", task->id(), task->get_parent_id()));
+    }
+
     auto delay = utils::get_local_injector().inject_parameter<uint32_t>("tablet_repair_add_delay_in_ms");
     if (delay) {
         rlogger.debug("Execute tablet_repair_add_delay_in_ms={}", *delay);
@@ -2546,31 +2572,16 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     co_return flush_time;
 }
 
-tasks::is_user_task repair::tablet_repair_task_impl::is_user_task() const noexcept {
-    return tasks::is_user_task::yes;
-}
-
-future<> repair::tablet_repair_task_impl::release_resources() noexcept {
-    _metas_size = _metas.size();
-    _metas = {};
-    _tables = {};
-    return make_ready_future();
-}
-
-size_t repair::tablet_repair_task_impl::get_metas_size() const noexcept {
-    return _metas.size() > 0 ? _metas.size() : _metas_size;
-}
-
 future<> repair_service::run_tablet_repair(
         gc_clock::time_point& _flush_time,
         bool& _should_flush_and_flush_failed,
-        const sstring& _keyspace,
-        const std::vector<sstring>& _tables,
-        const std::vector<tablet_repair_task_meta>& _metas,
-        const std::optional<int>& _ranges_parallelism,
+        sstring _keyspace,
+        std::vector<sstring> _tables,
+        std::vector<tablet_repair_task_meta> _metas,
+        std::optional<int> _ranges_parallelism,
         service::frozen_topology_guard _topo_guard,
         bool _skip_flush,
-        const tablet_repair_sched_info& sched_info,
+        tablet_repair_sched_info sched_info,
         streaming::stream_reason _reason,
         tasks::task_info parent_data,
         repair_uniq_id id) {
@@ -2720,17 +2731,6 @@ future<> repair_service::run_tablet_repair(
         get_repair_module().check_in_shutdown();
         return make_exception_future<>(ep);
     });
-}
-
-future<> repair::tablet_repair_task_impl::run() {
-    auto m = dynamic_pointer_cast<repair::task_manager_module>(_module);
-    auto& rs = m->get_repair_service();
-    return rs.run_tablet_repair(_flush_time, _should_flush_and_flush_failed, _keyspace, _tables, _metas, _ranges_parallelism, _topo_guard, _skip_flush, sched_info, _reason, info(), get_repair_uniq_id());
-}
-
-future<std::optional<double>> repair::tablet_repair_task_impl::expected_total_workload() const {
-    auto sz = get_metas_size();
-    co_return sz ? std::make_optional<double>(sz) : std::nullopt;
 }
 
 auto fmt::formatter<node_ops_cmd>::format(node_ops_cmd cmd, fmt::format_context& ctx) const

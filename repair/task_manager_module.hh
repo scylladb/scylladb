@@ -106,54 +106,6 @@ protected:
     virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
-class tablet_repair_task_impl : public repair_task_impl {
-private:
-    sstring _keyspace;
-    std::vector<sstring> _tables;
-    std::vector<tablet_repair_task_meta> _metas;
-    optimized_optional<abort_source::subscription> _abort_subscription;
-    std::optional<int> _ranges_parallelism;
-    size_t _metas_size = 0;
-    gc_clock::time_point _flush_time = gc_clock::time_point();
-    bool _should_flush_and_flush_failed = false;
-    service::frozen_topology_guard _topo_guard;
-    bool _skip_flush;
-public:
-    tablet_repair_sched_info sched_info;
-public:
-    tablet_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, sstring keyspace, tasks::task_id parent_id, std::vector<sstring> tables, streaming::stream_reason reason, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism, service::frozen_topology_guard topo_guard, tablet_repair_sched_info sched_info, bool skip_flush = false)
-        : repair_task_impl(module, id.uuid(), id.id, "keyspace", keyspace, "", "", parent_id, reason)
-        , _keyspace(std::move(keyspace))
-        , _tables(std::move(tables))
-        , _metas(std::move(metas))
-        , _ranges_parallelism(ranges_parallelism)
-        , _topo_guard(topo_guard)
-        , _skip_flush(skip_flush)
-        , sched_info(std::move(sched_info))
-    {
-    }
-
-    virtual tasks::is_abortable is_abortable() const noexcept override {
-        return tasks::is_abortable(!_abort_subscription);
-    }
-
-    gc_clock::time_point get_flush_time() const {
-        if (_should_flush_and_flush_failed) {
-            throw std::runtime_error(fmt::format("Flush is needed for repair {} with parent {}, but failed", id(), _parent_id));
-        }
-        return _flush_time;
-    }
-
-    tasks::is_user_task is_user_task() const noexcept override;
-    virtual future<> release_resources() noexcept override;
-private:
-    size_t get_metas_size() const noexcept;
-protected:
-    future<> run() override;
-
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
 class shard_repair_task_impl : public repair_task_impl {
 public:
     repair_service& rs;
@@ -292,6 +244,8 @@ public:
             .task_id = tasks::task_id::create_random_id(),
         };
     }
+
+    repair_uniq_id get_repair_uniq_id(tasks::task_manager::task::impl& task) const noexcept;
 
     repair_status get(int id) const;
     void check_in_shutdown();

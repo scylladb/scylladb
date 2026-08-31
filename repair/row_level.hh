@@ -251,7 +251,7 @@ public:
     future<gc_clock::time_point> repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas, locator::tablet_transition_stage stage);
 
 private:
-    future<> run_tablet_repair(gc_clock::time_point& _flush_time, bool& _should_flush_and_flush_failed, const sstring& _keyspace, const std::vector<sstring>& _tables, const std::vector<tablet_repair_task_meta>& _metas, const std::optional<int>& _ranges_parallelism, service::frozen_topology_guard _topo_guard, bool _skip_flush, const tablet_repair_sched_info& sched_info, streaming::stream_reason _reason, tasks::task_info parent_data, repair_uniq_id id);
+    future<> run_tablet_repair(gc_clock::time_point& _flush_time, bool& _should_flush_and_flush_failed, sstring _keyspace, std::vector<sstring> _tables, std::vector<tablet_repair_task_meta> _metas, std::optional<int> _ranges_parallelism, service::frozen_topology_guard _topo_guard, bool _skip_flush, tablet_repair_sched_info sched_info, streaming::stream_reason _reason, tasks::task_info parent_data, repair_uniq_id id);
     future<> run_user_requested_repair(lw_shared_ptr<locator::global_static_effective_replication_map> _germs, const std::vector<sstring>& _cfs, const dht::token_range_vector& _ranges, std::vector<sstring> _hosts, std::vector<sstring> _data_centers, std::unordered_set<locator::host_id> _ignore_nodes, bool _small_table_optimization, std::optional<int> _ranges_parallelism, abort_source& _as, sstring keyspace, tasks::task_info parent_data, repair_uniq_id id);
     future<> run_data_sync_repair(size_t& _cfs_size, const dht::token_range_vector& _ranges, const std::unordered_map<dht::token_range, repair_neighbors>& _neighbors, streaming::stream_reason _reason, abort_source& _as, service::frozen_topology_guard _frozen_topology_guard, sstring keyspace, tasks::task_info task_data, repair_uniq_id id);
 
@@ -345,7 +345,6 @@ public:
 
     friend class repair::user_requested_repair_task_impl;
     friend class repair::data_sync_repair_task_impl;
-    friend class repair::tablet_repair_task_impl;
 };
 
 class repair_info;
