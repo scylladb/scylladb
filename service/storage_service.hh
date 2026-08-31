@@ -50,6 +50,7 @@
 #include "utils/UUID.hh"
 #include "utils/user_provided_param.hh"
 #include "utils/sequenced_set.hh"
+#include "utils/serialized_action.hh"
 #include "service/topology_coordinator.hh"
 
 class node_ops_cmd_request;
@@ -885,6 +886,11 @@ public:
 private:
      // State machine that is responsible for topology change
     topology_state_machine& _topology_state_machine;
+
+    // Batches concurrent await_topology_quiesced() callers so that they share one
+    // group0 request instead of submitting one each. Only shard 0's instance is used,
+    // since that is where the other shards forward to.
+    serialized_action _quiesce_topology{[this] { return do_await_topology_quiesced(); }};
     db::view::view_building_state_machine& _view_building_state_machine;
 
     future<> _topology_change_coordinator = make_ready_future<>();
@@ -994,6 +1000,9 @@ public:
     future<> set_tablet_balancing_enabled(bool);
 
     future<utils::UUID> submit_quiesce_topology_request();
+    // The body of await_topology_quiesced(), run through _quiesce_topology so that
+    // concurrent callers share a single request. Shard 0 only.
+    future<> do_await_topology_quiesced();
     future<> await_topology_quiesced();
     // Verifies topology is not busy, and also that topology version hasn't changed since the one provided
     // by the caller.
