@@ -6,13 +6,17 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <exception>
 #include <string>
 #include <optional>
 
 #include <seastar/core/future.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/iostream.hh>
 #include <fmt/core.h>
+
+#include "utils/log.hh"
 
 #include "db/object_storage_endpoint_param.hh"
 
@@ -29,6 +33,8 @@
 using namespace seastar;
 using namespace sstables;
 using namespace utils;
+
+static logging::logger osclog("object_storage_client");
 
 
 sstables::object_name::object_name(std::string_view bucket, std::string_view prefix, std::string_view type)
@@ -60,17 +66,17 @@ fmt::formatter<sstables::object_name>::format(const sstables::object_name& n, fm
     return fmt::format_to(ctx.out(), "{}", n.str());
 }
 
-static shared_ptr<s3::client> make_s3_client(const db::object_storage_endpoint_param& ep, semaphore& memory, std::function<shared_ptr<s3::client>(std::string)> factory) {
+static shared_ptr<s3::client> make_s3_client(const db::object_storage_endpoint_param& ep, std::function<shared_ptr<s3::client>(std::string)> factory, unsigned connections_per_shard) {
     auto& epc = ep.get_s3_storage();
-    return s3::client::make(epc.endpoint, epc.region, epc.iam_role_arn, memory, std::move(factory));
+    return s3::client::make(epc.endpoint, epc.region, epc.iam_role_arn, std::move(factory), connections_per_shard);
 }
 
 class s3_client_wrapper : public sstables::object_storage_client {
     shared_ptr<s3::client> _client;
     shard_client_factory _cf;
 public:
-    s3_client_wrapper(const db::object_storage_endpoint_param& ep, semaphore& memory, shard_client_factory cf)
-        : _client(make_s3_client(ep, memory, std::bind_front(&s3_client_wrapper::shard_client, this)))
+    s3_client_wrapper(const db::object_storage_endpoint_param& ep, shard_client_factory cf, unsigned connections_per_shard)
+        : _client(make_s3_client(ep, std::bind_front(&s3_client_wrapper::shard_client, this), connections_per_shard))
         , _cf(std::move(cf))
     {}
     shared_ptr<s3::client> shard_client(std::string host) const {
@@ -102,9 +108,12 @@ public:
     future<> upload_file(std::filesystem::path path, object_name name, utils::upload_progress& up, seastar::abort_source* as) override {
         return _client->upload_file(std::move(path), name.str(), up, as);
     }
-    future<> update_config(const db::object_storage_endpoint_param& ep) override {
+    void update_config_sync(const db::object_storage_endpoint_param& ep) override {
         auto& epc = ep.get_s3_storage();
-        return _client->update_config(epc.region, epc.iam_role_arn);
+        _client->update_config_sync(epc.region, epc.iam_role_arn);
+    }
+    void update_connections_per_shard(unsigned connections_per_shard) override {
+        _client->update_connections_per_shard(connections_per_shard);
     }
     future<> close() override {
         return _client->close();
@@ -131,6 +140,7 @@ class gs_client_wrapper : public sstables::object_storage_client {
     shared_ptr<gcp::storage::client> _client;
     semaphore& _memory;
     std::function<shared_ptr<gcp::storage::client>()> _shard_client;
+    seastar::gate _config_update_gate;
 public:
     gs_client_wrapper(const db::object_storage_endpoint_param& ep, semaphore& memory, shard_client_factory cf)
         : _client(make_gcs_client(ep, memory))
@@ -285,18 +295,39 @@ public:
         }
 
     }
-    future<> update_config(const db::object_storage_endpoint_param& ep) override {
-        auto client = std::exchange(_client, make_gcs_client(ep, _memory));
-        co_await client->close();
+    void update_config_sync(const db::object_storage_endpoint_param& ep) override {
+        if (_config_update_gate.is_closed()) {
+            osclog.info("config update gate is closed");
+            return;
+        }
+
+        osclog.info("Updating GCS client config");
+
+        auto holder = _config_update_gate.hold();
+        auto new_client = make_gcs_client(ep, _memory);
+        auto old_client = std::exchange(_client, std::move(new_client));
+        (void)old_client->close()
+                .handle_exception([](std::exception_ptr ex) {
+                    osclog.error("Failed to close old GCS client during config update: {}", ex);
+                })
+                .finally([old_client = std::move(old_client), h = std::move(holder)] {
+                    osclog.info("Old GCS client cleanup done, use_count={}", old_client.use_count());
+                });
+    }
+    void update_connections_per_shard(unsigned) override {
+        // GCS client does not support per-scheduling-group connection budgeting
     }
     future<> close() override {
-        return _client->close();
+        osclog.info("Closing GCS client...");
+        co_await _config_update_gate.close();
+        co_await _client->close();
+        osclog.info("Closed GCS client");
     }
 };
 
-shared_ptr<object_storage_client> sstables::make_object_storage_client(const db::object_storage_endpoint_param& ep, semaphore& memory, shard_client_factory cf) {
+shared_ptr<object_storage_client> sstables::make_object_storage_client(const db::object_storage_endpoint_param& ep, semaphore& memory, shard_client_factory cf, unsigned connections_per_shard) {
     if (ep.is_s3_storage()) {
-        return seastar::make_shared<s3_client_wrapper>(ep, memory, std::move(cf));
+        return seastar::make_shared<s3_client_wrapper>(ep, std::move(cf), connections_per_shard);
     }
     if (ep.is_gs_storage()) {
         return seastar::make_shared<gs_client_wrapper>(ep, memory, std::move(cf));

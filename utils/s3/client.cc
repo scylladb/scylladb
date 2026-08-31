@@ -10,6 +10,7 @@
 #include <exception>
 #include <initializer_list>
 #include <memory>
+#include <numeric>
 #include <stdexcept>
 #if __has_include(<rapidxml.h>)
 #include <rapidxml.h>
@@ -92,7 +93,7 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<http::experimental::retry_strategy> rs)
+client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<http::experimental::retry_strategy> rs)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _creds_sem(1)
@@ -116,7 +117,6 @@ client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global
             }();
         })
         , _gf(std::move(gf))
-        , _memory(mem)
         , _retry_strategy(std::move(rs)) {
     _creds_provider_chain
         .add_credentials_provider(std::make_unique<aws::environment_aws_credentials_provider>())
@@ -129,7 +129,13 @@ client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global
     }
 }
 
-future<> client::update_config(std::string region, std::string ira) {
+void client::update_config_sync(std::string region, std::string ira) {
+    if (_config_update_gate.is_closed()) {
+        s3l.info("config update gate is closed");
+        return;
+    }
+    auto holder = _config_update_gate.hold();
+
     endpoint_config new_cfg = {
         .port = _cfg->port,
         .use_https = _cfg->use_https,
@@ -137,25 +143,49 @@ future<> client::update_config(std::string region, std::string ira) {
         .role_arn = std::move(ira),
     };
     _cfg = make_lw_shared<endpoint_config>(std::move(new_cfg));
-    auto units = co_await get_units(_creds_sem, 1);
-    _creds_provider_chain.invalidate_credentials();
-    _credentials = {};
-    _creds_update_timer.rearm(lowres_clock::now());
+
+    (void)get_units(_creds_sem, 1).then_wrapped([this, h = std::move(holder)](future<semaphore_units<>> f) {
+        try {
+            s3l.info("Invalidating credentials");
+            
+            auto units = f.get();
+            _creds_provider_chain.invalidate_credentials();
+            _credentials = {};
+            _creds_update_timer.rearm(lowres_clock::now());
+        } catch (...) {
+            s3l.error("Failed to refresh credentials during config update: {}", std::current_exception());
+        }
+    });
 }
 
-shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem, global_factory gf) {
-    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{});
+void client::update_connections_per_shard(unsigned connections_per_shard) {
+    if (_config_update_gate.is_closed()) {
+        s3l.info("config update gate is closed");
+        return;
+    }
+    auto holder = _config_update_gate.hold();
+    (void)with_semaphore(_rebalance_sem, 1, [this, connections_per_shard] {
+        _cfg->connections_per_shard = connections_per_shard;
+        return rebalance_connections();
+    }).handle_exception([holder = std::move(holder)](auto ex) {
+        s3l.warn("Failed to rebalance connections after config update: {}", ex);
+    });
 }
 
-shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf) {
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf) {
+    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{});
+}
+
+shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, global_factory gf, unsigned connections_per_shard) {
     auto url = utils::http::parse_simple_url(ep);
     endpoint_config cfg = {
         .port = url.port,
         .use_https = url.is_https(),
         .region = std::move(region),
         .role_arn = std::move(iam_role_arn),
+        .connections_per_shard = connections_per_shard,
     };
-    return make(url.host, make_lw_shared<endpoint_config>(std::move(cfg)), memory, gf);
+    return make(url.host, make_lw_shared<endpoint_config>(std::move(cfg)), gf);
 }
 
 future<> client::update_credentials_and_rearm() {
@@ -216,11 +246,8 @@ future<> client::authorize(http::request& req) {
     req._headers["Authorization"] = seastar::format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _credentials.access_key_id, time_point_st, _cfg->region, signed_headers_list, sig);
 }
 
-future<semaphore_units<>> client::claim_memory(size_t size, abort_source* as) {
-    if (as) {
-        return get_units(_memory, size, *as);
-    }
-    return get_units(_memory, size);
+static future<semaphore_units<>> claim_unit(semaphore& sem, seastar::abort_source* as) {
+    return as ? get_units(sem, 1, *as) : get_units(sem, 1);
 }
 
 client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn) : http(std::move(f), max_conn) {
@@ -251,31 +278,75 @@ void client::group_client::register_metrics(std::string class_name, std::string 
                 sm::description("Total time spend writing data to objects"), {ep_label, sg_label}),
         sm::make_counter("total_read_prefetch_bytes", [this] { return prefetch_bytes; },
                 sm::description("Total number of bytes requested from object"), {ep_label, sg_label}),
-         sm::make_counter("downloads_blocked_on_memory",
-                          [this] { return downloads_blocked_on_memory; },
-                          sm::description("Counts the number of times S3 client downloads were delayed due to insufficient memory availability"),
+         sm::make_counter("downloads_starving_on_max_concurrency",
+                          [this] { return downloads_starving_on_max_concurrency; },
+                          sm::description("Counts the number of times S3 client downloads were starving on max concurrency limit"),
                           {ep_label, sg_label})
 
     });
 }
 
-client::group_client& client::find_or_create_client() {
+future<client::group_client&> client::find_or_create_client() {
     auto sg = current_scheduling_group();
-    auto it = _https.find(sg);
-    if (it == _https.end()) [[unlikely]] {
-        auto factory = std::make_unique<utils::http::dns_connection_factory>(_host, _cfg->port, _cfg->use_https, s3l);
-        // Limit the maximum number of connections this group's http client
-        // may have proportional to its shares. Shares are typically in the
-        // range of 100...1000, thus resulting in 1..10 connections
-        unsigned max_connections = _cfg->max_connections.has_value() ? *_cfg->max_connections : std::max((unsigned)(sg.get_shares() / 100), 1u);
-        it = _https.emplace(std::piecewise_construct,
-            std::forward_as_tuple(sg),
-            std::forward_as_tuple(std::move(factory), max_connections)
-        ).first;
-
-        it->second.register_metrics(sg.name(), _host);
+    if (const auto it = _https.find(sg); it != _https.end()) [[likely]] {
+        return make_ready_future<client::group_client&>(it->second);
     }
-    return it->second;
+    return find_or_create_client_slow();
+}
+
+future<client::group_client&> client::find_or_create_client_slow() {
+    // Slow path: serialize creation + rebalance
+    auto sg = current_scheduling_group();
+    auto units = co_await get_units(_rebalance_sem, 1);
+    // Re-check after acquiring lock (another fiber may have created it)
+    auto it = _https.find(sg);
+    if (it != _https.end()) {
+        co_return it->second;
+    }
+
+    auto factory = std::make_unique<utils::http::dns_connection_factory>(_host, _cfg->port, _cfg->use_https, s3l);
+    unsigned max_connections = _cfg->max_connections.value_or(1);
+    it = _https.emplace(std::piecewise_construct,
+        std::forward_as_tuple(sg),
+        std::forward_as_tuple(std::move(factory), max_connections)
+    ).first;
+    it->second.register_metrics(sg.name(), _host);
+    if (!_cfg->max_connections) {
+        co_await rebalance_connections();
+    }
+    co_return it->second;
+}
+
+future<> client::rebalance_connections() {
+    auto total_shares = std::accumulate(_https.begin(), _https.end(), 0.0f, [](float sum, const auto& entry) { return sum + entry.first.get_shares(); });
+    unsigned total_assigned = 0;
+    scheduling_group max_shares_sg;
+    float max_shares = 0;
+    unsigned max_shares_connections = 0;
+
+    for (auto& [sg, gc] : _https) {
+        unsigned max_connections = std::max(static_cast<unsigned>(_cfg->connections_per_shard * sg.get_shares() / total_shares), 1u);
+        total_assigned += max_connections;
+        if (sg.get_shares() > max_shares) {
+            max_shares = sg.get_shares();
+            max_shares_sg = sg;
+            max_shares_connections = max_connections;
+        }
+        s3l.debug("Rebalancing S3 client for scheduling group '{}' (shares={}, total_shares={}, connections_per_shard={}): max_connections={}",
+                  sg.name(),
+                  sg.get_shares(),
+                  total_shares,
+                  _cfg->connections_per_shard,
+                  max_connections);
+        co_await gc.http.set_maximum_connections(max_connections);
+    }
+
+    // Assign remainder to the group with the most shares
+    unsigned remainder;
+    if (!__builtin_sub_overflow(_cfg->connections_per_shard, total_assigned, &remainder) && remainder > 0) {
+        s3l.debug("Assigning {} remainder connections to scheduling group '{}'", remainder, max_shares_sg.name());
+        co_await _https.at(max_shares_sg).http.set_maximum_connections(max_shares_connections + remainder);
+    }
 }
 
 [[noreturn]] void map_s3_client_exception(std::exception_ptr ex) {
@@ -407,7 +478,7 @@ future<> client::make_request(http::request req,
     auto request = std::move(req);
     auto handler = wrap_handler(request, std::move(handle), expected);
     co_await authorize(request);
-    auto& gc = find_or_create_client();
+    auto& gc = co_await find_or_create_client();
 
     co_await gc.http.make_request(request, handler, rs, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
         err_handler(std::move(ex));
@@ -420,11 +491,11 @@ future<> client::make_request(http::request req,
                               error_handler err_handler,
                               std::optional<http::reply::status_type> expected,
                               seastar::abort_source* as) {
-    auto& gc = find_or_create_client();
+    auto& gc = co_await find_or_create_client();
     auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
-    return make_request(std::move(req), std::move(handle), rs, std::move(err_handler), expected, as);
+    co_await make_request(std::move(req), std::move(handle), rs, std::move(err_handler), expected, as);
 }
 
 future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
@@ -691,8 +762,6 @@ sstring parse_multipart_copy_upload_etag(sstring& body) {
 
 class client::multipart_upload {
 protected:
-    static constexpr size_t _max_multipart_concurrency = 16;
-
     shared_ptr<client> _client;
     sstring _object_name;
     sstring _upload_id;
@@ -779,7 +848,7 @@ private:
             auto parts = std::views::iota(size_t{0}, (source_size + part_size - 1) / part_size);
             _part_etags.resize(parts.size());
             co_await max_concurrent_for_each(parts,
-                                             _max_multipart_concurrency,
+                                             max_client_mpu_in_flight,
                                              [part_size, source_size, this](auto part_num) -> future<> {
                                                  auto part_offset = part_num * part_size;
                                                  auto actual_part_size = std::min(source_size - part_offset, part_size);
@@ -942,7 +1011,7 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
         co_await start_upload();
     }
 
-    auto claim = co_await _client->claim_memory(bufs.size(), _as);
+    auto mpu = co_await claim_unit(_client->_mpus_sem, _as);
 
     unsigned part_number = _part_etags.size();
     _part_etags.emplace_back();
@@ -952,7 +1021,7 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     req._headers["Content-Length"] = seastar::format("{}", size);
     req.set_query_param("partNumber", seastar::format("{}", part_number + 1));
     req.set_query_param("uploadId", _upload_id);
-    req.write_body("bin", size, [this, part_number, bufs = std::move(bufs), p = std::move(claim)] (output_stream<char>&& out_) mutable -> future<> {
+    req.write_body("bin", size, [this, part_number, bufs = std::move(bufs)] (output_stream<char>&& out_) mutable -> future<> {
         auto out = std::move(out_);
         std::exception_ptr ex;
         s3l.trace("upload {} part data (upload id {})", part_number, _upload_id);
@@ -968,8 +1037,6 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
         if (ex) {
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
-        // note: At this point the buffers are sent, but the response is not yet
-        // received. However, claim is released and next part may start uploading
     });
 
     // Do upload in the background so that several parts could go in parallel.
@@ -993,7 +1060,7 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
         // ... the exact exception only remains in logs
         s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
-    }).finally([gh = std::move(gh)] {});
+    }).finally([gh = std::move(gh), mpu = std::move(mpu)] {});
 }
 
 future<> client::multipart_upload::abort_upload() {
@@ -1244,12 +1311,6 @@ data_sink client::make_upload_jumbo_sink(sstring object_name, std::optional<unsi
 }
 
 class client::chunked_download_source final : public seastar::data_source_impl {
-    struct claimed_buffer {
-        temporary_buffer<char> _buffer;
-        std::optional<semaphore_units<>> _claimed_memory;
-        claimed_buffer(temporary_buffer<char>&& buf, std::optional<semaphore_units<>>&& claimed_memory) noexcept
-            : _buffer(std::move(buf)), _claimed_memory(std::move(claimed_memory)) {}
-    };
     shared_ptr<client> _client;
     sstring _object_name;
     seastar::abort_source* _as;
@@ -1258,7 +1319,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     static constexpr size_t _max_buffers_size = 5_MiB;
     static constexpr double _buffers_low_watermark = 0.5;
     static constexpr double _buffers_high_watermark = 0.9;
-    std::deque<claimed_buffer> _buffers;
+    std::deque<temporary_buffer<char>> _buffers;
     size_t _buffers_size = 0;
     bool _is_finished = false;
     bool _is_contiguous_mode = false;
@@ -1269,17 +1330,21 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     future<> make_filling_fiber() {
         seastar::http::experimental::no_retry_strategy no_retry;
         s3l.trace("Fiber starts cycle for object '{}'", _object_name);
+        auto units = try_get_units(_client->_buffered_dl_sem, 1);
         while (!_is_finished) {
             try {
                 if (!_is_finished && _buffers_size >= _max_buffers_size * _buffers_low_watermark) {
                     co_await _bg_fiber_cv.when([this] { return _is_finished || (_buffers_size < _max_buffers_size * _buffers_low_watermark); });
                 }
 
-                if (auto units = try_get_units(_client->_memory, _socket_buff_size); !_is_finished && !_buffers.empty() && !units) {
-                    auto& gc = _client->find_or_create_client();
-                    ++gc.downloads_blocked_on_memory;
-                    co_await _bg_fiber_cv.when([this] {
-                        return _is_finished || _buffers.empty() || try_get_units(_client->_memory, _socket_buff_size);
+                if (!_is_finished && !_buffers.empty() && !units) {
+                    auto& gc = co_await _client->find_or_create_client();
+                    ++gc.downloads_starving_on_max_concurrency;
+                    co_await _bg_fiber_cv.when([this, &units] {
+                        if (_is_finished || _buffers.empty())
+                            return true;
+                        units = try_get_units(_client->_buffered_dl_sem, 1);
+                        return units.has_value();
                     });
                 }
 
@@ -1306,7 +1371,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                     }
                     if (current_range.length() == 0) {
                         s3l.trace("Fiber for object '{}' completed downloading, signals EOS and leaving fiber", _object_name);
-                    _buffers.emplace_back(temporary_buffer<char>(), co_await _client->claim_memory(0, _as));
+                        _buffers.emplace_back(temporary_buffer<char>());
                         _get_cv.signal();
                         _is_finished = true;
                         co_return;
@@ -1325,7 +1390,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 }
                 co_await _client->make_request(
                     std::move(req),
-                    [this, start = s3_clock::now(), discover_size, pf_length = discover_size ? 0 : current_range.length()](
+                    [this, &units, start = s3_clock::now(), discover_size, pf_length = discover_size ? 0 : current_range.length()](
                         group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
                         if (reply._status != http::reply::status_type::ok && reply._status != http::reply::status_type::partial_content) {
                             s3l.warn("Fiber for object '{}' failed: {}. Exiting", _object_name, reply._status);
@@ -1350,13 +1415,12 @@ class client::chunked_download_source final : public seastar::data_source_impl {
 
                             s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
                             temporary_buffer<char> buf;
-                            auto units = try_get_units(_client->_memory, _socket_buff_size);
+                            if (!units) {
+                                units = try_get_units(_client->_buffered_dl_sem, 1);
+                            }
                             if (_buffers.empty() || units) {
                                 buf = co_await in.read();
                                 assert(buf.size() <= _socket_buff_size);
-                                if (units) {
-                                    units->return_units(_socket_buff_size - buf.size());
-                                }
                             } else {
                                 break;
                             }
@@ -1366,7 +1430,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                             _buffers_size += buff_size;
                             if (buff_size == 0 && _range.length() == 0) {
                                 s3l.trace("Fiber for object '{}' signals EOS", _object_name);
-                                _buffers.emplace_back(std::move(buf), std::move(units));
+                                _buffers.emplace_back(std::move(buf));
                                 _get_cv.signal();
                                 _is_finished = true;
                                 break;
@@ -1376,7 +1440,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                 break;
                             }
                             s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
-                            _buffers.emplace_back(std::move(buf), std::move(units));
+                            _buffers.emplace_back(std::move(buf));
                             _get_cv.signal();
                             utils::get_local_injector().inject("break_s3_inflight_req", [] {
                                 // Inject a non-`aws_error` after partial data download to verify proper
@@ -1416,12 +1480,12 @@ public:
             if (!_buffers.empty()) {
                 auto claimed_buff = std::move(_buffers.front());
                 _buffers.pop_front();
-                _buffers_size -= claimed_buff._buffer.size();
+                _buffers_size -= claimed_buff.size();
                 if (_buffers_size < _max_buffers_size * _buffers_low_watermark) {
                     _bg_fiber_cv.signal();
                 }
-                s3l.trace("get() for object '{}' popped buffer of {} bytes", _object_name, claimed_buff._buffer.size());
-                co_return std::move(claimed_buff._buffer);
+                s3l.trace("get() for object '{}' popped buffer of {} bytes", _object_name, claimed_buff.size());
+                co_return std::move(claimed_buff);
             }
             _bg_fiber_cv.signal();
             s3l.trace("get() for object '{}' waiting for buffer", _object_name);
@@ -1597,14 +1661,16 @@ class client::do_upload_file : private multipart_upload {
     future<> upload_part(file f, uint64_t offset, uint64_t part_size, uint64_t part_number) {
         // upload a part in a multipart upload, see
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
-        auto mem_units = co_await _client->claim_memory(_transmit_size, _as);
+        //
+        // The claim is held for the whole request, including the response
+        auto mpu = co_await claim_unit(_client->_mpus_sem, _as);
 
         auto req = http::request::make("PUT", _client->_host, _object_name);
         req._headers["Content-Length"] = to_sstring(part_size);
         req.set_query_param("partNumber", to_sstring(part_number + 1));
         req.set_query_param("uploadId", _upload_id);
         s3l.trace("PUT part {}, {} bytes (upload id {})", part_number, part_size, _upload_id);
-        req.write_body("bin", part_size, [f=std::move(f), mem_units=std::move(mem_units), offset, part_size, &progress = _progress] (output_stream<char>&& out_) {
+        req.write_body("bin", part_size, [f=std::move(f), offset, part_size, &progress = _progress] (output_stream<char>&& out_) {
             auto input = make_file_input_stream(f, offset, part_size, input_stream_options());
             auto output = std::move(out_);
             return copy_to(std::move(input), std::move(output), _transmit_size, progress);
@@ -1626,7 +1692,7 @@ class client::do_upload_file : private multipart_upload {
         std::exception_ptr ex;
         try {
             co_await max_concurrent_for_each(std::views::iota(size_t{0}, (total_size + part_size - 1) / part_size),
-                                             _max_multipart_concurrency,
+                                             max_client_mpu_in_flight,
                                              [part_size, total_size, this, f = file{f}](auto part_num) -> future<> {
                                                  auto part_offset = part_num * part_size;
                                                  auto actual_part_size = std::min(total_size - part_offset, part_size);
@@ -1649,7 +1715,6 @@ class client::do_upload_file : private multipart_upload {
     future<> put_object(file&& f, uint64_t len) {
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html
         s3l.trace("PUT {} ({})", _object_name, _path.native());
-        auto mem_units = co_await _client->claim_memory(_transmit_size, _as);
 
         auto req = http::request::make("PUT", _client->_host, _object_name);
         if (_tag) {
@@ -1857,6 +1922,9 @@ file client::make_readable_file(sstring object_name, seastar::abort_source* as) 
 }
 
 future<> client::close() {
+    s3l.info("Closing S3 client...");
+
+    co_await _config_update_gate.close();
     {
         auto units = co_await get_units(_creds_sem, 1);
         _creds_invalidation_timer.cancel();
@@ -1865,6 +1933,8 @@ future<> client::close() {
     co_await coroutine::parallel_for_each(_https, [] (auto& it) -> future<> {
         co_await it.second.http.close();
     });
+
+    s3l.info("Closed S3 client");
 }
 
 client::bucket_lister::bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, size_t objects_per_page, size_t entries_batch)

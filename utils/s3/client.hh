@@ -9,6 +9,7 @@
 #pragma once
 
 #include <seastar/core/file.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -27,6 +28,9 @@ class memory_data_sink_buffers;
 namespace s3 {
 
 using s3_clock = std::chrono::steady_clock;
+
+static constexpr size_t max_client_mpu_in_flight = 32;
+static constexpr size_t max_client_buffered_downloads_in_flight = 32;
 
 class range {
     friend struct fmt::formatter<range>;
@@ -105,10 +109,13 @@ class client : public enable_shared_from_this<client> {
     std::string _host;
     endpoint_config_ptr _cfg;
     semaphore _creds_sem;
+    semaphore _mpus_sem{max_client_mpu_in_flight};
+    semaphore _buffered_dl_sem{max_client_buffered_downloads_in_flight};
     timer<seastar::lowres_clock> _creds_invalidation_timer;
     timer<seastar::lowres_clock> _creds_update_timer;
     aws_credentials _credentials;
     aws::aws_credentials_provider_chain _creds_provider_chain;
+    seastar::gate _config_update_gate;
 
     struct io_stats {
         uint64_t ops = 0;
@@ -126,24 +133,24 @@ class client : public enable_shared_from_this<client> {
         io_stats read_stats;
         io_stats write_stats;
         uint64_t prefetch_bytes = 0;
-        uint64_t downloads_blocked_on_memory = 0;
+        uint64_t downloads_starving_on_max_concurrency = 0;
         seastar::metrics::metric_groups metrics;
         group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn);
         void register_metrics(std::string class_name, std::string host);
     };
     std::unordered_map<seastar::scheduling_group, group_client> _https;
+    semaphore _rebalance_sem{1};
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
-    semaphore& _memory;
     std::unique_ptr<seastar::http::experimental::retry_strategy> _retry_strategy;
 
     struct private_tag {};
 
-    future<semaphore_units<>> claim_memory(size_t mem, seastar::abort_source* as);
-
     future<> update_credentials_and_rearm();
     future<> authorize(http::request&);
-    group_client& find_or_create_client();
+    future<group_client&> find_or_create_client();
+    future<group_client&> find_or_create_client_slow();
+    future<> rebalance_connections();
 
     using error_handler = std::function<void(std::exception_ptr)>;
     using reply_handler_ext = noncopyable_function<future<>(group_client&, const http::reply&, input_stream<char>&& body)>;
@@ -176,9 +183,9 @@ class client : public enable_shared_from_this<client> {
     future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* = nullptr);
 public:
 
-    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<seastar::http::experimental::retry_strategy> rs = nullptr);
-    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, global_factory gf = {});
-    static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf = {});
+    client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<seastar::http::experimental::retry_strategy> rs = nullptr);
+    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf = {});
+    static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, global_factory gf = {}, unsigned connections_per_shard = endpoint_config::default_connections_per_shard);
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
     future<stats> get_object_stats(sstring object_name, seastar::abort_source* = nullptr);
@@ -212,7 +219,8 @@ public:
                          upload_progress& up,
                          seastar::abort_source* = nullptr);
 
-    future<> update_config(std::string reg, std::string ira);
+    void update_config_sync(std::string reg, std::string ira);
+    void update_connections_per_shard(unsigned connections_per_shard);
 
     struct handle {
         std::string _host;
