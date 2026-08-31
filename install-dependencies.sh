@@ -179,18 +179,16 @@ fedora_python3_packages=(
 )
 
 # an associative array from packages to constrains
+#
+# These are packages also needed outside of test.py (e.g. by cqlsh, or by the
+# shipped python3 relocatable package / dist/common/scripts). test.py-only
+# packages live in test/requirements.txt instead, which test.py installs
+# itself so their versions stay decoupled from this frozen toolchain image.
 declare -A pip_packages=(
     [scylla-driver]="==$(cat tools/cqlsh/requirements.txt | grep scylla-driver | cut -d= -f3)"
     [geomet]=""
     [traceback-with-variables]=""
     [scylla-api-client]=""
-    [treelib]=""
-    [allure-pytest]=""
-    [pytest-xdist]=""
-    [pykmip]=""
-    [universalasync]=""
-    [boto3-stubs[dynamodb]]=""
-    [setuptools_scm]=""
 )
 
 pip_symlinks=(
