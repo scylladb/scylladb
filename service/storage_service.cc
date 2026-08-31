@@ -3172,19 +3172,20 @@ future<> storage_service::wait_for_topology_not_busy() {
 future<> storage_service::alter_table_with_tablet_hints(table_id tid,
                                                         std::optional<size_t> min_tablet_count,
                                                         std::optional<size_t> max_tablet_count,
-                                                        bool wait_balancer) {
+                                                        bool wait_balancer,
+                                                        bool remove_unset) {
     if (this_shard_id() != 0) {
         co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.alter_table_with_tablet_hints(tid, min_tablet_count, max_tablet_count, wait_balancer);
+            return ss.alter_table_with_tablet_hints(tid, min_tablet_count, max_tablet_count, wait_balancer, remove_unset);
         });
     }
 
-    if (!min_tablet_count && !max_tablet_count) {
+    if (!min_tablet_count && !max_tablet_count && !remove_unset) {
         slogger.info("alter_table_with_tablet_hints: the tablet hints passed are both nullopt, nothing to update");
         co_return;
     }
 
-    if (wait_balancer && min_tablet_count != max_tablet_count) {
+    if (wait_balancer && (!min_tablet_count || !max_tablet_count || *min_tablet_count != *max_tablet_count)) {
         throw std::invalid_argument(format(
             "wait_balancer requires both min_tablet_count and max_tablet_count to be provided and equal, got min={} max={}",
             min_tablet_count ? to_sstring(*min_tablet_count) : "nullopt",
@@ -3204,9 +3205,13 @@ future<> storage_service::alter_table_with_tablet_hints(table_id tid,
         auto tablet_options = schema->raw_tablet_options();
         if (min_tablet_count) {
             tablet_options["min_tablet_count"] = to_sstring(*min_tablet_count);
+        } else if (remove_unset) {
+            tablet_options.erase("min_tablet_count");
         }
         if (max_tablet_count) {
             tablet_options["max_tablet_count"] = to_sstring(*max_tablet_count);
+        } else if (remove_unset) {
+            tablet_options.erase("max_tablet_count");
         }
 
         schema_builder builder(schema);
@@ -3216,8 +3221,8 @@ future<> storage_service::alter_table_with_tablet_hints(table_id tid,
         auto ts = group0_guard.write_timestamp();
         sstring description = format("Altering table {}.{} with tablet count hints min_tablet_count={} max_tablet_count={}",
             schema->ks_name(), schema->cf_name(),
-            min_tablet_count ? to_sstring(*min_tablet_count) : "unchanged",
-            max_tablet_count ? to_sstring(*max_tablet_count) : "unchanged");
+            min_tablet_count ? to_sstring(*min_tablet_count) : (remove_unset ? "removed" : "unchanged"),
+            max_tablet_count ? to_sstring(*max_tablet_count) : (remove_unset ? "removed" : "unchanged"));
 
         auto mutations = co_await prepare_column_family_update_announcement(sp, modified_schema, /*view_updates=*/{}, ts);
 
