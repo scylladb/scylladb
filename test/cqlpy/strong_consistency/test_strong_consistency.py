@@ -207,3 +207,40 @@ def test_batch(cql, sc_keyspace, batch_mode):
             run_counter_batch([
                 ("counter_add", (1, 1)),
             ], kind="counter")
+
+
+# The single statement write path used to hand an empty JSON cache to the code
+# building the keys, so an INSERT ... JSON killed the coordinator on the
+# uninitialized storage. Reproduces SCYLLADB-3997.
+def test_insert_json(cql, sc_keyspace):
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        cql.execute(f"""INSERT INTO {table} JSON '{{"pk": 1, "v": 2}}'""")
+        assert list(cql.execute(f"SELECT pk, v FROM {table} WHERE pk = 1")) == [(1, 2)]
+
+
+# Clustering key columns come from the same cache as the partition key ones.
+def test_insert_json_with_clustering_key(cql, sc_keyspace):
+    with new_test_table(cql, sc_keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table:
+        cql.execute(f"""INSERT INTO {table} JSON '{{"pk": 1, "ck": 2, "v": 3}}'""")
+        assert list(cql.execute(f"SELECT pk, ck, v FROM {table} WHERE pk = 1")) == [(1, 2, 3)]
+
+
+# A bound JSON term is only known when the statement is executed, which is why
+# the cache cannot be prepared any earlier than that.
+def test_insert_json_prepared(cql, sc_keyspace):
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        insert = cql.prepare(f"INSERT INTO {table} JSON ?")
+        cql.execute(insert, ['{"pk": 1, "v": 2}'])
+        assert list(cql.execute(f"SELECT pk, v FROM {table} WHERE pk = 1")) == [(1, 2)]
+
+
+# A batch prepares the cache for each of its statements, which is what pins the
+# defect above down to the single statement path.
+def test_insert_json_in_batch(cql, sc_keyspace):
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        cql.execute(f"""
+            BEGIN UNLOGGED BATCH
+            INSERT INTO {table} JSON '{{"pk": 1, "v": 2}}';
+            APPLY BATCH
+        """)
+        assert list(cql.execute(f"SELECT pk, v FROM {table} WHERE pk = 1")) == [(1, 2)]
