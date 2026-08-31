@@ -89,6 +89,51 @@ end: {end_time}
         assert res.stdout == expected_output
 
 
+# The --sstables-file-list file is split on newlines and every piece is sent
+# to the server verbatim, where an empty name fails the whole restore with
+# malformed_sstable_exception. Text files usually end with a newline, so make
+# sure it doesn't turn into such an empty entry in the request body.
+@pytest.mark.parametrize("trailing_newline", [False, True])
+def test_restore_sstables_file_list(nodetool, scylla_only, tmp_path, trailing_newline):
+    endpoint = "s3.us-east-2.amazonaws.com"
+    bucket = "bucket-foo"
+    keyspace = "ks"
+    table = "cf"
+    prefix = "foo/bar"
+
+    sstables = [f"me-{id}-big-TOC.txt" for id in range(3)]
+    list_file = tmp_path / "sstables.list"
+    content = "\n".join(sstables)
+    if trailing_newline:
+        content += "\n"
+    list_file.write_text(content)
+
+    params = {"endpoint": endpoint,
+              "bucket": bucket,
+              "prefix": prefix,
+              "keyspace": keyspace,
+              "table": table}
+
+    task_id = "2c4a3e5f"
+    res = nodetool("restore",
+                   "--endpoint", endpoint,
+                   "--bucket", bucket,
+                   "--prefix", prefix,
+                   "--keyspace", keyspace,
+                   "--table", table,
+                   "--nowait",
+                   "--sstables-file-list", str(list_file),
+                   expected_requests=[
+                       expected_request(
+                           "POST",
+                           "/storage_service/restore",
+                           params,
+                           sstables,
+                           response=task_id)
+                   ])
+    assert task_id in res.stdout
+
+
 @pytest.mark.parametrize("scope_val", ["all", "dc", "rack"])
 @pytest.mark.parametrize("pro_val", ["--primary-replica-only", "-pro"])
 def test_restore_scope_primary_replica(nodetool, scylla_only, scope_val, pro_val):
