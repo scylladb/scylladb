@@ -7190,11 +7190,17 @@ static void test_twcs_reversed_restricted_query(bool enable_optimized_twcs_queri
                 "   'compaction_window_size': '1',"
                 "   'compaction_window_unit': 'MINUTES',"
                 "   'enable_optimized_twcs_queries': '{}',"
-                // Compactions would merge the sstables together, defeating the
-                // purpose of the test.
-                "   'enabled': 'false',"
                 "   'class': 'org.apache.cassandra.db.compaction.TimeWindowCompactionStrategy'"
                 "}}", enable_optimized_twcs_queries ? "true" : "false")).get();
+
+        // Compactions would merge the sstables together, defeating the purpose
+        // of the test. Note that we can't use the `enabled: false` compaction
+        // option for this, because it replaces the strategy (and hence the
+        // sstable set) with the null strategy, which wouldn't exercise the
+        // TWCS read paths at all.
+        e.db().invoke_on_all([] (replica::database& db) {
+            return db.find_column_family("ks", "tbl").disable_auto_compaction();
+        }).get();
 
         // One sstable per clustering key, so that each sstable has a narrow
         // min/max clustering position range.
