@@ -6804,6 +6804,151 @@ SEASTAR_TEST_CASE(test_unused_gc_sstable_deletion_is_crash_safe) {
     });
 }
 
+namespace {
+
+// Runs a compaction that gives up part way through, after it has sealed some
+// output but before any of it was handed to the replacer, and reports what it
+// created.
+//
+// Sealed output waits in _new_unused_sstables until an input sstable becomes
+// exhausted, at which point maybe_replace_exhausted_sstables_by_sst() hands it
+// over. With a single input that only happens once the last partition has been
+// written, so everything sealed before the failure is still sitting in that
+// vector when delete_sstables_for_interrupted_compaction() runs.
+//
+// The interruption is produced by failing the sstable creator, which is what a
+// real one looks like from the compaction's point of view: an exception out of
+// consumption and into compaction::run()'s handler. `fail_after` is the number of
+// sstables that get created before that happens.
+compaction_output_census compact_interrupted_after_sealing(test_env& env, size_t fail_after) {
+    auto s = schema_builder(1, "tests", "interrupted_compaction")
+            .with_column("id", utf8_type, column_kind::partition_key)
+            .with_column("value", int32_type)
+            .build();
+
+    auto cf = env.make_table_for_tests(s);
+    auto stop_cf = deferred_stop(cf);
+    auto base_sst_gen = env.make_sst_factory(s);
+
+    std::vector<shared_sstable> created;
+    auto sst_gen = [&] {
+        if (created.size() >= fail_after) {
+            throw std::runtime_error("test: sstable creation failed");
+        }
+        auto sst = base_sst_gen();
+        created.push_back(sst);
+        return sst;
+    };
+
+    api::timestamp_type ts = 1;
+    utils::chunked_vector<mutation> muts;
+    for (int i = 0; i < 24; i++) {
+        auto key = partition_key::from_exploded(*s, {to_bytes(format("key{:05d}", i))});
+        mutation m(s, key);
+        m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), ts++);
+        muts.push_back(std::move(m));
+    }
+    // A single input, so it is not exhausted until the very end and nothing the
+    // compaction seals gets handed over before it fails.
+    auto sst = make_sstable_containing(base_sst_gen, std::move(muts)).get();
+    column_family_test(cf).add_sstable(sst).get();
+
+    std::unordered_set<shared_sstable> handed_over;
+    auto replacer = [&] (compaction::compaction_completion_desc ccd) {
+        handed_over.insert(ccd.new_sstables.begin(), ccd.new_sstables.end());
+        handed_over.insert(ccd.old_sstables.begin(), ccd.old_sstables.end());
+    };
+
+    // max_sstable_bytes = 0 gives ~one partition per output sstable, so the
+    // compaction seals several before it reaches the failing creation.
+    compaction::compaction_descriptor desc({sst},
+            compaction::compaction_descriptor::default_level,
+            /* max_sstable_bytes */ 0);
+    bool threw = false;
+    try {
+        compact_sstables(env, std::move(desc), cf, sst_gen, replacer, can_purge_tombstones::yes).get();
+    } catch (...) {
+        threw = true;
+    }
+    BOOST_REQUIRE_MESSAGE(threw, "the compaction was expected to fail, so nothing was interrupted");
+
+    compaction_output_census census;
+    for (auto& created_sst : created) {
+        census.created.push_back({sstring(fmt::to_string(created_sst->toc_filename())), sstring(created_sst->get_origin())});
+    }
+    for (auto& handed_over_sst : handed_over) {
+        census.handed_over_tocs.insert(sstring(fmt::to_string(handed_over_sst->toc_filename())));
+    }
+    // The base sstable factory is shared with the input, which the compaction
+    // never created; only what sst_gen produced is under test.
+    created.clear();
+    handed_over.clear();
+    return census;
+}
+
+} // anonymous namespace
+
+// An interrupted compaction must not leave behind the output it had already
+// sealed. Those sstables have a complete TOC, so a restart that finds them cannot
+// tell them from live ones and loads them.
+SEASTAR_TEST_CASE(test_interrupted_compaction_does_not_leak_sealed_sstables) {
+    return test_env::do_with_async([] (test_env& env) {
+        constexpr size_t fail_after = 3;
+        auto census = compact_interrupted_after_sealing(env, fail_after);
+
+        // Sanity check: the scenario has to have sealed something, or it proves
+        // nothing about the cleanup.
+        BOOST_REQUIRE_EQUAL(census.created.size(), fail_after);
+        BOOST_REQUIRE_MESSAGE(census.handed_over_tocs.empty(),
+                "the compaction handed sstables over, so none of them was left unattached");
+
+        // Deletion of an unreferenced sstable can complete in the background,
+        // hence the retry loop.
+        (void) eventually_true([&] { return census.orphaned().empty(); });
+
+        auto extra = census.orphaned();
+        BOOST_REQUIRE_MESSAGE(extra.empty(),
+                fmt::format("interrupted compaction left sealed sstable(s) behind: [{}]",
+                            fmt::join(extra | std::views::transform([] (const auto& info) {
+                                return format("{} (origin: {})", info.toc, info.origin);
+                            }), ", ")));
+    });
+}
+
+// ... and that deletion has to survive a crash, for the same reason as on the
+// successful path: mark_for_deletion() records the intent in memory only. Inject a
+// failure right after the commit -- i.e. simulate dying before anything was
+// unlinked -- and check the pending_delete log names what was left over.
+SEASTAR_TEST_CASE(test_interrupted_compaction_sstable_deletion_is_crash_safe) {
+    return test_env::do_with_async([] (test_env& env) {
+        constexpr auto injection = "delete_atomically_after_prepare";
+        scoped_error_injection inject(injection);
+        if (!utils::get_local_injector().is_enabled(injection)) {
+            testlog.info("Skipping test: error injection is not compiled in");
+            return;
+        }
+
+        constexpr size_t fail_after = 3;
+        auto census = compact_interrupted_after_sealing(env, fail_after);
+        BOOST_REQUIRE_EQUAL(census.created.size(), fail_after);
+
+        auto pending_delete_dir = fs::path(std::string(census.created.front().toc)).parent_path() / sstables::pending_delete_dir;
+        BOOST_REQUIRE_MESSAGE(fs::exists(pending_delete_dir),
+                fmt::format("{} was not created, so nothing tells a restart to delete the leftovers", pending_delete_dir));
+
+        std::string logs;
+        for (const auto& entry : fs::directory_iterator(pending_delete_dir)) {
+            logs += seastar::util::read_entire_file_contiguous(entry.path()).get();
+        }
+        for (const auto& info : census.created) {
+            auto name = std::string(fs::path(std::string(info.toc)).filename());
+            BOOST_REQUIRE_MESSAGE(logs.find(name) != std::string::npos,
+                    fmt::format("no pending_delete log in {} names {}, so a restart would load it again",
+                                pending_delete_dir, name));
+        }
+    });
+}
+
 SEASTAR_TEST_CASE(test_size_tiering_for_tiny_sstables) {
     return test_env::do_with_async([] (test_env& env) {
         auto s = schema_builder(this_smp_shard_count(), "tests", "tiny_sstables")
