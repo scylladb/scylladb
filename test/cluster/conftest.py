@@ -75,12 +75,12 @@ def pytest_addoption(parser):
                      help='Skip tests which depend on artifacts from the internet')
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 async def _scylla_cluster_manager(request: pytest.FixtureRequest,
                                   suite_log_dir: Path,
                                   testpy_cluster_factory: ClusterFactory,
                                   testpy_uname: str) -> AsyncGenerator[ScyllaClusterManager]:
-    """Run the cluster manager on its own thread and event loop.
+    """Run a per-test cluster manager on its own thread and event loop.
 
     The manager owns loop-bound state -- the Scylla subprocess transports and
     the per-server asyncio locks -- so all of its coroutines have to run on one
@@ -189,28 +189,26 @@ async def manager(request: pytest.FixtureRequest,
 
     finally:
         # Drop the stash entry before closing the driver so a teardown-phase
-        # failure report doesn't gather logs through a fenced-off manager.
+        # failure report doesn't gather logs through a manager being stopped.
         request.node.stash[MANAGER_LOGS_KEY] = None
 
-    # Close the driver before after_test() raises the fence: the session is
-    # this test's, and nothing in after_test() needs it -- the keyspace count
-    # post-condition uses each server's own control connection.  after_test()
-    # runs even if closing fails: it is what raises the fence, detaches this
-    # test's log handler and hands the cluster back.
+    # Close the driver before after_test(): the session is this test's, and
+    # nothing in after_test() needs it -- the keyspace count post-condition
+    # uses each server's own control connection.  after_test() runs even if
+    # closing fails: it detaches this test's log handler and hands the
+    # cluster back.
     try:
         _scylla_cluster_manager.driver_close()
     finally:
         # Tear down (after test): notify the manager that the test finished.
-        # This also cuts off manager access for tasks leaked by the test.
         logger.debug("after_test for %s (success: %s)", test_case_name, not failed)
         cluster_status = await _scylla_cluster_manager.after_test(success=not failed)
         logger.info("Cluster after test %s (success: %s): %s", test_case_name, not failed, cluster_status)
 
-    if cluster_status is not None and cluster_status["server_broken"] and not failed:
+    if cluster_status is not None and cluster_status["tasks_leaked"] and not failed:
         failed = True
         pytest.fail(
-            f"test case {test_case_name} left unfinished tasks on Scylla server. Server marked as broken,"
-            f" server_broken_reason: {cluster_status["message"]}"
+            f"test case {test_case_name} left unfinished tasks on the cluster manager: {cluster_status["message"]}"
         )
     if found_errors:
         full_message = []

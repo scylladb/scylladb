@@ -16,7 +16,6 @@ decorator and the bridge under test are the production ones.
 
 import asyncio
 import concurrent.futures
-import inspect
 import logging
 import threading
 from collections.abc import Iterator
@@ -25,7 +24,7 @@ import pytest
 
 from test.pylib.internal_types import ServerNum
 from test.pylib.util import LogPrefixAdapter
-from test.pylib.scylla_cluster_manager import ScyllaClusterManager, fenced
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
 SERVER_ID = ServerNum(1)
@@ -187,63 +186,3 @@ async def test_exception_keeps_its_type(manager) -> None:
 
     with pytest.raises(ValueError, match="stop failed"):
         await mgr.server_stop(SERVER_ID, convict=False)
-
-
-async def test_broken_manager_refuses_mutations(manager) -> None:
-    """A manager fenced off by a previous test rejects further changes."""
-    mgr, cluster, manager_loop = manager
-    async def do_break() -> None:
-        mgr.break_manager("leaked task", "some_test")
-
-    await asyncio.wrap_future(
-        asyncio.run_coroutine_threadsafe(do_break(), manager_loop))
-
-    with pytest.raises(RuntimeError, match="BROKEN"):
-        await mgr.server_stop(SERVER_ID, convict=False)
-    assert not cluster.entered.is_set(), "a broken manager still ran the operation"
-
-    # Reads stay available so that after-test bookkeeping can still run.
-    assert await mgr.is_dirty() is False
-
-
-async def test_finished_test_fences_the_manager_off(manager) -> None:
-    """After after_test(), a task leaked by the test cannot reach the manager.
-
-    before_test() lifts the fence again for the next test.
-    """
-    mgr, cluster, _ = manager
-
-    mgr._test_finished = True
-    with pytest.raises(Exception, match="not accessible after the test finished"):
-        await mgr.is_dirty()
-    assert not cluster.entered.is_set()
-
-    mgr._test_finished = False
-    assert await mgr.is_dirty() is False
-
-
-async def test_driver_methods_are_fenced_off(manager) -> None:
-    """The driver lives on the shared manager, so a leaked caller must not
-    reach it -- but teardown still has to be able to close the session."""
-    mgr, _, _ = manager
-
-    mgr._test_finished = True
-    with pytest.raises(RuntimeError, match="not accessible after the test finished"):
-        mgr.driver_close()
-    with pytest.raises(RuntimeError, match="not accessible after the test finished"):
-        mgr.get_cql()
-    with pytest.raises(RuntimeError, match="not accessible after the test finished"):
-        await mgr.driver_connect()
-
-    mgr._driver_close()   # what stop() uses at module teardown; must not raise
-
-
-def test_fenced_keeps_the_kind_of_what_it_decorates() -> None:
-    """universalasync makes a method callable from a plain thread only if
-    iscoroutinefunction says it is one, so fenced must not change that answer.
-    """
-    async def operation(self) -> None: ...
-    def plain(self) -> None: ...
-
-    assert inspect.iscoroutinefunction(fenced(operation))
-    assert not inspect.iscoroutinefunction(fenced(plain))
