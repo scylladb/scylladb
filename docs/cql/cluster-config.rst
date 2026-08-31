@@ -37,9 +37,9 @@ value set at a broader one:
 
 Each option supports a fixed set of scopes. Options that describe a table (such as
 ``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. Options that
-describe the cluster as a whole (such as ``repair_hints_batchlog_flush_discard_unreplayed_hints``)
-can be set at ``CLUSTER`` scope only. No option currently supports the ``DATACENTER``, ``RACK`` or
-``NODE`` scopes.
+describe the cluster as a whole (such as ``repair_hints_batchlog_flush_discard_unreplayed_hints``
+or ``tablets_group0_leader_shard_ratio``) can be set at ``CLUSTER`` scope only. No option currently
+supports the ``DATACENTER``, ``RACK`` or ``NODE`` scopes.
 
 Each scope stores only the values that were explicitly set there. The *effective* value of an
 option for a table is the value stored at the narrowest scope that has one: the table's own value
@@ -228,6 +228,19 @@ Available options
        the default, for example after a node stayed down for a long time. Must be between ``1``
        and ``315360000`` (ten years). Default: ``300``, in effect once every node runs a version
        that knows the option.
+   * - ``tablets_group0_leader_shard_ratio``
+     - integer
+     - ``CLUSTER``
+     - Percentage (0-100) of the normal per-shard tablet capacity given to shard 0 of the group0
+       leader node, which carries extra raft and topology work. The capacity taken from shard 0 is
+       spread over the node's other shards. ``100`` means no skew; ``0`` shrinks shard 0 to a floor of one
+       target-size tablet or 0.1% of its normal capacity, whichever is larger. The other shards
+       of that node may then exceed ``tablets_per_shard_goal``, which is enforced as a per-shard
+       average. The skew follows the current group0 leader: when leadership moves,
+       tablets migrate between shards within the old and new leader nodes (intranode only; node
+       totals and cross-node balance are unaffected). A moderate value such as ``50`` keeps that
+       movement smaller than ``0``. Has no effect until every node supports the
+       ``TABLET_LOAD_STATS_V2`` cluster feature. Default: ``100``.
 
 .. _cql-cluster-config-yaml-options:
 
