@@ -2202,20 +2202,35 @@ def test_gsi_composite_exclusivestartkey_spurious_column_rejected(test_table_gsi
 ###############################################################################
 
 
-# This test will fail due to message mismatch. Correct message will be implemented in the future.
-# Note: DynamoDB will not raise this. Expect the test to fail against AWS.
-def test_gsi_composite_keyconditions_blocked(test_table_gsi_2h2r):
+# DynamoDB accepts the legacy KeyConditions parameter on a composite-key GSI,
+# just as it does on a single-key one. Alternator deliberately does not - there
+# we support only the newer KeyConditionExpression, and reject KeyConditions
+# with a ValidationException. This is a deliberate compatibility hole rather
+# than an oversight, so the test stays xfailing (see issue #31393) instead of
+# asserting Alternator's error message.
+@pytest.mark.xfail(reason="Issue #31393")
+def test_gsi_composite_keyconditions(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
-    with pytest.raises(ClientError, match="Legacy KeyConditions are not supported for composite key GSIs in Alternator"):
-        table.query(
-            IndexName="idx_2h2r",
-            KeyConditions={
-                "h1": {"AttributeValueList": ["v"], "ComparisonOperator": "EQ"},
-                "h2": {"AttributeValueList": ["v"], "ComparisonOperator": "EQ"},
-                "r1": {"AttributeValueList": ["r"], "ComparisonOperator": "EQ"},
-                "r2": {"AttributeValueList": ["a"], "ComparisonOperator": "LE"},
-            },
-        )
+    h1_val, h2_val = random_string(), random_string()
+    item = {
+        "p": random_string(),
+        "h1": h1_val,
+        "h2": h2_val,
+        "r1": "aaa",
+        "r2": "bbb",
+    }
+    table.put_item(Item=item)
+    assert_index_query(
+        table,
+        "idx_2h2r",
+        [item],
+        KeyConditions={
+            "h1": {"AttributeValueList": [h1_val], "ComparisonOperator": "EQ"},
+            "h2": {"AttributeValueList": [h2_val], "ComparisonOperator": "EQ"},
+            "r1": {"AttributeValueList": ["aaa"], "ComparisonOperator": "EQ"},
+            "r2": {"AttributeValueList": ["bbb"], "ComparisonOperator": "LE"},
+        },
+    )
 
 
 ###############################################################################
