@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #pragma once
@@ -66,10 +66,43 @@ enum class aws_error_type : uint8_t {
     HTTP_NETWORK_CONNECT_TIMEOUT = 126,
     HTTP_NETWORK_READ_TIMEOUT = 127,
     SERVICE_EXTENSION_START_RANGE = 128,
-    // S3-specific error enum values are substituted here at build time.
-    // @SCYLLA_AWS_ERRORS_S3@
-    // STS-specific error enum values are substituted here at build time.
-    // @SCYLLA_AWS_ERRORS_STS@
+    // Service-specific error values below are generated from the AWS c2j
+    // models by scripts/gen_aws_service_errors.py. Do not edit by hand.
+    // @SCYLLA_AWS_ERRORS_BEGIN@
+    // S3
+    ANNOTATION_LIMIT_EXCEEDED,
+    ANNOTATION_NAME_TOO_LONG,
+    BUCKET_ALREADY_EXISTS,
+    BUCKET_ALREADY_OWNED_BY_YOU,
+    ENCRYPTION_TYPE_MISMATCH,
+    IDEMPOTENCY_PARAMETER_MISMATCH,
+    INVALID_ANNOTATION_NAME,
+    INVALID_OBJECT_STATE,
+    INVALID_PREFIX,
+    INVALID_REQUEST,
+    INVALID_WRITE_OFFSET,
+    NO_SUCH_ANNOTATION,
+    NO_SUCH_BUCKET,
+    NO_SUCH_KEY,
+    NO_SUCH_UPLOAD,
+    OBJECT_ALREADY_IN_ACTIVE_TIER,
+    OBJECT_NOT_IN_ACTIVE_TIER,
+    TOO_MANY_PARTS,
+    UNSUPPORTED_MEDIA_TYPE,
+    // STS
+    EXPIRED_TOKEN,
+    EXPIRED_TRADE_IN_TOKEN,
+    INVALID_AUTHORIZATION_MESSAGE,
+    INVALID_IDENTITY_TOKEN,
+    I_D_P_COMMUNICATION_ERROR,
+    I_D_P_REJECTED_CLAIM,
+    J_W_T_PAYLOAD_SIZE_EXCEEDED,
+    MALFORMED_POLICY_DOCUMENT,
+    OUTBOUND_WEB_IDENTITY_FEDERATION_DISABLED,
+    PACKED_POLICY_TOO_LARGE,
+    REGION_DISABLED,
+    SESSION_DURATION_ESCALATION,
+    // @SCYLLA_AWS_ERRORS_END@
     // No error set
     OK = 255
 };
