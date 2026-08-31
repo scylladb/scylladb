@@ -130,6 +130,17 @@ public:
     topology_mutation_builder& del_global_topology_request_id();
     topology_mutation_builder& queue_global_topology_request_id(const utils::UUID& value);
     topology_mutation_builder& drop_first_global_topology_request_id(const std::vector<utils::UUID>&, const utils::UUID&);
+    // Drops `ids` from the front of the queue. The plural counterpart of the above, for
+    // when several queued requests are handled together, see handle_global_request().
+    //
+    // `queue` must start with `ids`, otherwise this is an internal error. Callers take the
+    // ids from the head of the queue under the same guard the mutation is written with,
+    // and that guard also excludes group0 command application, so the queue cannot move
+    // underneath them. Dropping the wrong entries would either lose a request nobody
+    // answered, or leave an answered one to be popped and answered again on every
+    // subsequent round, wedging the coordinator on it forever.
+    topology_mutation_builder& drop_first_global_topology_request_ids(const std::vector<utils::UUID>& queue,
+            const std::vector<utils::UUID>& ids);
     topology_mutation_builder& pause_rf_change_request(const utils::UUID&);
     topology_mutation_builder& resume_rf_change_request(const std::unordered_set<utils::UUID>&, const utils::UUID&);
     topology_mutation_builder& start_rf_change_migrations(const utils::UUID&);
@@ -161,7 +172,10 @@ public:
     topology_request_tracking_mutation_builder& set(const char* cell, topology_request value);
     topology_request_tracking_mutation_builder& set(const char* cell, global_topology_request value);
     topology_request_tracking_mutation_builder& abort(sstring error);
-    topology_request_tracking_mutation_builder& done(std::optional<sstring> error = std::nullopt);
+    // `end_time` defaults to now. Pass it explicitly when several requests are completed
+    // together, so that they are all stamped with the same time.
+    topology_request_tracking_mutation_builder& done(std::optional<sstring> error = std::nullopt,
+            std::optional<db_clock::time_point> end_time = std::nullopt);
     topology_request_tracking_mutation_builder& set_truncate_table_data(const table_id& table_id);
     topology_request_tracking_mutation_builder& set_new_keyspace_rf_change_data(const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc);
     topology_request_tracking_mutation_builder& set_snapshot_tables_data(const std::unordered_set<table_id>&, const sstring& tag, bool);
