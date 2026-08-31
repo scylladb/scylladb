@@ -29,6 +29,29 @@ namespace alternator {
 
 using chunked_content = rjson::chunked_content;
 
+namespace internal {
+
+class json_parser {
+    static constexpr size_t yieldable_parsing_threshold = 16*KB;
+    chunked_content _raw_document;
+    rjson::value _parsed_document;
+    std::exception_ptr _current_exception;
+    semaphore _parsing_sem{1};
+    condition_variable _document_waiting;
+    condition_variable _document_parsed;
+    abort_source _as;
+    future<> _run_parse_json_thread;
+public:
+    json_parser();
+    // Moving a chunked_content into parse() allows parse() to free each
+    // chunk as soon as it is parsed, so when chunks are relatively small,
+    // we don't need to store the sum of unparsed and parsed sizes.
+    future<rjson::value> parse(chunked_content&& content);
+    future<> stop();
+};
+
+}
+
 class server : public peering_sharded_service<server> {
     // The maximum size of a request body that Alternator will accept,
     // in bytes. This is a safety measure to prevent Alternator from
@@ -77,25 +100,7 @@ class server : public peering_sharded_service<server> {
 
     ::shared_ptr<seastar::tls::server_credentials> _credentials;
 
-    class json_parser {
-        static constexpr size_t yieldable_parsing_threshold = 16*KB;
-        chunked_content _raw_document;
-        rjson::value _parsed_document;
-        std::exception_ptr _current_exception;
-        semaphore _parsing_sem{1};
-        condition_variable _document_waiting;
-        condition_variable _document_parsed;
-        abort_source _as;
-        future<> _run_parse_json_thread;
-    public:
-        json_parser();
-        // Moving a chunked_content into parse() allows parse() to free each
-        // chunk as soon as it is parsed, so when chunks are relatively small,
-        // we don't need to store the sum of unparsed and parsed sizes.
-        future<rjson::value> parse(chunked_content&& content);
-        future<> stop();
-    };
-    json_parser _json_parser;
+    internal::json_parser _json_parser;
 
     // The server maintains a list of ongoing requests, that are being handled
     // by handle_api_request(). It uses this list in get_client_data(), which
@@ -146,4 +151,3 @@ private:
 };
 
 }
-

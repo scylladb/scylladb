@@ -1147,7 +1147,7 @@ future<> server::stop() {
     });
 }
 
-server::json_parser::json_parser() : _run_parse_json_thread(async([this] {
+internal::json_parser::json_parser() : _run_parse_json_thread(async([this] {
         while (true) {
             _document_waiting.wait().get();
             if (_as.abort_requested()) {
@@ -1164,7 +1164,7 @@ server::json_parser::json_parser() : _run_parse_json_thread(async([this] {
     })) {
 }
 
-future<rjson::value> server::json_parser::parse(chunked_content&& content) {
+future<rjson::value> internal::json_parser::parse(chunked_content&& content) {
     if (content.size() < yieldable_parsing_threshold) {
         return make_ready_future<rjson::value>(rjson::parse(std::move(content)));
     }
@@ -1180,7 +1180,7 @@ future<rjson::value> server::json_parser::parse(chunked_content&& content) {
     });
 }
 
-future<> server::json_parser::stop() {
+future<> internal::json_parser::stop() {
     _as.request_abort();
     _document_waiting.signal();
     _document_parsed.broken();
