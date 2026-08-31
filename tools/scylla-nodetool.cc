@@ -1924,7 +1924,12 @@ void restore_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         auto is_close = seastar::deferred_close(is);
         auto sstables_list = seastar::util::read_entire_stream_contiguous(is).get();
         for (const auto& toc : std::views::split(sstables_list, '\n')) {
-            writer.String(std::string_view(toc));
+            auto name = std::string_view(toc);
+            // Skip empty lines, in particular the one a newline-terminated file
+            // ends with -- an empty name fails the whole restore on the server.
+            if (!name.empty()) {
+                writer.String(name);
+            }
         }
     }
     // add the list provided by the command line
