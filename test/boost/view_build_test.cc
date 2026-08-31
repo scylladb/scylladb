@@ -690,6 +690,10 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
 }
 
 SEASTAR_THREAD_TEST_CASE(test_view_update_generator_stop_during_process_staging_sstables) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
     cql_test_config test_cfg;
     auto& db_cfg = *test_cfg.db_config;
 
@@ -729,9 +733,9 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_stop_during_process_staging_
         utils::get_local_injector().enable(injection);
         auto processing = view_update_generator.process_staging_sstables(table, {sst});
 
-        eventually_true([injection] {
+        BOOST_REQUIRE(eventually_true([injection] {
             return utils::get_local_injector().waiters(injection) > 0;
-        });
+        }));
 
         auto stop = view_update_generator.stop();
         utils::get_local_injector().receive_message(injection);
