@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <sched.h>
 #include <algorithm>
 
 #include <exception>
@@ -597,12 +598,25 @@ database::sum_read_concurrency_sem_stat(std::invocable<reader_concurrency_semaph
     return _reader_concurrency_semaphores_group.sum_read_concurrency_sem_var([&] (reader_concurrency_semaphore& rcs) { return std::invoke(stats_member, rcs.get_stats()); });
 }
 
+// Returns -1 when unknown, which cannot be mistaken for a real cpu.
+static int current_cpu_id() {
+    return sched_getcpu();
+}
+
 void
 database::setup_metrics() {
     _dirty_memory_manager.setup_collectd("regular");
     _system_dirty_memory_manager.setup_collectd("system");
 
     namespace sm = seastar::metrics;
+
+    // The value is 1 so that cpu label can be applied to node metrics by joining them with this
+    // metric using multiplication and "group_left" on (instance, cpu).
+    _metrics.add_group("location", {
+        sm::make_gauge("shard", [] { return 1; },
+                       sm::description("The host CPU this shard's reactor runs on, in the cpu label."),
+                       {sm::label_instance("cpu", current_cpu_id()), basic_level}),
+    });
 
     _metrics.add_group("memory", {
         sm::make_gauge("dirty_bytes", [this] { return _dirty_memory_manager.real_dirty_memory() + _system_dirty_memory_manager.real_dirty_memory(); },
