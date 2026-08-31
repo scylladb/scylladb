@@ -2045,20 +2045,49 @@ public:
     }
 
     void drop_unfixable_sstables() {
+        // This runs instead of replace_remaining_exhausted_sstables(), so nothing
+        // else will clean up after the compaction. None of the new sstables was
+        // attached, and the sealed ones have a complete TOC, so they go through the
+        // pending deletion log. Committed before the replacement below for the same
+        // reason as in replace_remaining_exhausted_sstables(): from here on they
+        // cannot be attached, and the replacer yields.
+        //
+        // Reserved up front, so nothing is moved out of the members until the
+        // moves can no longer fail.
+        std::vector<sstables::shared_sstable> unattached;
+        unattached.reserve(_new_unused_sstables.size() + _unused_garbage_collected_sstables.size());
+        std::ranges::move(std::exchange(_new_unused_sstables, {}), std::back_inserter(unattached));
+        std::ranges::move(std::exchange(_unused_garbage_collected_sstables, {}), std::back_inserter(unattached));
+        auto deletion = commit_deletion_of_unattached_sstables(std::move(unattached));
+
+        // As in replace_remaining_exhausted_sstables(), clean up even if the
+        // replacement throws: nothing else will.
+        std::exception_ptr ex;
         if (!_sstables.empty() || !used_garbage_collected_sstables().empty()) {
             std::vector<sstables::shared_sstable> old_sstables;
+            old_sstables.reserve(_sstables.size() + used_garbage_collected_sstables().size());
             std::move(_sstables.begin(), _sstables.end(), std::back_inserter(old_sstables));
 
             // Remove Garbage Collected SSTables from the SSTable set if any was previously added.
             auto& used_gc_sstables = used_garbage_collected_sstables();
             old_sstables.insert(old_sstables.end(), used_gc_sstables.begin(), used_gc_sstables.end());
 
-            _replacer(get_compaction_completion_desc(std::move(old_sstables), {}));
+            try {
+                _replacer(get_compaction_completion_desc(std::move(old_sstables), {}));
+            } catch (...) {
+                ex = std::current_exception();
+            }
         }
 
-        // Mark new sstables for deletion as well
-        for (auto& sst : std::views::concat(_new_partial_sstables, _new_unused_sstables)) {
+        // As in delete_sstables_for_interrupted_compaction(): marked to reclaim their
+        // space right away, with no pending deletion log since they were never sealed.
+        for (auto& sst : _new_partial_sstables) {
             sst->mark_for_deletion();
+        }
+
+        execute_deletion_of_unattached_sstables(std::move(deletion));
+        if (ex) {
+            std::rethrow_exception(std::move(ex));
         }
     }
 
