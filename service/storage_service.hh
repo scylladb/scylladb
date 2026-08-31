@@ -368,7 +368,8 @@ private:
 
     // Commits prepared token metadata changes. Must be called under token_metadata_lock
     // and on all shards.
-    void commit_token_metadata_change(token_metadata_change& change) noexcept;
+    void commit_token_metadata_change(token_metadata_change& change,
+            const locator::tablet_metadata_change_hint* tablet_hint) noexcept;
 
     // Update pending ranges locally and then replicate to all cores.
     // Should be serialized under token_metadata_lock.

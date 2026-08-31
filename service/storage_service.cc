@@ -2250,7 +2250,8 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(mut
     co_return change;
 }
 
-void storage_service::commit_token_metadata_change(token_metadata_change& change) noexcept {
+void storage_service::commit_token_metadata_change(token_metadata_change& change,
+        const locator::tablet_metadata_change_hint* tablet_hint) noexcept {
     slogger.debug("Replicating token_metadata");
 
     // Apply changes on a single shard
@@ -2271,7 +2272,7 @@ void storage_service::commit_token_metadata_change(token_metadata_change& change
         for (auto it = table_erms.begin(); it != table_erms.end(); ) {
             // Update base/views effective_replication_maps atomically.
             auto& cf = db.find_column_family(it->first);
-            cf.update_effective_replication_map(std::move(it->second));
+            cf.update_effective_replication_map(std::move(it->second), tablet_hint);
             for (const auto& view_ptr : cf.views()) {
                 const auto& view_id = view_ptr->id();
                 auto& view = db.find_column_family(view_id);
@@ -2279,7 +2280,7 @@ void storage_service::commit_token_metadata_change(token_metadata_change& change
                 if (view_it == view_erms.end()) {
                     throw std::runtime_error(format("Could not find pending effective_replication_map for view {}.{} id={}", view_ptr->ks_name(), view_ptr->cf_name(), view_id));
                 }
-                view.update_effective_replication_map(std::move(view_it->second));
+                view.update_effective_replication_map(std::move(view_it->second), tablet_hint);
                 if (view.uses_tablets()) {
                     register_tablet_split_candidate(view_it->first);
                 }
@@ -2345,7 +2346,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
     db_schema_getter getter{_db};
     auto change = co_await prepare_token_metadata_change(tmptr, getter);
     co_await container().invoke_on_all([&change] (storage_service& ss) {
-        ss.commit_token_metadata_change(change);
+        ss.commit_token_metadata_change(change, nullptr);
     });
     co_await change.destroy();
     co_await _db.local().get_compaction_manager().get_shared_tombstone_gc_state().
