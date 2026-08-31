@@ -627,6 +627,7 @@ def test_batch_get_item_full_failure(scylla_only, dynamodb, rest_api, test_table
                 'p': p, 'c': i, 'content': content})
     to_read = { test_table_sn.name: {'Keys': [{'p': p, 'c': c} for c in range(count)], 'ConsistentRead': True } }
     # The error injection is permanent, so it will fire for each batch read.
-    with scylla_inject_error(rest_api, "alternator_batch_get_item", one_shot=False):
+    with scylla_inject_error(rest_api, "alternator_batch_get_item", one_shot=False) as injection:
         with pytest.raises(ClientError, match="InternalServerError"):
             test_table_sn.meta.client.batch_get_item(RequestItems = to_read)
+        assert injection.enter_count() > 0
