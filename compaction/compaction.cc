@@ -1083,27 +1083,38 @@ private:
         // Delete either partially or fully written sstables of a compaction that
         // was either stopped abruptly (e.g. out of disk space) or deliberately
         // (e.g. nodetool stop COMPACTION).
+        // _new_partial_sstables were never sealed, so they still carry a temporary
+        // TOC and mark_for_deletion::implicit: a restart garbage collects them on
+        // the strength of that TOC alone, and an in-memory mark is enough.
+        for (auto& sst : _new_partial_sstables) {
+            log_debug("Deleting partially written sstable {} of interrupted compaction for {}.{}",
+                    sst->get_filename(), _schema->ks_name(), _schema->cf_name());
+            sst->mark_for_deletion();
+        }
+
+        // The sealed ones have a complete TOC, so nothing on disk tells a restart
+        // that they are stale: they have to go through the pending deletion log.
         //
-        // _unused_garbage_collected_sstables is included because a sealed GC
-        // sstable that was never consumed is not tracked anywhere else: it is not
-        // in _new_unused_sstables (it only lands there once
-        // consume_unused_garbage_collected_sstables() runs) and sealing cleared
-        // its implicit deletion mark, so ~sstable() would leave its files behind.
+        // _new_unused_sstables hold the outputs that were finished but not yet
+        // handed over. maybe_replace_exhausted_sstables_by_sst() moves out of the
+        // vector when it hands them to the replacer, so whatever is still in it was
+        // never attached.
         //
-        // _used_garbage_collected_sstables is deliberately NOT included: those were
-        // already added to the table's sstable set and are still live there after an
-        // interrupted compaction. Marking them would delete files still referenced
-        // by the sstable set.
-        auto mark_for_deletion = [this] (const auto& sstables) {
-            for (auto& sst : sstables) {
-                log_debug("Deleting sstable {} of interrupted compaction for {}.{}", sst->get_filename(), _schema->ks_name(), _schema->cf_name());
-                sst->mark_for_deletion();
-            }
-        };
-        mark_for_deletion(_new_partial_sstables);
-        mark_for_deletion(_new_unused_sstables);
-        mark_for_deletion(_unused_garbage_collected_sstables);
-        _unused_garbage_collected_sstables.clear();
+        // _unused_garbage_collected_sstables is included because a sealed GC sstable
+        // that was never consumed is not tracked anywhere else: it is not in
+        // _new_unused_sstables (it only lands there once
+        // consume_unused_garbage_collected_sstables() runs) and sealing cleared its
+        // implicit deletion mark, so ~sstable() would leave its files behind.
+        //
+        // Both come from the compaction's own sstable creator, so they share the
+        // table's storage and can go into one deletion. Unlike the successful path
+        // there is no replacement to protect here, so there is nothing to do
+        // between committing and unlinking.
+        auto unattached = std::exchange(_new_unused_sstables, {});
+        auto unused_gc = std::exchange(_unused_garbage_collected_sstables, {});
+        unattached.insert(unattached.end(), std::make_move_iterator(unused_gc.begin()), std::make_move_iterator(unused_gc.end()));
+        auto deletion = commit_deletion_of_unattached_sstables(std::move(unattached));
+        execute_deletion_of_unattached_sstables(std::move(deletion));
     }
 protected:
     // Crash-safe removal of sstables this compaction created but never attached to
