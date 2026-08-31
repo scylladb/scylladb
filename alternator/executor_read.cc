@@ -2862,6 +2862,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     bool should_add_rcu = rcu_consumed_capacity_counter::should_add_capacity(request);
     struct table_requests {
         schema_ptr schema;
+        lw_shared_ptr<stats> per_table_stats;
         db::consistency_level cl;
         ::shared_ptr<const std::optional<alternator::attrs_to_get>> attrs_to_get;
         // clustering_keys keeps a sorted set of clustering keys. It must
@@ -2870,8 +2871,10 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         using clustering_keys = std::map<clustering_key, rjson::value*, clustering_key::less_compare>;
         std::unordered_map<partition_key, clustering_keys, partition_key::hashing, partition_key::equality> requests;
         uint item_count = 0;
-        table_requests(schema_ptr s)
+        uint64_t consumed_rcu_half_units = 0;
+        table_requests(schema_ptr s, lw_shared_ptr<stats> stats)
             : schema(std::move(s))
+            , per_table_stats(std::move(stats))
             , requests(8, partition_key::hashing(*schema), partition_key::equality(*schema))
         {}
         void add(rjson::value& key) {
@@ -2890,9 +2893,10 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     std::vector<table_requests> requests;
     uint batch_size = 0;
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
-        table_requests rs(get_table_from_batch_request(_proxy, it));
-        lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
-        per_table_stats->api_operations.batch_get_item++;
+        auto schema = get_table_from_batch_request(_proxy, it);
+        auto per_table_stats = get_stats_from_schema(_proxy, *schema);
+        table_requests rs(std::move(schema), std::move(per_table_stats));
+        rs.per_table_stats->api_operations.batch_get_item++;
         tracing::add_alternator_table_name(trace_state, rs.schema->cf_name());
         rs.cl = get_read_consistency(it->value);
         std::unordered_set<std::string> used_attribute_names;
@@ -2924,15 +2928,10 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     utils::chunked_vector<future<batch_get_item_result>> response_futures;
     response_futures.reserve(partition_count);
     utils::chunked_vector<std::exception_ptr> response_exceptions(partition_count);
-    std::vector<uint64_t> consumed_rcu_half_units_per_table(requests.size());
-    utils::chunked_vector<lw_shared_ptr<stats>> batch_get_stats;
-    batch_get_stats.reserve(requests.size());
     // Finish potentially throwing per-table setup before launching reads.
     for (const table_requests& rs : requests) {
-        auto per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
-        per_table_stats->api_operations.batch_get_item_batch_total += rs.item_count;
-        per_table_stats->api_operations.batch_get_item_histogram.add(rs.item_count);
-        batch_get_stats.push_back(std::move(per_table_stats));
+        rs.per_table_stats->api_operations.batch_get_item_batch_total += rs.item_count;
+        rs.per_table_stats->api_operations.batch_get_item_histogram.add(rs.item_count);
     }
     const auto drain_wait_table = utils::get_local_injector().inject_parameter<std::string_view>(
             batch_get_item_drain_wait_injection, "table_name");
@@ -2940,9 +2939,9 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         return *drain_wait_table == rs.schema->cf_name();
     });
     for (size_t i = 0; i < requests.size(); i++) {
-        const table_requests& rs = requests[i];
+        table_requests& rs = requests[i];
         bool is_quorum = rs.cl == db::consistency_level::LOCAL_QUORUM;
-        auto per_table_stats = batch_get_stats[i];
+        auto per_table_stats = rs.per_table_stats;
         for (const auto& [pk, cks] : rs.requests) {
             try {
                 dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*rs.schema, pk))};
@@ -2962,7 +2961,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                 auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
                         query::tombstone_limit(_proxy.get_tombstone_limit()));
                 command->allow_limit = db::allow_per_partition_rate_limit::yes;
-                const auto item_callback = [is_quorum, per_table_stats, &rcus_per_table = consumed_rcu_half_units_per_table[i]](uint64_t size) {
+                const auto item_callback = [is_quorum, per_table_stats, &rcus_per_table = rs.consumed_rcu_half_units](uint64_t size) {
                     rcus_per_table += rcu_consumed_capacity_counter::get_half_units(size, is_quorum);
                     // Update item size only if the item exists.
                     if (size > 0) {
@@ -3007,6 +3006,11 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         if (response_futures[i].failed()) {
             response_exceptions[i] = response_futures[i].get_exception();
         }
+    }
+    // Charge completed reads before response construction, which can fail.
+    for (const table_requests& rs : requests) {
+        _stats.rcu_half_units_total += rs.consumed_rcu_half_units;
+        rs.per_table_stats->rcu_half_units_total += rs.consumed_rcu_half_units;
     }
     if (const auto table_name = utils::get_local_injector().inject_parameter<std::string_view>(
                 batch_get_item_response_failure_injection, "table_name");
@@ -3099,14 +3103,10 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                 add_unprocessed_keys(table, cks);
             }
         }
-        uint64_t rcu_half_units = consumed_rcu_half_units_per_table[i];
-        _stats.rcu_half_units_total += rcu_half_units;
-        lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
-        per_table_stats->rcu_half_units_total += rcu_half_units;
         if (should_add_rcu) {
             rjson::value entry = rjson::empty_object();
             rjson::add(entry, "TableName", table);
-            rjson::add(entry, "CapacityUnits", rcu_half_units*0.5);
+            rjson::add(entry, "CapacityUnits", rs.consumed_rcu_half_units*0.5);
             rjson::push_back(consumed_capacity, std::move(entry));
         }
     }
@@ -3137,8 +3137,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     auto duration = std::chrono::steady_clock::now() - start_time;
     _stats.api_operations.batch_get_item_latency.mark(duration);
     for (const table_requests& rs : requests) {
-        lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
-        per_table_stats->api_operations.batch_get_item_latency.mark(duration);
+        rs.per_table_stats->api_operations.batch_get_item_latency.mark(duration);
     }
     if (is_big(response)) {
         co_return make_streamed(std::move(response));
