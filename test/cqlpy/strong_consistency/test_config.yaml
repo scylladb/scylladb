@@ -1,0 +1,8 @@
+extra_scylla_cmdline_options:
+  - '--rf-rack-valid-keyspaces=1'
+  # Every server starts with enable_user_defined_functions on, and Scylla
+  # refuses to start unless the udf feature is unlocked as well.
+  - '--experimental-features=udf'
+  - '--experimental-features=strongly-consistent-tables'
+  - '--enable-tablets=true'
+  - '--tablets-initial-scale-factor=1'
