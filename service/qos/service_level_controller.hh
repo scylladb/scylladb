@@ -166,15 +166,32 @@ public:
             // and after that it's not necessary. We do NOT hold it here to avoid postpoing finishing `stop`.
 
             if (user && user->name) {
-                const std::optional<service_level_options> maybe_sl_opts = co_await find_effective_service_level(*user->name);
+                if (!_sl_controller.can_use_effective_service_level_cache()) {
+                    return with_user_service_level_uncached(user, std::forward<Func>(func));
+                }
+                const std::optional<service_level_options> maybe_sl_opts = find_cached_effective_service_level(*user->name);
                 const sstring& sl_name = maybe_sl_opts && maybe_sl_opts->shares_name
                         ? *maybe_sl_opts->shares_name
                         : service_level_controller::default_service_level_name;
 
-                co_return co_await _sl_controller.with_service_level(sl_name, std::forward<Func>(func));
+                return _sl_controller.with_service_level(sl_name, std::forward<Func>(func));
             } else {
-                co_return co_await _sl_controller.with_service_level(service_level_controller::default_service_level_name, std::forward<Func>(func));
+                return _sl_controller.with_service_level(service_level_controller::default_service_level_name, std::forward<Func>(func));
             }
+        }
+
+        // Until auth is migrated to raft, the effective service level cache is not
+        // populated, so the lookup has to hit the role manager and cannot avoid a
+        // coroutine frame.
+        template <typename Func, typename Ret = std::invoke_result_t<Func>>
+            requires std::invocable<Func>
+        futurize_t<Ret> with_user_service_level_uncached(const std::optional<auth::authenticated_user>& user, Func&& func) {
+            const std::optional<service_level_options> maybe_sl_opts = co_await find_effective_service_level(*user->name);
+            const sstring& sl_name = maybe_sl_opts && maybe_sl_opts->shares_name
+                    ? *maybe_sl_opts->shares_name
+                    : service_level_controller::default_service_level_name;
+
+            co_return co_await _sl_controller.with_service_level(sl_name, std::forward<Func>(func));
         }
 
         future<std::vector<cql3::description>> describe_attached_service_levels();
@@ -222,6 +239,7 @@ private:
     std::set<sstring> _effectively_dropped_sls;
     std::pair<const sstring*, service_level*> _sl_lookup[max_scheduling_groups()];
     service_level _default_service_level;
+    std::optional<scheduling_group> _driver_scheduling_group = std::nullopt;
     service_level_distributed_data_accessor_ptr _sl_data_accessor;
     sharded<auth::service>& _auth_service;
     locator::shared_token_metadata& _token_metadata;
@@ -337,6 +355,9 @@ public:
      * get_scheduling_group("default")
      */
     scheduling_group get_scheduling_group(sstring service_level_name);
+    std::optional<scheduling_group> get_driver_scheduling_group() const noexcept {
+        return _driver_scheduling_group;
+    }
     /**
      * Get the scheduling group of a specific user
      * @param user - the user for determining the service level
