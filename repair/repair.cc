@@ -1331,7 +1331,46 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
     // repair of each range is performed separately with repair_range().
     dht::token_range_vector ranges;
     if (options.ranges.size()) {
-        ranges = options.ranges;
+        // A requested range may span several vnode ranges with different
+        // replica sets, while repair_range() assumes each range has a single
+        // replica set (get_neighbors() resolves the replicas from the range's
+        // end token alone). Intersect the requested ranges with the local
+        // ranges, splitting them on vnode boundaries, so that each repaired
+        // range has a uniform replica set. Portions of the requested ranges
+        // this node is not a replica of are dropped, as the start_token and
+        // end_token options below already do.
+        auto local_ranges = co_await erm.get_ranges(my_host_id);
+        dht::token_range_vector dropped_ranges;
+        for (const auto& given_range : options.ranges) {
+            // The parts of given_range not replicated by this node are
+            // dropped; collect them to report the lost coverage below.
+            dht::token_range_vector remaining = {given_range};
+            for (const auto& local_range : local_ranges) {
+                if (auto intersection_opt = given_range.intersection(local_range, dht::token_comparator())) {
+                    dht::token_range_vector new_remaining;
+                    for (const auto& r : remaining) {
+                        auto subtracted = r.subtract(*intersection_opt, dht::token_comparator());
+                        new_remaining.insert(new_remaining.end(), subtracted.begin(), subtracted.end());
+                    }
+                    remaining = std::move(new_remaining);
+                    ranges.push_back(std::move(*intersection_opt));
+                }
+            }
+            dropped_ranges.insert(dropped_ranges.end(), remaining.begin(), remaining.end());
+            co_await coroutine::maybe_yield();
+        }
+        if (!dropped_ranges.empty()) {
+            constexpr size_t max_ranges_to_log = 100;
+            auto to_log = std::min(dropped_ranges.size(), max_ranges_to_log);
+            rlogger.warn("repair[{}]: {} sub-range(s) of the requested ranges are not replicated by this node and will not be repaired: {}{}",
+                    id.uuid(), dropped_ranges.size(),
+                    dht::token_range_vector(dropped_ranges.begin(), dropped_ranges.begin() + to_log),
+                    dropped_ranges.size() > max_ranges_to_log ? " and more" : "");
+        }
+        if (ranges.size() != options.ranges.size()) {
+            rlogger.info("repair[{}]: split the requested ranges on the local replica-set boundaries: {} requested ranges resulted in {} ranges to repair",
+                    id.uuid(), options.ranges.size(), ranges.size());
+        }
     } else if (options.primary_range) {
         rlogger.info("primary-range repair");
         // when "primary_range" option is on, neither data_centers nor hosts
