@@ -2165,6 +2165,46 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     co_return rjson::print(std::move(res));
 }
 
+static constexpr std::string_view batch_get_item_launch_failure_injection = "alternator_batch_get_item_launch_failure";
+static constexpr std::string_view batch_get_item_pause_read_injection = "alternator_batch_get_item_pause_read";
+static constexpr std::string_view batch_get_item_response_failure_injection = "alternator_batch_get_item_response_failure";
+
+static void maybe_inject_batch_get_item_launch_failure(const schema& table_schema, bool previous_read_was_launched) {
+    if (!previous_read_was_launched) {
+        return;
+    }
+    const auto table_name = utils::get_local_injector().inject_parameter<std::string_view>(
+            batch_get_item_launch_failure_injection, "table_name");
+    if (table_name && *table_name == table_schema.cf_name()) {
+        utils::get_local_injector().inject(batch_get_item_launch_failure_injection, [] {
+            throw std::runtime_error("batch_get_item launch injection");
+        });
+    }
+}
+
+static bool should_pause_batch_get_item_read(const schema& table_schema, bool first_read) {
+    const auto table_name = utils::get_local_injector().inject_parameter<std::string_view>(
+            batch_get_item_pause_read_injection, "table_name");
+    const auto position = utils::get_local_injector().inject_parameter<std::string_view>(
+            batch_get_item_pause_read_injection, "position");
+    return table_name && *table_name == table_schema.cf_name()
+            && position && *position == (first_read ? "first" : "later");
+}
+
+template <typename T>
+static future<T> maybe_pause_batch_get_item_read(future<T> read, bool pause_read) {
+    if (!pause_read) {
+        return std::move(read);
+    }
+    return std::move(read).then([] (T result) {
+        return utils::get_local_injector().inject(
+                batch_get_item_pause_read_injection, utils::wait_for_message(5min)).then(
+                [result = std::move(result)] () mutable {
+            return std::move(result);
+        });
+    });
+}
+
 future<executor::request_return_type> executor::batch_get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     // FIXME: In this implementation, an unbounded batch size can cause
     // unbounded response JSON object to be buffered in memory, unbounded
@@ -2281,8 +2321,8 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                         per_table_stats->operation_sizes.batch_get_item_op_size_kb.add(bytes_to_kb_ceil(size));
                     }
                 };
-                auto f = _proxy.query_result(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
-                        service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
+                maybe_inject_batch_get_item_launch_failure(*rs.schema, !response_futures.empty());
+                auto process_query_result =
                         [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection),
                                 attrs_to_get = rs.attrs_to_get, item_callback = std::move(item_callback)]
                         (service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr) mutable -> future<batch_get_item_result> {
@@ -2294,7 +2334,11 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                     return describe_multi_item(std::move(schema), std::move(partition_slice), std::move(selection), std::move(qr.query_result), std::move(attrs_to_get), std::move(item_callback)).then([] (std::vector<rjson::value> result) {
                         return make_ready_future<batch_get_item_result>(std::move(result));
                     });
-                });
+                };
+                const bool pause_read = should_pause_batch_get_item_read(*rs.schema, response_futures.empty());
+                auto query_result_future = _proxy.query_result(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
+                        service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state));
+                auto f = maybe_pause_batch_get_item_read(std::move(query_result_future), pause_read).then(std::move(process_query_result));
                 response_futures.push_back(std::move(f));
             } catch (...) {
                 response_futures.push_back(current_exception_as_future<batch_get_item_result>());
@@ -2312,6 +2356,15 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         if (response_futures[i].failed()) {
             response_exceptions[i] = response_futures[i].get_exception();
         }
+    }
+    if (const auto table_name = utils::get_local_injector().inject_parameter<std::string_view>(
+                batch_get_item_response_failure_injection, "table_name");
+            table_name && std::ranges::any_of(requests, [&] (const table_requests& rs) {
+                return *table_name == rs.schema->cf_name();
+            })) {
+        utils::get_local_injector().inject(batch_get_item_response_failure_injection, [] {
+            throw std::runtime_error("batch_get_item response injection");
+        });
     }
 
     // Process completed requests and build the response.
