@@ -27,6 +27,7 @@
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
 #include "replica/database.hh"
+#include "service/tablet_allocator.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/eventually.hh"
 
@@ -259,6 +260,58 @@ SEASTAR_TEST_CASE(test_cluster_config_registry_enforces_integer_bounds) {
         BOOST_REQUIRE_EQUAL(db::cluster_config_registry::to_integer(opt, sstring("21")), 15);
         BOOST_REQUIRE_EQUAL(db::cluster_config_registry::to_integer(opt, std::nullopt), 15);
         BOOST_REQUIRE_EQUAL(db::cluster_config_registry::to_integer(opt, sstring("abc")), 15);
+    });
+}
+
+// tablets_group0_leader_shard_ratio is a CLUSTER-only integer option bounded to [0, 100]. With
+// no override the allocator sees the default (no skew) and the local node, which leads group0 in
+// the test environment, as the leader.
+SEASTAR_TEST_CASE(test_cluster_config_tablets_group0_leader_shard_ratio) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_cfg WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+
+        const auto* opt = db::cluster_config_registry::find(db::cluster_config_registry::option_name::tablets_group0_leader_shard_ratio);
+        BOOST_REQUIRE(opt != nullptr);
+        BOOST_REQUIRE_EQUAL(std::get<int64_t>(opt->default_value), 100);
+
+        auto& talloc = e.get_tablet_allocator().local();
+        const auto local_host = e.shared_token_metadata().local().get()->get_topology().my_host_id();
+
+        with_config_manager(e, [&] (sharded<db::cluster_config_manager>& mgr) {
+            BOOST_REQUIRE_EQUAL(mgr.local().resolve_integer_config(*opt, {}), 100);
+        });
+        auto skew = talloc.group0_leader_shard_skew();
+        BOOST_REQUIRE_EQUAL(skew.ratio, 100u);
+        BOOST_REQUIRE(skew.leader == local_host);
+
+        for (const auto* invalid : {"101", "-1"}) {
+            BOOST_REQUIRE_EXCEPTION(
+                e.execute_cql(seastar::format("ALTER CLUSTER WITH tablets_group0_leader_shard_ratio = {}", invalid)).get(),
+                exceptions::invalid_request_exception, [] (const exceptions::invalid_request_exception& ex) {
+                return std::string_view(ex.what()).find("expected an integer in [0, 100]") != std::string_view::npos;
+            });
+        }
+        for (const auto* valid : {"0", "100"}) {
+            BOOST_REQUIRE_NO_THROW(e.execute_cql(seastar::format("ALTER CLUSTER WITH tablets_group0_leader_shard_ratio = {}", valid)).get());
+        }
+
+        e.execute_cql("ALTER CLUSTER WITH tablets_group0_leader_shard_ratio = 30").get();
+        e.cluster_config_manager().local().refresh().get();
+        BOOST_REQUIRE_EQUAL(talloc.group0_leader_shard_skew().ratio, 30u);
+
+        // Cluster-wide only: there is a single leader.
+        e.execute_cql("CREATE TABLE ks_cfg.tbl (pk int PRIMARY KEY, v int)").get();
+        for (const auto* stmt : {"ALTER KEYSPACE ks_cfg WITH tablets_group0_leader_shard_ratio = 5",
+                                 "ALTER TABLE ks_cfg.tbl WITH tablets_group0_leader_shard_ratio = 5"}) {
+            BOOST_REQUIRE_EXCEPTION(e.execute_cql(stmt).get(), exceptions::syntax_exception,
+                    [] (const exceptions::syntax_exception& ex) {
+                return std::string_view(ex.what()).find("tablets_group0_leader_shard_ratio") != std::string_view::npos;
+            });
+        }
+
+        e.execute_cql("ALTER CLUSTER WITH tablets_group0_leader_shard_ratio = null").get();
+        e.cluster_config_manager().local().refresh().get();
+        BOOST_REQUIRE_EQUAL(talloc.group0_leader_shard_skew().ratio, 100u);
     });
 }
 

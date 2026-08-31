@@ -1569,3 +1569,65 @@ SEASTAR_THREAD_TEST_CASE(test_rack_diff) {
 }
 
 BOOST_AUTO_TEST_SUITE_END()
+
+// The group0 leader's shard 0 is deweighted when allocating a new table's tablets; other hosts,
+// and an unknown leader, allocate uniformly.
+SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablet_allocation_group0_leader_shard_skew) {
+    constexpr unsigned shard_count = 4;
+    constexpr size_t tablet_count = 16;
+    const std::vector<sstring> racks = {"rack1", "rack2", "rack3"};
+
+    std::vector<locator::host_id> hosts;
+    for (size_t i = 0; i < racks.size(); ++i) {
+        hosts.push_back(locator::host_id(utils::make_random_uuid()));
+    }
+
+    locator::token_metadata::config tm_cfg;
+    tm_cfg.topo_cfg.this_endpoint = gms::inet_address("192.168.0.1");
+    tm_cfg.topo_cfg.this_host_id = hosts[0];
+    tm_cfg.topo_cfg.local_dc_rack = { "dc1", racks[0] };
+    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
+    auto stop_stm = deferred_stop(stm);
+    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+        for (size_t i = 0; i < hosts.size(); ++i) {
+            tm.get_topology().add_node(hosts[i], locator::endpoint_dc_rack{"dc1", racks[i]}, locator::node::state::normal, shard_count);
+            co_await tm.update_normal_tokens(std::unordered_set<token>{token{tests::d2t(double(i + 1) / hosts.size())}}, hosts[i]);
+        }
+    }).get();
+    auto tmptr = stm.get();
+
+    auto s = schema_builder(this_smp_shard_count(), "ks", "tb")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("v", utf8_type)
+        .build();
+    locator::replication_strategy_params params({{"dc1", "3"}}, tablet_count, std::nullopt);
+    auto ars_ptr = abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
+    auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
+    BOOST_REQUIRE(tab_awr_ptr);
+
+    auto replicas_per_shard = [&] (const locator::group0_leader_shard_skew& skew, locator::host_id host) {
+        auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, tmptr, tablet_count, skew).get();
+        std::vector<size_t> counts(shard_count, 0);
+        for (auto tid : tmap.tablet_ids()) {
+            for (const auto& r : tmap.get_tablet_info(tid).replicas) {
+                if (r.host == host) {
+                    counts[r.shard]++;
+                }
+            }
+        }
+        return counts;
+    };
+
+    // RF=3 over 3 racks: every host holds a replica of every tablet.
+    auto uniform = std::vector<size_t>(shard_count, tablet_count / shard_count);
+    BOOST_REQUIRE_EQUAL(replicas_per_shard({}, hosts[1]), uniform);
+    BOOST_REQUIRE_EQUAL(replicas_per_shard({std::nullopt, 0}, hosts[1]), uniform);
+
+    auto leader_counts = replicas_per_shard({hosts[1], 0}, hosts[1]);
+    testlog.info("leader per-shard replicas: {}", leader_counts);
+    BOOST_REQUIRE_LE(leader_counts[0], 1u);
+    for (unsigned i = 2; i < shard_count; ++i) {
+        BOOST_REQUIRE_LE(std::abs(int(leader_counts[i]) - int(leader_counts[1])), 1);
+    }
+    BOOST_REQUIRE_EQUAL(replicas_per_shard({hosts[1], 0}, hosts[2]), uniform);
+}
