@@ -15,6 +15,7 @@
 #include <seastar/core/loop.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
+#include <seastar/util/file.hh>
 #include <seastar/core/coroutine.hh>
 
 #include "sstables/generation_type.hh"
@@ -6747,6 +6748,59 @@ SEASTAR_TEST_CASE(test_last_gc_sstable_is_not_leaked_on_successful_compaction) {
                             fmt::join(extra | std::views::transform([] (const auto& info) {
                                 return format("{} (origin: {})", info.toc, info.origin);
                             }), ", ")));
+    });
+}
+
+// Deleting the leaked garbage-collected sstable has to survive a crash.
+//
+// mark_for_deletion() does not: it records the intent in memory only, and the
+// files are unlinked once the last reference to the sstable object goes away.
+// A crash in between leaves a sealed, complete sstable that the next restart
+// picks up from the data directory again -- the very leak
+// test_last_gc_sstable_is_not_leaked_on_successful_compaction() is about.
+//
+// The deletion therefore goes through sstables::atomic_deletion, which first
+// commits the intent to a pending_delete log.  This test injects a failure right
+// after that commit -- i.e. it simulates dying before anything was unlinked --
+// and checks that the log is on disk and names the leaked sstable, which is what
+// makes the restart finish the deletion (see
+// test_distributed_loader_with_pending_delete for the replay itself).
+SEASTAR_TEST_CASE(test_unused_gc_sstable_deletion_is_crash_safe) {
+    return test_env::do_with_async([] (test_env& env) {
+        constexpr auto injection = "delete_atomically_after_prepare";
+        scoped_error_injection inject(injection);
+        if (!utils::get_local_injector().is_enabled(injection)) {
+            testlog.info("Skipping test: error injection is not compiled in");
+            return;
+        }
+
+        auto census = compact_leaving_unused_gc_sstable(env);
+
+        // The injected failure aborts the deletion after the commit, so the
+        // sstable this is all about is still identifiable.
+        auto leaked = census.find_by_origin("garbage_collection");
+        BOOST_REQUIRE_MESSAGE(leaked.has_value(), "no garbage-collected sstable was produced");
+        BOOST_REQUIRE_MESSAGE(!census.handed_over_tocs.contains(leaked->toc),
+                fmt::format("{} was attached; the scenario no longer leaves an unused GC sstable", leaked->toc));
+
+        auto toc = fs::path(std::string(leaked->toc));
+        auto pending_delete_dir = toc.parent_path() / sstables::pending_delete_dir;
+        BOOST_REQUIRE_MESSAGE(fs::exists(pending_delete_dir),
+                fmt::format("{} was not created, so nothing tells a restart to delete {}",
+                            pending_delete_dir, toc));
+
+        // The log names TOCs relative to the table's base directory.
+        bool listed = false;
+        for (const auto& entry : fs::directory_iterator(pending_delete_dir)) {
+            auto text = seastar::util::read_entire_file_contiguous(entry.path()).get();
+            if (text.find(std::string(toc.filename())) != std::string::npos) {
+                listed = true;
+                break;
+            }
+        }
+        BOOST_REQUIRE_MESSAGE(listed,
+                fmt::format("no pending_delete log in {} names {}, so a restart would load it again",
+                            pending_delete_dir, toc));
     });
 }
 
