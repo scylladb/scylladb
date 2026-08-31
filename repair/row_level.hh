@@ -250,7 +250,10 @@ private:
 public:
     future<gc_clock::time_point> repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas, locator::tablet_transition_stage stage);
 
+private:
+    future<> run_tablet_repair(gc_clock::time_point& _flush_time, bool& _should_flush_and_flush_failed, const sstring& _keyspace, const std::vector<sstring>& _tables, const std::vector<tablet_repair_task_meta>& _metas, const std::optional<int>& _ranges_parallelism, service::frozen_topology_guard _topo_guard, bool _skip_flush, const tablet_repair_sched_info& sched_info, streaming::stream_reason _reason, tasks::task_info parent_data, repair_uniq_id id);
 
+public:
     future<std::optional<repair_task_progress>> get_tablet_repair_task_progress(tasks::task_id task_uuid);
 
 private:

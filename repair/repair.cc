@@ -2538,16 +2538,24 @@ size_t repair::tablet_repair_task_impl::get_metas_size() const noexcept {
     return _metas.size() > 0 ? _metas.size() : _metas_size;
 }
 
-future<> repair::tablet_repair_task_impl::run() {
-    auto m = dynamic_pointer_cast<repair::task_manager_module>(_module);
-    auto& rs = m->get_repair_service();
-    auto id = get_repair_uniq_id();
+future<> repair_service::run_tablet_repair(
+        gc_clock::time_point& _flush_time,
+        bool& _should_flush_and_flush_failed,
+        const sstring& _keyspace,
+        const std::vector<sstring>& _tables,
+        const std::vector<tablet_repair_task_meta>& _metas,
+        const std::optional<int>& _ranges_parallelism,
+        service::frozen_topology_guard _topo_guard,
+        bool _skip_flush,
+        const tablet_repair_sched_info& sched_info,
+        streaming::stream_reason _reason,
+        tasks::task_info parent_data,
+        repair_uniq_id id) {
     auto keyspace = _keyspace;
     rlogger.debug("repair[{}]: Repair tablet for keyspace={} tables={} status=started", id.uuid(), _keyspace, _tables);
-    co_await m->run(id, [this, &rs, id] () mutable {
+    co_await _repair_module->run(id, [this, id, &_keyspace, &_tables, &_metas,  &_ranges_parallelism, &_flush_time, &_should_flush_and_flush_failed, &_topo_guard, &_skip_flush, &parent_data, &_reason, &sched_info] () mutable {
         // This runs inside a seastar thread
         auto start_time = std::chrono::steady_clock::now();
-        auto parent_data = info();
         std::atomic<int> idx{1};
 
         // Start the off strategy updater
@@ -2559,14 +2567,14 @@ future<> repair::tablet_repair_task_impl::run() {
             table_ids.insert(meta.tid);
         }
         abort_source as;
-        auto off_strategy_updater = seastar::async([&rs, uuid = id.uuid().uuid(), &table_ids, &participants, &as] {
+        auto off_strategy_updater = seastar::async([this, uuid = id.uuid().uuid(), &table_ids, &participants, &as] {
             auto tables = std::list<table_id>(table_ids.begin(), table_ids.end());
             auto req = node_ops_cmd_request(node_ops_cmd::repair_updater, node_ops_id{uuid}, {}, {}, {}, {}, std::move(tables));
             auto update_interval = std::chrono::seconds(30);
             while (!as.abort_requested()) {
                 sleep_abortable(update_interval, as).get();
-                parallel_for_each(participants, [&rs, uuid, &req] (locator::host_id node) {
-                    return ser::node_ops_rpc_verbs::send_node_ops_cmd(&rs._messaging, node, req).then([uuid, node] (node_ops_cmd_response resp) {
+                parallel_for_each(participants, [this, uuid, &req] (locator::host_id node) {
+                    return ser::node_ops_rpc_verbs::send_node_ops_cmd(&_messaging, node, req).then([uuid, node] (node_ops_cmd_response resp) {
                         rlogger.debug("repair[{}]: Got node_ops_cmd::repair_updater response from node={}", uuid, node);
                     }).handle_exception([uuid, node] (std::exception_ptr ep) {
                         rlogger.warn("repair[{}]: Failed to send node_ops_cmd::repair_updater to node={}", uuid, node);
@@ -2588,9 +2596,9 @@ future<> repair::tablet_repair_task_impl::run() {
             rlogger.info("repair[{}]: Finished to shutdown off-strategy compaction updater", uuid);
         });
 
-        auto cleanup_repair_range_history = defer([&rs, uuid = id.uuid()] () mutable noexcept {
+        auto cleanup_repair_range_history = defer([this, uuid = id.uuid()] () mutable noexcept {
             try {
-                rs.cleanup_history(tasks::task_id{uuid.uuid()}).get();
+                cleanup_history(tasks::task_id{uuid.uuid()}).get();
             } catch (...) {
                 rlogger.warn("repair[{}]: Failed to cleanup history: {}", uuid, std::current_exception());
             }
@@ -2598,7 +2606,7 @@ future<> repair::tablet_repair_task_impl::run() {
 
         auto parent_shard = this_shard_id();
         auto flush_time = _flush_time;
-        auto res = rs.container().map_reduce0([&idx, id, metas = _metas, parent_data, reason = _reason, tables = _tables, sched_info = sched_info, ranges_parallelism = _ranges_parallelism, parent_shard, topo_guard = _topo_guard, skip_flush = _skip_flush] (repair_service& rs) -> future<std::pair<gc_clock::time_point, bool>> {
+        auto res = container().map_reduce0([&idx, id, metas = _metas, parent_data, reason = _reason, tables = _tables, sched_info = sched_info, ranges_parallelism = _ranges_parallelism, parent_shard, topo_guard = _topo_guard, skip_flush = _skip_flush] (repair_service& rs) -> future<std::pair<gc_clock::time_point, bool>> {
             std::exception_ptr error;
             gc_clock::time_point shard_flush_time;
             bool flush_failed = false;
@@ -2684,11 +2692,17 @@ future<> repair::tablet_repair_task_impl::run() {
                 id.uuid(), _keyspace, _tables, id.id, _metas.size(), duration);
     }).then([id, keyspace] {
         rlogger.debug("repair[{}]: Repair tablet for keyspace={} status=succeeded", id.uuid(), keyspace);
-    }).handle_exception([id, keyspace, &rs] (std::exception_ptr ep) {
+    }).handle_exception([id, keyspace, this] (std::exception_ptr ep) {
         rlogger.warn("repair[{}]: Repair tablet for keyspace={} status=failed: {}", id.uuid(), keyspace,  ep);
-        rs.get_repair_module().check_in_shutdown();
+        get_repair_module().check_in_shutdown();
         return make_exception_future<>(ep);
     });
+}
+
+future<> repair::tablet_repair_task_impl::run() {
+    auto m = dynamic_pointer_cast<repair::task_manager_module>(_module);
+    auto& rs = m->get_repair_service();
+    return rs.run_tablet_repair(_flush_time, _should_flush_and_flush_failed, _keyspace, _tables, _metas, _ranges_parallelism, _topo_guard, _skip_flush, sched_info, _reason, info(), get_repair_uniq_id());
 }
 
 future<std::optional<double>> repair::tablet_repair_task_impl::expected_total_workload() const {
