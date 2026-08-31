@@ -4442,6 +4442,136 @@ SEASTAR_THREAD_TEST_CASE(test_drain_with_forced_capacity_based_balancing_with_in
     }, std::move(cfg)).get();
 }
 
+// Regression test: force_capacity_based_balancing + tablets_group0_leader_shard_ratio != 100
+// gives same-node shards unequal capacity, which could make is_balanced()'s exact-equality
+// check unreachable and oscillate forever. rebalance_tablets() throws if it never converges.
+SEASTAR_THREAD_TEST_CASE(test_group0_leader_shard_ratio_converges_with_forced_capacity_based_balancing) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->force_capacity_based_balancing.set(true);
+    cfg.db_config->tablets_group0_leader_shard_ratio.set(50);
+
+    do_with_cql_env_thread([] (auto& e) {
+        scoped_logger_level lb_log("load_balancer", seastar::log_level::debug);
+
+        auto local_host = e.get_storage_service().local().get_token_metadata_ptr()->get_topology().my_host_id();
+        unsigned shard_count = 4;
+        const uint64_t capacity_unit = 100UL * 1024UL * 1024UL * 1024UL;
+
+        locator::endpoint_dc_rack dc_rack{"dc_local", "rack_local"};
+        auto& stm = e.shared_token_metadata().local();
+        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+            tm.update_topology(local_host, dc_rack, node::state::normal, shard_count);
+            return make_ready_future<>();
+        }).get();
+
+        shared_load_stats stats;
+        stats.set_capacity(local_host, capacity_unit);
+
+        auto ks_name = add_keyspace(e, {{dc_rack.dc, 1}}, 0);
+        auto table1 = add_table(e, ks_name).get();
+
+        // Start from a maximally imbalanced state: every tablet crammed onto shard 0.
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(32);
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set { tablet_replica {local_host, 0} }
+                });
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        // Must converge to an empty plan. Without the fix, this throws
+        // "convergence not reached within limit" due to perpetual oscillation.
+        rebalance_tablets(e, &stats);
+
+        std::vector<unsigned> shard_counts(shard_count, 0);
+        auto& tmap = stm.get()->tablets().get_tablet_map(table1);
+        tmap.for_each_tablet([&] (tablet_id, const tablet_info& ti) -> future<> {
+            for (auto& r : ti.replicas) {
+                if (r.host == local_host) {
+                    shard_counts[r.shard]++;
+                }
+            }
+            return make_ready_future<>();
+        }).get();
+
+        testlog.info("Final per-shard tablet counts on local host: {}", shard_counts);
+
+        // Peer shards (deweighting only targets shard 0) should be balanced among themselves.
+        for (unsigned i = 2; i < shard_count; ++i) {
+            BOOST_REQUIRE_LE(std::abs(int(shard_counts[i]) - int(shard_counts[1])), 1);
+        }
+        // Shard 0 (ratio=50) should have noticeably fewer tablets than its peers.
+        BOOST_REQUIRE_LT(shard_counts[0], shard_counts[1]);
+    }, std::move(cfg)).get();
+}
+
+// Verifies tablets_group0_leader_shard_ratio is live-updatable (no restart needed),
+// using default (size-based) balancing, not just the force_capacity_based_balancing path.
+SEASTAR_THREAD_TEST_CASE(test_group0_leader_shard_ratio_is_live_updatable) {
+    auto cfg = tablet_cql_test_config();
+
+    do_with_cql_env_thread([] (auto& e) {
+        auto local_host = e.get_storage_service().local().get_token_metadata_ptr()->get_topology().my_host_id();
+        unsigned shard_count = 4;
+        locator::endpoint_dc_rack dc_rack{"dc_local", "rack_local"};
+
+        auto& stm = e.shared_token_metadata().local();
+        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+            tm.update_topology(local_host, dc_rack, node::state::normal, shard_count);
+            return make_ready_future<>();
+        }).get();
+
+        shared_load_stats stats;
+        stats.set_capacity(local_host, 100UL * 1024UL * 1024UL * 1024UL);
+
+        auto ks_name = add_keyspace(e, {{dc_rack.dc, 1}}, 0);
+        auto table1 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(32);
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info { tablet_replica_set { tablet_replica {local_host, 0} } });
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+        stats.set_default_tablet_sizes(stm.get());
+
+        auto shard0_count = [&] {
+            unsigned n = 0;
+            auto& tmap = stm.get()->tablets().get_tablet_map(table1);
+            tmap.for_each_tablet([&] (tablet_id, const tablet_info& ti) -> future<> {
+                for (auto& r : ti.replicas) {
+                    if (r.host == local_host && r.shard == 0) {
+                        n++;
+                    }
+                }
+                return make_ready_future<>();
+            }).get();
+            return n;
+        };
+
+        // Default ratio (100): shard 0 gets a roughly even share.
+        rebalance_tablets(e, &stats);
+        auto baseline = shard0_count();
+        BOOST_REQUIRE_GE(baseline, 32 / shard_count - 1);
+
+        // Live-update to 0, on an already-running, already-balanced environment.
+        auto& live_cfg = e.db_config();
+        live_cfg.tablets_group0_leader_shard_ratio(0);
+        rebalance_tablets(e, &stats);
+        BOOST_REQUIRE_LT(shard0_count(), baseline);
+
+        // Live-update back: shard 0 should regain its share.
+        live_cfg.tablets_group0_leader_shard_ratio(100);
+        rebalance_tablets(e, &stats);
+        BOOST_REQUIRE_GE(shard0_count(), baseline);
+    }, std::move(cfg)).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
     do_with_cql_env_thread([] (auto& e) {
         topology_builder topo(e);
