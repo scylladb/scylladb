@@ -1255,6 +1255,34 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             group0_update_collector updates;
             bool requires_schema_changes = false;
 
+            // A quiesce request asks a question about the cluster as a whole, so several of them
+            // queued next to each other all have the same answer. Collapse the longest run of
+            // consecutive quiesce requests at the head of the queue and answer them from a single
+            // evaluation, instead of collecting load stats and balancing once per request.
+            //
+            // Only a prefix is collapsed, for two reasons: requests of other types keep their
+            // position in the queue, and every request in the batch was already queued before the
+            // evaluation below starts, so each still gets an answer computed after it was
+            // submitted. Attaching a request to an evaluation which started earlier would answer
+            // it with a stale observation.
+            std::vector<utils::UUID> batch{req_id};
+            const auto& queue = _topo_sm._topology.global_requests_queue;
+            for (size_t i = 1; i < queue.size(); i++) {
+                auto entry = co_await _sys_ks.get_topology_request_entry_opt(queue[i]);
+                if (!entry) {
+                    break;
+                }
+                auto* queued = std::get_if<global_topology_request>(&entry->request_type);
+                if (!queued || *queued != global_topology_request::quiesce) {
+                    break;
+                }
+                batch.push_back(queue[i]);
+            }
+            if (batch.size() > 1) {
+                rtlogger.debug("quiesce topology request: answering {} queued requests from one evaluation",
+                        batch.size());
+            }
+
             try {
                 rtlogger.debug("quiesce topology request: refreshing tablet load stats");
                 auto [load_stats, complete] = co_await collect_tablet_load_stats(require_live_nodes::yes);
@@ -1280,22 +1308,28 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
             updates.emplace_back(
                     topology_mutation_builder(guard.write_timestamp())
-                         .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
+                         .drop_first_global_topology_request_ids(_topo_sm._topology.global_requests_queue, batch)
                          .build());
-            updates.emplace_back(
-                    topology_request_tracking_mutation_builder(req_id)
-                         .set("start_time", db_clock::now())
-                         .done(error)
-                         .build());
+            // One evaluation answered all of them, so stamp them with one time rather than
+            // letting each request pick up a slightly different db_clock::now().
+            const auto completion_time = db_clock::now();
+            for (const auto& id : batch) {
+                updates.emplace_back(
+                        topology_request_tracking_mutation_builder(id)
+                             .set("start_time", completion_time)
+                             .done(error, completion_time)
+                             .build());
+            }
             if (error) {
-                auto reason = fmt::format("quiesce request deferred: {}", *error);
+                auto reason = fmt::format("quiesce request deferred ({} request(s)): {}", batch.size(), *error);
                 if (requires_schema_changes) {
                     co_await update_topology_state_with_mixed_change(std::move(guard), std::move(updates), reason);
                 } else {
                     co_await update_topology_state(std::move(guard), std::move(updates), reason);
                 }
             } else {
-                co_await update_topology_state(std::move(guard), std::move(updates), "quiesce request completed");
+                co_await update_topology_state(std::move(guard), std::move(updates),
+                        fmt::format("quiesce request completed ({} request(s))", batch.size()));
             }
         }
         break;
