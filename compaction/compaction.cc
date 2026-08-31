@@ -2123,12 +2123,20 @@ future<compaction_result> compaction::run(std::unique_ptr<compaction> c) {
         auto consumer = c->consume();
 
         auto start_time = db_clock::now();
+        std::exception_ptr ex;
         try {
            consumer.get();
         } catch (...) {
-            c->on_interrupt(std::current_exception());
+            ex = std::current_exception();
+        }
+        // Deliberately done with no exception in flight: a seastar thread does not
+        // save the exception handling state across a context switch, so yielding
+        // from inside a catch block is not safe, and ~compaction() below closes
+        // the writers' files.
+        if (ex) {
+            c->on_interrupt(ex);
             c = nullptr; // make sure writers are stopped while running in thread context. This is because of calls to file.close().get();
-            throw;
+            std::rethrow_exception(std::move(ex));
         }
 
         return c->finish(std::move(start_time), db_clock::now());
