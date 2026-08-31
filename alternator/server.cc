@@ -1147,7 +1147,34 @@ future<> server::stop() {
     });
 }
 
-internal::json_parser::json_parser() : _run_parse_json_thread(async([this] {
+bool internal::should_parse_json_yieldably(const chunked_content& content) {
+    size_t size = 0;
+    for (const auto& chunk : content) {
+        size += chunk.size();
+        if (size >= internal::yieldable_parsing_threshold) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static thread_attributes json_parser_thread_attributes(scheduling_group sg) {
+    thread_attributes attr;
+    attr.sched_group = sg;
+#ifdef SANITIZE
+    // ASAN's stack instrumentation makes RapidJSON's recursive parser exceed
+    // Seastar's default thread stack before the nesting guard can report an
+    // error. Parsing is serialized, so the larger stack has a bounded cost.
+    // See #31347 for evaluating iterative and resumable alternatives to the
+    // parser thread.
+    attr.stack_size = 512 * KB;
+#endif
+    return attr;
+}
+
+internal::json_parser::json_parser()
+        : _worker_scheduling_group(current_scheduling_group())
+        , _run_parse_json_thread(async(json_parser_thread_attributes(_worker_scheduling_group), [this] {
         while (true) {
             _document_waiting.wait().get();
             if (_as.abort_requested()) {
@@ -1165,10 +1192,23 @@ internal::json_parser::json_parser() : _run_parse_json_thread(async([this] {
 }
 
 future<rjson::value> internal::json_parser::parse(chunked_content&& content) {
-    if (content.size() < yieldable_parsing_threshold) {
+    if (!should_parse_json_yieldably(content)) {
         return make_ready_future<rjson::value>(rjson::parse(std::move(content)));
     }
-    return with_semaphore(_parsing_sem, 1, [this, content = std::move(content)] () mutable {
+
+    auto sg = current_scheduling_group();
+    return with_semaphore(_parsing_sem, 1, [this, sg, content = std::move(content)] () mutable {
+        // A Seastar thread cannot change its construction-time scheduling
+        // group. Reuse the worker for its own group; otherwise create a
+        // per-request thread in the caller's group.
+        if (sg != _worker_scheduling_group) {
+            // FIXME: #31349. Reuse the worker by switching its scheduling
+            // group once scylladb/seastar#3651 is available.
+            return async(json_parser_thread_attributes(sg), [content = std::move(content)] () mutable {
+                return rjson::parse_yieldable(std::move(content));
+            });
+        }
+
         _raw_document = std::move(content);
         _document_waiting.signal();
         return _document_parsed.wait().then([this] {
