@@ -1327,6 +1327,7 @@ public:
 
         const uint64_t default_tablet_size = _db.local().get_config().target_tablet_size_in_bytes();
 
+        // Shows the unskewed per-shard capacity, without the group0 leader shard 0 ratio.
         locator::load_sketch load(tm, stats, default_tablet_size);
         co_await load.populate();
 

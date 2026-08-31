@@ -37,9 +37,9 @@ value set at a broader one:
 
 Each option supports a fixed set of scopes. Options that describe a table (such as
 ``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. Options that
-describe the cluster as a whole (such as ``repair_hints_batchlog_flush_discard_unreplayed_hints``)
-can be set at ``CLUSTER`` scope only. No option currently supports the ``DATACENTER``, ``RACK`` or
-``NODE`` scopes.
+describe the cluster as a whole (such as ``repair_hints_batchlog_flush_discard_unreplayed_hints``
+or ``tablets_group0_leader_shard_ratio``) can be set at ``CLUSTER`` scope only. No option currently
+supports the ``DATACENTER``, ``RACK`` or ``NODE`` scopes.
 
 Each scope stores only the values that were explicitly set there. The *effective* value of an
 option for a table is the value stored at the narrowest scope that has one: the table's own value
@@ -228,6 +228,23 @@ Available options
        the default, for example after a node stayed down for a long time. Must be between ``1``
        and ``315360000`` (ten years). Default: ``300``, in effect once every node runs a version
        that knows the option.
+   * - ``tablets_group0_leader_shard_ratio``
+     - integer
+     - ``CLUSTER``
+     - Percentage (0-100) of the normal per-shard tablet capacity given to shard 0 of the group0
+       leader node, which carries extra raft and topology work. The node's capacity shrinks by what
+       shard 0 gives up and its other shards keep the normal capacity, so other nodes in its rack
+       (or datacenter) absorb the difference, or its other shards when it is the only node there.
+       ``100`` means no skew; ``0`` shrinks shard 0 to a floor of one
+       target-size tablet or 0.1% of its normal capacity, whichever is larger, during load balancing;
+       allocating a new table applies only the 0.1% relative floor.
+       The skewed node is persisted cluster-wide and follows the topology coordinator
+       (the group0 leader), but moves to a new coordinator only after it has been coordinator
+       for 10 minutes, so leadership changes shorter than that don't move tablets. When the skew moves,
+       the difference moves back onto the old leader and off the new one, from and to their rack
+       (or datacenter) peers, or their own other shards.
+       A moderate value such as ``50`` keeps that movement smaller than ``0``. Has no effect until every node supports the
+       ``TABLETS_SHARD0_SKEW`` cluster feature. Default: ``100``.
 
 .. _cql-cluster-config-yaml-options:
 

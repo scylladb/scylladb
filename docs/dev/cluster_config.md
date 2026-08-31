@@ -512,6 +512,8 @@ ALTER TABLE ks.tbl WITH auto_repair_enabled = true;
 
 `auto_repair_threshold_in_seconds` (integer seconds counted from the start of the last successful unfiltered repair, default `86400`, `0` disables time-based repair) is registered the same way and is set through the same forms.
 
+`tablets_group0_leader_shard_ratio` (integer percentage, bounded to `[0, 100]`, default `100`) is registered for the `CLUSTER` scope only, since there is one group0 leader: `ALTER CLUSTER WITH tablets_group0_leader_shard_ratio = 50` gives shard 0 of the leader half the normal per-shard tablet capacity, and the tablet allocator reads it on demand when it balances or allocates tablets.
+
 #### Consumer: The Tablet Repair Scheduler
 
 Both options are read on demand (the poll model) by the tablet load balancer when it builds a repair plan: once per table it resolves each option with `resolve_config` for the table's `lookup_context` and passes a stored value through the registry's `to_boolean`/`to_integer` converter. When no scope stores an override, the scheduler falls back to the node's `auto_repair_enabled_default` and `auto_repair_threshold_default_in_seconds` from `db/config.cc` rather than to the registered default, so clusters configured through `scylla.yaml` keep working and a stored override at any scope always wins over the yaml value. The yaml options are deprecated (a node that sets them warns at startup) and the fallback is temporary: once they are removed, the scheduler reads the options through the typed accessors and the registered default becomes the only default. They are not migrated through the registry because `value_status::Deprecated` in `db::config` means "accepted but ignored", which would drop the fallback in the same release.

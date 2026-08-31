@@ -14,6 +14,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "tablet_allocator_fwd.hh"
 #include "locator/token_metadata_fwd.hh"
+#include "locator/group0_leader_shard_skew.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/util/bool_class.hh>
@@ -425,6 +426,10 @@ public:
 
     /// Should be called when the node is no longer a leader.
     void on_leadership_lost();
+
+    /// The shard skew to use when placing tablets on this node's behalf: the persisted skew host
+    /// carried by the tablet metadata and the ratio currently configured for it.
+    locator::group0_leader_shard_skew group0_leader_shard_skew(const locator::token_metadata& tm);
 };
 
 /// Checks that the keyspace can be migrated from vnodes to tablets and returns its
