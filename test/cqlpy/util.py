@@ -357,7 +357,7 @@ class ScyllaMetrics:
     def get(self, name, labels = None, shard='total'):
         result = None
         for l in self._lines:
-            if not l.startswith(name):
+            if not l.startswith(name) or l[len(name):len(name) + 1] not in ('{', ' '):
                 continue
             labels_start = l.find('{')
             labels_finish = l.find('}')
