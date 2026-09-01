@@ -1519,7 +1519,7 @@ future<> repair_service::run_user_requested_repair(
     auto& sharded_db = get_db();
     auto& db = sharded_db.local();
 
-    return _repair_module->run(id, [this, &db, id, keyspace = std::move(keyspace), germs = std::move(_germs),
+    auto f = co_await coroutine::as_future(_repair_module->run(id, [this, &db, id, keyspace = std::move(keyspace), germs = std::move(_germs),
             cfs = std::move(_cfs), ranges = std::move(_ranges), hosts = std::move(_hosts), data_centers = std::move(_data_centers), ignore_nodes = std::move(_ignore_nodes), &task_as = _as, _small_table_optimization, _ranges_parallelism, task_data = std::move(task_data)] () mutable {
         auto uuid = node_ops_id{id.uuid().uuid()};
         auto start_time = std::chrono::steady_clock::now();
@@ -1606,13 +1606,16 @@ future<> repair_service::run_user_requested_repair(
         }).get();
         auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
         rlogger.info("repair[{}]: Finished user-requested repair for vnode keyspace={} tables={} repair_id={} duration={}", id.uuid(), keyspace, cfs, id.id, duration);
-    }).handle_exception([id, this] (std::exception_ptr ep) {
+    }));
+
+    if (f.failed()) {
+        auto ep = f.get_exception();
         rlogger.warn("repair[{}]: user-requested repair failed: {}", id.uuid(), ep);
         // If abort was requested, throw abort_requested_exception instead of wrapped exceptions from all shards,
         // so that it could be properly handled by callers.
         _repair_module->check_in_shutdown();
-        return make_exception_future<>(ep);
-    });
+        co_await coroutine::return_exception_ptr(std::move(ep));
+    }
 }
 
 future<int> repair_start(seastar::sharded<repair_service>& repair, sharded<gms::gossip_address_map>& am,
@@ -1751,7 +1754,7 @@ future<> repair_service::run_data_sync_repair(
     auto start_time = std::chrono::steady_clock::now();
     rlogger.info("repair[{}]: sync data for keyspace={}, status=started, reason={}, small_table_optimization_tables={}, normal_tables={}",
             id.uuid(), keyspace, _reason, small_cfs.size(), normal_cfs.size());
-    co_await _repair_module->run(id, [this, id, &db, keyspace, small_cfs = std::move(small_cfs), normal_cfs = std::move(normal_cfs), germs = std::move(germs), ranges = std::move(_ranges), neighbors = std::move(_neighbors), reason = _reason, &task_as = _as, frozen_topology_guard = _frozen_topology_guard, task_data = std::move(task_data)] () mutable {
+    auto f = co_await coroutine::as_future(_repair_module->run(id, [this, id, &db, keyspace, small_cfs = std::move(small_cfs), normal_cfs = std::move(normal_cfs), germs = std::move(germs), ranges = std::move(_ranges), neighbors = std::move(_neighbors), reason = _reason, &task_as = _as, frozen_topology_guard = _frozen_topology_guard, task_data = std::move(task_data)] () mutable {
         // A group of tables to be repaired together with a common set of ranges
         // and neighbors.
         struct repair_group {
@@ -1813,17 +1816,20 @@ future<> repair_service::run_data_sync_repair(
             }
             return make_ready_future<>();
         }).get();
-    }).handle_exception([&db, id, keyspace, this] (std::exception_ptr ep) {
+    }));
+
+    if (f.failed()) {
+        auto ep = f.get_exception();
         if (!db.has_keyspace(keyspace)) {
             rlogger.warn("repair[{}]: sync data for keyspace={}, status=failed: keyspace does not exist any more, ignoring it, {}", id.uuid(), keyspace, ep);
-            return make_ready_future<>();
+        } else {
+            rlogger.warn("repair[{}]: sync data for keyspace={}, status=failed: {}", id.uuid(), keyspace,  ep);
+            // If abort was requested, throw abort_requested_exception instead of wrapped exceptions from all shards,
+            // so that it could be properly handled by callers.
+            get_repair_module().check_in_shutdown();
+            co_await coroutine::return_exception_ptr(std::move(ep));
         }
-        rlogger.warn("repair[{}]: sync data for keyspace={}, status=failed: {}", id.uuid(), keyspace,  ep);
-        // If abort was requested, throw abort_requested_exception instead of wrapped exceptions from all shards,
-        // so that it could be properly handled by callers.
-        get_repair_module().check_in_shutdown();
-        return make_exception_future<>(ep);
-    });
+    }
     auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
     rlogger.info("repair[{}]: sync data for keyspace={}, status=succeeded, reason={}, duration={}",
             id.uuid(), keyspace, _reason, duration);
@@ -2611,7 +2617,7 @@ future<> repair_service::run_tablet_repair(
         repair_uniq_id id) {
     auto keyspace = _keyspace;
     rlogger.debug("repair[{}]: Repair tablet for keyspace={} tables={} status=started", id.uuid(), _keyspace, _tables);
-    co_await _repair_module->run(id, [this, id, &_keyspace, &_tables, &_metas,  &_ranges_parallelism, &_flush_time, &_should_flush_and_flush_failed, &_topo_guard, &_skip_flush, &parent_data, &_reason, &sched_info] () mutable {
+    auto f = co_await coroutine::as_future(_repair_module->run(id, [this, id, &_keyspace, &_tables, &_metas,  &_ranges_parallelism, &_flush_time, &_should_flush_and_flush_failed, &_topo_guard, &_skip_flush, &parent_data, &_reason, &sched_info] () mutable {
         // This runs inside a seastar thread
         auto start_time = std::chrono::steady_clock::now();
         std::atomic<int> idx{1};
@@ -2748,13 +2754,16 @@ future<> repair_service::run_tablet_repair(
         auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
         rlogger.info("repair[{}]: Finished user-requested repair for tablet keyspace={} tables={} repair_id={} tablets_repaired={} duration={}",
                 id.uuid(), _keyspace, _tables, id.id, _metas.size(), duration);
-    }).then([id, keyspace] {
+    }));
+
+    if (!f.failed()) {
         rlogger.debug("repair[{}]: Repair tablet for keyspace={} status=succeeded", id.uuid(), keyspace);
-    }).handle_exception([id, keyspace, this] (std::exception_ptr ep) {
+    } else {
+        auto ep = f.get_exception();
         rlogger.warn("repair[{}]: Repair tablet for keyspace={} status=failed: {}", id.uuid(), keyspace,  ep);
         get_repair_module().check_in_shutdown();
-        return make_exception_future<>(ep);
-    });
+        co_await coroutine::return_exception_ptr(std::move(ep));
+    }
 }
 
 auto fmt::formatter<node_ops_cmd>::format(node_ops_cmd cmd, fmt::format_context& ctx) const
