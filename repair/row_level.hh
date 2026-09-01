@@ -251,7 +251,11 @@ public:
     future<gc_clock::time_point> repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas, locator::tablet_transition_stage stage);
 
 private:
-    future<> run_tablet_repair(gc_clock::time_point& flush_time, bool& should_flush_and_flush_failed, sstring keyspace, std::vector<sstring> tables, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism, service::frozen_topology_guard topo_guard, bool skip_flush, tablet_repair_sched_info sched_info, streaming::stream_reason reason, tasks::task_info parent_data, repair_uniq_id id);
+    struct tablet_repair_result {
+        gc_clock::time_point flush_time;
+        bool should_flush_and_flush_failed;
+    };
+    future<tablet_repair_result> run_tablet_repair(sstring keyspace, std::vector<sstring> tables, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism, service::frozen_topology_guard topo_guard, bool skip_flush, tablet_repair_sched_info sched_info, streaming::stream_reason reason, tasks::task_info parent_data, repair_uniq_id id);
     future<> run_user_requested_repair(lw_shared_ptr<locator::global_static_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<locator::host_id> ignore_nodes, bool small_table_optimization, std::optional<int> ranges_parallelism, abort_source& as, sstring keyspace, tasks::task_info parent_data, repair_uniq_id id);
     future<> run_data_sync_repair(size_t& cfs_size, dht::token_range_vector ranges, std::unordered_map<dht::token_range, repair_neighbors> neighbors, streaming::stream_reason reason, abort_source& as, service::frozen_topology_guard frozen_topology_guard, sstring keyspace, tasks::task_info task_data, repair_uniq_id id);
 
