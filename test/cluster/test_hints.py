@@ -821,6 +821,7 @@ async def test_hints_basic_check(manager: ScyllaClusterManager):
     assert rows == [(1,)], "The hint was not replayed to the node that was down"
 
 
+@pytest.mark.skip_mode(mode="release", reason="error injections aren't enabled in release mode")
 async def test_hints_counter(manager: ScyllaClusterManager):
     """
     Counter updates must be replayed correctly from hints, both when the hint's target is still
@@ -833,7 +834,7 @@ async def test_hints_counter(manager: ScyllaClusterManager):
     cql = await manager.get_cql_exclusive(s1)
     await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
                         "'replication_factor': 2}")
-    await cql.run_async("CREATE TABLE ks.tbl (pk int PRIMARY KEY, c counter) WITH speculative_retry = 'NONE' AND read_repair_chance = 0 AND dclocal_read_repair_chance = 0")
+    await cql.run_async("CREATE TABLE ks.tbl (pk int PRIMARY KEY, c counter) WITH speculative_retry = 'NONE'")
 
     await manager.server_stop_gracefully(s2.server_id)
     await manager.others_not_see_server(s2.ip_addr)
@@ -842,17 +843,9 @@ async def test_hints_counter(manager: ScyllaClusterManager):
     stmt = cql.prepare("UPDATE ks.tbl SET c = c + ? WHERE pk = ?")
     stmt.consistency_level = ConsistencyLevel.ONE
     expected = {pk: 100 * pk for pk in range(100)}
-    for pk, value in expected.items():
-        await cql.run_async(stmt, (value, pk))
+    await gather_safely(*[cql.run_async(stmt, (value, pk)) for pk, value in expected.items()])
 
-    # Restart s1 with hinted handoff disabled, so that it doesn't start sending the hints
-    # just written as soon as s2 comes back, before the topology change below has a chance
-    # to make some of them orphaned.
-    logger.info("Restarting s1 with hinted handoff disabled...")
-    await manager.server_stop_gracefully(s1.server_id)
-    await manager.server_update_cmdline(s1.server_id, ["--hinted-handoff-enabled", "false"])
-    await manager.server_start(s1.server_id)
-    cql = await manager.get_cql_exclusive(s1)
+    await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay", one_shot=False)
 
     logger.info("Starting s2...")
     await manager.server_start(s2.server_id)
@@ -863,11 +856,8 @@ async def test_hints_counter(manager: ScyllaClusterManager):
     s3 = await manager.server_add(property_file=s2.property_file())
 
     logger.info("Restarting s1 with hinted handoff enabled...")
-    await manager.server_stop_gracefully(s1.server_id)
-    await manager.server_update_cmdline(s1.server_id, ["--hinted-handoff-enabled", "true"])
-    await manager.server_start(s1.server_id)
-    await manager.servers_see_each_other([s1, s2])
-    await manager.servers_see_each_other([s1, s3])
+    await manager.api.disable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay")
+    await manager.servers_see_each_other([s1, s2, s3])
 
     async def hints_sent() -> bool | None:
         sent = await get_hint_metrics(manager.metrics, s1.ip_addr, "sent_total")
@@ -896,10 +886,11 @@ async def test_hints_counter(manager: ScyllaClusterManager):
     await manager.server_stop_gracefully(s1.server_id)
 
     cql = await manager.get_cql_exclusive(s3)
-    read_stmt = cql.prepare("SELECT c FROM ks.tbl WHERE pk = ?")
-    read_stmt.consistency_level = ConsistencyLevel.ONE
-    actual = {pk: list(await cql.run_async(read_stmt, (pk,)))[0].c for pk in expected}
-    assert actual == expected
+    rows = await cql.run_async(SimpleStatement(
+        "SELECT * FROM ks.tbl",
+        consistency_level=ConsistencyLevel.ONE))
+    result = {row.pk: row.c for row in rows}
+    assert result == expected
 
 
 async def test_hints_decom(manager: ScyllaClusterManager):
