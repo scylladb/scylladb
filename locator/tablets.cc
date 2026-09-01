@@ -1815,9 +1815,15 @@ void tablet_metadata_guard::check() noexcept {
         erm.get()->get_token_metadata().get_version(),
         old_tmap,
         tmap);
-    if (bool(_stage) != bool(trinfo) || (_stage && _stage != trinfo->stage) || 
+    // Cancelling doesn't change the stage, so check the flag too. It stays set through the
+    // roll-back stages, whose operations must not be aborted.
+    bool newly_cancelled = trinfo && trinfo->cancelled && !_cancelled
+            && can_cancel_tablet_transition(trinfo->stage);
+    if (bool(_stage) != bool(trinfo) || (_stage && _stage != trinfo->stage) ||
+        newly_cancelled ||
         old_tmap.tablet_count() != tmap.tablet_count())
     {
+        _cancelled = _cancelled || newly_cancelled;
         tablet_logger.debug("tablet_metadata_guard::check: retain the erm and abort the guard");
         _abort_source.request_abort();
     } else {
@@ -1835,6 +1841,10 @@ tablet_metadata_guard::tablet_metadata_guard(replica::table& table, global_table
     subscribe();
     if (auto* trinfo = get_tablet_map().get_tablet_transition_info(tablet.tablet)) {
         _stage = trinfo->stage;
+        if (trinfo->cancelled && can_cancel_tablet_transition(trinfo->stage)) {
+            _cancelled = true;
+            _abort_source.request_abort();
+        }
     }
 }
 
