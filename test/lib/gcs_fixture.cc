@@ -265,6 +265,10 @@ const std::string& gcs_fixture::bucket() const {
     return _impl->bucket;
 }
 
+bool gcs_fixture::validating_uploads() const {
+    return _impl->upload_validator.has_value();
+}
+
 void gcs_fixture::add_object_to_delete(const std::string& name) {
     _impl->objects_to_delete.emplace_back(name);
 }
@@ -288,6 +292,10 @@ local_gcs_wrapper::~local_gcs_wrapper() = default;
 
 utils::gcp::storage::client& local_gcs_wrapper::client() const {
     return gcs_fixture::active()->client();
+}
+
+bool local_gcs_wrapper::validating_uploads() const {
+    return gcs_fixture::active()->validating_uploads();
 }
 
 seastar::future<> local_gcs_wrapper::setup() {
