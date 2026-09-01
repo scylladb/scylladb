@@ -3150,8 +3150,9 @@ future<> storage_service::reset_cleanup_needed() {
     }
 }
 
-future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry) {
-    co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(), id, require_entry);
+future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry,
+                                                                     std::optional<lowres_clock::time_point> deadline) {
+    co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(), id, require_entry, deadline);
 }
 
 future<> storage_service::abort_topology_request(utils::UUID request_id) {

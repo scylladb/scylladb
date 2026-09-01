@@ -1014,7 +1014,8 @@ public:
 
     // Waits for a topology request with a given ID to complete and return non empty error string
     // if request completes with an error
-    future<sstring> wait_for_topology_request_completion(utils::UUID id, bool require_entry = true);
+    future<sstring> wait_for_topology_request_completion(utils::UUID id, bool require_entry = true,
+                                                        std::optional<lowres_clock::time_point> deadline = std::nullopt);
 
     // Initiates abort of a topology request with a given ID.
     // May have no effect if the request is not in an abortable state.
