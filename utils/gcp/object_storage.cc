@@ -44,6 +44,10 @@ static constexpr char GCP_OBJECT_SCOPE_FULL_CONTROL[] = "https://www.googleapis.
 
 static constexpr char STORAGE_APIS_URI[] = "https://storage.googleapis.com";
 static constexpr char APPLICATION_JSON[] = "application/json";
+// A cancelled resumable upload is answered with 499, which seastar's status_type
+// does not name.
+static constexpr int CLIENT_CLOSED_REQUEST = 499;
+
 static constexpr char LOCATION[] = "Location";
 static constexpr char CONTENT_RANGE[] = "Content-Range";
 static constexpr char RANGE[] = "Range";
@@ -581,7 +585,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
              * resumable upload protocol works.
              */
             if (status_class != reply::status_class::informational && status_class != reply::status_class::success &&
-                rep._status != status_type::permanent_redirect) {
+                rep._status != status_type::permanent_redirect && int(rep._status) != CLIENT_CLOSED_REQUEST) {
                 if (rep._status == status_type::unauthorized) {
                     gcp_storage.warn("Request to failed with status {}. Refreshing credentials.", rep._status);
                     co_await authorize(req, scope);
@@ -890,7 +894,7 @@ future<> utils::gcp::storage::client::object_data_sink::remove_upload() {
     );
 
     switch (int(res.result())) {
-    case 499: // not in enum yet
+    case CLIENT_CLOSED_REQUEST:
         gcp_storage.debug("Upload of {}:{} removed ({})", _bucket, _object_name, _session_path);
         co_return; // done and happy
     default: {
