@@ -1828,6 +1828,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Sets the maximum difference in percentages between the most loaded and least loaded nodes, below which the load balancer considers nodes balanced.")
     , minimal_tablet_size_for_balancing(this, "minimal_tablet_size_for_balancing", liveness::LiveUpdate, value_status::Used, service::default_target_tablet_size / 100,
         "Sets the minimal tablet size for the load balancer. For any tablet smaller than this, the balancer will use this size instead of the actual tablet size.")
+    , tablet_transition_abort_grace_period_in_seconds(this, "tablet_transition_abort_grace_period_in_seconds", liveness::LiveUpdate, value_status::Used, 0,
+        "Default grace period given to in-flight tablet transitions when disabling tablet balancing. Transitions which don't finish "
+        "within it, and which are still in a stage that can be rolled back, are cancelled; if transitions which cannot be cancelled "
+        "are still in flight, the call fails. Cancelling a transition which was adding a tablet replica leaves that tablet below its "
+        "replication factor until balancing is enabled again. Callers of the API can pass their own grace period, which overrides "
+        "this. 0, the default, waits for transitions indefinitely and cancels nothing.")
     /**
     * @Group Ungrouped properties
     */
