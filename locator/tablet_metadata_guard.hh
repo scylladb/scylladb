@@ -27,6 +27,7 @@ class tablet_metadata_guard {
     global_tablet_id _tablet;
     effective_replication_map_ptr _erm;
     std::optional<tablet_transition_stage> _stage;
+    bool _cancelled = false;
     seastar::abort_source _abort_source;
     optimized_optional<seastar::abort_source::subscription> _callback;
 private:
