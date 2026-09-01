@@ -1486,15 +1486,24 @@ tasks::is_user_task repair::user_requested_repair_task_impl::is_user_task() cons
     return tasks::is_user_task::yes;
 }
 
-future<> repair::user_requested_repair_task_impl::run() {
-    auto module = dynamic_pointer_cast<repair::task_manager_module>(_module);
-    auto& rs = module->get_repair_service();
-    auto& sharded_db = rs.get_db();
+future<> repair_service::run_user_requested_repair(
+        lw_shared_ptr<locator::global_static_effective_replication_map> _germs,
+        const std::vector<sstring>& _cfs,
+        const dht::token_range_vector& _ranges,
+        std::vector<sstring> _hosts,
+        std::vector<sstring> _data_centers,
+        std::unordered_set<locator::host_id> _ignore_nodes,
+        bool _small_table_optimization,
+        std::optional<int> _ranges_parallelism,
+        abort_source& _as,
+        sstring keyspace,
+        tasks::task_info task_data,
+        repair_uniq_id id) {
+    auto& sharded_db = get_db();
     auto& db = sharded_db.local();
-    auto id = get_repair_uniq_id();
 
-    return module->run(id, [this, &rs, &db, id, keyspace = _status.keyspace, germs = std::move(_germs),
-            &cfs = _cfs, &ranges = _ranges, hosts = std::move(_hosts), data_centers = std::move(_data_centers), ignore_nodes = std::move(_ignore_nodes), &task_as = _as] () mutable {
+    return _repair_module->run(id, [this, &db, id, keyspace = std::move(keyspace), germs = std::move(_germs),
+            &cfs = _cfs, &ranges = _ranges, hosts = std::move(_hosts), data_centers = std::move(_data_centers), ignore_nodes = std::move(_ignore_nodes), &task_as = _as, _small_table_optimization, _ranges_parallelism, task_data = std::move(task_data)] () mutable {
         auto uuid = node_ops_id{id.uuid().uuid()};
         auto start_time = std::chrono::steady_clock::now();
 
@@ -1503,22 +1512,22 @@ future<> repair::user_requested_repair_task_impl::run() {
             auto normal_nodes = germs->get().get_token_metadata().get_normal_token_owners();
             participants = std::list<locator::host_id>(normal_nodes.begin(), normal_nodes.end());
         } else {
-            participants = get_hosts_participating_in_repair(_gossiper, germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
+            participants = get_hosts_participating_in_repair(_gossiper.local(), germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
         }
-        auto [_, hints_batchlog_flushed, flush_time] = rs.flush_hints(id, keyspace, cfs, ignore_nodes).get();
+        auto [_, hints_batchlog_flushed, flush_time] = flush_hints(id, keyspace, cfs, ignore_nodes).get();
 
         std::vector<future<>> repair_results;
         repair_results.reserve(this_smp_shard_count());
         auto table_ids = get_table_ids(db, keyspace, cfs);
         abort_source as;
-        auto off_strategy_updater = seastar::async([&rs, uuid = uuid.uuid(), &table_ids, &participants, &as] {
+        auto off_strategy_updater = seastar::async([this, uuid = uuid.uuid(), &table_ids, &participants, &as] {
             auto tables = std::list<table_id>(table_ids.begin(), table_ids.end());
             auto req = node_ops_cmd_request(node_ops_cmd::repair_updater, node_ops_id{uuid}, {}, {}, {}, {}, std::move(tables));
             auto update_interval = std::chrono::seconds(30);
             while (!as.abort_requested()) {
                 sleep_abortable(update_interval, as).get();
-                parallel_for_each(participants, [&rs, uuid, &req] (locator::host_id node) {
-                    return ser::node_ops_rpc_verbs::send_node_ops_cmd(&rs._messaging, node, req).then([uuid, node] (node_ops_cmd_response resp) {
+                parallel_for_each(participants, [this, uuid, &req] (locator::host_id node) {
+                    return ser::node_ops_rpc_verbs::send_node_ops_cmd(&_messaging, node, req).then([uuid, node] (node_ops_cmd_response resp) {
                         rlogger.debug("repair[{}]: Got node_ops_cmd::repair_updater response from node={}", uuid, node);
                     }).handle_exception([uuid, node] (std::exception_ptr ep) {
                         rlogger.warn("repair[{}]: Failed to send node_ops_cmd::repair_updater to node={}", uuid, node);
@@ -1540,9 +1549,9 @@ future<> repair::user_requested_repair_task_impl::run() {
             rlogger.info("repair[{}]: Finished to shutdown off-strategy compaction updater", uuid);
         });
 
-        auto cleanup_repair_range_history = defer([&rs, uuid] () mutable noexcept {
+        auto cleanup_repair_range_history = defer([this, uuid] () mutable noexcept {
             try {
-                rs.cleanup_history(tasks::task_id{uuid.uuid()}).get();
+                cleanup_history(tasks::task_id{uuid.uuid()}).get();
             } catch (...) {
                 rlogger.warn("repair[{}]: Failed to cleanup history: {}", uuid, std::current_exception());
             }
@@ -1552,12 +1561,11 @@ future<> repair::user_requested_repair_task_impl::run() {
 
         auto ranges_parallelism = _ranges_parallelism;
         bool small_table_optimization = _small_table_optimization;
-        auto parent_data = info();
         for (auto shard : std::views::iota(0u, this_smp_shard_count())) {
-            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed, flush_time, ranges_parallelism, small_table_optimization,
-                    data_centers, hosts, ignore_nodes, parent_data, germs] (repair_service& local_repair) mutable -> future<> {
+            auto f = container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed, flush_time, ranges_parallelism, small_table_optimization,
+                    data_centers, hosts, ignore_nodes, task_data, germs] (repair_service& local_repair) mutable -> future<> {
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
-                auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), std::move(keyspace),
+                auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(task_data, tasks::task_id::create_random_id(), std::move(keyspace),
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), std::unordered_map<dht::token_range, repair_neighbors>{}, streaming::stream_reason::repair, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time,
                         service::default_session_id);
@@ -1581,13 +1589,19 @@ future<> repair::user_requested_repair_task_impl::run() {
         }).get();
         auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
         rlogger.info("repair[{}]: Finished user-requested repair for vnode keyspace={} tables={} repair_id={} duration={}", id.uuid(), keyspace, cfs, id.id, duration);
-    }).handle_exception([id, &rs] (std::exception_ptr ep) {
+    }).handle_exception([id, this] (std::exception_ptr ep) {
         rlogger.warn("repair[{}]: user-requested repair failed: {}", id.uuid(), ep);
         // If abort was requested, throw abort_requested_exception instead of wrapped exceptions from all shards,
         // so that it could be properly handled by callers.
-        rs.get_repair_module().check_in_shutdown();
+        _repair_module->check_in_shutdown();
         return make_exception_future<>(ep);
     });
+}
+
+future<> repair::user_requested_repair_task_impl::run() {
+    auto module = dynamic_pointer_cast<repair::task_manager_module>(_module);
+    auto& rs = module->get_repair_service();
+    return rs.run_user_requested_repair(std::move(_germs), _cfs, _ranges, std::move(_hosts), std::move(_data_centers), std::move(_ignore_nodes), _small_table_optimization, _ranges_parallelism, _as, _status.keyspace, info(), get_repair_uniq_id());
 }
 
 future<std::optional<double>> repair::user_requested_repair_task_impl::expected_total_workload() const {
