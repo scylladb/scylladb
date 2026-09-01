@@ -9,11 +9,13 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/core/temporary_buffer.hh>
+#include <map>
 #include <optional>
 #include <seastar/core/scheduling.hh>
 #include "db/cache_tracker.hh"
 #include "readers/mutation_reader.hh"
 #include "replica/logstor/compaction.hh"
+#include "readers/mutation_source.hh"
 #include "types.hh"
 #include "index.hh"
 #include "segment_manager.hh"
@@ -76,6 +78,15 @@ public:
     future<> write(const mutation&, write_target target, db::timeout_clock::time_point timeout);
 
     future<std::optional<mutation>> read(const schema&, const primary_index&, const dht::decorated_key&, const query::partition_slice&);
+
+    // Debug introspection for SELECT * FROM MUTATION_FRAGMENTS(): returns one
+    // mutation source per place the key's data currently lives in - the
+    // in-memory logstor cache (if cached) and the log record - keyed by a name
+    // identifying the source. Returns an empty map when the key is not in the
+    // index. Neither source reads, populates or otherwise perturbs the cache.
+    // The cached mutation is snapshotted here and charged to the given permit,
+    // since the cache entry may be evicted before the source is read from.
+    std::map<sstring, mutation_source> make_mutation_sources_for_dump(schema_ptr, const primary_index&, const dht::decorated_key&, reader_permit);
 
     /// Create a mutation reader for a specific key
     mutation_reader make_reader(schema_ptr schema,

@@ -121,6 +121,11 @@ public:
 
     std::optional<mutation> lookup(const primary_index_entry&, schema_ptr);
 
+    // Like lookup(), but for introspection: returns a snapshot of the cached mutation
+    // without touching the LRU, without counting a hit or a miss and without upgrading
+    // the cached entry in place.
+    std::optional<mutation> peek(const primary_index_entry&, schema_ptr);
+
     void populate(const primary_index_entry&, const mutation&);
 
     logalloc::region& region() noexcept {

@@ -201,6 +201,28 @@ public:
         return std::nullopt;
     }
 
+    struct dump_lookup_result {
+        index_entry entry;
+        std::optional<mutation> cached_mutation;
+    };
+
+    // Looks up a key for MUTATION_FRAGMENTS(): returns its index entry and, when the key
+    // is cached, a snapshot of the cached mutation. Unlike the read path this neither
+    // touches the cache's LRU nor counts a cache hit or miss, so that inspecting a table
+    // does not perturb its cache.
+    std::optional<dump_lookup_result> lookup_for_dump(const dht::decorated_key& dk, schema_ptr target_schema) const {
+        auto it = find(dk);
+        if (it == _partitions.end()) {
+            return std::nullopt;
+        }
+
+        dump_lookup_result result{.entry = it->entry()};
+        if (_cache_tracker) {
+            result.cached_mutation = _cache_tracker->peek(*it, std::move(target_schema));
+        }
+        return result;
+    }
+
     bool is_record_alive(const primary_index_key& key, log_location location) {
         auto it = _partitions.find(key.dk, dht::ring_position_comparator(*_schema));
         if (it != _partitions.end()) {

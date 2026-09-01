@@ -135,6 +135,12 @@ public:
 
     uint64_t get_segment_size() const noexcept;
 
+    // Returns the path of the file holding the given segment (for debug/introspection).
+    // The path is computed from the segment id, the segment is not looked up, so the file
+    // does not have to hold a live segment. The file names are shard local, so this has to
+    // be called on the shard owning the segment.
+    sstring get_segment_file_path(log_segment_id) const;
+
     // Removes all the segments of the group and frees them. Waits for an ongoing compaction of
     // the group and keeps compaction disabled while discarding, so the caller doesn't have to.
     // The index must be cleared first, so that no record of the group is reachable.
