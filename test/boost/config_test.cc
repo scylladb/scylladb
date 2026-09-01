@@ -16,7 +16,9 @@
 #include "test/lib/test_utils.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/future-util.hh>
+#include <yaml-cpp/yaml.h>
 #include "db/config.hh"
+#include "db/object_storage_endpoint_param.hh"
 #include "utils/updateable_value.hh"
 
 using namespace db;
@@ -971,4 +973,62 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_invalid) {
                            BOOST_CHECK(!cfg.check_experimental(ef::UDF));
                        });
     return make_ready_future();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_region_from_environment) {
+    tests::tmp_set_env region_env("AWS_DEFAULT_REGION", "us-east-1");
+    auto ep = object_storage_endpoint_param::decode(YAML::Load("name: http://localhost:9000\n"));
+    BOOST_REQUIRE(ep.is_s3_storage());
+    BOOST_CHECK_EQUAL(ep.get_s3_storage().region, "us-east-1");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_region_unresolvable) {
+    tests::tmp_unset_env no_region_env("AWS_DEFAULT_REGION");
+    // Neither source is available. The error has to name both of them, so that
+    // the operator knows where to put the region.
+    try {
+        object_storage_endpoint_param::decode(YAML::Load("name: http://localhost:9000\n"));
+        BOOST_FAIL("expected the missing region to be reported");
+    } catch (const std::invalid_argument& e) {
+        const sstring msg = e.what();
+        BOOST_REQUIRE_NE(msg.find("aws_region"), msg.npos);
+        BOOST_REQUIRE_NE(msg.find("AWS_DEFAULT_REGION"), msg.npos);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_region_empty) {
+    // An empty region is the same broken state as an absent one - it signs
+    // requests with an empty credential scope - so neither source may resolve
+    // to it.
+    {
+        tests::tmp_unset_env no_region_env("AWS_DEFAULT_REGION");
+        BOOST_REQUIRE_THROW(object_storage_endpoint_param::decode(
+                YAML::Load("name: http://localhost:9000\naws_region: \"\"\n")),
+            std::invalid_argument);
+    }
+    {
+        tests::tmp_set_env empty_region_env("AWS_DEFAULT_REGION", "");
+        BOOST_REQUIRE_THROW(object_storage_endpoint_param::decode(
+                YAML::Load("name: http://localhost:9000\n")),
+            std::invalid_argument);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_parse_object_storage_endpoints_one_entry_broken) {
+    tests::tmp_unset_env no_region_env("AWS_DEFAULT_REGION");
+    auto cfg_ptr = std::make_unique<config>();
+    config& cfg = *cfg_ptr;
+
+    // The first entry cannot resolve a region. It must cost its own endpoint
+    // only - the correctly configured GCS entry below it has to survive.
+    cfg.read_from_yaml(R"foo(object_storage_endpoints:
+    - name: http://localhost:9000
+    - name: https://storage.googleapis.com
+      type: gs
+)foo", throw_on_error);
+
+    const auto& endpoints = cfg.object_storage_endpoints();
+    BOOST_REQUIRE_EQUAL(endpoints.size(), 1);
+    BOOST_CHECK(endpoints.front().is_gs_storage());
+    BOOST_CHECK_EQUAL(endpoints.front().key(), "https://storage.googleapis.com");
 }
