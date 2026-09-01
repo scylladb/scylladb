@@ -9,6 +9,17 @@ Alternator's compatibility with DynamoDB is described in the
 But Alternator also adds several features and APIs that are not available in
 DynamoDB. These Alternator-specific APIs are documented here.
 
+## Vector search extensions
+Alternator implements Amazon DynamoDB's own Vector Search API
+(`VectorIndexes`, `VectorIndexUpdates`, `SearchVectors`), so this core
+functionality is *not* Alternator-specific and is documented separately in
+[Alternator Vector Search](vector-search.md). That document does, however,
+also cover the handful of genuine ScyllaDB-only extensions layered on top
+of the standard API - most notably the `FLOAT32VECTOR` attribute type, a
+more compact representation for vectors than DynamoDB's own encoding, and
+the `BaseRead`/`FilterExpression` parameters of `SearchVectors` for reading
+data straight from the base table when needed.
+
 ## Write isolation policies
 DynamoDB API update requests may involve a read before the write - e.g., a
 _conditional_ update or an update based on the old value of an attribute.
