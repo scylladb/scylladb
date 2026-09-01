@@ -1503,6 +1503,7 @@ CREATE TABLE system.tablets (
     session uuid,
     stage text,
     transition text,
+    cancel boolean,
     sstables_repaired_at bigint,
     repair_incremental_mode text,
     PRIMARY KEY (table_id, last_token)
@@ -1550,6 +1551,12 @@ CREATE TYPE system.tablet_task_info (
 - `new_replicas`: What will be put in `replicas` after transition is done
 - `stage`: Current stage of tablet transition
 - `transition`: Type of transition (see below)
+- `session`: Identifies the session which the replicas of this tablet use for the current stage of
+  the transition. Cleared to make them abort whatever they started for it.
+- `cancel`: Set to make the topology coordinator roll the transition back instead of running it to
+  completion. Written together with clearing `session`, and cleared together with the rest of the
+  transition. Only the stages preceding `write_both_read_new` can be cancelled; see
+  [Cancelling tablet transitions](topology-over-raft.md#cancelling-tablet-transitions).
 - `repair_time`: Last time the tablet was repaired
 - `sstables_repaired_at`: Tablet-level reference `repaired_at` value. When an SSTable's on-disk `repaired_at` value is less than or equal to `sstables_repaired_at`, the SSTable is considered repaired.
 - `repair_incremental_mode`: Mode for incremental repair (see below)
