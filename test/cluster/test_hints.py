@@ -748,7 +748,7 @@ async def test_hints_removenode(manager: ScyllaClusterManager):
     to the new owners of the data instead of being dropped.
     """
     cmdline = ["--logger-log-level", "hints_manager=trace"]
-    s1, s2, s3 = await manager.servers_add(3, cmdline=cmdline, property_file={"dc": "dc1", "rack": "rack1"})
+    s1, _, s3 = await manager.servers_add(3, cmdline=cmdline, property_file={"dc": "dc1", "rack": "rack1"})
 
     s3_host_id = await manager.get_host_id(s3.server_id)
     s1_hints_dir = await get_hints_dir(manager, s1)
@@ -760,28 +760,26 @@ async def test_hints_removenode(manager: ScyllaClusterManager):
     await manager.server_stop_gracefully(s3.server_id)
     await manager.others_not_see_server(s3.ip_addr)
 
-    # With RF=1, the rows owned by server 3 can only be stored as hints.
     row_count = 100
     stmt = cql.prepare("INSERT INTO ks.t (pk, v) VALUES (?, ?)")
     stmt.consistency_level = ConsistencyLevel.ANY
-    for pk in range(row_count):
-        await cql.run_async(stmt, (pk, pk + 1))
+    await gather_safely(*[cql.run_async(stmt, (pk, pk + 1)) for pk in range(row_count)])
 
-    s1_log = await manager.server_open_log(s1.server_id)
-    s1_mark = await s1_log.mark()
+    await wait_until_hint_writing_settled(manager, [s1])
+    written = await get_hint_metrics(manager.metrics, s1.ip_addr, "written")
+    assert written > 0
 
     await manager.remove_node(s1.server_id, s3.server_id)
-
-    await s1_log.wait_for(f"drain_for: finished draining {s3_host_id}", from_mark=s1_mark, timeout=180)
+    await wait_until_hints_are_sent_from(manager, [s1], written)
 
     async def hint_dir_removed():
         return True if not hint_dir_exists(s1_hints_dir, s3_host_id) else None
     await wait_for(hint_dir_removed, time.time() + 60)
 
-    for pk in range(row_count):
-        rows = list(await cql.run_async(SimpleStatement(f"SELECT v FROM ks.t WHERE pk = {pk}",
-                                                        consistency_level=ConsistencyLevel.ONE)))
-        assert rows == [(pk + 1,)], f"row {pk} was lost when server 3 was removed"
+    rows = await cql.run_async("SELECT * FROM ks.t")
+    results = set((row.pk, row.v) for row in rows)
+    expected = set((pk, pk + 1) for pk in range(row_count))
+    assert results == expected, f"Mismatch: {results} vs. {expected}"
 
 
 async def test_hints_basic_check(manager: ScyllaClusterManager):
