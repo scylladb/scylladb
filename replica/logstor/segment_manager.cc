@@ -2290,7 +2290,7 @@ future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutati
                     return want_data::yes;
                 },
                 [&index, &bufs, &classifier] (log_location read_location, const log_record_header& record_header, log_record_bytes_view record_bytes) -> future<> {
-                    auto& cb = bufs.bufs[classifier(record_header.key.dk.token())];
+                    auto& cb = bufs.bufs[classifier(record_header.key.token())];
                     co_await cb.rewrite_record(index, read_location, record_header, record_bytes);
                 }
             );
@@ -2492,8 +2492,11 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
             co_return;
         }
         logstor_logger.info("Table {}.{} has {} entries in logstor index", tp->schema()->ks_name(), tp->schema()->cf_name(), tp->logstor_index().get_key_count());
-        for (const auto& entry : tp->logstor_index()) {
-            used_segments.set(entry.entry().location.segment.value);
+        auto scan = tp->logstor_index().scan();
+        while (auto batch = scan.next_batch(1024)) {
+            for (const auto& entry : batch->entries) {
+                used_segments.set(entry.get().entry().location.segment.value);
+            }
             co_await coroutine::maybe_yield();
         }
     });
@@ -2579,6 +2582,10 @@ future<> segment_manager_impl::recover_segment(replica::database& db, log_segmen
                 if (!t.uses_logstor()) {
                     return want_data::no;
                 }
+                // A record rejected for token overflow stays unindexed on purpose: the
+                // write that produced it had already failed for the same reason, and
+                // leaving it out keeps the bound an invariant across restarts. insert()
+                // logs the rejection.
                 t.logstor_index().insert(header.key, new_entry, cmp);
             } catch (const replica::no_such_column_family&) {
                 // ignore record
@@ -2646,7 +2653,7 @@ future<> segment_manager_impl::add_segment_to_compaction_group(replica::database
                 try {
                     auto& t = db.find_column_family(record_header.table);
                     auto key = record_header.key;
-                    auto& cg = t.get_logstor_group(key.dk.token());
+                    auto& cg = t.get_logstor_group(key.token());
                     auto* index_ptr = &cg.logstor_index();
                     auto writer = log_record_bytes_writer(record_header, record_bytes);
 

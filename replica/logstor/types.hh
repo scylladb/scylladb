@@ -7,9 +7,11 @@
  */
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <fmt/format.h>
 #include "dht/decorated_key.hh"
+#include "replica/logstor/key_utils.hh"
 #include "mutation/canonical_mutation.hh"
 #include "mutation/timestamp.hh"
 
@@ -31,7 +33,27 @@ struct log_location {
 };
 
 struct primary_index_key {
-    dht::decorated_key dk;
+    dht::token _token;
+    key_hash _hash;
+
+    primary_index_key() = default;
+
+    primary_index_key(dht::token token, key_hash hash)
+        : _token(std::move(token))
+        , _hash(std::move(hash)) {}
+
+    explicit primary_index_key(const schema& s, const dht::decorated_key& dk);
+
+    const dht::token& token() const noexcept {
+        return _token;
+    }
+
+    const key_hash& hash() const noexcept {
+        return _hash;
+    }
+
+    bool operator==(const primary_index_key& other) const noexcept = default;
+    auto operator<=>(const primary_index_key& other) const noexcept = default;
 };
 
 struct index_entry {
@@ -45,6 +67,8 @@ struct log_record_header {
     primary_index_key key;
     api::timestamp_type timestamp;
     table_id table;
+
+    bool operator==(const log_record_header& other) const noexcept = default;
 };
 
 struct log_record {
@@ -115,7 +139,11 @@ template <>
 struct fmt::formatter<replica::logstor::primary_index_key> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const replica::logstor::primary_index_key& key, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", key.dk);
+        auto out = fmt::format_to(ctx.out(), "{{token: {}, key_hash: ", key.token());
+        for (auto b : key.hash()) {
+            out = fmt::format_to(out, "{:02x}", b);
+        }
+        return fmt::format_to(out, "}}");
     }
 };
 

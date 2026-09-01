@@ -17,8 +17,8 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/as_future.hh>
 #include "serializer_impl.hh"
-#include "idl/logstor.dist.hh"
-#include "idl/logstor.dist.impl.hh"
+#include "idl/frozen_schema.dist.hh"
+#include "idl/frozen_schema.dist.impl.hh"
 #include <seastar/core/align.hh>
 #include <seastar/core/aligned_buffer.hh>
 #include "utils/crc.hh"
@@ -26,10 +26,6 @@
 namespace replica::logstor {
 
 void log_record_writer::compute_sizes() const {
-    seastar::measuring_output_stream ms_header;
-    ser::serialize(ms_header, _record.header);
-    _header_size = ms_header.size();
-
     seastar::measuring_output_stream ms_data;
     ser::serialize(ms_data, _record.mut);
     _data_size = ms_data.size();
@@ -93,7 +89,6 @@ raw_write_buffer::append_result raw_write_buffer::append_record(const log_record
 
     size_t record_header_offset = offset_in_buffer();
     auto rh = ondisk::record_header {
-        .header_size = static_cast<uint32_t>(header_size),
         .data_size = static_cast<uint32_t>(data_size)
     };
     ser::serialize(_stream, rh);
@@ -106,11 +101,11 @@ raw_write_buffer::append_result raw_write_buffer::append_record(const log_record
 
     _net_data_size += total_size;
     _record_count++;
-    if (!_min_token || header.key.dk.token() < *_min_token) {
-        _min_token = header.key.dk.token();
+    if (!_min_token || header.key.token() < *_min_token) {
+        _min_token = header.key.token();
     }
-    if (!_max_token || header.key.dk.token() > *_max_token) {
-        _max_token = header.key.dk.token();
+    if (!_max_token || header.key.token() > *_max_token) {
+        _max_token = header.key.token();
     }
 
     // Add padding to align record
@@ -326,7 +321,7 @@ bool ondisk::validate_header(const ondisk::buffer_header& bh) {
 }
 
 bool ondisk::validate_record_header(const ondisk::record_header& rh) {
-    return rh.header_size != 0;
+    return true;
 }
 
 // write_buffer_pool
