@@ -262,6 +262,11 @@ future<> writeable_segment::do_write(log_location loc, bytes_view data) {
 
 using seg_ptr = lw_shared_ptr<writeable_segment>;
 
+// The most a single write of the zero fill may ask the disk for. Larger requests keep saturating
+// the disk with less of the queue, but a format that runs while the shard is serving shares the
+// disk with the reads of that traffic, which wait behind whatever request is in flight.
+static constexpr uint64_t max_format_write_size = 1024 * 1024;
+
 class file_manager {
     uint64_t _segments_per_file;
 
@@ -392,10 +397,18 @@ future<> file_manager::format_file(file_id_t file_id) {
     auto file_path = get_file_path(file_id).string();
     bool file_exists = co_await seastar::file_exists(file_path);
     if (!file_exists) {
-        // Create and format a temporary file, then move it to the final location
+        // Create and format a temporary file, then move it to the final location.
+        //
+        // The temporary file is deliberately not opened with O_DSYNC, unlike the file the segments
+        // are then written through: a segment write is acknowledged when it completes and has to be
+        // durable by then, while formatting only has to be durable before the rename publishes the
+        // file. Flushing once at the end rather than on every one of the writes below is worth more
+        // than an order of magnitude, and the durability of the published file is the same either
+        // way. The commitlog re-opens its segments without O_DSYNC to pre-write them for the same
+        // reason, see segment_manager::allocate_segment_ex().
         auto tmp_path = file_path + ".tmp";
         auto tmp_file = co_await seastar::open_file_dma(tmp_path,
-                seastar::open_flags::rw | seastar::open_flags::create | seastar::open_flags::truncate | seastar::open_flags::dsync);
+                seastar::open_flags::rw | seastar::open_flags::create | seastar::open_flags::truncate);
         if (_sparse_files) {
             // Reading a hole yields zeros, so the file is already formatted as
             // far as the reader is concerned.
@@ -404,6 +417,7 @@ future<> file_manager::format_file(file_id_t file_id) {
             co_await tmp_file.allocate(0, _file_size);
             co_await format_file_region(tmp_file, 0, _file_size);
         }
+        co_await tmp_file.flush();
         co_await tmp_file.close();
 
         // move the temp file to the final location
@@ -546,13 +560,33 @@ future<seastar::file> file_manager::do_open_file(file_id_t file_id) {
 }
 
 future<> file_manager::format_file_region(seastar::file file, uint64_t offset, uint64_t size) {
-    // Write zeros to entire region using the pre-allocated zero buffer
+    // One request covers as much as the disk takes in one, up to max_format_write_size, which the
+    // zero buffer is repeated across rather than held in memory: a request an order of magnitude
+    // larger than the buffer is worth most of the difference between a stream of small writes and
+    // one the device is saturated by, and the cap keeps a format that runs while the shard serves
+    // traffic - the background format of the next file - from putting a request in the disk's way
+    // that a read then waits behind.
+    const auto max_write_size = std::min<uint64_t>(file.disk_write_max_length(), max_format_write_size);
+
     uint64_t remaining = size;
     uint64_t current_offset = offset;
 
     while (remaining > 0) {
-        auto write_size = std::min<uint64_t>(remaining, _zero_buf_size);
-        auto written = co_await file.dma_write(current_offset, _zero_buf.get(), write_size);
+        auto write_size = std::min(remaining, max_write_size);
+
+        size_t written;
+        if (write_size <= _zero_buf_size) {
+            // A region smaller than the buffer needs no vector, which is every write of the block a
+            // discarded segment has its header invalidated with.
+            written = co_await file.dma_write(current_offset, _zero_buf.get(), write_size);
+        } else {
+            std::vector<iovec> iov;
+            iov.reserve(write_size / _zero_buf_size + 1);
+            for (uint64_t covered = 0; covered < write_size; covered += _zero_buf_size) {
+                iov.emplace_back(iovec{_zero_buf.get(), std::min<size_t>(_zero_buf_size, write_size - covered)});
+            }
+            written = co_await file.dma_write(current_offset, std::move(iov));
+        }
 
         current_offset += written;
         remaining -= written;
