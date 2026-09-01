@@ -13,6 +13,7 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include <seastar/core/on_internal_error.hh>
 #include <boost/lexical_cast.hpp>
+#include "utils/error_injection.hh"
 #include "utils/log.hh"
 
 namespace gms {
@@ -95,6 +96,20 @@ void merge_endpoint_state(endpoint_state& into, const endpoint_state& from) {
     for (const auto& [key, value] : from.get_application_state_map()) {
         const auto* mine = into.get_application_state_ptr(key);
         if (!mine || mine->version() < value.version()) {
+            // Copying a value allocates, so this loop can fail partway through
+            // and leave `into` torn: the heartbeat above is already raised
+            // while application states below it are still missing. Injecting
+            // inside this branch, rather than at the top of the loop, makes
+            // the failure drop a value that really was newer.
+            //
+            // Only for SCHEMA, which changes just on DDL: a test can stop
+            // issuing DDL and then observe that the dropped value is never
+            // re-delivered. Failing on a state peers bump every round (LOAD,
+            // CACHE_HITRATES) would be masked by the next update.
+            if (key == application_state::SCHEMA) {
+                utils::get_local_injector().inject("merge_endpoint_state_fail",
+                        [] { throw std::runtime_error("injected merge failure"); });
+            }
             into.add_application_state(key, value);
         }
     }
