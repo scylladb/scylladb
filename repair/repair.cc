@@ -1660,11 +1660,17 @@ future<> repair_service::sync_data_using_repair(
     co_await task->done();
 }
 
-future<> repair::data_sync_repair_task_impl::run() {
-    auto module = dynamic_pointer_cast<repair::task_manager_module>(_module);
-    auto& rs = module->get_repair_service();
-    auto& keyspace = _status.keyspace;
-    auto& sharded_db = rs.get_db();
+future<> repair_service::run_data_sync_repair(
+        size_t& _cfs_size,
+        const dht::token_range_vector& _ranges,
+        const std::unordered_map<dht::token_range, repair_neighbors>& _neighbors,
+        streaming::stream_reason _reason,
+        abort_source& _as,
+        service::frozen_topology_guard _frozen_topology_guard,
+        sstring keyspace,
+        tasks::task_info task_data,
+        repair_uniq_id id) {
+    auto& sharded_db = get_db();
     auto& db = sharded_db.local();
     auto germs_fut = co_await coroutine::as_future(locator::make_global_static_effective_replication_map(sharded_db, keyspace));
     if (germs_fut.failed()) {
@@ -1676,8 +1682,6 @@ future<> repair::data_sync_repair_task_impl::run() {
         co_await coroutine::return_exception_ptr(std::move(ex));
     }
     auto germs = make_lw_shared(germs_fut.get());
-
-    auto id = get_repair_uniq_id();
 
     // Partition the tables of the keyspace into those that should use the small
     // table optimization and the rest. Both groups are repaired in the same
@@ -1701,12 +1705,12 @@ future<> repair::data_sync_repair_task_impl::run() {
     auto neighbor_nodes_vec = std::vector<locator::host_id>(neighbor_nodes.begin(), neighbor_nodes.end());
 
     auto [small_cfs, normal_cfs] = co_await partition_tables_for_small_table_optimization(
-            rs, db, id, keyspace, std::move(cfs), _reason, neighbor_nodes_vec);
+            *this, db, id, keyspace, std::move(cfs), _reason, neighbor_nodes_vec);
 
     auto start_time = std::chrono::steady_clock::now();
     rlogger.info("repair[{}]: sync data for keyspace={}, status=started, reason={}, small_table_optimization_tables={}, normal_tables={}",
             id.uuid(), keyspace, _reason, small_cfs.size(), normal_cfs.size());
-    co_await module->run(id, [this, &rs, id, &db, keyspace, small_cfs = std::move(small_cfs), normal_cfs = std::move(normal_cfs), germs = std::move(germs), &ranges = _ranges, &neighbors = _neighbors, reason = _reason, &task_as = _as, frozen_topology_guard = _frozen_topology_guard] () mutable {
+    co_await _repair_module->run(id, [this, id, &db, keyspace, small_cfs = std::move(small_cfs), normal_cfs = std::move(normal_cfs), germs = std::move(germs), &ranges = _ranges, &neighbors = _neighbors, reason = _reason, &task_as = _as, frozen_topology_guard = _frozen_topology_guard, task_data = std::move(task_data)] () mutable {
         // A group of tables to be repaired together with a common set of ranges
         // and neighbors.
         struct repair_group {
@@ -1736,17 +1740,16 @@ future<> repair::data_sync_repair_task_impl::run() {
         std::vector<future<>> repair_results;
         repair_results.reserve(groups.size() * this_smp_shard_count());
         task_as.check();
-        auto parent_data = info();
         for (auto& group : groups) {
             for (auto shard : std::views::iota(0u, this_smp_shard_count())) {
-                auto f = rs.container().invoke_on(shard, [keyspace, table_ids = group.table_ids, id, ranges_reduced_factor = group.ranges_reduced_factor, group_ranges = group.ranges, group_neighbors = group.neighbors, reason, germs, small_table_optimization = group.small_table_optimization, parent_data, frozen_topology_guard] (repair_service& local_repair) mutable -> future<> {
+                auto f = container().invoke_on(shard, [keyspace, table_ids = group.table_ids, id, ranges_reduced_factor = group.ranges_reduced_factor, group_ranges = group.ranges, group_neighbors = group.neighbors, reason, germs, small_table_optimization = group.small_table_optimization, task_data, frozen_topology_guard] (repair_service& local_repair) mutable -> future<> {
                     auto data_centers = std::vector<sstring>();
                     auto hosts = std::vector<sstring>();
                     auto ignore_nodes = std::unordered_set<locator::host_id>();
                     bool hints_batchlog_flushed = false;
                     auto ranges_parallelism = std::nullopt;
                     auto flush_time = gc_clock::time_point();
-                    auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), std::move(keyspace),
+                    auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(task_data, tasks::task_id::create_random_id(), std::move(keyspace),
                             local_repair, germs->get().shared_from_this(), std::move(group_ranges), std::move(table_ids),
                             id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), std::move(group_neighbors), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time,
                             frozen_topology_guard, tablet_repair_sched_info{}, ranges_reduced_factor);
@@ -1769,7 +1772,7 @@ future<> repair::data_sync_repair_task_impl::run() {
             }
             return make_ready_future<>();
         }).get();
-    }).handle_exception([&db, id, keyspace, &rs] (std::exception_ptr ep) {
+    }).handle_exception([&db, id, keyspace, this] (std::exception_ptr ep) {
         if (!db.has_keyspace(keyspace)) {
             rlogger.warn("repair[{}]: sync data for keyspace={}, status=failed: keyspace does not exist any more, ignoring it, {}", id.uuid(), keyspace, ep);
             return make_ready_future<>();
@@ -1777,12 +1780,18 @@ future<> repair::data_sync_repair_task_impl::run() {
         rlogger.warn("repair[{}]: sync data for keyspace={}, status=failed: {}", id.uuid(), keyspace,  ep);
         // If abort was requested, throw abort_requested_exception instead of wrapped exceptions from all shards,
         // so that it could be properly handled by callers.
-        rs.get_repair_module().check_in_shutdown();
+        get_repair_module().check_in_shutdown();
         return make_exception_future<>(ep);
     });
     auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
     rlogger.info("repair[{}]: sync data for keyspace={}, status=succeeded, reason={}, duration={}",
             id.uuid(), keyspace, _reason, duration);
+}
+
+future<> repair::data_sync_repair_task_impl::run() {
+    auto module = dynamic_pointer_cast<repair::task_manager_module>(_module);
+    auto& rs = module->get_repair_service();
+    return rs.run_data_sync_repair(_cfs_size, _ranges, _neighbors, _reason, _as, _frozen_topology_guard, _status.keyspace, info(), get_repair_uniq_id());
 }
 
 future<std::optional<double>> repair::data_sync_repair_task_impl::expected_total_workload() const {
