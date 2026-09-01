@@ -945,84 +945,45 @@ async def test_hints_dont_revive(manager: ScyllaClusterManager):
     A hint carries the timestamp of the original write, so replaying it after the row has been
     deleted must not resurrect the row.
     """
-    s1, s2, s3 = await manager.servers_add(3, auto_rack_dc="dc1")
-
-    s1_host_id = await manager.get_host_id(s1.server_id)
-    s2_hint_dir = await get_hints_dir(manager, s2)
-    s3_hint_dir = await get_hints_dir(manager, s3)
-
-    cql = await manager.get_cql_exclusive(s2)
-    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
-    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
-
-    await manager.server_stop_gracefully(s1.server_id)
-    await manager.others_not_see_server(s1.ip_addr)
-
-    await cql.run_async(SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (0, 1)",
-                                        consistency_level=ConsistencyLevel.TWO))
-
-    await asyncio.sleep(5)
-
-    assert hint_dir_exists(s2_hint_dir, s1_host_id) or hint_dir_exists(s3_hint_dir, s1_host_id)
-
-    await manager.server_start(s1.server_id)
-    await manager.servers_see_each_other([s1, s2, s3])
-
-    hinting_node = None
-    non_hinting_node = None
-    if hint_dir_exists(s2_hint_dir, s1_host_id):
-        await manager.server_stop_gracefully(s2.server_id)
-        await manager.others_not_see_server(s2.ip_addr)
-        hinting_node = s2
-        non_hinting_node = s3
-    else:
-        await manager.server_stop_gracefully(s3.server_id)
-        await manager.others_not_see_server(s3.ip_addr)
-        hinting_node = s3
-        non_hinting_node = s2
-
-    await manager.server_start(s1.server_id)
-    await manager.servers_see_each_other([s1, non_hinting_node])
+    s1, s2 = await manager.servers_add(2, auto_rack_dc="dc1")
 
     cql = await manager.get_cql_exclusive(s1)
-    await cql.run_async(SimpleStatement("DELETE FROM ks.t WHERE pk = 0",
-                                        consistency_level=ConsistencyLevel.TWO))
-
-    await manager.server_start(hinting_node.server_id)
-
-    hint_flush_threshold = 15
-    logger.info(f"Waiting {hint_flush_threshold}s for hints to be sent...")
-    await asyncio.sleep(hint_flush_threshold)
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
 
     await manager.server_stop_gracefully(s2.server_id)
-    await manager.server_stop_gracefully(s3.server_id)
-    await manager.server_not_sees_other_server(s1.ip_addr, s2.ip_addr)
-    await manager.server_not_sees_other_server(s1.ip_addr, s3.ip_addr)
+    await manager.others_not_see_server(s2.ip_addr)
 
-    results = await cql.run_async(SimpleStatement(
-        "SELECT * FROM ks.t WHERE pk = 0",
-        consistency_level=ConsistencyLevel.ONE))
-    assert len(results) == 0
+    await cql.run_async(SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (0, 1)",
+                                        consistency_level=ConsistencyLevel.ONE))
+    await wait_until_hint_writing_settled(manager, [s1])
+    s1_written = await get_hint_metrics(manager.metrics, s1.ip_addr, "written")
+    assert s1_written > 0
 
-    logger.info("Checking on node2...")
-    await manager.server_start(s2.server_id)
-    await manager.servers_see_each_other([s1, s2])
     await manager.server_stop_gracefully(s1.server_id)
-    await manager.server_not_sees_other_server(s2.ip_addr, s1.ip_addr)
+    await manager.server_start(s2.server_id)
 
     cql = await manager.get_cql_exclusive(s2)
+    await cql.run_async(SimpleStatement("DELETE FROM ks.t WHERE pk = 0",
+                                        consistency_level=ConsistencyLevel.ONE))
+    await wait_until_hint_writing_settled(manager, [s2])
+    s2_written = await get_hint_metrics(manager.metrics, s2.ip_addr, "written")
+    assert s2_written > 0
+
+    await manager.server_start(s1.server_id)
+    await wait_until_hints_are_sent_from(manager, [s1], s1_written)
+    await wait_until_hints_are_sent_from(manager, [s2], s2_written)
+
+    await manager.server_stop_gracefully(s1.server_id)
     results = await cql.run_async(SimpleStatement(
         "SELECT * FROM ks.t WHERE pk = 0",
         consistency_level=ConsistencyLevel.ONE))
     assert len(results) == 0
 
-    logger.info("Checking on node3...")
-    await manager.server_start(s3.server_id)
-    await manager.servers_see_each_other([s2, s3])
     await manager.server_stop_gracefully(s2.server_id)
-    await manager.server_not_sees_other_server(s3.ip_addr, s2.ip_addr)
+    await manager.server_start(s1.server_id)
 
-    cql = await manager.get_cql_exclusive(s3)
+    cql = await manager.get_cql_exclusive(s1)
     results = await cql.run_async(SimpleStatement(
         "SELECT * FROM ks.t WHERE pk = 0",
         consistency_level=ConsistencyLevel.ONE))
