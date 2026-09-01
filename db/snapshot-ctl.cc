@@ -21,7 +21,6 @@
 #include "db/schema_tables.hh"
 #include "index/secondary_index_manager.hh"
 #include "replica/database.hh"
-#include "replica/global_table_ptr.hh"
 #include "replica/schema_describe_helper.hh"
 #include "sstables/sstables_manager.hh"
 #include "service/storage_proxy.hh"
@@ -257,12 +256,6 @@ future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring buck
 
     co_await coroutine::switch_to(_config.backup_sched_group);
     snap_log.info("Backup sstables from {}({}) to {}", keyspace, snapshot_name, endpoint);
-    auto global_table = co_await get_table_on_all_shards(_db, keyspace, table);
-    auto& storage_options = global_table->get_storage_options();
-    if (!storage_options.is_local_type()) {
-        throw std::invalid_argument("not able to backup a non-local table");
-    }
-    auto& local_storage_options = std::get<data_dictionary::storage_options::local>(storage_options.value);
     //
     // The keyspace data directories and their snapshots are arranged as follows:
     //
@@ -281,11 +274,18 @@ future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring buck
     //  |- <keyspace name2>
     //  |- ...
     //
-    auto dir = (local_storage_options.dir /
-                sstables::snapshots_dir /
-                std::string_view(snapshot_name));
+    // The backup only reads the on-disk snapshot files, so it must succeed even
+    // if the table or keyspace was dropped after the snapshot was created, or
+    // dropped and recreated under the same name, snapshots survive DROP.
+    // Locate the snapshot on disk instead of resolving it through the live
+    // table.
+    auto dir = co_await _db.local().find_snapshot_dir(keyspace, table, snapshot_name);
+    if (!dir) {
+        throw std::invalid_argument(format("snapshot {} not found for table {}.{}", snapshot_name, keyspace, table));
+    }
+
     auto task = co_await _task_manager_module->make_and_start_task<::db::snapshot::backup_task_impl>(
-        {}, *this, _storage_manager.container(), std::move(endpoint), std::move(bucket), std::move(prefix), keyspace, dir, global_table->schema()->id(), move_files);
+        {}, *this, _storage_manager.container(), std::move(endpoint), std::move(bucket), std::move(prefix), keyspace, std::move(*dir), move_files);
     co_return task->id();
 }
 
