@@ -220,6 +220,9 @@ public:
             void set_virtual_parent() noexcept;
             task_id id() const noexcept;
             task_manager::task::status& get_status() noexcept;
+            seastar::abort_source& get_abort_source() noexcept {
+                return _as;
+            }
             future<> done() const noexcept;
             // A handle for making this task the parent of a new task.
             tasks::task_info info() const noexcept {
