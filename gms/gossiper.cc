@@ -693,12 +693,11 @@ future<> gossiper::apply_pending_states(locator::host_id hid, gate::holder gh) {
             co_await do_apply_state_locally(hid, std::move(pending.state), false);
         }
     } catch (...) {
-        // Drop any state that was queued while the failed apply was running,
-        // so the entry cannot be retained forever if nothing arrives for this
-        // endpoint anymore (e.g. because it left the cluster). If the state
-        // is still relevant, the next gossip exchange re-delivers it: the
-        // state was never applied, so our digest still advertises a version
-        // below everything it contained.
+        // Drop whatever was queued while the failed apply ran, so the state
+        // is not kept forever if the endpoint never gossips again. Keys at or
+        // below our advertised max are already stored, the rest is above the
+        // max and gets re-delivered. apply_new_states() can break downward
+        // closure by storing a torn state, see SCYLLADB-4195.
         drop_pending_state(hid);
         const auto ex = std::current_exception();
         if (_abort_source.abort_requested()) {
@@ -800,11 +799,22 @@ void gossiper::queue_state_apply(inet_address ep, endpoint_state state) {
             logger.debug("queue_state_apply: dropping a stale-generation state of {}", hid);
             return;
         }
-        if (incoming_gen > pending_gen) {
-            // A newer generation invalidates the older state wholesale.
-            pending = std::move(state);
-        } else {
-            merge_endpoint_state(pending, state);
+        try {
+            if (incoming_gen > pending_gen) {
+                // A newer generation invalidates the older state wholesale.
+                pending = std::move(state);
+            } else {
+                merge_endpoint_state(pending, state);
+            }
+        } catch (...) {
+            // A throw mid-merge leaves the slot torn: heartbeat raised, some
+            // states below the heartbeat version missing. Applying the slot
+            // would advertise a max that peers never send below. Drop the
+            // slot: keys at or below our max are already stored, the rest is
+            // above the max and gets re-delivered.
+            drop_pending_state(hid);
+            logger.warn("queue_state_apply: dropped a partially merged state of {}", hid);
+            throw;
         }
         // The slot's criticality is sticky: whatever it holds still has to be
         // applied before gossip can be considered settled.
