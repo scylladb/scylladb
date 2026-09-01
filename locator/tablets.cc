@@ -1804,9 +1804,26 @@ void tablet_metadata_guard::check() noexcept {
         erm.get()->get_token_metadata().get_version(),
         old_tmap,
         tmap);
-    if (bool(_stage) != bool(trinfo) || (_stage && _stage != trinfo->stage) || 
+    // A cancellation doesn't change the stage - the coordinator only rolls the transition back
+    // once the operation started for the current stage has stopped - so it has to be checked
+    // separately, otherwise the operation would keep running until it finished on its own.
+    // A guard constructed on an already-cancelled transition has _cancelled set and stays
+    // subscribed, so check() can run with it set. Aborting again would be harmless -
+    // request_abort() is idempotent - but there is nothing new to react to either.
+    // Past the cancellable stages the flag is history, not an instruction: the roll-back's own
+    // operations, cleanup at cleanup_target among them, run under guards of their own and must
+    // not start aborted.
+    bool newly_cancelled = trinfo && trinfo->cancelled && !_cancelled
+            && can_cancel_tablet_transition(trinfo->stage);
+    if (bool(_stage) != bool(trinfo) || (_stage && _stage != trinfo->stage) ||
+        newly_cancelled ||
         old_tmap.tablet_count() != tmap.tablet_count())
     {
+        // Keep _cancelled meaning "this guard has seen the cancellation" on both paths, as the
+        // constructor does. Aborting stops the resubscription below, so today check() does not
+        // run again and nothing reads it - but a flag which only sometimes tracks reality is a
+        // trap for whoever changes that.
+        _cancelled = _cancelled || newly_cancelled;
         tablet_logger.debug("tablet_metadata_guard::check: retain the erm and abort the guard");
         _abort_source.request_abort();
     } else {
@@ -1824,6 +1841,14 @@ tablet_metadata_guard::tablet_metadata_guard(replica::table& table, global_table
     subscribe();
     if (auto* trinfo = get_tablet_map().get_tablet_transition_info(tablet.tablet)) {
         _stage = trinfo->stage;
+        if (trinfo->cancelled && can_cancel_tablet_transition(trinfo->stage)) {
+            // Already cancelled before this operation even started. Don't rely on the session
+            // having been cleared alongside the flag to stop it - this guard is what the
+            // operation checks. Only while the stage can still be rolled back: afterwards the
+            // flag merely records what happened, and the roll-back's operations have to run.
+            _cancelled = true;
+            _abort_source.request_abort();
+        }
     }
 }
 
