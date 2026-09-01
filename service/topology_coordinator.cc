@@ -2121,6 +2121,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         bool needs_barrier = false;
         bool has_transitions = false;
         tablet_builder_map tablet_builders;
+        // Counted per round and published only once the round commits: update_topology_state()
+        // rethrows group0_concurrent_modification and the whole round is retried, which would
+        // otherwise count the same tablet again.
+        uint64_t cancelled_transitions = 0;
 
         shared_promise barrier;
         auto fail_barrier = seastar::defer([&] noexcept {
@@ -2262,6 +2266,49 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     return std::nullopt;
             };
 
+            const bool is_strong_consistency = tmap.has_raft_info();
+
+            auto rollback_stage = is_strong_consistency ?
+                locator::tablet_transition_stage::sc_rollback :
+                locator::tablet_transition_stage::cleanup_target;
+
+            // Rolls a cancelled transition back. The canceller already cleared the session,
+            // which aborts whatever the replicas started for this stage, so the action tracked
+            // by `holder` is failing or has failed. Wait for it rather than abandoning it:
+            // tablet_migration_state must outlive its actions, and the barrier of the
+            // cleanup_target stage is what waits for the replicas to release the session.
+            //
+            // Rolls back onto the same track a failed transition takes, which for a strongly
+            // consistent tablet means sc_rollback first: the group's configuration has to lose
+            // the pending replica before cleanup_target tears its raft server down.
+            auto rollback_cancelled = [&] (background_action_holder* holder) {
+                if (holder && *holder) {
+                    if (!(*holder)->available()) {
+                        rtlogger.debug("Tablet {} cancelled at stage {}, waiting for the in-flight action",
+                                       gid, trinfo.stage);
+                        return;
+                    }
+                    if ((*holder)->failed()) {
+                        // Consume it, the transition is not going to retry.
+                        (*holder)->ignore_ready_future();
+                    }
+                    // Replace the consumed future instead of leaving it in the holder.
+                    // ignore() moves an exceptional state to `invalid`, where available() and
+                    // failed() both report false, so a retried round would read the action as
+                    // still running and never roll the transition back, and stop() would
+                    // assert awaiting a future with no promise.
+                    *holder = make_ready_future<>();
+                }
+                // Debug, not info: an RF change puts every tablet of a keyspace into transition,
+                // so this would be one line per tablet. The total is on the
+                // cancelled_transitions metric and in the canceller's own summary line.
+                rtlogger.debug("Rolling back cancelled tablet transition of {} at stage {}", gid, trinfo.stage);
+                cancelled_transitions++;
+                get_mutation_builder()
+                        .set_stage(last_token, rollback_stage)
+                        .del_session(last_token);
+            };
+
             auto maybe_cancel_drain = [&] (locator::tablet_replica replica, const sstring& reason) {
                 auto raft_server = raft::server_id(replica.host.uuid());
                 if (!_topo_sm._topology.paused_requests.contains(raft_server)) {
@@ -2271,14 +2318,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     fmt::format("tablet draining failed: {}, moving {} to {}, due to {}", gid, replica, trinfo.pending_replica, reason));
             };
 
-            const bool is_strong_consistency = tmap.has_raft_info();
-
-            auto rollback_stage = is_strong_consistency ?
-                locator::tablet_transition_stage::sc_rollback :
-                locator::tablet_transition_stage::cleanup_target;
-
             switch (trinfo.stage) {
                 case locator::tablet_transition_stage::allow_write_both_read_old: /* start_migration */
+                    if (trinfo.cancelled) {
+                        rollback_cancelled(&tablet_state.barriers[trinfo.stage]);
+                        break;
+                    }
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
                         if (check_excluded_replicas()) {
                             transition_to(rollback_stage);
@@ -2299,6 +2344,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
                     break;
                 case locator::tablet_transition_stage::write_both_read_old: /* sc_add_nonvoter */
+                    if (trinfo.cancelled) {
+                        rollback_cancelled(&tablet_state.barriers[trinfo.stage]);
+                        break;
+                    }
                     if (action_failed(tablet_state.barriers[trinfo.stage])
                             || (is_strong_consistency && action_failed(tablet_state.config_sync[trinfo.stage]))) {
                         if (check_excluded_replicas()) {
@@ -2321,6 +2370,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     transition_to_with_barrier(rollback_stage);
                     break;
                 case locator::tablet_transition_stage::rebuild_repair: {
+                    if (trinfo.cancelled) {
+                        rollback_cancelled(&tablet_state.rebuild_repair);
+                        break;
+                    }
                     if (action_failed(tablet_state.rebuild_repair)) {
                         bool fail = utils::get_local_injector().enter("rebuild_repair_stage_fail");
                         if (fail || check_excluded_replicas()) {
@@ -2360,6 +2413,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 // get admitted before global_tablet_token_metadata_barrier() is finished for earlier
                 // stage in case of coordinator failover.
                 case locator::tablet_transition_stage::streaming: /* sc_snapshot_transfer */ {
+                    if (trinfo.cancelled) {
+                        rollback_cancelled(&tablet_state.streaming);
+                        break;
+                    }
                     if (action_failed(tablet_state.streaming) || utils::get_local_injector().enter("stream_tablet_fail")) {
                         std::optional<sstring> rollback;
 
@@ -2833,6 +2890,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             } else {
                 co_await update_topology_state(std::move(guard), std::move(updates), format("Tablet migration"));
             }
+            _tablet_ops_metrics.add_cancelled_transitions(cancelled_transitions);
         }
 
         if (needs_barrier) {
@@ -5323,7 +5381,6 @@ future<> topology_coordinator::stop() {
         // but let's check all of them because we never reset these holders
         // once they are added as barriers
         for (auto& [stage, barrier]: tablet_state.barriers) {
-            SCYLLA_ASSERT(barrier.has_value());
             co_await stop_background_action(barrier, gid, [stage] { return format("at stage {}", tablet_transition_stage_to_string(stage)); });
         }
 
@@ -5404,6 +5461,11 @@ tablet_ops_metrics::tablet_ops_metrics() {
                 sm::description("Number of failed tablet user repair"), {ops_label_type("user_repair"), basic_level}),
         sm::make_gauge("succeeded", [this] { return stats[locator::tablet_task_type::user_repair].succeeded; },
                 sm::description("Number of succeeded tablet user repair"), {ops_label_type("user_repair"), basic_level}),
+        sm::make_counter("cancelled_transitions", [this] { return cancelled_transitions; },
+                sm::description("Number of tablet transitions which were cancelled and put on the roll-back track. "
+                                "Counted by the topology coordinator, so it restarts from zero and moves between "
+                                "nodes when the coordinator changes"),
+                {basic_level}),
     });
 }
 
