@@ -10,19 +10,26 @@ Classes, factory functions, and shared pytest fixtures used by
 test/cluster/object_store/ and test/cqlpy/ tests.
 """
 
-import os
 import logging
+import os
 import re
 import uuid
+from collections.abc import Awaitable, Callable
+from operator import attrgetter
+from typing import Literal
 
-from test.pylib.minio_server import MinioServer
+import boto3
+import pytest
+import requests
+
 from test.pylib.dockerized_service import DockerizedServer
 from test.pylib.host_registry import HostRegistry
-from operator import attrgetter
+from test.pylib.minio_server import MinioServer
 
-import pytest
-import boto3
-import requests
+
+type StorageKind = Literal["s3", "gs"]
+type Storage = S3Server | GSFront
+type StorageFactory = Callable[[StorageKind], Awaitable[Storage]]
 
 
 def format_tuples(tuples=None, **kwargs):

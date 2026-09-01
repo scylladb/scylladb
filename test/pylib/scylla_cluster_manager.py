@@ -49,7 +49,7 @@ from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import HTTPError, ScyllaMetricsClient, ScyllaRESTAPIClient
-from test.pylib.scylla_cluster import ReplaceConfig, ScyllaCluster, bind_to_current_loop
+from test.pylib.scylla_cluster import ReplaceConfig, ScyllaCluster
 from test.pylib.scylla_server import ScyllaServer, ScyllaVersionDescription
 from test.pylib.util import (
     Host,
@@ -284,10 +284,7 @@ class ScyllaClusterManager:
                 yield self
             finally:
                 stop_event.set()
-                # Wait for the manager thread off the event loop.  Stopping
-                # the manager recycles the cluster, and recycling runs
-                # teardown callbacks that belong to the caller's loop;
-                # blocking it here would deadlock them.
+                # Wait for the manager thread off the event loop.
                 try:
                     await asyncio.get_running_loop().run_in_executor(None, future.result)
                 finally:
@@ -430,36 +427,6 @@ class ScyllaClusterManager:
         """Unpause the specified server."""
 
         self.cluster.server_unpause(server_id)
-
-    async def add_teardown_callback(self, callback: Callable[[], Any], name: str | None = None) -> None:
-        """Register a callback to run once the cluster used by this test has
-        been stopped.
-
-        The callbacks belong to the cluster and fire from its
-        run_teardown_callbacks(), which recycle() calls right after the servers
-        are stopped.  They therefore run against a cluster that is down, and
-        may dispose of a resource it was using without racing against it: an
-        object storage bucket that an in-flight tablet migration could
-        otherwise still read from (SCYLLADB-2471).
-
-        One consequence of firing that late is worth knowing: the resource
-        the callback disposes of has to stay alive past the fixture that
-        created it.
-
-        Callbacks fire in LIFO order; both plain callables and coroutine
-        functions are accepted.  Register them from a fixture rather than from
-        a test body, so that a coroutine is handed back to a loop that is still
-        alive when it is awaited.  `name` is what the cluster log calls this
-        callback, and defaults to the callable's qualified name.
-        """
-        # bind_to_current_loop() has to run here, on the caller's loop, not
-        # inside the operation, which runs on the manager's.
-        await self._add_teardown_callback(bind_to_current_loop(callback),
-                                          name or getattr(callback, "__qualname__", repr(callback)))
-
-    @manager_op
-    async def _add_teardown_callback(self, callback: Callable[[], Awaitable[None]], name: str) -> None:
-        self.cluster.add_teardown_callback(callback, name)
 
     @manager_op(timeout=None)
     async def _server_add(self,
