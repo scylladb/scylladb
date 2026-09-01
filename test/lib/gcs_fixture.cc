@@ -15,6 +15,10 @@
 #include <seastar/core/with_timeout.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/http/client.hh>
+#include <seastar/http/reply.hh>
+#include <seastar/http/request.hh>
+#include <seastar/util/short_streams.hh>
 
 #include "gcs_fixture.hh"
 #include "tmpdir.hh"
@@ -23,6 +27,7 @@
 
 #include "utils/gcp/gcp_credentials.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/http.hh"
 
 namespace fs = std::filesystem;
 namespace tp = tests::proc;
@@ -334,6 +339,38 @@ const std::string& gcs_fixture::bucket() const {
     return _impl->bucket;
 }
 
+bool gcs_fixture::validating_uploads() const {
+    return _impl->upload_validator.has_value();
+}
+
+seastar::future<> gcs_fixture::reset_upload_faults() {
+    if (!_impl->upload_validator) {
+        co_return;
+    }
+
+    auto url = utils::http::parse_simple_url(_impl->endpoint);
+    auto cln = seastar::http::client(socket_address(net::inet_address(url.host), url.port));
+
+    std::exception_ptr ex;
+    try {
+        auto req = seastar::http::request::make("PUT", url.host, "/__inject");
+        req._headers["Content-Length"] = "0";
+        req.set_query_param("reset", "1");
+        co_await cln.make_request(std::move(req), [](const seastar::http::reply&, seastar::input_stream<char>&& in) -> future<> {
+            auto body = std::move(in);
+            co_await util::skip_entire_stream(body);
+        }, seastar::http::reply::status_type::ok);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await cln.close();
+
+    if (ex) {
+        // teardown must not fail the test over this
+        BOOST_TEST_MESSAGE(fmt::format("Warning: could not disarm upload validator faults: {}", ex));
+    }
+}
+
 void gcs_fixture::add_object_to_delete(const std::string& name) {
     _impl->objects_to_delete.emplace_back(name);
 }
@@ -359,6 +396,10 @@ utils::gcp::storage::client& local_gcs_wrapper::client() const {
     return gcs_fixture::active()->client();
 }
 
+bool local_gcs_wrapper::validating_uploads() const {
+    return gcs_fixture::active()->validating_uploads();
+}
+
 seastar::future<> local_gcs_wrapper::setup() {
     auto f = gcs_fixture::active();
     if (!f) {
@@ -375,6 +416,8 @@ seastar::future<> local_gcs_wrapper::setup() {
 seastar::future<> local_gcs_wrapper::teardown() {
     auto f = gcs_fixture::active();
     assert(f);
+
+    co_await f->reset_upload_faults();
 
     auto& c = client();
     for (auto& name : objects_to_delete) {
