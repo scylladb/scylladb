@@ -149,12 +149,16 @@ async def update_hh_enabled_via_http_api(manager: ScyllaClusterManager, server: 
     assert response == expected
 
 
-async def assert_rows_present(cql, keys, present: bool) -> None:
-    stmt = cql.prepare("SELECT pk FROM ks.t WHERE pk = ?")
-    stmt.consistency_level = ConsistencyLevel.ONE
-    for key in keys:
-        rows = list(await cql.run_async(stmt, (key,)))
-        assert (len(rows) == 1) == present, f"key {key}: expected present={present}, got {rows}"
+async def assert_rows_present(cql, table: str, pk: str, keys, present: bool) -> None:
+    stmt = SimpleStatement(f"SELECT {pk} FROM {table}", consistency_level=ConsistencyLevel.ONE)
+    rows = await cql.run_async(stmt, all_pages=True)
+    results = set(getattr(row, pk) for row in rows)
+    keys = set(keys)
+
+    if present:
+        assert keys.issubset(results), f"{keys} vs. {results}"
+    else:
+        assert len(keys.intersection(results)) == 0, f"{keys} vs. {results}"
 
 
 # Write with RF=1 and CL=ANY to a dead node should write hints and succeed
@@ -1140,17 +1144,17 @@ async def test_hints_switch_config_in_runtime_via_http_api(manager: ScyllaCluste
     await manager.server_stop_gracefully(s3.server_id)
 
     cql = await manager.get_cql_exclusive(s2)
-    await assert_rows_present(cql, keys_enabled, present=True)
-    await assert_rows_present(cql, keys_disabled, present=False)
-    await assert_rows_present(cql, keys_dc3_only, present=False)
+    await assert_rows_present(cql, "ks.t", "pk", keys_enabled, present=True)
+    await assert_rows_present(cql, "ks.t", "pk", keys_disabled, present=False)
+    await assert_rows_present(cql, "ks.t", "pk", keys_dc3_only, present=False)
 
     await manager.server_start(s3.server_id)
     await manager.server_stop_gracefully(s2.server_id)
 
     cql = await manager.get_cql_exclusive(s3)
-    await assert_rows_present(cql, keys_enabled, present=True)
-    await assert_rows_present(cql, keys_disabled, present=False)
-    await assert_rows_present(cql, keys_dc3_only, present=True)
+    await assert_rows_present(cql, "ks.t", "pk", keys_enabled, present=True)
+    await assert_rows_present(cql, "ks.t", "pk", keys_disabled, present=False)
+    await assert_rows_present(cql, "ks.t", "pk", keys_dc3_only, present=True)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -1259,7 +1263,7 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     await wait_for_sync_point(sync_point_id, 0, expect="DONE")
 
     logger.info("Verifying that hints replayed all of the data...")
-    await assert_rows_present(cql, keys1, present=True)
+    await assert_rows_present(cql, "ks.t", "pk", keys1, present=True)
 
     logger.info("SUBTEST 2: Create a hint sync point, shutdown the waiting node and observe the failure")
 
@@ -1341,7 +1345,7 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     await wait_for_sync_point(sync_point_id, 60, expect="DONE")
 
     logger.info("Verifying that hints replayed all of the data...")
-    await assert_rows_present(cql, keys3, present=True)
+    await assert_rows_present(cql, "ks.t", "pk", keys3, present=True)
 
     logger.info("SUBTEST 4: Create a hint sync point and try to use it on another node - should fail")
 
@@ -1386,7 +1390,7 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     await asyncio.wait_for(fut, timeout=60)
 
     logger.info("Verifying that hints replayed all of the data...")
-    await assert_rows_present(cql, keys5, present=True)
+    await assert_rows_present(cql, "ks.t", "pk", keys5, present=True)
 
 
 async def test_hint_storage_proxy_metrics(manager: ScyllaClusterManager):
