@@ -23,6 +23,7 @@
 #include "sstable_directory.hh"
 #include "utils/assert.hh"
 #include "utils/lister.hh"
+#include "utils/error_injection.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/directories.hh"
 #include "utils/s3/client.hh"
@@ -355,6 +356,18 @@ future<> sstable_directory::filesystem_components_lister::scan(sstable_directory
         }
     }
 
+    static const auto* injection_name = "sstable_directory_pause_scan";
+    co_await utils::get_local_injector().inject(injection_name, [] (auto& handler) -> future<> {
+        // Only park the shard the test asked for, so that the other shards can go
+        // on and process what they found while this one is still listing.
+        if (std::atoll(handler.get("shard")->data()) != this_shard_id()) {
+            co_return;
+        }
+        dirlog.info("{}: hit", injection_name);
+        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+        dirlog.info("{}: continue", injection_name);
+    });
+
     dirlog.debug("Start scanning directory {} for SSTables", _directory);
     // It seems wasteful that each shard is repeating this scan, and to some extent it is.
     // However, we still want to open the files and especially call process_dir() in a distributed
@@ -402,6 +415,9 @@ future<> sstable_directory::filesystem_components_lister::scan(sstable_directory
 
     dirlog.debug("After {} scanned, {} descriptors found, {} different files found",
             _directory, _state->descriptors.size(), _state->generations_found.size());
+
+    // Lets tests wait until the listing is over on every shard.
+    utils::get_local_injector().inject("sstable_directory_scan_done", [] { });
 }
 
 future<> sstable_directory::filesystem_components_lister::process(sstable_directory& directory, process_flags flags) {

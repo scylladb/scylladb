@@ -6,6 +6,7 @@
 
 #!/usr/bin/env python3
 
+import contextlib
 import os
 import glob
 import logging
@@ -268,3 +269,119 @@ async def test_refresh_generates_view_updates(manager: ScyllaClusterManager, tab
             await wait_for_row_count_on_host(cql, host, ks, cf, expected_rows)
             await wait_for_row_count_on_host(cql, host, ks, mv, expected_rows)
             await wait_for_row_count_on_host(cql, host, ks, f'{idx}_index', expected_rows)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_refresh_does_not_claim_sstables_created_by_another_shard(manager: ScyllaClusterManager):
+    '''
+    A regular refresh mutates the level of every uploaded sstable, which hard-links
+    it into a new generation in the very upload directory that all shards are
+    listing.  Generations carry no shard affinity, so a shard whose listing is
+    still running can claim another shard's in-flight sstable and schedule all of
+    its components for removal.
+
+    Park shard 1 at the beginning of its listing and shard 0 in the middle of its
+    rewrites, so that shard 1 gets to list a directory full of unsealed sstables
+    belonging to shard 0, and check that the refresh still succeeds.
+
+    Tablets are disabled on purpose: with tablets, refresh is auto-promoted to
+    load-and-stream, which does not mutate the sstable level and so never writes
+    into the directory being listed.
+    '''
+    pause_scan = 'sstable_directory_pause_scan'
+    scan_done = 'sstable_directory_scan_done'
+    pause_rewrite = 'pause_sstable_component_rewrite'
+    cf = 'cf'
+    # A high loading concurrency keeps many rewrites in flight, and thus many
+    # unsealed sstables in the upload directory, when shard 0 parks.
+    server = await manager.server_add(cmdline=['--smp=2'],
+                                      config={'initial_sstable_loading_concurrency': 16})
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
+                                          "'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        # Leveled compaction with a tiny sstable size, so that the data ends up in
+        # many sstables above level 0.  Level 0 sstables are not rewritten, and the
+        # more of them are rewritten the likelier shard 1 is to claim one.
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY, value blob) WITH compaction = "
+                            "{'class': 'LeveledCompactionStrategy', 'sstable_size_in_mb': 1}")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+        keys = range(16384)
+        for begin in range(0, len(keys), 1024):
+            await asyncio.gather(*(cql.run_async(insert_stmt, (k, random.randbytes(1024)))
+                                   for k in keys[begin:begin + 1024]))
+            await manager.api.keyspace_flush(server.ip_addr, ks, cf)
+        await manager.api.keyspace_compaction(server.ip_addr, ks, cf)
+
+        async def sstable_levels():
+            info = await manager.api.get_sstable_info(server.ip_addr, ks, cf)
+            return [sst['level'] for entry in info for sst in entry['sstables']]
+
+        async def enough_sstables_above_level_zero():
+            return True if len([l for l in await sstable_levels() if l > 0]) >= 8 else None
+        await wait_for(enough_sstables_above_level_zero, time.time() + 60)
+
+        # Freeze the sstable set: leveled compaction keeps running in the
+        # background, and what is checked here has to be what gets snapshotted.
+        await manager.api.disable_autocompaction(server.ip_addr, ks, cf)
+        levels = await sstable_levels()
+        logger.info(f'SSTable levels: {levels}')
+        # Only sstables above level 0 are rewritten by refresh, so without them
+        # the test would not exercise anything.
+        assert len([l for l in levels if l > 0]) >= 8, f'expected sstables above level 0, got {levels}'
+
+        workdir = await manager.server_get_workdir(server.server_id)
+        cf_dir = os.path.join(f'{workdir}/data/{ks}', os.listdir(f'{workdir}/data/{ks}')[0])
+        upload_dir = os.path.join(cf_dir, 'upload')
+
+        snap_name, _ = await take_snapshot(ks, [server], manager, logger)
+        snapshot_dir = os.path.join(cf_dir, 'snapshots', snap_name)
+
+        logger.info('Clear data by truncating')
+        cql.execute(f'TRUNCATE TABLE {ks}.{cf};')
+
+        logger.info(f'Copy sstables from {snapshot_dir} to {upload_dir}')
+        os.makedirs(upload_dir, exist_ok=True)
+        for item in os.listdir(snapshot_dir):
+            if item not in ['manifest.json', 'schema.cql']:
+                shutil.copy2(os.path.join(snapshot_dir, item), os.path.join(upload_dir, item))
+
+        await manager.api.enable_injection(server.ip_addr, pause_scan, one_shot=False, parameters={'shard': '1'})
+        await manager.api.enable_injection(server.ip_addr, scan_done, one_shot=False)
+        await manager.api.enable_injection(server.ip_addr, pause_rewrite, one_shot=False)
+        try:
+            refresh = asyncio.create_task(
+                manager.api.load_new_sstables(server.ip_addr, ks, cf, load_and_stream=False))
+            # Both shards enter the scan injection; only shard 1 parks in it.
+            await manager.api.wait_for_injection_enter(server.ip_addr, pause_scan, threshold=2)
+            # Shard 0 is free to run ahead and park inside its rewrites, leaving
+            # unsealed sstables -- a TemporaryTOC and no TOC -- in the upload
+            # directory.  That is the state shard 1 has to list, and every one of
+            # them is a chance for it to claim a generation that hashes to it, so
+            # wait for a good number rather than for the first.  With the listing
+            # and the processing properly separated shard 0 cannot get that far:
+            # it waits for shard 1 to finish listing first, so this times out.
+            def unsealed_sstables():
+                return [f for f in os.listdir(upload_dir) if f.endswith('-TOC.txt.tmp')]
+
+            async def enough_unsealed_sstables():
+                return True if len(unsealed_sstables()) >= 6 else None
+            with contextlib.suppress(AssertionError):  # times out on a fixed build
+                await wait_for(enough_unsealed_sstables, time.time() + 10)
+            logger.info(f'{len(unsealed_sstables())} unsealed sstables in the upload dir')
+            logger.info('Releasing the listing on shard 1')
+            await manager.api.message_injection(server.ip_addr, pause_scan)
+            # Shard 0 is done listing long before shard 1 is released, so both
+            # shards having reached the end of the listing means shard 1 has
+            # walked the directory the rewrites are parked in.  Only then let
+            # them complete and seal.
+            await manager.api.wait_for_injection_enter(server.ip_addr, scan_done, threshold=2)
+            await manager.api.disable_injection(server.ip_addr, pause_rewrite)
+            await refresh
+        finally:
+            await manager.api.disable_injection(server.ip_addr, pause_scan)
+            await manager.api.disable_injection(server.ip_addr, scan_done)
+            await manager.api.disable_injection(server.ip_addr, pause_rewrite)
+
+        assert {row.pk for row in cql.execute(f"SELECT pk FROM {ks}.{cf}")} == set(keys)
+        await wait_for_upload_dir_empty(upload_dir)
