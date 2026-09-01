@@ -1020,7 +1020,13 @@ public:
     future<> del_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> restore_tablets(table_id, sstring snap_name);
     future<> abort_restore_tablets(table_id);
-    future<> set_tablet_balancing_enabled(bool);
+    // When disabling, waits for the in-flight tablet transitions. Those still in flight after
+    // grace_period are cancelled where possible; zero cancels nothing. Without grace_period, the
+    // tablet_transition_abort_grace_period_in_seconds option applies.
+    future<> set_tablet_balancing_enabled(bool enabled, std::optional<std::chrono::seconds> grace_period = std::nullopt);
+
+    // Cancels every tablet transition which can be cancelled, except those of a node drain.
+    future<> cancel_tablet_transitions();
 
     future<utils::UUID> submit_quiesce_topology_request();
     // The body of await_topology_quiesced(), run through _quiesce_topology so that
