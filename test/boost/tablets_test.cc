@@ -1147,7 +1147,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_update) {
                         tablet_replica {h2, 7},
                     }
                 );
-                builder.del_transition(token);
+                builder.del_transition(token, db.features());
 
                 muts.emplace_back(builder.build());
             }
@@ -1581,7 +1581,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                 tablet_replica {h1, 2},
                 tablet_replica {h2, 3},
             });
-            b.del_transition(last_token);
+            b.del_transition(last_token, e.local_db().features());
             e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
         }
 
@@ -1615,7 +1615,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                     tablet_replica {h1, 2},
                     tablet_replica {h2, 3},
             });
-            b.del_transition(last_token);
+            b.del_transition(last_token, e.local_db().features());
             b.set_resize_decision(resize_decision, e.local_db().features());
             e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
         }
