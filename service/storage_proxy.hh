@@ -597,6 +597,18 @@ public:
     future<> cancel_all_write_response_handlers();
     future<> cancel_nonlocal_write_response_handlers();
 
+    // Give a bounded deadline (now + `grace`) to write handlers that pin a token_metadata
+    // version older than `current_version` and whose own deadline is more than
+    // `unbounded_threshold` away, i.e. handlers that are effectively unbounded (internal
+    // writes run under infinite_timeout_config, whose one-hour timeouts are
+    // indistinguishable from forever for a topology operation). This keeps a topology
+    // barrier waiting on shared_token_metadata::stale_versions_in_use() from stalling
+    // behind them. See the definition for the exact selection rules and for why re-arming
+    // is preferred over cancelling.
+    future<> bound_write_handlers_pinning_stale_versions(
+            locator::token_metadata::version_t current_version,
+            clock_type::duration unbounded_threshold, clock_type::duration grace);
+
 private:
     bool only_me(const locator::effective_replication_map& erm, const host_id_vector_replica_set& replicas) const noexcept;
 

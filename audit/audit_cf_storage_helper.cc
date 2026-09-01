@@ -16,11 +16,34 @@
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "utils/error_injection.hh"
 
 namespace audit {
 
 const sstring audit_cf_storage_helper::KEYSPACE_NAME("audit");
 const sstring audit_cf_storage_helper::TABLE_NAME("audit_log");
+
+static service::client_state& audit_client_state() {
+    using namespace std::chrono_literals;
+    // Audit writes are fire-and-forget observability writes, like tracing's, and get the
+    // same bounded timeout tracing uses (see tracing_client_state()). Without it they run
+    // under infinite_timeout_config's one-hour timeouts, so a stuck audit write both
+    // blocks the client statement being audited (audit::inspect() is awaited on the
+    // statement path) and pins its effective_replication_map, and with it a token_metadata
+    // version that topology barriers wait on, for up to an hour.
+    static thread_local timeout_config audit_db_timeout_config = [] {
+        timeout_config cfg{5s, 5s, 5s, 5s, 5s, 5s, 5s};
+        // Restore the one-hour internal timeout so tests can drive an effectively
+        // unbounded internal write and exercise the topology-barrier backstop
+        // (storage_proxy::bound_write_handlers_pinning_stale_versions) with a real write.
+        utils::get_local_injector().inject("audit_unbounded_write_timeout", [&cfg] {
+            cfg = infinite_timeout_config;
+        });
+        return cfg;
+    }();
+    static thread_local service::client_state s(service::client_state::internal_tag{}, audit_db_timeout_config);
+    return s;
+}
 
 audit_cf_storage_helper::audit_cf_storage_helper(cql3::query_processor& qp, service::migration_manager& mm)
     : _qp(qp)
@@ -54,7 +77,7 @@ audit_cf_storage_helper::audit_cf_storage_helper(cql3::query_processor& qp, serv
                        "username,"
                        "error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                        KEYSPACE_NAME, TABLE_NAME))
-    , _dummy_query_state(service::client_state::for_internal_calls(), empty_service_permit())
+    , _dummy_query_state(audit_client_state(), empty_service_permit())
 {
 }
 
