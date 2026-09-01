@@ -40,36 +40,6 @@ protected:
     virtual future<> run() override = 0;
 };
 
-class data_sync_repair_task_impl : public repair_task_impl {
-private:
-    dht::token_range_vector _ranges;
-    std::unordered_map<dht::token_range, repair_neighbors> _neighbors;
-    optimized_optional<abort_source::subscription> _abort_subscription;
-    size_t _cfs_size = 0;
-    service::frozen_topology_guard _frozen_topology_guard;
-public:
-    data_sync_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, dht::token_range_vector ranges, std::unordered_map<dht::token_range, repair_neighbors> neighbors, streaming::stream_reason reason, shared_ptr<node_ops_info> ops_info, service::frozen_topology_guard frozen_topology_guard)
-        : repair_task_impl(module, id.uuid(), id.id, "keyspace", std::move(keyspace), "", std::move(entity), tasks::task_id::create_null_id(), reason)
-        , _ranges(std::move(ranges))
-        , _neighbors(std::move(neighbors))
-        , _frozen_topology_guard(std::move(frozen_topology_guard))
-    {
-        if (ops_info && ops_info->as) {
-            _abort_subscription = ops_info->as->subscribe([this] () noexcept {
-                abort();
-            });
-        }
-    }
-
-    virtual tasks::is_abortable is_abortable() const noexcept override {
-        return tasks::is_abortable(!_abort_subscription);
-    }
-protected:
-    future<> run() override;
-
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
 class shard_repair_task_impl : public repair_task_impl {
 public:
     repair_service& rs;

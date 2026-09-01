@@ -253,7 +253,7 @@ public:
 private:
     future<> run_tablet_repair(gc_clock::time_point& _flush_time, bool& _should_flush_and_flush_failed, sstring _keyspace, std::vector<sstring> _tables, std::vector<tablet_repair_task_meta> _metas, std::optional<int> _ranges_parallelism, service::frozen_topology_guard _topo_guard, bool _skip_flush, tablet_repair_sched_info sched_info, streaming::stream_reason _reason, tasks::task_info parent_data, repair_uniq_id id);
     future<> run_user_requested_repair(lw_shared_ptr<locator::global_static_effective_replication_map> _germs, std::vector<sstring> _cfs, dht::token_range_vector _ranges, std::vector<sstring> _hosts, std::vector<sstring> _data_centers, std::unordered_set<locator::host_id> _ignore_nodes, bool _small_table_optimization, std::optional<int> _ranges_parallelism, abort_source& _as, sstring keyspace, tasks::task_info parent_data, repair_uniq_id id);
-    future<> run_data_sync_repair(size_t& _cfs_size, const dht::token_range_vector& _ranges, const std::unordered_map<dht::token_range, repair_neighbors>& _neighbors, streaming::stream_reason _reason, abort_source& _as, service::frozen_topology_guard _frozen_topology_guard, sstring keyspace, tasks::task_info task_data, repair_uniq_id id);
+    future<> run_data_sync_repair(size_t& _cfs_size, dht::token_range_vector _ranges, std::unordered_map<dht::token_range, repair_neighbors> _neighbors, streaming::stream_reason _reason, abort_source& _as, service::frozen_topology_guard _frozen_topology_guard, sstring keyspace, tasks::task_info task_data, repair_uniq_id id);
 
 public:
     future<std::optional<repair_task_progress>> get_tablet_repair_task_progress(tasks::task_id task_uuid);
@@ -342,8 +342,6 @@ public:
     future<uint32_t> get_next_repair_meta_id();
 
     void on_cleanup_for_drop_table(const table_id& id);
-
-    friend class repair::data_sync_repair_task_impl;
 };
 
 class repair_info;

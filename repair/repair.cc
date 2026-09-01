@@ -1663,14 +1663,48 @@ future<> repair_service::sync_data_using_repair(
     }
 
     SCYLLA_ASSERT(this_shard_id() == 0);
-    auto task = co_await _repair_module->make_and_start_task<repair::data_sync_repair_task_impl>(tasks::make_empty_task_info(), _repair_module->new_repair_uniq_id(), std::move(keyspace), "", std::move(ranges), std::move(neighbors), reason, ops_info, std::move(frozen_topology_guard));
+    auto id = _repair_module->new_repair_uniq_id();
+    // If the operation was already aborted, bail out instead of creating
+    // a task for it.
+    if (ops_info && ops_info->as) {
+        ops_info->as->check();
+    }
+    // The number of tables in the keyspace, discovered while the task runs.
+    // Shared between the action and the workload callback.
+    auto cfs_size = make_lw_shared<size_t>(0);
+    tasks::task_manager::task_builder task_builder{_repair_module, format("{}", reason), id.uuid()};
+    task_builder.set_sequence_number(id.id)
+                .set_scope("keyspace")
+                .set_progress_units("ranges")
+                .set_keyspace(keyspace)
+                .set_is_internal(tasks::is_internal::no)
+                // A task driven by a node operation is aborted by the operation,
+                // not through the task manager API.
+                .set_is_abortable(tasks::is_abortable(!(ops_info && ops_info->as)))
+                .set_workload_fn([cfs_size, nranges = ranges.size()] () {
+                    return make_ready_future<std::optional<double>>(*cfs_size ? std::make_optional<double>(nranges * *cfs_size * this_smp_shard_count()) : std::nullopt);
+                });
+    auto task = co_await std::move(task_builder).build([module = _repair_module, keyspace = std::move(keyspace), ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_as = ops_info ? ops_info->as : nullptr, abort_subscription = optimized_optional<abort_source::subscription>{}, frozen_topology_guard, cfs_size] (tasks::task_manager::task::impl& self) mutable {
+        if (ops_as) {
+            abort_subscription = ops_as->subscribe([&self] () noexcept {
+                self.abort();
+            });
+            if (!abort_subscription) {
+                // The operation was aborted after the check above, before the
+                // task started.
+                self.abort();
+            }
+        }
+        auto& rs = module->get_repair_service();
+        return rs.run_data_sync_repair(*cfs_size, std::move(ranges), std::move(neighbors), reason, self.get_abort_source(), frozen_topology_guard, std::move(keyspace), self.info(), module->get_repair_uniq_id(self));
+    });
     co_await task->done();
 }
 
 future<> repair_service::run_data_sync_repair(
         size_t& _cfs_size,
-        const dht::token_range_vector& _ranges,
-        const std::unordered_map<dht::token_range, repair_neighbors>& _neighbors,
+        dht::token_range_vector _ranges,
+        std::unordered_map<dht::token_range, repair_neighbors> _neighbors,
         streaming::stream_reason _reason,
         abort_source& _as,
         service::frozen_topology_guard _frozen_topology_guard,
@@ -1717,7 +1751,7 @@ future<> repair_service::run_data_sync_repair(
     auto start_time = std::chrono::steady_clock::now();
     rlogger.info("repair[{}]: sync data for keyspace={}, status=started, reason={}, small_table_optimization_tables={}, normal_tables={}",
             id.uuid(), keyspace, _reason, small_cfs.size(), normal_cfs.size());
-    co_await _repair_module->run(id, [this, id, &db, keyspace, small_cfs = std::move(small_cfs), normal_cfs = std::move(normal_cfs), germs = std::move(germs), &ranges = _ranges, &neighbors = _neighbors, reason = _reason, &task_as = _as, frozen_topology_guard = _frozen_topology_guard, task_data = std::move(task_data)] () mutable {
+    co_await _repair_module->run(id, [this, id, &db, keyspace, small_cfs = std::move(small_cfs), normal_cfs = std::move(normal_cfs), germs = std::move(germs), ranges = std::move(_ranges), neighbors = std::move(_neighbors), reason = _reason, &task_as = _as, frozen_topology_guard = _frozen_topology_guard, task_data = std::move(task_data)] () mutable {
         // A group of tables to be repaired together with a common set of ranges
         // and neighbors.
         struct repair_group {
@@ -1793,16 +1827,6 @@ future<> repair_service::run_data_sync_repair(
     auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
     rlogger.info("repair[{}]: sync data for keyspace={}, status=succeeded, reason={}, duration={}",
             id.uuid(), keyspace, _reason, duration);
-}
-
-future<> repair::data_sync_repair_task_impl::run() {
-    auto module = dynamic_pointer_cast<repair::task_manager_module>(_module);
-    auto& rs = module->get_repair_service();
-    return rs.run_data_sync_repair(_cfs_size, _ranges, _neighbors, _reason, _as, _frozen_topology_guard, _status.keyspace, info(), get_repair_uniq_id());
-}
-
-future<std::optional<double>> repair::data_sync_repair_task_impl::expected_total_workload() const {
-    co_return _cfs_size ? std::make_optional<double>(_ranges.size() * _cfs_size * this_smp_shard_count()) : std::nullopt;
 }
 
 future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens, service::frozen_topology_guard frozen_topology_guard) {
