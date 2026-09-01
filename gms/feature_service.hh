@@ -140,6 +140,7 @@ public:
     gms::feature tablet_rack_aware_view_pairing { *this, "TABLET_RACK_AWARE_VIEW_PAIRING"sv };
 
     gms::feature tablet_migration_virtual_task { *this, "TABLET_MIGRATION_VIRTUAL_TASK"sv };
+    gms::feature tablet_transition_cancel { *this, "TABLET_TRANSITION_CANCEL"sv };
     gms::feature tablet_resize_virtual_task { *this, "TABLET_RESIZE_VIRTUAL_TASK"sv };
 
     // A feature just for use in tests. It must not be advertised unless

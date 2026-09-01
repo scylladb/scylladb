@@ -2443,7 +2443,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     if (do_barrier()) {
                         _tablets.erase(gid);
                         get_mutation_builder()
-                                .del_transition(last_token)
+                                .del_transition(last_token, _feature_service)
                                 .del_migration_task_info(last_token, _feature_service);
                         auto leaving_replica = get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
                         if (leaving_replica) {
@@ -2461,7 +2461,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     if (!defer_transition && do_barrier()) {
                         _tablets.erase(gid);
                         get_mutation_builder()
-                                .del_transition(last_token)
+                                .del_transition(last_token, _feature_service)
                                 .set_replicas(last_token, trinfo.next)
                                 .del_migration_task_info(last_token, _feature_service);
                         _vb_coordinator->generate_tablet_migration_updates(updates, guard, tmap, gid, trinfo);
@@ -2584,7 +2584,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         auto ep = tablet_state.restore->get_exception();
                         rtlogger.debug("Clearing restore transition for {} due to error", gid);
                         _tablets.erase(gid);
-                        get_mutation_builder().del_transition(last_token).del_snapshot_name(last_token).del_session(last_token);
+                        get_mutation_builder().del_transition(last_token, _feature_service).del_snapshot_name(last_token).del_session(last_token);
                         // Record error on the ongoing restore request so it's propagated to the caller.
                         if (auto it = restore_request_for_table.find(gid.table); it != restore_request_for_table.end()) {
                             updates.add(
@@ -2609,7 +2609,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     })) {
                         rtlogger.debug("Clearing restore transition for {}", gid);
                         _tablets.erase(gid);
-                        get_mutation_builder().del_transition(last_token).del_snapshot_name(last_token).del_session(last_token);
+                        get_mutation_builder().del_transition(last_token, _feature_service).del_snapshot_name(last_token).del_session(last_token);
                     }
                 }
                     break;
@@ -2647,7 +2647,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 rtlogger.info("The end_repair stage finished for tablet repair tablet_id={} session_id={}", gid, tablet_state.session_id);
                             }
                             _tablets.erase(gid);
-                            get_mutation_builder().del_transition(last_token);
+                            get_mutation_builder().del_transition(last_token, _feature_service);
                         }
                     }
                 }
