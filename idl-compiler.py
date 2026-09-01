@@ -704,7 +704,9 @@ def class_def_parse_action(tokens):
     template_params = None
     if 'template' in tokens:
         template_params = [ClassTemplateParam(typename=tp[0], name=tp[1]) for tp in tokens['template']]
-    return ClassDef(name=tokens['name'], members=class_members, final=is_final, stub=is_stub, attribute=attribute, template_params=template_params)
+    cls = ClassDef(name=tokens['name'], members=class_members, final=is_final, stub=is_stub, attribute=attribute, template_params=template_params)
+    validate_member_versioning(cls)
+    return cls
 
 
 def rpc_verb_param_parse_action(tokens):
@@ -957,6 +959,47 @@ def get_member_name(name):
 
 def get_members(cls):
     return [p for p in cls.members if not isinstance(p, ClassDef) and not isinstance(p, EnumDef)]
+
+
+def has_version(member):
+    '''True if a member's [[version]] attribute makes it optional on the wire.'''
+    return member.attribute is not None and member.attribute.startswith('version')
+
+
+def parse_version(attribute):
+    '''Parse the "version X.Y[.Z]" attribute string into a tuple of ints.'''
+    return tuple(int(p) for p in attribute[len('version'):].strip().split('.'))
+
+
+def validate_member_versioning(cls):
+    '''Enforce the [[version]] wire-format invariant for a class' members:
+    once a member is versioned, every member after it (in declaration/wire
+    order) must be versioned too, and version numbers must not decrease.
+    This is required because a versioned field is deserialized as
+    `(in.size()>0) ? deserialize(...) : default`, which only works correctly
+    for a field appended at the end of the wire layout.'''
+    prev_version = None
+    prev_name = None
+    for member in get_members(cls):
+        if has_version(member):
+            version = parse_version(member.attribute)
+            if prev_version is not None:
+                n = max(len(prev_version), len(version))
+                padded_prev = prev_version + (0,) * (n - len(prev_version))
+                padded_cur = version + (0,) * (n - len(version))
+                if padded_cur < padded_prev:
+                    raise ValueError(
+                        f"field '{member.name}' in class '{cls.name}' has [[version {'.'.join(map(str, version))}]] "
+                        f"which is lower than the version of the preceding versioned field '{prev_name}' "
+                        f"([[version {'.'.join(map(str, prev_version))}]]) — [[version]] numbers must be "
+                        f"non-decreasing within a class")
+            prev_version = version
+            prev_name = member.name
+        elif prev_version is not None:
+            raise TypeError(
+                f"field '{member.name}' in class '{cls.name}' is not versioned but follows versioned field "
+                f"'{prev_name}' — new mandatory fields must come before all [[version]] fields, or be "
+                f"versioned themselves")
 
 
 def get_variant_type(t):
