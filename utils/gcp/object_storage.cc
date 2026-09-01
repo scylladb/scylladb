@@ -140,9 +140,15 @@ public:
         return default_gcp_storage_chunk_size;
     }
 
+    struct session_status {
+        bool completed = false;   // the service finalized the object while we asked
+        uint64_t committed = 0;
+    };
+
     future<> acquire_session();
     future<> do_single_upload(std::deque<temporary_buffer<char>>, size_t offset, size_t len, bool final);
     future<> check_upload();
+    future<session_status> query_session();
     future<> remove_upload();
     future<> adjust_memory_limit(size_t);
     future<> maybe_do_upload(bool force) {
@@ -761,6 +767,12 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
     auto last = offset + std::max(len, size_t(1)) - 1; // inclusive.
     auto end = offset + len;
 
+    // A server that keeps not advancing would otherwise spin here. The bound covers the
+    // whole loop, so it does not matter which branch below decided not to move `offset`.
+    constexpr unsigned max_stalled = 10;
+    unsigned stalled = 0;
+    auto progress_at = offset;
+
     for (;;) {
         // A zero-length chunk names no bytes, so it must not name a last byte:
         // "bytes 0-0/0" claims byte 0 exists in an object declared to be empty,
@@ -777,6 +789,15 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
             );
 
         try {
+            if (offset != progress_at) {
+                progress_at = offset;
+                stalled = 0;
+            } else if (stalled++ == max_stalled) {
+                throw failed_upload_error(308, fmt::format("{}:{} made no progress at offset {} in {} attempts"
+                    , _bucket, _object_name, offset, stalled
+                ));
+            }
+
             if (_session_path.empty()) {
                 co_await acquire_session();
             }
@@ -807,11 +828,44 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
                 co_return; // done and happy
             default:
                 if (int(res.result()) == 308) {
+                    // A Range on a 308 reports what the session holds, counted from byte 0. It
+                    // never describes this chunk, so its absence says only that we do not know
+                    // where the session stands - ask instead of assuming the chunk was dropped.
+                    // https://docs.cloud.google.com/storage/docs/performing-resumable-uploads
                     uint64_t first = 0, new_last = 0;
-                    if (parse_response_range(res.reply, first, new_last) && last != new_last) {
-                        auto written = (new_last + 1) - offset;
+                    uint64_t committed = 0;
 
-                        gcp_storage.debug("{}:{} partial upload ({} bytes)", _bucket, _object_name, written);
+                    if (parse_response_range(res.reply, first, new_last)) {
+                        committed = new_last + 1;
+                    } else if (len == 0) {
+                        // the "bytes */<total>" finalize names no chunk to resend; leave the
+                        // session where it is and let check_upload() settle the object
+                        committed = offset;
+                    } else {
+                        auto status = co_await query_session();
+                        if (status.completed) {
+                            co_return;
+                        }
+                        committed = status.committed;
+                    }
+
+                    if (committed < offset) {
+                        // The session lost bytes it had already acknowledged, and
+                        // maybe_do_upload() released the buffers holding them, so the upload
+                        // can never be made contiguous again.
+                        throw failed_upload_error(int(res.result()), fmt::format("{}:{} session holds {} bytes, behind the chunk at offset {}"
+                            , _bucket, _object_name, committed, offset
+                        ));
+                    }
+
+                    auto acknowledged = committed - offset;
+
+                    if (acknowledged < len) {
+                        auto written = acknowledged;
+
+                        gcp_storage.debug("{}:{} session holds {} bytes, {} of the chunk at {}"
+                            , _bucket, _object_name, committed, acknowledged, offset
+                        );
 
                         if (!final && (len - written) < min_gcp_storage_chunk_size) {
                             written = len - std::min(min_gcp_storage_chunk_size, len);
@@ -835,7 +889,7 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
                         assert(len == total);
                         continue;
                     }
-                    // incomplete. ok for partial
+                    // the whole chunk landed
                     gcp_storage.debug("{}:{} chunk {}:{} done", _bucket, _object_name, offset, offset+len);
                     co_return;
                 }
@@ -880,6 +934,39 @@ future<> utils::gcp::storage::client::object_data_sink::check_upload() {
             , _bucket, _object_name, res.reply._headers[RANGE]
             , get_gcp_error_message(res.body())
         ));
+    }
+}
+
+// Ask the service where the session stands. Unlike an upload reply, a 308 here with no
+// Range does mean the session holds nothing.
+// https://docs.cloud.google.com/storage/docs/performing-resumable-uploads#status-check
+future<utils::gcp::storage::client::object_data_sink::session_status>
+utils::gcp::storage::client::object_data_sink::query_session() {
+    auto res = co_await _impl->send_with_retry(_session_path
+        , GCP_OBJECT_SCOPE_READ_WRITE
+        , ""s
+        , APPLICATION_JSON
+        , httpclient::method_type::PUT
+        , rest::key_values({ { CONTENT_RANGE, "bytes */*"s } })
+        , _as
+    );
+
+    switch (res.result()) {
+    case status_type::ok:
+    case status_type::created:
+        // the service finalized the object while we were asking
+        _completed = true;
+        gcp_storage.debug("{}:{} completed while querying the session", _bucket, _object_name);
+        co_return session_status{.completed = true};
+    case status_type::permanent_redirect: {
+        uint64_t first = 0, last = 0;
+        auto held = parse_response_range(res.reply, first, last) ? last + 1 : 0;
+        gcp_storage.debug("{}:{} session holds {} bytes", _bucket, _object_name, held);
+        co_return session_status{.committed = held};
+    }
+    default:
+        throw failed_upload_error(int(res.result()),
+                                  fmt::format("{}:{} could not query the session: {}", _bucket, _object_name, get_gcp_error_message(res.body())));
     }
 }
 
