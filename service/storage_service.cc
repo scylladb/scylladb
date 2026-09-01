@@ -3003,6 +3003,21 @@ future<> storage_service::drain() {
 future<> storage_service::do_drain() {
     co_await utils::get_local_injector().inject("storage_service_drain_wait", utils::wait_for_message(60s));
 
+    // Hand the leadership of strongly consistent tablet groups led by this node
+    // over to other replicas. Otherwise the tablets we lead would stay unavailable for writes
+    // until the remaining replicas expired their election timeouts.
+    //
+    // This has to happen before stop_transport() below: the transfer is done with Raft RPCs,
+    // which need messaging_service to be up. That is also why it is not a part of
+    // groups_manager::stop(), which runs only after the transport is gone.
+    try {
+        co_await _groups_manager.container().invoke_on_all(
+                &strong_consistency::groups_manager::stepdown_leaders);
+    } catch (...) {
+        slogger.warn("Failed to transfer Raft leadership of strongly consistent tablets: {}. Ignored.",
+                std::current_exception());
+    }
+
     // Need to stop transport before group0, otherwise RPCs may fail with raft_group_not_found.
     co_await stop_transport();
 

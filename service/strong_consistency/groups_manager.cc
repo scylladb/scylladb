@@ -38,6 +38,15 @@ static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
 };
 
+// Tests may lengthen the tick interval via error injection so that any
+// unwanted waiting on a raft tick becomes visible as a large delay.
+static raft_ticker_type::duration get_tick_interval() {
+    return utils::get_local_injector()
+            .inject_parameter<int64_t>("strongly-consistent-raft-group-tick-interval-in-ms")
+            .transform([](int64_t ms) { return raft_ticker_type::duration{std::chrono::milliseconds{ms}}; })
+            .value_or(raft_tick_interval);
+}
+
 // Precondition: The passed group_leader must be a non-trivial raft::server_id.
 static std::optional<locator::tablet_replica_set> prepare_replicas_for_sc_tablet_version(locator::tablet_replica_set replicas, raft::server_id group_leader) {
     std::ranges::sort(replicas);
@@ -208,13 +217,6 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     // initialize the corresponding timer to tick the raft server instance
     auto ticker = std::make_unique<raft_ticker_type>([srv = server.get()] { srv->tick(); });
 
-    // Tests may lengthen the tick interval via error injection so that any
-    // unwanted waiting on a raft tick becomes visible as a large delay.
-    const auto tick_interval = utils::get_local_injector()
-            .inject_parameter<int64_t>("strongly-consistent-raft-group-tick-interval-in-ms")
-            .transform([](int64_t ms) { return raft_ticker_type::duration{std::chrono::milliseconds{ms}}; })
-            .value_or(raft_tick_interval);
-
     co_await _raft_gr.start_server_for_group(raft_server_for_group {
         .gid = group_id,
         .server = std::move(server),
@@ -222,7 +224,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         .rpc = rpc_ref,
         .persistence = persistence_ref,
         .state_machine = state_machine_ref
-    }, tick_interval);
+    }, get_tick_interval());
 }
 
 void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state) {
@@ -544,6 +546,50 @@ void groups_manager::start() {
     if (_pending_tm) {
         update(std::move(_pending_tm));
     }
+}
+
+future<> groups_manager::stepdown_leaders() {
+    if (!_started || !_features.strongly_consistent_tables) {
+        co_return;
+    }
+    if (_raft_groups.size() == 0) {
+        logger.debug("stepdown_leaders(): no tablet raft groups on this node");
+        co_return;
+    }
+
+    const auto stepdown_timeout_ticks = std::max<int64_t>(std::chrono::seconds(5) / get_tick_interval(), 1);
+    size_t transferred = 0;
+
+    logger.info("stepdown_leaders(): transferring leadership away from this node, {} raft group(s) to consider",
+        _raft_groups.size());
+
+    co_await coroutine::parallel_for_each(_raft_groups, [&] (auto& entry) -> future<> {
+        const auto& [gid, state] = entry;
+
+        auto holder = state.gate->try_hold();
+        if (!holder) {
+            // A closed gate means the group is being deleted.
+            co_return;
+        }
+        // The holder also keeps state alive across the stepdown below: a reference
+        // into the map survives a rehash, and the erase cannot run before we let go.
+
+        if (!state.server || !state.server->is_leader()) {
+            co_return;
+        }
+
+        try {
+            co_await state.server->stepdown(raft::logical_clock::duration(stepdown_timeout_ticks));
+            ++transferred;
+            logger.debug("stepdown_leaders(): group id {}: leadership transferred", gid);
+        } catch (...) {
+            logger.info("stepdown_leaders(): group id {}: failed to transfer leadership: {}",
+                gid, std::current_exception());
+        }
+    });
+
+    logger.info("stepdown_leaders(): transferred leadership for {} raft group(s)",
+        transferred);
 }
 
 future<> groups_manager::stop() {
