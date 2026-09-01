@@ -11,7 +11,10 @@
 #include <list>
 #include <unordered_set>
 
+#include <ranges>
+
 #include "serializer.hh"
+#include "serialization_visitors.hh"
 #include "utils/chunked_string.hh"
 #include "enum_set.hh"
 #include "utils/chunked_vector.hh"
@@ -592,6 +595,10 @@ void serialize(Output& out, const managed_bytes& v) {
     serializer<bytes>::write(out, v);
 }
 template<typename Output>
+void serialize(Output& out, const managed_bytes_view& v) {
+    serializer<bytes>::write_fragmented(out, fragment_range(v));
+}
+template<typename Output>
 void serialize(Output& out, const bytes_ostream& v) {
     serializer<bytes>::write(out, v);
 }
@@ -604,6 +611,51 @@ requires FragmentRange<FragmentedBuffer>
 void serialize_fragmented(Output& out, FragmentedBuffer&& v) {
     serializer<bytes>::write_fragmented(out, std::forward<FragmentedBuffer>(v));
 }
+
+// Associative ranges (std::map, absl maps, ...) have their own wire format (key/value
+// pairs) and must go through a dedicated serializer<T> specialization; excluded here so
+// one missing such a specialization is a compile error, not a silent wrong-format write.
+template<typename T>
+concept MapLikeRange = requires {
+    typename T::key_type;
+    typename T::mapped_type;
+};
+
+// Serializes any non-associative range (lazy or materialized) as the IDL vector-of-T wire
+// format: [uint32_t count][T...]. Loses to the more specific container specializations
+// above by partial-specialization ordering, so it only ever applies to ranges with no
+// dedicated serializer<T> of their own (e.g. idl-compiler.py's range_of<T> members).
+// Must come after the concrete bytes/managed_bytes/managed_bytes_view/bytes_ostream
+// serialize() overloads above: write()'s per-element `serialize(out, e)` call is
+// looked up at this template's definition point (ordinary lookup) plus ADL at
+// instantiation, and ADL alone won't find those overloads for e.g. managed_bytes_view
+// (a different namespace); placing this after them is what makes ordinary lookup see
+// them, instead of silently falling back to the slow generic serialize<T> dispatcher.
+template<typename R>
+requires std::ranges::forward_range<const R> && (!MapLikeRange<R>)
+struct serializer<R> {
+    // lets tests confirm a given type resolved to this generic specialization, not a dedicated one
+    static constexpr bool is_generic_range_serializer = true;
+
+    template<typename Output>
+    static void write(Output& out, const R& v) {
+        using T = std::ranges::range_value_t<R>;
+        if constexpr (std::ranges::sized_range<R>) {
+            safe_serialize_as_uint32(out, std::ranges::size(v));
+            for (const T& e : v) {
+                serialize(out, e);
+            }
+        } else {
+            auto count_ph = start_place_holder(out);
+            size_type count = 0;
+            for (const T& e : v) {
+                serialize(out, e);
+                ++count;
+            }
+            count_ph.set(out, count);
+        }
+    }
+};
 
 template<typename T>
 struct serializer<std::optional<T>> {
