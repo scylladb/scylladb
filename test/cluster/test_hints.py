@@ -1400,9 +1400,6 @@ async def test_hint_storage_proxy_metrics(manager: ScyllaClusterManager):
 
     s1, s2 = await manager.servers_add(2, auto_rack_dc="dc1")
 
-    s2_host_id = await manager.get_host_id(s2.server_id)
-    s1_hints_dir = await get_hints_dir(manager, s1)
-
     cql = await manager.get_cql_exclusive(s1)
     await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
@@ -1410,34 +1407,28 @@ async def test_hint_storage_proxy_metrics(manager: ScyllaClusterManager):
     await manager.server_stop_gracefully(s2.server_id)
     await manager.others_not_see_server(s2.ip_addr)
 
-    # Exactly one mutation is performed: the `sent` metric is only reliable for a single hint.
     await cql.run_async(SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (0, 1)",
-                                        consistency_level=ConsistencyLevel.ANY))
-
-    async def hint_segment_written():
-        return True if count_hint_segments(s1_hints_dir, s2_host_id) > 0 else None
-    await wait_for(hint_segment_written, time.time() + 60)
+                                        consistency_level=ConsistencyLevel.ONE))
+    await wait_until_hint_writing_settled(manager, [s1])
+    written = await get_hint_metrics(manager.metrics, s1.ip_addr, "written")
+    assert written > 0
 
     await manager.server_start(s2.server_id)
-    await manager.servers_see_each_other([s1, s2])
+    await wait_until_hints_are_sent_from(manager, [s1], written)
 
-    async def hint_sent():
-        sent = await get_metric(manager.metrics, s1.ip_addr, sent_total_metric)
-        return True if (sent and sent > 0) else None
-    await wait_for(hint_sent, time.time() + 15)
+    sent = await get_hint_metrics(manager.metrics, s1.ip_addr, "sent_total")
 
-    # The receiver's counters may be updated slightly after the sender's, so give them
-    # a chance to catch up before comparing.
     async def metrics_agree():
-        sent = await get_metric(manager.metrics, s1.ip_addr, sent_total_metric)
         received = await get_metric(manager.metrics, s2.ip_addr, received_total_metric)
         return True if sent == received else None
     await wait_for(metrics_agree, time.time() + 60)
 
-    sent_total = await get_metric(manager.metrics, s1.ip_addr, sent_total_metric)
-    sent_bytes_total = await get_metric(manager.metrics, s1.ip_addr, sent_bytes_total_metric)
-    received_total = await get_metric(manager.metrics, s2.ip_addr, received_total_metric)
-    received_bytes_total = await get_metric(manager.metrics, s2.ip_addr, received_bytes_total_metric)
+    [sent_total, sent_bytes_total, received_total, received_bytes_total] = await gather_safely(*[
+        get_metric(manager.metrics, s1.ip_addr, sent_total_metric),
+        get_metric(manager.metrics, s1.ip_addr, sent_bytes_total_metric),
+        get_metric(manager.metrics, s2.ip_addr, received_total_metric),
+        get_metric(manager.metrics, s2.ip_addr, received_bytes_total_metric)
+    ])
 
     logger.info(f"Sent hint count     : {sent_total}")
     logger.info(f"Sent hint size      : {sent_bytes_total}")
