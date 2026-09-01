@@ -40,42 +40,6 @@ protected:
     virtual future<> run() override = 0;
 };
 
-class user_requested_repair_task_impl : public repair_task_impl {
-private:
-    lw_shared_ptr<locator::global_static_effective_replication_map> _germs;
-    std::vector<sstring> _cfs;
-    dht::token_range_vector _ranges;
-    std::vector<sstring> _hosts;
-    std::vector<sstring> _data_centers;
-    std::unordered_set<locator::host_id> _ignore_nodes;
-    bool _small_table_optimization;
-    std::optional<int> _ranges_parallelism;
-    [[maybe_unused]] gms::gossiper& _gossiper;
-public:
-    user_requested_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, lw_shared_ptr<locator::global_static_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<locator::host_id> ignore_nodes, bool small_table_optimization, std::optional<int> ranges_parallelism, gms::gossiper& gossiper) noexcept
-        : repair_task_impl(module, id.uuid(), id.id, "keyspace", std::move(keyspace), "", std::move(entity), tasks::task_id::create_null_id(), streaming::stream_reason::repair)
-        , _germs(germs)
-        , _cfs(std::move(cfs))
-        , _ranges(std::move(ranges))
-        , _hosts(std::move(hosts))
-        , _data_centers(std::move(data_centers))
-        , _ignore_nodes(std::move(ignore_nodes))
-        , _small_table_optimization(small_table_optimization)
-        , _ranges_parallelism(ranges_parallelism)
-        , _gossiper(gossiper)
-    {}
-
-    virtual tasks::is_abortable is_abortable() const noexcept override {
-        return tasks::is_abortable::yes;
-    }
-
-    tasks::is_user_task is_user_task() const noexcept override;
-protected:
-    future<> run() override;
-
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
 class data_sync_repair_task_impl : public repair_task_impl {
 private:
     dht::token_range_vector _ranges;

@@ -1485,18 +1485,28 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
     }
 
     auto ranges_parallelism = options.ranges_parallelism == -1 ? std::nullopt : std::optional<int>(options.ranges_parallelism);
-    auto task = co_await _repair_module->make_and_start_task<repair::user_requested_repair_task_impl>(tasks::make_empty_task_info(), id, std::move(keyspace), "", germs, std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes), small_table_optimization, ranges_parallelism, _gossiper.local());
+    tasks::task_manager::task_builder task_builder{_repair_module, format("{}", streaming::stream_reason::repair), id.uuid()};
+    task_builder.set_sequence_number(id.id)
+                .set_scope("keyspace")
+                .set_progress_units("ranges")
+                .set_keyspace(keyspace)
+                .set_is_internal(tasks::is_internal::no)
+                .set_is_abortable(tasks::is_abortable::yes)
+                .set_is_user_task(tasks::is_user_task::yes)
+                .set_workload_fn([workload = ranges.size() * cfs.size() * this_smp_shard_count()] () {
+                    return make_ready_future<std::optional<double>>(workload);
+                });
+    auto task = co_await std::move(task_builder).build([module = _repair_module, keyspace = std::move(keyspace), germs, cfs = std::move(cfs), ranges = std::move(ranges), hosts = std::move(options.hosts), data_centers = std::move(options.data_centers), ignore_nodes = std::move(ignore_nodes), small_table_optimization, ranges_parallelism] (tasks::task_manager::task::impl& self) mutable {
+        auto& rs = module->get_repair_service();
+        return rs.run_user_requested_repair(std::move(germs), std::move(cfs), std::move(ranges), std::move(hosts), std::move(data_centers), std::move(ignore_nodes), small_table_optimization, ranges_parallelism, self.get_abort_source(), std::move(keyspace), self.info(), module->get_repair_uniq_id(self));
+    });
     co_return id.id;
-}
-
-tasks::is_user_task repair::user_requested_repair_task_impl::is_user_task() const noexcept {
-    return tasks::is_user_task::yes;
 }
 
 future<> repair_service::run_user_requested_repair(
         lw_shared_ptr<locator::global_static_effective_replication_map> _germs,
-        const std::vector<sstring>& _cfs,
-        const dht::token_range_vector& _ranges,
+        std::vector<sstring> _cfs,
+        dht::token_range_vector _ranges,
         std::vector<sstring> _hosts,
         std::vector<sstring> _data_centers,
         std::unordered_set<locator::host_id> _ignore_nodes,
@@ -1510,7 +1520,7 @@ future<> repair_service::run_user_requested_repair(
     auto& db = sharded_db.local();
 
     return _repair_module->run(id, [this, &db, id, keyspace = std::move(keyspace), germs = std::move(_germs),
-            &cfs = _cfs, &ranges = _ranges, hosts = std::move(_hosts), data_centers = std::move(_data_centers), ignore_nodes = std::move(_ignore_nodes), &task_as = _as, _small_table_optimization, _ranges_parallelism, task_data = std::move(task_data)] () mutable {
+            cfs = std::move(_cfs), ranges = std::move(_ranges), hosts = std::move(_hosts), data_centers = std::move(_data_centers), ignore_nodes = std::move(_ignore_nodes), &task_as = _as, _small_table_optimization, _ranges_parallelism, task_data = std::move(task_data)] () mutable {
         auto uuid = node_ops_id{id.uuid().uuid()};
         auto start_time = std::chrono::steady_clock::now();
 
@@ -1603,16 +1613,6 @@ future<> repair_service::run_user_requested_repair(
         _repair_module->check_in_shutdown();
         return make_exception_future<>(ep);
     });
-}
-
-future<> repair::user_requested_repair_task_impl::run() {
-    auto module = dynamic_pointer_cast<repair::task_manager_module>(_module);
-    auto& rs = module->get_repair_service();
-    return rs.run_user_requested_repair(std::move(_germs), _cfs, _ranges, std::move(_hosts), std::move(_data_centers), std::move(_ignore_nodes), _small_table_optimization, _ranges_parallelism, _as, _status.keyspace, info(), get_repair_uniq_id());
-}
-
-future<std::optional<double>> repair::user_requested_repair_task_impl::expected_total_workload() const {
-    co_return _ranges.size() * _cfs.size() * this_smp_shard_count();
 }
 
 future<int> repair_start(seastar::sharded<repair_service>& repair, sharded<gms::gossip_address_map>& am,
