@@ -1357,6 +1357,7 @@ void sstable::rewrite_statistics() {
         sstlog.debug("Skipping statistics rewrite of unlinked sstable {}", get_filename());
         return;
     }
+<<<<<<< HEAD
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
     auto w = make_component_file_writer(component_type::TemporaryStatistics, std::move(options),
@@ -1365,6 +1366,199 @@ void sstable::rewrite_statistics() {
     w.close();
     // rename() guarantees atomicity when renaming a file into place.
     sstable_write_io_check(rename_file, fmt::to_string(filename(component_type::TemporaryStatistics)), fmt::to_string(filename(component_type::Statistics))).get();
+||||||| parent of 5cbd11fd43 (test/cluster: cover refresh racing with its own sstable rewrites)
+
+    if (!has_component(component)) {
+        on_internal_error(sstlog, fmt::format("SSTable does not have {} component to rewrite.", component_name(*this, component)));
+    }
+
+    if (!has_scylla_component()) {
+        on_internal_error(sstlog, "SSTable must have Scylla component to rewrite Statistics component.");
+    }
+
+    return seastar::async([this, creator = std::move(sstable_creator), component, modifier = std::move(modifier), update_sstable_id] {
+        // Serialize with the other on-disk mutations of this sstable (change_state(),
+        // snapshot(), pick_up_from_upload(), unlink()), which all take _mutate_sem too.
+        // Without this lock a concurrent change_state() -- e.g. the view update generator
+        // moving a staging sstable to the base directory -- can relocate this sstable's
+        // component files while we resolve their paths, hard-link them and read the Scylla
+        // component below, causing a file-not-found abort. See SCYLLADB-3263.
+        auto lock = get_units(_mutate_sem, 1).get();
+
+        auto new_sst = creator(shared_from_this());
+        auto generation = new_sst->generation();
+
+        // Mark the new sstable as a component-rewrite output so that when the
+        // component is written below it preserves the parent sstable's original
+        // encoding (e.g. encryption, recorded in scylla_metadata) instead of
+        // adopting the current schema (or config), which might be different than
+        // for all other components.
+        // The rest of the sstable is hard-linked and its scylla_metadata is carried over.
+        new_sst->mark_created_by_component_rewrite();
+
+        std::unordered_set<component_type> excluded_components = {component, component_type::Scylla};
+        _storage->link_with_excluded_components(*this, generation, excluded_components).get();
+        new_sst->copy_components(*this).get();
+
+        new_sst->_metadata_size_on_disk = _metadata_size_on_disk;
+        parallel_for_each(excluded_components, coroutine::lambda([this, new_sst] (component_type type) -> future<> {
+            new_sst->_metadata_size_on_disk -= co_await component_filesize(type);
+        })).get();
+
+        modifier(*new_sst);
+
+        // FIXME: Optimize by re-reading metadata only if _components->scylla_metadata was modified after loading.
+        // If unchanged, reuse the existing _components->scylla_metadata instead.
+        scylla_metadata metadata;
+        read_simple<component_type::Scylla>(metadata).get();
+        if (update_sstable_id) {
+            metadata.set_sstable_identifier();
+        }
+
+        new_sst->write_component_with_metadata(component, std::move(metadata));
+
+        new_sst->_shards = this->_shards;
+        new_sst->seal_sstable(false).get();
+        new_sst->open_data().get();
+
+        _cloned_to_sstable_filename = new_sst->component_basename(component_type::Data);
+        return new_sst;
+    });
+}
+
+// Rewrites a single SSTable component along with updated Scylla metadata.
+// This is used when modifying components (e.g., Statistics) without rewriting the entire SSTable.
+// 1. Write the component file (e.g., Statistics-*.db)
+//    - This calculates and stores the component's digest in _components_digests.map[type]
+// 2. Update the Scylla metadata's ComponentsDigests map with the new component digest
+// 3. Calculate the Scylla metadata's own digest based on its updated data
+// 4. Write the Scylla metadata component file
+// 5. Set the in-memory Scylla metadata to the new metadata
+void sstable::write_component_with_metadata(component_type type, scylla_metadata metadata) {
+    if (!is_component_rewrite_supported(type)) {
+        on_internal_error(sstlog, "Only Statistics component can be rewritten.");
+    }
+
+    write_component(type);
+
+    metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
+    metadata.digest = serialized_checksum(_version, metadata.data);
+
+    write_simple<component_type::Scylla>(metadata);
+
+    _components->scylla_metadata = std::move(metadata);
+    // Keep the cached _features in sync with the metadata we just wrote,
+    // mirroring read_scylla_metadata(). Otherwise a rewritten sstable would
+    // report zeroed features (e.g. losing ShadowableTombstones).
+    _features = _components->scylla_metadata->get_features();
+}
+
+future<uint64_t> sstable::component_filesize(component_type type) const noexcept {
+    // Open the file, in order to correctly read the size while taking into account
+    // the storage layer and possible encryption.
+    return open_file(type, open_flags::ro).then([] (file f) {
+        return with_closeable(std::move(f), std::mem_fn(&file::size));
+    });
+=======
+
+    if (!has_component(component)) {
+        on_internal_error(sstlog, fmt::format("SSTable does not have {} component to rewrite.", component_name(*this, component)));
+    }
+
+    if (!has_scylla_component()) {
+        on_internal_error(sstlog, "SSTable must have Scylla component to rewrite Statistics component.");
+    }
+
+    return seastar::async([this, creator = std::move(sstable_creator), component, modifier = std::move(modifier), update_sstable_id] {
+        // Serialize with the other on-disk mutations of this sstable (change_state(),
+        // snapshot(), pick_up_from_upload(), unlink()), which all take _mutate_sem too.
+        // Without this lock a concurrent change_state() -- e.g. the view update generator
+        // moving a staging sstable to the base directory -- can relocate this sstable's
+        // component files while we resolve their paths, hard-link them and read the Scylla
+        // component below, causing a file-not-found abort. See SCYLLADB-3263.
+        auto lock = get_units(_mutate_sem, 1).get();
+
+        auto new_sst = creator(shared_from_this());
+        auto generation = new_sst->generation();
+
+        // Mark the new sstable as a component-rewrite output so that when the
+        // component is written below it preserves the parent sstable's original
+        // encoding (e.g. encryption, recorded in scylla_metadata) instead of
+        // adopting the current schema (or config), which might be different than
+        // for all other components.
+        // The rest of the sstable is hard-linked and its scylla_metadata is carried over.
+        new_sst->mark_created_by_component_rewrite();
+
+        std::unordered_set<component_type> excluded_components = {component, component_type::Scylla};
+        _storage->link_with_excluded_components(*this, generation, excluded_components).get();
+
+        // The destination sstable is fully linked but not sealed yet: it has a
+        // TemporaryTOC and no TOC. Let tests hold the directory in that state.
+        utils::get_local_injector().inject("pause_sstable_component_rewrite",
+                utils::wait_for_message(std::chrono::minutes{5})).get();
+
+        new_sst->copy_components(*this).get();
+
+        new_sst->_metadata_size_on_disk = _metadata_size_on_disk;
+        parallel_for_each(excluded_components, coroutine::lambda([this, new_sst] (component_type type) -> future<> {
+            new_sst->_metadata_size_on_disk -= co_await component_filesize(type);
+        })).get();
+
+        modifier(*new_sst);
+
+        // FIXME: Optimize by re-reading metadata only if _components->scylla_metadata was modified after loading.
+        // If unchanged, reuse the existing _components->scylla_metadata instead.
+        scylla_metadata metadata;
+        read_simple<component_type::Scylla>(metadata).get();
+        if (update_sstable_id) {
+            metadata.set_sstable_identifier();
+        }
+
+        new_sst->write_component_with_metadata(component, std::move(metadata));
+
+        new_sst->_shards = this->_shards;
+        new_sst->seal_sstable(false).get();
+        new_sst->open_data().get();
+
+        _cloned_to_sstable_filename = new_sst->component_basename(component_type::Data);
+        return new_sst;
+    });
+}
+
+// Rewrites a single SSTable component along with updated Scylla metadata.
+// This is used when modifying components (e.g., Statistics) without rewriting the entire SSTable.
+// 1. Write the component file (e.g., Statistics-*.db)
+//    - This calculates and stores the component's digest in _components_digests.map[type]
+// 2. Update the Scylla metadata's ComponentsDigests map with the new component digest
+// 3. Calculate the Scylla metadata's own digest based on its updated data
+// 4. Write the Scylla metadata component file
+// 5. Set the in-memory Scylla metadata to the new metadata
+void sstable::write_component_with_metadata(component_type type, scylla_metadata metadata) {
+    if (!is_component_rewrite_supported(type)) {
+        on_internal_error(sstlog, "Only Statistics component can be rewritten.");
+    }
+
+    write_component(type);
+
+    metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
+    metadata.digest = serialized_checksum(_version, metadata.data);
+
+    write_simple<component_type::Scylla>(metadata);
+
+    _components->scylla_metadata = std::move(metadata);
+    // Keep the cached _features in sync with the metadata we just wrote,
+    // mirroring read_scylla_metadata(). Otherwise a rewritten sstable would
+    // report zeroed features (e.g. losing ShadowableTombstones).
+    _features = _components->scylla_metadata->get_features();
+}
+
+future<uint64_t> sstable::component_filesize(component_type type) const noexcept {
+    // Open the file, in order to correctly read the size while taking into account
+    // the storage layer and possible encryption.
+    return open_file(type, open_flags::ro).then([] (file f) {
+        return with_closeable(std::move(f), std::mem_fn(&file::size));
+    });
+>>>>>>> 5cbd11fd43 (test/cluster: cover refresh racing with its own sstable rewrites)
 }
 
 future<> sstable::read_summary() noexcept {
