@@ -124,9 +124,16 @@ public:
             } catch (...) {
                 _exception = std::current_exception();
             }
-            if (auto ex = std::exchange(_exception, {})) {
-                co_await remove_upload();
-                std::rethrow_exception(ex);
+            if (_exception) {
+                // Cancelling is best effort: whether it fails in remove_upload() itself or
+                // in the request under it, the upload's own error is the one the caller
+                // needs, so hold it across the cancel and rethrow it below.
+                try {
+                    co_await remove_upload();
+                } catch (...) {
+                    gcp_storage.warn("Could not cancel upload of {}:{}: {}", _bucket, _object_name, std::current_exception());
+                }
+                std::rethrow_exception(std::exchange(_exception, {}));
             }
         }
     }
@@ -935,16 +942,12 @@ future<> utils::gcp::storage::client::object_data_sink::remove_upload() {
     case CLIENT_CLOSED_REQUEST:
         gcp_storage.debug("Upload of {}:{} removed ({})", _bucket, _object_name, _session_path);
         co_return; // done and happy
-    default: {
-        auto msg = get_gcp_error_message(res.body());
-        gcp_storage.warn("Failed to remove broken upload of {}:{} ({})", _bucket, _object_name, msg);
-        if (!_exception) {
-            throw failed_upload_error(int(res.result()), fmt::format("{}:{} incomplete. ({}): {}"
-                , _bucket, _object_name, res.reply._headers[RANGE]
-                , msg
-            ));
-        }
-    }
+    default:
+        // Only close() cancels, and only once the upload has already failed, so there is
+        // no caller left for this status to be reported to. Warn and let the upload's own
+        // error stand.
+        gcp_storage.warn("Failed to remove broken upload of {}:{} ({})", _bucket, _object_name, get_gcp_error_message(res.body()));
+        break;
     }
 }
 
