@@ -1708,6 +1708,13 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         new_sst->mark_created_by_component_rewrite();
 
         _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla}, *sid).get();
+
+        // The destination sstable is fully linked but not sealed yet: it has a
+        // TemporaryTOC and no TOC. Let tests hold the directory in that state.
+        utils::get_local_injector().inject("pause_sstable_component_rewrite", [] (auto& handler) -> future<> {
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+        }).get();
+
         new_sst->copy_components(*this).get();
 
         modifier(*new_sst);

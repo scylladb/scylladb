@@ -23,6 +23,7 @@
 #include "sstable_directory.hh"
 #include "utils/assert.hh"
 #include "utils/lister.hh"
+#include "utils/error_injection.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/directories.hh"
 #include "utils/s3/client.hh"
@@ -354,6 +355,18 @@ future<> sstable_directory::filesystem_components_lister::scan(sstable_directory
             co_return;
         }
     }
+
+    static const auto* injection_name = "sstable_directory_pause_scan";
+    co_await utils::get_local_injector().inject(injection_name, [] (auto& handler) -> future<> {
+        // Only park the shard the test asked for, so that the other shards can go
+        // on and process what they found while this one is still listing.
+        if (std::atoll(handler.get("shard")->data()) != this_shard_id()) {
+            co_return;
+        }
+        dirlog.info("{}: hit", injection_name);
+        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+        dirlog.info("{}: continue", injection_name);
+    });
 
     dirlog.debug("Start scanning directory {} for SSTables", _directory);
     // It seems wasteful that each shard is repeating this scan, and to some extent it is.
