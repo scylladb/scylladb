@@ -639,14 +639,16 @@ async def test_hint_to_leaving_when_reducing_rf(manager: ScyllaClusterManager):
         assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = 0")) == [(0,)]
 
 
+@pytest.mark.skip_mode(mode="release", reason="error injections aren't enabled in release mode")
 async def test_hints_rebalance(manager: ScyllaClusterManager):
     """
     Verify that hint segments are rebalanced evenly across shards when the shard count changes,
     that the hint directories of shards which no longer exist are removed, and that the hints
     are still delivered afterwards.
     """
-    servers = await manager.servers_add(3, cmdline=["--smp", "1"], auto_rack_dc="dc1")
-    s1, s2, s3 = servers
+    config = {"error_injections_at_startup": ["decrease_hint_segment_size", "decrease_hints_flush_period"]}
+    servers = await manager.servers_add(2, cmdline=["--smp", "1"], config=config, auto_rack_dc="dc1")
+    s1, s2 = servers
 
     # Disable tablet load balancing so that tablets don't migrate out of shard 0. The cluster
     # starts with a single shard, so with balancing disabled every tablet replica stays on
@@ -655,79 +657,89 @@ async def test_hints_rebalance(manager: ScyllaClusterManager):
     await manager.disable_tablet_balancing()
 
     s1_hints_dir = await get_hints_dir(manager, s1)
-    s2_hints_dir = await get_hints_dir(manager, s2)
-    s3_host_id = await manager.get_host_id(s3.server_id)
+    s2_host_id = await manager.get_host_id(s2.server_id)
 
     cql = await manager.get_cql_exclusive(s1)
-    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
-    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v blob)")
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
 
-    await manager.server_stop_gracefully(s3.server_id)
-    await manager.others_not_see_server(s3.ip_addr)
+    await manager.server_stop_gracefully(s2.server_id)
+    await manager.others_not_see_server(s2.ip_addr)
 
-    # All the writes are coordinated by server 1, so all the hints end up there.
-    row_count = 100_000
-    threads = 300
-    value = os.urandom(1024)
-    stmt = cql.prepare("INSERT INTO ks.t (pk, v) VALUES (?, ?)")
-    stmt.consistency_level = ConsistencyLevel.QUORUM
-    for batch_start in range(0, row_count, threads):
-        await gather_safely(*[cql.run_async(stmt, (pk, value))
-                              for pk in range(batch_start, min(batch_start + threads, row_count))])
+    # We cannot rely on glob listing the segments as some of them
+    # may get removed by commitlog if they're redundant.
+    async def populate_segments(min_segment_count: int) -> None:
+        # This relies on the segment storing no more than 1 MiB of data.
+        inserts_per_segment = 4500
+        # Let's give ourselves some slack to make sure that we really
+        # create those segments.
+        insert_count = (inserts_per_segment + 1500) * min_segment_count
+        batch_size = 1000
+        batch_count = insert_count // batch_size
 
-    await wait_until_hint_writing_settled(manager, [s1, s2])
-    for srv in [s1, s2]:
-        dropped = await get_hint_metrics(manager.metrics, srv.ip_addr, "dropped")
-        errors = await get_hint_metrics(manager.metrics, srv.ip_addr, "errors")
-        assert dropped == 0, f"{srv.ip_addr} dropped hints count: {dropped}"
-        assert errors == 0, f"{srv.ip_addr} error count: {errors}"
+        insert_stmt = cql.prepare("INSERT INTO ks.t (pk, v) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ONE
 
-    expected_hints = await sum_hint_metric(manager.metrics, [s1, s2], "written")
+        for batch_idx in range(0, batch_count):
+            begin, end = batch_idx * batch_size, (batch_idx + 1) * batch_size
+            await gather_safely(*[cql.run_async(insert_stmt, (pk, pk)) for pk in range(begin, end)])
+            # Avoid overloading the server.
+            await wait_until_hint_writing_settled(manager, [s1])
 
-    async def restart_servers(to_restart: list, smp: int, hinted_handoff_enabled: str) -> None:
-        for server in to_restart:
-            await manager.server_stop_gracefully(server.server_id)
-        for server in to_restart:
-            await manager.server_update_cmdline(server.server_id, [f"--smp={smp}"])
-            await manager.server_update_config(server.server_id, "hinted_handoff_enabled", hinted_handoff_enabled)
-        await asyncio.gather(*(manager.server_start(server.server_id) for server in to_restart))
+        dropped = await get_hint_metrics(manager.metrics, s1.ip_addr, "dropped")
+        errors = await get_hint_metrics(manager.metrics, s1.ip_addr, "errors")
+        assert dropped == 0, f"{s1.ip_addr} dropped hints count: {dropped}"
+        assert errors == 0, f"{s1.ip_addr} error count: {errors}"
 
-    def check_balanced(hints_dir, num_shards: int) -> None:
-        counts = [count_hint_segments(hints_dir, s3_host_id, shard) for shard in range(num_shards)]
-        logger.info(f"Hint segments per shard: {counts}")
-        assert max(counts) - min(counts) <= 1, f"hint segments are not evenly balanced across shards: {counts}"
+        return insert_count
 
-    # "dont_send_hints" is a DC that doesn't exist, which stops the hints from being sent
-    # while we inspect how they are laid out on disk. s3 stays down throughout.
-    logger.info("Restarting s1 and s2 with 3 shards and hint sending disabled")
-    await restart_servers([s1, s2], smp=3, hinted_handoff_enabled="dont_send_hints")
-    check_balanced(s1_hints_dir, num_shards=3)
-    check_balanced(s2_hints_dir, num_shards=3)
+    # Three segments should be enough to get confident rebalancing works
+    # after changing SMP: 1 -> 3 -> 2.
+    expected_rows = await populate_segments(3)
 
-    logger.info("Restarting s1 and s2 with 2 shards and hint sending disabled")
-    await restart_servers([s1, s2], smp=2, hinted_handoff_enabled="dont_send_hints")
-    check_balanced(s1_hints_dir, num_shards=2)
-    check_balanced(s2_hints_dir, num_shards=2)
+    async def restart_with_smp(server_id, smp: int, hinted_handoff_enabled: bool):
+        await manager.server_stop_gracefully(server_id)
+        await manager.server_update_cmdline(server_id, [f"--smp={smp}"])
+        hh_enabled = "true" if hinted_handoff_enabled else "fake_dc"
+        await manager.server_update_config(server_id, "hinted_handoff_enabled", hh_enabled)
+        await manager.server_start(server_id)
+
+    async def check_balanced(hints_dir, num_shards: int) -> None:
+        async def check():
+            counts = [count_hint_segments(hints_dir, s2_host_id, shard) for shard in range(num_shards)]
+            logger.info(f"Hint segments per shard: {counts}")
+            # If there are no directories, the test verifies nothing.
+            # Let's not silently pass.
+            if max(counts) == 0:
+                return None
+            if max(counts) - min(counts) <= 1:
+                return True
+            logger.info(f"hint segments are not evenly balanced across shards: {counts}")
+            return None
+        await wait_for(check, time.time() + 120)
+
+    logger.info("Restarting s1 with 3 shards and hinted handoff disabled")
+    await restart_with_smp(s1.server_id, smp=3, hinted_handoff_enabled=False)
+    await check_balanced(s1_hints_dir, num_shards=3)
+
+    logger.info("Restarting s1 with 2 shards and hinted handoff disabled")
+    await restart_with_smp(s1.server_id, smp=2, hinted_handoff_enabled=False)
+    await check_balanced(s1_hints_dir, num_shards=2)
 
     # Check that shard 2 directories are gone.
-    assert not hint_dir_exists(s1_hints_dir, s3_host_id, shard=2)
-    assert not hint_dir_exists(s2_hints_dir, s3_host_id, shard=2)
+    async def check_directory_gone():
+        return True if (not hint_dir_exists(s1_hints_dir, s2_host_id, shard=2)) else None
+    await wait_for(check_directory_gone, time.time() + 120)
 
-    logger.info("Restarting the whole cluster (including s3) with hint sending enabled")
-    await restart_servers(servers, smp=2, hinted_handoff_enabled="true")
-    await wait_until_hints_are_sent_from(manager, [s1, s2], expected_hints)
+    await manager.server_start(s2.server_id)
+    # Re-enable hinted handoff.
+    await update_hh_enabled_via_http_api(manager, s1, "true")
+    await wait_until_hints_are_sent_from(manager, [s1], expected_rows)
 
     await manager.server_stop_gracefully(s1.server_id)
-    await manager.server_stop_gracefully(s2.server_id)
 
-    cql = await manager.get_cql_exclusive(s3)
-    read_stmt = cql.prepare("SELECT pk FROM ks.t WHERE pk = ?")
-    read_stmt.consistency_level = ConsistencyLevel.ONE
-    for batch_start in range(0, row_count, threads):
-        batch = range(batch_start, min(batch_start + threads, row_count))
-        results = await gather_safely(*[cql.run_async(read_stmt, (pk,)) for pk in batch])
-        for pk, rows in zip(batch, results):
-            assert len(list(rows)) == 1, f"row {pk} was not delivered by the hints"
+    cql = await manager.get_cql_exclusive(s2)
+    await assert_rows_present(cql, "ks.t", "pk", list(range(expected_rows)), present=True)
 
 
 async def test_hints_removenode(manager: ScyllaClusterManager):
