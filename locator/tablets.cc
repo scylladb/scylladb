@@ -177,13 +177,15 @@ tablet_transition_info::tablet_transition_info(tablet_transition_stage stage,
                                                tablet_replica_set next,
                                                std::optional<tablet_replica> pending_replica,
                                                service::session_id session_id,
-                                               sstring snapshot_name)
+                                               sstring snapshot_name,
+                                               bool cancelled)
     : stage(stage)
     , transition(transition)
     , next(std::move(next))
     , pending_replica(std::move(pending_replica))
     , session_id(session_id)
     , snapshot_name(std::move(snapshot_name))
+    , cancelled(cancelled)
     , writes(get_selector_for_writes(stage))
     , reads(get_selector_for_reads(stage))
 { }
@@ -969,6 +971,28 @@ static const std::unordered_map<sstring, tablet_transition_stage> tablet_transit
     }
     return result;
 });
+
+bool can_cancel_tablet_transition(tablet_transition_stage stage) {
+    switch (stage) {
+        case tablet_transition_stage::allow_write_both_read_old:
+        case tablet_transition_stage::write_both_read_old:
+        case tablet_transition_stage::rebuild_repair:
+        case tablet_transition_stage::streaming:
+            return true;
+        case tablet_transition_stage::write_both_read_old_fallback_cleanup:
+        case tablet_transition_stage::write_both_read_new:
+        case tablet_transition_stage::use_new:
+        case tablet_transition_stage::cleanup:
+        case tablet_transition_stage::cleanup_target:
+        case tablet_transition_stage::revert_migration:
+        case tablet_transition_stage::end_migration:
+        case tablet_transition_stage::repair:
+        case tablet_transition_stage::end_repair:
+        case tablet_transition_stage::restore:
+            return false;
+    }
+    on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
+}
 
 tablet_transition_kind choose_rebuild_transition_kind(const gms::feature_service& features) {
     return features.repair_based_tablet_rebuild ? tablet_transition_kind::rebuild_v2 : tablet_transition_kind::rebuild;
@@ -2191,6 +2215,9 @@ auto fmt::formatter<locator::tablet_map>::format(const locator::tablet_map& r, f
             out = fmt::format_to(out, ", stage={}, new_replicas={}, pending={}", tr->stage, tr->next, tr->pending_replica);
             if (tr->session_id) {
                 out = fmt::format_to(out, ", session={}", tr->session_id);
+            }
+            if (tr->cancelled) {
+                out = fmt::format_to(out, ", cancelled");
             }
         }
         if (r.has_raft_info()) {
