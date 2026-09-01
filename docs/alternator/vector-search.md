@@ -8,21 +8,37 @@ The Vector Search feature is only available in [ScyllaDB Cloud](https://cloud.do
 
 ## Introduction
 
-Alternator vector search is a ScyllaDB extension to the DynamoDB-compatible
-API that enables _approximate nearest neighbor_ (ANN) search on numeric
-vectors stored as item attributes.
+Vector search enables _approximate nearest neighbor_ (ANN) search on numeric
+vectors stored as item attributes. In a typical use case, each item in a
+table contains a high-dimensional embedding vector (e.g., produced by a
+machine-learning model), and a search asks for the _k_ items whose stored
+vectors are closest to a given query vector. This kind of similarity search
+is a building block for recommendation engines, semantic text search, image
+retrieval, and other AI/ML workloads.
 
-In a typical use case, each item in a table contains a high-dimensional
-embedding vector (e.g., produced by a machine-learning model), and a query
-asks for the _k_ items whose stored vectors are closest to a given query
-vector. This kind of similarity search is a building block for
-recommendation engines, semantic text search, image retrieval, and other
-AI/ML workloads.
+Alternator implements the same Vector Search API that Amazon DynamoDB does:
+`CreateTable`/`UpdateTable`'s `VectorIndexes`/`VectorIndexUpdates`
+parameters, `DescribeTable`'s reporting of vector indexes, and the
+`SearchVectors` operation all work the same way in Alternator as they do in
+DynamoDB, including DynamoDB's `SearchSchema` mechanism for filtering
+(`HASH` and `INLINE_FILTER` attributes, described below). Applications
+written against DynamoDB's Vector Search API should work against Alternator
+unmodified, using an AWS SDK version that supports this API.
 
-Because this feature does not exist in Amazon DynamoDB, all applications
-that use it must be written specifically for Alternator.
+On top of this DynamoDB-compatible core, Alternator also has its own
+`FLOAT32VECTOR` attribute type — a ScyllaDB-only, more compact way to
+store and send vectors, described in
+[its own section below](#the-float32vector-type-scylladb-extension). Sections
+below are marked **ScyllaDB extension** whenever they describe something
+beyond what DynamoDB's own Vector Search API defines.
 
-For a broader introduction to Vector Search concepts and terminology, see the
+This document describes the wire-level API in enough detail to use it
+directly (e.g., with a raw HTTP client, or an SDK version that doesn't
+model this operation), but application authors will normally just use
+their favorite AWS SDK's generated `SearchVectors`/`CreateTable` bindings.
+For a broader introduction to vector search concepts and terminology
+(embeddings, ANN, distance functions, etc.) not specific to any particular
+database's API, see the
 [Vector Search Concepts](https://cloud.docs.scylladb.com/stable/vector-search/vector-search-concepts.html)
 and
 [Vector Search Glossary](https://cloud.docs.scylladb.com/stable/vector-search/vector-search-glossary.html)
@@ -32,61 +48,35 @@ sections of the ScyllaDB Cloud documentation.
 
 The workflow has three steps:
 
-1. **Create** a table (or update an existing one) with one or more
-   _vector indexes_.
+1. **Create** a table (or update an existing one) with one or more _vector
+   indexes_, each on a numeric vector attribute. Choose a `Projection` to
+   control which attributes are returned by a search without an extra
+   round-trip to the base table, and optionally declare one or more other
+   attributes as the index's `SearchSchema`, to allow filtering the vector
+   search itself, not just examining the ANN results afterwards.
 2. **Write** items that include the indexed vector attribute. The attribute
    can be stored as a standard DynamoDB list (`L`) of number (`N`) elements,
-   or as a ScyllaDB-specific optimized vector type (`FLOAT32VECTOR`) — a list of
-   JSON floating-point numbers that is stored internally as compact 4-byte
-   floats rather than JSON-encoded strings, saving space and parse overhead.
-3. **Query** using the `VectorSearch` parameter to retrieve the _k_ nearest
-   neighbors.
+   or as the ScyllaDB-specific `FLOAT32VECTOR` type — a list of JSON
+   floating-point numbers stored internally as compact 4-byte floats instead
+   of JSON-encoded decimal strings, saving space and parse overhead.
+3. **Search** using the `SearchVectors` operation to retrieve the _k_ nearest
+   neighbors of a query vector.
 
-## API extensions
+## Vector indexes: CreateTable's VectorIndexes parameter
 
-### CreateTable — VectorIndexes parameter
-
-A new optional parameter `VectorIndexes` can be passed to `CreateTable`.
-It is a list of vector index definitions, each specifying:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `IndexName` | String | Unique name for this vector index. Follows the same naming rules as table names: 3–192 characters, matching the regex `[a-zA-Z0-9._-]+`. |
-| `VectorAttribute` | Structure | Describes the attribute to index (see below). |
-| `Projection` | Structure | Optional. Specifies which attributes are projected into the vector index (see below). |
-| `SimilarityFunction` | String | Optional. The distance metric used for nearest-neighbor search. See below. |
-
-**VectorAttribute fields:**
+An optional `VectorIndexes` parameter can be passed to `CreateTable`. It is
+a list of vector index definitions, each an object with the following
+fields. All of them are mandatory, with no defaults, except `SearchSchema`
+which is genuinely optional:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `AttributeName` | String | The item attribute that holds the vector. It must not be a key column. |
-| `Dimensions` | Integer | The fixed size of the vector (number of elements). |
-
-**SimilarityFunction values:**
-
-| Value | Description |
-|-------|-------------|
-| `COSINE` | Cosine similarity (angular distance). **Default when `SimilarityFunction` is omitted.** |
-| `EUCLIDEAN` | Euclidean (L2) distance. |
-| `DOT_PRODUCT` | Inner product (dot product). Useful when vectors are normalized. |
-
-**Projection fields:**
-
-The optional `Projection` parameter is identical to the one used for DynamoDB
-GSI and LSI, and specifies which attributes are stored in the vector index and
-returned when `Select=ALL_PROJECTED_ATTRIBUTES` is used in a vector search query:
-
-| `ProjectionType` | Description |
-|-----------------|-------------|
-| `KEYS_ONLY` | Only the primary key attributes of the base table (hash key and range key if present) are projected into the index. This is the default when `Projection` is omitted. |
-| `ALL` | All table attributes are projected into the index. *(Not yet supported.)* |
-| `INCLUDE` | The primary key attributes plus the additional non-key attributes listed in `NonKeyAttributes` are projected. *(Not yet supported.)* |
-
-> **Note:** Currently only `ProjectionType=KEYS_ONLY` is implemented. Specifying
-> `ProjectionType=ALL` or `ProjectionType=INCLUDE` returns a `ValidationException`.
-> Since `KEYS_ONLY` is also the default, omitting `Projection` entirely is
-> equivalent to specifying `{'ProjectionType': 'KEYS_ONLY'}`.
+| `IndexName` | String | Unique name for this vector index (unique among all vector indexes, GSIs, and LSIs on the table). Follows the same naming rules as table names: 3–192 characters, matching the regex `[a-zA-Z0-9._-]+`. |
+| `VectorAttribute` | Structure | `{"AttributeName": "<name>"}` — the item attribute that holds the vector. It must not be a key column of the base table or of any GSI/LSI. |
+| `Dimensions` | Integer | The fixed size of the vector (number of elements), between 1 and 16000. |
+| `DistanceFunction` | String | The distance metric used for nearest-neighbor search: `COSINE`, `EUCLIDEAN`, or `DOT_PRODUCT`. See [Similarity scores](#similarity-scores) below for what each one means for the score returned by a search. |
+| `Projection` | Structure | Which attributes are stored in the vector index and returned by default. See [Projection](#projection) below. |
+| `SearchSchema` | Array | Optional. Which attributes can be used to filter the search itself, and how. See [Filtering with SearchSchema](#filtering-with-searchschema-hash-and-inline_filter) below. |
 
 Example (using boto3):
 ```python
@@ -98,48 +88,136 @@ table = dynamodb.create_table(
     VectorIndexes=[
         {
             'IndexName': 'embedding-index',
-            'VectorAttribute': {'AttributeName': 'embedding', 'Dimensions': 1536},
+            'VectorAttribute': {'AttributeName': 'embedding'},
+            'Dimensions': 1536,
+            'DistanceFunction': 'COSINE',
+            'Projection': {'ProjectionType': 'KEYS_ONLY'},
         }
     ],
 )
 ```
 
 **Constraints:**
-- A vector index may not share a name with another vector index, a GSI, or an LSI on the same table.
-- The target attribute must not be a key column or an index key column.
-- `Dimensions` must be a positive integer up to the implementation maximum.
-- Vector indexes require ScyllaDB to operate with tablets (not vnodes).
-- Multiple vector indexes can be created on the same table in a single `CreateTable` call.
+- Multiple vector indexes can be created on the same table in a single
+  `CreateTable` call (or accumulated one at a time via `UpdateTable`, see
+  below).
+- Two vector indexes may target the same `VectorAttribute` as long as they
+  agree on `Dimensions` — this is useful for comparing different
+  `DistanceFunction`s on the same data, or for having indexes with
+  different `SearchSchema` or `Projection`.
+- Vector indexes require ScyllaDB to operate with tablets, not vnodes.
 
----
+## Filtering with SearchSchema: HASH and INLINE_FILTER
 
-### UpdateTable — VectorIndexUpdates parameter
+Without a `SearchSchema`, a vector search examines every item indexed by the
+vector index. `SearchSchema` lets a search instead be restricted, before the
+ANN algorithm even runs, to only the items matching a condition on one or
+more designated attributes — this is DynamoDB's equivalent of what other
+vector databases call "pre-filtering" or a "filterable/local index".
 
-A new optional parameter `VectorIndexUpdates` can be passed to `UpdateTable`
-to add or remove a vector index after the table is created. At most one
-index operation (Create or Delete) may be requested per call.
+`SearchSchema` is a list of objects, each `{"AttributeName": "<name>",
+"SearchSchemaElementType": "HASH"|"INLINE_FILTER"}`. Every attribute it
+names must also be declared in the request's `AttributeDefinitions`, with
+one of the key types `S`, `N`, or `B` — exactly like a GSI or LSI key
+attribute. Any attribute may be used, including one that is already a key
+attribute of the base table or one of its GSIs or LSIs.
 
-Each element of the list is an object with exactly one of the following keys:
+There are two kinds of `SearchSchema` elements, and they behave quite
+differently:
 
-**Create:**
+- **`HASH`** (at most one per index) acts like a partition key for the
+  vector index itself: items are effectively bucketed by this attribute's
+  value, the way a local secondary index buckets by the base table's own
+  partition key. Whenever a vector index declares a `HASH` attribute, every
+  `SearchVectors` call against it **must** include a condition on that
+  attribute — there is no way to search "across all partitions" at once.
+- **`INLINE_FILTER`** (any number per index) is a plain equality filter,
+  evaluated inside the vector store before the ANN search runs. Including a
+  condition on an `INLINE_FILTER` attribute in a search is optional.
+
+Both kinds of `SearchSchema` attribute are automatically projected into the
+vector index and returned by a search by default, regardless of the index's
+`Projection` setting (see below) — there's no need to separately list them
+in `Projection`.
+
+**Write-time enforcement:** once a vector index's `SearchSchema` exists,
+`PutItem`/`UpdateItem` reject any write that gives a `SearchSchema`
+attribute a value of the wrong type (compared to what was declared in
+`AttributeDefinitions`), and additionally reject an empty string specifically
+for the `HASH` attribute (empty strings remain fine for `INLINE_FILTER`
+attributes, since they aren't key-like). A write that simply omits the
+attribute is always allowed.
+
+**What happens to items already in the table:** adding a vector index to
+an existing (non-empty) table via `UpdateTable` triggers a backfill scan
+that indexes the table's current contents (see `IndexStatus`/`Backfilling`
+below); this can't rely on write-time validation, since that data was
+written before the `SearchSchema` existed. So instead:
+  - An item that lacks the `HASH` attribute, or whose existing value has the
+    wrong type or is an empty string, is simply left out of the index
+    entirely — it will never be found by any search on this index. This is
+    the same as what happens to an item that's missing its `HASH` value even
+    after `SearchSchema` was already in place.
+  - An item that lacks an `INLINE_FILTER` attribute is still indexed
+    normally; it just never matches a search that filters on that
+    attribute.
+  - An item whose *existing* value for an `INLINE_FILTER` attribute has the
+    wrong type, however, is skipped from indexing entirely — not indexed
+    with that one value simply missing. This might be surprising, since it's
+    treated differently than an item simply missing the same attribute. The
+    reason: if the item were indexed with a placeholder "missing" value, an
+    unfiltered search could return it with an attribute that, according to
+    the base table, does have a value — misrepresenting the item to the
+    caller. Since ANN search is already inherently approximate (it doesn't
+    promise to find every matching item), it's better to leave such an item
+    out entirely than to return it with an incorrect projected attribute.
+
+## Projection
+
+`Projection` controls which attributes (beyond the base table's own key
+columns and `SearchSchema` attributes, which are always projected) a vector
+index stores, and therefore which attributes a search can return:
+
+| `ProjectionType` | Description |
+|-----------------|-------------|
+| `KEYS_ONLY` | Only the base table's key attributes (plus `SearchSchema` attributes) are projected. |
+| `INCLUDE` | The above, plus the additional non-key attributes listed in the required `NonKeyAttributes` field. |
+| `ALL` | All of the item's attributes are available. |
+
+`ProjectionType=ALL` is currently implemented less efficiently than
+`KEYS_ONLY`/`INCLUDE`: since an item can carry arbitrary attributes, there's
+no fixed list to hand to the vector store ahead of time, so a search against
+such an index falls back to reading each matching item from the base table
+individually, rather than serving results directly out of the vector store
+(the one exception is a `ProjectionExpression` naming only key columns, which
+needs nothing beyond the ANN results regardless of `ProjectionType`). For
+latency-sensitive applications, prefer `KEYS_ONLY` or
+`INCLUDE` with a specific attribute list.
+
+DynamoDB's Vector Search API has no way to read an attribute that isn't
+projected into the index. As a ScyllaDB extension, `SearchVectors`'s
+`BaseRead` parameter (described below) can still reach into the base table
+for such attributes when needed.
+
+## UpdateTable — VectorIndexUpdates parameter
+
+An optional `VectorIndexUpdates` parameter can be passed to `UpdateTable` to
+add or remove one vector index — **at most one** `Create` or `Delete`
+operation per `UpdateTable` call (the same restriction DynamoDB places on
+`GlobalSecondaryIndexUpdates`).
+
+**Create** (same fields as `CreateTable`'s `VectorIndexes` entries above):
 ```json
 {
   "Create": {
     "IndexName": "my-vector-index",
-    "VectorAttribute": {"AttributeName": "embedding", "Dimensions": 1536},
-    "Projection": {"ProjectionType": "KEYS_ONLY"},
-    "SimilarityFunction": "COSINE"
+    "VectorAttribute": {"AttributeName": "embedding"},
+    "Dimensions": 1536,
+    "DistanceFunction": "COSINE",
+    "Projection": {"ProjectionType": "KEYS_ONLY"}
   }
 }
 ```
-
-The `Projection` field in the `Create` action is optional and accepts the same
-values as the `Projection` field in `CreateTable`'s `VectorIndexes` (see above).
-Currently only `ProjectionType=KEYS_ONLY` is supported; it is also the default
-when `Projection` is omitted.
-
-The `SimilarityFunction` field is also optional and accepts the same values as
-in `CreateTable`'s `VectorIndexes` (see above). Defaults to `COSINE` when omitted.
 
 **Delete:**
 ```json
@@ -150,297 +228,270 @@ in `CreateTable`'s `VectorIndexes` (see above). Defaults to `COSINE` when omitte
 }
 ```
 
-The same constraints as `CreateTable`'s `VectorIndexes` apply.
+`VectorIndexUpdates` cannot be combined with `GlobalSecondaryIndexUpdates`
+in the same `UpdateTable` request.
 
----
+## DescribeTable — VectorIndexes in the response
 
-### DescribeTable — VectorIndexes in the response
-
-`DescribeTable` (and `CreateTable`'s response) returns a `VectorIndexes`
-field in the `TableDescription` object when the table has at least one
-vector index. The structure mirrors the `CreateTable` input: a list of
-objects each containing `IndexName`, `VectorAttribute`
-(`AttributeName` + `Dimensions`), and `Projection` (`ProjectionType`).
-Currently `Projection` always contains `{"ProjectionType": "KEYS_ONLY"}`
-because that is the only supported projection type.
-If a `SimilarityFunction` was specified at index creation, it is returned
-at the index level (alongside `IndexName`, `VectorAttribute`, and `Projection`).
-When `SimilarityFunction` was not specified, `COSINE` is returned as the default.
-
-Each vector index entry also includes status fields that mirror the standard
-behavior of `GlobalSecondaryIndexes` in DynamoDB:
+`DescribeTable` (and `CreateTable`'s own response) returns a `VectorIndexes`
+list in `TableDescription` whenever the table has at least one vector index.
+Each entry echoes back `IndexName`, `IndexArn`, `VectorAttribute`,
+`Dimensions`, `DistanceFunction`, `Projection`, and — if the index has one —
+`SearchSchema`, plus two status fields that mirror how DynamoDB reports GSI
+status:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `IndexStatus` | String | `"ACTIVE"` when the vector store has finished building the index and it is fully operational. `"CREATING"` while the index is still being built (the vector store service is still initializing or has not yet been discovered). |
-| `Backfilling` | Boolean | Present and `true` only when `IndexStatus` is `"CREATING"` and the vector store is actively performing the initial scan of the base table (bootstrapping). When the initial scan is not yet started, or has already completed, this field is absent. |
+| `IndexStatus` | String | `"ACTIVE"` once the vector store has finished building the index and is serving it. `"CREATING"` while the index is still being built. |
+| `Backfilling` | Boolean | Present and `true` only while `IndexStatus` is `"CREATING"` *and* the vector store is actively scanning the base table's existing data (as opposed to still starting up). Absent once the scan hasn't started yet, or has already finished. |
 
-When creating a vector index on a non-empty table (via `UpdateTable`), data
-already in the table is picked up by the vector store through a full-table
-scan (backfill). During this period `IndexStatus` will be `"CREATING"` and
-`Backfilling` will be `true`. Once the scan completes the vector store
-transitions to monitoring CDC for ongoing changes, and `IndexStatus` becomes
-`"ACTIVE"`.
+When a vector index is added to a non-empty table, this backfill scan
+populates the index from the table's current contents; once it completes,
+the vector store switches to consuming ongoing changes via CDC, and
+`IndexStatus` becomes `"ACTIVE"`. Applications should wait for
+`IndexStatus="ACTIVE"` before relying on `SearchVectors` finding all
+existing data — this applies both to a `VectorIndexUpdates` `Create` on an
+existing table and to a brand new table created with `VectorIndexes`
+already set (even though it starts out empty, the vector store still needs
+a moment to initialize).
 
-**Type enforcement before and after index creation differs:**
+**Vector indexes are eventually consistent.** Even after `IndexStatus`
+reaches `"ACTIVE"`, ongoing writes (`PutItem`, `UpdateItem`,
+`BatchWriteItem`, etc.) reach the vector index asynchronously via the same
+CDC-based mechanism, not as part of the write itself. A `SearchVectors`
+call immediately following a write may not yet reflect it. Applications
+that need a just-written item to be immediately searchable must poll
+`SearchVectors` (or otherwise wait) until it appears, the same way they'd
+wait for `IndexStatus="ACTIVE"` during backfill.
 
-- **Pre-existing items:** when the backfill scan encounters an item whose
-  indexed attribute is not a list of exactly the right number of numbers
-  (e.g., it is a string, a list of the wrong length, or contains
-  non-numeric elements), that item is silently skipped and not indexed.
-  The item remains in the base table unchanged.
+## Performing a search: the SearchVectors operation
 
-- **New writes once the index exists:** any attempt to write a value to the
-  indexed attribute that is not a list of exactly `Dimensions` numbers —
-  where each number is representable as a 32-bit float — is rejected with a
-  `ValidationException`. This applies to `PutItem`, `UpdateItem`, and
-  `BatchWriteItem`. A missing value for the indexed attribute is always
-  allowed; such items simply are not indexed.
+A vector search is performed with its own distinct top-level operation,
+`SearchVectors` — not a variant of `Query` — with its own request and
+response shape:
 
-**Optimized vector storage format (`FLOAT32VECTOR` type):**
+| Field | Type | Description |
+|-------|------|-------------|
+| `TableName` | String | Required. |
+| `IndexName` | String | Required. Must name a vector index on this table. |
+| `SearchVector` | List (`L`) or `FLOAT32VECTOR` | Required. The query vector. Its length must equal the index's `Dimensions`. |
+| `TopK` | Integer | Required. How many nearest neighbors to return — between 1 and 1000. |
+| `SearchConditionExpression` | String | Optional (mandatory if the index has a `HASH` `SearchSchema` attribute). A pre-filter evaluated by the vector store itself before the ANN search, using `SearchSchema` attributes — see below. |
+| `FilterExpression` | String | Optional, ScyllaDB extension. A post-filter applied to the `TopK` candidates found by the ANN search — see below. |
+| `ExpressionAttributeNames` / `ExpressionAttributeValues` | | As usual, substituted into `SearchConditionExpression`/`FilterExpression`/`ProjectionExpression`. |
+| `ProjectionExpression` | String | Optional. Which attributes to return — see below. |
+| `BaseRead` | Boolean | Optional, ScyllaDB extension, default `false`. Whether to read matching items from the base table — see below. |
 
-As a ScyllaDB extension, the indexed vector attribute may be written using
-the `FLOAT32VECTOR` type instead of the standard `L` type. With the `FLOAT32VECTOR` type the value
-is a JSON array of plain floating-point numbers (not strings):
+`SearchConditionExpression` only supports the `=` operator, combining
+multiple conditions with `AND` (no `OR`, `NOT`, or other comparators). Every
+attribute it references must be a `SearchSchema` attribute (`HASH` or
+`INLINE_FILTER`) of the index being searched, and only string (`S`),
+number (`N`), and binary (`B`) values are supported.
+
+Example:
+```python
+client = table.meta.client
+
+# A vector index without a SearchSchema:
+response = client.search_vectors(
+    TableName='my-table',
+    IndexName='embedding-index',
+    SearchVector=[0.1, -0.3, 0.7, ...],   # or {'FLOAT32VECTOR': [...]}
+    TopK=10,
+)
+
+# A vector index whose SearchSchema declares 'category' as HASH:
+response = client.search_vectors(
+    TableName='my-table',
+    IndexName='embedding-index',
+    SearchVector=[0.1, -0.3, 0.7, ...],
+    TopK=10,
+    SearchConditionExpression='category = :c',
+    ExpressionAttributeValues={':c': 'electronics'},
+)
+```
+
+`ProjectionExpression`, by default (`BaseRead=false`, see below), can only
+request attributes actually
+available from the index itself — the base table's key columns,
+`SearchSchema` attributes, and `Projection`'s `NonKeyAttributes` — plus, as
+a special case, the vector attribute itself can always be requested
+explicitly even under `ProjectionType=KEYS_ONLY`, though the value returned
+is only as precise as the vector store's own storage of it (see
+[FLOAT32VECTOR](#the-float32vector-type-scylladb-extension) below). Naming
+an attribute that isn't actually available is not an error; it's simply
+left out of the result, the same as `ProjectionExpression` naming an
+attribute an item doesn't have. With `BaseRead=true`, this restriction is
+lifted: `ProjectionExpression` can then name any attribute of the base
+table, not just ones projected into the index.
+
+Omitting `ProjectionExpression` entirely always means the same thing - the
+entire item - but `BaseRead` decides which copy of the
+item that refers to: with `BaseRead=false`, the vector index's own copy,
+which only ever has the projected attributes to begin with (matching
+DynamoDB's own `ALL_PROJECTED_ATTRIBUTES` default for a GSI/LSI `Query` -
+not a restricted view, just "the entire item" as the index actually has
+it); with `BaseRead=true`, the base table's row, with every attribute it
+actually has. Either way, the vector attribute is excluded from this
+default; request it explicitly to get it.
+
+**BaseRead — ScyllaDB extension.** DynamoDB's own `SearchVectors` can only
+ever return the attributes projected into the index — it has no way to read
+anything else from the base table. As a ScyllaDB extension, `SearchVectors`
+accepts a boolean `BaseRead` parameter to lift that restriction:
+
+| `BaseRead` value | Behavior |
+|------------------|----------|
+| `false` (default) | The response is built entirely out of what's already projected into the index; no base-table reads. This is the *only* mode real DynamoDB's `SearchVectors` supports. Two things currently still force a base-table read even here, though neither is a deliberate restriction - they're missing features to fix later, not part of the design: `ProjectionType=ALL`'s default response (see [Projection](#projection)), and an explicit request for the vector attribute itself (the vector store can't yet reconstruct it on demand). |
+| `true` | Unconditionally reads each matching item from the base table, returning whatever `ProjectionExpression` asked for — any base table attribute, not just projected ones, and the full item if it wasn't given (see above) — and giving `FilterExpression` access to the full item. As a minor optimization, this is skipped for an explicit `ProjectionExpression` naming only key columns (regardless of `ProjectionType`, even `ALL`), with no `FilterExpression` - keys can't differ between the index and the base table, so a base-table read couldn't tell us anything new there. |
+
+`BaseRead=true` also gives up-to-date data, unlike `BaseRead=false`: vector
+indexes are only eventually consistent with the base table (see above), so
+a `BaseRead=false` search can miss a very recent write, while `BaseRead=true`
+reads the base table directly for every matching item, at the cost of an
+extra read per item.
+
+Interestingly, `BaseRead=false`'s fast path — serving a search entirely out
+of the vector index, without touching the base table — has no equivalent in
+ScyllaDB's own CQL `ANN OF` vector search: CQL always works the way
+`BaseRead=true` does here, retrieving only the matching keys from the
+vector search engine and then reading the rest of each item from the base
+table. `BaseRead=false`, DynamoDB's only supported mode, is thus an
+Alternator-only optimization not available to CQL users of the same index.
+
+Unlike `Query`, `SearchVectors` does not accept a `Select` parameter at
+all — `BaseRead` together with `ProjectionExpression` already covers the
+same ground (including `Query`'s `SPECIFIC_ATTRIBUTES` and `ALL_ATTRIBUTES`
+behaviors). Nor does it accept the legacy `AttributesToGet`
+(`ProjectionExpression`'s predecessor) - use `ProjectionExpression` instead.
+There's also no `SearchVectors` equivalent of `Select=COUNT`: the
+`SearchResults` response shape has no field for a bare count.
+
+**FilterExpression — ScyllaDB extension.** Also as a ScyllaDB extension, a
+`FilterExpression` can be applied to the `TopK` candidates found by the ANN
+search, discarding any that don't match. This is *post*-filtering: it
+happens only after the candidates have already been chosen — here, by the
+ANN search, rather than by a key condition or table scan as in `Query` or
+`Scan` — so a discarded item is never replaced by another candidate. This
+is the same relationship `FilterExpression` has to `Limit` in a standard
+`Query` or `Scan`, and because of it, the response can end up with fewer
+than `TopK` items.
+
+`FilterExpression` uses the exact same expression syntax, with the same
+capabilities, as `Query`'s and `Scan`'s `FilterExpression` — comparison
+operators (`=`, `<>`, `<`, `<=`, `>`, `>=`, `BETWEEN`, `IN`), functions
+(`attribute_exists`, `attribute_not_exists`, `attribute_type`,
+`begins_with`, `contains`, `size`), and conditions combined with
+`AND`/`OR`/`NOT`. This is far more general than `SearchConditionExpression`
+(see above), which only supports the `=` operator, `AND`-combined
+conditions, and only on `SearchSchema` attributes — `FilterExpression`, in
+contrast, can reference *any* attribute of the item, of any type (including
+one that varies from item to item, since Alternator attributes are
+otherwise untyped): a condition like `x = :want` simply treats an item
+whose `x` has a different type than `:want` (or is missing `x` entirely)
+as not matching, rather than an error.
+
+The attributes available to `FilterExpression` are exactly the ones
+available to `ProjectionExpression` (see `BaseRead` above) — not the
+possibly-smaller subset that a given `ProjectionExpression` actually asks
+to have *returned*: with `BaseRead=false`, only what's projected into the
+index is available, regardless of what `ProjectionExpression` requests — an
+attribute outside that set is silently treated as missing, the same as for
+an item that's genuinely missing it, and referencing it never by itself
+triggers a base-table read; with `BaseRead=true`, the full base-table item
+is available, again regardless of what `ProjectionExpression` requests.
+`ProjectionExpression` only trims the final response, after filtering has
+already happened.
+
+## Similarity scores
+
+A `SearchVectors` response has the shape:
+```json
+{
+  "SearchResults": [
+    {"Item": {"id": {"S": "item1"}}, "Score": 0.0123},
+    {"Item": {"id": {"S": "item2"}}, "Score": 0.4567}
+  ]
+}
+```
+(with up to `TopK` entries in `SearchResults`, each carrying its own `Item`
+and `Score`)
+
+`SearchResults` is already ordered — nearest match first — and every entry
+carries a `Score` alongside its `Item`. What `Score` means, and whether a
+*lower* or *higher* value is a better match, depends on the index's
+`DistanceFunction`:
+
+| `DistanceFunction` | What `Score` is | Range | Better match is... |
+|---------------------|------------------|-------|---------------------|
+| `COSINE` | Cosine distance: `1 - cosine_similarity` | `[0, 2]` | **lower** (`0` = identical direction, `2` = opposite direction) |
+| `EUCLIDEAN` | Raw Euclidean (L2) distance | `[0, ∞)` | **lower** (`0` = identical vectors) |
+| `DOT_PRODUCT` | Raw dot product | unbounded | **higher** (this one is a genuine similarity, not a distance — the other two are distances) |
+
+Because `COSINE` and `EUCLIDEAN` scores are distances while `DOT_PRODUCT`'s
+is a similarity, take care when comparing scores across indexes using
+different `DistanceFunction`s, or when deciding a "good enough" threshold:
+the direction of "better" flips for `DOT_PRODUCT`.
+
+## The FLOAT32VECTOR type (ScyllaDB extension)
+
+Amazon DynamoDB has no dedicated vector type: a vector is just an ordinary
+list (`L`) of numbers (`N`), each of which DynamoDB stores and transmits as
+a self-describing, variable-length decimal string. That's a natural fit for
+DynamoDB's general-purpose number type, but it's needlessly wasteful for
+what a vector actually is: a fixed-length array of IEEE-754 floats.
+
+As a ScyllaDB-only extension, Alternator additionally accepts the vector
+attribute — both when writing an item and as the `SearchVector` in a
+search — using the `FLOAT32VECTOR` type: a JSON array of plain floating
+point numbers (not quoted strings), stored internally as packed 4-byte
+big-endian floats rather than as a list of individually-tagged, decimal-
+string-encoded numbers:
 
 ```json
 // Standard DynamoDB list-of-numbers format:
 {"embedding": {"L": [{"N": "0.1"}, {"N": "-0.3"}, {"N": "0.7"}]}}
 
-// Optimized FLOAT32VECTOR format (ScyllaDB extension):
+// FLOAT32VECTOR format (ScyllaDB extension):
 {"embedding": {"FLOAT32VECTOR": [0.1, -0.3, 0.7]}}
 ```
 
-Both representations are accepted for writes and queries. The `FLOAT32VECTOR`
-format is stored internally as packed 4-byte IEEE 754 floats (big-endian),
-rather than as JSON with string-encoded numbers. This reduces storage space
-and avoids JSON parsing overhead when the vector is read back. For large,
-high-dimensional vectors the space saving is significant: a 1536-dimension
-vector takes 6145 bytes with `FLOAT32VECTOR` versus roughly 25 KB with `L`/`N`
-strings.
+For the high-dimensional vectors typical of ML embeddings — often in the
+hundreds or thousands of dimensions — this adds up: each `L`/`N` element
+carries per-value framing and decimal-text overhead on top of the number
+itself, while `FLOAT32VECTOR` is exactly 4 bytes per dimension, both on the
+wire and in storage, with no JSON-number parsing needed to reconstruct the
+floats. Since a vector attribute's precision is limited to what a 32-bit
+float can represent anyway (the vector store itself only ever deals in
+`float`, regardless of which format was used to write it), storing it as
+`L`/`N` doesn't buy any extra precision — only extra bytes and CPU time.
+Both formats are accepted anywhere a vector value is expected (writing an
+item, or as `SearchVector` in a search), and can be freely mixed between
+different items or requests.
 
-> **Important:** Applications must wait until `IndexStatus` is `"ACTIVE"` before
-> issuing `Query` requests against a vector index. Queries on a vector index
-> whose `IndexStatus` is still `"CREATING"` may fail. This applies both when
-> adding a vector index to an existing table via `UpdateTable` **and** when
-> creating a new table with a `VectorIndexes` parameter in `CreateTable` — even
-> though the new table starts empty, the vector store still needs a short
-> initialization period before it can serve queries.
+## Constraints and limits
 
----
-
-### Query — VectorSearch parameter
-
-To perform a nearest-neighbor search, pass the `VectorSearch` parameter
-to `Query`. When this parameter is present the request is interpreted as a
-vector search rather than a standard key-condition query.
-
-**VectorSearch fields:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `QueryVector` | AttributeValue (list `L` or vector `FLOAT32VECTOR`) | The query vector as a DynamoDB `AttributeValue`. Use type `L` with `N` elements (standard DynamoDB) or the optimized ScyllaDB `FLOAT32VECTOR` type with plain floating-point elements. |
-
-Example:
-```python
-# Standard DynamoDB format:
-response = table.query(
-    IndexName='embedding-index',
-    Limit=10,
-    VectorSearch={
-        'QueryVector': {'L': [{'N': '0.1'}, {'N': '-0.3'}, {'N': '0.7'}, ...]},
-    },
-)
-
-# Optimized ScyllaDB FLOAT32VECTOR format:
-response = table.query(
-    IndexName='embedding-index',
-    Limit=10,
-    VectorSearch={
-        'QueryVector': {'FLOAT32VECTOR': [0.1, -0.3, 0.7, ...]},
-    },
-)
-```
-
-**Requirements:**
-
-| Parameter | Details |
-|-----------|---------|
-| `IndexName` | Required. Must name a vector index on this table (not a GSI or LSI). |
-| `VectorSearch.QueryVector` | Required. A DynamoDB `AttributeValue` of type `L` (all elements of type `N`) or the ScyllaDB-specific type `FLOAT32VECTOR` (plain floating-point JSON numbers). |
-| QueryVector length | Must match the `Dimensions` configured for the named vector index. |
-| `Limit` | Required. Defines _k_ — how many nearest neighbors to return. Must be a positive integer no greater than 1000. |
-
-**Differences from standard Query:**
-
-Vector search reinterprets several standard `Query` parameters in a fundamentally
-different way, and explicitly rejects others that have no meaningful interpretation:
-
-- **`Limit` means top-k, not page size.** In a standard Query, `Limit` caps
-  the number of items examined per page, and you page through results with
-  `ExclusiveStartKey`. In vector search, `Limit` defines _k_: the ANN
-  algorithm runs once and returns exactly the _k_ nearest neighbors. There
-  is no natural "next page" — each page would require a full re-run of the
-  search — so **`ExclusiveStartKey` is rejected**. Because vector search does
-  not support pagination, `Limit` is capped at 1000; if you need more results
-  you must issue separate queries with different query vectors.
-
-- **Results are ordered by vector distance, not by sort key.** A standard
-  Query returns rows in sort-key order; `ScanIndexForward=false` reverses
-  that order. Vector search always returns results ordered by their distance
-  to `QueryVector` (nearest first). Having `ScanIndexForward` specify sort-key
-  direction has no meaning here, so **`ScanIndexForward` is rejected**.
-
-- **Eventual consistency only.** The vector store is an external service fed
-  asynchronously from ScyllaDB via CDC. Like GSIs, vector indexes can never
-  reflect writes instantly, so strongly-consistent reads are impossible.
-  **`ConsistentRead=true` is rejected.**
-
-**Select parameter:**
-
-The standard DynamoDB `Select` parameter is supported for vector search queries
-and controls which attributes are returned for each matching item:
-
-| `Select` value | Behavior |
-|----------------|----------|
-| `ALL_PROJECTED_ATTRIBUTES` (default) | Return only the attributes projected to the vector index. Currently, only the primary key attributes (hash key, and range key if present) are projected; support for configuring additional projected attributes is not yet implemented. Note that the vector attribute itself is **not** included: the vector store may not retain the original floating-point values (e.g., it may quantize them), so the authoritative copy lives only in the base table. This is the most efficient option because Scylla can return the results directly from the vector store without an additional fetch from the base table. |
-| `ALL_ATTRIBUTES` | Return all attributes of each matching item, fetched from the base table. |
-| `SPECIFIC_ATTRIBUTES` | Return only the attributes named in `ProjectionExpression` or `AttributesToGet`. |
-| `COUNT` | Return only the count of matching items; no `Items` list is included in the response. |
-
-When neither `Select` nor `ProjectionExpression`/`AttributesToGet` is specified,
-`Select` defaults to `ALL_PROJECTED_ATTRIBUTES`.  When `ProjectionExpression` or
-`AttributesToGet` is present without an explicit `Select`, it implies
-`SPECIFIC_ATTRIBUTES`.  Using `ProjectionExpression` or `AttributesToGet`
-together with an explicit `Select` other than `SPECIFIC_ATTRIBUTES` is an error.
-
-**Note on performance:** Unlike a DynamoDB LSI, a vector index allows you to
-read non-projected attributes (e.g., with `ALL_ATTRIBUTES` or
-`SPECIFIC_ATTRIBUTES` requesting a non-key column).  However, doing so requires
-an additional read from the base table for each result — similar to reading
-through a secondary index (rather than a materialized view) in CQL — and is
-therefore significantly slower than returning only projected attributes with
-`ALL_PROJECTED_ATTRIBUTES`.  For latency-sensitive applications, prefer
-`ALL_PROJECTED_ATTRIBUTES` or limiting `SPECIFIC_ATTRIBUTES` to key columns.
-
-**Filtering: pre-filter and post-filter:**
-
-Vector search supports two complementary filtering mechanisms:
-
-**Pre-filtering (`KeyConditionExpression`):** conditions are sent to the vector
-store before the ANN search, so the search is performed only over matching
-items. Because pre-filtering is evaluated inside the vector store, only
-attributes that are projected into the vector index can be referenced — today
-that means the base table's key columns (hash key and range key if present).
-Supported operators are `=`, `<`, `<=`, `>`, `>=`, `IN`, and `BETWEEN`;
-conditions are combined with `AND`. `OR` and `NOT` are rejected because the
-vector store's pre-filter API only accepts a flat list of conditions implicitly
-ANDed together. The `<>` (not-equal) operator is also rejected. In cases where
-`OR` would otherwise test a single attribute against multiple values, `IN` can
-often serve as a replacement: instead of `p = :v1 OR p = :v2`, write
-`p IN (:v1, :v2)`. `KeyConditions` (the legacy non-expression API) is **not**
-supported and will be rejected with a `ValidationException`.
-
-Pre-filtering searches only within the matching subset and returns the items
-most similar to the query vector, but the result count is **not** guaranteed
-to reach `Limit`: the underlying ANN algorithm explores a bounded neighborhood
-of the graph and may return fewer than `Limit` items even when enough matching
-items exist in the index. There is no automatic retry to fill missing slots.
-
-**Post-filtering (`FilterExpression`):** after the ANN search returns its `Limit`
-nearest-neighbor candidates, the filter is applied to each candidate and only
-matching items are returned. Because filtering happens _after_ the `Limit`
-candidates have already been selected, some may be discarded, and the response
-may contain **fewer than `Limit` items**. The server does not automatically
-fetch additional neighbors to replace filtered-out items. Any attribute may be
-referenced in a `FilterExpression`, not only projected columns. This is
-identical to how `FilterExpression` interacts with `Limit` in a standard
-DynamoDB `Query`. `QueryFilter` (the legacy non-expression filter API) is **not**
-supported and will be rejected with a `ValidationException`.
-
-The response always includes two count fields:
-
-| Field | Description |
-|-------|-------------|
-| `ScannedCount` | The number of candidates returned by the vector index. Normally equal to `Limit`, but may be less if there are fewer than `Limit` items in the table (or matching the pre-filtering condition), or if the approximate ANN search did not find enough candidates. |
-| `Count` | The number of items that passed the `FilterExpression` (or equal to `ScannedCount` when no filter is present). |
-
-**Interaction with `Select`:**
-
-- `Select=ALL_ATTRIBUTES`: Each candidate item is fetched from the
-  base table, the filter is evaluated against all its attributes, and only
-  matching items are returned. `Count` reflects the number of items that passed
-  the filter.
-
-- `Select=SPECIFIC_ATTRIBUTES`: Each candidate item is fetched from the base
-  table — including any attributes needed by the filter expression, even if
-  those attributes are not listed in `ProjectionExpression` — and the filter is
-  applied. Only the projected attributes are returned in the response; filter
-  attributes that were not requested are not included in the returned items.
-
-- `Select=COUNT`: The candidate items are still fetched from the base table and
-  the filter is evaluated for each one, but no `Items` list is returned. `Count`
-  reflects the number of items that passed the filter; `ScannedCount` is the
-  total number of candidates examined. This is useful for counting matches
-  without transferring item data to the client.
-
-- `Select=ALL_PROJECTED_ATTRIBUTES` (default): When no filter is present this is the most
-  efficient mode — results are returned directly from the vector store without
-  any base-table reads. When a `FilterExpression` is present, however, the full
-  item must be fetched from the base table to evaluate the filter, and only the
-  projected (key) attributes are returned for items that pass.
-
-**ReturnScores field:**
-
-By default, a vector search `Query` response contains only the matched items
-(or a count) — it does not include how similar each result is to the query
-vector. To also receive similarity scores, set the optional
-`ReturnScores` field inside the `VectorSearch` parameter:
-
-| Value | Behavior |
-|-------|----------|
-| `NONE` | Default. No similarity scores are returned. |
-| `SIMILARITY` | Each response includes a `Scores` array parallel to `Items`, with one floating-point score per item. |
-
-The `Scores` array is always the same length as `Items` and in the same
-order: `Scores[i]` is the similarity score for `Items[i]`.
-
-**What the similarity score means:**
-
-The similarity score is a floating-point number computed from the distance
-between the query vector and each result's stored vector, using the index's
-`SimilarityFunction`. A **higher** score means a **closer** (more similar)
-match, so results appear in descending similarity order.  The score range
-depends on the similarity function:
-
-| `SimilarityFunction` | Range | Mapping |
-|----------------------|-------|---------|
-| `COSINE` (default) | 0.0 to 1.0 | The cosine of the angle between the two vectors is in `[-1, 1]`. So taking `(1 + cos)/2` gives us a similarity value in `[0, 1]`: 1.0 means identical direction, 0.5 means orthogonal vectors, 0.0 means opposite direction. |
-| `EUCLIDEAN` | 0.0 to 1.0 | Euclidean distance _d_ in `[0, inf)` is mapped to `1 / (1 + d)`. similarity 1.0 means identical vectors, 0.0 means infinitely far apart. |
-| `DOT_PRODUCT` | Unbounded | Uses the same distance definition and mapping as `COSINE`. For L2-normalized vectors the result is identical to `COSINE` and stays in [0, 1]. For unnormalized vectors the value may exceed 1 or be negative. |
-
-`ReturnScores=SIMILARITY` is not allowed with `Select=COUNT`,
-since `COUNT` returns no `Items` array.
-
-Example:
-```python
-response = table.query(
-    IndexName='embedding-index',
-    Limit=5,
-    VectorSearch={'QueryVector': {'FLOAT32VECTOR': [0.1, -0.3, 0.7, ...]}, 'ReturnScores': 'SIMILARITY'},
-)
-for item, score in zip(response['Items'], response['Scores']):
-    print(f"  {item['id']}  similarity={score:.4f}")
-```
+| Limit | Value |
+|-------|-------|
+| `Dimensions` | 1 to 16000 |
+| `TopK` | 1 to 1000 |
+| `IndexName` length | 3 to 192 characters |
+| `SearchSchema` `AttributeName` length | up to 255 characters (same as any key attribute) |
+| `VectorAttribute`/`NonKeyAttributes` attribute name length | up to 65535 characters (same as any non-key attribute) |
+| `VectorIndexUpdates` per `UpdateTable` call | exactly one `Create` or `Delete` |
+| `SearchConditionExpression` | `=` only, `AND`-combined only, `S`/`N`/`B` values only |
+| Base table replication | must use tablets, not vnodes |
 
 ## Metrics
 
-ScyllaDB exposes the following metrics (under the `alternator` group) for
-monitoring vector search activity:
+ScyllaDB exposes the following metrics (under the `alternator` group, and
+per-table under `alternator_table`) for monitoring vector search activity,
+alongside the standard `SearchVectors` label on the general
+`scylla_alternator_operation`/`scylla_alternator_operation_latency`
+metrics:
 
 | Metric | Description |
 |--------|-------------|
-| `vector_search_query` | Number of `Query` operations that included a `VectorSearch` parameter. These are also counted in the general `operation{op="Query"}` metric. |
-| `vector_search_query_returned_items` | Total number of items returned across all vector search queries. Not incremented for `Select=COUNT` queries, since no items are actually returned in that case. |
-| `vector_search_query_items_from_vs` | Total number of nearest-neighbor candidates returned by the vector store. Some candidates may be filtered out by a `FilterExpression` and not appear in the final response. |
-| `vector_search_query_items_from_base_table` | Total number of items read from the base table by vector search queries. Queries using `Select=ALL_PROJECTED_ATTRIBUTES` without a filter, or `Select=COUNT` without a filter, bypass the base-table read entirely and do not increment this counter. |
+| `vector_search_returned_items` | Total number of items actually returned in `SearchResults`, across all `SearchVectors` calls. |
+| `vector_search_items_from_vs` | Total number of nearest-neighbor candidates returned by the vector store itself. Can exceed `vector_search_returned_items` when a `FilterExpression` (a ScyllaDB extension) discards some of them. |
+| `vector_search_items_from_base_table` | Total number of items read from the base table to serve `SearchVectors` requests. `BaseRead=false` requests never need this - that's the fast path real DynamoDB always uses - with two known-gap exceptions: `ProjectionType=ALL`'s default response (see [Projection](#projection)) and an explicit request naming the vector attribute itself. `BaseRead=true` (a ScyllaDB extension) forces it, at a real latency cost - see `BaseRead` below for the one minor case it doesn't. |
