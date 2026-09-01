@@ -16,6 +16,7 @@
 #include "utils/utf8.hh"
 #include "replica/database_fwd.hh"
 #include "schema/schema_fwd.hh"
+#include "utils/range_of.hh"
 #include <compare>
 #include <span>
 
@@ -103,13 +104,11 @@ public:
         return end();
     }
 
-    // Returns a range of managed_bytes_view
-    auto components() const {
+    utils::range_of<managed_bytes_view> auto components() const {
         return TopLevelView::compound::element_type::components(representation());
     }
 
-    // Returns a range of managed_bytes_view
-    auto components(const schema& s) const {
+    utils::range_of<managed_bytes_view> auto components(const schema& s) const {
         return components();
     }
 
@@ -306,13 +305,11 @@ public:
         return is_empty();
     }
 
-    // Returns a range of managed_bytes_view
-    auto components() const {
+    utils::range_of<managed_bytes_view> auto components() const {
         return TopLevelView::compound::element_type::components(representation());
     }
 
-    // Returns a range of managed_bytes_view
-    auto components(const schema& s) const {
+    utils::range_of<managed_bytes_view> auto components(const schema& s) const {
         return components();
     }
 
