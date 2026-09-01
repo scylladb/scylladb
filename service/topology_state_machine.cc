@@ -13,6 +13,9 @@
 #include "replica/database.hh"
 #include "locator/tablets.hh"
 #include "topology_mutation.hh"
+#include "replica/tablet_mutation_builder.hh"
+#include "service/raft/group0_state_machine.hh"
+#include <seastar/coroutine/maybe_yield.hh>
 #include "raft/raft_group0_client.hh"
 #include "raft/raft_group0.hh"
 
@@ -347,6 +350,61 @@ void topology_state_machine::generate_cancel_request_update(utils::chunked_vecto
     topology_request_tracking_mutation_builder rtbuilder(request_id);
     rtbuilder.done(std::move(reason));
     muts.emplace_back(rtbuilder.build());
+}
+
+future<size_t> generate_cancel_tablet_transition_updates(
+        group0_update_collector& updates,
+        const gms::feature_service& features,
+        const group0_guard& guard,
+        const locator::tablet_metadata& tmeta,
+        const utils::chunked_vector<locator::global_tablet_id>& tablets) {
+    if (!features.tablet_transition_cancel) {
+        // Returning quietly would leave the caller waiting for transitions which are never
+        // going to be cancelled, so make it the caller's problem.
+        throw std::runtime_error("Cannot cancel tablet transitions: the cluster does not support "
+                                 "the TABLET_TRANSITION_CANCEL feature yet");
+    }
+
+    // A single call can cover every tablet of a keyspace - an RF change puts them all into
+    // transition at once - so yield like the coordinator's own transition loop does.
+    std::unordered_map<table_id, replica::tablet_mutation_builder> builders;
+    size_t cancelled = 0;
+    for (auto gid : tablets) {
+        co_await coroutine::maybe_yield();
+        auto& tmap = tmeta.get_tablet_map(gid.table);
+        auto* trinfo = tmap.get_tablet_transition_info(gid.tablet);
+        if (!trinfo) {
+            tsmlogger.debug("Not cancelling tablet {}, it is not in transition", gid);
+            continue;
+        }
+        if (trinfo->cancelled) {
+            continue;
+        }
+        if (!locator::can_cancel_tablet_transition(trinfo->stage)) {
+            tsmlogger.info("Not cancelling tablet {}, stage {} cannot be rolled back", gid,
+                           locator::tablet_transition_stage_to_string(trinfo->stage));
+            continue;
+        }
+        auto base_table = tmeta.get_base_table(gid.table);
+        auto last_token = tmap.get_last_token(gid.tablet);
+        auto i = builders.try_emplace(base_table, guard.write_timestamp(), base_table).first;
+        i->second.cancel_transition(last_token);
+        cancelled++;
+        // Per tablet at debug only: a single call can cover every tablet of a keyspace. The
+        // caller logs the total.
+        tsmlogger.debug("Cancelling transition of tablet {} at stage {}", gid,
+                        locator::tablet_transition_stage_to_string(trinfo->stage));
+    }
+
+    // system.tablets is partitioned by table id, so all tablets of a table share one mutation.
+    // add_large() because a mutation covering every tablet of a table can be big; collect()
+    // then splits it into canonical mutations of a bounded size.
+    for (auto& [table, builder] : builders) {
+        co_await coroutine::maybe_yield();
+        updates.add_large(builder.build());
+    }
+
+    co_return cancelled;
 }
 
 future<> topology_state_machine::abort_request(service::raft_group0& group0,
