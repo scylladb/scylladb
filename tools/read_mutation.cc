@@ -85,6 +85,9 @@ mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& 
         sharded_parameter([] { return default_io_error_handler_gen(); })).get();
     auto stop_sst_dirs = deferred_stop(sst_dirs);
 
+    // Must complete on all shards before any of them starts processing what it found.
+    sst_dirs.invoke_on_all(&sstables::sstable_directory::scan_sstable_dir).get();
+
     using open_infos_t = std::vector<sstables::foreign_sstable_open_info>;
     auto sstable_open_infos = sst_dirs.map_reduce0(
         [] (sstables::sstable_directory& sst_dir) -> future<std::vector<sstables::foreign_sstable_open_info>> {
