@@ -75,6 +75,87 @@ class registry:
 SESSIONS = registry()
 
 
+FAULTS = ("unacknowledged_chunks", "failed_chunks", "failed_cancels", "cancelled_uploads")
+
+
+STATUS_ANSWERS = "status_answers"
+UNACKNOWLEDGED_AT = "unacknowledged_at"
+
+# no scripted answer for this status query: report what the session really holds
+UNSET = object()
+
+
+class injector:
+    """Faults a test asked for over the control path, see handler._control()."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._counts = dict.fromkeys(FAULTS, 0)
+        self._status_answers = []
+        self._unacknowledged_at = set()
+
+    def arm(self, **counts):
+        with self._lock:
+            self._counts.update(counts)
+
+    def arm_status_answers(self, answers):
+        with self._lock:
+            self._status_answers = list(answers)
+
+    def arm_unacknowledged_at(self, offsets):
+        with self._lock:
+            self._unacknowledged_at = set(offsets)
+
+    def reset(self):
+        with self._lock:
+            self._counts = dict.fromkeys(FAULTS, 0)
+            self._status_answers = []
+            self._unacknowledged_at = set()
+
+    def counts(self):
+        with self._lock:
+            return dict(self._counts, **{
+                STATUS_ANSWERS: len(self._status_answers),
+                UNACKNOWLEDGED_AT: len(self._unacknowledged_at),
+            })
+
+    def take_unacknowledged_at(self, first):
+        with self._lock:
+            if first not in self._unacknowledged_at:
+                return False
+            self._unacknowledged_at.discard(first)
+            return True
+
+    def take_status_answer(self):
+        with self._lock:
+            return self._status_answers.pop(0) if self._status_answers else UNSET
+
+    def _take(self, name):
+        with self._lock:
+            left = self._counts[name]
+            if left <= 0:
+                return False
+            self._counts[name] = left - 1
+            return True
+
+    def take_unacknowledged_chunk(self):
+        return self._take("unacknowledged_chunks")
+
+    def take_failed_chunk(self):
+        return self._take("failed_chunks")
+
+    def take_failed_cancel(self):
+        return self._take("failed_cancels")
+
+    def take_cancelled_upload(self):
+        return self._take("cancelled_uploads")
+
+
+INJECTED = injector()
+
+CONTROL_PATH = "/__inject"
+
+
 class limited_reader:
     """Hands http.client exactly `remaining` bytes off a socket, no buffering."""
 
@@ -229,7 +310,111 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _control(self):
+        """Arm faults, or report which are still armed.
+
+        PUT /__inject                    -- report the counts, change nothing
+        PUT /__inject?<fault>=<n>[&...]  -- arm <n> of each fault
+        PUT /__inject?reset=1            -- disarm every fault
+
+        unacknowledged_chunks -- answer a chunk with a Range-less 308
+        failed_chunks         -- answer a chunk with 400
+        failed_cancels        -- answer a session DELETE with 403
+        cancelled_uploads     -- answer a session DELETE with 499, the way real GCS does
+
+        status_answers=<v>[,<v>...] scripts the next status queries instead of answering
+        them from the session. Each <v> is a byte count, or "none"/0 for a Range-less
+        reply. A count below the chunk's offset is a session that lost acknowledged
+        bytes, which a client cannot recover from.
+
+        unacknowledged_at=<off>[,<off>...] drops the chunk starting at each offset, the
+        way unacknowledged_chunks does but without depending on how many chunks the
+        client happens to send first. Uploads are serialized, so naming an offset picks
+        out one chunk exactly.
+
+        Each count is absolute and applies to the next <n> matching requests whatever
+        session they belong to, so a test arms it immediately before the upload it
+        wants faulted. The reply carries the counts still armed: a test that expects a
+        fault to fire can require it was taken, and one that over-arms can disarm the
+        remainder so it does not reach the next test.
+
+        An unknown parameter is an error rather than a no-op -- a misspelled fault would
+        otherwise arm nothing and report success, leaving a test green over an upload it
+        never faulted.
+        """
+        body_len = self._body_length() or 0
+        if body_len:
+            self.rfile.read(body_len)
+
+        q = parse_qs(urlparse(self.path).query)
+        known = list(FAULTS) + [STATUS_ANSWERS, UNACKNOWLEDGED_AT]
+        unknown = sorted(set(q) - set(known) - {"reset"})
+        if unknown:
+            self._reject(f"unknown parameter(s) {unknown}; known faults are {known}", 0)
+            return
+
+        if "reset" in q:
+            INJECTED.reset()
+        counts = {name: int(q[name][0]) for name in FAULTS if name in q}
+        if counts:
+            INJECTED.arm(**counts)
+        if STATUS_ANSWERS in q:
+            INJECTED.arm_status_answers(
+                0 if tok.strip() in ("", "none") else int(tok)
+                for tok in q[STATUS_ANSWERS][0].split(","))
+        if UNACKNOWLEDGED_AT in q:
+            INJECTED.arm_unacknowledged_at(int(tok) for tok in q[UNACKNOWLEDGED_AT][0].split(","))
+
+        left = INJECTED.counts()
+        self._note(f"armed: {left}")
+        payload = json.dumps(left).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _unacknowledged(self, body_len, buffered):
+        """Answer a chunk with "308, nothing persisted": a 308 carrying no Range.
+
+        Google documents a Range-less 308 as "start your upload from the beginning",
+        so the client has to send the chunk again. The body is dropped instead of
+        forwarded, which makes the reply true -- the session's received count does
+        not move, so a client that skips ahead instead trips the Content-Range check
+        on its next chunk.
+        """
+        self._note(f"dropping chunk {self.headers.get('Content-Range')!r}, "
+                   f"answering 308 with no Range")
+        if buffered is None:
+            remaining = body_len
+            while remaining > 0:
+                got = self.rfile.read(min(BLOCK, remaining))
+                if not got:
+                    break
+                remaining -= len(got)
+        self.send_response(308)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _status(self, held):
+        """Answer a "bytes */*" status query.
+
+        A session holding nothing has no valid "bytes=0-<last>" to report, so the Range
+        header is omitted entirely - which is exactly the case a client must not read as
+        "this chunk was not persisted".
+        """
+        self._note(f"status query: session holds {held} bytes")
+        self.send_response(308)
+        if held:
+            self.send_header("Range", f"bytes=0-{held - 1}")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _proxy(self):
+        if urlparse(self.path).path == CONTROL_PATH:
+            self._control()
+            return
+
         body_len = self._body_length()
         buffered = None
         if body_len is None:
@@ -246,6 +431,47 @@ class handler(BaseHTTPRequestHandler):
             if err:
                 self._reject(err, 0 if buffered is not None else body_len)
                 return
+            # Only a chunk carrying bytes can be faulted: a "bytes */<total>" finalize
+            # and a "bytes */*" status probe name no chunk to drop or to reject, and
+            # letting either consume a fault would spend it on the wrong request.
+            m = CONTENT_RANGE_RE.match(content_range)
+            if m.group(1) is not None:
+                if INJECTED.take_unacknowledged_at(int(m.group(1))) \
+                        or INJECTED.take_unacknowledged_chunk():
+                    self._unacknowledged(body_len, buffered)
+                    return
+                if INJECTED.take_failed_chunk():
+                    self._reject("injected chunk failure", 0 if buffered is not None else body_len)
+                    return
+            elif m.group(3) is None:
+                # "bytes */*" asks where the session stands. Answer it here instead of
+                # forwarding: this proxy is what tracks the session, and fake-gcs-server
+                # does not have to implement the status check at all.
+                held = INJECTED.take_status_answer()
+                self._status(s.received if held is UNSET else held)
+                return
+
+        if self.command == "DELETE" and upload_id and INJECTED.take_cancelled_upload():
+            # Real GCS reports a cancelled resumable upload with 499. fake-gcs-server
+            # answers the DELETE with a 2xx, so this is the only way a test reaches the
+            # client's 499 path.
+            self._note("answering the cancel of an upload with 499")
+            SESSIONS.drop(upload_id)
+            self.send_response(499, "Client Closed Request")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        if self.command == "DELETE" and upload_id and INJECTED.take_failed_cancel():
+            # 403 rather than a 5xx: the client retries retryable statuses, and this
+            # fault is only useful if it survives to the caller
+            self._note("failing the cancel of an upload")
+            self.close_connection = True
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            return
 
         conn = http.client.HTTPConnection(self.server.upstream_host,
                                           self.server.upstream_port, timeout=600)
