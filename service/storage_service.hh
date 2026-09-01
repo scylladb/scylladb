@@ -986,7 +986,8 @@ private:
     future<> transit_tablet(table_id, dht::token, noncopyable_function<sstring(group0_update_collector&, const locator::tablet_map& tmap, api::timestamp_type)> prepare_mutations);
     future<bool> try_transit_tablet(table_id, dht::token, noncopyable_function<sstring(group0_update_collector&, const locator::tablet_map& tmap, api::timestamp_type)> prepare_mutations);
     future<service::group0_guard> get_guard_for_tablet_update();
-    future<bool> exec_tablet_update(service::group0_guard guard, group0_update_collector updates, sstring reason);
+    future<bool> exec_tablet_update(service::group0_guard guard, group0_update_collector updates, sstring reason,
+                                    std::optional<raft_timeout> timeout = raft_timeout{});
 public:
     struct all_tokens_tag {};
     future<std::unordered_map<sstring, sstring>> add_repair_tablet_request(table_id table, std::variant<utils::chunked_vector<dht::token>, all_tokens_tag> tokens_variant, std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter, bool await_completion, locator::tablet_repair_incremental_mode incremental_mode);
@@ -996,7 +997,40 @@ public:
     future<> del_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> restore_tablets(table_id, sstring snap_name);
     future<> abort_restore_tablets(table_id);
-    future<> set_tablet_balancing_enabled(bool);
+    // Sets tablet balancing. When disabling, waits until the topology coordinator has no
+    // tablet transition in flight. Transitions which don't finish within grace_period are
+    // cancelled so that the call completes in bounded time; zero means wait indefinitely.
+    future<> set_tablet_balancing_enabled(bool enabled, std::optional<std::chrono::seconds> grace_period = std::nullopt);
+
+    // Why cancelling stopped, so that a caller which gives up can say what actually happened
+    // instead of blaming transitions which were never considered.
+    enum class tablet_cancel_outcome {
+        // Every transition in flight was considered; those which could be rolled back were
+        // cancelled.  With a count of zero it means none of them could be.
+        considered_all,
+        // A node is being drained, so nothing was cancelled: the coordinator ignores pending
+        // topology requests while draining, and rolling tablets back would only make the drain
+        // move them again.
+        draining,
+        // The deadline passed before the change could be committed, so transitions which could
+        // have been rolled back may still be running.
+        deadline,
+    };
+    struct tablet_cancel_result {
+        size_t cancelled = 0;
+        tablet_cancel_outcome outcome = tablet_cancel_outcome::considered_all;
+    };
+
+    // Cancels every tablet transition in the cluster which can still be rolled back, so that
+    // the topology coordinator rolls it back instead of running it to completion.  Transitions
+    // in a stage which cannot be rolled back, and every transition while a node is being
+    // drained, are left alone.  Throws if the cluster does not support the
+    // TABLET_TRANSITION_CANCEL feature.
+    //
+    // Bounded by the deadline, which is carried into the group0 operations as well: the
+    // coordinator is busy by construction here, so its concurrent writes can keep rejecting
+    // ours, and this runs inside a call whose whole purpose is to finish in bounded time.
+    future<tablet_cancel_result> cancel_tablet_transitions(lowres_clock::time_point deadline);
 
     future<utils::UUID> submit_quiesce_topology_request();
     future<> await_topology_quiesced();
@@ -1041,6 +1075,21 @@ public:
     // from across the entire cluster.
     future<utils::chunked_vector<temporary_buffer<char>>> do_sample_sstables(table_id, uint64_t chunk_size, uint64_t n_chunks);
 private:
+    struct tablet_transition_counts {
+        size_t total = 0;
+        // Transitions which are not cancelled, and so will not end by themselves.
+        size_t blocking = 0;
+    };
+
+    // Logs the tablet transitions which are still in flight when a caller gives up waiting
+    // for them, and returns how many there were.
+    tablet_transition_counts log_remaining_tablet_transitions();
+
+    // True if any tablet is in transition.  With ignore_cancelled, counts only transitions
+    // which are not already cancelled: a cancelled one is rolling back and ends on its own, so
+    // its presence does not mean that waiting longer is pointless.
+    bool has_tablet_transitions(bool ignore_cancelled = false) const;
+
     future<utils::chunked_vector<canonical_mutation>> get_system_mutations(schema_ptr schema);
     future<utils::chunked_vector<canonical_mutation>> get_system_mutations(const sstring& ks_name, const sstring& cf_name);
 
