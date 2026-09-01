@@ -25,6 +25,7 @@
 #include "utils/lister.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/directories.hh"
+#include "utils/exceptions.hh"
 #include "utils/s3/client.hh"
 #include "replica/database.hh"
 #include "dht/auto_refreshing_sharder.hh"
@@ -470,9 +471,22 @@ future<> sstable_directory::commit_directory_changes() {
 
 future<> sstable_directory::filesystem_components_lister::commit() {
     // Remove all files scheduled for removal
-    return parallel_for_each(std::exchange(_state->files_for_removal, {}), [] (sstring path) {
+    return parallel_for_each(std::exchange(_state->files_for_removal, {}), [] (sstring path) -> future<> {
         dirlog.info("Removing file {}", path);
-        return remove_file(std::move(path));
+        try {
+            co_await remove_file(path);
+        } catch (...) {
+            // Two overlapping directory-processing passes (e.g. process_sstable_dir()
+            // and a subsequent reshard/reshape pass) can independently schedule the
+            // same leftover temporary file for removal. The file is already gone by
+            // the time the second pass gets to it, so ENOENT here is expected and
+            // not an error, consistent with how leftover-component removal is
+            // handled elsewhere (see filesystem_storage::wipe()).
+            if (!is_system_error_errno(ENOENT)) {
+                throw;
+            }
+            dirlog.debug("Forgiving ENOENT when removing file {}", path);
+        }
     });
 }
 
