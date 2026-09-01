@@ -918,13 +918,23 @@ async def test_hints_decom(manager: ScyllaClusterManager):
         consistency_level=ConsistencyLevel.ANY
     )) for i in range(row_count)])
 
+    await wait_until_hint_writing_settled(manager, [s1])
+    written = await get_hint_metrics(manager.metrics, s1.ip_addr, "written")
+    assert written > 0
+
+    log = await manager.server_open_log(s1.server_id)
+    mark = await log.mark()
+
     await manager.server_start(s3.server_id)
     await manager.servers_see_each_other([s1, s2, s3])
 
     await manager.decommission_node(s3.server_id)
+    await log.wait_for(f"Draining starts for {s3_host_id}", from_mark=mark)
+    await wait_until_hints_are_sent_from(manager, [s1], written)
+    await log.wait_for(f"drain_for: finished draining {s3_host_id}", from_mark=mark)
 
-    hint_flush_threshold = 15
-    await asyncio.sleep(hint_flush_threshold)
+    # Make sure all rows are present.
+    await assert_rows_present(cql, "ks.tbl", "pk", list(range(row_count)), present=True)
 
     assert not hint_dir_exists(s1_hints_dir, s3_host_id)
     assert not hint_dir_exists(s2_hints_dir, s3_host_id)
