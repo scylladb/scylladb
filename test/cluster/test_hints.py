@@ -782,44 +782,43 @@ async def test_hints_removenode(manager: ScyllaClusterManager):
     assert results == expected, f"Mismatch: {results} vs. {expected}"
 
 
+@pytest.mark.skip_mode(mode="release", reason="error injections aren't enabled in release mode")
 async def test_hints_basic_check(manager: ScyllaClusterManager):
     """
     The most basic scenario: a write performed while a replica is down must reach that replica
     once it comes back, and it must reach it through a hint - which is verified by reading the
     row from that replica alone.
     """
-    s1, s2, s3 = await manager.servers_add(3, auto_rack_dc="dc1")
+    config = {"error_injections_at_startup": ["decrease_hints_flush_period"]}
+    s1, s2 = await manager.servers_add(2, config=config, auto_rack_dc="dc1")
 
-    s1_host_id = await manager.get_host_id(s1.server_id)
-    s2_hints_dir = await get_hints_dir(manager, s2)
-    s3_hints_dir = await get_hints_dir(manager, s3)
+    s1_hints_dir = await get_hints_dir(manager, s1)
+    s2_host_id = await manager.get_host_id(s2.server_id)
 
-    cql = await manager.get_cql_exclusive(s2)
-    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
+    cql = await manager.get_cql_exclusive(s1)
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
 
-    await manager.server_stop_gracefully(s1.server_id)
-    await manager.others_not_see_server(s1.ip_addr)
+    await manager.server_stop_gracefully(s2.server_id)
+    await manager.others_not_see_server(s2.ip_addr)
 
     await cql.run_async(SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (0, 1)",
                                         consistency_level=ConsistencyLevel.ONE))
+    await wait_until_hint_writing_settled(manager, [s1])
+    assert hint_dir_exists(s1_hints_dir, s2_host_id)
 
-    await asyncio.sleep(5)
-    assert hint_dir_exists(s2_hints_dir, s1_host_id) or hint_dir_exists(s3_hints_dir, s1_host_id)
+    written = await get_hint_metrics(manager.metrics, s1.ip_addr, "written")
+    assert written > 0
 
-    await manager.server_start(s1.server_id)
-    await manager.servers_see_each_other([s1, s2, s3])
+    await manager.server_start(s2.server_id)
+    await wait_until_hints_are_sent_from(manager, [s1], written)
 
-    hint_flush_threshold = 15
-    await asyncio.sleep(hint_flush_threshold)
+    cql = await manager.get_cql_exclusive(s2)
+    await manager.server_stop_gracefully(s1.server_id)
 
-    await manager.server_stop_gracefully(s2.server_id)
-    await manager.server_stop_gracefully(s3.server_id)
-
-    cql = await manager.get_cql_exclusive(s1)
     rows = list(await cql.run_async(SimpleStatement("SELECT v FROM ks.t WHERE pk = 0",
                                                     consistency_level=ConsistencyLevel.ONE)))
-    assert rows == [(1,)], "the hint was not replayed to the node that was down"
+    assert rows == [(1,)], "The hint was not replayed to the node that was down"
 
 
 async def test_hints_counter(manager: ScyllaClusterManager):
