@@ -388,3 +388,31 @@ def test_batch_consistency_level_on_sc_table(cql, sc_keyspace):
             f"BEGIN BATCH INSERT INTO {table} (pk, v) VALUES (1, 2); APPLY BATCH",
             consistency_level=ConsistencyLevel.QUORUM))
         assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 2
+
+
+def test_mixed_keyspace_batch_on_sc_table(cql, sc_keyspace, test_keyspace):
+    """
+    A CQL text batch that mixes statements on strongly consistent and
+    eventually consistent keyspaces is rejected, in both statement
+    orders, like on the native protocol batch path. Such a batch
+    cannot be executed: strongly consistent writes go through the
+    tablet raft groups and eventually consistent writes do not.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as sc_table:
+        with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as ec_table:
+            error_msg = "Cannot mix strongly consistent and eventually consistent statements in a batch"
+            with pytest.raises(InvalidRequest, match=error_msg):
+                cql.execute(f"""
+                    BEGIN BATCH
+                    INSERT INTO {ec_table} (pk, v) VALUES (1, 1);
+                    INSERT INTO {sc_table} (pk, v) VALUES (1, 2);
+                    APPLY BATCH
+                """)
+
+            with pytest.raises(InvalidRequest, match=error_msg):
+                cql.execute(f"""
+                    BEGIN BATCH
+                    INSERT INTO {sc_table} (pk, v) VALUES (1, 2);
+                    INSERT INTO {ec_table} (pk, v) VALUES (1, 1);
+                    APPLY BATCH
+                """)
