@@ -9,6 +9,7 @@
 
 #include <fcntl.h>
 #include <fmt/format.h>
+#include <seastar/core/align.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/iostream.hh>
