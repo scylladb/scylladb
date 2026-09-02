@@ -255,6 +255,8 @@ The json structure is as follows:
       "index_size": 8,
       "first_token": -8629266958227979430,
       "last_token": 9168982884335614769,
+      "tablet_id": 0,
+      "repaired_at": 0,
     },
     {
       "id": "67e35000-d8c6-11f0-85dc-0625e9f3bd1b",
@@ -298,6 +300,8 @@ The `sstables` member is a list containing metadata about the SSTables in the sn
 - `toc_name` - is the name of the SSTable Table Of Contents (TOC) component.
 - `data_size` and `index_size` - are the sizes of the SSTable's data and index components, respectively.  They can be used to estimate how much disk space is needed for restore.
 - `first_token` and `last_token` - are the first and last tokens in the SSTable, respectively.  They can be used to determine if a SSTable is fully contained in a (tablet) token range to enable efficient file-based streaming of the SSTable.
+- `tablet_id` - Optional. The id of the tablet that owned the SSTable when the snapshot was taken. Omitted for vnode-based tables.
+- `repaired_at` - Optional. When the SSTable was last repaired, or 0 if it was never repaired.
 
 The optional `files` member may contain a list of non-SSTable files included in the snapshot directory, not including the manifest.json file and schema.cql.
 ```
