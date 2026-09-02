@@ -56,6 +56,15 @@ shared_ptr<function> make_bm25_function() {
     return ::make_shared<external_scalar_function>(BM25_FUNCTION_NAME.name, float_type, std::vector<data_type>{utf8_type, utf8_type});
 }
 
+shared_ptr<function> make_bm25_highlight_function() {
+    // Full-text search highlighting function: bm25_highlight(column, query) -> text
+    //
+    // Answers with a fragment of the row's own text, with the terms of the query marked. Only the
+    // full-text index can pick the fragment - it needs the corpus statistics and the analyzer -
+    // and it may find none, which is why the return type is nullable.
+    return ::make_shared<external_scalar_function>(BM25_HIGHLIGHT_FUNCTION_NAME.name, utf8_type, std::vector<data_type>{utf8_type, utf8_type});
+}
+
 shared_ptr<function> make_ann_function(const std::vector<data_type>& arg_types) {
     // ANN vector ordering function: ann(column, query_vector) -> float
     return ::make_shared<external_scalar_function>(ANN_FUNCTION_NAME.name, float_type, arg_types);
