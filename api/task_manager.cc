@@ -168,6 +168,8 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
             throw bad_param_exception(e.what());
         } catch (tasks::task_not_abortable& e) {
             throw httpd::base_exception{e.what(), http::reply::status_type::forbidden};
+        } catch (timed_out_error& e) {
+            throw httpd::base_exception{e.what(), http::reply::status_type::request_timeout};
         }
         co_return json_void();
     });
