@@ -98,6 +98,42 @@ std::optional<expr::expression> validate_bm25_where_restriction(const expr::bina
     return std::nullopt;
 }
 
+/// The fragments a full-text index marks the search's terms in, as the values of the temporary that
+/// reports them: one per joined row, in the order the rows are emitted.
+///
+/// The text is read out of the rows themselves - empty where a row has none, so that the documents
+/// stay lined up with the rows - and sent in one request, answered positionally. A row the index found
+/// no fragment in gets a null and is kept; being unable to ask at all fails the query, so the two
+/// never arrive as the same answer.
+future<std::vector<cql3::raw_value>> highlights_of(vector_search::vector_store_client& client, const schema& schema,
+        const secondary_index::index& index, const sstring& search_term, std::span<const joined_row> rows, abort_source& as) {
+    const auto& type = *ranked_column(schema, index).type;
+    auto documents = std::vector<sstring>{};
+    documents.reserve(rows.size());
+    for (const auto& row : rows) {
+        const auto& text = row.columns.at(0);
+        documents.push_back(text ? value_cast<sstring>(type.deserialize(managed_bytes_view(*text))) : sstring());
+    }
+
+    if (documents.empty()) {
+        // Nothing matched, so there is nothing to mark up and no reason to ask.
+        co_return std::vector<cql3::raw_value>{};
+    }
+
+    auto fragments = co_await client.highlight(schema.ks_name(), index.metadata().name(), search_term, std::move(documents), as);
+    if (!fragments.has_value()) {
+        co_await coroutine::return_exception(
+                exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::fts_error_visitor{}, fragments.error())));
+    }
+
+    auto values = std::vector<cql3::raw_value>{};
+    values.reserve(fragments->size());
+    for (const auto& fragment : *fragments) {
+        values.push_back(fragment ? cql3::raw_value::make_value(utf8_type->decompose(*fragment)) : cql3::raw_value::make_null());
+    }
+    co_return values;
+}
+
 } // anonymous namespace
 
 void prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_selectors, std::optional<bm25_ordering_info>& ordering_info,
@@ -306,16 +342,30 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
 
     auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys.value());
 
+    const auto score_temporary_index = _bm25_ordering_info.score_temporary_index;
+    const auto fragment_temporary_index = _bm25_ordering_info.highlight_temporary_index;
+
     auto provider = std::optional<external_search_provider>{};
-    if (table_results.rows && _bm25_ordering_info.score_temporary_index) {
-        // The relevance the index reported is matched to a row by its primary key, so it can only be
-        // lined up with the rows now that they are read.
-        auto rows = join_table_results(*table_results.rows.value(), table_results.command->slice, *_schema, *_selection, pkeys.value(), {});
+    if (table_results.rows && (score_temporary_index || fragment_temporary_index)) {
+        // What the search says about a row can only be lined up with it now that the rows are read,
+        // and a fragment does not exist at all until the index has been sent their text.
+        auto columns = std::vector<const column_definition*>{};
+        if (fragment_temporary_index) {
+            columns.push_back(&ranked_column(*_schema, _bm25_ordering_info.index));
+        }
+        auto rows = join_table_results(*table_results.rows.value(), table_results.command->slice, *_schema, *_selection, pkeys.value(), columns);
+
+        auto filled = std::vector<external_values>{};
         auto dropped = std::vector<bool>(rows.size(), false);
-        auto similarities = similarities_of(rows, pkeys.value(), dropped);
-        provider.emplace(
-                std::vector{external_values{.temporary_index = *_bm25_ordering_info.score_temporary_index, .values = std::move(similarities)}},
-                std::move(dropped));
+        if (score_temporary_index) {
+            filled.push_back(
+                    external_values{.temporary_index = *score_temporary_index, .values = similarities_of(rows, pkeys.value(), dropped)});
+        }
+        if (fragment_temporary_index) {
+            auto fragments = co_await highlights_of(qp.vector_store_client(), *_schema, _index, search_term_text, rows, aoe.abort_source());
+            filled.push_back(external_values{.temporary_index = *fragment_temporary_index, .values = std::move(fragments)});
+        }
+        provider.emplace(std::move(filled), std::move(dropped));
     }
     co_return co_await emit_result_set(std::move(table_results), options, provider ? &*provider : nullptr);
 }
