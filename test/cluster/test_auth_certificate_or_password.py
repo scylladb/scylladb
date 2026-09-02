@@ -123,45 +123,43 @@ def _gen_certs(tmp_path):
            f'-out "{tmp_path}/client3.crt" 2>/dev/null')
 
 
-async def _start_server(manager, tmp_path):
-    """Start a Scylla node with CertificateOrPasswordAuthenticator and TLS settings.
+def _server_config(tmp_path, extra_config=None):
+    """Build the node config the tests in this file share.
 
     native_transport_port_ssl adds the TLS port (9143) while keeping the default
     plain port (9042), which the test framework's manager requires since it connects
     without TLS.  All four ports (9042, 9143, 19042, 19142) must be set explicitly:
     without that, the shard-aware port (19042) inherits the encryption setting and
     becomes TLS-only, which makes the manager's plain driver hang on connection.
-    On the plain port, CertificateOrPasswordAuthenticator sees no
-    client certificate and falls back to SASL; we supply cassandra/cassandra
-    credentials via driver_connect_opts.
+
+    extra_config, when given, is merged over the defaults, so a test needing a
+    node configured differently - a different authenticator, or auditing turned
+    on - can say so without affecting the other tests in this file.
     """
-    servers = await manager.servers_add(1,
-        config={
-            'authenticator': 'CertificateOrPasswordAuthenticator',
-            'authorizer': 'CassandraAuthorizer',
-            'auth_certificate_role_queries': [
-                {'source': 'SUBJECT', 'query': 'CN=([^,]+)'},
-            ],
-            # Set explicit non-SSL and SSL ports so the driver can connect to unencrypted port.
-            # Without this, native_shard_aware_transport_port (19042) gets encrypted
-            # (np=0, nps=0, ceo=1 → encrypted), which prevents the manager's plain driver
-            # from connecting and causes servers_add to hang.
-            'native_transport_port': 9042,
-            'native_shard_aware_transport_port': 19042,
-            'native_transport_port_ssl': _TLS_PORT,
-            'native_shard_aware_transport_port_ssl': 19142,
-            'client_encryption_options': {
-                'enabled': True,
-                'certificate': 'conf/scylla.crt',
-                'keyfile': 'conf/scylla.key',
-                'truststore': f'{tmp_path}/ca.crt',
-                'require_client_auth': 'optional',
-            },
+    config = {
+        'authenticator': 'CertificateOrPasswordAuthenticator',
+        'authorizer': 'CassandraAuthorizer',
+        'auth_certificate_role_queries': [
+            {'source': 'SUBJECT', 'query': 'CN=([^,]+)'},
+        ],
+        # Set explicit non-SSL and SSL ports so the driver can connect to unencrypted port.
+        # Without this, native_shard_aware_transport_port (19042) gets encrypted
+        # (np=0, nps=0, ceo=1 → encrypted), which prevents the manager's plain driver
+        # from connecting and causes servers_add to hang.
+        'native_transport_port': 9042,
+        'native_shard_aware_transport_port': 19042,
+        'native_transport_port_ssl': _TLS_PORT,
+        'native_shard_aware_transport_port_ssl': 19142,
+        'client_encryption_options': {
+            'enabled': True,
+            'certificate': 'conf/scylla.crt',
+            'keyfile': 'conf/scylla.key',
+            'truststore': f'{tmp_path}/ca.crt',
+            'require_client_auth': 'optional',
         },
-        driver_connect_opts={
-            'auth_provider': PlainTextAuthProvider(username='cassandra', password='cassandra'),
-        })
-    return servers[0]
+    }
+    config.update(extra_config or {})
+    return config
 
 
 async def test_cql_optional_client_cert(manager: ScyllaClusterManager, tmp_path):
@@ -182,7 +180,11 @@ async def test_cql_optional_client_cert(manager: ScyllaClusterManager, tmp_path)
             and there is no fallback to password auth.
     """
     _gen_certs(tmp_path)
-    host = (await _start_server(manager, tmp_path)).ip_addr
+    servers = await manager.servers_add(1, config=_server_config(tmp_path),
+        driver_connect_opts={
+            'auth_provider': PlainTextAuthProvider(username='cassandra', password='cassandra'),
+        })
+    host = servers[0].ip_addr
 
     # Test 1: cert-bearing client authenticates via cert CN, no SASL needed.
     logger.info("Test 1: cert client should authenticate via cert CN")
@@ -291,7 +293,10 @@ async def test_cql_plain_port(manager: ScyllaClusterManager, tmp_path):
     correct credentials succeed, and incorrect credentials fail.
     """
     _gen_certs(tmp_path)
-    server = await _start_server(manager, tmp_path)
+    server = (await manager.servers_add(1, config=_server_config(tmp_path),
+        driver_connect_opts={
+            'auth_provider': PlainTextAuthProvider(username='cassandra', password='cassandra'),
+        }))[0]
 
     # Correct password authenticates successfully via SASL.
     logger.info("Correct password should succeed on the plain port")
