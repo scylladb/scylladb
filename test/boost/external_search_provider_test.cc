@@ -305,3 +305,17 @@ BOOST_AUTO_TEST_CASE(test_a_row_already_dropped_stays_dropped) {
     BOOST_REQUIRE_EQUAL(score_of(similarities, 1), 0.75f);
 }
 
+// The provider's position moves for every row it is offered, dropped ones included - otherwise the
+// rows after a dropped one would read their neighbour's value.
+BOOST_AUTO_TEST_CASE(test_provider_advances_past_a_dropped_row) {
+    auto values = std::vector<cql3::raw_value>{
+            cql3::raw_value::make_null(),
+            cql3::raw_value::make_value(float_type->decompose(0.75f)),
+    };
+    auto provider = external_search_provider({external_values{.temporary_index = 1, .values = std::move(values)}}, {true, false});
+
+    auto temporaries = std::vector<cql3::raw_value>{cql3::raw_value::make_null(), cql3::raw_value::make_null()};
+    BOOST_REQUIRE(!provider.try_fill(temporaries));
+    BOOST_REQUIRE(provider.try_fill(temporaries));
+    BOOST_REQUIRE_EQUAL(temporaries[1].view().deserialize<float>(*float_type), 0.75f);
+}

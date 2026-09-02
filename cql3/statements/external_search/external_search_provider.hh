@@ -70,8 +70,7 @@ class external_search_provider final : public cql3::selection::external_values_p
 public:
     external_search_provider(std::vector<external_values> values, std::vector<bool> dropped);
 
-    bool try_fill(std::vector<cql3::raw_value>& temporaries, std::span<const bytes> partition_key, std::span<const bytes> clustering_key,
-            const query::result_row_view& static_row, const query::result_row_view* row) const override;
+    bool try_fill(std::vector<cql3::raw_value>& temporaries) const override;
 };
 
 } // namespace cql3::statements

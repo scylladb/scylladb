@@ -51,8 +51,13 @@ class external_values_provider {
 public:
     virtual ~external_values_provider() = default;
 
-    // Writes this provider's external values into the current row's slots.
+    // Writes the next row's external values into its slots.
     // Returns true to keep the row, false to drop it.
+    //
+    // Called once per row the result set is built from, in that order, and told
+    // nothing about the row: a provider knows what each of them gets before the
+    // first call. A value that has to be computed from the rows is computed by
+    // whoever reads them, before the result set is built.
     //
     // `temporaries` is the selection's whole temporaries vector; a provider must
     // confine itself to the slots it was allocated, since writing to any other
@@ -62,13 +67,7 @@ public:
     // it owns on every row - with an explicit null when it has no value for one,
     // which is how a row is kept while a value is left absent. Skipping a write
     // silently leaves the previous row's value in place.
-    virtual bool try_fill(
-        std::vector<cql3::raw_value>& temporaries,
-        std::span<const bytes> partition_key,
-        std::span<const bytes> clustering_key,
-        const query::result_row_view& static_row,
-        const query::result_row_view* row // nullptr for static-only rows
-    ) const = 0;
+    virtual bool try_fill(std::vector<cql3::raw_value>& temporaries) const = 0;
 };
 
 class selectors {
@@ -99,12 +98,7 @@ public:
     // Runs the provider against the current row, so its external values land in
     // the slots it was allocated. Called once per input row, before the row is
     // offered to the CQL filter. Returns false if the provider dropped the row.
-    virtual bool provide_external_values(
-        const external_values_provider& provider,
-        std::span<const bytes> partition_key,
-        std::span<const bytes> clustering_key,
-        const query::result_row_view& static_row,
-        const query::result_row_view* row) = 0;
+    virtual bool provide_external_values(const external_values_provider& provider) = 0;
 };
 
 class selection {
@@ -394,8 +388,7 @@ public:
             auto row_iterator = row.iterator();
 
             // Inject externally supplied values and optionally drop the row.
-            if (_external_values_provider && !_builder._selectors->provide_external_values(*_external_values_provider,
-                    _partition_key, _clustering_key, static_row, &row)) {
+            if (_external_values_provider && !_builder._selectors->provide_external_values(*_external_values_provider)) {
                 return;
             }
 
@@ -432,8 +425,7 @@ public:
         uint64_t accept_partition_end(const query::result_row_view& static_row) {
             if (_row_count == 0) {
                 // Inject provider values for static-only rows.
-                if (_external_values_provider && !_builder._selectors->provide_external_values(*_external_values_provider,
-                        _partition_key, _clustering_key, static_row, nullptr)) {
+                if (_external_values_provider && !_builder._selectors->provide_external_values(*_external_values_provider)) {
                     return 0;
                 }
 
