@@ -258,3 +258,19 @@ def test_counter_batch_on_sc_table(cql, sc_keyspace):
         batch.add(cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)"), (1, 2))
         with pytest.raises(InvalidRequest, match=error_msg):
             cql.execute(batch)
+
+
+def test_cdc_on_sc_table(cql, sc_keyspace):
+    """
+    CDC is rejected on tables in strongly consistent keyspaces, at
+    CREATE TABLE and with ALTER TABLE. The CDC log would never be
+    populated: log rows are generated on the coordinator write path,
+    which strongly consistent writes bypass.
+    """
+    error_msg = "CDC is not supported in strongly consistent keyspaces"
+    with pytest.raises(InvalidRequest, match=error_msg):
+        cql.execute(f"CREATE TABLE {sc_keyspace}.{unique_name()} (pk int PRIMARY KEY, v int) WITH cdc = {{'enabled': true}}")
+
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': true}}")
