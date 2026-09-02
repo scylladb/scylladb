@@ -131,8 +131,13 @@ async def capture_stable_hint_count(manager: ScyllaClusterManager, servers: list
     return last
 
 
-async def create_sync_point(client: TCPRESTClient, server_ip: IPAddress) -> str:
-    response = await client.post_json("/hinted_handoff/sync_point", host=server_ip, port=10_000)
+async def create_sync_point(client: TCPRESTClient, server_ip: IPAddress, target_hosts=None) -> str:
+    params = {"target_hosts": target_hosts} if target_hosts else None
+    response = await client.post_json(
+        "/hinted_handoff/sync_point",
+        host=server_ip,
+        port=10_000,
+        params=params)
     return response
 
 
@@ -1174,31 +1179,32 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
         await manager.server_start(server.server_id)
         await manager.servers_see_each_other([s1, s2])
 
-    async def create_sync_point(node: ServerInfo = None) -> str:
-        node = node or s1
-        sync_point_id = await manager.api.client.post_json(
-            "/hinted_handoff/sync_point", host=node.ip_addr, port=10_000,
-            params={"target_hosts": s2.ip_addr})
+    async def get_sync_point() -> str:
+        # Wait until all hints have been written. Otherwise, the created sync point
+        # could capture an unstable state, which could lead to some flakiness in the test.
+        await wait_until_hint_writing_settled(manager, [s1])
+        sync_point_id = await create_sync_point(manager.api.client, s1.ip_addr, target_hosts=s2.ip_addr)
         assert isinstance(sync_point_id, str)
-        logger.info(f"Created a sync point on {node.server_id} / {node.ip_addr}: {sync_point_id}")
+        logger.info(f"Created a sync point on {s1.server_id} / {s1.ip_addr}: {sync_point_id}")
         return sync_point_id
 
-    async def wait_for_sync_point(sync_point_id: str, timeout: int, expect: str, node: ServerInfo = None) -> None:
-        node = node or s1
-        logger.info(f"Waiting for a sync point on {node.server_id} / {node.ip_addr}: {sync_point_id}")
+    async def wait_for_sync_point(server: ServerInfo, sync_point_id: str, timeout: int, expect: str) -> None:
+        logger.info(f"Waiting for a sync point on {server.server_id} / {server.ip_addr}: {sync_point_id}")
         params = {"id": sync_point_id, "timeout": str(timeout)}
-        if expect == "FAILED":
-            try:
-                status = await manager.api.client.get_json("/hinted_handoff/sync_point", host=node.ip_addr,
-                                                            port=10_000, params=params)
+
+        status = None
+        try:
+            status = await manager.api.client.get_json("/hinted_handoff/sync_point", host=server.ip_addr,
+                                                       port=10_000, params=params)
+            if expect == "FAILED":
                 pytest.fail(f"Expected waiting for the sync point to fail, but got: {status}")
-            except HTTPError as e:
-                logger.debug(f"Got the expected failure: {e}")
-        else:
-            status = await manager.api.client.get_json("/hinted_handoff/sync_point", host=node.ip_addr,
-                                                        port=10_000, params=params)
             assert status == expect
             logger.debug(f"Got status {status}, which was expected")
+        except HTTPError as e:
+            if expect == "FAILED":
+                logger.debug(f"Got the expected failure: {e}")
+            else:
+                pytest.fail(f"Got unexpected failure: {e}")
 
     s1, s2 = await manager.servers_add(2, cmdline=["--smp", "3", "--logger-log-level", "hints_manager=trace"],
                                        property_file={"dc": "dc1", "rack": "r1"})
@@ -1240,13 +1246,13 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     await start_node(s2)
 
     logger.info("Create hint sync point")
-    sync_point_id = await create_sync_point()
+    sync_point_id = await get_sync_point()
 
     logger.info("Check that the sync point is not immediately resolved (because hint replay is paused)")
-    await wait_for_sync_point(sync_point_id, 0, expect="IN_PROGRESS")
+    await wait_for_sync_point(s1, sync_point_id, 0, expect="IN_PROGRESS")
 
     logger.info("Start waiting for the point, asynchronously, with infinite timeout")
-    fut = asyncio.create_task(wait_for_sync_point(sync_point_id, -1, expect="DONE"))
+    fut = asyncio.create_task(wait_for_sync_point(s1, sync_point_id, -1, expect="DONE"))
 
     logger.info("Unpause hint replay on s1")
     await manager.api.disable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay")
@@ -1256,7 +1262,7 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     await asyncio.wait_for(fut, timeout=60)
 
     logger.info("Check that the sync point still returns success")
-    await wait_for_sync_point(sync_point_id, 0, expect="DONE")
+    await wait_for_sync_point(s1, sync_point_id, 0, expect="DONE")
 
     logger.info("Verifying that hints replayed all of the data...")
     await assert_rows_present(cql, "ks.t", "pk", keys1, present=True)
@@ -1277,11 +1283,11 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     await start_node(s2)
 
     logger.info("Create hint sync point...")
-    sync_point_id = await create_sync_point()
+    sync_point_id = await get_sync_point()
 
     # Asynchronously wait, indefinitely
     logger.info("Start waiting for the point, asynchronously, with infinite timeout")
-    fut = asyncio.create_task(wait_for_sync_point(sync_point_id, -1, expect="FAILED"))
+    fut = asyncio.create_task(wait_for_sync_point(s1, sync_point_id, -1, expect="FAILED"))
 
     logger.info("Stopping s1...")
     await manager.server_stop_gracefully(s1.server_id)
@@ -1314,7 +1320,7 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     await start_node(s2)
 
     logger.info("Create hint sync point")
-    sync_point_id = await create_sync_point()
+    sync_point_id = await get_sync_point()
 
     logger.info("Stopping s1...")
     await manager.server_stop_gracefully(s1.server_id)
@@ -1338,7 +1344,7 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     # Hint replay is unpaused because of the restart
 
     logger.info("Wait until all hints are successfully replayed...")
-    await wait_for_sync_point(sync_point_id, 60, expect="DONE")
+    await wait_for_sync_point(s1, sync_point_id, 60, expect="DONE")
 
     logger.info("Verifying that hints replayed all of the data...")
     await assert_rows_present(cql, "ks.t", "pk", keys3, present=True)
@@ -1346,10 +1352,10 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     logger.info("SUBTEST 4: Create a hint sync point and try to use it on another node - should fail")
 
     logger.info("Create hint sync point on s1")
-    sync_point_id = await create_sync_point(node=s1)
+    sync_point_id = await get_sync_point()
 
     logger.info("Try waiting for the point on s2 - should fail")
-    await wait_for_sync_point(sync_point_id, 0, expect="FAILED", node=s2)
+    await wait_for_sync_point(s2, sync_point_id, 0, expect="FAILED")
 
     logger.info("SUBTEST 5: Create a hint sync point and decommission the target node - waiting should succeed")
 
@@ -1367,16 +1373,16 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     await start_node(s2)
 
     logger.info("Create hint sync point on s1")
-    sync_point_id = await create_sync_point(node=s1)
+    sync_point_id = await get_sync_point()
 
     logger.info("Decommissioning s2...")
     await manager.decommission_node(s2.server_id)
 
     logger.info("Check that the sync point is not yet resolved (because hint replay is paused)")
-    await wait_for_sync_point(sync_point_id, 0, expect="IN_PROGRESS")
+    await wait_for_sync_point(s1, sync_point_id, 0, expect="IN_PROGRESS")
 
     logger.info("Start waiting for the point, asynchronously, with infinite timeout")
-    fut = asyncio.create_task(wait_for_sync_point(sync_point_id, -1, expect="DONE"))
+    fut = asyncio.create_task(wait_for_sync_point(s1, sync_point_id, -1, expect="DONE"))
 
     logger.info("Unpause hint replay on s1")
     await manager.api.disable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay")
