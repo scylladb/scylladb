@@ -188,6 +188,11 @@ future<> gossiper::handle_syn_msg(locator::host_id from, gossip_digest_syn syn_m
         co_return;
     }
 
+    if (utils::get_local_injector().is_enabled("gossiper_ignore_incoming_syn")) {
+        logger.info("gossiper_ignore_incoming_syn: ignoring gossip syn msg from node {}", from);
+        co_return;
+    }
+
     /* If the message is from a different cluster throw it away. */
     if (syn_msg.cluster_id() != get_cluster_name()) {
         logger.warn("ClusterName mismatch from {} {}!={}", from, syn_msg.cluster_id(), get_cluster_name());
