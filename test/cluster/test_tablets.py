@@ -1810,3 +1810,358 @@ async def test_table_creation_wakes_up_balancer(manager: ManagerClient):
         # up to stats refresh period, which is 60s. So use a small timeout.
         await manager.api.message_injection(server.ip_addr, 'wait-before-topology-coordinator-goes-to-sleep')
         await log.wait_for('wait-after-topology-coordinator-gets-event: wait', from_mark=mark, timeout=5)
+<<<<<<< HEAD
+||||||| parent of 6cd1c71b2a (replica: Fix crash completing tablet split when main compaction group is non-empty)
+
+@pytest.mark.asyncio
+async def test_multi_rf_increase_auto_abort_excluded_node(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    """Test that an RF change is automatically aborted when a required rack has no available nodes.
+
+    Setup:
+    - dc1 has 1 node in rack1 (holds the initial replica)
+    - dc2 has 2 racks: rack1 (1 node) and rack2 (1 node)
+
+    Steps:
+    1. Create a keyspace with replication in dc1 only.
+    2. Stop the node in dc2/rack1 and mark it as excluded.
+    3. ALTER KEYSPACE to add replicas in dc2: ['rack1', 'rack2'].
+       This requires extending to dc2/rack1 which has no available node.
+    4. Verify that the RF change is rolled back automatically by the load balancer.
+    """
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
+    cmdline = ["--enforce-rack-list", "true", "--smp", "2", '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'load_balancer=debug']
+
+    dc1_server = await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    dc2_rack1_server = await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack1'})
+    dc2_rack2_server = await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2'})
+
+    servers = [dc1_server, dc2_rack1_server, dc2_rack2_server]
+    dc1_host_id = await manager.get_host_id(dc1_server.server_id)
+
+    cql = manager.get_cql()
+    dc1_host = (await wait_for_cql_and_get_hosts(cql, [dc1_server], time.time() + 30))[0]
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1']} AND tablets = {'initial': 4}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int);")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
+
+        # Verify initial state: all replicas in dc1
+        replicas = await get_all_tablet_replicas(manager, dc1_server, ks, "t")
+        assert len(replicas) > 0
+        for t in replicas:
+            assert len(t.replicas) == 1
+            assert t.replicas[0][0] == dc1_host_id
+
+        # Stop dc2/rack1 node and mark it as excluded
+        await manager.server_stop(dc2_rack1_server.server_id)
+        await manager.others_not_see_server(dc2_rack1_server.ip_addr)
+        await manager.api.exclude_node(dc1_server.ip_addr, hosts=[await manager.get_host_id(dc2_rack1_server.server_id)])
+
+        # ALTER KEYSPACE to add replicas in dc2 (rack1 and rack2).
+        # dc2/rack1 has no available node, so the RF change should be auto-aborted.
+        failed = False
+        try:
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1'], 'dc2': ['rack1', 'rack2']}};")
+        except Exception:
+            failed = True
+        assert failed
+
+        # Verify the replication was rolled back: next_replication should be cleared
+        await check_system_schema_keyspaces(manager, ks, {'dc1': ['rack1']}, None)
+
+        # Verify tablet replicas are unchanged — still only in dc1
+        replicas = await get_all_tablet_replicas(manager, dc1_server, ks, "t")
+        assert len(replicas) > 0
+        for t in replicas:
+            assert len(t.replicas) == 1
+            assert t.replicas[0][0] == dc1_host_id
+
+@pytest.mark.asyncio
+async def test_rf_extend_abort_with_down_node(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    """Test that an RF extend is aborted when a required rack has a down (not excluded) node.
+
+    Setup:
+    - dc1 has 1 node in rack1
+    - dc2 has 2 racks: rack1 (1 node) and rack2 (1 node)
+
+    Steps:
+    1. Create a keyspace with replication in dc1 only.
+    2. Stop the node in dc2/rack1 (do NOT exclude it).
+    3. ALTER KEYSPACE to add replicas in dc2: ['rack1', 'rack2'].
+    4. Verify that the RF change is aborted because of the down node.
+    """
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
+    cmdline = ["--enforce-rack-list", "true", "--smp", "2", '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'load_balancer=debug']
+
+    dc1_server = await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    dc2_rack1_server = await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack1'})
+    dc2_rack2_server = await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2'})
+
+    dc1_host_id = await manager.get_host_id(dc1_server.server_id)
+
+    cql = manager.get_cql()
+    dc1_host = (await wait_for_cql_and_get_hosts(cql, [dc1_server], time.time() + 30))[0]
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1']} AND tablets = {'initial': 4}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int);")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
+
+        # Stop dc2/rack1 node but do NOT exclude it
+        await manager.server_stop(dc2_rack1_server.server_id)
+        await manager.others_not_see_server(dc2_rack1_server.ip_addr)
+
+        # ALTER KEYSPACE to add replicas in dc2 (rack1 and rack2).
+        # dc2/rack1 has a down node, so the RF change should be auto-aborted.
+        failed = False
+        try:
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1'], 'dc2': ['rack1', 'rack2']}};")
+        except Exception:
+            failed = True
+        assert failed
+
+        # Verify the replication was rolled back: next_replication should be cleared
+        await check_system_schema_keyspaces(manager, ks, {'dc1': ['rack1']}, None)
+
+        # Verify tablet replicas are unchanged — still only in dc1
+        replicas = await get_all_tablet_replicas(manager, dc1_server, ks, "t")
+        assert len(replicas) > 0
+        for t in replicas:
+            assert len(t.replicas) == 1
+            assert t.replicas[0][0] == dc1_host_id
+=======
+
+@pytest.mark.asyncio
+async def test_multi_rf_increase_auto_abort_excluded_node(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    """Test that an RF change is automatically aborted when a required rack has no available nodes.
+
+    Setup:
+    - dc1 has 1 node in rack1 (holds the initial replica)
+    - dc2 has 2 racks: rack1 (1 node) and rack2 (1 node)
+
+    Steps:
+    1. Create a keyspace with replication in dc1 only.
+    2. Stop the node in dc2/rack1 and mark it as excluded.
+    3. ALTER KEYSPACE to add replicas in dc2: ['rack1', 'rack2'].
+       This requires extending to dc2/rack1 which has no available node.
+    4. Verify that the RF change is rolled back automatically by the load balancer.
+    """
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
+    cmdline = ["--enforce-rack-list", "true", "--smp", "2", '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'load_balancer=debug']
+
+    dc1_server = await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    dc2_rack1_server = await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack1'})
+    dc2_rack2_server = await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2'})
+
+    servers = [dc1_server, dc2_rack1_server, dc2_rack2_server]
+    dc1_host_id = await manager.get_host_id(dc1_server.server_id)
+
+    cql = manager.get_cql()
+    dc1_host = (await wait_for_cql_and_get_hosts(cql, [dc1_server], time.time() + 30))[0]
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1']} AND tablets = {'initial': 4}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int);")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
+
+        # Verify initial state: all replicas in dc1
+        replicas = await get_all_tablet_replicas(manager, dc1_server, ks, "t")
+        assert len(replicas) > 0
+        for t in replicas:
+            assert len(t.replicas) == 1
+            assert t.replicas[0][0] == dc1_host_id
+
+        # Stop dc2/rack1 node and mark it as excluded
+        await manager.server_stop(dc2_rack1_server.server_id)
+        await manager.others_not_see_server(dc2_rack1_server.ip_addr)
+        await manager.api.exclude_node(dc1_server.ip_addr, hosts=[await manager.get_host_id(dc2_rack1_server.server_id)])
+
+        # ALTER KEYSPACE to add replicas in dc2 (rack1 and rack2).
+        # dc2/rack1 has no available node, so the RF change should be auto-aborted.
+        failed = False
+        try:
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1'], 'dc2': ['rack1', 'rack2']}};")
+        except Exception:
+            failed = True
+        assert failed
+
+        # Verify the replication was rolled back: next_replication should be cleared
+        await check_system_schema_keyspaces(manager, ks, {'dc1': ['rack1']}, None)
+
+        # Verify tablet replicas are unchanged — still only in dc1
+        replicas = await get_all_tablet_replicas(manager, dc1_server, ks, "t")
+        assert len(replicas) > 0
+        for t in replicas:
+            assert len(t.replicas) == 1
+            assert t.replicas[0][0] == dc1_host_id
+
+@pytest.mark.asyncio
+async def test_rf_extend_abort_with_down_node(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    """Test that an RF extend is aborted when a required rack has a down (not excluded) node.
+
+    Setup:
+    - dc1 has 1 node in rack1
+    - dc2 has 2 racks: rack1 (1 node) and rack2 (1 node)
+
+    Steps:
+    1. Create a keyspace with replication in dc1 only.
+    2. Stop the node in dc2/rack1 (do NOT exclude it).
+    3. ALTER KEYSPACE to add replicas in dc2: ['rack1', 'rack2'].
+    4. Verify that the RF change is aborted because of the down node.
+    """
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
+    cmdline = ["--enforce-rack-list", "true", "--smp", "2", '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'load_balancer=debug']
+
+    dc1_server = await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    dc2_rack1_server = await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack1'})
+    dc2_rack2_server = await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2'})
+
+    dc1_host_id = await manager.get_host_id(dc1_server.server_id)
+
+    cql = manager.get_cql()
+    dc1_host = (await wait_for_cql_and_get_hosts(cql, [dc1_server], time.time() + 30))[0]
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1']} AND tablets = {'initial': 4}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int);")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
+
+        # Stop dc2/rack1 node but do NOT exclude it
+        await manager.server_stop(dc2_rack1_server.server_id)
+        await manager.others_not_see_server(dc2_rack1_server.ip_addr)
+
+        # ALTER KEYSPACE to add replicas in dc2 (rack1 and rack2).
+        # dc2/rack1 has a down node, so the RF change should be auto-aborted.
+        failed = False
+        try:
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1'], 'dc2': ['rack1', 'rack2']}};")
+        except Exception:
+            failed = True
+        assert failed
+
+        # Verify the replication was rolled back: next_replication should be cleared
+        await check_system_schema_keyspaces(manager, ks, {'dc1': ['rack1']}, None)
+
+        # Verify tablet replicas are unchanged — still only in dc1
+        replicas = await get_all_tablet_replicas(manager, dc1_server, ks, "t")
+        assert len(replicas) > 0
+        for t in replicas:
+            assert len(t.replicas) == 1
+            assert t.replicas[0][0] == dc1_host_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_split_completion_with_data_in_main_cg(manager: ManagerClient):
+    """Verifies that set_split_mode() is called on storage groups when a node
+    catches up on a resize decision it missed while down (SCYLLADB-1867).
+
+    The production scenario:
+
+    A tablet split goes through three Raft entries:
+      Entry A (schema_change) — table/view creation.
+      Entry B (topology_change) — resize decision added; tablet count stays
+          the same (e.g. 1) but needs_split() becomes true.
+      Entry C (topology_change) — new tablet count committed (e.g. 1 → 2).
+
+    When a node that was down during entries A and B restarts:
+      - Schema loaded from system tables without resize decision →
+        allocate_storage_group() sees needs_split()=false → no set_split_mode().
+      - topology_state_load() applies the resize decision from Raft log →
+        update_effective_replication_map() fires with old_tmap (no resize)
+        and new_tmap (resize, same tablet count).
+      - The fix's else-if branch detects needs_split() becoming true and
+        calls set_split_mode() on existing storage groups.
+
+    Without the fix, subsequent writes would land in _main_cg and when
+    entry C arrives, handle_tablet_split_completion() would crash because
+    _main_cg is non-empty.
+
+    This test verifies the fix by checking that the log message from the
+    else-if branch is emitted when the node restarts and catches up.
+    """
+    logger.info("Bootstrapping cluster")
+    config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
+    cmdline = ['--smp', '2']
+    servers = await manager.servers_add(3, config=config, cmdline=cmdline, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    target = servers[2]
+
+    # Stop the target BEFORE creating the table.  Its local system.tablets
+    # will not have any info for the table, forcing Raft log replay to
+    # apply entries A and B from scratch on restart.
+    await manager.server_stop(target.server_id)
+
+    # Open logs on the two alive nodes — either may be the topology coordinator.
+    logs = {}
+    marks = {}
+    for s in servers[:2]:
+        logs[s.server_id] = await manager.server_open_log(s.server_id)
+        marks[s.server_id] = await logs[s.server_id].mark()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        # Create the table (entry A) and trigger a split (entry B) while
+        # the target is down.
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}};")
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 2}};")
+
+        # Wait for entry B to actually be committed before restarting the target.
+        #
+        # The ALTER only raises min_tablet_count in the schema; the resize decision
+        # itself is emitted by the tablet load balancer on the topology coordinator.
+        # That cannot happen until refresh_tablet_load_stats() stops blocking on the
+        # stopped target, which in turn waits for gossip's failure detector to mark
+        # it down (~20s) — until then load_stats_for_table() has no entry for the
+        # table and make_resize_plan() skips it.
+        #
+        # Either of the two alive nodes may be the coordinator, so wait on both and
+        # take whichever reports first.
+        await wait_for_first_completed([
+            logs[s.server_id].wait_for('Emitting resize decision of type split for table',
+                                       from_mark=marks[s.server_id], timeout=180)
+            for s in servers[:2]
+        ], timeout=180)
+
+        # Configure the target to hold the split monitor at startup.
+        await manager.server_update_config(target.server_id, "error_injections_at_startup", ['tablet_split_monitor_wait'])
+
+        # Start the target.  On startup, Raft log replay applies:
+        #   - Entry A: table created with stale tmap (no resize decision)
+        #   - Entry B: resize decision added → update_effective_replication_map()
+        #     detects needs_split() becoming true → calls set_split_mode().
+        await manager.server_start(target.server_id)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        log_target = await manager.server_open_log(target.server_id)
+
+        # Verify the fix code path was hit: the log message from the else-if
+        # branch in update_effective_replication_map().  Entry B may still be
+        # replaying when the node starts serving CQL, so wait rather than grep.
+        await log_target.wait_for(
+            'Detected new split decision for table.*setting split mode on existing storage groups',
+            timeout=60)
+
+        # Insert data to confirm writes land in split-ready groups (not _main_cg).
+        keys = range(100)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+        await manager.api.flush_keyspace(target.ip_addr, ks)
+
+        mark_target = await log_target.mark()
+
+        # Release the split monitor — it will ACK the split (set seq number),
+        # the coordinator will see all replicas agree and commit entry C.
+        await manager.api.message_injection(target.ip_addr, "tablet_split_monitor_wait")
+
+        # Wait for the split to complete on the target node.
+        await log_target.wait_for('Detected tablet split for table', from_mark=mark_target, timeout=60)
+
+        # The bug manifests as on_internal_error logged at ERR level.
+        # With the fix, _main_cg is empty because set_split_mode() was called
+        # during Raft log replay, so writes landed in split-ready groups.
+        errors = await log_target.grep("wasn't split correctly", from_mark=mark_target)
+        assert not errors, f"Crash reproduced — storage group wasn't split correctly: {errors}"
+
+        # Release the split monitor hold for clean shutdown.
+        await manager.api.message_injection(target.ip_addr, "tablet_split_monitor_wait")
+        await manager.server_update_config(target.server_id, "error_injections_at_startup", [])
+>>>>>>> 6cd1c71b2a (replica: Fix crash completing tablet split when main compaction group is non-empty)
