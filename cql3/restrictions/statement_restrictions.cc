@@ -894,13 +894,17 @@ statement_restrictions::statement_restrictions(private_tag,
     std::vector<predicate> predicates;
     for (auto& prepared_restriction : prepared_where_clause) {
         if (const auto* fc = expr::as_if<expr::function_call>(&prepared_restriction.lhs)) {
-            // Scoring restrictions are purely declarative.
-            // They signal search intent but do not filter rows or select an index.
-            // Intercept them so they never enter the generic restriction/index/filtering
-            // machinery; whichever external index owns the scoring function interprets them,
-            // and select_statement::prepare() rejects any that no index claimed.
-            if (expr::is_native_function_call(*fc, functions::BM25_FUNCTION_NAME)
-                    || expr::is_native_function_call(*fc, functions::ANN_FUNCTION_NAME)) {
+            if (expr::is_external_function_call(*fc)) {
+                // A relation on an external search function, "WHERE BM25(c, t) > 0", is not a
+                // filter: it says which search to run. Keep it out of the restrictions used for
+                // filtering and index selection; the statement serving the search interprets it,
+                // and select_statement::prepare() rejects any that no such statement claimed.
+                // Search is the only kind of external function that gets here; another would need
+                // a bucket of its own.
+                if (!expr::is_native_function_call(*fc, functions::BM25_FUNCTION_NAME)
+                        && !expr::is_native_function_call(*fc, functions::ANN_FUNCTION_NAME)) {
+                    on_internal_error(rlogger, "statement_restrictions: external function in WHERE is not a search function");
+                }
                 if (!type.is_select()) {
                     throw exceptions::invalid_request_exception("Scoring functions are only supported in SELECT statements");
                 }
