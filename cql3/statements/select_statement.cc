@@ -2318,6 +2318,12 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     };
 
     if (strong_consistency::is_strongly_consistent(db, schema->ks_name())) {
+        if (_parameters->is_mutation_fragments()) {
+            throw exceptions::invalid_request_exception("SELECT FROM MUTATION_FRAGMENTS() is not supported on strongly consistent tables");
+        }
+        if (_parameters->is_prune_materialized_view()) {
+            throw exceptions::invalid_request_exception("PRUNE MATERIALIZED VIEW is not supported on strongly consistent tables");
+        }
         if (!group_by_cell_indices->empty()) {
             throw exceptions::invalid_request_exception("Strongly consistent queries don't support GROUP BY");
         }

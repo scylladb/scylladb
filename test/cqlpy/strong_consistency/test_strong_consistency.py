@@ -18,7 +18,7 @@ from cassandra.query import BatchStatement, BatchType, SimpleStatement
 
 from test.pylib.skip_types import skip_env
 
-from ..util import new_test_table, unique_name
+from ..util import new_materialized_view, new_test_table, unique_name
 
 
 # A keyspace whose tables are strongly consistent. Cassandra and the --vnodes
@@ -431,3 +431,34 @@ def test_group_by_on_sc_table(cql, sc_keyspace):
 
         with pytest.raises(InvalidRequest, match="Strongly consistent queries don't support GROUP BY"):
             cql.execute(f"SELECT ck, count(v) FROM {table} WHERE pk = 1 GROUP BY pk, ck")
+
+
+def test_debug_selects_on_sc_table(cql, sc_keyspace, test_keyspace):
+    """
+    SELECT FROM MUTATION_FRAGMENTS() and PRUNE MATERIALIZED VIEW are
+    rejected on strongly consistent tables. Both would otherwise be
+    dispatched as plain strongly consistent reads: an internal server
+    error for MUTATION_FRAGMENTS(), a silent no-op for PRUNE
+    MATERIALIZED VIEW. The eventually consistent behavior of both
+    statements serves as contrast: MUTATION_FRAGMENTS() returns the
+    partition's fragments, and PRUNE is rejected on a plain table and
+    returns no rows from a view.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 2)")
+
+        with pytest.raises(InvalidRequest, match="MUTATION_FRAGMENTS.. is not supported on strongly consistent tables"):
+            cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1")
+
+        with pytest.raises(InvalidRequest, match="PRUNE MATERIALIZED VIEW is not supported on strongly consistent tables"):
+            cql.execute(f"PRUNE MATERIALIZED VIEW {table} WHERE pk = 1")
+
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as ec_table:
+        cql.execute(f"INSERT INTO {ec_table} (pk, v) VALUES (1, 2)")
+        assert len(list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({ec_table}) WHERE pk = 1"))) > 0
+
+        with pytest.raises(InvalidRequest, match="Ghost rows can only be deleted from materialized views"):
+            cql.execute(f"PRUNE MATERIALIZED VIEW {ec_table} WHERE pk = 1")
+
+        with new_materialized_view(cql, ec_table, '*', 'v, pk', 'v is not null and pk is not null') as mv:
+            assert list(cql.execute(f"PRUNE MATERIALIZED VIEW {mv} WHERE v = 2")) == []
