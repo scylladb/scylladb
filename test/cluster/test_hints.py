@@ -37,15 +37,6 @@ async def get_hint_metrics(client: ScyllaMetricsClient, server_ip: IPAddress, me
     return await get_metric(client, server_ip, f"scylla_hints_manager_{metric_name}")
 
 
-async def sum_hint_metric(client: ScyllaMetricsClient, servers: list[ServerInfo], metric_name: str) -> float:
-    total = 0.0
-    results = await gather_safely(
-        *[get_hint_metrics(client, server.ip_addr, metric_name) for server in servers])
-    for result in results:
-        total += result or 0.0
-    return total
-
-
 async def get_all_hint_metrics(client: ScyllaMetricsClient, server_ip: IPAddress) -> dict:
     metrics = await client.query(server_ip)
 
@@ -108,27 +99,6 @@ async def wait_until_hints_are_sent_from(manager: ScyllaClusterManager, servers:
         sent = sum([metrics["sent_total"] for metrics in all_metrics])
         return True if sent >= expected_count else None
     await wait_for(check, time.time() + timeout)
-
-
-async def capture_stable_hint_count(manager: ScyllaClusterManager, servers: list[ServerInfo],
-                                    stable_checks: int = 3, interval: float = 2, timeout: float = 60) -> float:
-    """
-    Poll the cumulative `written` hint counter until it stops changing, then return it.
-
-    Writing a hint for a down replica is a fire-and-forget background operation relative to
-    the client-visible ack of a write that didn't use CL=ANY, so the counter can still be
-    climbing for a while after the last write returned.
-    """
-    stable = 0
-    last = await sum_hint_metric(manager.metrics, servers, "written")
-    deadline = time.time() + timeout
-    while stable < stable_checks - 1:
-        assert time.time() < deadline, f"the number of written hints did not stabilize (last value: {last})"
-        await asyncio.sleep(interval)
-        current = await sum_hint_metric(manager.metrics, servers, "written")
-        stable = stable + 1 if current == last else 0
-        last = current
-    return last
 
 
 async def create_sync_point(client: TCPRESTClient, server_ip: IPAddress, target_hosts=None) -> str:
