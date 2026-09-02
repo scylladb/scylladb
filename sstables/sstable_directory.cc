@@ -492,17 +492,23 @@ future<> sstable_directory::restore_components_lister::commit() {
 
 future<> sstable_directory::sstables_registry_components_lister::garbage_collect(storage& st) {
     std::set<generation_type> gens_to_remove;
-    std::set<generation_type> gens_to_retain;
-    co_await _sstables_registry.sstables_registry_list(_table_id, _node_owner, coroutine::lambda([this, &st, &gens_to_remove, &gens_to_retain] (sstring status, sstable_state state, entry_descriptor desc) -> future<> {
-        if (status == "sealed" || status == "snapshot_owned") {
+    std::vector<entry_descriptor> descs_to_retain;
+    std::vector<entry_descriptor> owned_entries;
+    co_await _sstables_registry.sstables_registry_list(_table_id, _node_owner,
+            coroutine::lambda([this, &st, &gens_to_remove, &descs_to_retain, &owned_entries] (sstring status, sstable_state state, entry_descriptor desc) -> future<> {
+        desc.state = state;
+        if (status == "sealed") {
             co_return;
         }
-
+        if (status == "snapshot_owned") {
+            owned_entries.push_back(std::move(desc));
+            co_return;
+        }
         dirlog.info("Removing dangling {} {} entry", desc.generation, status);
         auto gen = desc.generation;
-        if (co_await st.remove_by_registry_entry(std::move(desc), _node_owner)) {
+        if (co_await st.remove_by_registry_entry(entry_descriptor(desc), _node_owner)) {
             // Still pinned by this node's snapshot references. Keep the entry until the last one is cleared.
-            gens_to_retain.insert(gen);
+            descs_to_retain.push_back(std::move(desc));
         } else {
             gens_to_remove.insert(gen);
         }
@@ -510,10 +516,22 @@ future<> sstable_directory::sstables_registry_components_lister::garbage_collect
     co_await coroutine::parallel_for_each(gens_to_remove, [this] (auto gen) -> future<> {
         co_await _sstables_registry.delete_entry(_table_id, _node_owner, gen);
     });
-    co_await coroutine::parallel_for_each(gens_to_retain, [this] (auto gen) -> future<> {
-        dirlog.info("Retaining {} entry as snapshot_owned (snapshot references remain)", gen);
-        co_await _sstables_registry.update_entry_status(_table_id, _node_owner, gen, "snapshot_owned");
+    co_await coroutine::parallel_for_each(descs_to_retain, [this] (entry_descriptor& desc) -> future<> {
+        dirlog.debug("Retaining {} entry as snapshot_owned (snapshot references remain)", desc.generation);
+        // Write the whole row, not only the status cell: a cell-only UPDATE
+        // racing a concurrent entry deletion resurrects the row,
+        // a full row comes back complete and is re-evaluated and deleted on the next boot.
+        auto state = *desc.state;
+        co_await _sstables_registry.create_entry(_table_id, _node_owner, "snapshot_owned", state, std::move(desc));
     });
+
+    for (auto& desc : owned_entries) {
+        dirlog.debug("Re-evaluating snapshot_owned {} entry", desc.generation);
+        auto gen = desc.generation;
+        if (!co_await st.remove_by_registry_entry(std::move(desc), _node_owner, false)) {
+            co_await _sstables_registry.delete_entry(_table_id, _node_owner, gen);
+        }
+    }
 }
 
 future<>
