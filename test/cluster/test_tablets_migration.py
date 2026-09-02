@@ -12,6 +12,7 @@ from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.skip_types import skip_env
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_info
 from test.pylib.util import start_writes, scale_timeout_by_mode
+from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.util import (
     wait_for_cql_and_get_hosts, new_test_keyspace, reconnect_driver, wait_for,
     wait_for_no_pending_topology_transition, get_topology_coordinator,
@@ -1165,3 +1166,195 @@ async def test_disable_balancing_grace_period_parameter(manager: ScyllaClusterMa
         with pytest.raises(HTTPError) as excinfo:
             await manager.api.disable_tablet_balancing(server.ip_addr, grace_period_in_seconds=value)
         assert excinfo.value.code == 400, f"'{value}' was not rejected with 400: {excinfo.value}"
+
+
+async def get_migration_task_id(manager: ScyllaClusterManager, server, ks: str, table: str, token: int):
+    """Task id of the tablet's in-flight migration, or None if it has none. Only migration and
+    intranode_migration transitions carry a migration_task_info, so only those are addressable
+    by task id."""
+    info = await get_tablet_info(manager, server, ks, table, token)
+    if info is None or info.migration_task_info is None:
+        return None
+    return str(info.migration_task_info.tablet_task_id)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_disable_balancing_waits_for_a_roll_back_it_did_not_start(manager: ScyllaClusterManager,
+                                                                       scale_timeout):
+    """A transition which somebody else already cancelled is rolling back and ends on its own, so
+    disabling balancing has to grant it the second grace period rather than give up at once.
+
+    Cancelling finds nothing to cancel in that state - the flag is already set - and giving up on
+    a zero count would fail a Scylla Manager retry, or a disable issued right after a task-api
+    abort, while nothing is actually blocking. The coordinator is parked before it can commit the
+    roll-back, so the state is held for the whole call instead of racing it."""
+    tm = TaskManagerClient(manager.api)
+    cluster = blocked_migration(manager)
+    await cluster.start_cluster()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
+                                 "'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+        await cluster.setup_table(ks)
+
+        await manager.api.enable_injection(cluster.target_server.ip_addr, "stream_mutation_fragments",
+                                           one_shot=True)
+        await cluster.start_move()
+        await manager.api.wait_for_injection_enter(cluster.target_server.ip_addr, "stream_mutation_fragments",
+                                                  deadline=time.time() + scale_timeout(60))
+        assert await cluster.stage() == "streaming"
+
+        async def task_id_appears():
+            return await get_migration_task_id(manager, cluster.servers[0], ks, "test", cluster.last_token)
+        task_id = await wait_for(task_id_appears, time.time() + scale_timeout(60),
+                                 label="migration task id")
+
+        coordinator = await manager.find_server_by_host_id(cluster.servers,
+                                                           await get_topology_coordinator(manager))
+        # Both group0 writes below have to go somewhere other than the coordinator: while it is
+        # parked it holds its own group0 guard, and start_operation() waits for that node's
+        # operation mutex without any timeout, so a request served by the coordinator itself
+        # would block there instead of finishing within its grace period.
+        client = next(s for s in cluster.servers if s.ip_addr != coordinator.ip_addr)
+
+        await tm.abort_task(client.ip_addr, task_id)
+        info = await get_tablet_info(manager, cluster.servers[0], ks, "test", cluster.last_token)
+        assert info.cancel, "the task api abort did not set the cancel flag"
+
+        # Park the coordinator before it commits the roll-back, so the transition stays
+        # cancelled-but-still-in-flight for as long as the test needs.
+        await manager.api.enable_injection(coordinator.ip_addr, "tablet_transition_updates", one_shot=False)
+        await manager.api.wait_for_injection_enter(coordinator.ip_addr, "tablet_transition_updates",
+                                                  deadline=time.time() + scale_timeout(60))
+
+        # The call still fails - the roll-back is held - but it has to fail having waited twice
+        # and having said the transitions are rolling back, not having declared them
+        # uncancellable after one grace period.
+        started = time.time()
+        with pytest.raises(HTTPError, match="still rolling back") as excinfo:
+            await manager.api.disable_tablet_balancing(client.ip_addr,
+                                                       grace_period_in_seconds=GRACE_PERIOD)
+        waited = time.time() - started
+        logger.info(f"disable failed after {waited:.1f}s with: {excinfo.value}")
+        assert waited >= 2 * GRACE_PERIOD * 0.9, \
+            f"gave up after {waited:.1f}s, so the second grace period was skipped"
+
+        # Let the roll-back proceed so the cluster is left in a sane state.
+        await manager.api.disable_injection(coordinator.ip_addr, "tablet_transition_updates")
+        await manager.api.message_injection(coordinator.ip_addr, "tablet_transition_updates")
+        await await_api_task(cluster.move_task, allowed_exception=HTTPError)
+        await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(120))
+        await cluster.assert_rolled_back()
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_is_not_abortable_without_the_cluster_feature(manager: ScyllaClusterManager,
+                                                                      scale_timeout):
+    """A migration is aborted by cancelling its transition, which the whole cluster has to
+    support. Where it does not, the task api must not advertise the abort: reporting a task as
+    abortable and then failing the abort is worse than reporting it as not abortable."""
+    tm = TaskManagerClient(manager.api)
+    cluster = blocked_migration(manager, extra_config={
+        'error_injections_at_startup': [{'name': 'suppress_features',
+                                         'value': 'TABLET_TRANSITION_CANCEL'}]})
+    await cluster.start_cluster()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
+                                 "'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+        await cluster.setup_table(ks)
+
+        await manager.api.enable_injection(cluster.target_server.ip_addr, "stream_mutation_fragments",
+                                           one_shot=True)
+        await cluster.start_move()
+        await manager.api.wait_for_injection_enter(cluster.target_server.ip_addr, "stream_mutation_fragments",
+                                                  deadline=time.time() + scale_timeout(60))
+        assert await cluster.stage() == "streaming"
+
+        async def task_id_appears():
+            return await get_migration_task_id(manager, cluster.servers[0], ks, "test", cluster.last_token)
+        task_id = await wait_for(task_id_appears, time.time() + scale_timeout(60),
+                                 label="migration task id")
+
+        status = await tm.get_task_status(cluster.servers[0].ip_addr, task_id)
+        assert not status.is_abortable, "a migration was advertised as abortable without the feature"
+
+        with pytest.raises(HTTPError) as excinfo:
+            await tm.abort_task(cluster.servers[0].ip_addr, task_id)
+        assert excinfo.value.code == 403, f"expected 403, got {excinfo.value}"
+
+        # Let the migration finish, so nothing is left in flight at teardown.
+        await manager.api.message_injection(cluster.target_server.ip_addr, "stream_mutation_fragments")
+        await await_api_task(cluster.move_task, allowed_exception=HTTPError)
+        await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(120))
+        await cluster.assert_rolled_forward()
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_abort_one_migration_through_the_task_api(manager: ScyllaClusterManager, scale_timeout):
+    """A single migration can be cancelled on its own through the task api, which rolls it back.
+    Balancing is disabled here so that the roll-back is observable."""
+    tm = TaskManagerClient(manager.api)
+    cluster = blocked_migration(manager)
+    await cluster.start_cluster()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
+                                 "'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+        await cluster.setup_table(ks)
+
+        await manager.api.enable_injection(cluster.target_server.ip_addr, "stream_mutation_fragments",
+                                           one_shot=True)
+        await cluster.start_move()
+        await manager.api.wait_for_injection_enter(cluster.target_server.ip_addr, "stream_mutation_fragments",
+                                                   deadline=time.time() + scale_timeout(60))
+        assert await cluster.stage() == "streaming"
+
+        async def task_id_appears():
+            return await get_migration_task_id(manager, cluster.servers[0], ks, "test", cluster.last_token)
+        task_id = await wait_for(task_id_appears, time.time() + scale_timeout(60),
+                                 label="migration task id")
+
+        status = await tm.get_task_status(cluster.servers[0].ip_addr, task_id)
+        assert status.type in ["migration", "intranode_migration"], f"unexpected task type {status.type}"
+
+        coordinator = await manager.find_server_by_host_id(cluster.servers,
+                                                           await get_topology_coordinator(manager))
+        # Both task-api calls below have to be served by a node other than the coordinator, since
+        # it is parked for the rest of the test. It holds its own group0 guard while parked, so
+        # start_operation() would block on that node's operation mutex untimed, and
+        # tablet_virtual_task::contains() opens with a group0 barrier which cannot complete
+        # there either - the request would hang before the task was even resolved.
+        client = next(s for s in cluster.servers if s.ip_addr != coordinator.ip_addr)
+        wait_log = await manager.server_open_log(client.server_id)
+        wait_mark = await wait_log.mark()
+
+        # Park the coordinator before it can commit the roll-back, so that the transition - and
+        # with it the virtual task - is still there while the wait below is being registered.
+        await manager.api.enable_injection(coordinator.ip_addr, "tablet_transition_updates", one_shot=False)
+
+        # Aborting a migration used to be rejected as non-abortable.
+        await tm.abort_task(client.ip_addr, task_id)
+        await manager.api.wait_for_injection_enter(coordinator.ip_addr, "tablet_transition_updates",
+                                                  deadline=time.time() + scale_timeout(60))
+
+        # A tablet virtual task is derived from the tablet's metadata, so it disappears together
+        # with the transition it describes: a wait issued after the roll-back would be rejected as
+        # an unknown task. Creating the asyncio task only schedules the request, so wait for the
+        # server to log that it has resolved the task and started waiting before releasing the
+        # roll-back - otherwise the two race.
+        wait_task = asyncio.create_task(tm.wait_for_task(client.ip_addr, task_id))
+        await wait_log.wait_for("tablet_virtual_task: wait until tablet operation is finished",
+                                from_mark=wait_mark, timeout=scale_timeout(60))
+
+        # Now let the roll-back proceed.
+        await manager.api.disable_injection(coordinator.ip_addr, "tablet_transition_updates")
+        await manager.api.message_injection(coordinator.ip_addr, "tablet_transition_updates")
+
+        await await_api_task(cluster.move_task, allowed_exception=HTTPError)
+        await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(120))
+        await cluster.assert_rolled_back()
+
+        # And the flag did not outlive the transition it cancelled.
+        info = await get_tablet_info(manager, cluster.servers[0], ks, "test", cluster.last_token)
+        assert not info.cancel, "the tablet kept its cancel flag"
+
+        # The task api has to report the outcome of its own abort, which is what a task-api user
+        # looks at. A rolled back migration leaves the pending replica out of the replica set,
+        # which tablet_virtual_task::wait() reports as failed rather than done.
+        status = await wait_task
+        assert status.state == "failed", f"aborted migration reported as {status.state}"
