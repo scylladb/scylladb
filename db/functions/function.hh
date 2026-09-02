@@ -51,6 +51,20 @@ public:
      */
     virtual bool is_aggregate() const = 0;
 
+    /**
+     * Checks whether the function is an external one, i.e. whether its value comes from an
+     * external search system rather than from evaluating its arguments locally.
+     *
+     * Statement preparation finds calls to such functions by this capability and either lowers
+     * them to a value injected per row or rejects the clause they appear in. Two invariants
+     * follow: an external function must be non-pure, so that a call whose arguments happen to be
+     * literals is not constant-folded before preparation gets to it, and its own evaluation must
+     * never be reached.
+     *
+     * @return <code>true</code> if the function is an external one, <code>false</code> otherwise.
+     */
+    virtual bool is_external() const { return false; }
+
     virtual void print(std::ostream& os) const = 0;
 
     /**
