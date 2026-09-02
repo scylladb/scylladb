@@ -72,6 +72,26 @@ inline frame<bytes_ostream> start_frame(bytes_ostream& out) {
     return frame<bytes_ostream> { size_ph, offset };
 }
 
+// A fixed-size class reserves its whole size once and serializes into the returned substream.
+template<typename Output>
+auto reserve_fixed_size(Output& out, size_t size) {
+    return out.write_substream(size);
+}
+
+inline seastar::simple_output_stream reserve_fixed_size(bytes_ostream& out, size_t size) {
+    return {reinterpret_cast<char*>(out.write_place_holder(size)), size};
+}
+
+inline seastar::measuring_output_stream reserve_fixed_size(seastar::measuring_output_stream& out, size_t size) {
+    out.write(nullptr, size);
+    return {};
+}
+
+template<typename Stream>
+bool fixed_size_filled(const Stream& s) {
+    return std::is_same_v<Stream, seastar::measuring_output_stream> || s.size() == 0;
+}
+
 template<typename Input>
 size_type read_frame_size(Input& in) {
     auto sz = deserialize(in, std::type_identity<size_type>());
@@ -102,6 +122,14 @@ inline frame<seastar::measuring_output_stream> start_frame(seastar::measuring_ou
     return { };
 }
 
+// get_sizeof() used to reject objects whose frame size doesn't fit size_type.
+inline size_type checked_frame_size(size_t size) {
+    if (size > std::numeric_limits<size_type>::max()) [[unlikely]] {
+        throw std::runtime_error("Object is too big for a frame");
+    }
+    return size;
+}
+
 template<>
 class place_holder<seastar::simple_output_stream> {
     seastar::simple_output_stream _substream;
@@ -122,7 +150,7 @@ public:
         : place_holder(ph), _start(start) { }
 
     void end(seastar::simple_output_stream& out) {
-        set(out, out.begin() - _start);
+        set(out, checked_frame_size(out.begin() - _start));
     }
 };
 
@@ -160,7 +188,7 @@ public:
         : place_holder<seastar::memory_output_stream<Iterator>>(ph), _start_left(start_left) { }
 
     void end(seastar::memory_output_stream<Iterator>& out) {
-        this->set(out, _start_left - out.size());
+        this->set(out, checked_frame_size(_start_left - out.size()));
     }
 };
 

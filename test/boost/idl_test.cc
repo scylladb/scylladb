@@ -192,6 +192,39 @@ BOOST_AUTO_TEST_CASE(test_simple_compound)
     BOOST_REQUIRE_EQUAL(sc.bar, sc_view.bar());
 }
 
+BOOST_AUTO_TEST_CASE(test_fixed_size_across_fragments)
+{
+    // Fixed-size classes reserve their whole size at once; 7-byte fragments split every reservation.
+    std::vector<simple_compound> vec;
+    for (uint32_t i = 0; i < 10; ++i) {
+        vec.push_back({i, ~i});
+    }
+    bytes_ostream expected_out;
+    ser::serialize(expected_out, vec);
+    auto expected = expected_out.linearize();
+    // Pin the wire format: vector count, then {i=0}: frame size 12, foo 0, bar ~0 (little-endian).
+    const uint8_t golden[] = {10, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff};
+    BOOST_REQUIRE_EQUAL(expected.size(), 4 + 10 * 12);
+    BOOST_REQUIRE(std::equal(std::begin(golden), std::end(golden), reinterpret_cast<const uint8_t*>(expected.data())));
+
+    std::vector<seastar::temporary_buffer<char>> frags;
+    for (size_t left = expected.size(); left; ) {
+        auto n = std::min<size_t>(left, 7);
+        frags.emplace_back(n);
+        left -= n;
+    }
+    using iterator = std::vector<seastar::temporary_buffer<char>>::iterator;
+    seastar::memory_output_stream<iterator> out(seastar::fragmented_memory_output_stream<iterator>(frags.begin(), expected.size()));
+    ser::serialize(out, vec);
+    BOOST_REQUIRE_EQUAL(out.size(), 0);
+
+    std::string actual;
+    for (auto& f : frags) {
+        actual.append(f.get(), f.size());
+    }
+    BOOST_REQUIRE(actual == std::string(reinterpret_cast<const char*>(expected.data()), expected.size()));
+}
+
 BOOST_AUTO_TEST_CASE(test_vector)
 {
     std::vector<simple_compound> vec1 = {

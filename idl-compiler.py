@@ -22,8 +22,10 @@ READ_BUFF = 'input_buffer'
 WRITE_BUFF = 'output_buffer'
 SERIALIZER = 'serialize'
 DESERIALIZER = 'deserialize'
-SETSIZE = 'set_size'
 SIZETYPE = 'size_type'
+FRAME_VAR = 'idl_frame'
+FIXED_SIZE_TYPES = {'bool': 1, 'int8_t': 1, 'uint8_t': 1, 'int16_t': 2, 'uint16_t': 2, 'int32_t': 4,
+                    'uint32_t': 4, 'int64_t': 8, 'uint64_t': 8, 'float': 4, 'double': 8}
 
 
 def reindent(indent, text):
@@ -309,6 +311,15 @@ class ClassDef(ASTBase):
     def __repr__(self):
         return self.__str__()
 
+    def fixed_size(self):
+        '''Serialized size if it never varies, else None. Stubs serialize by hand, so they don't count.'''
+        if self.template_params or self.stub:
+            return None
+        sizes = [fixed_size_of(m.type) for m in self.members if not isinstance(m, (ClassDef, EnumDef))]
+        if None in sizes:
+            return None
+        return sum(sizes) + (0 if self.final else FIXED_SIZE_TYPES['uint32_t'])
+
     def serializer_write_impl(self, cout):
         name = self.ns_qualified_name()
         full_name = name + self.template_param_names_str
@@ -317,13 +328,23 @@ class ClassDef(ASTBase):
 {self.template_declaration}
 template <typename Output>
 void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
-        if not self.final:
-            fprintln(cout, f"""  {SETSIZE}(buf, obj);""")
+        size = None if self.final else self.fixed_size()
+        out = "buf" if size is None else "idl_out"
+        if size is not None:
+            # Reserve the whole object once: each separate stream write reloads the stream's state (measured).
+            fprintln(cout, f"""  auto idl_out = reserve_fixed_size(buf, {size});
+  serialize(idl_out, size_type({size}));""")
+        elif not self.final:
+            fprintln(cout, f"""  auto {FRAME_VAR} = start_frame(buf);""")
         for member in self.members:
             if isinstance(member, ClassDef) or isinstance(member, EnumDef):
                 continue
             fprintln(cout, f"""  static_assert(is_equivalent<decltype(obj.{member.name}), {param_type(member.type)}>::value, "member value has a wrong type");
-  {SERIALIZER}(buf, obj.{member.name});""")
+  {SERIALIZER}({out}, obj.{member.name});""")
+        if size is not None:
+            fprintln(cout, f"""  throwing_assert(fixed_size_filled(idl_out));""")
+        elif not self.final:
+            fprintln(cout, f"""  {FRAME_VAR}.end(buf);""")
         fprintln(cout, "}")
 
 
@@ -873,8 +894,23 @@ def flat_type(t):
 
 
 local_types = {}
+local_enums = {}
+# Names defined more than once (e.g. in different namespaces) can't be resolved by name alone.
+ambiguous_names = set()
 local_writable_types = {}
 rpc_verbs = {}
+
+
+def fixed_size_of(t):
+    if not isinstance(t, BasicType):
+        return None
+    if t.name in ambiguous_names:
+        return None
+    name = local_enums.get(t.name, t.name)
+    if name in FIXED_SIZE_TYPES:
+        return FIXED_SIZE_TYPES[name]
+    cls = local_types.get(t.name)
+    return cls.fixed_size() if cls is not None else None
 
 
 def resolve_basic_type_ref(type: BasicType):
@@ -1407,6 +1443,8 @@ def handle_visitors_nodes(cls, cout, variant_node=False, classes=[]):
 
 def register_local_type(cls):
     global local_types
+    if cls.name in local_types or cls.name in local_enums:
+        ambiguous_names.add(cls.name)
     local_types[cls.name] = cls
 
 
@@ -1789,7 +1827,9 @@ def handle_types(tree):
         elif isinstance(obj, RpcVerb):
             register_rpc_verb(obj)
         elif isinstance(obj, EnumDef):
-            pass
+            if obj.name in local_types or obj.name in local_enums:
+                ambiguous_names.add(obj.name)
+            local_enums[obj.name] = obj.underlying_type
         elif isinstance(obj, NamespaceDef):
             handle_types(obj.members)
         elif isinstance(obj, Include):
