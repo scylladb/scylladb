@@ -684,6 +684,12 @@ future<> filesystem_storage::unlink_component(const sstable& sst, component_type
     }
 }
 
+// The name of a node reference relative to "{prefix}/{sid}/refs/". Single
+// source of the format for make_ref_object_name() and the release helper.
+static sstring object_storage_node_ref_name(locator::host_id host, generation_type gen) {
+    return seastar::format("nodes/{}/{}", host, gen);
+}
+
 class object_storage_base : public sstables::storage {
 protected:
     sstring _type;
@@ -705,7 +711,7 @@ protected:
 
     // Construct the object name for a reference: {prefix}/{sstable_id}/refs/nodes/{host_id}/{gen}
     object_name make_ref_object_name(sstable_id sid, generation_type gen, locator::host_id host_id) const {
-        return object_name(_bucket, prefix(), sid, fmt::format("refs/nodes/{}/{}", host_id, gen));
+        return object_name(_bucket, prefix(), sid, "refs/" + object_storage_node_ref_name(host_id, gen));
     }
     object_name make_snapshot_ref_object_name(sstable_id sid, generation_type gen, std::string_view tag) const {
         return object_name(_bucket, prefix(), sid, object_storage_snapshot_ref_name(tag, gen));
@@ -861,7 +867,8 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
     return ret;
 }
 
-static future<> collect_lister_entries(abstract_lister& lister, object_storage_reference_names& entries) {
+template <typename Container>
+static future<> collect_lister_entries(abstract_lister& lister, Container& entries) {
     while (auto entry = co_await lister.get()) {
         entries.push_back(entry->name);
     }
@@ -879,6 +886,21 @@ future<object_storage_reference_names> list_object_storage_references(object_sto
         throw std::runtime_error(fmt::format("Failed to list references: prefix={} sstable_id={}: {:t}", prefix, sid, std::current_exception()));
     }
     co_return refs;
+}
+
+// Every object under "{prefix}/{sid}/", by name relative to it.
+static future<std::vector<sstring>> list_object_storage_sstable_objects(object_storage_client& client, sstring bucket, std::string_view prefix, sstable_id sid) {
+    std::vector<sstring> names;
+    try {
+        auto sid_prefix = fmt::format("{}/{}/", prefix, sid);
+        auto lister = client.make_object_lister(std::move(bucket), sid_prefix, [] (const std::filesystem::path&, const directory_entry&) { return true; });
+        co_await with_closeable(std::move(lister), [&names] (abstract_lister& lister) {
+            return collect_lister_entries(lister, names);
+        });
+    } catch (...) {
+        throw std::runtime_error(fmt::format("Failed to list objects: prefix={} sstable_id={}: {:t}", prefix, sid, std::current_exception()));
+    }
+    co_return names;
 }
 
 sstring object_storage_prefix(const std::optional<sstring>& location) {
@@ -904,22 +926,7 @@ future<size_t> object_storage_base::num_references(const sstable& sst) const {
 }
 
 future<> object_storage_base::delete_components(std::vector<sstring> components, sstable_id sid, bool log_errors) const {
-    auto prefix = this->prefix();
-    auto delete_component = [this, &prefix, &sid, log_errors] (std::string_view component) -> future<> {
-        try {
-            co_await delete_object(object_name(_bucket, prefix, sid, component));
-        } catch (...) {
-            if (!log_errors) {
-                throw;
-            }
-            sstlog.warn("Failed to delete {} object {} for sstable_id={}: {:t}", _type, component, sid, std::current_exception());
-        }
-    };
-
-    co_await coroutine::parallel_for_each(components, [&delete_component] (const sstring& component) -> future<> {
-        co_await delete_component(component);
-    });
-    co_await delete_component(sstable_version_constants::TOC_SUFFIX);
+    return delete_object_storage_components(*_client, _bucket, sstring(prefix()), sid, std::move(components), abort_source(), log_errors);
 }
 
 // For when the sstable's TOC is not at hand: every non-TOC component its version can have.
@@ -940,6 +947,78 @@ sstring object_storage_snapshot_ref_name(std::string_view tag, generation_type g
 future<> delete_object_storage_snapshot_ref(object_storage_client& client, object_name ref_name) {
     co_await client.delete_object(ref_name);
     sstlog.debug("Deleted snapshot reference {}", ref_name.str());
+}
+
+future<> release_object_storage_snapshot_refs_by_listing(object_storage_client& client,
+        const data_dictionary::storage_options::object_storage& os,
+        sstable_id sid, std::string_view tag) {
+    auto bucket = sstring(os.bucket);
+    auto prefix = object_storage_prefix(os);
+    // One listing of everything under the sstable gives us the tag's references and the
+    // components
+    auto objects = co_await list_object_storage_sstable_objects(client, bucket, prefix, sid);
+    const auto tag_prefix = fmt::format("refs/snapshot-{}/", tag);
+    std::vector<sstring> components;
+    for (auto& name : objects) {
+        std::string_view sv(name);
+        if (sv.starts_with(std::string_view(tag_prefix))) {
+            co_await delete_object_storage_snapshot_ref(client, object_name(bucket, prefix, sid, name));
+        } else if (!sv.starts_with("refs/") && name != sstable_version_constants::TOC_SUFFIX) {
+            components.push_back(std::move(name));
+        }
+    }
+    // Listing after the deletes helps us avoid a race with restore which can put a node ref
+    // concurrently. It's a path we take on exceptional scenarios so definitely not hot.
+    auto refs = co_await list_object_storage_references(client, bucket, prefix, sid);
+    if (!refs.empty()) {
+        co_return;
+    }
+    co_await delete_object_storage_components(client, bucket, prefix, sid, std::move(components));
+}
+
+future<> delete_object_storage_components(object_storage_client& client, sstring bucket,
+        sstring prefix, sstable_id sid, std::vector<sstring> components,
+        seastar::abort_source* as, bool log_errors) {
+    auto delete_component = [&] (std::string_view component) -> future<> {
+        try {
+            co_await client.delete_object(object_name(bucket, prefix, sid, component), as);
+        } catch (...) {
+            if (!log_errors) {
+                throw;
+            }
+            sstlog.warn("Failed to delete object {} for sstable_id={}: {:t}", component, sid, std::current_exception());
+        }
+    };
+    co_await coroutine::parallel_for_each(components, [&] (const sstring& component) -> future<> {
+        co_await delete_component(component);
+    });
+    // The TOC goes last: while it exists the sstable is still discoverable,
+    // so a crash mid-way leaves a deletable sstable, not blind orphans.
+    co_await delete_component(sstable_version_constants::TOC_SUFFIX);
+}
+
+future<> delete_object_storage_components(object_storage_client& client, sstring bucket,
+        sstring prefix, sstable_id sid, sstable_version_types version,
+        seastar::abort_source* as, bool log_errors) {
+    return delete_object_storage_components(client, std::move(bucket), std::move(prefix), sid,
+            all_possible_components(version), as, log_errors);
+}
+
+future<> release_object_storage_snapshot_ref(object_storage_client& client,
+        const data_dictionary::storage_options::object_storage& os,
+        std::string_view tag, const entry_descriptor& desc) {
+    if (!desc.sid) {
+        on_internal_error(sstlog, fmt::format("Cannot release snapshot reference of generation={}: no sstable_id", desc.generation));
+    }
+    auto sid = *desc.sid;
+    auto prefix = object_storage_prefix(os);
+    co_await delete_object_storage_snapshot_ref(client,
+            object_name(sstring(os.bucket), prefix, sid, object_storage_snapshot_ref_name(tag, desc.generation)));
+
+    auto refs = co_await list_object_storage_references(client, sstring(os.bucket), prefix, sid);
+    if (refs.empty()) {
+        co_await delete_object_storage_components(client, sstring(os.bucket), sstring(prefix), sid, desc.version);
+    }
 }
 
 void object_storage_base::open(sstable& sst) {
@@ -1118,9 +1197,11 @@ future<> object_storage_base::destroy(const sstable& sst) {
     auto ref_name = make_ref_object_name(sid, sst.generation(), node_owner);
     co_await delete_object(ref_name);
 
-    // Only delete components if no references remain
-    auto remaining_refs = co_await sst.num_references();
-    if (!remaining_refs) {
+    // Delete components only if no references remain. Snapshot references
+    // count like any other, so a snapshotted sstable's data survives the
+    // removal of the live sstable.
+    auto refs = co_await list_object_storage_references(*_client, _bucket, prefix(), sid);
+    if (refs.empty()) {
         // Delete the S3 objects. Errors are logged but not propagated because
         // destroy() is called fire-and-forget from the shared_ptr deleter.
         // Any objects that could not be deleted here will be retried on the
@@ -1147,7 +1228,7 @@ future<> object_storage_base::destroy(const sstable& sst) {
     // race with shutdown: unplug_system_keyspace() may have already unplugged the
     // sstables_registry by the time we get here. Accessing it then would trip the
     // SCYLLA_ASSERT in sstables_manager::sstables_registry(). Skip the entry
-    // deletion in that case — the "removing" entry survives and garbage_collect()
+    // deletion in that case: the "removing" entry survives and garbage_collect()
     // on the next startup deletes the (already gone) objects tolerantly and
     // removes the entry.
     try {
@@ -1159,7 +1240,7 @@ future<> object_storage_base::destroy(const sstable& sst) {
     } catch (...) {
         sstlog.warn("Failed to delete registry entry for {}: {:t}", sst.toc_filename(), std::current_exception());
     }
-    sstlog.debug("Deleted reference {} remaining_refs={}", ref_name.str(), remaining_refs);
+    sstlog.debug("Deleted reference {} remaining_refs={}", ref_name.str(), refs.size());
 }
 
 class object_storage_atomic_deletion_impl : public atomic_deletion_impl {
@@ -1213,15 +1294,16 @@ future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc, lo
 
     auto ref_name = make_ref_object_name(sid, desc.generation, node_owner);
     co_await delete_object(ref_name);
+    sstlog.debug("Deleted reference {}", ref_name.str());
 
-    auto remaining_refs = co_await num_references(sid);
-    if (remaining_refs) {
-        sstlog.debug("Deleted reference {}: remaining_refs={}", ref_name.str(), remaining_refs);
+    auto refs = co_await list_object_storage_references(*_client, _bucket, prefix(), sid);
+    if (!refs.empty()) {
+        sstlog.debug("Reference {}: remaining_refs={}", ref_name.str(), refs.size());
         co_return;
     }
 
     co_await delete_components(all_possible_components(desc.version), sid, false);
-    sstlog.debug("Deleted reference {}: remaining_refs={}", ref_name.str(), remaining_refs);
+    sstlog.debug("Reference {}: remaining_refs=0", ref_name.str());
 }
 
 future<> object_storage_base::unlink_component(const sstable& sst, component_type type) noexcept {
