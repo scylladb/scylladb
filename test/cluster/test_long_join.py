@@ -30,7 +30,6 @@ async def test_long_join(manager: ScyllaClusterManager) -> None:
     await asyncio.gather(task)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.xfail(reason="SCYLLADB-4095")
 async def test_long_join_drop_entries_on_bootstrapping(manager: ScyllaClusterManager) -> None:
     """The test checks that join works even if expiring entries are dropped
        on the joining node between placement of the join request and its processing"""
