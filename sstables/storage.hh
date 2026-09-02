@@ -43,6 +43,7 @@ class delayed_commit_changes;
 class object_storage_client;
 class sstable;
 class sstables_manager;
+class sstables_registry;
 class atomic_deletion;
 class entry_descriptor;
 
@@ -170,6 +171,7 @@ public:
 
 std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schema_ptr schema, const data_dictionary::storage_options& s_opts, sstable_state state);
 future<object_storage_reference_names> list_object_storage_references(object_storage_client& client, sstring bucket, std::string_view prefix, sstable_id sid);
+
 // The bucket prefix the given storage options resolve to. Must match the
 // object_storage_base constructor.
 std::string_view object_storage_prefix(const data_dictionary::storage_options::object_storage& os);
@@ -186,6 +188,22 @@ sstring object_storage_snapshot_ref_name(std::string_view tag, generation_type g
 future<> delete_object_storage_snapshot_ref(object_storage_client& client,
         const data_dictionary::storage_options::object_storage& os,
         sstable_id sid, std::string_view tag, generation_type gen);
+
+// Releases one snapshot reference of an sstable that may no longer be alive.
+// Deletes the reference object (missing is not an error). If this node holds
+// no other claim on the sstable, also deletes the component objects when no
+// references remain at all, and the retained "snapshot_owned" registry entry.
+// `desc` must carry sid, generation, version and format.
+future<> release_object_storage_snapshot_ref(object_storage_client& client,
+        const data_dictionary::storage_options::object_storage& os,
+        sstables_registry* registry, table_id owner, locator::host_id node,
+        std::string_view tag, const entry_descriptor& desc);
+
+// Deletes the component objects of one sstable, forgiving missing objects.
+// TOC goes last, so a crash mid-way leaves the sstable discoverable.
+future<> delete_object_storage_components(object_storage_client& client, sstring bucket,
+        sstring prefix, sstable_id sid, sstable_version_types version,
+        seastar::abort_source* as = nullptr, bool log_errors = false);
 
 // A snapshot tag names bucket reference objects (refs/snapshot-<tag>/...), so
 // it must be non-empty and must not contain '/'.
