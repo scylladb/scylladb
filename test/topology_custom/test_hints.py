@@ -1017,8 +1017,7 @@ async def test_hints_switch_config_in_runtime_via_http_api(manager: ManagerClien
     stmt.consistency_level = ConsistencyLevel.ONE
 
     async def insert(keys) -> None:
-        for key in keys:
-            await cql.run_async(stmt, (key, key + 1))
+        await gather_safely(*[cql.run_async(stmt, (key, key + 1)) for key in keys])
 
     await update_hh_enabled_via_http_api(manager, s1, "true")
     await insert(keys_enabled)
@@ -1036,7 +1035,6 @@ async def test_hints_switch_config_in_runtime_via_http_api(manager: ManagerClien
 
     await manager.server_start(s2.server_id)
     await manager.server_start(s3.server_id)
-    await manager.servers_see_each_other([s1, s2, s3])
 
     await update_hh_enabled_via_http_api(manager, s1, "true")
     await wait_until_hints_are_sent_from(manager, [s1], expected_hints)
