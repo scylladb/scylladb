@@ -12,8 +12,9 @@
 #############################################################################
 
 import pytest
+from cassandra.cluster import ConsistencyLevel
 from cassandra.protocol import ConfigurationException, InvalidRequest
-from cassandra.query import BatchStatement, BatchType
+from cassandra.query import BatchStatement, BatchType, SimpleStatement
 
 from test.pylib.skip_types import skip_env
 
@@ -364,3 +365,26 @@ def test_batch_attributes_on_sc_table(cql, sc_keyspace):
                 INSERT INTO {table} (pk, v) VALUES (2, 3);
                 APPLY BATCH
             """)
+
+
+def test_batch_consistency_level_on_sc_table(cql, sc_keyspace):
+    """
+    A strongly consistent batch requires QUORUM or LOCAL_QUORUM, like
+    a standalone strongly consistent write.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        cl_error = "Strongly consistent writes must use QUORUM/LOCAL_QUORUM"
+        with pytest.raises(InvalidRequest, match=cl_error):
+            cql.execute(SimpleStatement(
+                f"INSERT INTO {table} (pk, v) VALUES (1, 2)",
+                consistency_level=ConsistencyLevel.ONE))
+
+        with pytest.raises(InvalidRequest, match=cl_error):
+            cql.execute(SimpleStatement(
+                f"BEGIN BATCH INSERT INTO {table} (pk, v) VALUES (1, 2); APPLY BATCH",
+                consistency_level=ConsistencyLevel.ONE))
+
+        cql.execute(SimpleStatement(
+            f"BEGIN BATCH INSERT INTO {table} (pk, v) VALUES (1, 2); APPLY BATCH",
+            consistency_level=ConsistencyLevel.QUORUM))
+        assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 2
