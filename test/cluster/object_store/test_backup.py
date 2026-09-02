@@ -22,7 +22,7 @@ from test.pylib.internal_types import ServerInfo
 from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace, new_test_table
 from test.pylib.rest_client import read_barrier, HTTPError
 from test.pylib.util import unique_name, wait_all, wait_for_view
-from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
+from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count
 from cassandra import ReadFailure
 from cassandra.cluster import ConsistencyLevel
 from collections import defaultdict
@@ -1316,6 +1316,56 @@ async def test_restore_tablets_with_different_tablet_hints(build_mode: str, mana
         desc = (await cql.run_async(f"DESC TABLE {ks}.test"))[0].create_statement
         assert f"'min_tablet_count': '{min_tablet_count_before_restore}'" in desc, f"Expected min_tablet_count={min_tablet_count_before_restore} in: {desc}"
         assert f"'max_tablet_count': '{max_tablet_count_before_restore}'" in desc, f"Expected max_tablet_count={max_tablet_count_before_restore} in: {desc}"
+
+
+async def test_restore_tablets_leaves_a_hintless_table_resizable(build_mode: str, manager: ScyllaClusterManager,
+                                                                 object_storage):
+    # Three nodes because a tablet-aware restore writes system_distributed.snapshot_sstables at
+    # EACH_QUORUM, which a single node cannot satisfy.
+    topology = topo(rf = 1, nodes = 3, racks = 1, dcs = 1)
+
+    # A small target tablet size, so the restored rows in one tablet are well past the
+    # 2 * target the balancer splits at.
+    servers, _ = await create_cluster(topology, manager, logger, object_storage,
+                                     extra_config={'tablet_load_stats_refresh_interval_in_seconds': 1},
+                                     extra_cmdline=['--target-tablet-size-in-bytes', '1024',
+                                                    '--logger-log-level', 'load_balancer=debug'])
+    cql = manager.get_cql()
+    replication = f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}"
+    num_keys = 1000
+
+    async with new_test_keyspace(manager, replication) as src_ks:
+        # Back the table up at one tablet, which is what the restore pins the destination to.
+        snap_name, manifests = await populate_and_backup(manager, cql, servers, object_storage, src_ks, 'test',
+                                                         "WITH tablets = {'min_tablet_count': 1, 'max_tablet_count': 1}",
+                                                         num_keys)
+
+    async with new_test_keyspace(manager, replication) as ks:
+        # The destination declares no tablet hints of its own - the ordinary case for a user table.
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int );")
+
+        logger.info(f'Restore cluster via {servers[0].ip_addr}')
+        tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, 'test', snap_name, servers[0].datacenter,
+                                                object_storage.address, object_storage.bucket_name, manifests)
+        status = await manager.api.wait_task(servers[0].ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'done')
+
+        restored_count = await get_tablet_count(manager, servers[0], ks, 'test')
+        assert restored_count == 1, f"Expected the restore to leave 1 tablet, got {restored_count}"
+
+        # Give the balancer the on-disk sizes it decides resizes on.
+        await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
+        await asyncio.gather(*(manager.api.keyspace_compaction(s.ip_addr, ks, 'test') for s in servers))
+
+        async def split():
+            return True if await get_tablet_count(manager, servers[0], ks, 'test') > restored_count else None
+        await wait_for(split, time.time() + 120,
+                       label=f"the balancer to split the restored table away from {restored_count} tablet")
+
+        # ... and the hints the restore put back must be the ones the table declared, i.e. none.
+        desc = (await cql.run_async(f"DESC TABLE {ks}.test"))[0].create_statement
+        assert 'min_tablet_count' not in desc, f"Expected no min_tablet_count in: {desc}"
+        assert 'max_tablet_count' not in desc, f"Expected no max_tablet_count in: {desc}"
 
 # The keyspace and table parameters of both restore APIs name the destination, while the source is
 # addressed by the bucket prefix together with the sstable list (plain restore) or by the manifests
