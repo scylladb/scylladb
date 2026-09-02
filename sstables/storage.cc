@@ -684,6 +684,12 @@ future<> filesystem_storage::unlink_component(const sstable& sst, component_type
     }
 }
 
+// The name of a node reference relative to "{prefix}/{sid}/refs/". Single
+// source of the format for make_ref_object_name() and the release helper.
+static sstring object_storage_node_ref_name(locator::host_id host, generation_type gen) {
+    return seastar::format("nodes/{}/{}", host, gen);
+}
+
 class object_storage_base : public sstables::storage {
 protected:
     sstring _type;
@@ -709,7 +715,7 @@ protected:
 
     // Construct the object name for a reference: {prefix}/{sstable_id}/refs/nodes/{host_id}/{gen}
     object_name make_ref_object_name(sstable_id sid, generation_type gen, locator::host_id host_id) const {
-        return object_name(_bucket, prefix(), sid, fmt::format("refs/nodes/{}/{}", host_id, gen));
+        return object_name(_bucket, prefix(), sid, "refs/" + object_storage_node_ref_name(host_id, gen));
     }
     object_name make_snapshot_ref_object_name(sstable_id sid, generation_type gen, std::string_view tag) const {
         return object_name(_bucket, prefix(), sid, fmt::format("refs/snapshot-{}/{}", tag, gen));
@@ -868,7 +874,9 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
 // True when the refs listing contains a snapshot reference for this
 // generation. Names are relative to "{prefix}/{sid}/refs/": node references
 // are "nodes/{host}/{gen}", snapshot references "snapshot-{tag}/{gen}".
-// A match on the generation means this node owns the snapshot.
+// A match on the generation means this node owns the snapshot reference:
+// generations are unique per claim, so every node sharing the sstable claims
+// it under its own generation and creates snapshot references carrying it.
 static bool has_own_snapshot_ref(const object_storage_reference_names& refs, generation_type gen) {
     auto suffix = fmt::format("/{}", gen);
     return std::ranges::any_of(refs, [&] (const sstring& name) {
@@ -960,6 +968,86 @@ bool is_valid_object_storage_snapshot_tag(std::string_view tag) {
 future<> delete_object_storage_snapshot_ref(object_storage_client& client, object_name ref_name) {
     co_await client.delete_object(ref_name);
     sstlog.debug("Deleted snapshot reference {}", ref_name.str());
+}
+
+future<> release_object_storage_snapshot_refs_by_listing(object_storage_client& client,
+        const data_dictionary::storage_options::object_storage& os,
+        sstable_id sid, std::string_view tag) {
+    auto bucket = sstring(os.bucket);
+    auto prefix = object_storage_prefix(os);
+    auto refs = co_await list_object_storage_references(client, bucket, prefix, sid);
+    const auto tag_prefix = fmt::format("snapshot-{}/", tag);
+    for (const auto& name : refs) {
+        if (!std::string_view(name).starts_with(std::string_view(tag_prefix))) {
+            continue;
+        }
+        // Listed names are relative to "{prefix}/{sid}/refs/".
+        co_await delete_object_storage_snapshot_ref(client, object_name(bucket, prefix, sid, "refs/" + name));
+    }
+}
+
+future<> delete_object_storage_components(object_storage_client& client, sstring bucket,
+        sstring prefix, sstable_id sid, sstable_version_types version,
+        seastar::abort_source* as, bool log_errors) {
+    auto delete_component = [&] (const sstring& component) -> future<> {
+        try {
+            co_await client.delete_object(object_name(bucket, prefix, sid, component), as);
+        } catch (...) {
+            if (!log_errors) {
+                throw;
+            }
+            sstlog.warn("Failed to delete object {} for sstable_id={}: {:t}", component, sid, std::current_exception());
+        }
+    };
+    auto& component_map = sstable_version_constants::get_component_map(version);
+    co_await coroutine::parallel_for_each(component_map, [&] (const auto& entry) -> future<> {
+        if (entry.first == component_type::TOC) {
+            co_return;
+        }
+        co_await delete_component(entry.second);
+    });
+    // The TOC goes last: while it exists the sstable is still discoverable,
+    // so a crash mid-way leaves a deletable sstable, not blind orphans.
+    co_await delete_component(component_map.at(component_type::TOC));
+}
+
+future<> release_object_storage_snapshot_ref(object_storage_client& client,
+        const data_dictionary::storage_options::object_storage& os,
+        sstables_registry* registry, table_id owner, locator::host_id node,
+        std::string_view tag, const entry_descriptor& desc) {
+    if (!desc.sid) {
+        on_internal_error(sstlog, fmt::format("Cannot release snapshot reference of generation={}: no sstable_id", desc.generation));
+    }
+    auto sid = *desc.sid;
+    auto prefix = object_storage_prefix(os);
+    co_await delete_object_storage_snapshot_ref(client,
+            object_name(sstring(os.bucket), prefix, sid, object_storage_snapshot_ref_name(tag, desc.generation)));
+
+    auto refs = co_await list_object_storage_references(client, sstring(os.bucket), prefix, sid);
+    if (refs.empty()) {
+        // Last claim of this node: consume the retained "snapshot_owned" entry.
+        // Components go first, entry last, so a crash in between leaves an entry
+        // describing what is left to delete.
+        co_await delete_object_storage_components(client, sstring(os.bucket), sstring(prefix), sid, desc.version);
+        if (registry) {
+            co_await registry->delete_entry(owner, node, desc.generation);
+        }
+        co_return;
+    }
+
+    // If this node still claims the sstable, via its node reference or
+    // another snapshot's reference of this generation, there is nothing more
+    // to release here. The remaining claim's own lifecycle resolves the rest.
+    auto node_ref = object_storage_node_ref_name(node, desc.generation);
+    if (std::ranges::find(refs, node_ref) != refs.end() || has_own_snapshot_ref(refs, desc.generation)) {
+        co_return;
+    }
+
+    // If peer references remain, the components stay for them and only our
+    // entry goes.
+    if (registry) {
+        co_await registry->delete_entry(owner, node, desc.generation);
+    }
 }
 
 void object_storage_base::open(sstable& sst) {
