@@ -1077,7 +1077,10 @@ class ScyllaServer:
         except FileNotFoundError:
             pass
         self.log_filename.unlink(missing_ok=True)
-        self.log_file = None
+        if self.log_file:
+            self.log_file.close()
+            self.log_file = None
+        self.maintenance_socket_dir.cleanup()
 
     def write_log_marker(self, msg) -> None:
         """Write a message to the server's log file (e.g. separator/marker)"""

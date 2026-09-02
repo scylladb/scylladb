@@ -59,7 +59,7 @@ class StubCluster:
         await self._release
         self.stopped.append(server_id)
 
-    async def recycle(self) -> None:
+    async def stop(self) -> None:
         pass
 
     def release(self) -> None:

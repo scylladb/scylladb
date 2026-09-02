@@ -173,8 +173,9 @@ class ScyllaClusterManager:
     Parallel requests are not supported.
 
     The manager lives for one test: the fixture starts it before the test and
-    stops it right after, recycling the cluster.  after_test() drains what
-    the test left running and reports what it leaked.
+    stops it right after, stopping the servers; the cluster fixture then
+    recycles the cluster.  after_test() drains what the test left running
+    and reports what it leaked.
 
     A method that awaits cluster or server internals must be a @manager_op --
     those objects belong to the manager's loop -- and the CQL driver, the REST
@@ -235,14 +236,18 @@ class ScyllaClusterManager:
         return out
 
     async def stop(self) -> None:
-        """Dispose of the cluster if present."""
+        """Stop the cluster's servers if present.
 
+        Only the loop-bound part of the cluster's disposal: the server
+        subprocess transports belong to the manager's loop, so they have to be
+        awaited here.  The cluster fixture recycles and uninstalls afterwards.
+        """
         self.logger.info("ScyllaManager stopping for test %s", self.test_name)
         self.driver_close()
         self.thread_pool.shutdown(wait=False)
         if self.cluster:
             self.logger.info("ScyllaManager: stopping Scylla cluster %s after %s", self.cluster, self.test_name)
-            await self.cluster.recycle()
+            await self.cluster.stop()
             self.cluster = None
 
     @asynccontextmanager
@@ -889,20 +894,11 @@ class ScyllaClusterManager:
                 server_cores[server] = found_cores
         return server_cores
 
-    async def gather_related_logs(self, failed_test_path_dir: Path, logs: dict[str, Path]) -> None:
+    async def gather_related_logs(self, failed_test_path_dir: Path) -> None:
         for server in await self.all_servers():
             log_file = await self.server_open_log(server_id=server.server_id)
             shutil.copyfile(log_file.file, failed_test_path_dir / f"{pathlib.Path(log_file.file).name}")
             allure.attach(log_file.file.read_bytes(), name=log_file.file.name, attachment_type=allure.attachment_type.TEXT)
-        for name, log in logs.items():
-            # A log is missing when the handler that writes it was never installed, e.g. the
-            # test failed before before-test ran. Skip it: the caller collects the rest of the
-            # artifacts after this returns, so raising here would lose them all.
-            if not log.is_file():
-                self.logger.warning("Log %s (%s) does not exist, not attaching it", name, log)
-                continue
-            allure.attach(log.read_bytes(), name=name, attachment_type=allure.attachment_type.TEXT)
-            shutil.copyfile(log, failed_test_path_dir / name)
 
     async def all_servers_by_host_id(self) -> dict[HostID, ServerInfo]:
         result = dict()

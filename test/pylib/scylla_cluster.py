@@ -14,7 +14,7 @@ import pathlib
 import uuid
 from collections import ChainMap
 from functools import reduce
-from typing import Any, Awaitable, Callable, Dict, List, NamedTuple, Optional, Set, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, NamedTuple, Optional, Set, Union
 
 import psutil
 
@@ -32,7 +32,15 @@ from test.pylib.scylla_server import (
 from test.pylib.util import gather_safely, graceful_stop_timeout
 
 
-type ClusterFactory = Callable[[logging.Logger | logging.LoggerAdapter], Awaitable[ScyllaCluster]]
+if TYPE_CHECKING:
+    from contextlib import AbstractAsyncContextManager
+
+    import _pytest.nodes
+
+
+# Returns a context manager leasing a cluster to one test: entering it creates
+# the cluster and stashes it on the given node, exiting recycles it.
+type ClusterFactory = Callable[[_pytest.nodes.Node, str], AbstractAsyncContextManager[ScyllaCluster]]
 
 
 class ReplaceConfig(NamedTuple):
@@ -50,7 +58,6 @@ class ScyllaCluster:
     def __init__(self,
                  logger: Union[logging.Logger, logging.LoggerAdapter],
                  vardir: pathlib.Path,
-                 replicas: int,
                  mode: str,
                  cmdline_options: str | list[str],
                  cmdline_options_override: list[str],
@@ -70,7 +77,6 @@ class ScyllaCluster:
         self.host_registry = HostRegistry()
         self.leased_ips = set[IPAddress]()
         self.name = str(uuid.uuid1())
-        self.replicas = replicas
         # Every ScyllaServer is in one of self.running, self.stopped.
         # These dicts are disjoint.
         # A server ID present in self.removed may be either in self.running or in self.stopped.
@@ -81,84 +87,47 @@ class ScyllaCluster:
         self.starting: Dict[ServerNum, ScyllaServer] = {}       # servers starting right now, not yet running (and not included in "servers").
         # The first IP assigned to a server added to the cluster.
         self.initial_seed: Optional[IPAddress] = None
-        # cluster is started (but it might not have running servers)
-        self.is_running: bool = False
-        self.start_exception: Optional[Exception] = None
+        # cluster is started (but it might not have running servers);
+        # cleared by stop(), which is a no-op when it is False
+        self.is_running: bool = True
         self.api = ScyllaRESTAPIClient()
-        self.stop_lock = asyncio.Lock()
         self.logger.info("Created new cluster %s", self.name)
 
-    async def install_and_start(self) -> None:
-        """Setup initial servers and start them.
-           Catch and save any startup exception"""
-        try:
-            if self.replicas > 0:
-                await self.add_servers(self.replicas)
-        except Exception as exc:
-            # If start fails, swallow the error to throw later,
-            # at test time.
-            self.start_exception = exc
-        self.is_running = True
-        self.logger.info("Created cluster %s", self)
-
-    async def uninstall(self) -> None:
-        """Stop running servers and uninstall all servers"""
-        self.logger.info("Uninstalling cluster %s", self)
-        await self.stop()
-        await gather_safely(*(srv.uninstall() for srv in self.stopped.values()))
-        # Close API client to release connector resources
-        if self.api is not None:
-            self.api.close()
-            self.api = None
-        await gather_safely(*(self.host_registry.release_host(Host(ip))
-                               for ip in self.leased_ips))
-
     async def recycle(self) -> None:
-        """Dispose of the cluster once it's no longer needed: stop it, close the
-           server log files and sockets and release the used IPs. We don't
-           necessarily uninstall() it, which would delete the log file and
-           directory - we might want to preserve these if the cluster was used
-           by a failed test.
+        """Dispose of the cluster once it's no longer needed: stop it, close
+           the server log files and sockets, release the used IPs and, unless
+           --save-log-on-success asks to keep everything, delete the servers'
+           directories and log files.
         """
         await self.stop()
-        for srv in self.servers.values():
-            if srv.log_file is not None:
-                srv.log_file.close()
-            srv.maintenance_socket_dir.cleanup()
-        # Close API client to release connector resources
-        if self.api is not None:
-            self.api.close()
-            self.api = None
-        await self.release_ips()
-        if not self.save_log_on_success:
+        if self.save_log_on_success:
+            for srv in self.servers.values():
+                if srv.log_file is not None:
+                    srv.log_file.close()
+                srv.maintenance_socket_dir.cleanup()
+        else:
             # The cluster has served its purpose: a failed test's logs were
             # copied to failed_test/ when it failed, and nothing here is read
             # again.  Delete now rather than at exit, so that a long run
             # doesn't keep the directories of thousands of clusters on disk.
             await gather_safely(*(srv.uninstall() for srv in self.servers.values()))
 
-    async def release_ips(self) -> None:
-        """Release all IPs leased from the host registry by this cluster.
-        Call this function only if the cluster is stopped and will not be started again."""
-        assert not self.running
-        self.logger.info("Cluster %s releases ips %s", self, self.leased_ips)
-        while self.leased_ips:
-            ip = self.leased_ips.pop()
-            await self.host_registry.release_host(Host(ip))
+        # Close API client to release connector resources
+        if self.api is not None:
+            self.api.close()
+            self.api = None
+        await gather_safely(*(self.host_registry.release_host(Host(ip)) for ip in self.leased_ips))
+        self.leased_ips.clear()
 
     async def stop(self) -> None:
         """Stop all running servers ASAP"""
-        # FIXME: the lock is necessary because test.py calls `stop()` and `uninstall()` concurrently
-        # (from exit artifacts), which leads to issues (#15755). A more elegant solution would be
-        # to prevent that instead of using a lock here.
-        async with self.stop_lock:
-            if self.is_running:
-                self.is_running = False
-                self.logger.info("Cluster %s stopping", self)
-                # If self.running is empty, no-op
-                await gather_safely(*(server.stop() for server in self.running.values()))
-                self.stopped.update(self.running)
-                self.running.clear()
+        if self.is_running:
+            self.is_running = False
+            self.logger.info("Cluster %s stopping", self)
+            # If self.running is empty, no-op
+            await gather_safely(*(server.stop() for server in self.running.values()))
+            self.stopped.update(self.running)
+            self.running.clear()
 
     async def stop_gracefully(self) -> None:
         """Stop all running servers in a clean way"""
@@ -291,6 +260,19 @@ class ScyllaCluster:
                 await server.install_and_start(self.api, expected_error, expected_server_up_state)
             else:
                 await server.install()
+        except asyncio.CancelledError:
+            if server is not None:
+                # Cancelled mid-start, e.g. by the manager loop shutting down
+                # on an interrupted run, possibly after the cluster's stop()
+                # already ran: kill the process here, and keep the server in
+                # the cluster so recycle() uninstalls it and releases its IP.
+                if server.cmd is not None and server.cmd.returncode is None:
+                    try:
+                        server.cmd.kill()
+                    except ProcessLookupError:
+                        pass
+                self.running[server.server_id] = server
+            raise
         except Exception as exc:
             workdir = '<unknown>' if server is None else server.workdir.name
             self.logger.error("Failed to start Scylla server at host %s in %s: %s",
