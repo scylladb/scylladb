@@ -2318,6 +2318,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     };
 
     if (strong_consistency::is_strongly_consistent(db, schema->ks_name())) {
+        if (!group_by_cell_indices->empty()) {
+            throw exceptions::invalid_request_exception("Strongly consistent queries don't support GROUP BY");
+        }
         stmt = ::make_shared<strong_consistency::select_statement>(
                 schema,
                 ctx.bound_variables_size(),
