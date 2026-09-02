@@ -78,6 +78,13 @@ def count_hint_segments(hints_dir: str, target_host_id: str, shard: int | None =
     return len(glob.glob(os.path.join(hints_dir, shard_glob, str(target_host_id), "HintsLog-*.log")))
 
 
+async def wait_for_hint_dir_removed(hints_dir: str, target_host_id: str,
+                                    shard: int | None = None, timeout: int = 120):
+    async def check_directory_gone():
+        return True if (not hint_dir_exists(hints_dir, target_host_id, shard)) else None
+    await wait_for(check_directory_gone, time.time() + timeout)
+
+
 async def wait_until_hint_writing_settled(manager: ScyllaClusterManager, servers: list[ServerInfo],
                                           timeout: float = 180) -> None:
     async def check():
@@ -702,9 +709,7 @@ async def test_hints_rebalance(manager: ScyllaClusterManager):
     await check_balanced(s1_hints_dir, num_shards=2)
 
     # Check that shard 2 directories are gone.
-    async def check_directory_gone():
-        return True if (not hint_dir_exists(s1_hints_dir, s2_host_id, shard=2)) else None
-    await wait_for(check_directory_gone, time.time() + 120)
+    await wait_for_hint_dir_removed(s1_hints_dir, s2_host_id, shard=2)
 
     await manager.server_start(s2.server_id)
     # Re-enable hinted handoff.
@@ -747,9 +752,7 @@ async def test_hints_removenode(manager: ScyllaClusterManager):
     await manager.remove_node(s1.server_id, s3.server_id)
     await wait_until_hints_are_sent_from(manager, [s1], written)
 
-    async def hint_dir_removed():
-        return True if not hint_dir_exists(s1_hints_dir, s3_host_id) else None
-    await wait_for(hint_dir_removed, time.time() + 60)
+    await wait_for_hint_dir_removed(s1_hints_dir, s3_host_id)
 
     rows = await cql.run_async("SELECT * FROM ks.t")
     results = set((row.pk, row.v) for row in rows)
@@ -911,8 +914,8 @@ async def test_hints_decom(manager: ScyllaClusterManager):
     # Make sure all rows are present.
     await assert_rows_present(cql, "ks.tbl", "pk", list(range(row_count)), present=True)
 
-    assert not hint_dir_exists(s1_hints_dir, s3_host_id)
-    assert not hint_dir_exists(s2_hints_dir, s3_host_id)
+    await wait_for_hint_dir_removed(s1_hints_dir, s3_host_id)
+    await wait_for_hint_dir_removed(s2_hints_dir, s3_host_id)
 
 
 async def test_hints_dont_revive(manager: ScyllaClusterManager):
