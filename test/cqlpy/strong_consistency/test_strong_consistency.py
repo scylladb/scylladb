@@ -82,8 +82,7 @@ def test_batch(cql, sc_keyspace, batch_mode):
     Rejection cases:
     - batch touching multiple tables,
     - batch touching multiple partitions,
-    - statement touching multiple partition keys,
-    - counter batch.
+    - statement touching multiple partition keys.
     """
 
     def _prepared_batch_type(kind):
@@ -91,8 +90,6 @@ def test_batch(cql, sc_keyspace, batch_mode):
             return BatchType.LOGGED
         if kind == "unlogged":
             return BatchType.UNLOGGED
-        if kind == "counter":
-            return BatchType.COUNTER
         raise ValueError(f"Unexpected batch kind: {kind}")
 
     def _render_text_statement(table_name, op, args):
@@ -108,25 +105,17 @@ def test_batch(cql, sc_keyspace, batch_mode):
         if op == "delete_in":
             pk1, pk2, ck = args
             return f"DELETE FROM {table_name} WHERE pk IN ({pk1}, {pk2}) AND ck = {ck}"
-        if op == "counter_add":
-            delta, pk = args
-            return f"UPDATE {table_name} SET c = c + {delta} WHERE pk = {pk}"
         raise ValueError(f"Unexpected operation: {op}")
 
-    def _make_batch_runner(table_name, *, counter_table=False):
+    def _make_batch_runner(table_name):
         prepared_statements = {}
         if batch_mode == "prepared":
-            if counter_table:
-                prepared_statements = {
-                    "counter_add": cql.prepare(f"UPDATE {table_name} SET c = c + ? WHERE pk = ?"),
-                }
-            else:
-                prepared_statements = {
-                    "insert": cql.prepare(f"INSERT INTO {table_name} (pk, ck, v) VALUES (?, ?, ?)"),
-                    "update": cql.prepare(f"UPDATE {table_name} SET v = ? WHERE pk = ? AND ck = ?"),
-                    "delete": cql.prepare(f"DELETE FROM {table_name} WHERE pk = ? AND ck = ?"),
-                    "delete_in": cql.prepare(f"DELETE FROM {table_name} WHERE pk IN (?, ?) AND ck = ?"),
-                }
+            prepared_statements = {
+                "insert": cql.prepare(f"INSERT INTO {table_name} (pk, ck, v) VALUES (?, ?, ?)"),
+                "update": cql.prepare(f"UPDATE {table_name} SET v = ? WHERE pk = ? AND ck = ?"),
+                "delete": cql.prepare(f"DELETE FROM {table_name} WHERE pk = ? AND ck = ?"),
+                "delete_in": cql.prepare(f"DELETE FROM {table_name} WHERE pk IN (?, ?) AND ck = ?"),
+            }
 
         def _run(ops, *, kind):
             if batch_mode == "prepared":
@@ -135,9 +124,7 @@ def test_batch(cql, sc_keyspace, batch_mode):
                     batch.add(prepared_statements[op], args)
                 return cql.execute(batch)
 
-            if kind == "counter":
-                begin = "BEGIN COUNTER BATCH"
-            elif kind == "unlogged":
+            if kind == "unlogged":
                 begin = "BEGIN UNLOGGED BATCH"
             elif kind == "logged":
                 begin = "BEGIN BATCH"
@@ -200,14 +187,6 @@ def test_batch(cql, sc_keyspace, batch_mode):
                         APPLY BATCH
                     """)
 
-    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, c counter") as table:
-        run_counter_batch = _make_batch_runner(table, counter_table=True)
-
-        with pytest.raises(InvalidRequest, match="Counter batches are not supported"):
-            run_counter_batch([
-                ("counter_add", (1, 1)),
-            ], kind="counter")
-
 
 # The single statement write path used to hand an empty JSON cache to the code
 # building the keys, so an INSERT ... JSON killed the coordinator on the
@@ -244,3 +223,38 @@ def test_insert_json_in_batch(cql, sc_keyspace):
             APPLY BATCH
         """)
         assert list(cql.execute(f"SELECT pk, v FROM {table} WHERE pk = 1")) == [(1, 2)]
+
+
+def test_counter_table_creation(cql, sc_keyspace):
+    """
+    Counter tables are rejected in strongly consistent keyspaces: a
+    counter update is a delta, and the write path would store it raw
+    instead of folding it into the counter value, aborting the node
+    when the counter is read back.
+    """
+    with pytest.raises(InvalidRequest, match="counters are not yet supported in strongly consistent keyspaces"):
+        cql.execute(f"CREATE TABLE {sc_keyspace}.{unique_name()} (pk int PRIMARY KEY, c counter)")
+
+
+def test_counter_batch_on_sc_table(cql, sc_keyspace):
+    """
+    Counter batches are rejected on strongly consistent keyspaces.
+    The batch type is checked before the statements in it, so the
+    batch here carries a regular INSERT. It could not carry a counter
+    update anyway: that needs a counter table, and counter tables
+    cannot be created in strongly consistent keyspaces (see
+    test_counter_table_creation).
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        error_msg = "Counter batches are not supported with strongly consistent tables"
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"""
+                BEGIN COUNTER BATCH
+                INSERT INTO {table} (pk, v) VALUES (1, 2);
+                APPLY BATCH
+            """)
+
+        batch = BatchStatement(batch_type=BatchType.COUNTER)
+        batch.add(cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)"), (1, 2))
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(batch)
