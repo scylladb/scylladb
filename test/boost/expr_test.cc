@@ -5956,3 +5956,97 @@ BOOST_AUTO_TEST_CASE(split_aggregation_allocates_fresh_temporaries) {
     BOOST_REQUIRE_EQUAL(temporary_index_of(split.inner_loop[1].expr), 5);
     BOOST_REQUIRE_EQUAL(allocator.nr_allocated(), 6);
 }
+
+static collection_constructor make_int_collection(collection_constructor::style_type style,
+        std::vector<expression> elements) {
+    const bool is_set = style == collection_constructor::style_type::set;
+    return collection_constructor {
+        .style = style,
+        .elements = std::move(elements),
+        .type = is_set ? data_type(set_type_impl::get_instance(int32_type, true))
+                       : data_type(list_type_impl::get_instance(int32_type, true)),
+    };
+}
+
+BOOST_AUTO_TEST_CASE(unevaluated_equality_constants) {
+    // A constant is the value, so a pair of them is decided either way.
+    BOOST_REQUIRE(unevaluated_equality(make_int_const(7), make_int_const(7)) == equality::always);
+    BOOST_REQUIRE(unevaluated_equality(make_int_const(7), make_int_const(8)) == equality::never);
+}
+
+BOOST_AUTO_TEST_CASE(unevaluated_equality_bind_variables) {
+    // One variable written twice is two nodes with two receivers and one value. This is what
+    // expression::operator== gets wrong, because it compares the receivers.
+    BOOST_REQUIRE(unevaluated_equality(new_bind_variable(0), new_bind_variable(0)) == equality::always);
+    // Two variables may still be given one value, and a marker may be given what a constant holds.
+    BOOST_REQUIRE(unevaluated_equality(new_bind_variable(0), new_bind_variable(1)) == equality::unknown);
+    BOOST_REQUIRE(unevaluated_equality(new_bind_variable(0), make_int_const(7)) == equality::unknown);
+}
+
+BOOST_AUTO_TEST_CASE(unevaluated_equality_columns) {
+    schema_ptr table_schema = make_simple_test_schema();
+    expression r = column_value(table_schema->get_column_definition("r"));
+    expression s = column_value(table_schema->get_column_definition("s"));
+
+    // Within one row a column reads one value; two columns may happen to hold the same one.
+    BOOST_REQUIRE(unevaluated_equality(r, r) == equality::always);
+    BOOST_REQUIRE(unevaluated_equality(r, s) == equality::unknown);
+}
+
+BOOST_AUTO_TEST_CASE(unevaluated_equality_lists) {
+    auto list_of = [] (std::vector<expression> elements) {
+        return make_int_collection(collection_constructor::style_type::list_or_vector, std::move(elements));
+    };
+
+    // Length and order are part of a list's value, so one element decides the whole of it.
+    BOOST_REQUIRE(unevaluated_equality(list_of({make_int_const(1), new_bind_variable(0)}),
+                                      list_of({make_int_const(1), new_bind_variable(0)})) == equality::always);
+    BOOST_REQUIRE(unevaluated_equality(list_of({make_int_const(1), new_bind_variable(0)}),
+                                      list_of({make_int_const(2), new_bind_variable(0)})) == equality::never);
+    BOOST_REQUIRE(unevaluated_equality(list_of({make_int_const(1)}),
+                                      list_of({make_int_const(1), make_int_const(1)})) == equality::never);
+    // An element that cannot be proved either way leaves the list unknown, not never-equal.
+    BOOST_REQUIRE(unevaluated_equality(list_of({new_bind_variable(0)}),
+                                      list_of({new_bind_variable(1)})) == equality::unknown);
+}
+
+BOOST_AUTO_TEST_CASE(unevaluated_equality_sets) {
+    auto set_of = [] (std::vector<expression> elements) {
+        return make_int_collection(collection_constructor::style_type::set, std::move(elements));
+    };
+
+    // Element for element still proves a set equal.
+    BOOST_REQUIRE(unevaluated_equality(set_of({make_int_const(1), new_bind_variable(0)}),
+                                      set_of({make_int_const(1), new_bind_variable(0)})) == equality::always);
+    // But a set forgets the order of its elements and collapses duplicates among them, so neither a
+    // differing element nor a differing length is reasoned about: {1, 1} is the set {1}.
+    BOOST_REQUIRE(unevaluated_equality(set_of({make_int_const(1)}),
+                                      set_of({make_int_const(2)})) == equality::unknown);
+    BOOST_REQUIRE(unevaluated_equality(set_of({make_int_const(1)}),
+                                      set_of({make_int_const(1), make_int_const(1)})) == equality::unknown);
+}
+
+BOOST_AUTO_TEST_CASE(unevaluated_equality_function_calls) {
+    auto pure = functions::make_native_scalar_function<true>(
+            "expr_test_pure_fn", int32_type, std::vector<data_type>{int32_type},
+            [] (std::span<const bytes_opt> args) -> bytes_opt { return args[0]; });
+    auto impure = functions::make_native_scalar_function<false>(
+            "expr_test_impure_fn", int32_type, std::vector<data_type>{int32_type},
+            [] (std::span<const bytes_opt> args) -> bytes_opt { return args[0]; });
+    auto call = [] (shared_ptr<functions::function> fn, expression arg) {
+        return function_call{.func = std::move(fn), .args = {std::move(arg)}};
+    };
+
+    // A pure function sends equal arguments to one value, so matching them proves the calls equal.
+    BOOST_REQUIRE(unevaluated_equality(call(pure, make_int_const(1)),
+                                      call(pure, make_int_const(1))) == equality::always);
+    // It may send different arguments there too, so a differing argument proves nothing.
+    BOOST_REQUIRE(unevaluated_equality(call(pure, make_int_const(1)),
+                                      call(pure, make_int_const(2))) == equality::unknown);
+    // An impure function need not agree even with itself.
+    BOOST_REQUIRE(unevaluated_equality(call(impure, make_int_const(1)),
+                                      call(impure, make_int_const(1))) == equality::unknown);
+    // Neither does a call that is still only a name.
+    BOOST_REQUIRE(unevaluated_equality(make_token({make_int_const(1)}),
+                                      make_token({make_int_const(1)})) == equality::unknown);
+}
