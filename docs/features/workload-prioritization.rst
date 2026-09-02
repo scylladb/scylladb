@@ -22,9 +22,12 @@ Using Service Level CQL commands, database administrators (working on ScyllaDB) 
 By assigning each service level to the different roles within your organization, DBAs ensure that each :doc:`role </operating-scylla/security/rbac-usecase>` receives the level of service the role requires.
 
 
-Initially ScyllaDB has two service levels:
+Initially ScyllaDB has three service levels:
  * ``'default'`` - Receives all load unassigned to any other service level.
  * ``'driver'`` - Isolates metadata operations (for example, driver schema and topology fetches) and handles new connections before the user is authenticated and authorized. This reduces the impact of connection handling on regular query traffic. In most deployments, you do not need to tune the ``'driver'`` service level.
+ * ``'default_batch'`` - Isolates requests that are likely to be part of a bulk workload - scans that are not restricted to a known set of partitions, and batches of twelve or more statements - when the role issuing them has no service level of its own. This keeps such requests from delaying interactive traffic that shares the ``'default'`` service level. A role with an explicitly assigned service level always uses that service level instead. In most deployments, you do not need to tune the ``'default_batch'`` service level.
+
+The ``'driver'`` and ``'default_batch'`` service levels are created automatically. You can alter or drop them like any other service level; once dropped, they are not re-created. Dropping ``'default_batch'`` makes bulk requests run in the service level of the role issuing them. A ``SELECT`` that names a service level explicitly with ``USING SERVICE LEVEL`` is never redirected; a batch has no such clause.
 
 Prerequisites
 =============
@@ -79,7 +82,7 @@ Where:
 Example
 .......
 
-There are 4 service levels (OLAP, OLTP, driver, default) where: (the percentage of resources = (Assigned Shares / Total Shares) x 100). Total Shares in this case is the total of all allocated shares + the Default SLA (1000). The percentage of resources would be:
+There are 5 service levels (OLAP, OLTP, driver, default_batch, default) where: (the percentage of resources = (Assigned Shares / Total Shares) x 100). Total Shares in this case is the total of all allocated shares + the Default SLA (1000). The percentage of resources would be:
 
 .. list-table::
    :widths: 30 30 30 
@@ -93,15 +96,18 @@ There are 4 service levels (OLAP, OLTP, driver, default) where: (the percentage 
      - 4%
    * - OLTP
      - 1000
-     - 44%
+     - 42%
    * - driver
      - 200
      - 8%
+   * - default_batch
+     - 100
+     - 4%
    * - default
      - 1000
-     - 44%
+     - 42%
    * - Total 
-     - 2300
+     - 2400
      - 100%
 
 **Procedure**
@@ -121,12 +127,14 @@ There are 4 service levels (OLAP, OLTP, driver, default) where: (the percentage 
 
    service_level | shares
    --------------+-------
+   default_batch |    100
+   --------------+-------
           driver |    200
    --------------+-------
             olap |    100
    --------------+-------
             oltp |   1000
-   (3 rows)
+   (4 rows)
 
 Change Resource Allocation for a Service Level 
 -----------------------------------------------
@@ -236,10 +244,11 @@ Run the following:
 
    service_level  | shares
    ---------------+--------
+    default_batch |     100
            driver |     200
              olap |     100
              oltp |    1000
-   (3 rows)
+   (4 rows)
 
 
 Delete a Service Level
@@ -427,7 +436,9 @@ In order for workload prioritization to take effect, application users need to b
 
 Limits
 ======
-ScyllaDB is limited to 10 service levels, including the default and driver levels; this means you can create up to 8 service levels.
+ScyllaDB is limited to 11 service levels, including the default, driver and default_batch levels; this means you can create up to 8 service levels.
+
+If the limit is already reached when ScyllaDB tries to create ``'driver'`` or ``'default_batch'``, the creation fails and is retried later; requests keep running in the service level they would have used otherwise. Drop a user service level to let ScyllaDB create the missing one.
 
 
 Additional References
