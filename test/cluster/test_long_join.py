@@ -58,7 +58,7 @@ async def test_long_join_drop_entries_on_bootstrapping(manager: ScyllaClusterMan
     await wait_for(gossiper_api_ready, time.time() + 60)
 
     servers.append(s)
-    await manager.servers_see_each_other(servers, interval=300)
+    await manager.servers_see_each_other(servers)
     await manager.api.enable_injection(s.ip_addr, 'join_node_response_drop_expiring', one_shot=True)
     await asyncio.gather(*(manager.api.message_injection(s.ip_addr, inj) for s in servers[:-1]))
     await asyncio.gather(task)
