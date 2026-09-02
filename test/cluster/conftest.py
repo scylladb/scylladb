@@ -16,9 +16,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from test import TOP_SRC_DIR, MODES_TIMEOUT_FACTOR, path_to
 from test.pylib.runner import PHASE_REPORT_KEY, MANAGER_LOGS_KEY, make_failed_test_dir
-from test.pylib.object_storage import make_object_storage
+from test.pylib.object_storage import make_object_storage, format_tuples
 from test.pylib.random_tables import RandomTables
 from test.pylib.skip_types import skip_env
+from test.cluster.util import FeatureConfig
 from test.pylib.util import unique_name
 from test.pylib.async_cql import run_async
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -307,15 +308,33 @@ def failure_detector_timeout(build_mode):
     return 5000 * MODES_TIMEOUT_FACTOR[build_mode]
 
 @pytest.fixture(params=[None, 's3', 'gs'], ids=['local', 's3', 'gs'])
-async def storage(request, pytestconfig, tmpdir, suite_log_dir, manager: ScyllaClusterManager):
-    """Parametrize tests over local / S3 / GCS storage.
+async def storage_config(request, pytestconfig, tmpdir, suite_log_dir, manager: ScyllaClusterManager) -> FeatureConfig:
+    """Parametrize tests over local / S3 / GCS storage, as a FeatureConfig.
 
-    When storage is None the test runs with local (filesystem) storage.
-    Otherwise the fixture yields an object-storage server handle.
+    A test applies the object-storage cluster config and keyspace STORAGE clause
+    the same way it applies any other configuration, and combines the two by
+    chaining: storage_config.get_cluster_cfg(feature_config.get_cluster_cfg(cfg)).
+    The local flavor yields an empty configuration.
     """
     if request.param is None:
-        yield None
+        yield FeatureConfig()
         return
 
+    # Skip before provisioning: a test that skips itself in its body has already
+    # paid for a backend, and leaves the cluster clean, so the teardown callback
+    # that stops the backend never fires.
+    for marker in request.node.iter_markers('skip_storage'):
+        reason = marker.kwargs.get('reason')
+        if not reason:
+            raise pytest.UsageError(f"{request.node.name}: skip_storage takes the flavors positionally "
+                                    "and requires reason=...")
+        if request.param in marker.args:
+            skip_env(reason)
+
     async with make_object_storage(request.param, pytestconfig, tmpdir, suite_log_dir, request.node.name, manager) as server:
-        yield server
+        storage_opts = format_tuples(type=server.type,
+                                     endpoint=server.address,
+                                     bucket=server.bucket_name)
+        yield FeatureConfig(ks_opts=f" WITH STORAGE = {storage_opts}",
+                            cluster_cfg={'object_storage_endpoints': server.create_endpoint_conf()},
+                            on_object_storage=True)
