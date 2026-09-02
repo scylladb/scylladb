@@ -17,12 +17,16 @@
 #include <seastar/core/future.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/test_fixture.hh>
+#include <seastar/util/closeable.hh>
+#include <seastar/util/short_streams.hh>
 
 #include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "sstables/object_storage_client.hh"
 #include "sstables/storage.hh"
+#include "utils/memory_data_sink.hh"
+#include "utils/rjson.hh"
 #include "sstables_loader.hh"
 #include "replica/database_fwd.hh"
 #include "replica/tablets.hh"
@@ -370,6 +374,71 @@ SEASTAR_TEST_CASE(test_populate_snapshot_sstables_from_manifests, *boost::unit_t
             populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "snapshot", {manifest_path}, db::consistency_level::ONE).get();
 
             check_snapshot_sstables(env).get();
+    }, false, db_cfg_ptr, 10);
+}
+
+future<sstring> download_object(cql_test_env& env, sstring endpoint, sstring bucket, sstring path) {
+    auto client = env.get_sstorage_manager().local().get_endpoint_client(endpoint);
+    auto source = client->make_download_source(object_name(bucket, path));
+    return seastar::with_closeable(input_stream<char>(std::move(source)), [] (input_stream<char>& is) {
+        return util::read_entire_stream_contiguous(is);
+    });
+}
+
+future<> upload_object(cql_test_env& env, sstring endpoint, sstring bucket, sstring path, sstring content) {
+    auto client = env.get_sstorage_manager().local().get_endpoint_client(endpoint);
+    memory_data_sink_buffers bufs;
+    bufs.push_back(temporary_buffer<char>(content.data(), content.size()));
+    return client->put_object(object_name(bucket, path), std::move(bufs));
+}
+
+// Manifests written by older Scylla versions lack the optional per-sstable metadata
+// fields, and so do manifests of vnode-based tables, which have no tablet_id. Restore
+// must not fail on them.
+SEASTAR_TEST_CASE(test_restore_should_handle_missing_optional_fields, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+    using namespace sstables;
+
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+    auto storage_options = make_test_object_storage_options("S3");
+    db_cfg_ptr->object_storage_endpoints(make_storage_options_config(storage_options));
+
+    return do_with_some_data_in_thread({"cf"}, [storage_options = std::move(storage_options)] (cql_test_env& env) {
+            take_snapshot(env, "ks", "cf", "snapshot").get();
+
+            auto ep = storage_options.to_map()["endpoint"];
+            auto bucket = storage_options.to_map()["bucket"];
+            auto prefix = backup(env, ep, bucket).get();
+
+            // Download the manifest just written and strip the optional fields from every
+            // sstable entry, to emulate a manifest written before 2026.3, which had none.
+            auto manifest = rjson::parse(download_object(env, ep, bucket, prefix + "/manifest.json").get());
+            auto* sstables = rjson::find(manifest, "sstables");
+            BOOST_REQUIRE(sstables && sstables->IsArray() && sstables->Size() > 0);
+            for (auto& sstable_entry : sstables->GetArray()) {
+                for (auto field : {"tablet_id", "repaired_at", "data_size", "index_size"}) {
+                    BOOST_REQUIRE(rjson::remove_member(sstable_entry, field));
+                }
+            }
+
+            auto manifest_path = prefix + "/manifest-without-optional-fields.json";
+            upload_object(env, ep, bucket, manifest_path, rjson::print(manifest)).get();
+
+            populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "snapshot", {manifest_path}, db::consistency_level::ONE).get();
+
+            check_snapshot_sstables(env).get();
+
+            // the fields dropped above default to 0
+            auto& topology = env.get_storage_proxy().local().get_token_metadata_ptr()->get_topology();
+            db::snapshot_table_helper sth(env.local_qp());
+            auto entries = sth.get_snapshot_sstables("snapshot", "ks", "cf", topology.get_datacenter(), topology.get_rack(), db::consistency_level::ONE).get();
+            BOOST_REQUIRE(!entries.empty());
+            for (const auto& e : entries) {
+                BOOST_CHECK_EQUAL(e.tablet_id, 0);
+                BOOST_CHECK_EQUAL(e.repaired_at, 0);
+                BOOST_CHECK_EQUAL(e.data_size, 0);
+                BOOST_CHECK_EQUAL(e.index_size, 0);
+            }
     }, false, db_cfg_ptr, 10);
 }
 

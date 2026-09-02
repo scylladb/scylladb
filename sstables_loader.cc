@@ -1197,10 +1197,12 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
         auto first_token = rjson::to_token(rjson::get(sstable_entry, "first_token"));
         auto last_token = rjson::to_token(rjson::get(sstable_entry, "last_token"));
         auto toc_name = rjson::to_sstring(rjson::get(sstable_entry, "toc_name"));
-        auto tablet_id = rjson::get<size_t>(sstable_entry, "tablet_id");
-        auto repaired_at = rjson::get<int64_t>(sstable_entry, "repaired_at");
-        auto data_size = rjson::get<int64_t>(sstable_entry, "data_size");
-        auto index_size = rjson::get<int64_t>(sstable_entry, "index_size");
+        // The fields below are not needed to restore the sstable, they are only recorded
+        // in system_distributed.snapshot_sstables for informational purposes.
+        auto tablet_id = rjson::get_opt<size_t>(sstable_entry, "tablet_id").value_or(0);
+        auto repaired_at = rjson::get_opt<int64_t>(sstable_entry, "repaired_at").value_or(0);
+        auto data_size = rjson::get_opt<int64_t>(sstable_entry, "data_size").value_or(0);
+        auto index_size = rjson::get_opt<int64_t>(sstable_entry, "index_size").value_or(0);
         auto prefix = sstring(std::filesystem::path(manifest_prefix).parent_path().string());
         // Insert the snapshot sstable metadata into system_distributed.snapshot_sstables with a TTL of 3 days, that should be enough
         // for any snapshot restore operation to complete, and after that the metadata will be automatically cleaned up from the table
