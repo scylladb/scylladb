@@ -262,6 +262,12 @@ BOOST_AUTO_TEST_CASE(test_matching_primitives) {
     BOOST_CHECK(!role_matches("!(guest)", "guest"));
     // Trailing backslash: incomplete escape.
     BOOST_CHECK(!role_matches("admin\\", "admin"));
+
+    BOOST_CHECK(role_matches("", ""));
+    BOOST_CHECK(role_matches("*", ""));
+    BOOST_CHECK(!role_matches("admin_*", ""));
+    BOOST_CHECK(!role_matches("?", ""));
+    BOOST_CHECK(!role_matches("", "admin"));
 }
 
 BOOST_AUTO_TEST_CASE(test_rule_matching_and_sinks) {
