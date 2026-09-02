@@ -1017,6 +1017,15 @@ public:
     // TABLET_TRANSITION_CANCEL feature.
     future<> cancel_tablet_transitions();
 
+    // Cancels the transition of one tablet, so that the coordinator rolls it back instead of
+    // running it to completion.
+    //
+    // Unlike cancel_tablet_transitions(), a transition which is draining a node is not exempt:
+    // the caller named this tablet, and restarting a stuck drain stream is a legitimate reason
+    // to ask.  Throws if the tablet is not transitioning, if its stage cannot be rolled back,
+    // or if the cluster does not support the TABLET_TRANSITION_CANCEL feature.
+    future<> cancel_tablet_transition(locator::global_tablet_id tablet);
+
     future<utils::UUID> submit_quiesce_topology_request();
     // The body of await_topology_quiesced(), run through _quiesce_topology so that
     // concurrent callers share a single request. Shard 0 only.
