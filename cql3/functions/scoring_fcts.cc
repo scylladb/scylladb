@@ -51,6 +51,15 @@ shared_ptr<function> make_bm25_function() {
     return ::make_shared<external_scalar_function>(BM25_FUNCTION_NAME.name, float_type, std::vector<data_type>{utf8_type, utf8_type});
 }
 
+shared_ptr<function> make_bm25_highlight_function() {
+    // Full-text search highlighting function: bm25_highlight(column, query) -> text
+    //
+    // Only the full-text index can pick the fragment, because it needs the analyzer and the
+    // corpus statistics. The index may find no fragment, for example when the query consists only
+    // of stop words; the value is then null.
+    return ::make_shared<external_scalar_function>(BM25_HIGHLIGHT_FUNCTION_NAME.name, utf8_type, std::vector<data_type>{utf8_type, utf8_type});
+}
+
 shared_ptr<function> make_ann_function(const std::vector<data_type>& arg_types) {
     // ANN vector ordering function: ann(column, query_vector) -> float
     return ::make_shared<external_scalar_function>(ANN_FUNCTION_NAME.name, float_type, arg_types);
