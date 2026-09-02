@@ -53,6 +53,8 @@ using namespace cql3::expr::test_utils;
 
 using cql3::statements::external_search::drop_unscored_rows;
 using cql3::statements::external_search::equality;
+using cql3::statements::external_search::external_search_provider;
+using cql3::statements::external_search::external_values;
 using cql3::statements::external_search::join_table_results;
 using cql3::statements::external_search::joined_row;
 using cql3::statements::external_search::similarities_of;
@@ -365,6 +367,22 @@ BOOST_AUTO_TEST_CASE(test_a_row_already_dropped_stays_dropped) {
     BOOST_REQUIRE(!rows[1].dropped);
     BOOST_REQUIRE(similarities[0].is_null());
     BOOST_REQUIRE_EQUAL(score_of(similarities, 1), 0.75f);
+}
+
+// The provider's position moves for every row it is offered, dropped ones included - otherwise the
+// rows after a dropped one would read their neighbour's value.
+BOOST_AUTO_TEST_CASE(test_provider_advances_past_a_dropped_row) {
+    auto values = std::vector<cql3::raw_value>{
+            cql3::raw_value::make_null(),
+            cql3::raw_value::make_value(float_type->decompose(0.75f)),
+    };
+    auto rows = std::vector<joined_row>{{.external_result = std::nullopt, .dropped = true}, {.external_result = 1}};
+    auto provider = external_search_provider({external_values{.temporary_index = 1, .values = std::move(values)}}, rows);
+
+    auto temporaries = std::vector<cql3::raw_value>{cql3::raw_value::make_null(), cql3::raw_value::make_null()};
+    BOOST_REQUIRE(!provider.try_fill(temporaries));
+    BOOST_REQUIRE(provider.try_fill(temporaries));
+    BOOST_REQUIRE_EQUAL(temporaries[1].view().deserialize<float>(*float_type), 0.75f);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -76,8 +76,7 @@ public:
     /// Copies each row's `dropped` flag; `rows` is not retained.
     external_search_provider(std::vector<external_values> values, std::span<const joined_row> rows);
 
-    bool try_fill(std::vector<cql3::raw_value>& temporaries, std::span<const bytes> partition_key, std::span<const bytes> clustering_key,
-            const query::result_row_view& static_row, const query::result_row_view* row) const override;
+    bool try_fill(std::vector<cql3::raw_value>& temporaries) const override;
 };
 
 } // namespace cql3::statements::external_search
