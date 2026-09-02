@@ -8,6 +8,8 @@
 
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/switch_to.hh>
+#include <seastar/util/backtrace.hh>
+#include <seastar/core/on_internal_error.hh>
 #include <cctype>
 #include <ranges>
 #include <unordered_map>
@@ -55,6 +57,15 @@ atomic_deletion::atomic_deletion(std::vector<shared_sstable> ssts)
 future<> atomic_deletion::commit() {
     if (empty()) {
         co_return;
+    }
+    // The caller detached these sstables before asking for the deletion and will
+    // not put them back, so they are condemned from here on, however this deletion
+    // ends. Mark them before anything can fail: sstable::destroy() then removes
+    // them when the last reference is dropped, so a failure below neither leaves
+    // their files behind until the next startup nor looks like a leak to
+    // sstables_manager::detect_leakage().
+    for (auto& sst : _ssts) {
+        sst->mark_for_deletion();
     }
     if (utils::get_local_injector().enter("delete_atomically_before_prepare")) {
         throw std::runtime_error("delete_atomically_before_prepare");
@@ -431,7 +442,36 @@ void sstables_manager::add(sstable* sst) {
     _active.push_back(*sst);
 }
 
+void sstables_manager::detect_leakage(sstable* sst) {
+    if (!_detect_leakage) {
+        return;
+    }
+    if (_leakage_detection_paused.contains(sst->get_schema()->id())) {
+        return;
+    }
+    if (sst->unlinked_at()) {
+        return;
+    }
+    // A sstable marked for deletion is unlinked by sstable::destroy(), which
+    // runs right after deactivation, so it isn't leaked.
+    if (sst->marked_for_deletion()) {
+        return;
+    }
+    // During boot, a sstable can be partially loaded for determining shard
+    // ownership and then discarded. Also, a partially written sstable can
+    // be discarded without being unlinked, but will be GC'ed on restart.
+    // Either way, detector shouldn't misfire.
+    if (!sst->opened_for_reading()) {
+        return;
+    }
+    // Deactivation runs from lw_shared_ptr's deleter, i.e. from a noexcept
+    // context, so throwing when abort_on_internal_error is unset would terminate.
+    on_internal_error_noexcept(smlogger, fmt::format("Detected leakage of sstable {} of origin {} and state {}",
+                                            sst->get_filename(), sst->get_origin(), sst->state()));
+}
+
 void sstables_manager::deactivate(sstable* sst) {
+    detect_leakage(sst);
     // Drop reclaimable components if they are still in memory
     // and remove SSTable from the reclaimable memory tracking
     reclaim_memory_and_stop_tracking_sstable(sst);

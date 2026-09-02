@@ -2835,8 +2835,15 @@ future<> database::start(sharded<qos::service_level_controller>& sl_controller, 
     }
 }
 
+void database::enable_sstable_leakage_detection() noexcept {
+    _user_sstables_manager->enable_leakage_detection();
+    _system_sstables_manager->enable_leakage_detection();
+}
+
 future<> database::shutdown() {
     _shutdown = true;
+    _user_sstables_manager->disable_leakage_detection();
+    _system_sstables_manager->disable_leakage_detection();
     auto b = defer([this] noexcept { _stop_barrier.abort(); });
     co_await _stop_barrier.arrive_and_wait();
     b.cancel();

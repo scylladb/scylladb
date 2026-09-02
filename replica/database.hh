@@ -2017,6 +2017,10 @@ public:
     /// the normal concurrency.
     void revert_initial_system_read_concurrency_boost();
     future<> start(sharded<qos::service_level_controller>&, utils::disk_space_monitor* dsm);
+    // Arms the sstable leakage detector, see sstables_manager::detect_leakage().
+    // Called once sstable loading is over, so that boot doesn't trip it.
+    void enable_sstable_leakage_detection() noexcept;
+
     future<> shutdown();
     future<> stop();
     future<> close_tables(table_kind kind_to_close);

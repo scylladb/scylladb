@@ -2193,6 +2193,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             checkpoint(stop_signal, "loading non-system sstables");
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
 
+            // Loading is over, so from now on a sstable is only released after
+            // being unlinked, and the leakage detector can be armed.
+            db.invoke_on_all(&replica::database::enable_sstable_leakage_detection).get();
+
             checkpoint(stop_signal, "recovering logstor");
             db.invoke_on_all([] (replica::database& db) {
                 return db.recover_logstor();

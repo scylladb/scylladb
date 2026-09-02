@@ -183,6 +183,11 @@ private:
     future<> _components_reloader_status = make_ready_future<>();
 
     bool _closing = false;
+    // Leakage detection is off until the owner explicitly arms it. See
+    // detect_leakage().
+    bool _detect_leakage = false;
+    // Per-table nesting count of pause_leakage_detection() holders.
+    std::unordered_map<table_id, unsigned> _leakage_detection_paused;
     promise<> _done;
     cache_tracker& _cache_tracker;
 
@@ -321,6 +326,28 @@ public:
 
     const abort_source& get_abort_source() const noexcept { return _abort; }
 
+    // To be called by the owner once it is done loading sstables, and again,
+    // to disable, before it starts closing its tables. See detect_leakage().
+    void enable_leakage_detection() noexcept { _detect_leakage = true; }
+    void disable_leakage_detection() noexcept { _detect_leakage = false; }
+
+    // Suppresses leakage detection for one table while an operation that
+    // legitimately releases live sstables is in progress. The holder must
+    // outlive whatever owns those sstables.
+    using leakage_detection_pause = deferred_action<noncopyable_function<void () noexcept>>;
+
+    [[nodiscard]] leakage_detection_pause pause_leakage_detection(table_id id) {
+        ++_leakage_detection_paused[id];
+        return leakage_detection_pause([this, id] () noexcept {
+            // Look the entry up rather than indexing it, so the destructor
+            // doesn't allocate.
+            auto it = _leakage_detection_paused.find(id);
+            if (it != _leakage_detection_paused.end() && !--it->second) {
+                _leakage_detection_paused.erase(it);
+            }
+        });
+    }
+
     // To be called by the sstable to signal its unlinking
     void on_unlink(sstable* sst);
 
@@ -358,6 +385,16 @@ private:
     // The method is idempotent and for an sstable that is deleted, it is called both
     // during unlink and during deactivation.
     void reclaim_memory_and_stop_tracking_sstable(sstable* sst);
+    // The sstable will be reported as leaked if the system is no longer referencing
+    // the sstable, but it's still alive in the storage.
+    //
+    // Only owners that arm the detector via enable_leakage_detection() are checked.
+    // It stays off while sstables are being loaded, since loading legitimately
+    // releases live sstables (e.g. a shared sstable is handed over as open info,
+    // see sstable_directory::process_descriptor()), and it is turned off again
+    // when closing tables on shutdown. Managers owned by tools and tests never arm
+    // it.
+    void detect_leakage(sstable* sst);
 private:
     db::large_data_handler& get_large_data_handler() const {
         return _large_data_handler;
