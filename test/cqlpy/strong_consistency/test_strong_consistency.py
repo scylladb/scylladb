@@ -55,17 +55,16 @@ def test_reject_user_provided_timestamps(cql, sc_keyspace):
             cql.execute(f"UPDATE {table} USING TIMESTAMP 23 SET v = 13 WHERE pk = 0")
         with pytest.raises(InvalidRequest, match=error_msg):
             cql.execute(f"DELETE FROM {table} USING TIMESTAMP 23 WHERE pk = 0")
-        # FIXME(SCYLLADB-977):
-        # Add test cases for batches with timestamps. Remember to
-        # handle both whole-batch timestamps, e.g.
-        #   BEGIN BATCH USING TIMESTAMP ts
-        #     ...
-        #   APPLY BATCH
-        # as well as timestamps for individual items, e.g.
-        #   BEGIN BATCH
-        #     INSERT INTO ... USING TIMESTAMP st;
-        #     ...
-        #   APPLY BATCH
+        # A timestamp on an individual batch item, rejected when the
+        # inner statements are prepared. Whole-batch timestamps are
+        # covered by test_batch_attributes_on_sc_table.
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"""
+                BEGIN BATCH
+                INSERT INTO {table} (pk, v) VALUES (0, 13) USING TIMESTAMP 23;
+                INSERT INTO {table} (pk, v) VALUES (0, 14);
+                APPLY BATCH
+            """)
 
 
 @pytest.mark.parametrize("batch_mode", ["text", "prepared"], ids=["text", "prepared"])
@@ -340,3 +339,28 @@ def test_lwt_on_sc_table(cql, sc_keyspace):
             """)
 
         assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 1
+
+
+def test_batch_attributes_on_sc_table(cql, sc_keyspace):
+    """
+    Batch-level USING TTL and USING TIMESTAMP are rejected on strongly
+    consistent batches. The strongly consistent batch reads its USING
+    attributes only to compute the timeout, so both would be parsed
+    and then silently ignored.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        with pytest.raises(InvalidRequest, match="Global TTL on the BATCH statement is not supported"):
+            cql.execute(f"""
+                BEGIN BATCH USING TTL 100
+                INSERT INTO {table} (pk, v) VALUES (1, 2);
+                INSERT INTO {table} (pk, v) VALUES (1, 3);
+                APPLY BATCH
+            """)
+
+        with pytest.raises(InvalidRequest, match="Strongly consistent queries don't support user-provided timestamps"):
+            cql.execute(f"""
+                BEGIN BATCH USING TIMESTAMP 42
+                INSERT INTO {table} (pk, v) VALUES (2, 2);
+                INSERT INTO {table} (pk, v) VALUES (2, 3);
+                APPLY BATCH
+            """)
