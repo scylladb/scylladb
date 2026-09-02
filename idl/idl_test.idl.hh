@@ -47,6 +47,19 @@ struct writable_vector stub [[writable]] {
     std::vector<simple_compound> vector;
 };
 
+// Same wire prefix as writable_versioned_compound, without the versioned
+// tail: what a sender predating [[version 1.1]] puts on the wire.
+struct writable_versioned_compound_old stub [[writable]] {
+    uint32_t foo;
+    uint32_t bar;
+};
+
+struct writable_versioned_compound stub [[writable]] {
+    uint32_t foo;
+    uint32_t bar;
+    std::optional<uint32_t> opt [[version 1.1]];
+};
+
 
 struct writable_variants stub [[writable]] {
     int id;
