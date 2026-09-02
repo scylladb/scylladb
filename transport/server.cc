@@ -1498,10 +1498,22 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
                 co_return std::nullopt;
             };
         }
-        auto role_name = co_await a.authenticate(std::move(dn_func));
+        auto auth_fut = co_await coroutine::as_future(a.authenticate(std::move(dn_func)));
+        if (auth_fut.failed()) {
+            auto ex = auth_fut.get_exception();
+            co_await audit::inspect_login(sstring(), client_state.get_client_address().addr(), true);
+            co_return coroutine::exception(std::move(ex));
+        }
+        auto role_name = auth_fut.get();
         if (role_name) {
             client_state.set_login(auth::authenticated_user(*role_name));
-            co_await client_state.check_user_can_login();
+            auto login_fut = co_await coroutine::as_future(client_state.check_user_can_login());
+            if (login_fut.failed()) {
+                auto login_ex = login_fut.get_exception();
+                co_await audit::inspect_login(*role_name, client_state.get_client_address().addr(), true);
+                co_return coroutine::exception(std::move(login_ex));
+            }
+            co_await audit::inspect_login(*role_name, client_state.get_client_address().addr(), false);
             client_state.maybe_update_per_service_level_params();
             update_scheduling_group();
             _authenticating = false;
