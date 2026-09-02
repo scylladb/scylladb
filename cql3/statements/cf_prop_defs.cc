@@ -11,6 +11,7 @@
 #include "cql3/statements/cf_prop_defs.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/request_validations.hh"
+#include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/extensions.hh"
 #include "db/tags/extension.hh"
@@ -150,6 +151,9 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     auto per_partition_rate_limit_options = get_per_partition_rate_limit_options(schema_extensions);
     if (per_partition_rate_limit_options && !db.features().typed_errors_in_read_rpc) {
         throw exceptions::configuration_exception("Per-partition rate limit is not supported yet by the whole cluster");
+    }
+    if (per_partition_rate_limit_options && strong_consistency::is_strongly_consistent(db, ks_name)) {
+        throw exceptions::configuration_exception("Per-partition rate limit is not supported in strongly consistent keyspaces");
     }
 
     auto tombstone_gc_options = get_tombstone_gc_options(schema_extensions);
