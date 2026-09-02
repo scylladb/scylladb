@@ -290,3 +290,20 @@ def test_per_partition_rate_limit_on_sc_table(cql, sc_keyspace):
     with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
         with pytest.raises(ConfigurationException, match=rate_limit_msg):
             cql.execute(f"ALTER TABLE {table} WITH per_partition_rate_limit = {{'max_reads_per_second': 100}}")
+
+
+def test_views_and_indexes_on_sc_table(cql, sc_keyspace):
+    """
+    Materialized views and secondary indexes are rejected on tables in
+    strongly consistent keyspaces. They would never be updated: view
+    updates are generated on the coordinator write path, which strongly
+    consistent writes bypass.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        error_msg = "not supported on tables in strongly consistent keyspaces"
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"CREATE MATERIALIZED VIEW {table}_mv AS"
+                        f" SELECT * FROM {table} WHERE v IS NOT NULL AND pk IS NOT NULL"
+                        f" PRIMARY KEY (v, pk)")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"CREATE INDEX ON {table} (v)")
