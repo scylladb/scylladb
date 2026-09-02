@@ -64,10 +64,12 @@ void fetch_primary_key_columns(selection::selection& selection, const schema& sc
 struct search_temporaries {
     std::optional<size_t> score;
     std::optional<size_t> rank;
+    /// Only a full-text search has a fragment to report; see search_value::fragment.
+    std::optional<size_t> fragment;
 
     /// True when the query returns some value of the search.
     bool any() const {
-        return score.has_value() || rank.has_value();
+        return score.has_value() || rank.has_value() || fragment.has_value();
     }
 };
 

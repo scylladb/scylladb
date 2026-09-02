@@ -56,6 +56,7 @@ expr::expression prepare_external_search_relation_lhs(expr::expression lhs, data
     case search_value::score:
         return lhs;
     case search_value::rank:
+    case search_value::fragment:
         throw exceptions::invalid_request_exception(format("{}() is not supported in the WHERE clause", fun->display_name()));
     case search_value::score_and_rank:
         break;
@@ -128,6 +129,18 @@ shared_ptr<function> make_bm25_rank_function() {
     return ::make_shared<external_search_function>(
             BM25_RANK_FUNCTION_NAME.name, int32_type, std::vector<data_type>{utf8_type, utf8_type}, search_family::bm25,
             search_value::rank);
+}
+
+shared_ptr<function> make_bm25_highlight_function() {
+    // bm25_highlight(column, query) -> text, an excerpt of the column's text with the matched
+    // terms marked.
+    //
+    // Only the full-text index can pick the fragment, because it needs the analyzer and the
+    // corpus statistics. The index may find no fragment, for example when the query consists only
+    // of stop words; the value is then null.
+    return ::make_shared<external_search_function>(
+            BM25_HIGHLIGHT_FUNCTION_NAME.name, utf8_type, std::vector<data_type>{utf8_type, utf8_type}, search_family::bm25,
+            search_value::fragment);
 }
 
 shared_ptr<function> make_ann_function(const function_name& name, const std::vector<data_type>& arg_types) {
