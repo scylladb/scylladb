@@ -9,6 +9,7 @@
 #include <seastar/core/abort_source.hh>
 #include "raft.hh"
 #include <functional>
+#include <optional>
 
 namespace raft {
 
@@ -110,6 +111,16 @@ public:
     // The caller may pass a pointer to an abort_source to make the operation abortable.
     // If it passes nullptr, the operation is unabortable.
     //
+    // The caller may pass the term number which must be current at the moment
+    // when the entry is appended. If the term changes before the entry is appended,
+    // the call to `add_entry` will fail with a `raft::term_changed` exception.
+    // The intended use of this feature is to prevent situations where a leader
+    // observes some state and decides to add some entries based on the observation,
+    // but between the observation and the append leadership is transferred away and back,
+    // and the other leader manages to commit some entries in the meantime.
+    // *NOTE*: This feature is only supported when forwarding is disabled.
+    // *NOTE*: The provided term number must not be larger than the current term.
+    //
     // Successful `add_entry` does not guarantee that `state_machine::apply` will be called
     // locally for this entry. Between the commit and the application we may load a snapshot
     // containing this entry, so the state machine's state 'jumps' forward in time, skipping
@@ -131,13 +142,16 @@ public:
     //     It may also be thrown in case of a transport error while forwarding add_entry to the leader.
     // raft::dropped_entry
     //     Thrown if the entry was replaced because of a leader change.
+    // raft::term_changed
+    //     Thrown if the term moved on before the entry could be appended in `append_in_term`.
     // raft::request_aborted
     //     Thrown if abort is requested before the operation finishes.
     // raft::stopped_error
     //     Thrown if abort() was called on the server instance.
     // raft::not_a_leader
     //     Thrown if the node is not a leader and forwarding is not enabled through enable_forwarding config option.
-    virtual future<> add_entry(command command, wait_type type, seastar::abort_source* as) = 0;
+    virtual future<> add_entry(command command, wait_type type, seastar::abort_source* as,
+        std::optional<term_t> append_in_term = std::nullopt) = 0;
 
     // Set a new cluster configuration. If the configuration is
     // identical to the previous one does nothing.
