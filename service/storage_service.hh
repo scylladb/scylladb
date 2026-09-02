@@ -1028,6 +1028,10 @@ public:
     // Cancels every tablet transition which can be cancelled, except those of a node drain.
     future<> cancel_tablet_transitions();
 
+    // Cancels the tablet's migration with the given task id, even one draining a node. Throws
+    // task_not_found if the tablet is no longer in that migration.
+    future<> cancel_tablet_transition(locator::global_tablet_id tablet, locator::tablet_task_id task_id);
+
     future<utils::UUID> submit_quiesce_topology_request();
     // The body of await_topology_quiesced(), run through _quiesce_topology so that
     // concurrent callers share a single request. Shard 0 only.

@@ -6713,6 +6713,62 @@ future<> storage_service::cancel_tablet_transitions() {
     }
 }
 
+future<> storage_service::cancel_tablet_transition(locator::global_tablet_id tablet, locator::tablet_task_id task_id) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [tablet, task_id] (auto& ss) {
+            return ss.cancel_tablet_transition(tablet, task_id);
+        });
+    }
+
+    if (!_feature_service.tablet_transition_cancel) {
+        throw std::runtime_error("Cannot cancel the tablet transition: the cluster does not "
+                                 "support the TABLET_TRANSITION_CANCEL feature yet");
+    }
+
+    // The coordinator writes to group0 concurrently, so bound the retries.
+    auto deadline = lowres_clock::now() + std::chrono::minutes(1);
+
+    while (true) {
+        if (lowres_clock::now() >= deadline) {
+            rtlogger.warn("Gave up cancelling the transition of tablet {}, group0 is busy", tablet);
+            throw seastar::timed_out_error{};
+        }
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        // The migration may have finished, and another transition started, since the task was
+        // looked up.
+        auto tm = get_token_metadata_ptr();
+        const auto* tmap = tm->tablets().has_tablet_map(tablet.table) ? &tm->tablets().get_tablet_map(tablet.table) : nullptr;
+        const auto* task_info = tmap ? tmap->get_tablet_info(tablet.tablet).migration_task_info.get() : nullptr;
+        auto* trinfo = tmap ? tmap->get_tablet_transition_info(tablet.tablet) : nullptr;
+        if (!task_info || task_info->tablet_task_id != task_id || !trinfo) {
+            throw tasks::task_manager::task_not_found(tasks::task_id{task_id.uuid()});
+        }
+        if (trinfo->cancelled) {
+            co_return;
+        }
+        if (!locator::can_cancel_tablet_transition(trinfo->stage)) {
+            throw std::runtime_error(format("Transition of tablet {} is at stage {}, which cannot be "
+                                            "rolled back", tablet,
+                                            locator::tablet_transition_stage_to_string(trinfo->stage)));
+        }
+
+        auto base_table = tm->tablets().get_base_table(tablet.table);
+        replica::tablet_mutation_builder builder(guard.write_timestamp(), base_table);
+        builder.cancel_transition(tmap->get_last_token(tablet.tablet), *trinfo, _feature_service);
+        group0_update_collector updates;
+        updates.add_large(builder.build());
+
+        auto reason = format("Cancelling transition of tablet {}", tablet);
+        if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))) {
+            co_return;
+        }
+    }
+}
+
 future<> storage_service::set_tablet_balancing_enabled(bool enabled, std::optional<std::chrono::seconds> grace_period_opt) {
     auto holder = _async_gate.hold();
 
