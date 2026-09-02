@@ -12,6 +12,7 @@ import pytest
 import shutil
 import time
 import uuid
+from cassandra import OperationTimedOut, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from typing import Callable
@@ -19,7 +20,7 @@ from typing import Callable
 from test.cluster.util import get_topology_coordinator, new_test_keyspace, new_test_table, reconnect_driver
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.tablets import get_tablet_count
-from test.pylib.util import Host, wait_for_cql_and_get_hosts
+from test.pylib.util import Host, gather_safely, wait_for_cql_and_get_hosts
 from test.cluster.storage.conftest import space_limited_servers
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,47 @@ logger = logging.getLogger(__name__)
 def write_generator(table, size_in_kb: int):
     for idx in range(size_in_kb):
         yield f"INSERT INTO {table} (pk, t) VALUES ({idx}, '{'x' * 1020}')"
+
+
+# Number of INSERTs write_rows() keeps in flight. These tests run against nodes
+# whose data directory is a small fuse2fs volume, and in debug mode the nodes
+# are slow to begin with. Submitting a whole bulk load at once leaves thousands
+# of statements queued behind a single busy shard; once one of them stays
+# unanswered for longer than write_request_timeout_in_ms, the load fails with a
+# WriteTimeout that says nothing about the behaviour under test.
+WRITE_CONCURRENCY = 64
+
+# A timeout during a bulk load means the node was too slow, not that
+# out-of-space prevention misbehaved. The statements are plain idempotent
+# INSERTs, so retrying them is harmless.
+WRITE_ATTEMPTS = 3
+
+
+async def write_rows(cql, table, size_in_kb: int) -> None:
+    """Write size_in_kb rows of ~1KB each into table, keeping at most
+    WRITE_CONCURRENCY statements in flight and retrying the timed out ones.
+
+    The amount of data written is what pushes these tests over the disk
+    utilization thresholds, so it must not be reduced; only the rate at which
+    it is submitted is capped.
+    """
+    sem = asyncio.Semaphore(WRITE_CONCURRENCY)
+
+    async def write(query: str) -> None:
+        async with sem:
+            for attempt in range(1, WRITE_ATTEMPTS + 1):
+                try:
+                    await cql.run_async(query)
+                    return
+                except (WriteTimeout, OperationTimedOut) as exc:
+                    if attempt == WRITE_ATTEMPTS:
+                        raise
+                    logger.warning(f"Bulk load statement timed out (attempt {attempt}/{WRITE_ATTEMPTS}), retrying: {exc}")
+
+    # gather_safely waits for every statement even when one of them fails, so a
+    # failed load leaves no writes running against a table that is about to be
+    # dropped.
+    await gather_safely(*[write(query) for query in write_generator(table, size_in_kb)])
 
 
 class random_content_file:
@@ -139,7 +181,7 @@ async def test_autotoggle_compaction(manager: ScyllaClusterManager, volumes_fact
                 table = cf.split('.')[-1]
 
                 for _ in range(3):
-                    await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 10)])
+                    await write_rows(cql, cf, 10)
                     await manager.api.flush_keyspace(servers[0].ip_addr, ks)
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
@@ -195,7 +237,7 @@ async def test_critical_utilization_during_decommission(manager: ScyllaClusterMa
                                               " AND tablets = {'initial': 8}") as ks:
 
             async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
-                await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 10)])
+                await write_rows(cql, cf, 10)
 
                 # We want to trap only migrations which happened during decommission
                 await manager.api.quiesce_topology(servers[0].ip_addr)
@@ -232,7 +274,7 @@ async def test_reject_split_compaction(manager: ScyllaClusterManager, volumes_fa
         async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
             async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
                 for _ in range(30):
-                    await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 100)])
+                    await write_rows(cql, cf, 100)
                 await manager.api.flush_keyspace(servers[0].ip_addr, ks)
 
                 logger.info("Trigger split compaction")
@@ -264,7 +306,7 @@ async def test_split_compaction_not_triggered(manager: ScyllaClusterManager, vol
         async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
             async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
                 for _ in range(30):
-                    await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 100)])
+                    await write_rows(cql, cf, 100)
                 await manager.api.flush_keyspace(servers[0].ip_addr, ks)
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
@@ -296,7 +338,7 @@ async def test_tablet_repair(manager: ScyllaClusterManager, volumes_factory: Cal
                 table = cf.split('.')[-1]
 
                 for _ in range(2):
-                    await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 100)])
+                    await write_rows(cql, cf, 100)
                     await manager.api.flush_keyspace(servers[0].ip_addr, ks)
                 await manager.server_stop_gracefully(servers[0].server_id)
                 await manager.server_wipe_sstables(servers[0].server_id, ks, table)
@@ -357,7 +399,7 @@ async def test_autotoggle_reject_incoming_migrations(manager: ScyllaClusterManag
         async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
             async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
                 table = cf.split('.')[-1]
-                await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 10)])
+                await write_rows(cql, cf, 10)
 
                 logger.info("Get tablet to migrate")
                 table_id = await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{table}'")
@@ -422,7 +464,7 @@ async def test_node_restart_while_tablet_split(manager: ScyllaClusterManager, vo
                 table = cf.split('.')[-1]
                 table_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{table}'"))[0].id
 
-                await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 64)])
+                await write_rows(cql, cf, 64)
                 await manager.api.flush_keyspace(servers[0].ip_addr, ks)
 
                 # Ensure that the topology state update reaches the node. We should never reach 5s timeout here.
@@ -490,7 +532,7 @@ async def test_repair_failure_on_split_rejection(manager: ScyllaClusterManager, 
                 table = cf.split('.')[-1]
                 table_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{table}'"))[0].id
 
-                await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 64)])
+                await write_rows(cql, cf, 64)
                 await manager.api.flush_keyspace(servers[0].ip_addr, ks)
 
                 coord = await get_topology_coordinator(manager)
@@ -603,7 +645,7 @@ async def test_sstables_incrementally_released_during_streaming(manager: ScyllaC
             async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text", extra_table_param) as cf:
                 before_disk_info = psutil.disk_usage(workdir)
                 # About 4mb per tablet
-                await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 8000)])
+                await write_rows(cql, cf, 8000)
 
                 # split data into 1mb fragments
                 await manager.api.keyspace_flush(servers[1].ip_addr, ks)
@@ -637,7 +679,7 @@ async def test_sstables_incrementally_released_during_streaming(manager: ScyllaC
                     # Run major in order to try to reproduce 2x space amplification if files aren't released
                     # incrementally by streamer.
                     await manager.api.keyspace_compaction(servers[1].ip_addr, ks)
-                    await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 100)])
+                    await write_rows(cql, cf, 100)
 
                     disk_info = psutil.disk_usage(workdir)
                     logger.info(f"Percent used after major {disk_info.percent}")
@@ -689,7 +731,7 @@ async def test_load_and_stream_rejected_on_critical_disk(manager: ScyllaClusterM
                 logger.info("Write data and flush on the source node")
                 # Use enough data (~100KB) to exceed the queue reader buffer (8KB),
                 # ensuring the producer will still be reading when the consumer resumes.
-                await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 100)])
+                await write_rows(cql, cf, 100)
                 await manager.api.flush_keyspace(servers[1].ip_addr, ks)
 
                 logger.info("Take a snapshot on the source node to produce sstable files")
