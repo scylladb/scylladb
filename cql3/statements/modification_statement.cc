@@ -647,6 +647,11 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
         if (prepared_stmt->is_timestamp_set()) {
             throw exceptions::invalid_request_exception("Strongly consistent queries don't support user-provided timestamps");
         }
+        // The raw IF clauses, not has_conditions(): INSERT JSON ... IF NOT
+        // EXISTS never sets the flags behind has_conditions() (issue #8682).
+        if (_if_not_exists || _if_exists || _conditions) {
+            throw exceptions::invalid_request_exception("Strongly consistent updates don't support conditions");
+        }
     }
 
     // At this point the prepare context instance should have a list of
