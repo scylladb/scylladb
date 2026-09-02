@@ -7,6 +7,8 @@
 import time
 import pytest
 
+from cassandra.protocol import ConfigurationException
+
 from .util import new_test_table, unique_name
 from .nodetool import flush
 
@@ -69,3 +71,18 @@ def testDropColumnWithTimestampPreparedNonExistingSchema(scylla_only, cql, test_
         ])
     finally:
         cql.execute(f"DROP TABLE {table}")
+
+def test_prepared_alter_table_options_validated_on_every_execute(cql, test_keyspace):
+    """
+    A prepared ALTER TABLE with invalid options must be rejected on
+    every execution. Validation caches the compaction class in the
+    prepared statement after the first run, and that cache must not
+    skip the remaining checks on the second run. The same for views is
+    in test_materialized_view.py.
+    """
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY") as table:
+        alter = cql.prepare(f"ALTER TABLE {table} WITH compaction = {{'class': 'SizeTieredCompactionStrategy'}}"
+                            " AND min_index_interval = 0")
+        for _ in range(2):
+            with pytest.raises(ConfigurationException, match="min_index_interval"):
+                cql.execute(alter)
