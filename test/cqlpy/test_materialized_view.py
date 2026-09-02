@@ -1756,3 +1756,27 @@ def test_mv_select_key_columns(cql, test_keyspace, cassandra_bug):
             # hurt to make sure.
             cql.execute(f'insert into {table} (p, c, v1, v2, v3) values (1, 2, 3, 4, 5)')
             assert [(3,1,2,4)] == list(cql.execute(f'select * from {mv} where v1=3'))
+
+# A prepared CREATE MATERIALIZED VIEW or ALTER MATERIALIZED VIEW with invalid
+# table options must be rejected on every execution. Validation caches the
+# compaction class in the prepared statement after the first run, and that
+# cache must not skip the remaining checks on the second run. The same for
+# ALTER TABLE is in test_alter_table.py.
+def test_prepared_view_options_validated_on_every_execute(cql, test_keyspace):
+    bad_options = " WITH compaction = {'class': 'SizeTieredCompactionStrategy'} AND min_index_interval = 0"
+
+    def rejected_twice(prepared):
+        for _ in range(2):
+            with pytest.raises(ConfigurationException, match="min_index_interval"):
+                cql.execute(prepared)
+
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
+        mv = f"{test_keyspace}.{unique_name()}"
+        try:
+            rejected_twice(cql.prepare(f"CREATE MATERIALIZED VIEW {mv} AS SELECT * FROM {table}"
+                                       f" WHERE v IS NOT NULL AND p IS NOT NULL PRIMARY KEY (v, p){bad_options}"))
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {mv}")
+
+        with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as mv:
+            rejected_twice(cql.prepare(f"ALTER MATERIALIZED VIEW {mv}{bad_options}"))
