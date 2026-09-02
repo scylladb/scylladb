@@ -366,3 +366,15 @@ def test_create_vector_index_with_view_properties(cql, test_keyspace, scylla_onl
         index_name = unique_name()
         with pytest.raises(InvalidRequest, match="You cannot use view properties with a vector_index"):
             cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}(v) USING 'vector_index' WITH gc_grace_seconds = 13")
+
+# A prepared CREATE INDEX with invalid view properties must be rejected on
+# every execution. Validation caches the compaction class in the prepared
+# statement after the first run, and that cache must not skip the remaining
+# checks on the second run.
+def test_prepared_create_index_options_validated_on_every_execute(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
+        create = cql.prepare(f"CREATE INDEX {unique_name()} ON {table}(v)"
+                             " WITH compaction = {'class': 'SizeTieredCompactionStrategy'} AND min_index_interval = 0")
+        for _ in range(2):
+            with pytest.raises(ConfigurationException, match="min_index_interval"):
+                cql.execute(create)

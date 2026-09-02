@@ -94,12 +94,6 @@ data_dictionary::keyspace cf_prop_defs::find_keyspace(const data_dictionary::dat
 }
 
 void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name, const schema::extensions_map& schema_extensions) const {
-    // Skip validation if the comapction strategy class is already set as it means we've already
-    // prepared (and redoing it would set strategyClass back to null, which we don't want)
-    if (_compaction_strategy_class) {
-        return;
-    }
-
     const auto& ks = find_keyspace(db, ks_name);
 
     static std::set<sstring> keywords({
@@ -130,7 +124,7 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     }
 
     auto compaction_type_options = get_compaction_type_options();
-    if (!compaction_type_options.empty()) {
+    if (!_compaction_strategy_class && !compaction_type_options.empty()) {
         auto strategy = compaction_type_options.find(COMPACTION_STRATEGY_CLASS_KEY);
         if (strategy == compaction_type_options.end()) {
             throw exceptions::configuration_exception(sstring("Missing sub-option '") + COMPACTION_STRATEGY_CLASS_KEY + "' for the '" + KW_COMPACTION + "' option.");
