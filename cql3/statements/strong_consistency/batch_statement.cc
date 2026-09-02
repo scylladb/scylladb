@@ -52,6 +52,8 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
         co_return seastar::make_shared<result_message::void_message>();
     }
 
+    validate_write_consistency_level(options.get_consistency());
+
     auto timeout = db::timeout_clock::now() + (_attrs->is_timeout_set() ? _attrs->get_timeout(options) : qs.get_client_state().get_timeout_config().write_timeout);
 
     // Build partition keys for all statements and validate they all target the same partition
