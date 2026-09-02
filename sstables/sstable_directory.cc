@@ -566,13 +566,18 @@ future<> sstable_directory::restore_components_lister::commit() {
 future<> sstable_directory::sstables_registry_components_lister::garbage_collect(storage& st) {
     std::set<generation_type> gens_to_remove;
     std::vector<generation_type> gens_to_retain;
+    std::vector<entry_descriptor> owned_entries;
     std::vector<entry_descriptor> dangling_entries;
     co_await _sstables_registry.sstables_registry_list(_table_id, _node_owner,
-            coroutine::lambda([&dangling_entries] (sstring status, sstable_state state, entry_descriptor desc) -> future<> {
-        if (status == "sealed" || status == "snapshot_owned") {
+            coroutine::lambda([&owned_entries, &dangling_entries] (sstring status, sstable_state state, entry_descriptor desc) -> future<> {
+        if (status == "sealed") {
             co_return;
         }
         desc.state = state;
+        if (status == "snapshot_owned") {
+            owned_entries.push_back(std::move(desc));
+            co_return;
+        }
         dirlog.info("Removing dangling {} {} entry", desc.generation, status);
         dangling_entries.push_back(std::move(desc));
     }));
@@ -595,6 +600,14 @@ future<> sstable_directory::sstables_registry_components_lister::garbage_collect
         // the full row instead (see storage.cc).
         co_await _sstables_registry.batch_update_entry_status(_table_id, _node_owner, gens_to_retain, "snapshot_owned");
     }
+
+    co_await max_concurrent_for_each(owned_entries, 16, [this, &st] (entry_descriptor& desc) -> future<> {
+        dirlog.debug("Re-evaluating snapshot_owned {} entry", desc.generation);
+        auto gen = desc.generation;
+        if (!co_await st.remove_by_registry_entry(std::move(desc), _node_owner, delete_node_ref::no)) {
+            co_await _sstables_registry.delete_entry(_table_id, _node_owner, gen);
+        }
+    });
 }
 
 future<>
