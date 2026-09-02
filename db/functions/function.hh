@@ -51,6 +51,17 @@ public:
      */
     virtual bool is_aggregate() const = 0;
 
+    /**
+     * Checks whether the function's value comes from an external search system, such as
+     * BM25() or ANN(), rather than from evaluating its arguments. The statement that contains
+     * such a call replaces it with the value the search system returns, so the function is
+     * never executed. It must be non-pure: otherwise a call with constant arguments would be
+     * constant-folded, and executed, before the statement is prepared.
+     *
+     * @return <code>true</code> if the function is an external one, <code>false</code> otherwise.
+     */
+    virtual bool is_external() const { return false; }
+
     virtual void print(std::ostream& os) const = 0;
 
     /**
