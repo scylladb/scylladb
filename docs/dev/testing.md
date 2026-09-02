@@ -10,7 +10,7 @@ This is a manual for `test.py`.
 
 ## Installation
 
-To run `test.py`, Python 3.11 or higher is required.
+To run `test.py`, Python 3.14 or higher is required.
 `./install-dependencies.sh` should install all the required Python
 modules. If `install-dependencies.sh` does not support your distribution,
 please manually install all Python modules it lists with `pip`.
