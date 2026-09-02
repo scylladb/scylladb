@@ -103,6 +103,9 @@ add_scylla_test(enum_set_test
   KIND BOOST)
 add_scylla_test(estimated_histogram_test
   KIND BOOST)
+add_scylla_test(event_notifier_fanout_test
+  KIND BOOST
+  LIBRARIES transport)
 add_scylla_test(exception_container_test
   KIND SEASTAR)
 add_scylla_test(exceptions_fallback_test
