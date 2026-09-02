@@ -1102,8 +1102,9 @@ async def test_hints_switch_config_in_runtime_via_http_api(manager: ScyllaCluste
                         "{'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 1, 'dc3': 1}")
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
 
-    await manager.server_stop_gracefully(s2.server_id)
-    await manager.server_stop_gracefully(s3.server_id)
+    await gather_safely(*[
+        manager.server_stop_gracefully(s2.server_id),
+        manager.server_stop_gracefully(s3.server_id)])
     await manager.server_not_sees_other_server(s1.ip_addr, s2.ip_addr)
     await manager.server_not_sees_other_server(s1.ip_addr, s3.ip_addr)
 
@@ -1111,8 +1112,7 @@ async def test_hints_switch_config_in_runtime_via_http_api(manager: ScyllaCluste
     stmt.consistency_level = ConsistencyLevel.ONE
 
     async def insert(keys) -> None:
-        for key in keys:
-            await cql.run_async(stmt, (key, key + 1))
+        await gather_safely(*[cql.run_async(stmt, (key, key + 1)) for key in keys])
 
     await update_hh_enabled_via_http_api(manager, s1, "true")
     await insert(keys_enabled)
@@ -1128,15 +1128,16 @@ async def test_hints_switch_config_in_runtime_via_http_api(manager: ScyllaCluste
     await insert(keys_dc3_only)
     expected_hints += len(keys_dc3_only)
 
-    await manager.server_start(s2.server_id)
-    await manager.server_start(s3.server_id)
-    await manager.servers_see_each_other([s1, s2, s3])
+    await gather_safely(*[
+        manager.server_start(s2.server_id),
+        manager.server_start(s3.server_id)])
 
     await update_hh_enabled_via_http_api(manager, s1, "true")
     await wait_until_hints_are_sent_from(manager, [s1], expected_hints)
 
-    await manager.server_stop_gracefully(s1.server_id)
-    await manager.server_stop_gracefully(s3.server_id)
+    await gather_safely(*[
+        manager.server_stop_gracefully(s1.server_id),
+        manager.server_stop_gracefully(s3.server_id)])
 
     cql = await manager.get_cql_exclusive(s2)
     await assert_rows_present(cql, "ks.t", "pk", keys_enabled, present=True)
