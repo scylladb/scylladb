@@ -544,8 +544,8 @@ public:
     ///
     /// Some permits cannot be associated with any table, so passing nullptr as
     /// the schema parameter is allowed.
-    future<reader_permit> obtain_permit(schema_ptr schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
-    future<reader_permit> obtain_permit(schema_ptr schema, sstring&& op_name, size_t memory, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
+    future<reader_permit> obtain_permit(schema_ptr schema, const char* const op_name, size_t memory_credit, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
+    future<reader_permit> obtain_permit(schema_ptr schema, sstring&& op_name, size_t memory_credit, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
 
     /// Make a tracking only permit
     ///
@@ -582,7 +582,7 @@ public:
     ///
     /// Some permits cannot be associated with any table, so passing nullptr as
     /// the schema parameter is allowed.
-    future<> with_permit(schema_ptr schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout,
+    future<> with_permit(schema_ptr schema, const char* const op_name, size_t memory_credit, db::timeout_clock::time_point timeout,
             tracing::trace_state_ptr trace_ptr, reader_permit_opt& permit_holder, read_func func);
 
     /// Run the function through the semaphore's execution stage with a pre-admitted permit

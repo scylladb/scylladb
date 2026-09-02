@@ -104,9 +104,9 @@ private:
     reader_permit() = default;
     reader_permit(shared_ptr<impl>);
     explicit reader_permit(reader_concurrency_semaphore& semaphore, schema_ptr schema, std::string_view op_name,
-            reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
+            reader_resources admission_credit, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
     explicit reader_permit(reader_concurrency_semaphore& semaphore, schema_ptr schema, sstring&& op_name,
-            reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
+            reader_resources admission_credit, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
 
     reader_permit::impl& operator*() { return *_impl; }
     reader_permit::impl* operator->() { return _impl.get(); }
@@ -159,9 +159,22 @@ public:
 
     reader_resources consumed_resources() const;
 
-    reader_resources base_resources() const;
+    // The amount of credited resources currently outstanding, that is, resources
+    // which were consumed on the read's behalf on admission, but which the read
+    // hasn't consumed for real (yet). See \ref release_credited_resources().
+    reader_resources credited_resources() const;
 
-    void release_base_resources() noexcept;
+    // Give back the resources which are still credited to this read.
+    //
+    // Reads are credited an estimate of the resources they are going to consume
+    // when they are admitted, so that a read which was admitted but hasn't
+    // started consuming yet is already accounted for. The credit is drawn down
+    // by the read's real consumption, so it doesn't inflate the read's
+    // footprint.
+    // Call this when the read is known not to consume the credited resources
+    // anymore -- either because it is done with them, or because it is about to
+    // wait on something which depends on other reads making progress.
+    void release_credited_resources() noexcept;
 
     sstring description() const;
 

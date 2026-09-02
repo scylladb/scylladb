@@ -1163,7 +1163,7 @@ multishard_combining_reader::multishard_combining_reader(
     // One way to prevent the deadlock is to avoid the resource dependency by ensuring
     // that the resources of multishard reader are released before the children attempt to acquire theirs.
     // We do this here.
-    _permit.release_base_resources();
+    _permit.release_credited_resources();
 
     on_partition_range_change(pr);
 

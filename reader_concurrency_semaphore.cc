@@ -154,7 +154,11 @@ private:
 
     sstring _op_name;
     std::string_view _op_name_view;
-    const reader_resources _base_resources;
+    // The resource estimate credited to the read when it is admitted, see top_up_credit().
+    const reader_resources _admission_credit;
+    // How much of the credited resources is still outstanding, i.e. was consumed
+    // on the read's behalf, but isn't backed by real consumption (yet).
+    reader_resources _credited_resources;
     reader_resources _resources;
     std::exception_ptr _ex; // exception the permit was aborted with, nullptr if not aborted
     timer<db::timeout_clock> _ttl_timer;
@@ -177,7 +181,6 @@ private:
     size_t _requested_memory = 0;
     uint64_t _oom_kills = 0;
     reader_permit::state _state = reader_permit::state::active;
-    bool _base_resources_consumed = false;
     bool _marked_as_need_cpu = false;
     bool _marked_as_awaits = false;
 
@@ -261,25 +264,25 @@ private:
 public:
     struct value_tag {};
 
-    impl(reader_concurrency_semaphore& semaphore, schema_ptr schema, const std::string_view& op_name, reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
+    impl(reader_concurrency_semaphore& semaphore, schema_ptr schema, const std::string_view& op_name, reader_resources admission_credit, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
         : _created(db::timeout_clock::now())
         , _semaphore(semaphore)
         , _schema(std::move(schema))
         , _op_name_view(op_name)
-        , _base_resources(base_resources)
+        , _admission_credit(admission_credit)
         , _ttl_timer([this] { on_timeout(); })
         , _trace_ptr(std::move(trace_ptr))
     {
         set_timeout(timeout);
         _semaphore.on_permit_created(*this);
     }
-    impl(reader_concurrency_semaphore& semaphore, schema_ptr schema, sstring&& op_name, reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
+    impl(reader_concurrency_semaphore& semaphore, schema_ptr schema, sstring&& op_name, reader_resources admission_credit, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
         : _created(db::timeout_clock::now())
         , _semaphore(semaphore)
         , _schema(std::move(schema))
         , _op_name(std::move(op_name))
         , _op_name_view(_op_name)
-        , _base_resources(base_resources)
+        , _admission_credit(admission_credit)
         , _ttl_timer([this] { on_timeout(); })
         , _trace_ptr(std::move(trace_ptr))
     {
@@ -287,7 +290,7 @@ public:
         _semaphore.on_permit_created(*this);
     }
     ~impl() {
-        release_base_resources();
+        release_credited_resources();
 
         if (_resources.non_zero()) {
             on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {} detected a leak of {{count={}, memory={}}} resources",
@@ -381,12 +384,7 @@ public:
         SCYLLA_ASSERT(_state != reader_permit::state::active_await);
         on_permit_active();
 
-        if (_base_resources_consumed) {
-            on_internal_error(rcslog, fmt::format("on_admission(): permit {} already has its base resources consumed", description()));
-        }
-
-        consume(_base_resources);
-        _base_resources_consumed = true;
+        top_up_credit(_admission_credit);
     }
 
     void on_granted_memory() {
@@ -427,12 +425,56 @@ public:
     void on_evicted() {
         SCYLLA_ASSERT(_state == reader_permit::state::inactive);
         _state = reader_permit::state::evicted;
-        release_base_resources();
+        release_credited_resources();
     }
 
-    void consume(reader_resources res) {
+    // Consume resources on the read's behalf, in advance of the read actually
+    // using them. Keeps the resources consumed so far in _credited_resources,
+    // so that the read's real consumption can be drawn against them, instead of
+    // adding to them -- the credit is an estimate of what the read is going to
+    // consume, not an extra cost on top of it.
+    // Crediting on admission is what makes admission self-limiting: a read which
+    // was admitted, but hasn't started consuming yet, is already accounted for,
+    // so it cannot be joined by an unbounded number of reads flying through
+    // admission before any of them gets to consume anything.
+    // The credit is only ever topped up to _admission_credit, never beyond it.
+    // Otherwise a read which is admitted repeatedly -- e.g. one which is evicted
+    // and re-admitted in a loop -- could accumulate credit faster than it manages
+    // to draw it down, ending up with an ever growing amount of resources
+    // consumed on its behalf.
+    void top_up_credit(reader_resources credit) {
+        const reader_resources missing{
+                std::max(credit.count - _credited_resources.count, 0),
+                std::max(credit.memory - _credited_resources.memory, ssize_t(0))};
+        if (!missing.non_zero()) {
+            return;
+        }
+        do_consume(missing);
+        _credited_resources += missing;
+    }
+
+    // The part of \p res, component-wise, which the outstanding credit covers.
+    reader_resources credit_coverage(reader_resources res) const noexcept {
+        return reader_resources{
+                std::min(res.count, _credited_resources.count),
+                std::min(res.memory, _credited_resources.memory)};
+    }
+
+    void do_consume(reader_resources res) {
         _semaphore.consume(*this, res);
         _resources += res;
+    }
+
+    // Draw \p res from the outstanding credit first, consume for real only the
+    // part the credit doesn't cover.
+    // The credit is drawn only after the excess was consumed successfully, so a
+    // failed consumption leaves the credit intact.
+    void consume(reader_resources res) {
+        const auto covered = credit_coverage(res);
+        if (const auto excess = res - covered; excess.non_zero()) {
+            do_consume(excess);
+        }
+        _credited_resources -= covered;
     }
 
     void signal(reader_resources res) {
@@ -451,14 +493,17 @@ public:
         return _resources;
     }
 
-    reader_resources base_resources() const {
-        return _base_resources;
+    reader_resources admission_credit() const {
+        return _admission_credit;
     }
 
-    void release_base_resources() noexcept {
-        if (_base_resources_consumed) {
-            _base_resources_consumed = false;
-            signal(_base_resources);
+    reader_resources credited_resources() const {
+        return _credited_resources;
+    }
+
+    void release_credited_resources() noexcept {
+        if (_credited_resources.non_zero()) {
+            signal(std::exchange(_credited_resources, reader_resources{}));
         }
     }
 
@@ -593,14 +638,14 @@ reader_permit::reader_permit(shared_ptr<impl> impl) : _impl(std::move(impl))
 }
 
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, schema_ptr schema, std::string_view op_name,
-        reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
-    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, std::move(schema), op_name, base_resources, timeout, std::move(trace_ptr)))
+        reader_resources admission_credit, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
+    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, std::move(schema), op_name, admission_credit, timeout, std::move(trace_ptr)))
 {
 }
 
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, schema_ptr schema, sstring&& op_name,
-        reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
-    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, std::move(schema), std::move(op_name), base_resources, timeout, std::move(trace_ptr)))
+        reader_resources admission_credit, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
+    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, std::move(schema), std::move(op_name), admission_credit, timeout, std::move(trace_ptr)))
 {
 }
 
@@ -655,12 +700,12 @@ reader_resources reader_permit::consumed_resources() const {
     return _impl->resources();
 }
 
-reader_resources reader_permit::base_resources() const {
-    return _impl->base_resources();
+reader_resources reader_permit::credited_resources() const {
+    return _impl->credited_resources();
 }
 
-void reader_permit::release_base_resources() noexcept {
-    return _impl->release_base_resources();
+void reader_permit::release_credited_resources() noexcept {
+    return _impl->release_credited_resources();
 }
 
 sstring reader_permit::description() const {
@@ -1249,7 +1294,7 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
         const dht::partition_range* range) noexcept {
     auto& permit = reader.permit();
     if (permit->aborted()) {
-        permit->release_base_resources();
+        permit->release_credited_resources();
         close_reader(std::move(reader));
         return inactive_read_handle();
     }
@@ -1546,7 +1591,7 @@ reader_concurrency_semaphore::can_admit_read(const reader_permit::impl& permit) 
         return reason::need_cpu_permits;
     }
 
-    return has_available_units(permit.base_resources());
+    return has_available_units(permit.admission_credit());
 }
 
 bool reader_concurrency_semaphore::should_evict_inactive_read(const reader_permit::impl& permit) const noexcept {
@@ -1792,17 +1837,17 @@ void reader_concurrency_semaphore::on_permit_not_awaits() noexcept {
     --_stats.awaits_permits;
 }
 
-future<reader_permit> reader_concurrency_semaphore::obtain_permit(schema_ptr schema, const char* const op_name, size_t memory,
+future<reader_permit> reader_concurrency_semaphore::obtain_permit(schema_ptr schema, const char* const op_name, size_t memory_credit,
         db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
-    auto permit = reader_permit(*this, std::move(schema), std::string_view(op_name), {1, static_cast<ssize_t>(memory)}, timeout, std::move(trace_ptr));
+    auto permit = reader_permit(*this, std::move(schema), std::string_view(op_name), {1, static_cast<ssize_t>(memory_credit)}, timeout, std::move(trace_ptr));
     return do_wait_admission(*permit).then([permit] () mutable {
         return std::move(permit);
     });
 }
 
-future<reader_permit> reader_concurrency_semaphore::obtain_permit(schema_ptr schema, sstring&& op_name, size_t memory,
+future<reader_permit> reader_concurrency_semaphore::obtain_permit(schema_ptr schema, sstring&& op_name, size_t memory_credit,
         db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
-    auto permit = reader_permit(*this, std::move(schema), std::move(op_name), {1, static_cast<ssize_t>(memory)}, timeout, std::move(trace_ptr));
+    auto permit = reader_permit(*this, std::move(schema), std::move(op_name), {1, static_cast<ssize_t>(memory_credit)}, timeout, std::move(trace_ptr));
     return do_wait_admission(*permit).then([permit] () mutable {
         return std::move(permit);
     });
@@ -1818,9 +1863,9 @@ reader_permit reader_concurrency_semaphore::make_tracking_only_permit(schema_ptr
     return reader_permit(*this, std::move(schema), std::move(op_name), {}, timeout, std::move(trace_ptr));
 }
 
-future<> reader_concurrency_semaphore::with_permit(schema_ptr schema, const char* const op_name, size_t memory,
+future<> reader_concurrency_semaphore::with_permit(schema_ptr schema, const char* const op_name, size_t memory_credit,
         db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr, reader_permit_opt& permit_holder, read_func func) {
-    permit_holder = reader_permit(*this, std::move(schema), std::string_view(op_name), {1, static_cast<ssize_t>(memory)}, timeout, std::move(trace_ptr));
+    permit_holder = reader_permit(*this, std::move(schema), std::string_view(op_name), {1, static_cast<ssize_t>(memory_credit)}, timeout, std::move(trace_ptr));
     auto permit = *permit_holder;
     permit->func() = std::move(func);
     return do_wait_admission(*permit);
