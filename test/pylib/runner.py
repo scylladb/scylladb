@@ -522,7 +522,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     if session.testsfailed == 0 and not session.config.getoption("--save-log-on-success"):
         # Use missing_ok=True because the log file is only created on first write,
         # so it may never have been written if nothing was logged.
-        pathlib.Path(_pytest_config.stash[PYTEST_LOG_FILE]).unlink(missing_ok=True)
+        pathlib.Path(session.config.stash[PYTEST_LOG_FILE]).unlink(missing_ok=True)
 
     asyncio.run(artifacts.cleanup_before_exit())
 
@@ -657,49 +657,48 @@ def pytest_runtest_makereport(item, call):
     item.stash.setdefault(PHASE_REPORT_KEY, {})[report.when] = report
 
     # Optionally save test failure logs to files
-    if _pytest_config:
-        pytest_tests_logs = pathlib.Path(_pytest_config.getoption("--tmpdir")).absolute() / PYTEST_TESTS_LOGS_FOLDER
-        if report.failed or _pytest_config.getoption("--save-log-on-success"):
-            with open(pytest_tests_logs / f"{item._nodeid.replace('::', '-').replace('/', '-')}-{report.when}-{HOST_ID}.log", 'a') as f:
-                f.write(report.longreprtext + "\n")
-                for section in report.sections:
-                    f.write(section[0] + "\n")
-                    f.write(section[1] + "\n")
+    pytest_tests_logs = pathlib.Path(item.config.getoption("--tmpdir")).absolute() / PYTEST_TESTS_LOGS_FOLDER
+    if report.failed or item.config.getoption("--save-log-on-success"):
+        with open(pytest_tests_logs / f"{item._nodeid.replace('::', '-').replace('/', '-')}-{report.when}-{HOST_ID}.log", 'a') as f:
+            f.write(report.longreprtext + "\n")
+            for section in report.sections:
+                f.write(section[0] + "\n")
+                f.write(section[1] + "\n")
 
-        # Single source of truth for attaching failed-test logs. cqlpy/alternator
-        # expose a `scylla_cluster`; topology suites publish MANAGER_LOGS_KEY.
-        if report.failed:
-            # C++ items (and early setup failures) lack `funcargs`; nothing to collect.
-            funcargs = getattr(item, "funcargs", {})
-            build_mode = funcargs.get("build_mode")
-            cluster = funcargs.get("scylla_cluster")
-            # Published by the manager fixture (even when pulled in indirectly),
-            # so we don't re-derive its log paths or re-resolve the fixture here.
-            manager_logs = item.stash.get(MANAGER_LOGS_KEY, None)
-            if build_mode is not None and (cluster is not None or manager_logs is not None):
-                try:
-                    failed_test_dir_path = make_failed_test_dir(item.config, build_mode, item.name)
+    # Single source of truth for attaching failed-test logs. cqlpy/alternator
+    # expose a `scylla_cluster`; topology suites publish MANAGER_LOGS_KEY.
+    if report.failed:
+        # C++ items (and early setup failures) lack `funcargs`; nothing to collect.
+        funcargs = getattr(item, "funcargs", {})
+        build_mode = funcargs.get("build_mode")
+        cluster = funcargs.get("scylla_cluster")
+        # Published by the manager fixture (even when pulled in indirectly),
+        # so we don't re-derive its log paths or re-resolve the fixture here.
+        manager_logs = item.stash.get(MANAGER_LOGS_KEY, None)
+        if build_mode is not None and (cluster is not None or manager_logs is not None):
+            try:
+                failed_test_dir_path = make_failed_test_dir(item.config, build_mode, item.name)
 
-                    if cluster is not None:
-                        # Copy the server log before the cluster teardown closes it.
-                        server_log = cluster.server_log_filename()
-                        if server_log is not None and pathlib.Path(server_log).is_file():
-                            shutil.copyfile(server_log, failed_test_dir_path / pathlib.Path(server_log).name)
+                if cluster is not None:
+                    # Copy the server log before the cluster teardown closes it.
+                    server_log = cluster.server_log_filename()
+                    if server_log is not None and pathlib.Path(server_log).is_file():
+                        shutil.copyfile(server_log, failed_test_dir_path / pathlib.Path(server_log).name)
 
-                    if manager_logs is not None:
-                        # Manager owns the servers; gather via ScyllaClusterManager (sync-callable
-                        # since ScyllaClusterManager is universalasync-wrapped).
-                        manager_logs["manager"].gather_related_logs(failed_test_dir_path, manager_logs["logs"])
+                if manager_logs is not None:
+                    # Manager owns the servers; gather via ScyllaClusterManager (sync-callable
+                    # since ScyllaClusterManager is universalasync-wrapped).
+                    manager_logs["manager"].gather_related_logs(failed_test_dir_path, manager_logs["logs"])
 
-                    record_failed_test_artifacts(
-                        config=item.config,
-                        properties=item.user_properties,
-                        failed_test_dir_path=failed_test_dir_path,
-                        longreprtext=report.longreprtext,
-                        when=report.when,
-                    )
-                except Exception:
-                    logger.warning("Failed to collect logs for failed test %s", item.name, exc_info=True)
+                record_failed_test_artifacts(
+                    config=item.config,
+                    properties=item.user_properties,
+                    failed_test_dir_path=failed_test_dir_path,
+                    longreprtext=report.longreprtext,
+                    when=report.when,
+                )
+            except Exception:
+                logger.warning("Failed to collect logs for failed test %s", item.name, exc_info=True)
 
 
 class TestSuiteConfig:
