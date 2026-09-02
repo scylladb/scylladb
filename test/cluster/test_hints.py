@@ -46,6 +46,28 @@ async def sum_hint_metric(client: ScyllaMetricsClient, servers: list[ServerInfo]
     return total
 
 
+async def get_all_hint_metrics(client: ScyllaMetricsClient, server_ip: IPAddress) -> dict:
+    metrics = await client.query(server_ip)
+
+    def resolve_metric(name: str):
+        return metrics.get(f"scylla_hints_manager_{name}") or 0.0
+
+    metric_names = [
+        "size_of_hints_in_progress",
+        "written",
+        "errors",
+        "dropped",
+        "sent_total",
+        "sent_bytes_total",
+        "discarded",
+        "send_errors",
+        "corrupted_files",
+        "pending_drains",
+        "pending_sends"]
+
+    return {name: resolve_metric(name) for name in metric_names}
+
+
 # Hint segments live in <workdir>/hints/<shard>/<target host id>/HintsLog-*.log.
 async def get_hints_dir(manager: ScyllaClusterManager, server: ServerInfo) -> str:
     return os.path.join(await manager.server_get_workdir(server.server_id), "hints")
@@ -68,8 +90,9 @@ def count_hint_segments(hints_dir: str, target_host_id: str, shard: int | None =
 async def wait_until_hint_writing_settled(manager: ScyllaClusterManager, servers: list[ServerInfo],
                                           timeout: float = 180) -> None:
     async def check():
-        in_progress = await sum_hint_metric(manager.metrics, servers, "size_of_hints_in_progress")
-        logger.debug(f"{in_progress} byte(s) of hints still being written")
+        all_metrics = await gather_safely(*[get_all_hint_metrics(manager.metrics, srv.ip_addr) for srv in servers])
+        logger.debug(f"Waiting for hint writing to settle. Metric snapshot: {all_metrics}")
+        in_progress = sum([metrics["size_of_hints_in_progress"] for metrics in all_metrics])
         return True if in_progress == 0 else None
     await wait_for(check, time.time() + timeout)
 
@@ -80,8 +103,9 @@ async def wait_until_hints_are_sent_from(manager: ScyllaClusterManager, servers:
     Wait until `expected_count` hints have been sent on `servers`.
     """
     async def check():
-        sent = await sum_hint_metric(manager.metrics, servers, "sent_total")
-        logger.info(f"{sent} hints sent discarded, waiting for {expected_count} in total")
+        all_metrics = await gather_safely(*[get_all_hint_metrics(manager.metrics, srv.ip_addr) for srv in servers])
+        logger.debug(f"Waiting for {expected_count} hints in total to be sent. Metric snapshot: {all_metrics}")
+        sent = sum([metrics["sent_total"] for metrics in all_metrics])
         return True if sent >= expected_count else None
     await wait_for(check, time.time() + timeout)
 
