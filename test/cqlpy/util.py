@@ -366,8 +366,16 @@ class ScyllaMetrics:
             def match_kv(kv):
                 key, val = kv.split('=')
                 val = val.strip('"')
-                return shard == 'total' or val == shard if key == 'shard' \
-                    else labels is None or labels.get(key, None) == val
+                if key == 'shard':
+                    return shard == 'total' or val == shard
+                if labels is None:
+                    return True
+                expected = labels.get(key, None)
+                # A label may be given a collection of accepted values, in which case
+                # all of the matching series are summed up by the loop below.
+                if isinstance(expected, (list, tuple, set, frozenset)):
+                    return val in expected
+                return expected == val
             match = all(match_kv(kv) for kv in l[labels_start + 1:labels_finish].split(','))
             if match:
                 value = float(l[labels_finish + 2:])
