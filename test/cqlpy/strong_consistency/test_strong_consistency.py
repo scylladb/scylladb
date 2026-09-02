@@ -274,3 +274,19 @@ def test_cdc_on_sc_table(cql, sc_keyspace):
     with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
         with pytest.raises(InvalidRequest, match=error_msg):
             cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': true}}")
+
+
+def test_per_partition_rate_limit_on_sc_table(cql, sc_keyspace):
+    """
+    per_partition_rate_limit is rejected for tables in strongly
+    consistent keyspaces. Rate limits are enforced on the coordinator
+    read and write paths, which strongly consistent queries bypass.
+    """
+    rate_limit_msg = "Per-partition rate limit is not supported in strongly consistent keyspaces"
+    with pytest.raises(ConfigurationException, match=rate_limit_msg):
+        cql.execute(f"CREATE TABLE {sc_keyspace}.{unique_name()} (pk int PRIMARY KEY, v int)"
+                    " WITH per_partition_rate_limit = {'max_writes_per_second': 100}")
+
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        with pytest.raises(ConfigurationException, match=rate_limit_msg):
+            cql.execute(f"ALTER TABLE {table} WITH per_partition_rate_limit = {{'max_reads_per_second': 100}}")
