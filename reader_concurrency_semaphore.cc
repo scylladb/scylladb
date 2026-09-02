@@ -1475,30 +1475,6 @@ void reader_concurrency_semaphore::close_reader(mutation_reader reader) {
     });
 }
 
-reader_concurrency_semaphore::reason reader_concurrency_semaphore::has_available_units(const resources& r) const {
-    if (_resources.non_zero() && _resources.count >= r.count && _resources.memory >= r.memory) {
-        return reason::all_ok;
-    }
-
-    // Special case: when there is no active reader (based on count) admit one
-    // regardless of availability of memory.
-    if (_resources.count == _initial_resources.count) {
-        return reason::all_ok;
-    }
-
-    if (_resources.count < r.count) {
-        return reason::count_resources;
-    }
-
-    {
-        const ssize_t needed_from_shared = r.memory - _resources.memory;
-        if (_shared_pool.available_memory() >= needed_from_shared) {
-            return reason::all_ok;
-        }
-    }
-    return reason::memory_resources;
-}
-
 bool reader_concurrency_semaphore::cpu_concurrency_limit_reached() const {
     return (_stats.need_cpu_permits - _stats.awaits_permits) >= _cpu_concurrency();
 }
@@ -1591,7 +1567,27 @@ reader_concurrency_semaphore::can_admit_read(const reader_permit::impl& permit) 
         return reason::need_cpu_permits;
     }
 
-    return has_available_units(permit.admission_credit());
+    const auto required = permit.admission_credit();
+    if (_resources.non_zero() && _resources.count >= required.count && _resources.memory >= required.memory) {
+        return reason::all_ok;
+    }
+
+    // Special case: when there is no active reader (based on count) admit one
+    // regardless of availability of memory.
+    if (_resources.count == _initial_resources.count) {
+        return reason::all_ok;
+    }
+
+    if (_resources.count < required.count) {
+        return reason::count_resources;
+    }
+
+    const ssize_t needed_from_shared = required.memory - _resources.memory;
+    if (_shared_pool.available_memory() >= needed_from_shared) {
+        return reason::all_ok;
+    }
+
+    return reason::memory_resources;
 }
 
 bool reader_concurrency_semaphore::should_evict_inactive_read(const reader_permit::impl& permit) const noexcept {
