@@ -489,6 +489,20 @@ rebuild which failed for any other reason was already not retried, but cancellin
 easier to reach. Tracked in
 [SCYLLADB-3948](https://scylladb.atlassian.net/browse/SCYLLADB-3948).
 
+#### Aborting a single migration
+
+Tablet migration tasks are abortable through the task manager, and aborting one cancels that
+tablet's transition (`storage_service::cancel_tablet_transition()`), which the coordinator then
+rolls back. It aborts one streaming, not tablet migration as such: to stop migrating, disable
+tablet balancing.
+
+Unlike the bulk path, a transition which is draining a node is not exempt here: the caller named
+the tablet, and restarting a stuck drain stream is a legitimate reason to ask.
+
+Only transitions which have a task id can be aborted this way. `rebuild` transitions created by
+an RF change, and by `add_tablet_replica` / `del_tablet_replica`, carry no `migration_task_info`,
+so they have no task and can only be cancelled in bulk.
+
 ## File-based streaming
 
 The `streaming` stage of a tablet migration (and of `rebuild` / `rebuild_v2`)

@@ -6532,6 +6532,83 @@ storage_service::cancel_tablet_transitions(lowres_clock::time_point deadline) {
     }
 }
 
+future<> storage_service::cancel_tablet_transition(locator::global_tablet_id tablet) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0, and the task api can abort from any shard.
+        co_return co_await container().invoke_on(0, [tablet] (auto& ss) {
+            return ss.cancel_tablet_transition(tablet);
+        });
+    }
+
+    // The coordinator is writing to group0 while we try to, so bound the retries rather than
+    // spinning: this is an operator-facing call and it should either act or say why not. The
+    // deadline is carried into the group0 operations too, so a single attempt cannot outlast it.
+    auto deadline = lowres_clock::now() + std::chrono::minutes(1);
+    auto timeout = raft_timeout{.value = deadline};
+    auto too_late = [&tablet] {
+        return std::runtime_error(format("Could not cancel the transition of tablet {}, group0 "
+                                         "kept rejecting the change", tablet));
+    };
+
+    while (true) {
+        if (lowres_clock::now() >= deadline) {
+            throw too_late();
+        }
+        std::optional<group0_guard> guard_holder;
+        try {
+            guard_holder = co_await _group0->client().start_operation(_group0_as, timeout);
+        } catch (const raft_operation_timeout_error&) {
+            throw too_late();
+        }
+        auto guard = std::move(*guard_holder);
+
+        auto tm = get_token_metadata_ptr();
+        if (!tm->tablets().has_tablet_map(tablet.table)) {
+            // The table can be dropped between listing the task and aborting it.
+            throw std::runtime_error(format("Table {} has no tablets", tablet.table));
+        }
+        const auto& tmap = tm->tablets().get_tablet_map(tablet.table);
+        auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+        if (!trinfo) {
+            throw std::runtime_error(format("Tablet {} is not in transition", tablet));
+        }
+        if (trinfo->cancelled) {
+            co_return;
+        }
+        if (!locator::can_cancel_tablet_transition(trinfo->stage)) {
+            // c_str(), not the sstring itself: this file includes <fmt/ranges.h>, whose range
+            // formatter takes precedence over seastar's sstring formatter, so an sstring passed
+            // to format() here comes out as a list of characters. (string_view would fix the
+            // formatting but drag std::format into the overload set by ADL.)
+            throw std::runtime_error(format("Transition of tablet {} is at stage {}, which cannot be "
+                                            "rolled back", tablet,
+                                            locator::tablet_transition_stage_to_string(trinfo->stage).c_str()));
+        }
+
+        group0_update_collector updates;
+        auto cancelled = co_await generate_cancel_tablet_transition_updates(
+                updates, _feature_service, guard, tm->tablets(),
+                utils::chunked_vector<locator::global_tablet_id>{tablet});
+        if (!cancelled) {
+            // The checks above should have caught every reason, so this means the state changed
+            // under us; retrying re-reads it.
+            continue;
+        }
+
+        auto reason = format("Cancelling transition of tablet {}", tablet);
+        try {
+            if (co_await exec_tablet_update(std::move(guard), std::move(updates),
+                                            std::move(reason), timeout)) {
+                co_return;
+            }
+        } catch (const raft_operation_timeout_error&) {
+            throw too_late();
+        }
+    }
+}
+
 // Logs the transitions which are still in flight, so that a caller giving up is diagnosable
 // from the log, and returns how many there were. A cancelled transition is still in transition
 // while it rolls back, so the two cases are reported differently - only the second kind is what
