@@ -1790,7 +1790,7 @@ public:
         co_return res;
     }
 
-    future<migration_plan> make_rf_change_plan(node_load_map& nodes, std::vector<rf_change_action> actions, sstring dc, sstring rack) {
+    future<migration_plan> make_rf_change_plan(node_load_map& nodes, node_load_map& streaming_nodes, std::vector<rf_change_action> actions, sstring dc, sstring rack) {
         lblogger.debug("In make_rf_change_plan");
 
         migration_plan mplan;
@@ -1929,9 +1929,9 @@ public:
                         };
                         auto mig_streaming_info = get_migration_streaming_info(topo, ti, mig);
                         pick(*_load_sketch, dst.host, dst.shard, source_tablets);
-                        if (can_accept_load(nodes, mig_streaming_info)) {
+                        if (can_accept_load(streaming_nodes, mig_streaming_info)) {
                             lblogger.debug("Starting rebuild_v2 transition to {}.{} of tablet {}; new_replica = {}", dc, rack, gid, pending_replica);
-                            apply_load(nodes, mig_streaming_info);
+                            apply_load(streaming_nodes, mig_streaming_info);
                             mark_as_scheduled(mig);
                             mplan.add(std::move(mig));
                         }
@@ -1954,8 +1954,8 @@ public:
                         if (_load_sketch->has_node(replica->host) && !(rep_node && rep_node->is_excluded())) {
                             unload(*_load_sketch, replica->host, replica->shard, source_tablets);
                         }
-                        if (can_accept_load(nodes, mig_streaming_info)) {
-                            apply_load(nodes, mig_streaming_info);
+                        if (can_accept_load(streaming_nodes, mig_streaming_info)) {
+                            apply_load(streaming_nodes, mig_streaming_info);
                             mark_as_scheduled(mig);
                             mplan.add(std::move(mig));
                         }
@@ -4714,7 +4714,7 @@ public:
         }
 
         if (!rf_change_actions.empty() && rack.has_value()) {
-            plan.merge(co_await make_rf_change_plan(nodes, rf_change_actions, dc, rack.value()));
+            plan.merge(co_await make_rf_change_plan(nodes, nodes, rf_change_actions, dc, rack.value()));
         }
 
         if (_tm->tablets().balancing_enabled() && plan.empty() && !ongoing_rack_list_colocation()) {
