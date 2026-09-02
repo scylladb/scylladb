@@ -307,3 +307,36 @@ def test_views_and_indexes_on_sc_table(cql, sc_keyspace):
                         f" PRIMARY KEY (v, pk)")
         with pytest.raises(InvalidRequest, match=error_msg):
             cql.execute(f"CREATE INDEX ON {table} (v)")
+
+
+def test_lwt_on_sc_table(cql, sc_keyspace):
+    """
+    Conditional statements (LWT) are rejected on strongly consistent
+    tables, standalone and inside a batch. The strongly consistent
+    execution path never evaluates conditions, so accepting them would
+    silently execute the write unconditionally. INSERT JSON is covered
+    separately: its IF NOT EXISTS is not tracked as a condition in the
+    prepared statement.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 1)")
+
+        error_msg = "Strongly consistent updates don't support conditions"
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 999) IF NOT EXISTS")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"UPDATE {table} SET v = 7 WHERE pk = 1 IF v = 12345")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"UPDATE {table} SET v = 7 WHERE pk = 1 IF EXISTS")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"DELETE FROM {table} WHERE pk = 1 IF EXISTS")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"""INSERT INTO {table} JSON '{{"pk": 1, "v": 999}}' IF NOT EXISTS""")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"""
+                BEGIN BATCH
+                UPDATE {table} SET v = 8 WHERE pk = 1 IF v = 12345;
+                APPLY BATCH
+            """)
+
+        assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 1
