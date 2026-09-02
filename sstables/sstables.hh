@@ -1268,7 +1268,7 @@ public:
             std::function<void(sstable&)> modifier,
             update_sstable_id);
     // Must be called in a seastar thread
-    void write_component_with_metadata(component_type type, scylla_metadata metadata);
+    void write_component_with_metadata_and_modifier(component_type type, scylla_metadata metadata, std::function<void(sstable&)> modifier);
 private:
     future<uint64_t> component_filesize(component_type type) const noexcept;
 public:
