@@ -16,6 +16,7 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_add_and_drop_column_with_cdc(manager: ScyllaClusterManager):
     """ Test writing to a table with CDC enabled while adding and dropping a column.
         In particular we are interested at the behavior when the schemas of the base table

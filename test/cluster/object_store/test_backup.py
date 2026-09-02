@@ -1800,6 +1800,7 @@ async def test_decommision_waits_for_backup(manager: ScyllaClusterManager, objec
 
     await do_test_backup_helper(manager, object_storage, "backup_task_pre_upload", decommission_and_check, 2)
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_aborted_decommision_reenables_snapshot(manager: ScyllaClusterManager, object_storage):
     """
     Tests that an aborted decommission will still allow snapshots

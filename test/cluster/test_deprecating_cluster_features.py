@@ -17,6 +17,7 @@ SUPPRESS_FEATURES = "suppress_features"
 ERROR_INJECTIONS_AT_STARTUP_CONFIG_KEY = "error_injections_at_startup"
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_feature_deprecation_works(manager: ScyllaClusterManager) -> None:
     """Simulate a very old node which, long ago, has enabled some features,
        persisted them in system.scylla_local, and now some of them became

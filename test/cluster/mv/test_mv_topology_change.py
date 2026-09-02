@@ -480,6 +480,7 @@ async def test_mv_write_during_migration(manager: ScyllaClusterManager, migratio
 # on the topology coordinator, but the joining node is delayed in applying the group0 state.
 # The joining node receives base mutations from the other nodes to apply as the new replica,
 # and it also should generate view updates for them while in a joining state.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_write_during_node_join(manager: ScyllaClusterManager):
     cmdline = ['--logger-log-level', 'storage_service=debug', '--logger-log-level', 'raft_topology=debug']
     servers = await manager.servers_add(1, cmdline=cmdline)

@@ -194,6 +194,7 @@ async def check_decommission_tasks_tree(manager: ScyllaClusterManager, tm: TaskM
     vts_list = await get_new_virtual_tasks_list(tm, module_name, servers[0], previous_vts)
     return servers, previous_vts + [vts_list[0].task_id]
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_node_ops_tasks_tree(manager: ScyllaClusterManager):
     """Test node ops task manager tasks."""
     module_name = "node_ops"
@@ -228,6 +229,7 @@ async def test_node_ops_tasks_ttl(manager: ScyllaClusterManager):
     time.sleep(3)
     await get_new_virtual_tasks_statuses(tm, module_name, servers, [], expected_task_num=0)
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_node_ops_task_wait(manager: ScyllaClusterManager):
     """Test node ops virtual task's wait."""
     async def _decommission(manager: ScyllaClusterManager, server: ServerInfo):

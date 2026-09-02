@@ -35,6 +35,7 @@ async def test_remove_node_add_column(manager: ScyllaClusterManager, random_tabl
     await random_tables.verify_schema()
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_decommission_node_add_column(manager: ScyllaClusterManager, random_tables: RandomTables):
     """Add a node, remove an original node, add a column"""
     table = await random_tables.add_table(ncolumns=5)

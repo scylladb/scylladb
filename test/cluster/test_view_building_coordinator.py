@@ -585,6 +585,7 @@ async def test_view_building_failure(manager: ScyllaClusterManager):
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
 
 # Reproduces scylladb/scylladb#25912
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_concurrent_tablet_migrations(manager: ScyllaClusterManager):
     """
     The test creates a situation where a single tablet is replicated across
@@ -1039,6 +1040,7 @@ async def test_all_good_on_node_restart(manager: ScyllaClusterManager):
 # Test that view building does not trigger tombstone_warn_threshold warnings.
 # Uses a high tablet count (2048) to create many tasks, which produces many
 # tombstones when tasks are cleaned up. Verifies no warnings appear in logs.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tombstone_warn_threshold(manager: ScyllaClusterManager):
     node_count = 1
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[

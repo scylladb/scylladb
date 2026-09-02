@@ -76,6 +76,7 @@ async def test_cdc_generations_are_published(request, manager: ScyllaClusterMana
     logger.info(f"Timestamps after check_and_repair: {gen_timestamps}")
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_multiple_unpublished_cdc_generations(request, manager: ScyllaClusterManager):
     """Test that the CDC generation publisher works correctly when there is more than one unpublished CDC generation."""
     query_gen_timestamps = SimpleStatement(

@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mutation_schema_change(manager, random_tables):
     """
         Cluster A, B, C
@@ -81,6 +82,7 @@ async def test_mutation_schema_change(manager, random_tables):
                                     execution_profile='whitelist')
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mutation_schema_change_restart(manager, random_tables):
     """
         Cluster A, B, C

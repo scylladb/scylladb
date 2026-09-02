@@ -277,6 +277,7 @@ async def test_vnode_keyspace_describe_ring(manager: ScyllaClusterManager):
             assert natural_endpoints == ring_endpoints, f"natural_endpoint mismatch describe_ring for {key=} {token=} {natural_endpoints=} {ring_endpoints=}"
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_repair_timtestamp_difference(manager):
     cmdline = [ "--smp", "1", "--logger-log-level", "api=trace", "--hinted-handoff-enabled", "0" ]
     node1, node2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")

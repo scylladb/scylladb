@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 The injection forces the topology coordinator to send CDC generation data in multiple parts,
 if it didn't the command size would go over commitlog segment size limit making it impossible to commit and apply the command.
 """
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_send_data_in_parts(manager: ScyllaClusterManager):
     config = {
         'schema_commitlog_segment_size_in_mb': 2

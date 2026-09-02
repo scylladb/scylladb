@@ -16,6 +16,7 @@ from test.pylib.rest_client import inject_error_one_shot
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_raft_snapshot_truncation(manager: ScyllaClusterManager):
     """
     Check that after snapshot creation, snapshot_trailing_size is taken into consideration,
