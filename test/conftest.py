@@ -13,7 +13,7 @@ from test.pylib.skip_reason_plugin import SkipReasonPlugin
 from test.pylib.skip_types import SkipType
 
 
-pytest_plugins = []
+pytest_plugins = ["test.pylib.object_storage"]
 
 def dynamic_scope() -> _pytest.scope._ScopeName:
     """Dynamic scope for fixtures which rely on a current test.py suite/test.

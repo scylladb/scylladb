@@ -16,14 +16,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from test import TOP_SRC_DIR, MODES_TIMEOUT_FACTOR, path_to
 from test.pylib.runner import PHASE_REPORT_KEY, MANAGER_LOGS_KEY, make_failed_test_dir
-from test.cluster.object_store.conftest import make_object_storage
+from test.pylib.object_storage import make_object_storage
 from test.pylib.random_tables import RandomTables
 from test.pylib.skip_types import skip_env
 from test.pylib.util import unique_name
 from test.pylib.async_cql import run_async
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.scylla_server import ScyllaVersionDescription, get_scylla_2025_1_description
-from test.pylib.connect_options import add_cql_connection_options, add_s3_options
+from test.pylib.connect_options import add_cql_connection_options
 from test.pylib.encryption_provider import KeyProvider, make_key_provider_factory
 import logging
 import pytest
@@ -64,7 +64,6 @@ async def decode_backtrace(build_mode: str, input: str):
 
 def pytest_addoption(parser):
     add_cql_connection_options(parser)
-    add_s3_options(parser)
     parser.addoption('--skip-internet-dependent-tests', action='store_true', default=False,
                      help='Skip tests which depend on artifacts from the internet')
 

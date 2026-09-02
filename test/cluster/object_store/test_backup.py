@@ -1600,9 +1600,10 @@ async def test_restore_with_non_existing_sstable(manager: ScyllaClusterManager, 
         assert 'error' in status and 'Not Found' in status['error']
 
 
-async def test_backup_broken_streaming(manager: ScyllaClusterManager, s3_storage):
+@pytest.mark.parametrize('object_storage', ['s3'], indirect=True)
+async def test_backup_broken_streaming(manager: ScyllaClusterManager, object_storage):
     # Define configuration for the servers.
-    objconf = s3_storage.create_endpoint_conf()
+    objconf = object_storage.create_endpoint_conf()
     config = {
         'enable_user_defined_functions': False,
         'object_storage_endpoints': objconf,
@@ -1645,8 +1646,8 @@ async def test_backup_broken_streaming(manager: ScyllaClusterManager, s3_storage
                          sst_path]).decode())[0]['count']
 
             prefix = unique_name('/test/streaming_')
-            s3_resource = s3_storage.get_resource()
-            bucket = s3_resource.Bucket(s3_storage.bucket_name)
+            s3_resource = object_storage.get_resource()
+            bucket = s3_resource.Bucket(object_storage.bucket_name)
             sstables = []
 
             print(f"Uploading files from '{tmp_dir}' to prefix '{prefix}':")
@@ -1663,7 +1664,7 @@ async def test_backup_broken_streaming(manager: ScyllaClusterManager, s3_storage
 
         restore_task_id = await manager.api.restore(
             server.ip_addr, keyspace, table,
-            s3_storage.address, s3_storage.bucket_name,
+            object_storage.address, object_storage.bucket_name,
             prefix, sstables, "node"
         )
 
