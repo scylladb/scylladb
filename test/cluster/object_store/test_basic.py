@@ -20,7 +20,7 @@ from test.cqlpy.rest_api import scylla_inject_error
 from test.cluster.test_config import wait_for_config
 from test.cluster.util import new_test_keyspace, wait_for_token_ring_and_group0_consistency
 from test.pylib.tablets import get_all_tablet_replicas
-from test.pylib.util import wait_for
+from test.pylib.util import wait_for, unique_name
 
 logger = logging.getLogger(__name__)
 
@@ -863,3 +863,77 @@ async def test_stream_sink_abort_on_object_storage(manager: ScyllaClusterManager
             components, refs = get_components_and_refs()
             logger.error(f"Orphaned components: {components=} {refs=}: {e}")
             raise
+
+
+async def run_scylla_sstable(args, timeout=300):
+    """Run a scylla sstable command without blocking the event loop, and without
+    letting a stalled object-storage request hang the run."""
+    proc = await asyncio.create_subprocess_exec(*args,
+                                               stdout=asyncio.subprocess.PIPE,
+                                               stderr=asyncio.subprocess.PIPE)
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:
+        pytest.fail(f"scylla sstable did not finish within {timeout}s: {args}")
+    finally:
+        # Reap the process on timeout, on cancellation, and on any error out of
+        # communicate(), so that a stray scylla does not outlive the test.
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+    return proc.returncode, stdout.decode(), stderr.decode()
+
+
+async def test_scylla_sstable_dump_scylla_metadata(manager: ScyllaClusterManager, object_storage, tmp_path):
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf}
+    cmd = ['--logger-log-level', 's3=trace:http=debug:gcp_storage=trace']
+    server = await manager.server_add(config=cfg, cmdline=cmd)
+
+    cql = manager.get_cql()
+
+    print(f'Create keyspace (storage server listening at {object_storage.address})')
+    async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
+        schema = f"CREATE TABLE {ks}.test (name text PRIMARY KEY, value int)"
+        schema_file = os.path.join(tmp_path, f"{unique_name()}-schema.cql")
+        with open(schema_file, "w") as f:
+            f.write(schema)
+        await cql.run_async(schema)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (name, value) VALUES ('{k}', {k});") for k in range(4)])
+
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        # Scope the lookup to this table: system.sstables holds an entry for
+        # every object-storage sstable on the node, not just ours.
+        table_id = await get_table_id(cql, ks, 'test')
+        res = await cql.run_async(
+            SimpleStatement(f"SELECT sstable_id FROM system.sstables WHERE table_id = {table_id} ALLOW FILTERING",
+                            consistency_level=ConsistencyLevel.ONE))
+        sstables = [row.sstable_id for row in res]
+        assert sstables, f'No sstables registered for {ks}.test'
+        logger.debug(f'Found entries: {sstables}')
+
+        scylla_path = await manager.server_get_exe(server.server_id)
+        workdir = await manager.server_get_workdir(server.server_id)
+        args = [scylla_path, "sstable", "dump-scylla-metadata",
+                "--scylla-yaml-file", os.path.join(workdir, "conf", "scylla.yaml"),
+                "--schema-file", schema_file,
+                f"{object_storage.type}://{object_storage.bucket_name}/sstables/{sstables[0]}/TOC.txt"]
+        returncode, out, err = await run_scylla_sstable(args)
+        assert returncode == 0, f"scylla sstable failed: {out} {err}"
+        # The dump is keyed by component name and carries the scylla metadata of
+        # each sstable.  Checking the identifier, rather than just that some JSON
+        # came back, is what pins down that the tool recovered the descriptor from
+        # the TOC attributes and opened the sstable we asked for.
+        dumped = json.loads(out)["sstables"]
+        assert len(dumped) == 1, f"expected a single sstable in the dump, got {list(dumped)}"
+        metadata = next(iter(dumped.values()))
+        assert metadata.get("sstable_identifier") == str(sstables[0]), \
+            f"unexpected sstable_identifier: {metadata}"
+
+        # A path that does not name an sstable id is not a live-layout path, and
+        # must be reported as such rather than as a standard-layout parse error.
+        bad_args = args[:-1] + [f"{object_storage.type}://{object_storage.bucket_name}/sstables/not-a-uuid/TOC.txt"]
+        returncode, out, err = await run_scylla_sstable(bad_args)
+        assert returncode != 0
+        assert "is not one" in out + err, f"unexpected diagnosis: {out} {err}"

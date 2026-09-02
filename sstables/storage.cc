@@ -671,7 +671,9 @@ protected:
     schema_ptr _schema;
     shared_ptr<sstables::object_storage_client> _client;
     sstring _bucket;
-    bool _uses_foreign_location;
+    // Fixed at construction: the layout decides how component objects are
+    // named, so it cannot change once anything has been written under it.
+    const data_dictionary::storage_options::object_storage_layout _layout;
     sstring _prefix;
     seastar::abort_source* _as;
 
@@ -687,8 +689,12 @@ protected:
         return object_name(_bucket, prefix(), sid, fmt::format("refs/nodes/{}/{}", host_id, gen));
     }
 
+    bool uses_foreign_layout() const noexcept {
+        return _layout == data_dictionary::storage_options::object_storage_layout::foreign;
+    }
+
     table_id owner() const {
-        if (_uses_foreign_location) {
+        if (uses_foreign_layout()) {
             on_internal_error(sstlog, format("Storage holds '{}' prefix, but registry owner is expected", prefix()));
         }
         return _schema->id();
@@ -697,16 +703,16 @@ protected:
         return _as;
     }
 public:
-    object_storage_base(sstring type, schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, seastar::abort_source* as)
+    object_storage_base(sstring type, schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, data_dictionary::storage_options::object_storage_layout layout, seastar::abort_source* as)
         : _type(type) 
         , _schema(std::move(schema))
         , _client(std::move(client))
         , _bucket(std::move(bucket))
-        , _uses_foreign_location(loc.has_value())
+        , _layout(layout)
         , _prefix(loc ? std::move(*loc) : "sstables")
         , _as(as)
     {
-        sstlog.debug("Object storage type={} keyspace={} table={} table_id={} bucket={} prefix={} uses_foreign_location={}", _type, _schema->ks_name(), _schema->cf_name(), _schema->id(), _bucket, _prefix, _uses_foreign_location);
+        sstlog.debug("Object storage type={} keyspace={} table={} table_id={} bucket={} prefix={} layout={}", _type, _schema->ks_name(), _schema->cf_name(), _schema->id(), _bucket, _prefix, uses_foreign_layout() ? "foreign" : "live");
     }
 
     future<> seal(const sstable& sst) override;
@@ -763,14 +769,20 @@ public:
 
     future<size_t> num_references(sstable_id sid) const;
     future<> delete_components(sstable_version_types version, sstable_id sid, bool log_errors) const;
+    future<> create_reference(sstable_id sid, generation_type gen, locator::host_id node_owner) const;
 
     bool is_object_storage() const override { return true; }
 
-    future<> put_object(object_name name, ::memory_data_sink_buffers bufs) const {
-        return _client->put_object(std::move(name), std::move(bufs), abort_source());
+    // The attributes are deliberately not defaulted: every object this class
+    // writes either carries the sstable descriptor or knowingly carries nothing,
+    // and a component path that silently forgot them would produce an sstable
+    // that no reader can describe.  Saying object_storage_attributes{} is cheap;
+    // finding out later that a component lost its descriptor is not.
+    future<> put_object(object_name name, ::memory_data_sink_buffers bufs, object_storage_attributes attributes) const {
+        return _client->put_object(std::move(name), std::move(bufs), std::move(attributes), abort_source());
     }
-    future<> copy_object(object_name src, object_name dst) const {
-        return _client->copy_object(std::move(src), std::move(dst), abort_source());
+    future<> copy_object(object_name src, object_name dst, object_storage_attributes attributes) const {
+        return _client->copy_object(std::move(src), std::move(dst), std::move(attributes), abort_source());
     }
     future<> delete_object(object_name name) const {
         return _client->delete_object(std::move(name), abort_source());
@@ -778,18 +790,30 @@ public:
     file make_readable_file(object_name name) {
         return _client->make_readable_file(std::move(name), abort_source());
     }
-    data_sink make_data_upload_sink(object_name name, std::optional<unsigned> max_parts_per_piece) {
-        return _client->make_data_upload_sink(std::move(name), max_parts_per_piece, abort_source());
+    data_sink make_data_upload_sink(object_name name, object_storage_attributes attributes, std::optional<unsigned> max_parts_per_piece) {
+        return _client->make_data_upload_sink(std::move(name), std::move(attributes), max_parts_per_piece, abort_source());
     }
-    data_sink make_upload_sink(object_name name) {
-        return _client->make_upload_sink(std::move(name), abort_source());
+    data_sink make_upload_sink(object_name name, object_storage_attributes attributes) {
+        return _client->make_upload_sink(std::move(name), std::move(attributes), abort_source());
     }
 };
 
+// The descriptor rides on the TOC object, which is the one a reader looks for
+// and the one that is written first.  Every other component gets no attributes.
+static object_storage_attributes make_sstable_object_attributes(component_type type, const sstable& sst) {
+    if (type != component_type::TOC) {
+        return {};
+    }
+    return {
+        {sstring(object_storage_sstable_version_attribute), fmt::format("{}", sst.get_version())},
+        {sstring(object_storage_sstable_format_attribute), fmt::format("{}", sst.get_format())},
+    };
+}
+
 class s3_storage : public object_storage_base {
 public:
-    s3_storage(schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, seastar::abort_source* as)
-        : object_storage_base("S3", std::move(schema), std::move(client), std::move(bucket), std::move(loc), as)
+    s3_storage(schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, data_dictionary::storage_options::object_storage_layout layout, seastar::abort_source* as)
+        : object_storage_base("S3", std::move(schema), std::move(client), std::move(bucket), std::move(loc), layout, as)
     {}
 
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
@@ -806,7 +830,7 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
         throw std::runtime_error(fmt::format("'{}' STORAGE only works with uuid_sstable_identifier enabled", _type));
     }
 
-    auto ret = _uses_foreign_location
+    auto ret = uses_foreign_layout()
             ? object_name(_bucket, prefix(), sstable::component_basename(sst.get_schema()->ks_name(), sst.get_schema()->cf_name(), sst.get_version(), gen, sst.get_format(), comp))
             : object_name(_bucket, prefix(), get_sstable_identifier(sst), comp);
     sstlog.trace("make_object_name: sstable_id={} generation={} comp={}: {}", sst.sstable_identifier(), gen, comp, ret.str());
@@ -836,6 +860,11 @@ future<object_storage_reference_names> list_object_storage_references(object_sto
 future<size_t> object_storage_base::num_references(sstable_id sid) const {
     auto refs = co_await list_object_storage_references(*_client, _bucket, prefix(), sid);
     co_return refs.size();
+}
+
+future<> object_storage_base::create_reference(sstable_id sid, generation_type gen, locator::host_id node_owner) const {
+    auto ref_name = make_ref_object_name(sid, gen, node_owner);
+    co_await put_object(ref_name, memory_data_sink_buffers(), object_storage_attributes{});
 }
 
 future<size_t> object_storage_base::num_references(const sstable& sst) const {
@@ -875,16 +904,15 @@ void object_storage_base::open(sstable& sst) {
     auto host_id = sst.manager().get_local_host_id();
     sst.manager().sstables_registry().create_entry(owner(), host_id, status_creating, sst._state, std::move(desc)).get();
 
-    auto ref_name = make_ref_object_name(sid, sst.generation(), host_id);
-    put_object(ref_name, memory_data_sink_buffers()).get();
+    create_reference(sid, sst.generation(), host_id).get();
 
     memory_data_sink_buffers bufs;
     auto out = data_sink(std::make_unique<memory_data_sink>(bufs));
     auto w = std::make_unique<crc32_digest_file_writer>(std::move(out), sst.sstable_buffer_size, component_name(sst, component_type::TOC));
 
     sst.write_toc(std::move(w));
-    put_object(make_object_name(sst, component_type::TOC), std::move(bufs)).get();
-    sstlog.debug("Created reference {}: {}", sst.get_filename(), ref_name);
+    put_object(make_object_name(sst, component_type::TOC), std::move(bufs), make_sstable_object_attributes(component_type::TOC, sst)).get();
+    sstlog.debug("Created reference {}: sstable_id={}", sst.get_filename(), sid);
 }
 
 future<file> object_storage_base::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
@@ -940,7 +968,7 @@ future<data_sink> object_storage_base::make_data_or_index_sink(sstable& sst, com
         || type == component_type::Rows
         || type == component_type::Partitions);
     // FIXME: if we have file size upper bound upfront, it's better to use make_upload_sink() instead
-    return maybe_wrap_sink(sst, type, make_data_upload_sink(make_object_name(sst, type), std::nullopt));
+    return maybe_wrap_sink(sst, type, make_data_upload_sink(make_object_name(sst, type), object_storage_attributes{}, std::nullopt));
 }
 
 future<data_source>
@@ -970,7 +998,7 @@ s3_storage::make_source(sstable& sst, component_type type, file f, uint64_t offs
 }
 
 future<data_sink> object_storage_base::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
-    return maybe_wrap_sink(sst, type, make_upload_sink(make_object_name(sst, type)));
+    return maybe_wrap_sink(sst, type, make_upload_sink(make_object_name(sst, type), make_sstable_object_attributes(type, sst)));
 }
 
 future<> object_storage_base::seal(const sstable& sst) {
@@ -1110,7 +1138,7 @@ bool object_storage_base::operator==(const storage& other) const noexcept {
             && _type == other_object->_type
             && _schema->id() == other_object->_schema->id()
             && _client.get() == other_object->_client.get()
-            && _uses_foreign_location == other_object->_uses_foreign_location
+            && _layout == other_object->_layout
             && _prefix == other_object->_prefix;
 }
 
@@ -1159,7 +1187,8 @@ future<> object_storage_base::copy_components(const sstable& sst, sstable_id sid
         if (excluded_components.contains(p.first)) {
             co_return;
         }
-        co_await copy_object(make_object_name(sst, p.second, sst.generation()), object_name(_bucket, prefix, sid, p.second));
+        co_await copy_object(make_object_name(sst, p.second, sst.generation()), object_name(_bucket, prefix, sid, p.second),
+                make_sstable_object_attributes(p.first, sst));
     });
 }
 
@@ -1174,8 +1203,7 @@ future<> object_storage_base::link_with_excluded_components(const sstable& sst, 
     auto node_owner = sst.manager().get_local_host_id();
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
 
-    auto ref_name = make_ref_object_name(sid, new_gen, node_owner);
-    co_await put_object(ref_name, memory_data_sink_buffers());
+    co_await create_reference(sid, new_gen, node_owner);
 
     co_await copy_components(sst, sid, excluded_components);
 }
@@ -1191,8 +1219,7 @@ future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_typ
     auto node_owner = sst.manager().get_local_host_id();
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
 
-    auto ref_name = make_ref_object_name(sid, gen, node_owner);
-    co_await _client->put_object(ref_name, memory_data_sink_buffers(), abort_source());
+    co_await create_reference(sid, gen, node_owner);
     auto refs = co_await num_references(sid);
     sstlog.debug("Cloned {} sstable_id={} num_references={}", sst.get_filename(), sid, refs);
 
@@ -1201,7 +1228,7 @@ future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_typ
         auto scylla_metadata = co_await sst.copy_scylla_metadata();
         scylla_metadata->set_sstable_identifier(sid);
         auto scylla_metadata_bufs = co_await sst.serialize_scylla_metadata(std::move(*scylla_metadata));
-        co_await put_object(object_name(_bucket, prefix(), sid, sstable_version_constants::get_component_map(sst.get_version()).at(component_type::Scylla)), std::move(*scylla_metadata_bufs));
+        co_await put_object(object_name(_bucket, prefix(), sid, sstable_version_constants::get_component_map(sst.get_version()).at(component_type::Scylla)), std::move(*scylla_metadata_bufs), object_storage_attributes{});
     }
 
     if (!leave_unsealed) {
@@ -1223,10 +1250,10 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schem
         },
         [&] (const data_dictionary::storage_options::object_storage& os) mutable -> std::unique_ptr<sstables::storage> {
             if (s_opts.is_s3_type()) {
-                return std::make_unique<sstables::s3_storage>(schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
+                return std::make_unique<sstables::s3_storage>(schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.layout, os.abort_source);
             }
             if (s_opts.is_gs_type()) {
-                return std::make_unique<sstables::object_storage_base>("GS", schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
+                return std::make_unique<sstables::object_storage_base>("GS", schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.layout, os.abort_source);
             }
             throw std::runtime_error(fmt::format("Not implemented: '{}'", os.type));
         }

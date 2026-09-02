@@ -123,7 +123,7 @@ void do_test_client_multipart_upload(failure_policy policy, bool is_jumbo = fals
     auto close_client = deferred_close(*cln);
 
     testlog.info("Upload object");
-    auto out = output_stream<char>(is_jumbo ? cln->make_upload_jumbo_sink(name, 3) : cln->make_upload_sink(name));
+    auto out = output_stream<char>(is_jumbo ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 3) : cln->make_upload_sink(name));
     auto close_stream = deferred_close(out);
 
     static constexpr unsigned chunk_size = 1000;
