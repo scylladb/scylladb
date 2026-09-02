@@ -18,14 +18,16 @@ from cassandra.cluster import Session
 from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
 
 from test import TOP_SRC_DIR, MODES_TIMEOUT_FACTOR, path_to
+from test.cluster.util import FeatureConfig
 from test.pylib.async_cql import run_async
 from test.pylib.connect_options import add_cql_connection_options, add_s3_options
 from test.pylib.encryption_provider import KeyProvider, make_key_provider_factory
-from test.pylib.object_storage import Storage, StorageFactory, StorageKind, create_gs_server, create_s3_server
+from test.pylib.object_storage import Storage, StorageFactory, StorageKind, create_gs_server, create_s3_server, format_tuples
 from test.pylib.random_tables import RandomTables
 from test.pylib.runner import PHASE_REPORT_KEY, make_failed_test_dir
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.scylla_server import ScyllaVersionDescription, get_scylla_2025_1_description
+from test.pylib.skip_reason_plugin import skip_marker
 from test.pylib.skip_types import skip_env
 from test.pylib.util import unique_name
 
@@ -63,6 +65,29 @@ async def decode_backtrace(build_mode: str, input: str):
     )
     stdout, stderr = await proc.communicate(input=input.encode())
     return f"{stdout.decode()}\n{stderr.decode()}"
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Apply the skip_storage markers while collecting, before any fixture runs.
+
+    Skipping any later, from the fixture or the test body, would already
+    have started a server and created a bucket for a test that never runs.
+    """
+    for item in items:
+        callspec = getattr(item, 'callspec', None)
+        if callspec is None:
+            continue
+        flavor = callspec.params.get('storage')
+        if flavor is None:
+            continue
+        for marker in item.iter_markers('skip_storage'):
+            reason = marker.kwargs.get('reason')
+            if not reason:
+                raise pytest.UsageError(f"{item.name}: skip_storage takes the flavors positionally "
+                                        "and requires reason=...")
+            if flavor in marker.args:
+                skip_marker(item, reason, skip_type='env')
+                break
 
 
 def pytest_addoption(parser):
@@ -312,3 +337,22 @@ async def storage(request: pytest.FixtureRequest, object_storage_factory: Storag
     if request.param is None:
         return None
     return await object_storage_factory(request.param)
+
+
+@pytest.fixture
+def storage_config(storage: Storage | None) -> FeatureConfig:
+    """Express the storage fixture's backend as a FeatureConfig.
+
+    A test applies the object-storage cluster config and the keyspace STORAGE
+    clause the same way it applies any other configuration, and combines the
+    two by chaining: storage_config.get_cluster_cfg(feature_config.get_cluster_cfg(cfg)).
+    """
+    if storage is None:
+        return FeatureConfig()
+
+    storage_opts = format_tuples(type=storage.type,
+                                 endpoint=storage.address,
+                                 bucket=storage.bucket_name)
+    return FeatureConfig(ks_opts=f" WITH STORAGE = {storage_opts}",
+                         cluster_cfg={'object_storage_endpoints': storage.create_endpoint_conf()},
+                         on_object_storage=True)
