@@ -33,17 +33,6 @@ extern logger seastar_logger;
 
 namespace ser {
 
-template<typename T>
-void set_size(seastar::measuring_output_stream& os, const T& obj) {
-    serialize(os, uint32_t(0));
-}
-
-template<typename Stream, typename T>
-void set_size(Stream& os, const T& obj) {
-    serialize(os, get_sizeof(obj));
-}
-
-
 template<typename Output>
 void safe_serialize_as_uint32(Output& out, uint64_t data) {
     if (data > std::numeric_limits<uint32_t>::max()) {

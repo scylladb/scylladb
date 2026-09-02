@@ -22,8 +22,8 @@ READ_BUFF = 'input_buffer'
 WRITE_BUFF = 'output_buffer'
 SERIALIZER = 'serialize'
 DESERIALIZER = 'deserialize'
-SETSIZE = 'set_size'
 SIZETYPE = 'size_type'
+FRAME_VAR = '_frame'
 
 
 def reindent(indent, text):
@@ -318,7 +318,11 @@ class ClassDef(ASTBase):
 template <typename Output>
 void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
         if not self.final:
-            fprintln(cout, f"""  {SETSIZE}(buf, obj);""")
+            # Reserve the size field with a place holder and backpatch it once the
+            # members are written, instead of pre-computing the size with a full
+            # extra measuring pass over `obj` (which the outer serialize_to_buffer
+            # measuring pass already accounted for).
+            fprintln(cout, f"""  auto {FRAME_VAR} = start_frame(buf);""")
         for member in self.members:
             if isinstance(member, ClassDef) or isinstance(member, EnumDef):
                 continue
@@ -330,6 +334,8 @@ void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
             else:
                 fprintln(cout, f"""  static_assert(is_equivalent<decltype(obj.{member.name}), {param_type(member.type)}>::value, "member value has a wrong type");
   {SERIALIZER}(buf, obj.{member.name});""")
+        if not self.final:
+            fprintln(cout, f"""  {FRAME_VAR}.end(buf);""")
         fprintln(cout, "}")
 
 
