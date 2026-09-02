@@ -170,8 +170,7 @@ values_provider::values_provider(std::vector<external_values> values, std::span<
     }
 }
 
-bool values_provider::try_fill(std::vector<cql3::raw_value>& temporaries, std::span<const bytes>, std::span<const bytes>,
-        const query::result_row_view&, const query::result_row_view*) const {
+bool values_provider::try_fill(std::vector<cql3::raw_value>& temporaries) const {
     // Advanced for every row offered, dropped ones included: the values were computed for the
     // same rows in the same order.
     const auto row = _next_row++;
