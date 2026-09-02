@@ -109,6 +109,10 @@ global_cmdline = ["--disk-space-monitor-normal-polling-interval-in-seconds", "1"
                   "--commitlog-segment-size-in-mb", "2",
                   "--schema-commitlog-segment-size-in-mb", "4",
                   "--tablet-load-stats-refresh-interval-in-seconds", "1",
+                  # Startup produces a handful of stalls which otherwise exhaust the default
+                  # budget of 5 reports/minute, so a later stall is logged as a bare
+                  # "Rate-limit: suppressed N backtraces" line with no backtrace (SCYLLADB-3850).
+                  "--blocked-reactor-reports-per-minute", "60",
                   ]
 
 
@@ -606,6 +610,10 @@ global_cmdline_with_disabled_monitor = [
     "--commitlog-segment-size-in-mb", "2",
     "--schema-commitlog-segment-size-in-mb", "4",
     "--tablet-load-stats-refresh-interval-in-seconds", "1",
+    # Startup produces a handful of stalls which otherwise exhaust the default
+    # budget of 5 reports/minute, so a later stall is logged as a bare
+    # "Rate-limit: suppressed N backtraces" line with no backtrace (SCYLLADB-3850).
+    "--blocked-reactor-reports-per-minute", "60",
 ]
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_sstables_incrementally_released_during_streaming(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
