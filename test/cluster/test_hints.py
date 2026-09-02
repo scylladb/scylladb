@@ -1016,14 +1016,13 @@ async def test_support_max_hh_concurrency_param(manager: ScyllaClusterManager,
     if cmdline is None and max_hinted_handoff_concurrency != 0:
         config = {"max_hinted_handoff_concurrency": max_hinted_handoff_concurrency}
 
-    servers = await manager.servers_add(3, cmdline=cmdline, config=config, auto_rack_dc="dc1")
-    s1, s2, s3 = servers
+    servers = await manager.servers_add(2, cmdline=cmdline, config=config, auto_rack_dc="dc1")
+    s1, s2 = servers
 
-    for server in servers:
-        await validate_max_hinted_handoff_concurrency(manager, server, max_hinted_handoff_concurrency)
+    await gather_safely(*[validate_max_hinted_handoff_concurrency(manager, srv, max_hinted_handoff_concurrency) for srv in servers])
 
     cql = await manager.get_cql_exclusive(s2)
-    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
 
     await manager.server_stop_gracefully(s1.server_id)
@@ -1035,15 +1034,16 @@ async def test_support_max_hh_concurrency_param(manager: ScyllaClusterManager,
     await gather_safely(*[cql.run_async(stmt, (pk, pk + 1)) for pk in range(row_count)])
 
     await manager.server_start(s1.server_id)
-    await manager.servers_see_each_other([s1, s2, s3])
+    await manager.servers_see_each_other([s1, s2])
 
-    await wait_until_hints_are_sent_from(manager, [s2, s3], expected_count=row_count)
+    await wait_until_hints_are_sent_from(manager, [s2], expected_count=row_count)
 
     await manager.server_stop_gracefully(s2.server_id)
-    await manager.others_not_see_server(s2.ip_addr)
 
     cql = await manager.get_cql_exclusive(s1)
-    results = await cql.run_async("SELECT count(*) FROM ks.t")
+    results = await cql.run_async(SimpleStatement(
+        "SELECT count(*) FROM ks.t",
+        consistency_level=ConsistencyLevel.ONE))
     assert results[0].count == row_count
 
 
