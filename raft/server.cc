@@ -121,7 +121,7 @@ public:
     void set_applier_queue_max_size(size_t queue_max_size) override;
     future<> stepdown(logical_clock::duration timeout, server_id target) override;
     future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) override;
-    future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as);
+    future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as, term_t append_in_term);
     void register_metrics() override;
     size_t max_command_size() const override;
 private:
@@ -697,24 +697,33 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
     co_return;
 }
 
-future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as) {
+future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as, term_t append_in_term) {
+    co_await utils::get_local_injector().inject("block_raft_add_entry_before_waiting_for_memory",
+            utils::wait_for_message(std::chrono::minutes(5)));
+
     // Wait for sufficient memory to become available
     fsm::memory_permit memory_permit;
-    while (true) {
-        term_t t = _fsm->get_current_term();
         try {
             memory_permit = co_await _fsm->wait_for_memory_permit(as, log::memory_usage_of(cmd, _config.max_command_size));
         } catch (semaphore_aborted&) {
             throw request_aborted(
                 format("Semaphore aborted while waiting for memory availability for adding entry on leader in term: {}, on server: {}, current term: {}",
-                       t,
+                       append_in_term,
                        _id,
                        _fsm->get_current_term()));
         }
-        if (t == _fsm->get_current_term()) {
-            break;
+        if (append_in_term != _fsm->get_current_term()) [[unlikely]] {
+            // Throw an exception and refuse to append if the term has changed
+            // since the beginning of the server::add_entry call, in order to
+            // uphold the guarantee in the add_entry contract. This can happen
+            // due to a different node becoming a leader, but also may happen
+            // due to circumstances where leadership ultimately stays on the
+            // same node, e.g. if a different node becomes a leader for a while
+            // or after a network partition. This may lead to a slightly confusing
+            // error message, but it beats adding a new error variant for this
+            // case only.
+            co_await coroutine::return_exception(raft::not_a_leader(_fsm->current_leader()));
         }
-    }
     logger.trace("[{}] adding entry after waiting for memory permit", _tag);
 
     const log_entry& e = _fsm->add_entry(std::move(cmd));
@@ -731,7 +740,12 @@ future<add_entry_reply> server_impl::execute_add_entry(server_id from, command c
     }
     logger.trace("[{}] adding a forwarded entry from {}", _tag, from);
     try {
-        co_return add_entry_reply{co_await add_entry_on_leader(std::move(cmd), as)};
+        // On the forwarding path, we don't give guarantees about entry being
+        // appended in a given term, so the check against `append_in_term`
+        // is technically not needed. However, making this parameter mandatory
+        // makes the implementation of `add_entry_on_leader` a bit simpler,
+        // and the check fails in rather rare circumstances so it is rather harmless.
+        co_return add_entry_reply{co_await add_entry_on_leader(std::move(cmd), as, _fsm->get_current_term())};
     } catch (raft::not_a_leader& e) {
         co_return add_entry_reply{transient_error{std::current_exception(), e.leader}};
     }
@@ -794,6 +808,10 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
         {
             // Taken before the first await which can reorder callers, released before
             // waiting for the entry. See _add_entry_admission.
+            // Similarly, append_in_term needs to be acquired before the first
+            // await in order to protect the entry from being appended in an
+            // unwanted term.
+            term_t append_in_term = _fsm->get_current_term();
             auto f_admission = co_await coroutine::as_future(as
                     ? get_units(_add_entry_admission, 1, *as)
                     : get_units(_add_entry_admission, 1));
@@ -807,7 +825,7 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
                     co_await coroutine::return_exception_ptr(eptr);
                 }
             }
-            eid = co_await add_entry_on_leader(std::move(command), as);
+            eid = co_await add_entry_on_leader(std::move(command), as, append_in_term);
         }
         co_await utils::get_local_injector().inject("block_raft_add_entry_before_wait_for_entry",
                 utils::wait_for_message(std::chrono::minutes(5)));

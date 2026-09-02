@@ -590,3 +590,64 @@ SEASTAR_THREAD_TEST_CASE(test_add_entry_preserves_submission_order) {
         BOOST_REQUIRE_EQUAL((*applied)[v], v);
     }
 }
+
+SEASTAR_THREAD_TEST_CASE(test_add_entry_append_succeeds_only_in_current_term) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+    return;
+#else
+    raft::server::configuration srv_config {
+        .enable_forwarding = false,
+    };
+    test_case test_config {
+        .nodes = 2,
+        .config = std::vector<raft::server::configuration>(2, srv_config),
+    };
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        100, // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    auto& server0 = cluster.get_server(0);
+    auto& server1 = cluster.get_server(1);
+    server0.wait_for_leader(nullptr).get();
+
+    const auto first_term = server0.log_last_idx_term().second;
+
+    // Initiate add_entry but block it in the middle
+    constexpr auto block_add_entry = "block_raft_add_entry_before_waiting_for_memory";
+    std::optional<scoped_error_injection> blocked_add_entry{block_add_entry};
+    auto f_add_entry = server0.add_entry(create_command(42), raft::wait_type::committed, nullptr);
+
+    // Move leadership away and back
+    BOOST_REQUIRE(server0.is_leader());
+    server0.stepdown(raft::logical_clock::duration{5}, server1.id()).get();
+    server0.wait_for_leader(nullptr).get();
+    BOOST_REQUIRE(server1.is_leader());
+    server1.stepdown(raft::logical_clock::duration{5}, server0.id()).get();
+    server1.wait_for_leader(nullptr).get();
+    BOOST_REQUIRE(server0.is_leader());
+
+    // Newly elected leaders append a dummy entry, so read the index once again
+    auto [before_idx, term] = server0.log_last_idx_term();
+    BOOST_CHECK_EQUAL(term, raft::term_t{first_term.value() + 2});
+
+    // add_entry should fail after unblocking the error injection and nothing
+    // should be appended to the log. The term should have changed twice.
+    blocked_add_entry.reset();
+    BOOST_REQUIRE_THROW(f_add_entry.get(), raft::not_a_leader);
+    BOOST_REQUIRE_EQUAL(server0.log_last_idx_term().first, before_idx);
+    BOOST_REQUIRE_EQUAL(server0.log_last_idx_term().second, term);
+
+    // Append the entry again, this time without changing the term. It should succeed.
+    std::tie(before_idx, term) = server0.log_last_idx_term();
+    server0.add_entry(create_command(42), raft::wait_type::committed, nullptr).get();
+    BOOST_REQUIRE_EQUAL(server0.log_last_idx_term().first, raft::index_t{before_idx.value() + 1});
+    BOOST_REQUIRE_EQUAL(server0.log_last_idx_term().second, term);
+#endif
+}
