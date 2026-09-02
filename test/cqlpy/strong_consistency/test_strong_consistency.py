@@ -416,3 +416,18 @@ def test_mixed_keyspace_batch_on_sc_table(cql, sc_keyspace, test_keyspace):
                     INSERT INTO {ec_table} (pk, v) VALUES (1, 1);
                     APPLY BATCH
                 """)
+
+
+def test_group_by_on_sc_table(cql, sc_keyspace):
+    """
+    GROUP BY is rejected on strongly consistent SELECTs. The strongly
+    consistent read path builds its result set without the grouping
+    indices, so an aggregate over GROUP BY would return one global row
+    instead of one row per group.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table:
+        for ck in (1, 2, 3):
+            cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (1, {ck}, {ck})")
+
+        with pytest.raises(InvalidRequest, match="Strongly consistent queries don't support GROUP BY"):
+            cql.execute(f"SELECT ck, count(v) FROM {table} WHERE pk = 1 GROUP BY pk, ck")
