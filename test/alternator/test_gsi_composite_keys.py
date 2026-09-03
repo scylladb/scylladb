@@ -2233,6 +2233,31 @@ def test_gsi_composite_keyconditions(test_table_gsi_2h2r):
     )
 
 
+# Until #31393 is fixed, Alternator deliberately rejects KeyConditions on
+# composite-key GSIs (see the test above for DynamoDB's behavior), and
+# Query's KeyConditions code path relies on that rejection. Pin it down for
+# both composite shapes: composite HASH key, and composite RANGE key.
+def test_gsi_composite_keyconditions_rejected(
+    test_table_gsi_2h2r, test_table_gsi_1h2r, scylla_only
+):
+    with pytest.raises(ClientError, match="ValidationException.*Legacy KeyConditions"):
+        test_table_gsi_2h2r.query(
+            IndexName="idx_2h2r",
+            KeyConditions={
+                "h1": {"AttributeValueList": ["v"], "ComparisonOperator": "EQ"},
+                "h2": {"AttributeValueList": ["v"], "ComparisonOperator": "EQ"},
+            },
+        )
+    with pytest.raises(ClientError, match="ValidationException.*Legacy KeyConditions"):
+        test_table_gsi_1h2r.query(
+            IndexName="idx_1h2r",
+            KeyConditions={
+                "h": {"AttributeValueList": ["v"], "ComparisonOperator": "EQ"},
+                "r2": {"AttributeValueList": ["w"], "ComparisonOperator": "EQ"},
+            },
+        )
+
+
 ###############################################################################
 
 
