@@ -63,12 +63,13 @@ future<shared_ptr<result_message>> batch_statement::do_execute(
     // The local and timestamp arguments are unused: the batch is always
     // committed through the Raft group which owns the partition, and that
     // group assigns the timestamp.
+    auto warning = begin_execution(qp, options);
+    validate_write_consistency_level(options.get_consistency());
+
     const auto& statements = get_statements();
     if (statements.empty()) {
         co_return seastar::make_shared<result_message::void_message>();
     }
-
-    validate_write_consistency_level(options.get_consistency());
 
     auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
 
@@ -143,7 +144,11 @@ future<shared_ptr<result_message>> batch_statement::do_execute(
         co_return co_await redirect_statement(qp, options, redirect->target, timeout, is_write, coordinator.get().get_stats(), std::move(redirect->on_forwarding_finished));
     }
 
-    co_return seastar::make_shared<result_message::void_message>();
+    auto result = seastar::make_shared<result_message::void_message>();
+    if (warning) {
+        result->add_warning(std::move(*warning));
+    }
+    co_return result;
 }
 
 }

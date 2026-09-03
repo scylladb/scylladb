@@ -250,6 +250,36 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
                        seastar::cref(options), false, options.get_timestamp(state));
 }
 
+std::optional<sstring> batch_statement::begin_execution(query_processor& qp, const query_options& options) const {
+    const auto cl = options.get_consistency();
+    const query_processor::write_consistency_guardrail_state guardrail_state = qp.check_write_consistency_levels_guardrail(cl);
+    if (guardrail_state == query_processor::write_consistency_guardrail_state::FAIL) {
+        throw exceptions::invalid_request_exception(
+                format("Write consistency level {} is forbidden by the current configuration "
+                       "setting of write_consistency_levels_disallowed. Please use a different "
+                       "consistency level, or remove {} from write_consistency_levels_disallowed "
+                       "set in the configuration.", cl, cl));
+    }
+
+    for (size_t i = 0; i < _statements.size(); ++i) {
+        _statements[i].statement->restrictions().validate_primary_key(options.for_statement(i));
+    }
+
+    if (_has_conditions) {
+        ++_stats.cas_batches;
+        _stats.statements_in_cas_batches += _statements.size();
+    } else {
+        ++_stats.batches;
+        _stats.statements_in_batches += _statements.size();
+    }
+
+    if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
+        return format("Using write consistency level {} listed on the "
+                      "write_consistency_levels_warned is not recommended.", cl);
+    }
+    return std::nullopt;
+}
+
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_execute(
         query_processor& qp,
         service::query_state& query_state, const query_options& options,
@@ -263,35 +293,17 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
         throw new InvalidRequestException("Invalid empty serial consistency level");
 #endif
 
+    auto warning = begin_execution(qp, options);
     const auto cl = options.get_consistency();
-    const query_processor::write_consistency_guardrail_state guardrail_state = qp.check_write_consistency_levels_guardrail(cl);
-    if (guardrail_state == query_processor::write_consistency_guardrail_state::FAIL) {
-        return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(
-                exceptions::invalid_request_exception(
-                        format("Write consistency level {} is forbidden by the current configuration "
-                               "setting of write_consistency_levels_disallowed. Please use a different "
-                               "consistency level, or remove {} from write_consistency_levels_disallowed "
-                               "set in the configuration.", cl, cl)));
-    }
-
-    for (size_t i = 0; i < _statements.size(); ++i) {
-        _statements[i].statement->restrictions().validate_primary_key(options.for_statement(i));
-    }
 
     if (_has_conditions) {
-        ++_stats.cas_batches;
-        _stats.statements_in_cas_batches += _statements.size();
-        return execute_with_conditions(qp, options, query_state).then([guardrail_state, cl] (auto result) {
-            if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
-                result->add_warning(format("Using write consistency level {} listed on the "
-                                           "write_consistency_levels_warned is not recommended.", cl));
+        return execute_with_conditions(qp, options, query_state).then([warning = std::move(warning)] (auto result) mutable {
+            if (warning) {
+                result->add_warning(std::move(*warning));
             }
             return result;
         });
     }
-
-    ++_stats.batches;
-    _stats.statements_in_batches += _statements.size();
 
     auto timeout = db::timeout_clock::now() + get_timeout(query_state.get_client_state(), options);
     auto violations = make_lw_shared<db::large_data_violation_type>(db::large_data_violation_type::none);
@@ -299,15 +311,14 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     return get_mutations(qp, options, timeout, local, now, query_state).then([this, &qp, cl, timeout, tr_state = query_state.get_trace_state(),
                     permit = query_state.get_permit(), violations] (utils::chunked_vector<mutation> ms) mutable {
         return execute_without_conditions(qp, std::move(ms), cl, timeout, std::move(tr_state), std::move(permit), violations.get());
-    }).then([guardrail_state, cl, violations] (coordinator_result<> res) {
+    }).then([warning = std::move(warning), violations] (coordinator_result<> res) mutable {
         if (!res) {
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                     seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error()));
         }
         auto result = make_shared<cql_transport::messages::result_message::void_message>();
-        if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
-            result->add_warning(format("Using write consistency level {} listed on the "
-                                       "write_consistency_levels_warned is not recommended.", cl));
+        if (warning) {
+            result->add_warning(std::move(*warning));
         }
         if (auto warning = db::large_data_soft_violation_warning(*violations); !warning.empty()) [[unlikely]] {
             result->add_warning(std::move(warning));

@@ -142,6 +142,14 @@ protected:
             service::query_state& query_state, const query_options& options,
             bool local, api::timestamp_type now) const;
 
+    // The part of do_execute() which does not depend on the storage backend:
+    // the write consistency guardrail, primary key validation of every
+    // statement and the batch counters. Every do_execute() implementation
+    // calls it first. Throws when the guardrail forbids the consistency level;
+    // returns the warning to attach to the result when the guardrail merely
+    // warns.
+    std::optional<sstring> begin_execution(query_processor& qp, const query_options& options) const;
+
 private:
     friend class batch_statement_executor;
 
