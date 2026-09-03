@@ -627,7 +627,7 @@ static uint64_t expected_list_requests(int nr_objects, size_t page_size) {
 
 // Reproducer for the bucket_lister round-trip-count candidate: lists the same
 // population once via bucket_lister's real production default (no
-// objects_per_page override, i.e. max-keys=64, as every in-tree caller uses
+// objects_per_page override, i.e. max-keys=100, as every in-tree caller uses
 // it) and once with max-keys pinned to S3's actual ListObjectsV2 ceiling
 // (1000). Asserts the actual GET round-trip count, not just the returned
 // names, so a regression back to the old default (or any other page-size
