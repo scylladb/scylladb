@@ -1091,3 +1091,13 @@ async def test_storage_mode_contradicting_the_cluster_refuses_to_start(manager: 
     await manager.server_start(server.server_id,
                                expected_error='storage_mode_for_new_keyspaces is local, but this cluster keeps its user data in object storage')
 
+
+async def test_alternator_refuses_to_start_on_object_storage(manager: ScyllaClusterManager, object_storage):
+    '''Alternator is untested on object storage, so a node configured for both
+    must refuse to start'''
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': object_storage.create_endpoint_conf(),
+           'storage_mode_for_new_keyspaces': 'object_storage'}
+    cfg.update(alternator_config)
+    await manager.server_add(config=cfg,
+                             expected_error='Alternator is not supported when storage_mode_for_new_keyspaces is object_storage')
