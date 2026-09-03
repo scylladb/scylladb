@@ -6,16 +6,17 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-// Reproducer: default_aws_retry_strategy's backoff has no jitter, so any
-// number of independent callers that fail at the same instant (same
-// attempted_retries) resume at the same instant too - a synchronized
-// retry wave against the same bucket/endpoint.
+// Regression test: default_aws_retry_strategy's backoff must be jittered, so
+// independent callers that fail at the same instant (same attempted_retries)
+// don't all resume at the same instant and re-synchronize the retry wave.
 
 #include "test/lib/scylla_test_case.hh"
 #include "utils/s3/default_aws_retry_strategy.hh"
 #include "utils/s3/aws_error.hh"
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/when_all.hh>
+#include <seastar/core/sleep.hh>
 #include <vector>
 #include <algorithm>
 
@@ -53,15 +54,9 @@ future<std::chrono::microseconds> measure_resume_spread(unsigned n, unsigned att
 
 } // anonymous namespace
 
-// attempted_retries=3 => (1<<3)*25ms == 200ms sleep. If backoff were
-// jittered, N independent callers would resume spread out over a good
-// fraction of that 200ms window. With no jitter they should all resume
-// within a few ms of each other (pure scheduler noise), regardless of N.
-// Contract a retry strategy is expected to uphold (e.g. AWS SDKs' "full
-// jitter"): independent callers retrying at the same attempted_retries
-// should resume spread out over a good fraction of the backoff window,
-// not in lockstep. These assertions FAIL against the current
-// default_aws_retry_strategy because it has no jitter term at all.
+// attempted_retries=3 => ladder = (1<<3)*25ms == 200ms. Full jitter picks
+// uniformly from [floor, min(cap, ladder)], so N independent callers should
+// resume spread out over a good fraction of that window, not in lockstep.
 SEASTAR_TEST_CASE(test_retry_wave_should_disperse_small) {
     constexpr unsigned attempted_retries = 3;
     constexpr auto expected_sleep = std::chrono::milliseconds((1UL << attempted_retries) * 25);
@@ -77,12 +72,57 @@ SEASTAR_TEST_CASE(test_retry_wave_should_disperse_at_scale) {
     constexpr auto expected_sleep = std::chrono::milliseconds((1UL << attempted_retries) * 25);
 
     // Scale N up by two orders of magnitude (models more concurrent
-    // objects/shards/nodes hitting the same bucket). If anything, a
-    // correct jittered implementation disperses *more* visibly as N
-    // grows (the resume histogram fills out the window); this codebase's
-    // implementation stays glued together regardless of N.
+    // objects/shards/nodes hitting the same bucket). A correct jittered
+    // implementation disperses at least as well as N grows.
     auto spread = co_await measure_resume_spread(2000, attempted_retries);
     fmt::print("N=2000 resume spread = {}us (sleep = {}ms)\n", spread.count(), expected_sleep.count());
 
     BOOST_REQUIRE_GT(spread, expected_sleep / 4);
+}
+
+// The ladder for a high attempt count would climb past a minute with the old
+// (1<<n)*25ms formula; max_sleep_time must cap it at a few seconds.
+SEASTAR_TEST_CASE(test_backoff_sleep_is_capped) {
+    constexpr auto cap = 200ms;
+    aws::default_aws_retry_strategy strategy(/* max_retries */ 100, cap);
+    constexpr unsigned attempted_retries = 15; // (1<<15)*25ms would be ~13 minutes uncapped
+
+    auto t0 = lowres_clock::now();
+    co_await strategy.should_retry(make_retryable_error(), attempted_retries);
+    auto elapsed = lowres_clock::now() - t0;
+
+    fmt::print("retry#{} elapsed = {}ms (cap = {}ms)\n",
+               attempted_retries,
+               std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(),
+               cap.count());
+    BOOST_REQUIRE_LE(elapsed, cap + 100ms); // allow scheduler slack
+}
+
+// A single retry must not resume near-instantly; a small floor keeps the
+// backoff meaningful even at low attempt counts.
+SEASTAR_TEST_CASE(test_backoff_sleep_has_floor) {
+    aws::default_aws_retry_strategy strategy(/* max_retries */ 100);
+    constexpr unsigned attempted_retries = 1;
+
+    auto t0 = lowres_clock::now();
+    co_await strategy.should_retry(make_retryable_error(), attempted_retries);
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(lowres_clock::now() - t0);
+
+    fmt::print("retry#{} elapsed = {}ms\n", attempted_retries, elapsed.count());
+    BOOST_REQUIRE_GE(elapsed, 5ms); // well above scheduler noise, below the 10ms floor's own margin
+}
+
+// An in-progress backoff sleep must be cancellable via abort_source, so
+// shutdown/close doesn't wait out a stuck retry's full backoff window.
+SEASTAR_TEST_CASE(test_backoff_sleep_is_abortable) {
+    constexpr auto cap = 60s; // long enough that only the abort ends the wait
+    abort_source as;
+    aws::default_aws_retry_strategy strategy(/* max_retries */ 100, cap, &as);
+    constexpr unsigned attempted_retries = 10;
+
+    auto fut = strategy.should_retry(make_retryable_error(), attempted_retries);
+    co_await sleep(50ms);
+    as.request_abort();
+
+    BOOST_REQUIRE_THROW(co_await std::move(fut), seastar::sleep_aborted);
 }
