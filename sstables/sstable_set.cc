@@ -132,6 +132,7 @@ sstable_set::sstable_set(std::unique_ptr<sstable_set_impl> impl)
 sstable_set::sstable_set(const sstable_set& x)
         : enable_lw_shared_from_this<sstable_set>()
         , _impl(x._impl->clone())
+        , _token_range_tombstones(x._token_range_tombstones)
 {}
 
 sstable_set::sstable_set(sstable_set&&) noexcept = default;
@@ -181,12 +182,25 @@ stop_iteration sstable_set::for_each_sstable_until(std::function<stop_iteration(
 
 bool
 sstable_set::insert(shared_sstable sst) {
+    _token_range_tombstones.reset();
     return _impl->insert(sst);
 }
 
 bool
 sstable_set::erase(shared_sstable sst) {
+    _token_range_tombstones.reset();
     return _impl->erase(sst);
+}
+
+const token_range_tombstone_list& sstable_set::token_range_tombstones() const {
+    if (!_token_range_tombstones) {
+        token_range_tombstone_list l;
+        for_each_sstable([&l] (const shared_sstable& sst) {
+            l.apply(sst->token_range_tombstones());
+        });
+        _token_range_tombstones = std::move(l);
+    }
+    return *_token_range_tombstones;
 }
 
 size_t
