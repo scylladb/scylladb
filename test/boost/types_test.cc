@@ -1085,6 +1085,41 @@ SEASTAR_TEST_CASE(test_empty_type_serialization) {
     return make_ready_future<>();
 }
 
+// type_interning_helper's per-shard cache (types.hh, get_instance()) must
+// reclaim shapes nothing outside the cache references any more -- e.g. a
+// dropped table/column's collection/tuple/UDT type, or the instance an
+// ALTER TYPE just superseded -- rather than pinning every distinct shape
+// ever built for the process lifetime.
+SEASTAR_TEST_CASE(test_tuple_type_interning_cache_reclaims_unreferenced_shapes) {
+    using intern = type_interning_helper<tuple_type_impl, std::vector<data_type>>;
+    auto baseline = intern::test_only_cache_size();
+
+    // A live reference must survive reclamation, unchanged.
+    std::vector<data_type> live_shape(3, int32_type);
+    auto live = tuple_type_impl::get_instance(live_shape);
+
+    // Distinct-length tuples are automatically distinct cache keys (vector
+    // equality requires equal length), modeling one shape per differently-shaped
+    // tuple/collection column across a schema. No returned shared_ptr is kept,
+    // so nothing outside the cache holds any of these alive.
+    constexpr size_t n = 6000;
+    for (size_t i = 0; i < n; ++i) {
+        std::vector<data_type> shape(i + 4, int32_type);
+        tuple_type_impl::get_instance(std::move(shape));
+    }
+
+    auto after = intern::test_only_cache_size();
+    // Without reclamation the cache would have grown by exactly n (plus the
+    // one live entry); reclamation must keep it well below that.
+    BOOST_REQUIRE_LT(after - baseline, n / 2);
+
+    // The live entry survived every reclaim pass, identity intact.
+    // (tuple_type_impl isn't ostream-printable, so compare raw pointers directly.)
+    BOOST_REQUIRE_EQUAL(tuple_type_impl::get_instance(live_shape).get(), live.get());
+
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(test_list_type_serialization) {
     auto list_type = list_type_impl::get_instance(int32_type, false);
     auto list = make_list_value(list_type, {data_value(7), data_value::make_null(int32_type), data_value(6)});

@@ -755,11 +755,33 @@ class type_interning_helper {
     };
     using map_type = std::unordered_map<key_type, value_type, hash_type>;
     static thread_local map_type _instances;
+    // size _instances had after the last reclaim pass; drives the doubling
+    // threshold below so the O(n) sweep is amortized O(1) per get_instance().
+    static thread_local size_t _last_reclaim_size;
+
+    // Entries whose only owner is this cache (use_count() == 1) belong to
+    // types nothing outside the cache references any more -- e.g. shapes
+    // used only by a dropped table/column or a superseded ALTER TYPE -- and
+    // can be reclaimed without disturbing the identity of any live type.
+    // Swept only once the table has roughly doubled since the last sweep, so
+    // an unbroken stream of distinct shapes (e.g. schema churn) still pays
+    // amortized O(1) per miss rather than O(n) on every single one.
+    static void maybe_reclaim() {
+        auto size = _instances.size();
+        if (size < 1024 || size < 2 * _last_reclaim_size) {
+            return;
+        }
+        std::erase_if(_instances, [] (const auto& kv) { return kv.second.use_count() == 1; });
+        _last_reclaim_size = _instances.size();
+    }
 public:
+    // test-only: exposes cache size, since there is no other way to observe it
+    static size_t test_only_cache_size() { return _instances.size(); }
     static shared_ptr<const InternedType> get_instance(BaseTypes... keys) {
         auto key = std::make_tuple(keys...);
         auto i = _instances.find(key);
         if (i == _instances.end()) {
+            maybe_reclaim();
             auto v = ::make_shared<InternedType>(std::move(keys)...);
             i = _instances.insert(std::make_pair(std::move(key), std::move(v))).first;
         }
@@ -770,6 +792,9 @@ public:
 template <typename InternedType, typename... BaseTypes>
 thread_local typename type_interning_helper<InternedType, BaseTypes...>::map_type
     type_interning_helper<InternedType, BaseTypes...>::_instances;
+
+template <typename InternedType, typename... BaseTypes>
+thread_local size_t type_interning_helper<InternedType, BaseTypes...>::_last_reclaim_size = 0;
 
 class reversed_type_impl : public abstract_type {
     using intern = type_interning_helper<reversed_type_impl, data_type>;
