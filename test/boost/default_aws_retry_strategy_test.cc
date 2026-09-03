@@ -6,83 +6,75 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-// Reproducer: default_aws_retry_strategy's backoff has no jitter, so any
-// number of independent callers that fail at the same instant (same
-// attempted_retries) resume at the same instant too - a synchronized
-// retry wave against the same bucket/endpoint.
+// Regression test: default_aws_retry_strategy's backoff must be jittered, so
+// callers that fail together don't resume in lockstep. Samples
+// compute_sleep_duration() directly instead of timing real sleeps.
 
 #include "test/lib/scylla_test_case.hh"
 #include "utils/s3/default_aws_retry_strategy.hh"
-#include "utils/s3/aws_error.hh"
-#include <seastar/core/lowres_clock.hh>
-#include <seastar/core/when_all.hh>
-#include <vector>
 #include <algorithm>
+#include <vector>
 
-using namespace seastar;
 using namespace std::chrono_literals;
 
 namespace {
 
-std::exception_ptr make_retryable_error() {
-    return std::make_exception_ptr(aws::aws_exception(aws::aws_error(aws::aws_error_type::INTERNAL_FAILURE, utils::http::retryable::yes)));
-}
-
-// Simulates N independent shards/nodes that all hit a retryable error at
-// the same moment and are on their Kth retry already (attempted_retries).
-// Returns the spread (max - min) of their resume timestamps.
-future<std::chrono::microseconds> measure_resume_spread(unsigned n, unsigned attempted_retries) {
-    std::vector<aws::default_aws_retry_strategy> strategies;
-    strategies.reserve(n);
+// Spread (max - min) across n compute_sleep_duration() samples.
+std::chrono::milliseconds sample_spread(const aws::default_aws_retry_strategy& strategy, unsigned n, unsigned attempted_retries) {
+    std::vector<std::chrono::milliseconds> samples;
+    samples.reserve(n);
     for (unsigned i = 0; i < n; ++i) {
-        strategies.emplace_back(attempted_retries + 10); // never exhaust retries
+        samples.push_back(strategy.compute_sleep_duration(attempted_retries));
     }
-
-    auto t0 = lowres_clock::now();
-    std::vector<future<std::chrono::microseconds>> futs;
-    futs.reserve(n);
-    for (auto& s : strategies) {
-        futs.push_back(s.should_retry(make_retryable_error(), attempted_retries).then([t0](bool) {
-            return std::chrono::duration_cast<std::chrono::microseconds>(lowres_clock::now() - t0);
-        }));
-    }
-    auto results = co_await when_all_succeed(futs.begin(), futs.end());
-    auto [min_it, max_it] = std::minmax_element(results.begin(), results.end());
-    co_return *max_it - *min_it;
+    auto [min_it, max_it] = std::minmax_element(samples.begin(), samples.end());
+    return *max_it - *min_it;
 }
 
 } // anonymous namespace
 
-// attempted_retries=3 => (1<<3)*25ms == 200ms sleep. If backoff were
-// jittered, N independent callers would resume spread out over a good
-// fraction of that 200ms window. With no jitter they should all resume
-// within a few ms of each other (pure scheduler noise), regardless of N.
-// Contract a retry strategy is expected to uphold (e.g. AWS SDKs' "full
-// jitter"): independent callers retrying at the same attempted_retries
-// should resume spread out over a good fraction of the backoff window,
-// not in lockstep. These assertions FAIL against the current
-// default_aws_retry_strategy because it has no jitter term at all.
-SEASTAR_TEST_CASE(test_retry_wave_should_disperse_small) {
+// ladder(3) = 200ms; samples should spread over a good fraction of it, not collapse to one value.
+BOOST_AUTO_TEST_CASE(test_retry_wave_should_disperse) {
+    aws::default_aws_retry_strategy strategy;
     constexpr unsigned attempted_retries = 3;
     constexpr auto expected_sleep = std::chrono::milliseconds((1UL << attempted_retries) * 25);
 
-    auto spread = co_await measure_resume_spread(10, attempted_retries);
-    fmt::print("N=10 resume spread = {}us (sleep = {}ms)\n", spread.count(), expected_sleep.count());
+    auto spread = sample_spread(strategy, 2000, attempted_retries);
+    fmt::print("2000 samples spread = {}ms (sleep = {}ms)\n", spread.count(), expected_sleep.count());
 
     BOOST_REQUIRE_GT(spread, expected_sleep / 4);
 }
 
-SEASTAR_TEST_CASE(test_retry_wave_should_disperse_at_scale) {
-    constexpr unsigned attempted_retries = 3;
-    constexpr auto expected_sleep = std::chrono::milliseconds((1UL << attempted_retries) * 25);
+// ladder(15) would be ~13 minutes uncapped; max_sleep_time must cap it.
+BOOST_AUTO_TEST_CASE(test_backoff_sleep_is_capped) {
+    constexpr auto cap = 200ms;
+    aws::default_aws_retry_strategy strategy(/* max_retries */ 100, cap);
+    constexpr unsigned attempted_retries = 15; // (1<<15)*25ms would be ~13 minutes uncapped
 
-    // Scale N up by two orders of magnitude (models more concurrent
-    // objects/shards/nodes hitting the same bucket). If anything, a
-    // correct jittered implementation disperses *more* visibly as N
-    // grows (the resume histogram fills out the window); this codebase's
-    // implementation stays glued together regardless of N.
-    auto spread = co_await measure_resume_spread(2000, attempted_retries);
-    fmt::print("N=2000 resume spread = {}us (sleep = {}ms)\n", spread.count(), expected_sleep.count());
+    auto sleep_time = strategy.compute_sleep_duration(attempted_retries);
+    fmt::print("retry#{} sleep = {}ms (cap = {}ms)\n", attempted_retries, sleep_time.count(), cap.count());
 
-    BOOST_REQUIRE_GT(spread, expected_sleep / 4);
+    BOOST_REQUIRE_LE(sleep_time, cap);
+}
+
+// A single retry must not resume near-instantly.
+BOOST_AUTO_TEST_CASE(test_backoff_sleep_has_floor) {
+    aws::default_aws_retry_strategy strategy(/* max_retries */ 100);
+    constexpr unsigned attempted_retries = 1;
+
+    auto sleep_time = strategy.compute_sleep_duration(attempted_retries);
+    fmt::print("retry#{} sleep = {}ms\n", attempted_retries, sleep_time.count());
+
+    BOOST_REQUIRE_GE(sleep_time, 10ms); // the default min_sleep_time floor
+}
+
+// Below the natural ladder, the floor must still jitter, not collapse to a fixed value.
+BOOST_AUTO_TEST_CASE(test_backoff_sleep_jitters_below_natural_ladder) {
+    constexpr auto min_sleep_time = 1000ms; // above ladder(1)=50ms and ladder(2)=100ms
+    aws::default_aws_retry_strategy strategy(/* max_retries */ 10, /* max_sleep_time */ 5000ms, min_sleep_time);
+    constexpr unsigned attempted_retries = 1;
+
+    auto spread = sample_spread(strategy, 2000, attempted_retries);
+    fmt::print("2000 samples spread below natural ladder = {}ms\n", spread.count());
+
+    BOOST_REQUIRE_GT(spread, 0ms);
 }
