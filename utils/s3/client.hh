@@ -286,8 +286,9 @@ public:
 
     public:
 
-        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix = "", size_t objects_per_page = 64, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
-        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, lister::filter_type filter, size_t objects_per_page = 64, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
+        // 100 keys stays under Seastar's 128KiB large-alloc threshold even at S3's max 1024-byte key length, cutting round trips ~36% over the old 64
+        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix = "", size_t objects_per_page = 100, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
+        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, lister::filter_type filter, size_t objects_per_page = 100, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
 
         future<std::optional<directory_entry>> get() override;
         future<> close() noexcept override;
