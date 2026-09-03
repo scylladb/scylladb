@@ -85,6 +85,12 @@ struct endpoint_worker {
     future<> notify_fiber() noexcept;
     future<> _notify_fiber = make_ready_future<>();
 
+    // Rate limit for the catch-all warning in `ping_fiber()`. An unexpected exception
+    // repeats on every ping while its cause persists, up to once per ping period if it
+    // is raised without delay. Kept per worker, i.e. per endpoint, so that one endpoint
+    // cannot shadow the warnings about another.
+    logging::logger::rate_limit _ping_error_rate_limit{std::chrono::minutes(1)};
+
     endpoint_worker(failure_detector::impl&, pinger::endpoint_id);
     ~endpoint_worker();
 
@@ -564,7 +570,9 @@ future<> endpoint_worker::ping_fiber() noexcept {
                 logger.debug("ping to endpoint {} timed out after {} clock ticks", _id, clock.now() - start);
             } catch (...) {
                 // Unexpected exception, probably from `pinger.ping(...)`. Log and continue.
-                logger.warn("unexpected exception when pinging {}: {}", _id, std::current_exception());
+                // Rate-limited per endpoint, see `_ping_error_rate_limit`.
+                logger.log(logging::log_level::warn, _ping_error_rate_limit,
+                        "unexpected exception when pinging {}: {}", _id, std::current_exception());
             }
         } else {
             // We have a listener which already timed out.

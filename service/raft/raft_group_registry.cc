@@ -592,6 +592,18 @@ future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id
         }
     } catch (seastar::rpc::closed_error&) {
         co_return false;
+    } catch (seastar::rpc::timeout_error&) {
+        // Expected when the pinged node is dead or unreachable.
+        rslog.debug("ping(id = {}): timed out", dst_id);
+        co_return false;
+    } catch (netw::unknown_address&) {
+        // The node has no IP address mapping, e.g. shortly after this node restarted
+        // while the pinged node is still down. Persists for as long as the node stays
+        // down, so warn at most once per 5 minutes per endpoint.
+        auto& rate_limit = _rate_limits.try_get_recent_entry(id, std::chrono::minutes(5));
+        rslog.log(log_level::warn, rate_limit, "ping(id = {}): node has no IP address mapping", dst_id);
+        _rate_limits.remove_least_recent_entries(std::chrono::minutes(30));
+        co_return false;
     }
     co_return true;
 }
