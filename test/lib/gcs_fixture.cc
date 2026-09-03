@@ -162,9 +162,12 @@ seastar::future<> gcs_fixture::impl::teardown() {
         }
     }
 
+    // Reset it, so that a teardown from a failed setup does not leave a second
+    // one re-terminating an already reaped process.
     if (fake_gcs_server) {
         fake_gcs_server->terminate();
         co_await fake_gcs_server->wait();
+        fake_gcs_server.reset();
     }
 
     if (client) {
