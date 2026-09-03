@@ -14,7 +14,7 @@ import pytest
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.pylib.internal_types import ServerInfo
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.cluster.util import delete_discovery_state_and_group0_id, delete_raft_group_data, disable_schema_agreement_wait, new_test_keyspace, new_test_table, reconnect_driver
 
@@ -28,7 +28,7 @@ def check_tombstone_gc_mode(cql, table, mode):
 
 @pytest.mark.parametrize("rf", [1, 2])
 @pytest.mark.parametrize("tablets", [True, False])
-async def test_default_tombstone_gc(manager: ManagerClient, rf: int, tablets: bool):
+async def test_default_tombstone_gc(manager: ScyllaClusterManager, rf: int, tablets: bool):
     _ = await manager.servers_add(2, auto_rack_dc="dc1")
     cql = manager.get_cql()
     tablets_enabled = "true" if tablets else "false"
@@ -39,7 +39,7 @@ async def test_default_tombstone_gc(manager: ManagerClient, rf: int, tablets: bo
 
 @pytest.mark.parametrize("rf", [1, 2])
 @pytest.mark.parametrize("tablets", [True, False])
-async def test_default_tombstone_gc_does_not_override(manager: ManagerClient, rf: int, tablets: bool):
+async def test_default_tombstone_gc_does_not_override(manager: ScyllaClusterManager, rf: int, tablets: bool):
     _ = await manager.servers_add(2, auto_rack_dc="dc1")
     cql = manager.get_cql()
     tablets_enabled = "true" if tablets else "false"
@@ -49,7 +49,7 @@ async def test_default_tombstone_gc_does_not_override(manager: ManagerClient, rf
             check_tombstone_gc_mode(cql, table, "disabled")
 
 
-async def test_group0_tombstone_gc(manager: ManagerClient):
+async def test_group0_tombstone_gc(manager: ScyllaClusterManager):
     """
     Regression test for #15607.
 
@@ -263,7 +263,7 @@ async def test_group0_tombstone_gc(manager: ManagerClient):
 
 @pytest.mark.skip_mode(mode='release', reason="test only needs to run once - allowing only the 'dev' mode")
 @pytest.mark.skip_mode(mode='debug', reason="test only needs to run once - allowing only the 'dev' mode")
-async def test_group0_state_id_failure(manager: ManagerClient):
+async def test_group0_state_id_failure(manager: ScyllaClusterManager):
     """
     Issue #21117 regression test.
 
@@ -295,7 +295,7 @@ async def test_group0_state_id_failure(manager: ManagerClient):
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("tablets", (True, False))
-async def test_tombstone_gc_rf_one(manager: ManagerClient, tablets: bool):
+async def test_tombstone_gc_rf_one(manager: ScyllaClusterManager, tablets: bool):
     """ Check Tombstone GC with RF=1
 
     In particular, check that:

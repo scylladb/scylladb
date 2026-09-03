@@ -12,13 +12,13 @@ from cassandra.cluster import Session as CassandraSession
 from cassandra.protocol import InvalidRequest
 
 from test.pylib.async_cql import _wrap_future
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 logger = logging.getLogger(__name__)
 
 @pytest.mark.parametrize("rf_kind", ["numeric", "rack_list"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_create_mv_and_index_restrictions_in_tablet_keyspaces(manager: ManagerClient, rf_kind: str):
+async def test_create_mv_and_index_restrictions_in_tablet_keyspaces(manager: ScyllaClusterManager, rf_kind: str):
     """
     Verify that creating a materialized view or a secondary index in a tablet-based keyspace
     is allowed only when RF equals the number of racks, even if `rf_rack_valid_keyspaces` is false.
@@ -97,7 +97,7 @@ async def test_create_mv_and_index_restrictions_in_tablet_keyspaces(manager: Man
 
 @pytest.mark.parametrize("rf_kind", ["numeric", "rack_list"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_alter_keyspace_rf_rack_restriction_with_mv_and_index(manager: ManagerClient, rf_kind: str):
+async def test_alter_keyspace_rf_rack_restriction_with_mv_and_index(manager: ScyllaClusterManager, rf_kind: str):
     """
     Verify that ALTER KEYSPACE fails if it changes RF so that RF != number of racks
     for a tablets-based keyspace while it has a materialized view or a secondary index, even if
@@ -175,7 +175,7 @@ async def test_alter_keyspace_rf_rack_restriction_with_mv_and_index(manager: Man
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_add_node_in_new_rack_restriction_with_mv(manager: ManagerClient):
+async def test_add_node_in_new_rack_restriction_with_mv(manager: ScyllaClusterManager):
     """
     Test adding a node to a new rack is rejected when there is a keyspace with RF=Racks and a materialized view
     that would make the keyspace become RF-rack-invalid, even if `rf_rack_valid_keyspaces` is false.
@@ -206,7 +206,7 @@ async def test_add_node_in_new_rack_restriction_with_mv(manager: ManagerClient):
 
 @pytest.mark.parametrize("op", ["remove", "decommission"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_remove_node_violating_rf_rack(manager: ManagerClient, op: str):
+async def test_remove_node_violating_rf_rack(manager: ScyllaClusterManager, op: str):
     """
     Test removing a node is rejected when there is a keyspace with RF=Racks and a materialized view
     that would make the keyspace become RF-rack-invalid, even if `rf_rack_valid_keyspaces` is false.

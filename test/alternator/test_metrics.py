@@ -304,6 +304,30 @@ def test_batch_get_item(test_table_s, metrics):
         test_table_s.meta.client.batch_get_item(RequestItems = {
             test_table_s.name: {'Keys': [{'p': random_string()}], 'ConsistentRead': True}})
 
+# Reproduces issue #30754:
+def test_table_batch_get_item(test_table_s, metrics):
+    with check_table_increases_operation(metrics, ['BatchGetItem'], test_table_s.name, expected_value=1):
+        test_table_s.meta.client.batch_get_item(RequestItems = {
+            test_table_s.name: {'Keys': [{'p': random_string()}, {'p': random_string()}], 'ConsistentRead': True}})
+
+def test_table_batch_get_item_counted_on_validation_error(test_table_s, metrics):
+    p = random_string()
+    with check_table_increases_operation(metrics, ['BatchGetItem'], test_table_s.name, expected_value=1):
+        with pytest.raises(ClientError):
+            test_table_s.meta.client.batch_get_item(RequestItems = {
+                test_table_s.name: {'Keys': [{'p': p}, {'p': p}], 'ConsistentRead': True}})
+
+def test_table_batch_get_item_counted_on_authorization_error(dynamodb, cql, test_table_s, metrics):
+    with new_role(cql, superuser=True) as (super_role, super_key):
+        with new_dynamodb(dynamodb, super_role, super_key) as auth_dynamodb:
+            with scylla_config_auth_temporary(auth_dynamodb, True, False):
+                with new_role(cql) as (role, key):
+                    with new_dynamodb(dynamodb, role, key) as d:
+                        with check_table_increases_operation(metrics, ['BatchGetItem'], test_table_s.name, expected_value=1):
+                            with pytest.raises(ClientError, match='AccessDeniedException'):
+                                d.meta.client.batch_get_item(RequestItems = {
+                                    test_table_s.name: {'Keys': [{'p': random_string()}], 'ConsistentRead': True}})
+
 def test_batch_write_item_count(test_table_s, metrics):
     with check_increases_operation(metrics, ['BatchWriteItem'], metric_name='scylla_alternator_batch_item_count', expected_value=2):
         test_table_s.meta.client.batch_write_item(RequestItems = {

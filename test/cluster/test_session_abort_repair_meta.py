@@ -8,7 +8,7 @@ import asyncio
 import logging
 import pytest
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.repair import create_table_insert_data_for_repair
 
 
@@ -37,7 +37,7 @@ async def wait_for_cleanup_log(logs, marks, timeout: float = 15) -> list[tuple[s
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_session_abort_cleans_orphan_repair_meta(manager: ManagerClient):
+async def test_session_abort_cleans_orphan_repair_meta(manager: ScyllaClusterManager):
     """Verifies that orphaned repair_meta on a follower does not block
     drain_closing_sessions() thanks to the session abort_source mechanism.
 

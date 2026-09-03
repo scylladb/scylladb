@@ -8,13 +8,13 @@ import pytest
 import logging
 import asyncio
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot
 from test.cluster.util import new_test_keyspace, reconnect_driver
 
 logger = logging.getLogger(__name__)
 
-async def disable_autocompaction_across_keyspaces(manager: ManagerClient, server_ip_addr: str, *keyspace_list):
+async def disable_autocompaction_across_keyspaces(manager: ScyllaClusterManager, server_ip_addr: str, *keyspace_list):
     """Disable autocompaction that might interfere with testing"""
 
     logger.info("Disabling autocompaction across keyspaces")
@@ -23,7 +23,7 @@ async def disable_autocompaction_across_keyspaces(manager: ManagerClient, server
 
 @pytest.mark.parametrize("consider_only_existing_data", [True, False])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_major_compaction_consider_only_existing_data(manager: ManagerClient, consider_only_existing_data):
+async def test_major_compaction_consider_only_existing_data(manager: ScyllaClusterManager, consider_only_existing_data):
     """
     Test compactions drop tombstones when consider_only_existing_data is enabled.
     1. Create a single node cluster.
@@ -90,7 +90,7 @@ async def test_major_compaction_consider_only_existing_data(manager: ManagerClie
             assert len(await cql.run_async(f"SELECT * FROM {ks}.{cf} WHERE pk = {k}")) == expected_count
 
 @pytest.mark.parametrize("compaction_flush_all_tables_before_major_seconds", [0, 2, 10])
-async def test_major_compaction_flush_all_tables(manager: ManagerClient, compaction_flush_all_tables_before_major_seconds):
+async def test_major_compaction_flush_all_tables(manager: ScyllaClusterManager, compaction_flush_all_tables_before_major_seconds):
     """
     1. Start server with configured compaction_flush_all_tables_before_major_seconds value
     2. Create table and insert few rows
@@ -141,7 +141,7 @@ async def test_major_compaction_flush_all_tables(manager: ManagerClient, compact
 
 # Testcase for https://github.com/scylladb/scylladb/issues/20197
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_shutdown_drain_during_compaction(manager: ManagerClient):
+async def test_shutdown_drain_during_compaction(manager: ScyllaClusterManager):
     """
     Test drain/shutdown during compaction doesn't throw any unexpected errors
     1. Create a single node cluster.
@@ -195,7 +195,7 @@ async def test_shutdown_drain_during_compaction(manager: ManagerClient):
         await reconnect_driver(manager)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_alter_compaction_strategy_during_compaction(manager: ManagerClient):
+async def test_alter_compaction_strategy_during_compaction(manager: ScyllaClusterManager):
     """
     Test ALTERing compaction strategy during compaction doesn't crash the server
     1. Create a single node cluster.
@@ -238,7 +238,7 @@ async def test_alter_compaction_strategy_during_compaction(manager: ManagerClien
 
 # Testcase for https://github.com/scylladb/scylladb/issues/24501
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_disable_autocompaction_during_major_compaction(manager: ManagerClient):
+async def test_disable_autocompaction_during_major_compaction(manager: ScyllaClusterManager):
     """
     Test disable autocompaction during a major compaction doesn't stop the major compaction.
     1. Create a single node cluster.

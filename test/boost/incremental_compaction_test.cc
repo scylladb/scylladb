@@ -592,8 +592,10 @@ SEASTAR_TEST_CASE(gc_sstable_incremental_release_test) {
                 }
             }
 
-            column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(), desc.new_sstables, desc.old_sstables).get();
-            env.test_compaction_manager().propagate_replacement(cf.as_compaction_group_view(), desc.old_sstables, desc.new_sstables);
+            auto new_sstables = desc.new_sstables;
+            std::ranges::copy(desc.new_gc_sstables, std::back_inserter(new_sstables));
+            column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(), new_sstables, desc.old_sstables).get();
+            env.test_compaction_manager().propagate_replacement(cf.as_compaction_group_view(), desc.old_sstables, std::move(new_sstables));
         };
 
         auto desc = compaction::compaction_descriptor(std::move(input_sstables), 1, 512);
@@ -725,8 +727,10 @@ SEASTAR_TEST_CASE(gc_sstable_no_premature_release_with_overlapping_inputs_test) 
                 std::erase(alive_inputs, old_sst);
             }
 
-            column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(), desc.new_sstables, desc.old_sstables).get();
-            env.test_compaction_manager().propagate_replacement(cf.as_compaction_group_view(), desc.old_sstables, desc.new_sstables);
+            auto new_sstables = desc.new_sstables;
+            std::ranges::copy(desc.new_gc_sstables, std::back_inserter(new_sstables));
+            column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(), new_sstables, desc.old_sstables).get();
+            env.test_compaction_manager().propagate_replacement(cf.as_compaction_group_view(), desc.old_sstables, std::move(new_sstables));
         };
 
         auto desc = compaction::compaction_descriptor(std::move(input_sstables), 1, 512);

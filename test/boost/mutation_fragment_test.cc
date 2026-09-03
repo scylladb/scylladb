@@ -709,7 +709,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator_validation_leve
 }
 
 // Verify that mutation_fragment_stream_validator uses ring (legacy raw-byte) order
-// for same-token partition keys, not the type-aware partition_key::tri_compare order.
+// for same-token partition keys, not a type-aware value comparison.
 //
 // Two keys that share a token must be ordered by their raw serialized bytes
 // (legacy_tri_compare), which is what SSTables use on disk.  Using the

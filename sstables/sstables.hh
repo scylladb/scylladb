@@ -337,7 +337,7 @@ public:
         encoding_stats enc_stats,
         shard_id shard = this_shard_id());
 
-    // Validates the content of the sstable.
+    // Validates the content of the sstable and component digests.
     // Reports all errors via the provided error handler.
     // Returns the count of all validation errors found.
     // Can be aborted via the abort-source parameter.
@@ -345,7 +345,7 @@ public:
     // (e.g. parse error), it will return with validation error count seen up to
     // the abort. In the latter case it will call the error-handler before doing so.
     future<uint64_t> validate(reader_permit permit, abort_source& abort,
-            std::function<void(sstring)> error_handler, sstables::read_monitor& monitor = default_read_monitor(), bool validate_index = false);
+            std::function<void(sstring)> error_handler, sstables::read_monitor& monitor = default_read_monitor());
 
     encoding_stats get_encoding_stats_for_compaction() const;
 
@@ -373,6 +373,12 @@ public:
 
     bool marked_for_deletion() const {
         return _marked_for_deletion == mark_for_deletion::marked;
+    }
+
+    // Undo mark_for_deletion(). Used when the intent to delete could not be
+    // recorded durably, so the sstable must be left in place.
+    void unmark_for_deletion() {
+        _marked_for_deletion = mark_for_deletion::none;
     }
 
     const std::set<generation_type>& compaction_ancestors() const {
@@ -796,7 +802,6 @@ public:
     using skip_data_digest = bool_class<struct skip_data_digest_tag>;
     future<> validate_digests(skip_data_digest skip_data = skip_data_digest::no);
 private:
-    future<> validate_index_digest() const;
     // Read the Scylla component self-digest from file.
     // Should only be called by sstables which have a Scylla file digest.
     future<uint32_t> read_scylla_file_digest() const;
@@ -1267,6 +1272,8 @@ public:
             update_sstable_id);
     // Must be called in a seastar thread
     void write_component_with_metadata(component_type type, scylla_metadata metadata);
+private:
+    future<uint64_t> component_filesize(component_type type) const noexcept;
 };
 
 // Validate checksums

@@ -24,7 +24,6 @@ enum class stream_reason : uint8_t {
     replace,
     tablet_migration,
     tablet_rebuild,
-    restore,
 };
 
 }
@@ -53,8 +52,6 @@ struct fmt::formatter<streaming::stream_reason> : fmt::formatter<string_view> {
             return formatter<string_view>::format("tablet migration", ctx);
         case tablet_rebuild:
             return formatter<string_view>::format("tablet rebuild", ctx);
-        case restore:
-            return formatter<string_view>::format("restore", ctx);
         }
         std::abort();
     }

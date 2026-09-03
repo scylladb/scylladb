@@ -8,13 +8,13 @@ Test that ensure_committed_by_group0() fixes tables missing the flag on boot.
 """
 import pytest
 import logging
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-async def test_ensure_committed_by_group0(manager: ManagerClient):
+async def test_ensure_committed_by_group0(manager: ScyllaClusterManager):
     """Tables with committed_by_group0 = null or false get fixed on restart."""
     servers = await manager.servers_add(1)
     (cql, _) = await manager.get_ready_cql(servers)

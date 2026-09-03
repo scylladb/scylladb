@@ -858,7 +858,7 @@ future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, s
     }));
     co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto& ks = this->find_keyspace(v.first);
-        auto&& user_types = co_await create_types_from_schema_partition(*ks.metadata(), v.second);
+        auto&& user_types = co_await create_types_from_schema_partition(*ks.metadata(), v.second, "loading types at startup");
         for (auto&& type : user_types) {
             ks.add_user_type(type);
         }
@@ -966,24 +966,18 @@ database::init_logstor() {
             .file_size = _cfg.logstor_file_size_in_mb() * 1024ull * 1024ull,
             .disk_size = _cfg.logstor_disk_size_in_mb() * 1024ull * 1024ull,
             .format_on_startup = _cfg.logstor_format_on_startup(),
-            .compaction_sg = _dbcfg.compaction_scheduling_group,
+            .sparse_files = _cfg.logstor_sparse_files(),
+            .trigger_compaction_threshold = _cfg.logstor_compaction_trigger_threshold,
+            .compaction_sg = _dbcfg.logstor_compaction_scheduling_group,
             .compaction_static_shares = _cfg.compaction_static_shares,
+            .compaction_max_shares = _cfg.logstor_compaction_max_shares,
             .separator_sg = _dbcfg.memtable_scheduling_group,
-            .separator_delay_limit_ms = _cfg.logstor_separator_delay_limit_ms(),
-            .max_separator_memory = _cfg.logstor_separator_max_memory_in_mb() * 1024ull * 1024ull,
+            .split_compaction_sg = _dbcfg.maintenance_scheduling_group,
         },
         .flush_sg = _dbcfg.commitlog_scheduling_group,
         .max_queued_write_bytes = _dbcfg.available_memory * 1 / 100,
     };
     _logstor = std::make_unique<logstor::logstor>(std::move(cfg), _row_cache_tracker);
-
-    _logstor->set_trigger_compaction_hook([this] {
-        trigger_logstor_compaction(false);
-    });
-
-    _logstor->set_trigger_separator_flush_hook([this] (logstor::segment_sequence seq_num) {
-        (void)flush_logstor_separator(seq_num);
-    });
 
     dblog.info("logstor initialized");
     co_return;
@@ -1234,22 +1228,19 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
             erm = ks.get_static_effective_replication_map();
         }
     }
+
+    if (schema->logstor_enabled() && !_logstor) {
+        throw std::runtime_error(fmt::format("The table {}.{} is using logstor storage but logstor is not initialized", schema->ks_name(), schema->cf_name()));
+    }
+
     // avoid self-reporting
     auto& sst_manager = get_sstables_manager(*schema);
-    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
+    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager, schema->logstor_enabled() ? _logstor.get() : nullptr, sst_manager, *_cl_stats, _row_cache_tracker, erm);
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
     if (is_new) {
         cf->mark_ready_for_writes(commitlog_for(schema));
         cf->set_truncation_time(db_clock::time_point::min());
-    }
-
-    if (schema->logstor_enabled()) {
-        if (!_logstor) {
-            throw std::runtime_error(fmt::format("The table {}.{} is using logstor storage but logstor is not initialized", schema->ks_name(), schema->cf_name()));
-        }
-        cf->init_logstor(_logstor.get());
-        dblog.info0("Table {}.{} is using logstor storage", schema->ks_name(), schema->cf_name());
     }
 
     auto uuid = schema->id();
@@ -2381,8 +2372,12 @@ future<> database::do_apply_many(const utils::chunked_vector<frozen_mutation>& m
         auto s = local_schema_registry().get(muts[i].schema_version());
         auto&& cf = find_column_family(muts[i].column_family_id());
 
-        if (cf.uses_logstor()) {
-            continue;
+        // Atomicity here comes from writing all the mutations to the commitlog as one batch, which
+        // a logstor table cannot take part in, having no commitlog. Skipping it instead would also
+        // desynchronize the handles below from the mutations they belong to.
+        if (cf.uses_logstor()) [[unlikely]] {
+            on_internal_error(dblog, format("Cannot apply atomically to a table using logstor: {}.{}",
+                              cf.schema()->ks_name(), cf.schema()->cf_name()));
         }
 
         if (!cl) {
@@ -3155,7 +3150,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
             if (cf.uses_logstor()) {
                 auto& logstor_cm = cf.get_logstor_compaction_manager();
                 co_await cf.parallel_foreach_logstor_compaction_group([&logstor_cm, &st] (replica::compaction_group& cg) -> future<> {
-                    st->logstor_cres.emplace_back(co_await logstor_cm.disable_compaction(cg));
+                    st->logstor_cres.emplace_back(co_await logstor_cm.disable_compaction(cg.as_logstor_group()));
                 });
             }
 

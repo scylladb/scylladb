@@ -5,7 +5,7 @@
 #
 
 from test.pylib.internal_types import ServerInfo
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for
@@ -35,7 +35,7 @@ async def disable_injection_on(manager, error_name, servers):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_merge_simple(manager: ManagerClient):
+async def test_tablet_merge_simple(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
@@ -178,7 +178,7 @@ async def test_tablet_merge_simple(manager: ManagerClient):
 
 # Multiple cycles of split and merge, with topology changes in parallel and RF > 1.
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: ManagerClient):
+async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=info',
@@ -323,7 +323,7 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
 
 @pytest.mark.parametrize("racks", [2, 3])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks):
+async def test_tablet_merge_cross_rack_migrations(manager: ScyllaClusterManager, racks):
     cmdline = ['--target-tablet-size-in-bytes', '30000',]
     config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
     servers = []
@@ -374,7 +374,7 @@ async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks)
 
 # Reproduces #23284
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: ManagerClient, racks = 2):
+async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: ScyllaClusterManager, racks = 2):
     cmdline = ['--smp', '4', '-m', '2G', '--target-tablet-size-in-bytes', '30000', '--max-task-backlog', '200', '--logger-log-level', 'load_balancer=debug']
     config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
 
@@ -441,7 +441,7 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Man
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
     FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_missing_data(manager: ManagerClient, feature_config: FeatureConfig):
+async def test_missing_data(manager: ScyllaClusterManager, feature_config: FeatureConfig):
 
     # This is a test and reproducer for issue:
     # https://github.com/scylladb/scylladb/issues/23313
@@ -508,7 +508,7 @@ async def test_missing_data(manager: ManagerClient, feature_config: FeatureConfi
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
     FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_merge_with_drop(manager: ManagerClient, feature_config: FeatureConfig):
+async def test_merge_with_drop(manager: ScyllaClusterManager, feature_config: FeatureConfig):
 
     # This is a test and reproducer for issue:
     # https://github.com/scylladb/scylladb/issues/23313
@@ -580,7 +580,7 @@ async def test_merge_with_drop(manager: ManagerClient, feature_config: FeatureCo
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
     FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_background_merge_deadlock(manager: ManagerClient, feature_config: FeatureConfig):
+async def test_background_merge_deadlock(manager: ScyllaClusterManager, feature_config: FeatureConfig):
     """
     Reproducer for https://scylladb.atlassian.net/browse/SCYLLADB-928
 
@@ -652,3 +652,111 @@ async def test_background_merge_deadlock(manager: ManagerClient, feature_config:
     await wait_for(finished_merge, time.time() + 120)
 
     await manager.server_stop(servers[0].server_id, convict=False)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_gc_sstable_release_during_tablet_merge(manager: ScyllaClusterManager):
+    """
+    Reproducer for the "Unable to remove input SSTable ... origin=garbage_collection"
+    crash during tablet merge.
+
+    The bug: sstable_list_updater::prepare() routes new sstables via the live
+    tablet map (compaction_group_for_sstable) but pins old sstables to _cg.
+    During merge the tablet map is swapped synchronously, so a GC sstable
+    produced AFTER the merge is routed to the new main CG, but on release
+    the code tries to remove it from _cg (the merging group) — crash.
+
+    Strategy:
+      1. Create multi-fragment run + tombstones (2 tablets)
+      2. Block merge_completion_fiber (prevents stopping compactions)
+      3. Trigger merge (tablet map swaps, groups become merging)
+      4. Start major compaction (runs on the merging group)
+      5. Compaction produces GC sstable → routed to new main CG
+      6. GC release → tries to remove from merging group → crash
+    """
+
+    logger.info('Bootstrapping cluster')
+    cfg = {'enable_tablets': True, 'tablet_load_stats_refresh_interval_in_seconds': 1}
+    cmdline = [
+        '--logger-log-level', 'compaction_manager=info',
+        '--logger-log-level', 'compaction=info',
+    ]
+    server = await manager.server_add(cmdline=cmdline, config=cfg)
+
+    cql = manager.get_cql()
+    await manager.disable_tablet_balancing()
+
+    initial_tablets = 2
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}") as ks:
+        # sstable_size_in_mb=1 forces writer rotation → multi-fragment runs.
+        # No compression so data sizes are predictable.
+        await cql.run_async(f"""CREATE TABLE {ks}.test (pk int PRIMARY KEY, c text)
+                               WITH compaction = {{'class': 'IncrementalCompactionStrategy',
+                                                   'sstable_size_in_mb': 1}}
+                               AND compression = {{}}
+                               AND tablets = {{'min_tablet_count': {initial_tablets}}}""")
+
+        # Disable auto-compaction via API (not via strategy 'enabled=false'
+        # which replaces ICS with NullCompactionStrategy).
+        await manager.api.disable_autocompaction(server.ip_addr, ks, 'test')
+
+        n_keys = 5000
+        blob_value = 'x' * 4096
+
+        # Step 1: Write live data, flush.
+        batch_size = n_keys // 10
+        for i in range(0, n_keys, batch_size):
+            await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, '{blob_value}')")
+                                   for k in range(i, min(i + batch_size, n_keys))])
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        # Step 2: First major → produces multi-fragment run.
+        await manager.api.keyspace_compaction(server.ip_addr, ks)
+
+        # Step 3: Delete keys in batches (multiple tombstone sstables).
+        batch_size = n_keys // 10
+        for i in range(0, n_keys, batch_size):
+            await asyncio.gather(*[cql.run_async(f"DELETE FROM {ks}.test WHERE pk = {k}")
+                                   for k in range(i, min(i + batch_size, n_keys)) if k % 2 == 0])
+            await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        # Step 4: Set gc_grace_seconds=0 + immediate mode so tombstones
+        # are purgeable (bypasses repair-time and commitlog checks).
+        await cql.run_async(f"""ALTER TABLE {ks}.test
+                               WITH gc_grace_seconds = 0
+                               AND tombstone_gc = {{'mode': 'immediate'}}""")
+        # Extra flush to advance commitlog
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        # Step 5: Block the merge_completion_fiber. This prevents it from
+        # stopping compactions on the merging groups after the merge fires.
+        await manager.api.enable_injection(server.ip_addr, "merge_completion_fiber", one_shot=True)
+
+        # Step 6: Trigger merge (2 → 1 tablet). The topology coordinator
+        # will swap the tablet map synchronously. The old groups become
+        # merging groups, but their compactions are NOT stopped (fiber is blocked).
+        target_tablets = 1
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': {target_tablets}}}")
+        await manager.enable_tablet_balancing()
+
+        # Wait for merge to be finalized (tablet count changes)
+        started = time.time()
+        while True:
+            tablet_count = await get_tablet_count(manager, server, ks, 'test')
+            if tablet_count == target_tablets:
+                break
+            assert time.time() - started < 120, f'Timeout waiting for merge (current={tablet_count}, target={target_tablets})'
+            await asyncio.sleep(0.5)
+
+        logger.info(f"Merge done, tablet count = {tablet_count}")
+
+        # Step 7: Now run major compaction with consider_only_existing_data=True
+        # (disables commitlog check so tombstones can actually be GC'd).
+        # The compaction will run on the merging group, produce GC sstables
+        # routed to the new main CG, and crash on GC release.
+        await manager.api.keyspace_compaction(server.ip_addr, ks, consider_only_existing_data=True)
+        logger.info("Compaction completed successfully (bug is fixed)")
+
+        # Unblock the merge fiber to let cleanup proceed
+        await manager.api.message_injection(server.ip_addr, "merge_completion_fiber")

@@ -950,6 +950,13 @@ This setting does not affect reads with consistency level ``ALL`` because they a
 Note that frequently reading from additional replicas can hurt cluster performance.
 When in doubt, keep the default ``99PERCENTILE``.
 
+The default value for newly created tables which do not specify ``speculative_retry``
+(``99PERCENTILE``) can be changed with the ``speculative_retry_user_table_default``
+configuration option in ``scylla.yaml``. The option applies at table creation time
+only; changing it does not affect already existing tables. The value used for a new
+table is taken from the node that coordinates its creation, so the option should be
+set identically on all nodes.
+
 
 .. _cql-compaction-options:
 

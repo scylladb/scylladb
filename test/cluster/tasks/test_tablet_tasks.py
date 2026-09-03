@@ -10,7 +10,7 @@ from typing import Optional
 import pytest
 
 from test.pylib.internal_types import ServerInfo
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.repair import create_table_insert_data_for_repair, get_tablet_task_id
 from test.pylib.rest_client import read_barrier
 from test.pylib.tablets import get_all_tablet_replicas
@@ -21,15 +21,15 @@ from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.tasks.task_manager_types import TaskStatus, TaskStats
 from test.cluster.tasks import extra_scylla_cmdline_options
 
-async def enable_injection(manager: ManagerClient, servers: list[ServerInfo], injection: str):
+async def enable_injection(manager: ScyllaClusterManager, servers: list[ServerInfo], injection: str):
     for server in servers:
         await manager.api.enable_injection(server.ip_addr, injection, False)
 
-async def disable_injection(manager: ManagerClient, servers: list[ServerInfo], injection: str):
+async def disable_injection(manager: ScyllaClusterManager, servers: list[ServerInfo], injection: str):
     for server in servers:
         await manager.api.disable_injection(server.ip_addr, injection)
 
-async def message_injection(manager: ManagerClient, servers: list[ServerInfo], injection: str):
+async def message_injection(manager: ScyllaClusterManager, servers: list[ServerInfo], injection: str):
     for server in servers:
         await manager.api.message_injection(server.ip_addr, injection)
 
@@ -53,7 +53,7 @@ def check_task_status(status: TaskStatus, states: list[str], type: str, scope: s
     assert len(status.children_ids) in possible_child_num
     assert status.state in states
 
-async def check_and_abort_repair_task(manager: ManagerClient, tm: TaskManagerClient, servers: list[ServerInfo], module_name: str, keyspace: str):
+async def check_and_abort_repair_task(manager: ScyllaClusterManager, tm: TaskManagerClient, servers: list[ServerInfo], module_name: str, keyspace: str):
     # Wait until user repair task is created.
     repair_tasks = await wait_tasks_created(tm, servers[0], module_name, 1, "user_repair", keyspace=keyspace)
 
@@ -81,7 +81,7 @@ async def check_and_abort_repair_task(manager: ManagerClient, tm: TaskManagerCli
     await asyncio.gather(wait_for_task(), abort_task())
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_repair_task(manager: ManagerClient):
+async def test_tablet_repair_task(manager: ScyllaClusterManager):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
 
@@ -97,7 +97,7 @@ async def test_tablet_repair_task(manager: ManagerClient):
     await asyncio.gather(repair_task(), check_and_abort_repair_task(manager, tm, servers, module_name, ks))
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_repair_wait_with_table_drop(manager: ManagerClient):
+async def test_tablet_repair_wait_with_table_drop(manager: ScyllaClusterManager):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
     injection = "tablet_virtual_task_wait"
@@ -171,7 +171,7 @@ async def check_repair_task_list(tm: TaskManagerClient, servers: list[ServerInfo
         await tm.abort_task(servers[0].ip_addr, task0.task_id)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_repair_task_list(manager: ManagerClient):
+async def test_tablet_repair_task_list(manager: ScyllaClusterManager):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
 
@@ -194,7 +194,7 @@ async def test_tablet_repair_task_list(manager: ManagerClient):
     await asyncio.gather(run_repair(0, "test"), run_repair(1, "test2"), run_repair(2, "test3"), check_repair_task_list(tm, servers, module_name, ks))
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_repair_wait(manager: ManagerClient):
+async def test_tablet_repair_wait(manager: ScyllaClusterManager):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
 
@@ -232,7 +232,7 @@ async def test_tablet_repair_wait(manager: ManagerClient):
     await asyncio.gather(wait_for_task(), merge_tablets())
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_repair_task_children(manager: ManagerClient):
+async def test_tablet_repair_task_children(manager: ScyllaClusterManager):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
     injection = "repair_tablet_repair_task_impl_run"
@@ -267,7 +267,7 @@ async def test_tablet_repair_task_children(manager: ManagerClient):
 
     await asyncio.gather(repair_task(), resume_repair(), check_children())
 
-async def prepare_migration_test(manager: ManagerClient):
+async def prepare_migration_test(manager: ScyllaClusterManager):
     servers = []
     host_ids = []
 
@@ -288,7 +288,7 @@ async def prepare_migration_test(manager: ManagerClient):
     return (ks, servers, host_ids)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_migration_task(manager: ManagerClient):
+async def test_tablet_migration_task(manager: ScyllaClusterManager):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
     ks, servers, host_ids = await prepare_migration_test(manager)
@@ -322,7 +322,7 @@ async def test_tablet_migration_task(manager: ManagerClient):
     await asyncio.gather(move_tablet(migration_src, migration_dst), check("migration"))
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_migration_task_list(manager: ManagerClient):
+async def test_tablet_migration_task_list(manager: ScyllaClusterManager):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
     ks, servers, host_ids = await prepare_migration_test(manager)
@@ -368,7 +368,7 @@ async def test_tablet_migration_task_list(manager: ManagerClient):
     await asyncio.gather(move_tablet(servers[0], migration_src, migration_dst), check_migration_task_list("migration"))
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_migration_task_failed(manager: ManagerClient):
+async def test_tablet_migration_task_failed(manager: ScyllaClusterManager):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
     ks, servers, host_ids = await prepare_migration_test(manager)
@@ -408,7 +408,7 @@ async def test_tablet_migration_task_failed(manager: ManagerClient):
     await asyncio.gather(move_tablet(src, dst), check("intranode_migration", log, mark))
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_repair_task_info_is_none_when_no_running_repair(manager: ManagerClient):
+async def test_repair_task_info_is_none_when_no_running_repair(manager: ScyllaClusterManager):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
     token = -1
@@ -434,7 +434,7 @@ async def test_repair_task_info_is_none_when_no_running_repair(manager: ManagerC
 
     await asyncio.gather(repair_task(), wait_and_check_none())
 
-async def prepare_split(manager: ManagerClient, server: ServerInfo, keyspace: str, table: str, keys: list[int]):
+async def prepare_split(manager: ScyllaClusterManager, server: ServerInfo, keyspace: str, table: str, keys: list[int]):
     await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
@@ -445,7 +445,7 @@ async def prepare_split(manager: ManagerClient, server: ServerInfo, keyspace: st
 
     await manager.api.flush_keyspace(server.ip_addr, keyspace)
 
-async def prepare_merge(manager: ManagerClient, server: ServerInfo, keyspace: str, table: str, keys: list[int]):
+async def prepare_merge(manager: ScyllaClusterManager, server: ServerInfo, keyspace: str, table: str, keys: list[int]):
     await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
@@ -453,7 +453,7 @@ async def prepare_merge(manager: ManagerClient, server: ServerInfo, keyspace: st
 
     await manager.api.flush_keyspace(server.ip_addr, keyspace)
 
-async def enable_tablet_balancing_and_wait(manager: ManagerClient, server: ServerInfo, message: str):
+async def enable_tablet_balancing_and_wait(manager: ScyllaClusterManager, server: ServerInfo, message: str):
     s1_log = await manager.server_open_log(server.server_id)
     s1_mark = await s1_log.mark()
 
@@ -467,7 +467,7 @@ cmdline.extend(extra_scylla_cmdline_options)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_resize_task(manager: ManagerClient):
+async def test_tablet_resize_task(manager: ScyllaClusterManager):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
     servers = [await manager.server_add(cmdline=cmdline, config={
@@ -507,7 +507,7 @@ async def test_tablet_resize_task(manager: ManagerClient):
         await wait_and_check_status(servers[0], "merge", keyspace, table1)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_resize_list(manager: ManagerClient):
+async def test_tablet_resize_list(manager: ScyllaClusterManager):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
     servers = [await manager.server_add(cmdline=cmdline, config={
@@ -571,7 +571,7 @@ async def test_tablet_resize_list(manager: ManagerClient):
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='debug mode is too time-sensitive')
-async def test_tablet_resize_revoked(manager: ManagerClient):
+async def test_tablet_resize_revoked(manager: ScyllaClusterManager):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
     servers = [await manager.server_add(cmdline=cmdline, config={
@@ -611,7 +611,7 @@ async def test_tablet_resize_revoked(manager: ManagerClient):
         await asyncio.gather(revoke_resize(log, mark), wait_for_task(task0.task_id))
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_task_sees_latest_state(manager: ManagerClient):
+async def test_tablet_task_sees_latest_state(manager: ScyllaClusterManager):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
 
     token = -1
@@ -632,7 +632,7 @@ async def test_tablet_task_sees_latest_state(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-async def test_tablet_repair_wait_task_shutdown(manager: ManagerClient):
+async def test_tablet_repair_wait_task_shutdown(manager: ScyllaClusterManager):
     """Reproducer for SCYLLADB-1532.
 
     tablet_virtual_task::wait() for repair tasks used a condition variable

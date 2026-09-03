@@ -50,6 +50,7 @@
 #include "db/batchlog_manager.hh"
 #include "schema/schema_builder.hh"
 #include "schema/compression_initializer.hh"
+#include "schema/speculative_retry_initializer.hh"
 #include "db/view/view_building_state.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/log.hh"
@@ -96,12 +97,12 @@ future<scheduling_groups> get_scheduling_groups() {
         _scheduling_groups->compaction_scheduling_group = co_await create_scheduling_group("compaction", 1000);
         _scheduling_groups->maintenance_compaction_scheduling_group = co_await create_scheduling_group("maintenance_compaction", 200);
         _scheduling_groups->memory_compaction_scheduling_group = co_await create_scheduling_group("mem_compaction", 1000);
+        _scheduling_groups->logstor_compaction_scheduling_group = co_await create_scheduling_group("logstor_compaction", 1000);
         _scheduling_groups->streaming_scheduling_group = co_await create_scheduling_group("streaming", 200);
         _scheduling_groups->statement_scheduling_group = co_await create_scheduling_group("statement", 1000);
         _scheduling_groups->memtable_scheduling_group = co_await create_scheduling_group("memtable", 1000);
         _scheduling_groups->memtable_to_cache_scheduling_group = co_await create_scheduling_group("memtable_to_cache", 200);
         _scheduling_groups->gossip_scheduling_group = co_await create_scheduling_group("gossip", 1000);
-        _scheduling_groups->backup_scheduling_group = co_await create_scheduling_group("backup", 200);
     }
     co_return *_scheduling_groups;
 }
@@ -124,6 +125,10 @@ cql_test_config::cql_test_config(shared_ptr<db::config> cfg)
     db_config->commitlog_use_o_dsync(false);
 
     db_config->rf_rack_valid_keyspaces(true);
+
+    // Preallocating and zero-filling logstor files wastes disk space and I/O
+    // for data that is thrown away when the test ends.
+    db_config->logstor_sparse_files(true);
 }
 
 cql_test_config::cql_test_config(const cql_test_config&) = default;
@@ -600,7 +605,6 @@ private:
             auto scheduling_groups = get_scheduling_groups().get();
             debug::streaming_scheduling_group = scheduling_groups.streaming_scheduling_group;
             debug::gossip_scheduling_group = scheduling_groups.streaming_scheduling_group;
-            debug::backup_scheduling_group = scheduling_groups.backup_scheduling_group;
 
             auto notify_set = init_configurables
                 ? configurable::init_all(*cfg, init_configurables->extensions, service_set(
@@ -615,6 +619,7 @@ private:
             register_compression_initializer(*cfg, [this] {
                 return bool(_feature_service.local().sstable_compression_dicts);
             });
+            register_speculative_retry_initializer(*cfg);
 
             // Important to restore schema initializers during shutdown to
             // support tests that repeatedly create `cql_test_env` instances.
@@ -668,12 +673,12 @@ private:
             dbcfg.compaction_scheduling_group = scheduling_groups.compaction_scheduling_group;
             dbcfg.maintenance_compaction_scheduling_group = scheduling_groups.maintenance_compaction_scheduling_group;
             dbcfg.memory_compaction_scheduling_group = scheduling_groups.memory_compaction_scheduling_group;
+            dbcfg.logstor_compaction_scheduling_group = scheduling_groups.logstor_compaction_scheduling_group;
             dbcfg.streaming_scheduling_group = scheduling_groups.streaming_scheduling_group;
             dbcfg.statement_scheduling_group = scheduling_groups.statement_scheduling_group;
             dbcfg.memtable_scheduling_group = scheduling_groups.memtable_scheduling_group;
             dbcfg.memtable_to_cache_scheduling_group = scheduling_groups.memtable_to_cache_scheduling_group;
             dbcfg.gossip_scheduling_group = scheduling_groups.gossip_scheduling_group;
-            dbcfg.backup_scheduling_group = scheduling_groups.backup_scheduling_group;
 
             auto get_tm_cfg = sharded_parameter([&] {
                 return tasks::task_manager::config {
@@ -991,7 +996,7 @@ private:
                 _view_builder.stop().get();
             });
 
-            _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_view_building_worker), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group, scheduling_groups.backup_scheduling_group).get();
+            _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_view_building_worker), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
             auto stop_streaming = defer_verbose_shutdown("stream manager", [this] { _stream_manager.stop().get(); });
 
             _auth_cache.start(std::ref(_qp), std::ref(abort_sources)).get();
@@ -1067,6 +1072,10 @@ private:
             }).get();
 
             replica::distributed_loader::init_non_system_keyspaces(_db, _proxy, _sys_ks).get();
+
+            _db.invoke_on_all([] (replica::database& db) {
+                return db.recover_logstor();
+            }).get();
 
             _db.invoke_on_all([] (replica::database& db) {
                 db.get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<replica::table> table) {

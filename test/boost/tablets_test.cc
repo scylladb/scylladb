@@ -32,7 +32,10 @@
 #include "db/schema_tables.hh"
 #include "schema/schema_builder.hh"
 
+#include "replica/compaction_group.hh"
+#include "test/boost/sstable_test.hh"
 #include "replica/tablets.hh"
+#include "compaction/compaction_manager.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include "locator/tablets.hh"
 #include "service/tablet_allocator.hh"
@@ -3420,6 +3423,60 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_shrinks_respecting_rack_allocation)
     }, cfg).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_size_scaling_is_not_order_dependent) {
+    auto run_scenario = [] (bool large_table_first) {
+        cql_test_config cfg{};
+        cfg.db_config->tablets_per_shard_goal.set(10);
+        cfg.db_config->tablets_initial_scale_factor.set(1);
+
+        size_t large_tablet_count = 0;
+
+        do_with_cql_env_thread([&] (auto& e) {
+            topology_builder topo(e);
+            topo.add_node(node_state::normal, 1);
+
+            auto& load_stats = topo.get_shared_load_stats();
+            auto ks_name = add_keyspace(e, {{topo.dc(), 1}});
+
+            auto add_small_tables = [&] (size_t count) {
+                while (count--) {
+                    auto table = add_table(e, ks_name).get();
+                    load_stats.set_size(table, 0);
+                }
+            };
+
+            table_id large_table;
+            if (large_table_first) {
+                large_table = add_table(e, ks_name).get();
+                load_stats.set_size(large_table, service::default_target_tablet_size * 64);
+                rebalance_tablets(e, &load_stats);
+                add_small_tables(9);
+            } else {
+                add_small_tables(9);
+                rebalance_tablets(e, &load_stats);
+                large_table = add_table(e, ks_name).get();
+                load_stats.set_size(large_table, service::default_target_tablet_size * 64);
+            }
+
+            rebalance_tablets(e, &load_stats);
+
+            auto& stm = e.shared_token_metadata().local();
+            large_tablet_count = stm.get()->tablets().get_tablet_map(large_table).tablet_count();
+        }, std::move(cfg)).get();
+
+        return large_tablet_count;
+    };
+
+    const auto large_first_count = run_scenario(true);
+    const auto large_last_count = run_scenario(false);
+
+    // The large table wants 64 tablets from size alone. With 9 empty 1-tablet tables
+    // and tablets_per_shard_goal=10, proportional scaling should converge to 8 tablets
+    // regardless of whether the large table appears before or after the small tables.
+    BOOST_REQUIRE_EQUAL(large_first_count, 8);
+    BOOST_REQUIRE_EQUAL(large_first_count, large_last_count);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_merge_does_not_overload_racks) {
     cql_test_config cfg{};
     // This test relies on the fact that we use an RF strictly smaller than the number of racks.
@@ -5301,6 +5358,95 @@ SEASTAR_THREAD_TEST_CASE(test_split_and_merge_of_colocated_tables) {
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_uses_correct_desired_count_for_colocated_tables) {
+    cql_test_config cfg{};
+    cfg.db_config->tablets_per_shard_goal.set(4);
+    cfg.db_config->tablets_initial_scale_factor.set(1);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto host1 = topo.add_node(node_state::normal, 1);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto table1 = add_table(e, ks_name).get();
+        auto table2 = add_table(e, ks_name).get();
+        auto small1 = add_table(e, ks_name).get();
+        auto small2 = add_table(e, ks_name).get();
+        auto small3 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(1);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                    }
+            });
+
+            tablet_map tmap1 = co_await tmap.clone_gently();
+            tmeta.set_tablet_map(table1, std::move(tmap1));
+            co_await tmeta.set_colocated_table(table2, table1);
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(table1).tablet_count());
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(table2).tablet_count());
+
+        // For a 2-table colocated group, sizing thresholds use default_target_tablet_size / 2,
+        // but the desired tablet count must still be based on the whole group's migration-unit
+        // target of default_target_tablet_size. The total size below is 5 * default_target_tablet_size,
+        // so the correct desired count for the colocated group is 5, not 10.
+        //
+        // We add 3 empty tables and set tablets_per_shard_goal=4 to make this observable:
+        //  - total desired count before scaling is 5 + 1 + 1 + 1 = 8
+        //  - scale factor is 4 / 8
+        //  - colocated group scaled desired count is 5 * 4 / 8 = 2.5
+        //
+        // So it will give 2 tablets to the group.
+        //
+        // The buggy colocated math advertises 10, which scales to 10 * 4/13 > 3 and then rounds up to 4.
+        const uint64_t colocated_target_tablet_size = service::default_target_tablet_size / 2;
+
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_size(table1, 4 * colocated_target_tablet_size);
+        load_stats.set_size(table2, 6 * colocated_target_tablet_size);
+        load_stats.set_size(small1, 0);
+        load_stats.set_size(small2, 0);
+        load_stats.set_size(small3, 0);
+
+        rebalance_tablets(e, &load_stats);
+
+        BOOST_REQUIRE_EQUAL(2, stm.get()->tablets().get_tablet_map(table1).tablet_count());
+        BOOST_REQUIRE_EQUAL(2, stm.get()->tablets().get_tablet_map(table2).tablet_count());
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(small1).tablet_count());
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(small2).tablet_count());
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(small3).tablet_count());
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_expected_data_size_in_gb_set_post_creation_affects_desired_count) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        topo.add_node(node_state::normal, 1);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto table = add_table(e, ks_name).get();
+
+        auto& stm = e.shared_token_metadata().local();
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(table).tablet_count());
+
+        // default_target_tablet_size is 5 GiB, so expected_data_size_in_gb=15 wants 3 tablets,
+        // which rounds up to 4 with pow2_count=true.
+        set_tablet_opts(e, table, {{"expected_data_size_in_gb", "15"}});
+        topo.get_shared_load_stats().set_size(table, service::default_target_tablet_size);
+
+        rebalance_tablets(e, &topo.get_shared_load_stats());
+
+        BOOST_REQUIRE_EQUAL(4, stm.get()->tablets().get_tablet_map(table).tablet_count());
+    }).get();
+}
+
 // This test verifies that per-table tablet count is adjusted
 // in reaction to changes of relevant config and schema options.
 SEASTAR_THREAD_TEST_CASE(test_tablet_option_and_config_changes) {
@@ -5704,6 +5850,119 @@ SEASTAR_THREAD_TEST_CASE(test_get_split_token_is_compatible_with_old_behavior) {
     }
 }
 
+// The sub-ranges storage_group::set_split_mode() hands to its split-ready compaction
+// groups are derived from the group's own token range, without consulting the tablet
+// map. Check that the derivation agrees with the map, which is what routes writes to
+// those groups: the same split point, the same ranges the post-split tablets will
+// have, and each side's range holding exactly the tokens the map sends to that side.
+// A disagreement would give a group a range its own sstables fall outside of.
+SEASTAR_THREAD_TEST_CASE(test_split_token_range_agrees_with_tablet_map) {
+    for (auto tablet_count : {1ul, 2ul, 8ul, 128ul}) {
+        locator::tablet_map tmap(tablet_count);
+        locator::tablet_map tmap_after_splitting(tablet_count * 2);
+
+        for (size_t id = 0; id < tablet_count; id++) {
+            auto tid = tablet_id(id);
+            auto range = tmap.get_token_range(tid);
+            auto sub_ranges = replica::split_token_range(range);
+            BOOST_REQUIRE(sub_ranges.has_value());
+            const auto& [left, right] = *sub_ranges;
+            testlog.debug("tablet_count {}, id {}, range {}, left {}, right {}", tablet_count, id, range, left, right);
+
+            // Split at the same token the map splits at.
+            BOOST_REQUIRE(left.end()->value() == tmap.get_split_token(tid));
+            // The two halves are the ranges of the tablets the split will produce,
+            // which handle_tablet_split_completion() installs once it completes.
+            BOOST_REQUIRE(left == tmap_after_splitting.get_token_range(tablet_id(id * 2)));
+            BOOST_REQUIRE(right == tmap_after_splitting.get_token_range(tablet_id(id * 2 + 1)));
+            // Between them they cover the range being split, and no more.
+            BOOST_REQUIRE(*left.start_copy() == *range.start_copy());
+            BOOST_REQUIRE(*right.end_copy() == *range.end_copy());
+
+            // A token the map routes to one side lies in that side's range, so a
+            // split-ready group's range covers everything written to it.
+            auto check = [&] (dht::token t, tablet_range_side expected_side, const dht::token_range& expected_range) {
+                BOOST_REQUIRE_EQUAL(tmap.get_tablet_range_side(t), expected_side);
+                BOOST_REQUIRE(expected_range.contains(t, dht::token_comparator()));
+            };
+            auto lower_token = range.start()->value() == dht::minimum_token() ? dht::first_token() : range.start()->value();
+            check(next_token(lower_token), tablet_range_side::left, left);
+            check(left.end()->value(), tablet_range_side::left, left);
+            check(next_token(left.end()->value()), tablet_range_side::right, right);
+            check(range.end()->value(), tablet_range_side::right, right);
+
+            thread::maybe_yield();
+        }
+    }
+
+    // A range which cannot be split reports so rather than returning a pair with an
+    // empty side. Splitting a range holding a single token does not arise for a tablet
+    // today, but it will for a tablet isolating a hot partition.
+    auto t = dht::token::bias(uint64_t(1) << 63);   // an ordinary key token, mid-ring
+    BOOST_REQUIRE(!replica::split_token_range(dht::token_range::make({t, false}, {next_token(t), true})));
+    BOOST_REQUIRE(!replica::split_token_range(dht::token_range::make_singular(t)));
+    BOOST_REQUIRE(!replica::split_token_range(dht::token_range::make_open_ended_both_sides()));
+    BOOST_REQUIRE(!replica::split_token_range(dht::token_range::make_starting_with({t, false})));
+    BOOST_REQUIRE(!replica::split_token_range(dht::token_range::make_ending_with({t, true})));
+}
+
+// Once a table is in split mode, each of a storage group's split-ready compaction
+// groups should own the range of the tablet it will become, not the whole range of the
+// tablet being split. Checked against the tablet map rather than against the way
+// set_split_mode() derives the ranges, so that the two have to agree.
+SEASTAR_THREAD_TEST_CASE(test_split_ready_groups_own_their_post_split_range) {
+    auto cfg = tablet_cql_test_config();
+    cfg.initial_tablets = std::bit_floor(this_smp_shard_count());
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql(
+                "CREATE TABLE cf (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
+
+        for (unsigned i = 0; i < this_smp_shard_count() * 20; i++) {
+            e.execute_cql(format("INSERT INTO cf (pk, ck, v) VALUES ({}, 0, 0)", i)).get();
+        }
+
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& table = db.find_column_family("ks", "cf");
+            return table.flush();
+        }).get();
+
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& table = db.find_column_family("ks", "cf");
+            return table.split_all_storage_groups(tasks::task_info{});
+        }).get();
+
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& t = db.find_column_family("ks", "cf");
+            auto& sgm = column_family_test::get_storage_group_manager(t);
+            sgm->for_each_storage_group([&] (size_t id, replica::storage_group& sg) {
+                const auto& groups = sg.split_ready_compaction_groups();
+                THREADSAFE_BOOST_REQUIRE_EQUAL(groups.size(), 2);
+
+                // A token on each side of the split point, taken from the bounds of
+                // the range being split: its start is exclusive and belongs to the
+                // preceding tablet, its end is inclusive and is the last token of
+                // this one.
+                auto range = sg.token_range();
+                auto lower_token = range.start()->value() == dht::minimum_token()
+                        ? dht::first_token() : next_token(range.start()->value());
+                auto upper_token = range.end()->value();
+
+                for (auto [side, token] : {std::pair(tablet_range_side::left, lower_token),
+                                           std::pair(tablet_range_side::right, upper_token)}) {
+                    const auto& cg = groups[size_t(side)];
+                    auto expected = t.get_token_range_after_split(token);
+                    testlog.debug("group {} side {} range {} expected {}", id, int(side), cg->token_range(), expected);
+                    THREADSAFE_BOOST_REQUIRE(cg->token_range() == expected);
+                    // The point of the narrower range: it is the range the group's
+                    // own sstables can span, not twice it.
+                    THREADSAFE_BOOST_REQUIRE(cg->token_range() != range);
+                    THREADSAFE_BOOST_REQUIRE(cg->token_range().contains(token, dht::token_comparator()));
+                }
+            });
+        }).get();
+    }, std::move(cfg)).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(basic_tablet_storage_splitting_test) {
     auto cfg = tablet_cql_test_config();
     cfg.initial_tablets = std::bit_floor(this_smp_shard_count());
@@ -5732,6 +5991,106 @@ SEASTAR_THREAD_TEST_CASE(basic_tablet_storage_splitting_test) {
             auto& table = db.find_column_family("ks", "cf");
             return make_ready_future<bool>(table.all_storage_groups_split());
         }, bool(false), std::logical_or<bool>()).get(), true);
+    }, std::move(cfg)).get();
+}
+
+// Compaction groups created after the table was started must contribute to the
+// compaction backlog.
+//
+// replica::compaction_group's constructor builds a backlog tracker but never
+// registers it with compaction_backlog_manager. The only registration path is
+// table::set_compaction_strategy(), which runs at table start and on schema
+// change, so it only ever covers the compaction groups that exist at that
+// moment. The groups a tablet split creates keep a live, correctly charged
+// tracker that nothing ever reads, and the shard reports no compaction backlog
+// at all while sstables pile up in them.
+//
+// The split here is driven the same way a user would drive it: ALTER TABLE
+// raising min_tablet_count, then the tablet scheduler.
+SEASTAR_THREAD_TEST_CASE(test_compaction_backlog_of_compaction_groups_created_by_tablet_split) {
+    auto cfg = tablet_cql_test_config();
+    cfg.initial_tablets = std::bit_floor(this_smp_shard_count());
+    cfg.db_config->tablets_per_shard_goal.set(10000); // Inhibit scaling-down of the count.
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE cf (pk int, ck int, v text, PRIMARY KEY (pk, ck))").get();
+        auto table = e.local_db().find_column_family("ks", "cf").schema()->id();
+
+        // Auto compaction would consume the very backlog this test observes.
+        e.db().invoke_on_all([] (replica::database& db) {
+            return db.find_column_family("ks", "cf").disable_auto_compaction();
+        }).get();
+
+        auto total_backlog = [&e] {
+            return e.db().map_reduce0([] (replica::database& db) {
+                return make_ready_future<double>(db.get_compaction_manager().backlog());
+            }, double(0), std::plus<double>()).get();
+        };
+        auto total_sstables = [&e] {
+            return e.db().map_reduce0([] (replica::database& db) {
+                return make_ready_future<int64_t>(db.find_column_family("ks", "cf").sstables_count());
+            }, int64_t(0), std::plus<int64_t>()).get();
+        };
+
+        // Each round produces one sstable per compaction group holding data. More than
+        // min_compaction_threshold sstables of similar size, so the size-tiered backlog
+        // tracker finds an interesting bucket.
+        auto write_sstables = [&e] (int rounds, int key_base) {
+            for (int round = 0; round < rounds; round++) {
+                for (int i = 0; i < 256; i++) {
+                    e.execute_cql(format("INSERT INTO cf (pk, ck, v) VALUES ({}, {}, 'payload to give the sstable some size')",
+                                         key_base + round * 256 + i, round)).get();
+                }
+                e.db().invoke_on_all([] (replica::database& db) {
+                    return db.find_column_family("ks", "cf").flush();
+                }).get();
+            }
+        };
+
+        write_sstables(8, 0);
+
+        testlog.info("before split: sstables={} backlog={}", total_sstables(), total_backlog());
+        // Sanity check: the compaction group that existed when the table was started is
+        // registered, so the backlog does account for accumulated work.
+        BOOST_REQUIRE_GT(total_backlog(), 0.0);
+
+        testlog.info("Requesting a tablet split...");
+        auto new_tablet_count = 2 * std::bit_floor(this_smp_shard_count());
+        e.execute_cql(format("ALTER TABLE ks.cf WITH tablets = {{'min_tablet_count': '{}'}}", new_tablet_count)).get();
+
+        auto& stm = e.shared_token_metadata().local();
+        shared_load_stats load_stats;
+        stm.get()->get_topology().for_each_node([&] (const locator::node& node) {
+            load_stats.set_capacity(node.host_id(), service::default_target_tablet_size * node.get_shard_count());
+        });
+        load_stats.set_tablet_sizes(stm.get(), table, service::default_target_tablet_size);
+
+        // Emit the split resize decision. The replica's own split monitor notices it
+        // and splits the storage groups in the background.
+        apply_resize_decisions(e, load_stats);
+
+        // Wait for the replica to finish splitting, like the topology coordinator does.
+        auto deadline = lowres_clock::now() + std::chrono::minutes(1);
+        while (!e.db().map_reduce0([] (replica::database& db) {
+                    return make_ready_future<bool>(db.find_column_family("ks", "cf").all_storage_groups_split());
+                }, true, std::logical_and<bool>()).get()) {
+            BOOST_REQUIRE(lowres_clock::now() < deadline);
+            seastar::sleep(std::chrono::milliseconds(100)).get();
+        }
+
+        // Finalize the resize: the tablet count doubles and the groups created for the
+        // split become the storage groups of the new tablets.
+        load_stats.set_split_ready_seq_number(table, stm.get()->tablets().get_tablet_map(table).resize_decision().sequence_number);
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(stm.get()->tablets().get_tablet_map(table).tablet_count(), new_tablet_count);
+
+        // Fill the compaction groups that the split created.
+        write_sstables(8, 1000000);
+
+        auto sstables_after = total_sstables();
+        auto backlog_after = total_backlog();
+        testlog.info("after split: sstables={} backlog={}", sstables_after, backlog_after);
+        BOOST_REQUIRE_GT(sstables_after, 0);
+        BOOST_REQUIRE_GT(backlog_after, 0.0);
     }, std::move(cfg)).get();
 }
 

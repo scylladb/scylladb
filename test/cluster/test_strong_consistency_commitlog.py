@@ -4,14 +4,14 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-from test.pylib.manager_client import ManagerClient
-from test.cluster.util import new_test_keyspace, reconnect_driver
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.cluster.util import new_test_keyspace
 
 import pytest
 
 
 @pytest.mark.asyncio
-async def test_data_survives_crash(manager: ManagerClient):
+async def test_data_survives_crash(manager: ScyllaClusterManager):
     """Verify that SC table data survives a non-graceful crash and is recovered
     from commitlog replay. After a crash, committed raft entries in the commitlog
     must be re-applied to memtables even if they were already snapshotted, because
@@ -37,8 +37,7 @@ async def test_data_survives_crash(manager: ManagerClient):
         # Crash the node (non-graceful stop — no flush)
         await manager.server_stop(server.server_id, convict=False)
         await manager.server_start(server.server_id)
-        await reconnect_driver(manager)
-        cql = manager.get_cql()
+        (cql, hosts) = await manager.get_ready_cql([server])
 
         for pk in range(5):
             rows = await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk = {pk};")
@@ -60,7 +59,7 @@ async def test_data_survives_crash(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-async def test_schema_upgrade_during_replay(manager: ManagerClient):
+async def test_schema_upgrade_during_replay(manager: ScyllaClusterManager):
     """Verify that SC table data survives a crash even when the schema was altered
     between writes. During commitlog replay, mutations written under the old schema
     must be upgraded to the current schema before being applied to memtables."""
@@ -94,8 +93,7 @@ async def test_schema_upgrade_during_replay(manager: ManagerClient):
         # Crash the node (non-graceful stop — no flush)
         await manager.server_stop(server.server_id, convict=False)
         await manager.server_start(server.server_id)
-        await reconnect_driver(manager)
-        cql = manager.get_cql()
+        (cql, hosts) = await manager.get_ready_cql([server])
 
         # Verify rows written under the old schema
         for pk in range(5):
@@ -115,7 +113,7 @@ async def test_schema_upgrade_during_replay(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-async def test_double_crash_recovery(manager: ManagerClient):
+async def test_double_crash_recovery(manager: ScyllaClusterManager):
     """Verify that SC table data survives two consecutive crashes.
     Write data, crash, restart (commitlog replay restores data), write more data,
     crash again, restart, and verify all data (from both write phases) is present."""
@@ -140,8 +138,7 @@ async def test_double_crash_recovery(manager: ManagerClient):
         # First crash
         await manager.server_stop(server.server_id, convict=False)
         await manager.server_start(server.server_id)
-        await reconnect_driver(manager)
-        cql = manager.get_cql()
+        (cql, hosts) = await manager.get_ready_cql([server])
 
         # Verify phase 1 data survived
         for pk in range(10):
@@ -156,8 +153,7 @@ async def test_double_crash_recovery(manager: ManagerClient):
         # Second crash
         await manager.server_stop(server.server_id, convict=False)
         await manager.server_start(server.server_id)
-        await reconnect_driver(manager)
-        cql = manager.get_cql()
+        (cql, hosts) = await manager.get_ready_cql([server])
 
         # Verify all data (both phases) survived
         for pk in range(20):
@@ -169,7 +165,7 @@ async def test_double_crash_recovery(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-async def test_crash_with_multiple_commitlog_segments(manager: ManagerClient):
+async def test_crash_with_multiple_commitlog_segments(manager: ScyllaClusterManager):
     """Verify crash recovery when data spans multiple commitlog segments.
     Uses a small commitlog segment size to force segment rotation, writes
     enough rows to span multiple segments, crashes, and verifies all data
@@ -200,8 +196,7 @@ async def test_crash_with_multiple_commitlog_segments(manager: ManagerClient):
         # Crash
         await manager.server_stop(server.server_id, convict=False)
         await manager.server_start(server.server_id)
-        await reconnect_driver(manager)
-        cql = manager.get_cql()
+        (cql, hosts) = await manager.get_ready_cql([server])
 
         # Verify all rows survived
         rows_by_pk = {}
@@ -217,7 +212,7 @@ async def test_crash_with_multiple_commitlog_segments(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-async def test_crash_recovery_multi_tablet(manager: ManagerClient):
+async def test_crash_recovery_multi_tablet(manager: ScyllaClusterManager):
     """Verify crash recovery with multiple tablets (independent raft groups).
     Creates a table with 4 tablets, writes data distributed across all tablets,
     crashes, and verifies all data is recovered — testing that commitlog replay
@@ -244,8 +239,7 @@ async def test_crash_recovery_multi_tablet(manager: ManagerClient):
         # Crash
         await manager.server_stop(server.server_id, convict=False)
         await manager.server_start(server.server_id)
-        await reconnect_driver(manager)
-        cql = manager.get_cql()
+        (cql, hosts) = await manager.get_ready_cql([server])
 
         # Verify all rows survived
         rows_by_pk = {}
@@ -261,7 +255,7 @@ async def test_crash_recovery_multi_tablet(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-async def test_crash_recovery_after_flush(manager: ManagerClient):
+async def test_crash_recovery_after_flush(manager: ScyllaClusterManager):
     """Verify crash recovery when some data was flushed to sstables before the crash.
     Write data, flush it to sstables (so it is persisted on disk), then write
     more data (which exists only in the commitlog), crash, and verify both the
@@ -293,8 +287,7 @@ async def test_crash_recovery_after_flush(manager: ManagerClient):
         # Crash (non-graceful — phase 2 data is only in commitlog)
         await manager.server_stop(server.server_id, convict=False)
         await manager.server_start(server.server_id)
-        await reconnect_driver(manager)
-        cql = manager.get_cql()
+        (cql, hosts) = await manager.get_ready_cql([server])
 
         # Verify all data: flushed (phase 1) + replayed from commitlog (phase 2)
         for pk in range(20):

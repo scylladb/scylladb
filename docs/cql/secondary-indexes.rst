@@ -371,11 +371,32 @@ The following options are supported for full-text indexes:
 | ``analyzer``   | Text analyzer for tokenization. Determines how text is split into terms.                  | ``standard``      |
 |                | Supported values (case-insensitive): ``standard``, ``english``, ``german``,               |                   |
 |                | ``french``, ``spanish``, ``italian``, ``portuguese``, ``russian``, ``simple``,            |                   |
-|                | ``whitespace``. CJK analyzers (``chinese``, ``japanese``, ``korean``) are not supported.  |                   |
+|                | ``whitespace``. No other values are supported.                                            |                   |
 +----------------+-------------------------------------------------------------------------------------------+-------------------+
 | ``positions``  | Whether token positions are stored. Required for phrase queries.                          | ``true``          |
 |                | Supported values: ``true``, ``false`` (case-insensitive).                                 |                   |
 +----------------+-------------------------------------------------------------------------------------------+-------------------+
+
+The analyzers differ in how they tokenize and normalize text:
+
+* ``standard`` splits text into terms on whitespace and punctuation, lowercases
+  them, and applies a generic set of English stop words. It does not apply any
+  language-specific stemming.
+* The language analyzers (``english``, ``german``, ``french``, ``spanish``,
+  ``italian``, ``portuguese``, ``russian``) tokenize and lowercase like
+  ``standard``, but additionally apply stemming and stop-word removal specific
+  to that language, so that related word forms (e.g., ``running`` and ``run``)
+  match the same term.
+* ``simple`` lowercases text and splits on any non-alphanumeric character
+  (including punctuation); digits and letters adjacent to each other stay in
+  the same term (e.g., ``abc123`` is one term), while punctuation is dropped
+  rather than kept as part of a term or as a term of its own (e.g., ``don't``
+  becomes the terms ``don`` and ``t``). It does not apply stemming or
+  stop-word removal.
+* ``whitespace`` splits only on whitespace characters; punctuation attached to
+  a word is kept as part of that term (e.g., ``Hello, World!`` becomes the terms
+  ``Hello,`` and ``World!``). It does not apply lowercasing, stemming,
+  or stop-word removal.
 
 .. _drop-index-statement:
 
@@ -396,6 +417,31 @@ the system stops the build process and cleans up any partially built data associ
 
 .. If the index does not exists, the statement will return an error, unless ``IF EXISTS`` is used in which case the
 .. operation is a no-op.
+
+Changing Indexes During a Paged Read
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A paged read keeps using the query plan it started with. The paging state
+returned to the client records whether the read scans the base table or uses a
+particular secondary index, and every subsequent page is served by that same
+plan, so creating an index that could serve the query affects only new queries.
+Because a new index takes a moment to become known cluster-wide, a read that
+already uses one may be resumed by a node that does not know it yet, and then
+fails as described below.
+
+Dropping the index a paged read uses is different: the position saved in the
+paging state belongs to that index's scan, and no other plan can interpret it.
+Requesting the next page fails with an ``InvalidRequest`` error stating that the
+index is no longer available, and the query has to be retried from the
+beginning. Creating another index under the same name does not help, because the
+read is tied to the specific index it started with. A prepared statement fails
+one step earlier: the ``DROP`` invalidates it, the driver re-prepares it before
+resuming, and a query that is not valid without the index - one lacking
+``ALLOW FILTERING``, for example - fails that re-preparation. A read scanning the
+base table, in contrast, is not tied to that table's identity: dropping and
+re-creating the base table does not change the plan, and the next page is served
+from the new table - resuming where the old table's scan stopped, so whatever
+the new table holds before that position is skipped without an error.
 
 Additional Information
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

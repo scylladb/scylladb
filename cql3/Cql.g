@@ -68,6 +68,7 @@ options {
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/selection/selectable-expr.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/dialect.hh"
 #include "cql3/keyspace_element_name.hh"
 #include "cql3/constants.hh"
@@ -327,7 +328,14 @@ query returns [std::unique_ptr<raw::parsed_statement> stmnt]
     ;
 
 cqlStatement returns [std::unique_ptr<raw::parsed_statement> stmt]
-    @after{ if (stmt) { stmt->set_bound_variables(_bind_variable_names, _dialect); } }
+    @after{
+        if (stmt) { stmt->set_bound_variables(_bind_variable_names, _dialect); }
+        // A statement takes the markers of its own text with it; the next
+        // statement of a multi-statement parse numbers its own from zero,
+        // and a marker name it reuses is a marker of its own.
+        _bind_variable_names.clear();
+        _named_bind_variables_indexes.clear();
+    }
     : st1= selectStatement             { $stmt = std::move(st1); }
     | st2= insertStatement             { $stmt = std::move(st2); }
     | st3= updateStatement             { $stmt = std::move(st3); }
@@ -532,7 +540,13 @@ orderByClause[raw::select_statement::parameters::orderings_type& orderings, bool
                 }
             }
             is_similarity_ordering = true;
-            orderings.emplace_back(c, ann_ordering.value());
+            // Lower the legacy 'col ANN OF vec' syntax to the same representation as the
+            // function syntax 'ANN(col, vec)', so that both share one resolver downstream.
+            expression func_expr = function_call{
+                cql3::functions::ANN_FUNCTION_NAME,
+                {unresolved_identifier{c}, ann_ordering.value()}
+            };
+            orderings.emplace_back(nullptr, raw::select_statement::scoring_function_ordering{std::move(func_expr)});
         }
     }
     ;
@@ -1749,6 +1763,7 @@ allowedFunctionName returns [sstring s]
     | u=unreserved_function_keyword { $s = u; }
     | K_TOKEN                       { $s = "token"; }
     | K_COUNT                       { $s = "count"; }
+    | K_ANN                         { $s = "ann"; }
     ;
 
 functionArgs returns [std::vector<expression> a]

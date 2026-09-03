@@ -59,7 +59,7 @@ update_parameters::get_prefetched_list(const partition_key& pkey, const clusteri
 }
 
 update_parameters::prefetch_data::prefetch_data(schema_ptr schema)
-    : rows(key_less{*schema})
+    : rows(0, key_hash{*schema}, key_equal{*schema})
     , schema(schema)
 { }
 

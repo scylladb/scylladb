@@ -7,13 +7,13 @@ import logging
 import time
 
 import pytest
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import wait_for_token_ring_and_group0_consistency
 
 logger = logging.getLogger(__name__)
 
 
-async def test_decommissioned_node_cant_rejoin(request, manager: ManagerClient):
+async def test_decommissioned_node_cant_rejoin(request, manager: ScyllaClusterManager):
     # This a regression test for #17282.
 
     logger.info("Bootstrapping the leader node")

@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import read_barrier
 from test.cluster.util import new_test_keyspace
 from collections import defaultdict
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 GB = 1024 * 1024 * 1024
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_balance_empty_tablets(manager: ManagerClient):
+async def test_balance_empty_tablets(manager: ScyllaClusterManager):
 
     # This test checks that size-based load balancing migrates empty tablets of a newly created
     # table after a scale-out. The number of tablets on a node must be proportional to the disk

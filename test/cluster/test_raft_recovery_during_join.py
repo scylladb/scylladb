@@ -11,7 +11,7 @@ from uuid import UUID
 import pytest
 
 from test.pylib.internal_types import ServerInfo
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import gather_safely, wait_for_cql_and_get_hosts
 from test.cluster.util import check_system_topology_and_cdc_generations_v3_consistency, \
@@ -20,7 +20,7 @@ from test.cluster.util import check_system_topology_and_cdc_generations_v3_consi
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_raft_recovery_during_join(manager: ManagerClient):
+async def test_raft_recovery_during_join(manager: ScyllaClusterManager):
     """
     Test that the Raft-based recovery procedure works correctly if majority has been lost in the write_both_read_new
     state caused by a join request.

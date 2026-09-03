@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from test.cluster.dtest.ccmlib.scylla_node import ScyllaNode
     from test.cluster.dtest.dtest_config import DTestConfig
     from test.cluster.dtest.dtest_setup_overrides import DTestSetupOverrides
-    from test.pylib.manager_client import ManagerClient
+    from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
 DEFAULT_PROTOCOL_VERSION = 4
@@ -61,7 +61,7 @@ class DTestSetup:
     def __init__(self,
                  dtest_config: DTestConfig | None = None,
                  setup_overrides: DTestSetupOverrides | None = None,
-                 manager: ManagerClient | None = None,
+                 manager: ScyllaClusterManager | None = None,
                  scylla_mode: str | None = None,
                  cluster_name: str = "test"):
         self.dtest_config = dtest_config

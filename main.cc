@@ -138,6 +138,7 @@
 #include "utils/labels.hh"
 #include "tools/utils.hh"
 #include "schema/compression_initializer.hh"
+#include "schema/speculative_retry_initializer.hh"
 
 
 namespace fs = std::filesystem;
@@ -926,6 +927,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return bool(feature_service.local().sstable_compression_dicts);
             });
 
+            // Register the default speculative_retry value for user tables.
+            // Registration parses the option value, so an invalid value fails
+            // startup.
+            register_speculative_retry_initializer(*cfg);
+
             cfg->setup_directories();
 
             // We're writing to a non-atomic variable here. But bool writes are atomic
@@ -1255,6 +1261,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             dbcfg.compaction_scheduling_group = create_scheduling_group("compaction", "comp", 1000).get();
             dbcfg.maintenance_compaction_scheduling_group = create_scheduling_group("maintenance_compaction", "manc", 200, maintenance_supergroup).get();
             dbcfg.memory_compaction_scheduling_group = create_scheduling_group("mem_compaction", "mcmp", 1000).get();
+            dbcfg.logstor_compaction_scheduling_group = create_scheduling_group("logstor_compaction", "lcmp", 1000).get();
             dbcfg.streaming_scheduling_group = create_scheduling_group("streaming", "strm", 200, maintenance_supergroup).get();
             debug::streaming_scheduling_group = dbcfg.streaming_scheduling_group;
             dbcfg.maintenance_scheduling_group = maintenance_scheduling_group;
@@ -1266,7 +1273,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             dbcfg.commitlog_scheduling_group = create_scheduling_group("commitlog", "clog", 1000).get();
             dbcfg.schema_commitlog_scheduling_group = create_scheduling_group("schema_commitlog", "sclg", 1000).get();
             dbcfg.backup_scheduling_group = create_scheduling_group("backup", "bckp", 200, maintenance_supergroup).get(),
-            debug::backup_scheduling_group = dbcfg.backup_scheduling_group;
             dbcfg.available_memory = memory::stats().total_memory();
 
             // Make sure to initialize the scheduling group keys at a point where we are sure
@@ -1347,6 +1353,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sstm.start(std::ref(*cfg), stm_cfg).get();
             auto stop_sstm = defer_verbose_shutdown("sstables storage manager", [&sstm] {
                 sstm.stop().get();
+            });
+
+            api::set_server_storage_manager(ctx, sstm).get();
+            auto stop_storage_manager_api = defer_verbose_shutdown("storage manager API", [&ctx] {
+                api::unset_server_storage_manager(ctx).get();
             });
 
             static sharded<auth::service> auth_service;
@@ -1987,7 +1998,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             debug::the_stream_manager = &stream_manager;
             checkpoint(stop_signal, "starting streaming service");
-            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(view_builder), std::ref(view_building_worker), std::ref(messaging), std::ref(mm), std::ref(gossiper), dbcfg.streaming_scheduling_group, dbcfg.backup_scheduling_group).get();
+            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(view_builder), std::ref(view_building_worker), std::ref(messaging), std::ref(mm), std::ref(gossiper), dbcfg.streaming_scheduling_group).get();
             auto stop_stream_manager = defer_verbose_shutdown("stream manager", [&stream_manager] {
                 // FIXME -- keep the instances alive, just call .stop on them
                 stream_manager.invoke_on_all(&streaming::stream_manager::stop).get();
@@ -2430,7 +2441,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             checkpoint(stop_signal, "starting sstables loader");
-            sst_loader.start(std::ref(db), std::ref(ss), std::ref(messaging), std::ref(view_builder), std::ref(view_building_worker), std::ref(task_manager), std::ref(sstm), std::ref(sys_dist_ks), dbcfg.backup_scheduling_group).get();
+            sst_loader.start(std::ref(db), std::ref(ss), std::ref(messaging), std::ref(view_builder), std::ref(view_building_worker), std::ref(task_manager), std::ref(sstm), std::ref(sys_dist_ks), dbcfg.streaming_scheduling_group).get();
             auto stop_sst_loader = defer_verbose_shutdown("sstables loader", [&sst_loader] {
                 sst_loader.stop().get();
             });

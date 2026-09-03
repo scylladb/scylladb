@@ -14,7 +14,7 @@ were not being counted in the coordinator write_timeouts metric.
 import asyncio
 import pytest
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error
 
 from .util import new_test_keyspace, new_test_table
@@ -24,7 +24,7 @@ COORDINATOR_WRITE_TIMEOUTS_METRIC = "scylla_storage_proxy_coordinator_write_time
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-async def test_counter_write_timeout_updates_coordinator_metric(manager: ManagerClient):
+async def test_counter_write_timeout_updates_coordinator_metric(manager: ScyllaClusterManager):
     """
     Test that when a counter write times out, the coordinator write_timeouts
     metric is incremented.

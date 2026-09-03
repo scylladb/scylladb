@@ -296,6 +296,9 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
         throw std::runtime_error(format("tools:do_load_schemas(): failed to parse CQL statements: {}", std::current_exception()));
     }
     for (auto& raw_statement : raw_statements) {
+        if (raw_statement->get_prepare_context().bound_variables_size()) {
+            throw std::runtime_error("tools::do_load_schemas(): CQL statement uses bind markers, which a schema file cannot bind values for");
+        }
         auto cf_statement = dynamic_cast<cql3::statements::raw::cf_statement*>(raw_statement.get());
         if (!cf_statement) {
             continue; // we don't support any non-cf statements here
@@ -468,7 +471,7 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
             ut_builder.add(name, field_names, field_types);
         }
 
-        auto user_types = ut_builder.build().get();
+        auto user_types = ut_builder.build("offline schema loading").get();
         for (auto&& ut : user_types) {
             utm.add_type(std::move(ut));
         }

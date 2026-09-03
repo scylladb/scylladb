@@ -513,6 +513,8 @@ private:
 
     compaction::compaction_manager& _compaction_manager;
     compaction::compaction_strategy _compaction_strategy;
+    logstor::logstor* _logstor = nullptr;
+    std::unique_ptr<logstor::primary_index> _logstor_index;
     // The storage_group_manager manages either a single storage_group for vnodes or per-tablet storage_group for tablets.
     // It contains and manages both the compaction_groups list and the storage_groups vector.
     std::unique_ptr<storage_group_manager> _sg_manager;
@@ -551,9 +553,6 @@ private:
     bool _tombstone_gc_enabled = true;
     utils::phased_barrier _flush_barrier;
     std::vector<view_ptr> _views;
-
-    logstor::logstor* _logstor = nullptr;
-    std::unique_ptr<logstor::primary_index> _logstor_index;
 
     std::unique_ptr<cell_locker> _counter_cell_locks; // Memory-intensive; allocate only when needed.
 
@@ -624,9 +623,8 @@ public:
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
 
-    bool add_logstor_segment(logstor::log_segment_id, logstor::segment_descriptor&, dht::token first_token, dht::token last_token);
-
-    logstor::separator_buffer& get_logstor_separator_buffer(dht::token token, size_t write_size);
+    logstor::logstor_group& get_logstor_group(dht::token token);
+    logstor::logstor_group& get_logstor_group(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token);
 
     // Restricted to new sstables produced by external processes such as repair.
     // The sstable might undergo split if table is in split mode.
@@ -896,10 +894,14 @@ public:
     // to issue disk operations safely.
     void mark_ready_for_writes(db::commitlog* cl);
 
-    void init_logstor(logstor::logstor* ls);
-
     bool uses_logstor() const {
         return _logstor != nullptr;
+    }
+
+    // The mutation sources of this table for SELECT ... FROM MUTATION_FRAGMENTS(), see
+    // logstor::make_mutation_sources_for_dump(). Only valid when uses_logstor().
+    std::map<sstring, mutation_source> make_logstor_mutation_sources_for_dump(schema_ptr s, const dht::decorated_key& dk, reader_permit permit) {
+        return _logstor->make_mutation_sources_for_dump(std::move(s), *_logstor_index, dk, std::move(permit));
     }
 
     logstor::primary_index& logstor_index() noexcept {
@@ -1033,7 +1035,7 @@ public:
 
     logalloc::occupancy_stats occupancy() const;
 public:
-    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker, locator::effective_replication_map_ptr erm);
+    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& cm, logstor::logstor* logstor, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker, locator::effective_replication_map_ptr erm);
 
     table(column_family&&) = delete; // 'this' is being captured during construction
     ~table();
@@ -1600,6 +1602,7 @@ struct database_config {
     seastar::scheduling_group compaction_scheduling_group;
     seastar::scheduling_group maintenance_compaction_scheduling_group;
     seastar::scheduling_group memory_compaction_scheduling_group;
+    seastar::scheduling_group logstor_compaction_scheduling_group;
     seastar::scheduling_group statement_scheduling_group;
     seastar::scheduling_group streaming_scheduling_group;
     seastar::scheduling_group maintenance_scheduling_group;
@@ -1762,6 +1765,10 @@ private:
             db::per_partition_rate_limit::info,
             bool /* skip_large_data_guardrails */> _apply_stage;
 
+    // Declared ahead of the tables, since a logstor table holds a pointer to it and its compaction
+    // groups reach for its compaction manager as they are destroyed, so it has to outlive them.
+    std::unique_ptr<logstor::logstor> _logstor;
+
     flat_hash_map<sstring, keyspace> _keyspaces;
     tables_metadata _tables_metadata;
     std::unique_ptr<db::commitlog> _commitlog;
@@ -1776,8 +1783,6 @@ private:
     bool _shutdown = false;
     bool _enable_autocompaction_toggle = false;
     querier_cache _querier_cache;
-
-    std::unique_ptr<logstor::logstor> _logstor;
 
     std::unique_ptr<db::large_data_handler> _large_data_handler;
     std::unique_ptr<db::large_data_handler> _nop_large_data_handler;

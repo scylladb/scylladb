@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 import os
 import asyncio
@@ -40,41 +40,41 @@ cmdline_loggers = [
     '--logger-log-level', 'load_balancer=debug',
 ]
 
-async def mark_all_servers(manager: ManagerClient) -> list[int]:
+async def mark_all_servers(manager: ScyllaClusterManager) -> list[int]:
     servers = await manager.running_servers()
     logs = await asyncio.gather(*(manager.server_open_log(s.server_id) for s in servers))
     return await asyncio.gather(*(l.mark() for l in logs))
 
-async def pause_view_build_coordinator(manager: ManagerClient):
+async def pause_view_build_coordinator(manager: ScyllaClusterManager):
     """Pause view build coordinator."""
     servers = await manager.running_servers()
     await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, VIEW_BUILDING_COORDINATOR_PAUSE_MAIN_LOOP, one_shot=True) for s in servers))
 
-async def unpause_view_build_coordinator(manager: ManagerClient):
+async def unpause_view_build_coordinator(manager: ScyllaClusterManager):
     """Unpause the view build coordinator."""
     servers = await manager.running_servers()
     await asyncio.gather(*(manager.api.message_injection(s.ip_addr, VIEW_BUILDING_COORDINATOR_PAUSE_MAIN_LOOP) for s in servers))
     await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, VIEW_BUILDING_COORDINATOR_PAUSE_MAIN_LOOP) for s in servers))
 
-async def pause_view_building_tasks(manager: ManagerClient, token: int | None = None, pause_all: bool = True):
+async def pause_view_building_tasks(manager: ScyllaClusterManager, token: int | None = None, pause_all: bool = True):
     servers = await manager.running_servers()
     params = {}
     if token is not None:
         params["token"] = token
     await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK, one_shot=pause_all, parameters=params) for s in servers))
 
-async def unpause_view_building_tasks(manager: ManagerClient):
+async def unpause_view_building_tasks(manager: ScyllaClusterManager):
     servers = await manager.running_servers()
     await asyncio.gather(*(manager.api.message_injection(s.ip_addr, VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK) for s in servers))
     await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK) for s in servers))
 
-async def wait_for_message_on_any_server(manager: ManagerClient, message: str, marks: list[int]):
+async def wait_for_message_on_any_server(manager: ScyllaClusterManager, message: str, marks: list[int]):
     servers = await manager.running_servers()
     logs = await asyncio.gather(*(manager.server_open_log(s.server_id) for s in servers))
     assert len(servers) == len(marks)
     await wait_for_first_completed([l.wait_for(message, from_mark=m, timeout=60) for l, m in zip(logs, marks)])
 
-async def wait_for_some_view_build_tasks_to_get_stuck(manager: ManagerClient, marks: list[int]):
+async def wait_for_some_view_build_tasks_to_get_stuck(manager: ScyllaClusterManager, marks: list[int]):
     return await wait_for_message_on_any_server(manager, "do_build_range: paused, waiting for message", marks)
 
 async def populate_base_table(cql: Session, ks: str, tbl: str):
@@ -93,7 +93,7 @@ async def check_view_contents(cql: Session, ks: str, table: str, view: str, part
 ### TESTS ###
 #############
 
-async def test_build_no_data(manager: ManagerClient):
+async def test_build_no_data(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
         {"dc": "dc1", "rack": "r1"},
@@ -108,7 +108,7 @@ async def test_build_no_data(manager: ManagerClient):
         await wait_for_view(cql, 'mv_cf_view', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
 
-async def test_build_one_view(manager: ManagerClient):
+async def test_build_one_view(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
         {"dc": "dc1", "rack": "r1"},
@@ -125,7 +125,7 @@ async def test_build_one_view(manager: ManagerClient):
         await wait_for_view(cql, 'mv_cf_view', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
 
-async def test_build_filtered_view(manager: ManagerClient):
+async def test_build_filtered_view(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers)
     cql, _ = await manager.get_ready_cql(servers)
@@ -140,7 +140,7 @@ async def test_build_filtered_view(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_build_two_views(manager: ManagerClient):
+async def test_build_two_views(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
         {"dc": "dc1", "rack": "r1"},
@@ -169,7 +169,7 @@ async def test_build_two_views(manager: ManagerClient):
         await check_view_contents(cql, ks, "tab", "mv_cf_view2")
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_add_view_while_build_in_progress(manager: ManagerClient):
+async def test_add_view_while_build_in_progress(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
         {"dc": "dc1", "rack": "r1"},
@@ -202,7 +202,7 @@ async def test_add_view_while_build_in_progress(manager: ManagerClient):
         await check_view_contents(cql, ks, "tab", "mv_cf_view2")
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_add_view_after_view_build_flush_races_with_delete(manager: ManagerClient):
+async def test_add_view_after_view_build_flush_races_with_delete(manager: ScyllaClusterManager):
     server = await manager.server_add(cmdline=cmdline_loggers, property_file={"dc": "dc1", "rack": "r1"})
     cql = manager.get_cql()
 
@@ -237,7 +237,7 @@ async def test_add_view_after_view_build_flush_races_with_delete(manager: Manage
         await check_view_contents(cql, ks, "tab", "mv_cf_view2")
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_remove_some_view_while_build_in_progress(manager: ManagerClient):
+async def test_remove_some_view_while_build_in_progress(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers)
     cql, _ = await manager.get_ready_cql(servers)
@@ -265,7 +265,7 @@ async def test_remove_some_view_while_build_in_progress(manager: ManagerClient):
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_abort_building_by_remove_view(manager: ManagerClient):
+async def test_abort_building_by_remove_view(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers)
     cql, _ = await manager.get_ready_cql(servers)
@@ -292,7 +292,7 @@ async def test_abort_building_by_remove_view(manager: ManagerClient):
 
 @pytest.mark.parametrize("change", ["add", "rename"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_alter_base_schema_while_build_in_progress(manager: ManagerClient, change: str):
+async def test_alter_base_schema_while_build_in_progress(manager: ScyllaClusterManager, change: str):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers)
     cql, _ = await manager.get_ready_cql(servers)
@@ -327,7 +327,7 @@ async def test_alter_base_schema_while_build_in_progress(manager: ManagerClient,
 
 @pytest.mark.parametrize("change", ["increase", "decrease"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_change_rf_while_build_in_progress(manager: ManagerClient, change: str):
+async def test_change_rf_while_build_in_progress(manager: ScyllaClusterManager, change: str):
     if change == "increase":
         node_count = 2
         rack_layout = ["rack1", "rack2"]
@@ -368,7 +368,7 @@ async def test_change_rf_while_build_in_progress(manager: ManagerClient, change:
 
 @pytest.mark.parametrize("operation", ["add", "remove", "decommission", "replace"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_node_operation_during_view_building(manager: ManagerClient, operation: str):
+async def test_node_operation_during_view_building(manager: ScyllaClusterManager, operation: str):
     if operation == "remove" or operation == "decommission":
         node_count = 4
         rack_layout = ["rack1", "rack2", "rack3", "rack3"]
@@ -418,7 +418,7 @@ async def test_node_operation_during_view_building(manager: ManagerClient, opera
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_leader_change_while_building(manager: ManagerClient):
+async def test_leader_change_while_building(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
         {"dc": "dc1", "rack": "r1"},
@@ -452,7 +452,7 @@ async def test_leader_change_while_building(manager: ManagerClient):
 
 @pytest.mark.xfail
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_building(manager: ManagerClient):
+async def test_truncate_while_building(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
         {"dc": "dc1", "rack": "r1"},
@@ -483,7 +483,7 @@ async def test_truncate_while_building(manager: ManagerClient):
 
 @pytest.mark.parametrize("view_action", ["finish_build", "drop_while_building"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_scylla_views_builds_in_progress(manager: ManagerClient, view_action):
+async def test_scylla_views_builds_in_progress(manager: ScyllaClusterManager, view_action):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
         {"dc": "dc1", "rack": "r1"},
@@ -529,7 +529,7 @@ async def test_scylla_views_builds_in_progress(manager: ManagerClient, view_acti
         await check_scylla_views_builds_in_progress(expect_zero_rows=True)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_view_building_while_tablet_streaming_fail(manager: ManagerClient):
+async def test_view_building_while_tablet_streaming_fail(manager: ScyllaClusterManager):
     servers = [await manager.server_add(cmdline=cmdline_loggers)]
     await manager.disable_tablet_balancing()
 
@@ -559,7 +559,7 @@ async def test_view_building_while_tablet_streaming_fail(manager: ManagerClient)
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_view_building_failure(manager: ManagerClient):
+async def test_view_building_failure(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
         {"dc": "dc1", "rack": "r1"},
@@ -585,7 +585,7 @@ async def test_view_building_failure(manager: ManagerClient):
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
 
 # Reproduces scylladb/scylladb#25912
-async def test_concurrent_tablet_migrations(manager: ManagerClient):
+async def test_concurrent_tablet_migrations(manager: ScyllaClusterManager):
     """
     The test creates a situation where a single tablet is replicated across
     multiple DCs / racks, and all those tablet replicas are eligible for migration.
@@ -660,7 +660,7 @@ async def test_concurrent_tablet_migrations(manager: ManagerClient):
         await unpause_view_building_tasks(manager)
         await wait_for_view(cql, "mv", len(servers))
 
-async def get_table_dir(manager: ManagerClient, server: ServerInfo, ks: str, table: str):
+async def get_table_dir(manager: ScyllaClusterManager, server: ServerInfo, ks: str, table: str):
     workdir = await manager.server_get_workdir(server.server_id)
     ks_dir = os.path.join(workdir, "data", ks)
 
@@ -670,7 +670,7 @@ async def get_table_dir(manager: ManagerClient, server: ServerInfo, ks: str, tab
             if table_pattern.match(d):
                 return os.path.join(root, d)
 
-async def delete_table_sstables(manager: ManagerClient, server: ServerInfo, ks: str, table: str):
+async def delete_table_sstables(manager: ScyllaClusterManager, server: ServerInfo, ks: str, table: str):
     table_dir = await get_table_dir(manager, server, ks, table)
     for root, dirs, files in os.walk(table_dir):
         for file in files:
@@ -690,7 +690,7 @@ async def assert_row_count_on_host(cql, host, ks, table, row_count):
 # Then processing staging sstables is prevented using error injection and the tablet is
 # migrated to a new node, which will receive the staging sstables via file streaming.
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_file_streaming(manager: ManagerClient):
+async def test_file_streaming(manager: ScyllaClusterManager):
     node_count = 2
     smp = 2
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers + [f'--smp={smp}'], property_file=[
@@ -825,7 +825,7 @@ async def test_file_streaming(manager: ManagerClient):
 #   but the map stays the same, so one sstable won't be processed
 #   because last token after tablet merge = last token of tablet2 before merge
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
+async def test_staging_sstables_with_tablet_merge(manager: ScyllaClusterManager):
     node_count = 2
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
         {"dc": "dc1", "rack": "r1"},
@@ -932,7 +932,7 @@ async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
         await manager.server_start(servers[1].server_id)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_migration_during_view_building(manager: ManagerClient):
+async def test_tablet_migration_during_view_building(manager: ScyllaClusterManager):
     node_count = 1
     server = new_server = await manager.server_add(cmdline=cmdline_loggers, property_file={"dc": "dc1", "rack": "r1"})
     cql, _ = await manager.get_ready_cql([server])
@@ -962,7 +962,7 @@ async def test_tablet_migration_during_view_building(manager: ManagerClient):
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_merge_during_view_building(manager: ManagerClient):
+async def test_tablet_merge_during_view_building(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
         {"dc": "dc1", "rack": "r1"},
@@ -1014,7 +1014,7 @@ async def test_tablet_merge_during_view_building(manager: ManagerClient):
 #
 # We check that the observed bad behavior no longer occurs by checking that
 # the view_building_state_observer no longer prints warnings.
-async def test_all_good_on_node_restart(manager: ManagerClient):
+async def test_all_good_on_node_restart(manager: ScyllaClusterManager):
     node_count = 2
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
         {"dc": "dc1", "rack": "r1"},
@@ -1039,7 +1039,7 @@ async def test_all_good_on_node_restart(manager: ManagerClient):
 # Test that view building does not trigger tombstone_warn_threshold warnings.
 # Uses a high tablet count (2048) to create many tasks, which produces many
 # tombstones when tasks are cleaned up. Verifies no warnings appear in logs.
-async def test_tombstone_warn_threshold(manager: ManagerClient):
+async def test_tombstone_warn_threshold(manager: ScyllaClusterManager):
     node_count = 1
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
         {"dc": "dc1", "rack": "r1"},
@@ -1069,7 +1069,7 @@ async def test_tombstone_warn_threshold(manager: ManagerClient):
 # Test that in presence of view update hints, view building will not be marked as finished
 # Migrated from dtest materialized_views_test.py::TestMaterializedViews::test_do_not_finish_view_building_with_hints
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_do_not_finish_view_building_with_hints(manager: ManagerClient):
+async def test_do_not_finish_view_building_with_hints(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, config={
         "hinted_handoff_enabled": False,
@@ -1123,7 +1123,7 @@ async def test_do_not_finish_view_building_with_hints(manager: ManagerClient):
 # Reproduces scylladb/scylladb#27298
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_coordinator_misses_cv_broadcast(manager: ManagerClient):
+async def test_coordinator_misses_cv_broadcast(manager: ScyllaClusterManager):
     node_count = 1
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, auto_rack_dc="dc1")
     cql, _ = await manager.get_ready_cql(servers)
@@ -1166,7 +1166,7 @@ async def test_coordinator_misses_cv_broadcast(manager: ManagerClient):
 # which no longer exists, hitting ENOENT, and retries indefinitely.
 # Reproduces SCYLLADB-2312
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_staging_registration_race_with_tablet_migration(manager: ManagerClient):
+async def test_staging_registration_race_with_tablet_migration(manager: ScyllaClusterManager):
     node_count = 2
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
         {"dc": "dc1", "rack": "r1"},

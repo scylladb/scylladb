@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import wait_for
 

@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING, Any
 
 from test.cluster.dtest.ccmlib.common import ArgumentError, wait_for, BIN_DIR
 from test.pylib.internal_types import ServerUpState
-from test.pylib.manager_client import NoSuchProcess
 
 if TYPE_CHECKING:
     from test.pylib.internal_types import ServerInfo
@@ -172,10 +171,7 @@ class ScyllaNode:
         return self.network_interfaces["storage"][0]
 
     def is_running(self) -> bool:
-        try:
-            return self.cluster.manager.server_get_returncode(server_id=self.server_id) is None
-        except NoSuchProcess:
-            return False
+        return self.cluster.manager.server_is_alive(server_id=self.server_id)
 
     is_live = is_running
 

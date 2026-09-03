@@ -153,16 +153,6 @@ void set_system(http_context& ctx, routes& r) {
         return json::json_void();
     });
 
-    hs::drop_sstable_caches.set(r, [&ctx](std::unique_ptr<request> req) {
-        apilog.info("Dropping sstable caches");
-        return ctx.db.invoke_on_all([] (replica::database& db) {
-            return db.drop_caches();
-        }).then([] {
-            apilog.info("Caches dropped");
-            return json::json_return_type(json::json_void());
-        });
-    });
-
     hs::dump_profile.set(r, [](std::unique_ptr<request> req) {
         if (!__llvm_profile_dump) {
             apilog.info("Profile will not be dumped, executable is not instrumented with profile dumping.");

@@ -601,6 +601,27 @@ struct convert<db::object_storage_endpoint_param> {
 };
 
 template<>
+struct convert<std::vector<db::object_storage_endpoint_param>> {
+    // Decode each entry on its own, so a malformed entry costs its own
+    // endpoint rather than the whole option.
+    static bool decode(const Node& node, std::vector<db::object_storage_endpoint_param>& endpoints) {
+        if (!node.IsSequence()) {
+            return false;
+        }
+
+        endpoints.clear();
+        for (size_t i = 0; i < node.size(); ++i) {
+            try {
+                endpoints.push_back(db::object_storage_endpoint_param::decode(node[i]));
+            } catch (const std::exception& e) {
+                cfglogger.error("Ignoring object_storage_endpoints entry {}: {}", i, e.what());
+            }
+        }
+        return true;
+    }
+};
+
+template<>
 struct convert<audit::audit_rule> {
     static bool decode(const Node& node, audit::audit_rule& rule) {
         if (!node.IsMap()) {
@@ -983,10 +1004,13 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , logstor_format_on_startup(this, "logstor_format_on_startup", value_status::Used, true,
         "Controls when logstor data files are formatted. When enabled, all logstor files are formatted during node startup, which increases startup time but ensures optimal write performance immediately after startup. "
         "When disabled, logstor files are formatted lazily on first write, which reduces startup time but may cause slightly degraded write performance on first access to each file.")
-    , logstor_separator_delay_limit_ms(this, "logstor_separator_delay_limit_ms", value_status::Used, 100,
-        "Maximum delay in milliseconds for logstor separator debt control.")
-    , logstor_separator_max_memory_in_mb(this, "logstor_separator_max_memory_in_mb", value_status::Used, 256,
-        "Maximum memory in megabytes for logstor separator memory buffers.")
+    , logstor_sparse_files(this, "logstor_sparse_files", value_status::Used, false,
+        "Create logstor data files as sparse files. When disabled, each file is preallocated and fully written with zeros, guaranteeing space is available and avoiding fragmentation. "
+        "When enabled, the file is only extended to its nominal size, so unwritten regions consume no disk space. Useful for tests, where the disk space and I/O of formatting files is wasteful.")
+    , logstor_compaction_trigger_threshold(this, "logstor_compaction_trigger_threshold", liveness::LiveUpdate, value_status::Used, 0.05,
+        "Trigger automatic logstor compaction when the number of available segments drops below this fraction of the total number of logstor segments. A value of 0 disables the trigger threshold.")
+    , logstor_compaction_max_shares(this, "logstor_compaction_max_shares", liveness::LiveUpdate, value_status::Used, 2000,
+        "Maximum CPU shares the logstor compaction controller gives the logstor compaction scheduling group, reached at full space pressure. ")
     , file_cache_size_in_mb(this, "file_cache_size_in_mb", value_status::Unused, 512,
         "Total memory to use for SSTable-reading buffers.")
     , memtable_flush_queue_size(this, "memtable_flush_queue_size", value_status::Unused, 4,
@@ -1320,7 +1344,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , vector_store_secondary_uri(this, "vector_store_secondary_uri", liveness::LiveUpdate, value_status::Used, "",
         "A comma-separated list of secondary vector store node URIs. These nodes are used as a fallback when all primary nodes are unavailable, and are typically located in a different availability zone for high availability.")
     , vector_store_unreachable_node_detection_time_in_ms(this, "vector_store_unreachable_node_detection_time_in_ms", liveness::LiveUpdate, value_status::Used, 3000,
-        "Time in milliseconds for detecting an unreachable vector store node. This value is applied to the TCP connect timeout, keepalive parameters, and TCP_USER_TIMEOUT. "
+        "Time in milliseconds for detecting an unreachable vector store node. This value is applied to the TCP connect timeout, keepalive parameters, TCP_USER_TIMEOUT, "
+        "and the deadline of the health-check request used to detect that an unreachable node became available again. "
         "When any of these mechanisms detects that a node is unreachable within this window, the client fails over to the next available vector store node.")
     , vector_store_encryption_options(this, "vector_store_encryption_options", value_status::Used, {},
         "Options for encrypted connections to the vector store. These options are used for HTTPS URIs in `vector_store_primary_uri` and `vector_store_secondary_uri`. The available options are:\n"
@@ -1462,7 +1487,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , prometheus_port(this, "prometheus_port", value_status::Used, 9180, "Prometheus port, set to zero to disable.")
     , prometheus_address(this, "prometheus_address", value_status::Used, {/* listen_address */}, "Prometheus listening address, defaulting to listen_address if not explicitly set.")
     , prometheus_prefix(this, "prometheus_prefix", value_status::Used, "scylla", "Set the prefix of the exported Prometheus metrics. Changing this will break Scylla's dashboard compatibility, do not change unless you know what you are doing.")
-    , prometheus_allow_protobuf(this, "prometheus_allow_protobuf", value_status::Used, false, "If set allows the experimental Prometheus protobuf with native histogram")
+    , prometheus_allow_protobuf(this, "prometheus_allow_protobuf", value_status::Used, true, "Enable Prometheus protobuf with native histogram. Set to false to force text exposition format.")
     , abort_on_lsa_bad_alloc(this, "abort_on_lsa_bad_alloc", value_status::Used, false, "Abort when allocation in LSA region fails.")
     , murmur3_partitioner_ignore_msb_bits(this, "murmur3_partitioner_ignore_msb_bits", value_status::Used, default_murmur3_partitioner_ignore_msb_bits, "Number of most significant token bits to ignore in murmur3 partitioner; increase for very large clusters.")
     , unspooled_dirty_soft_limit(this, "unspooled_dirty_soft_limit", value_status::Used, 0.6, "Soft limit of unspooled dirty memory expressed as a portion of the hard limit.")
@@ -1517,6 +1542,13 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The minimum size a table has to reach before dictionaries will be trained for it.")
     , sstable_compression_dictionaries_min_training_improvement_factor(this, "sstable_compression_dictionaries_min_training_improvement_factor", liveness::LiveUpdate, value_status::Used, 0.95,
         "New dictionaries will be only published if the estimated compression ratio is smaller than current ratio multiplied by this factor.")
+    , speculative_retry_user_table_default(this, "speculative_retry_user_table_default", liveness::LiveUpdate, value_status::Used, "99.0PERCENTILE",
+        "Default value of the speculative_retry option for user tables, i.e., tables in non-internal keyspaces. "
+        "Applied when a table is created without specifying speculative_retry explicitly; existing tables are not affected. "
+        "Materialized views and secondary indexes created without an explicit value also use this default; they do not inherit the base table's value. "
+        "The value used for a new table is taken from the configuration of the node coordinating the table creation, so the option should be set identically on all nodes. "
+        "The option can be updated at runtime; the updated value applies to tables created after the update. "
+        "Accepted values are the same as for the table option: ALWAYS, NONE, <X>PERCENTILE (e.g. 99.0PERCENTILE) and <N>ms (e.g. 200ms).")
     , uuid_sstable_identifiers_enabled(this,
             "uuid_sstable_identifiers_enabled", value_status::Unused, true, "If set to true, each newly created sstable will have a UUID "
             "based generation identifier, and such files are not readable by previous Scylla versions.")
@@ -1737,7 +1769,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , audit_tables(this, "audit_tables", liveness::LiveUpdate, value_status::Used, "", "Comma separated list of table names (<keyspace>.<table>) that will be audited.")
     , audit_keyspaces(this, "audit_keyspaces", liveness::LiveUpdate, value_status::Used, "", "Comma separated list of keyspaces that will be audited. All tables in those keyspaces will be audited")
     , audit_unix_socket_path(this, "audit_unix_socket_path", value_status::Used, "/dev/log", "The path to the unix socket used for writing to syslog. Only applicable when audit is set to syslog.")
-    , audit_syslog_write_buffer_size(this, "audit_syslog_write_buffer_size", value_status::Used, 1048576, "The size (in bytes) of a write buffer used when writing to syslog socket.")
+    , audit_syslog_write_buffer_size(this, "audit_syslog_write_buffer_size", value_status::Unused, 1048576, "The size (in bytes) of a write buffer used when writing to syslog socket.")
      , audit_rules(this, "audit_rules", liveness::LiveUpdate, value_status::Used, {},
         "List of granular audit rules. Each rule has: sinks, categories, qualified_table_names, roles. "
         "When non-empty, these rules extend audit_categories, audit_tables, and audit_keyspaces; "

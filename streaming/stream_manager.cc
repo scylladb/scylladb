@@ -31,7 +31,7 @@ stream_manager::stream_manager(db::config& cfg,
             sharded<db::view::view_building_worker>& view_building_worker,
             sharded<netw::messaging_service>& ms,
             sharded<service::migration_manager>& mm,
-            gms::gossiper& gossiper, scheduling_group sg, scheduling_group backup_sg)
+            gms::gossiper& gossiper, scheduling_group sg)
         : _db(db)
         , _view_builder(view_builder)
         , _view_building_worker(view_building_worker)
@@ -39,7 +39,6 @@ stream_manager::stream_manager(db::config& cfg,
         , _mm(mm)
         , _gossiper(gossiper)
         , _streaming_group(std::move(sg))
-        , _backup_scheduling_group(std::move(backup_sg))
         , _io_throughput_mbs(cfg.stream_io_throughput_mb_per_sec)
 {
     namespace sm = seastar::metrics;
@@ -50,7 +49,6 @@ stream_manager::stream_manager(db::config& cfg,
     _finished_percentage[streaming::stream_reason::rebuild] = 1;
     _finished_percentage[streaming::stream_reason::repair] = 1;
     _finished_percentage[streaming::stream_reason::replace] = 1;
-    _finished_percentage[streaming::stream_reason::restore] = 1;
 
     auto ops_label_type = sm::label("ops");
     _metrics.add_group("streaming", {
@@ -77,9 +75,6 @@ stream_manager::stream_manager(db::config& cfg,
 
         sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::replace]; },
                 sm::description("Finished percentage of node operation on this shard"), {ops_label_type("replace"), basic_level}),
-
-        sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::restore]; },
-                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("restore"), basic_level}),
     });
 }
 

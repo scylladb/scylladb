@@ -397,7 +397,7 @@ future<rjson::value> azure_host::impl::send_request(const sstring& host, unsigne
     client.add_header("Authorization", fmt::format("Bearer {}", token.token));
     client.content("application/json", std::move(rjson::print(body)));
 
-    azlog.trace("Sending request: {}", rest::redacted_request_type{ client.request(), filter });
+    azlog.trace("Sending request: {}", rest::redacted_request_type{ client, filter });
 
     auto res = co_await client.send();
     if (res.result() == http::reply::status_type::ok) {

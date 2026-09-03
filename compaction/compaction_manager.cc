@@ -1534,7 +1534,8 @@ protected:
                     descriptor.sstables, compacting_table()->get_sstables_repaired_at(),
                     compacting_table()->token_range(), uuid, _compaction_data.compaction_uuid);
 
-            auto old_sstables = ::format("{}", descriptor.sstables);
+            // descriptor is moved into compact_sstables() below; keep a cheap (shared_ptr) copy for the later debug log.
+            auto old_sstables = descriptor.sstables;
 
             if (descriptor.sstables.empty() || !can_proceed() || t.is_auto_compaction_disabled_by_user()) {
                 cmlog.debug("{}: sstables={} can_proceed={} auto_compaction={}", *this, descriptor.sstables.size(), can_proceed(), t.is_auto_compaction_disabled_by_user());
@@ -2602,7 +2603,7 @@ compaction_reenabler compaction_manager::add_with_compaction_disabled(compaction
 future<> compaction_manager::remove(compaction_group_view& t, sstring reason) noexcept {
     auto& c_state = get_compaction_state(&t);
     auto erase_state = defer([&t, this] () noexcept {
-       t.get_backlog_tracker().disable();
+       t.get_backlog_tracker().retire();
        _compaction_state.erase(&t);
     });
 
@@ -2713,8 +2714,26 @@ future<> compaction_manager::unplug_system_keyspace() noexcept {
     co_await _sys_ks.unplug();
 }
 
-double compaction_backlog_tracker::backlog() const {
-    return disabled() ? compaction_controller::disable_backlog : _impl->backlog(_ongoing_writes, _ongoing_compactions);
+void compaction_backlog_tracker::retire() {
+    if (_manager) {
+        _manager->remove_backlog_tracker(this);
+        _manager = nullptr;
+    }
+    disable();
+}
+
+double compaction_backlog_tracker::backlog() {
+    if (disabled()) {
+        return compaction_controller::disable_backlog;
+    }
+    try {
+        return _impl->backlog(_ongoing_writes, _ongoing_compactions);
+    } catch (...) {
+        // Isolate the failure to this tracker instead of poisoning the whole shard's backlog poll.
+        cmlog.error("Disabling backlog tracker due to exception during backlog computation: {}", std::current_exception());
+        disable();
+        return compaction_controller::disable_backlog;
+    }
 }
 
 void compaction_backlog_tracker::replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) {

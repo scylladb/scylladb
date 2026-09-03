@@ -3,7 +3,8 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-from test.pylib.manager_client import ManagerClient, ServerInfo
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cdc_generations_are_published(request, manager: ManagerClient):
+async def test_cdc_generations_are_published(request, manager: ScyllaClusterManager):
     """Test that the CDC generation publisher eventually publishes committed CDC generations in the correct order."""
     query_gen_timestamps = SimpleStatement(
         "select time from system_distributed.cdc_generation_timestamps where key = 'timestamps'",
@@ -75,7 +76,7 @@ async def test_cdc_generations_are_published(request, manager: ManagerClient):
     logger.info(f"Timestamps after check_and_repair: {gen_timestamps}")
 
 
-async def test_multiple_unpublished_cdc_generations(request, manager: ManagerClient):
+async def test_multiple_unpublished_cdc_generations(request, manager: ScyllaClusterManager):
     """Test that the CDC generation publisher works correctly when there is more than one unpublished CDC generation."""
     query_gen_timestamps = SimpleStatement(
         "select time from system_distributed.cdc_generation_timestamps where key = 'timestamps'",

@@ -75,14 +75,14 @@ static std::generator<dht::ring_position_view> generate_rpvs(
     }
     if (sst_ver == sstables::sstable_version_types::ms) {
         // ms encodes the partition key component-wise, so for two same-token
-        // rpvs the expected order is given by partition_key::tri_compare
+        // rpvs the expected order is the type-aware component-wise order
         // (NOT the ring comparator, which compares pks by their legacy form).
-        partition_key::tri_compare pk_cmp(string_pair_pk_schema);
-        std::ranges::sort(rpvs, [&pk_cmp] (const dht::ring_position_view& a, const dht::ring_position_view& b) {
+        const auto& pk_type = partition_key::get_compound_type(string_pair_pk_schema);
+        std::ranges::sort(rpvs, [&pk_type] (const dht::ring_position_view& a, const dht::ring_position_view& b) {
             if (auto cmp = a.token() <=> b.token(); cmp != 0) {
                 return cmp < 0;
             }
-            if (auto cmp = pk_cmp(*a.key(), *b.key()); cmp != 0) {
+            if (auto cmp = pk_type->compare(a.key()->representation(), b.key()->representation()); cmp != 0) {
                 return cmp < 0;
             }
             return a.weight() < b.weight();

@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include <seastar/core/on_internal_error.hh>
 
 #include "serializer.hh"

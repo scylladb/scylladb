@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 import logging
 import time
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Each time, we check that a view update backlog on some shard increased
 # due to the write.
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
-async def test_view_backlog_increased_after_write(manager: ManagerClient) -> None:
+async def test_view_backlog_increased_after_write(manager: ScyllaClusterManager) -> None:
     node_count = 2
     # Use a higher smp to make it more likely that the writes go to a different shard than the coordinator.
     servers = await manager.servers_add(node_count, cmdline=['--smp', '5'], config={'error_injections_at_startup': ['never_finish_remote_view_updates'], 'tablets_mode_for_new_keyspaces': 'enabled'})
@@ -52,7 +52,7 @@ async def test_view_backlog_increased_after_write(manager: ManagerClient) -> Non
 # In the test, we create a table and perform a write to it that fills the view update backlog.
 # After a gossip round is performed, the following write should succeed.
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
-async def test_gossip_same_backlog(manager: ManagerClient) -> None:
+async def test_gossip_same_backlog(manager: ScyllaClusterManager) -> None:
     node_count = 2
     servers = await manager.servers_add(node_count, config={'error_injections_at_startup': ['view_update_limit', 'update_backlog_immediately'], 'tablets_mode_for_new_keyspaces': 'enabled'})
     cql, hosts = await manager.get_ready_cql(servers)
@@ -95,7 +95,7 @@ async def test_gossip_same_backlog(manager: ManagerClient) -> None:
 # the same as ratios of the view_flow_control_delay_limit_in_ms parameter
 # that was set during the measurement.
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
-async def test_configurable_mv_control_flow_delay(manager: ManagerClient) -> None:
+async def test_configurable_mv_control_flow_delay(manager: ScyllaClusterManager) -> None:
     node_count = 2
     servers = await manager.servers_add(node_count,
                                         config={'error_injections_at_startup': ['update_backlog_immediately', 'view_update_limit', 'skip_updating_local_backlog_via_view_update_backlog_broker'], 'tablets_mode_for_new_keyspaces': 'enabled'},

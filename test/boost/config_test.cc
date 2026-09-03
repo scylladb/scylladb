@@ -17,7 +17,9 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/smp.hh>
+#include <yaml-cpp/yaml.h>
 #include "db/config.hh"
+#include "db/object_storage_endpoint_param.hh"
 #include "utils/updateable_value.hh"
 
 using namespace db;
@@ -980,8 +982,8 @@ SEASTAR_THREAD_TEST_CASE(test_use_on_non_zero_shard_after_broadcast) {
     if (this_smp_shard_count() == 1) {
         return;
     }
-    auto broadcast_cfg = std::make_unique<config>();
-    broadcast_cfg->broadcast_to_all_shards().get();
+    config broadcast_cfg;
+    broadcast_cfg.broadcast_to_all_shards().get();
 
     smp::submit_to(1, [] {
         config cfg;
@@ -995,18 +997,76 @@ SEASTAR_THREAD_TEST_CASE(test_broadcast_value_is_per_shard) {
     if (this_smp_shard_count() == 1) {
         return;
     }
-    auto cfg = std::make_unique<config>();
-    cfg->data_file_directories.set({"/tmp/shard0"});
-    cfg->broadcast_to_all_shards().get();
+    config cfg;
+    cfg.data_file_directories.set({"/tmp/shard0"});
+    cfg.broadcast_to_all_shards().get();
 
-    auto* cfg_ptr = cfg.get();
+    auto* cfg_ptr = &cfg;
     smp::submit_to(1, [cfg_ptr] {
         cfg_ptr->data_file_directories.set({"/tmp/shard1"});
     }).get();
 
     // shard 0's copy must be unaffected by shard 1's write
-    BOOST_REQUIRE_EQUAL(cfg->data_file_directories()[0], "/tmp/shard0");
+    BOOST_REQUIRE_EQUAL(cfg.data_file_directories()[0], "/tmp/shard0");
     smp::submit_to(1, [cfg_ptr] {
         BOOST_REQUIRE_EQUAL(cfg_ptr->data_file_directories()[0], "/tmp/shard1");
     }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_region_from_environment) {
+    tests::tmp_set_env region_env("AWS_DEFAULT_REGION", "us-east-1");
+    auto ep = object_storage_endpoint_param::decode(YAML::Load("name: http://localhost:9000\n"));
+    BOOST_REQUIRE(ep.is_s3_storage());
+    BOOST_CHECK_EQUAL(ep.get_s3_storage().region, "us-east-1");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_region_unresolvable) {
+    tests::tmp_unset_env no_region_env("AWS_DEFAULT_REGION");
+    // Neither source is available. The error has to name both of them, so that
+    // the operator knows where to put the region.
+    try {
+        object_storage_endpoint_param::decode(YAML::Load("name: http://localhost:9000\n"));
+        BOOST_FAIL("expected the missing region to be reported");
+    } catch (const std::invalid_argument& e) {
+        const sstring msg = e.what();
+        BOOST_REQUIRE_NE(msg.find("aws_region"), msg.npos);
+        BOOST_REQUIRE_NE(msg.find("AWS_DEFAULT_REGION"), msg.npos);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_region_empty) {
+    // An empty region is the same broken state as an absent one - it signs
+    // requests with an empty credential scope - so neither source may resolve
+    // to it.
+    {
+        tests::tmp_unset_env no_region_env("AWS_DEFAULT_REGION");
+        BOOST_REQUIRE_THROW(object_storage_endpoint_param::decode(
+                YAML::Load("name: http://localhost:9000\naws_region: \"\"\n")),
+            std::invalid_argument);
+    }
+    {
+        tests::tmp_set_env empty_region_env("AWS_DEFAULT_REGION", "");
+        BOOST_REQUIRE_THROW(object_storage_endpoint_param::decode(
+                YAML::Load("name: http://localhost:9000\n")),
+            std::invalid_argument);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_parse_object_storage_endpoints_one_entry_broken) {
+    tests::tmp_unset_env no_region_env("AWS_DEFAULT_REGION");
+    auto cfg_ptr = std::make_unique<config>();
+    config& cfg = *cfg_ptr;
+
+    // The first entry cannot resolve a region. It must cost its own endpoint
+    // only - the correctly configured GCS entry below it has to survive.
+    cfg.read_from_yaml(R"foo(object_storage_endpoints:
+    - name: http://localhost:9000
+    - name: https://storage.googleapis.com
+      type: gs
+)foo", throw_on_error);
+
+    const auto& endpoints = cfg.object_storage_endpoints();
+    BOOST_REQUIRE_EQUAL(endpoints.size(), 1);
+    BOOST_CHECK(endpoints.front().is_gs_storage());
+    BOOST_CHECK_EQUAL(endpoints.front().key(), "https://storage.googleapis.com");
 }

@@ -51,7 +51,8 @@ def large_rows():
 
 
 def find_component(generation, component_type, sst_dir):
-    comps = glob.glob(os.path.join(sst_dir, f"*-{str(generation)}-big-{component_type}.db"))
+    extension = "txt" if component_type == "TOC" else "db"
+    comps = glob.glob(os.path.join(sst_dir, f"*-{str(generation)}-big-{component_type}.{extension}"))
     assert len(comps) == 1
     return comps[0]
 
@@ -65,6 +66,15 @@ def find_partition_index_component(generation, sst_dir):
     assert len(comps) == 1
     return comps[0]
 
+def rewrite_without_scylla(generation, sst_dir):
+    toc = find_component(generation, "TOC", sst_dir)
+    scylla = find_component(generation, "Scylla", sst_dir)
+    os.remove(scylla)
+
+    with open(toc, 'r') as f:
+        new_toc = [line for line in f.read().splitlines(keepends=True) if line.strip() != "Scylla.db"]
+    with open(toc, 'w') as f:
+        f.write(''.join(new_toc))
 
 @pytest.fixture(scope="module")
 def sstable_cache(scylla_path):
@@ -94,6 +104,7 @@ def sstable_cache(scylla_path):
                 f.write(json_str)
             version_arg = ["--sstable-version", version] if version is not None else []
             generation = subprocess.check_output([self._scylla_path, "sstable", "write", *version_arg, "--schema-file", schema_file, "--output-dir", self._store_dir, "--input-file", self._in_json, "--input-format", "json"], text=True).strip()
+            rewrite_without_scylla(generation, self._store_dir)
             self._cache[cache_key] = generation
             return generation
 

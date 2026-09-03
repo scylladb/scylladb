@@ -7,7 +7,7 @@ import logging
 import asyncio
 
 from test.pylib.host_registry import HostRegistry
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import IPAddress
 from test.cluster.util import new_test_keyspace, new_test_table
 from cassandra.cluster import ConsistencyLevel
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Refs #27429
 # Transposed/adapted from dtest with same name
-async def do_test_internode_compression_between_datacenters(manager: ManagerClient, compression: str, verifier) -> None:
+async def do_test_internode_compression_between_datacenters(manager: ScyllaClusterManager, compression: str, verifier) -> None:
     """
     Verify that compression between datacenters is compressed if internode_compression is set to dc and
     not compressed for intra-dc communication.
@@ -172,7 +172,7 @@ async def do_test_internode_compression_between_datacenters(manager: ManagerClie
         for addr, _, _ in proxy_addrs:
             await HostRegistry().release_host(addr)
 
-async def test_internode_compression_compress_packets_between_nodes(request, manager: ManagerClient) -> None:
+async def test_internode_compression_compress_packets_between_nodes(request, manager: ScyllaClusterManager) -> None:
     def check_expected(msg_size, node1_proxy, node2_proxy, node3_proxy):
         # get the stats
         max_intra_pkg = max(node1_proxy.stats.max_packet_size, node2_proxy.stats.max_packet_size)
@@ -184,7 +184,7 @@ async def test_internode_compression_compress_packets_between_nodes(request, man
 
     await do_test_internode_compression_between_datacenters(manager, "all", check_expected)
 
-async def test_internode_compression_between_datacenters(request, manager: ManagerClient) -> None:
+async def test_internode_compression_between_datacenters(request, manager: ScyllaClusterManager) -> None:
     def check_expected(msg_size, node1_proxy, node2_proxy, node3_proxy):
         # get the stats
         max_intra_pkg = max(node1_proxy.stats.max_packet_size, node2_proxy.stats.max_packet_size)

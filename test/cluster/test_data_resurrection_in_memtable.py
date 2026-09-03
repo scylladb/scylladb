@@ -13,14 +13,14 @@ from cassandra.cluster import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 
 from test.cluster.util import new_test_keyspace
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts, execute_with_tracing
 
 
 logger = logging.getLogger(__name__)
 
 
-async def run_test_cache_tombstone_gc(manager: ManagerClient, statement_pairs: list[tuple[str]]):
+async def run_test_cache_tombstone_gc(manager: ScyllaClusterManager, statement_pairs: list[tuple[str]]):
     """Test for cache garbage collecting tombstones which cover data in the memtable.
 
     1. Write a live row.
@@ -102,31 +102,31 @@ async def run_test_cache_tombstone_gc(manager: ManagerClient, statement_pairs: l
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cache_tombstone_gc_partition_tombstone(manager: ManagerClient):
+async def test_cache_tombstone_gc_partition_tombstone(manager: ScyllaClusterManager):
     await run_test_cache_tombstone_gc(manager,
                                       [("INSERT INTO {ks}.tbl (pk, ck, v) VALUES (0, 100, 999)", "DELETE FROM {ks}.tbl WHERE pk = 0")])
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cache_tombstone_gc_row_tombstone(manager: ManagerClient):
+async def test_cache_tombstone_gc_row_tombstone(manager: ScyllaClusterManager):
     await run_test_cache_tombstone_gc(manager,
                                       [("INSERT INTO {ks}.tbl (pk, ck, v) VALUES (0, 100, 999)", "DELETE FROM {ks}.tbl WHERE pk = 0 AND ck = 100")])
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cache_tombstone_gc_range_tombstone(manager: ManagerClient):
+async def test_cache_tombstone_gc_range_tombstone(manager: ScyllaClusterManager):
     await run_test_cache_tombstone_gc(manager,
                                       [("INSERT INTO {ks}.tbl (pk, ck, v) VALUES (0, 100, 999)", "DELETE FROM {ks}.tbl WHERE pk = 0 AND ck > 0 AND ck < 1000")])
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cache_tombstone_gc_cell_tombstone(manager: ManagerClient):
+async def test_cache_tombstone_gc_cell_tombstone(manager: ScyllaClusterManager):
     await run_test_cache_tombstone_gc(manager,
                                       [("UPDATE {ks}.tbl SET v = 999 WHERE pk = 0 AND ck = 100", "DELETE v FROM {ks}.tbl WHERE pk = 0 AND ck = 100")])
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cache_tombstone_gc_cell_tombstone_and_row_tombstone(manager: ManagerClient):
+async def test_cache_tombstone_gc_cell_tombstone_and_row_tombstone(manager: ScyllaClusterManager):
     await run_test_cache_tombstone_gc(manager,
                                       [
                                           ("INSERT INTO {ks}.tbl (pk, ck, v) VALUES (0, 100, 999)", "DELETE FROM {ks}.tbl WHERE pk = 0 AND ck = 100"),

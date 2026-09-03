@@ -271,8 +271,15 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
 
     if (_properties.properties()->has_property(cf_prop_defs::KW_STORAGE_ENGINE)) {
         auto storage_engine = _properties.properties()->get_string(cf_prop_defs::KW_STORAGE_ENGINE, "");
-        if (storage_engine == "logstor" && !_column_aliases.empty()) {
-            throw exceptions::configuration_exception("The 'logstor' storage engine cannot be used with tables that have clustering columns");
+        if (storage_engine == "logstor") {
+            if (!_column_aliases.empty()) {
+                throw exceptions::configuration_exception("The 'logstor' storage engine cannot be used with tables that have clustering columns");
+            }
+            for (auto&& [id, type] : stmt->_columns) {
+                if (type->is_counter()) {
+                    throw exceptions::configuration_exception("The 'logstor' storage engine cannot be used with counter columns");
+                }
+            }
         }
     }
 

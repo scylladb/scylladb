@@ -5538,11 +5538,13 @@ public:
             auto it = std::ranges::find_if(v, [] (auto&& ver) {
                     return bool(ver.par);
             });
-            auto m = mutation(_schema, it->par->mut().key());
-            for (const version& ver : v) {
-                if (ver.par) {
+            // The first version has nothing to be merged with, so it is unfrozen
+            // into the reconciled mutation directly instead of being applied to it.
+            auto m = co_await unfreeze_gently(it->par->mut(), _schema);
+            for (auto i = std::next(it); i != v.end(); ++i) {
+                if (i->par) {
                     mutation_application_stats app_stats;
-                    co_await apply_gently(m.partition(), schema, ver.par->mut().partition(), schema, app_stats);
+                    co_await apply_gently(m.partition(), schema, i->par->mut().partition(), schema, app_stats);
                 }
             }
             auto live_row_count = m.live_row_count();

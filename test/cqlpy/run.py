@@ -272,6 +272,11 @@ def run_scylla_cmd(pid, dir):
     }
     return ([scylla_link,
         '--options-file',  source_path + '/conf/scylla.yaml',
+        # api_doc_dir defaults to a path relative to the current directory,
+        # which is wherever this script happened to be started from, so spell
+        # it out - the same way install.sh points it at the installed copy.
+        # Without it every /api-doc record the server advertises is unusable.
+        '--api-doc-dir', source_path + '/api/api-doc/',
         '--developer-mode', '1',
         '--ring-delay-ms', '0',
         '--collectd', '0',
@@ -343,7 +348,8 @@ def run_scylla_cmd(pid, dir):
         '--alternator-ttl-period-in-seconds=0.5',
         '--logstor-disk-size-in-mb=8',
         '--logstor-file-size-in-mb=4',
-        '--logstor-separator-max-memory-in-mb=8',
+        # Don't waste disk space and I/O on formatting logstor files
+        '--logstor-sparse-files=true',
         ], env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same
@@ -416,6 +422,7 @@ def run_precompiled_scylla_cmd(exe, pid, dir):
         cmd.remove('--logstor-disk-size-in-mb=8')
         cmd.remove('--logstor-file-size-in-mb=4')
         cmd.remove('--logstor-separator-max-memory-in-mb=8')
+        cmd.remove('--logstor-sparse-files=true')
     return (cmd, env)
 
 # Get a Cluster object to connect to CQL at the given IP address (and with
@@ -524,17 +531,17 @@ def _has_marker_expression(pytest_args: list[str]) -> bool:
 def _prepare_pytest_args(pytest_args: list[str]) -> list[str]:
     """Prepare pytest arguments for runpy wrappers.
 
-    By default, runpy wrappers skip tests marked ``nightly`` to keep
+    By default, runpy wrappers skip tests marked ``tier2`` to keep
     local and per-PR runs focused and fast.
 
     Marker policy:
-    * if no marker expression is provided, add ``-m 'not nightly'``;
+    * if no marker expression is provided, add ``-m 'not tier2'``;
     * if marker expression is provided, keep it unchanged.
     """
     prepared_args = list(pytest_args)
     if _has_marker_expression(prepared_args):
         return prepared_args
-    return ["-m", "not nightly"] + prepared_args
+    return ["-m", "not tier2"] + prepared_args
 
 def run_pytest(pytest_dir, additional_parameters):
     global run_with_temporary_dir_pids

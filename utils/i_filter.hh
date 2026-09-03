@@ -41,7 +41,6 @@ struct i_filter {
     virtual void add(const hashed_key& key) = 0;
     virtual bool is_present(const bytes_view& key) = 0;
     virtual bool is_present(hashed_key) = 0;
-    virtual void clear() = 0;
     virtual void close() = 0;
 
     virtual size_t memory_size() = 0;

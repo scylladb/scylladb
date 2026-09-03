@@ -218,7 +218,18 @@ future<> view_building_worker::run_staging_sstables_registrator() {
         try {
             co_await create_staging_sstable_tasks();
             _as.check();
-            co_await _sstables_to_register_event.when();
+            // create_staging_sstable_tasks() releases _staging_sstables_mutex just before
+            // returning here. Releasing a semaphore's units may run a waiter's continuation
+            // right there, and reaching this line after that is itself a deferred/preempted
+            // continuation -- so there is a real scheduling gap, between the mutex being
+            // released and this fiber becoming a waiter on the condition variable, during
+            // which register_staging_sstable_tasks() can grab the mutex, queue an entry and
+            // broadcast() with nobody waiting yet. broadcast() (unlike signal()) does not
+            // remember such a notification, so a bare when() here could sleep forever with
+            // work already queued. Using a predicate closes that gap: it is checked before
+            // suspending, so any entry queued during the gap above is picked up immediately
+            // instead of relying on a broadcast() that may never have had a waiter to wake.
+            co_await _sstables_to_register_event.when([this] { return !_sstables_to_register.empty(); });
         } catch (semaphore_aborted&) {
             vbw_logger.warn("Got semaphore_aborted while creating staging sstable tasks");
         } catch (broken_condition_variable&) {

@@ -124,6 +124,21 @@ SELECT * FROM keyspace.table_name;
 DELETE FROM keyspace.table_name WHERE pk = 1;
 ```
 
+### Inspecting a Table
+
+`SELECT ... FROM MUTATION_FRAGMENTS()` dumps the raw mutations of a logstor table as the
+node they are read on stores them, bypassing the storage proxy. A logstor table has two
+mutation sources:
+
+| Source | Content |
+|--------|---------|
+| `logstor-cache` | The partition as held in the logstor cache, if it is cached |
+| `logstor-log:${file path}:${segment}` | The log record, named after the segment holding it |
+
+```cql
+SELECT * FROM MUTATION_FRAGMENTS(keyspace.table_name) WHERE pk = 1;
+```
+
 ## On-Disk Format
 
 ### Files

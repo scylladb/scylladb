@@ -196,6 +196,12 @@ future<> verify_create_permission(bool enforce_authorization, bool warn_authoriz
 // attribute_types.
 void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string, std::string>* attribute_types = nullptr, const std::map<sstring, sstring>* tags = nullptr);
 
+// Returns how many of the *leading* clustering-key columns of the given
+// schema are genuine, user-specified RANGE key attributes. The rest of the
+// clustering columns, if any, were added by Alternator for the materialized
+// view's sake and must not be reported to the user.
+uint8_t genuine_range_key_count(const schema&, const std::map<sstring, sstring>* tags);
+
 /// is_big() checks approximately if the given JSON value is "bigger" than
 /// the given big_size number of bytes. The goal is to *quickly* detect
 /// oversized JSON that, for example, is too large to be serialized to a

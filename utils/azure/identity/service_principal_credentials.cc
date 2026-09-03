@@ -173,7 +173,7 @@ future<sstring> service_principal_credentials::post(const sstring& body) {
     client.content(mime_type, std::move(body));
 
     if (az_creds_logger.is_enabled(log_level::trace)) {
-        az_creds_logger.trace("[{}] Sending request: {}", *this, rest::redacted_request_type{ client.request(), filter });
+        az_creds_logger.trace("[{}] Sending request: {}", *this, rest::redacted_request_type{ client, filter });
     }
 
     auto res = co_await client.send();

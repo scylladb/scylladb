@@ -17,10 +17,6 @@ on:
         default: 'scylladb/scylladb'
         type: string
 
-permissions:
-  contents: read
-  statuses: write
-
 jobs:
   route-ci:
     # Run on:
@@ -35,6 +31,10 @@ jobs:
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.user.login != 'scylladbbot')
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 30
+    permissions:
+      contents: read
+      statuses: write # publish Jenkins CI status updates on the PR commit
+      issues: write # remove the stale 'conflicts' label and post contributor comments
     env:
       JENKINS_URL: "https://jenkins.scylladb.com"
 
@@ -280,8 +280,20 @@ jobs:
         run: |
           echo "Fetching PR #$PR_NUMBER details..."
           PR_JSON=$(gh_api_retry "repos/$PR_REPO/pulls/$PR_NUMBER")
-
           MERGEABLE_STATE=$(echo "$PR_JSON" | jq -r '.mergeable_state')
+
+          # GitHub computes mergeability asynchronously and reports "unknown"
+          # while it does; poll a few times so we don't treat a still-pending
+          # computation as a real conflict.
+          POLL_ATTEMPTS=0
+          while [ "$MERGEABLE_STATE" = "unknown" ] && [ "$POLL_ATTEMPTS" -lt 5 ]; do
+            POLL_ATTEMPTS=$((POLL_ATTEMPTS + 1))
+            echo "Mergeable state is unknown, waiting for GitHub to compute it (attempt $POLL_ATTEMPTS/5)..."
+            sleep 2
+            PR_JSON=$(gh_api_retry "repos/$PR_REPO/pulls/$PR_NUMBER")
+            MERGEABLE_STATE=$(echo "$PR_JSON" | jq -r '.mergeable_state')
+          done
+
           LABELS=$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")')
 
           HAS_CONFLICTS=false
@@ -291,7 +303,7 @@ jobs:
           PYTEST_EXTRA_OPTIONS=""
 
           # Check labels
-          if echo "$LABELS" | grep -q "conflicts"; then
+          if echo "$PR_JSON" | jq -e 'any(.labels[]; .name == "conflicts")' >/dev/null; then
             HAS_CONFLICTS=true
           fi
           if echo "$LABELS" | grep -q "ci/requires_artifact_tests"; then
@@ -312,8 +324,26 @@ jobs:
           PYTEST_EXTRA_OPTIONS=$(echo "$PYTEST_EXTRA_OPTIONS" | sed 's/^ //')
 
           # Check conflict state
-          if [ "$MERGEABLE_STATE" = "dirty" ] || [ "$HAS_CONFLICTS" = "true" ]; then
+          if [ "$MERGEABLE_STATE" = "dirty" ]; then
             HAS_CONFLICTS=true
+            echo "::warning::CI will not be triggered since $PR_URL has conflicts"
+          elif [ "$MERGEABLE_STATE" = "unknown" ]; then
+            # GitHub still hasn't finished computing mergeability after polling;
+            # don't block CI on it (that would require a manual push/comment to
+            # unstick once GitHub resolves it) -- fall back to the label state.
+            echo "::warning::GitHub did not determine mergeability for $PR_URL yet; falling back to the 'conflicts' label state"
+          elif [ "$MERGEABLE_STATE" = "clean" ] && [ "$HAS_CONFLICTS" = "true" ]; then
+            # The 'conflicts' label is stale: nothing removes it once applied (RELENG-804),
+            # so a PR that resolved its conflicts (e.g. via a force-push) stayed blocked from
+            # CI forever. GitHub now reports it as cleanly mergeable, so trust that over the
+            # label and clean it up.
+            echo "PR is mergeable again, removing stale 'conflicts' label"
+            if gh_api_retry -X DELETE "repos/$PR_REPO/issues/$PR_NUMBER/labels/conflicts" --silent; then
+              HAS_CONFLICTS=false
+            else
+              echo "::warning::Failed to remove stale 'conflicts' label from $PR_URL; CI will not be triggered"
+            fi
+          elif [ "$HAS_CONFLICTS" = "true" ]; then
             echo "::warning::CI will not be triggered since $PR_URL has conflicts"
           fi
 

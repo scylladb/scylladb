@@ -7,7 +7,7 @@ from collections import defaultdict
 from typing import Optional, Type
 from aiohttp.client_exceptions import ServerDisconnectedError
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.skip_types import skip_env
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_info
@@ -38,7 +38,7 @@ async def await_api_task(task, allowed_exception: Optional[Type[Exception]]=None
 
 
 @pytest.mark.parametrize("action", ['move', 'add_replica', 'del_replica'])
-async def test_tablet_transition_sanity(manager: ManagerClient, action):
+async def test_tablet_transition_sanity(manager: ScyllaClusterManager, action):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     host_ids = []
@@ -85,12 +85,14 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
         if action == 'move':
             logger.info(f"Move tablet {old_replica[0]} -> {new_replica[0]}")
             await manager.api.move_tablet(servers[0].ip_addr, ks, "test", old_replica[0], old_replica[1], new_replica[0], new_replica[1], 0)
+        # Both actions change the number of replicas the tablet has in rack r1, which breaks
+        # the replication constraints of an RF-rack-valid keyspace, hence force=True.
         if action == 'add_replica':
             logger.info(f"Adding replica to tablet, host {new_replica[0]}")
-            await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], 0)
+            await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], 0, force=True)
         if action == 'del_replica':
             logger.info(f"Deleting replica from tablet, host {old_replica[0]}")
-            await manager.api.del_tablet_replica(servers[0].ip_addr, ks, "test", old_replica[0], old_replica[1], 0)
+            await manager.api.del_tablet_replica(servers[0].ip_addr, ks, "test", old_replica[0], old_replica[1], 0, force=True)
 
         replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
         logger.info(f"Tablet is now on [{replicas}]")
@@ -120,8 +122,134 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
                 assert res[0].count == 0
 
 
+async def make_rack_aware_cluster(manager: ScyllaClusterManager, cfg: dict):
+    """Creates a cluster of two nodes in rack r1 and one node in rack r2 of dc1.
+    Returns the servers and a rack name -> host ids mapping."""
+    servers = []
+    hosts_by_rack = defaultdict(list)
+
+    async def make_server(rack: str):
+        s = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": rack})
+        servers.append(s)
+        hosts_by_rack[rack].append(await manager.get_host_id(s.server_id))
+
+    await make_server("r1")
+    await make_server("r1")
+    await make_server("r2")
+
+    await manager.disable_tablet_balancing()
+
+    return servers, hosts_by_rack
+
+
+async def get_single_tablet_replicas(manager: ScyllaClusterManager, server, ks: str):
+    replicas = await get_all_tablet_replicas(manager, server, ks, 'test')
+    assert len(replicas) == 1
+    return replicas[0].replicas
+
+
+def pick_replica_and_free_host_in_rack(replicas, rack_hosts):
+    """Returns a replica of the tablet which sits in the given rack together with a node
+    in the same rack which doesn't hold a replica of that tablet."""
+    replica_hosts = [r[0] for r in replicas]
+    old_replica = next((r for r in replicas if r[0] in rack_hosts), None)
+    assert old_replica is not None, "Cannot find a replica in the rack"
+    new_host = next((h for h in rack_hosts if h not in replica_hosts), None)
+    assert new_host is not None, "Cannot find a node without a replica in the rack"
+    return old_replica, (new_host, 0)
+
+
+@pytest.mark.parametrize("action", ['add_replica', 'del_replica'])
+@pytest.mark.parametrize("constraint", ['rf_rack_valid', 'views', 'rack_list'])
+async def test_tablet_replica_change_requires_force_with_rack_constraints(manager: ScyllaClusterManager, action, constraint):
+    """Adding or removing a single tablet replica changes the number of replicas the tablet
+    has in one rack. Keyspaces which use rack lists, as well as keyspaces which are required
+    to be RF-rack-valid, must keep that number fixed, so such calls have to be rejected
+    unless the caller explicitly asks to break the constraints with force=true.
+
+    RF-rack-validity is required either by the rf_rack_valid_keyspaces option or by the
+    keyspace having materialized views.
+    """
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled',
+           'rf_rack_valid_keyspaces': constraint == 'rf_rack_valid'}
+    servers, hosts_by_rack = await make_rack_aware_cluster(manager, cfg)
+
+    rf = "'dc1': ['r1', 'r2']" if constraint == 'rack_list' else "'replication_factor': 2"
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
+                                          f"{rf}}} AND tablets = {{'initial': 1}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        if constraint == 'views':
+            await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.test_view AS SELECT * FROM {ks}.test "
+                                f"WHERE c IS NOT NULL PRIMARY KEY (c, pk)")
+
+        replicas = await get_single_tablet_replicas(manager, servers[0], ks)
+        logger.info(f"Tablet is on [{replicas}]")
+        assert len(replicas) == 2
+        replica_hosts = [r[0] for r in replicas]
+
+        old_replica, new_replica = pick_replica_and_free_host_in_rack(replicas, hosts_by_rack['r1'])
+
+        if action == 'add_replica':
+            call = lambda force: manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test",
+                                                                new_replica[0], new_replica[1], 0, force=force)
+            expected_replicas = sorted(replica_hosts + [new_replica[0]])
+        else:
+            call = lambda force: manager.api.del_tablet_replica(servers[0].ip_addr, ks, "test",
+                                                                old_replica[0], old_replica[1], 0, force=force)
+            expected_replicas = sorted(h for h in replica_hosts if h != old_replica[0])
+
+        with pytest.raises(HTTPError, match="would break the replication constraints of the keyspace"):
+            await call(False)
+
+        logger.info("Verifying that the rejected call left the tablet intact")
+        assert sorted(r[0] for r in await get_single_tablet_replicas(manager, servers[0], ks)) == sorted(replica_hosts)
+
+        logger.info(f"Retrying {action} with force=true")
+        await call(True)
+        assert sorted(r[0] for r in await get_single_tablet_replicas(manager, servers[0], ks)) == expected_replicas
+
+
+async def test_tablet_replica_change_without_rack_constraints(manager: ScyllaClusterManager):
+    """When the keyspace neither uses rack lists nor is required to be RF-rack-valid, adding
+    and removing tablet replicas is allowed. Adding a replica to a rack which already holds
+    one is still rejected, because it reduces availability, the same way the move API does.
+    """
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled',
+           'rf_rack_valid_keyspaces': False}
+    servers, hosts_by_rack = await make_rack_aware_cluster(manager, cfg)
+
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
+                                          "'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        replicas = await get_single_tablet_replicas(manager, servers[0], ks)
+        logger.info(f"Tablet is on [{replicas}]")
+        assert len(replicas) == 2
+        replica_hosts = [r[0] for r in replicas]
+
+        old_replica, new_replica = pick_replica_and_free_host_in_rack(replicas, hosts_by_rack['r1'])
+
+        logger.info("Rack r1 already holds a replica, so adding another one there reduces availability")
+        with pytest.raises(HTTPError, match="would reduce availability"):
+            await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], 0)
+
+        logger.info("Removing a replica is not constrained")
+        await manager.api.del_tablet_replica(servers[0].ip_addr, ks, "test", old_replica[0], old_replica[1], 0)
+        assert [r[0] for r in await get_single_tablet_replicas(manager, servers[0], ks)] == \
+               [h for h in replica_hosts if h != old_replica[0]]
+
+        logger.info("Rack r1 holds no replica now, so the tablet can be brought back to RF=2 there")
+        await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], 0)
+        assert sorted(r[0] for r in await get_single_tablet_replicas(manager, servers[0], ks)) == \
+               sorted([h for h in replica_hosts if h != old_replica[0]] + [new_replica[0]])
+
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_bootstrap_starts_while_tablet_migration_is_blocked(manager: ManagerClient, scale_timeout):
+async def test_bootstrap_starts_while_tablet_migration_is_blocked(manager: ScyllaClusterManager, scale_timeout):
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     servers = []
     hosts_by_rack = defaultdict(list)
@@ -185,7 +313,7 @@ async def test_bootstrap_starts_while_tablet_migration_is_blocked(manager: Manag
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
 @pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "cleanup", "cleanup_target", "end_migration", "revert_migration"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail_replica, fail_stage, build_mode,
+async def test_node_failure_during_tablet_migration(manager: ScyllaClusterManager, fail_replica, fail_stage, build_mode,
                                                     feature_config: FeatureConfig):
     if fail_stage == 'cleanup' and fail_replica == 'destination':
         skip_env('Failing destination during cleanup is pointless')
@@ -350,7 +478,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
 
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
     FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
-async def test_tablet_back_and_forth_migration(manager: ManagerClient, feature_config: FeatureConfig):
+async def test_tablet_back_and_forth_migration(manager: ScyllaClusterManager, feature_config: FeatureConfig):
     logger.info("Bootstrapping cluster")
     cfg = feature_config.get_cluster_cfg(
         {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'})
@@ -401,7 +529,7 @@ async def test_tablet_back_and_forth_migration(manager: ManagerClient, feature_c
         await assert_rows(3)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: ManagerClient):
+async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     # the error injection will halt view updates from staging, allowing migration to transfer the view update backlog.
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled',
@@ -497,7 +625,7 @@ async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: M
 
 @pytest.mark.parametrize("migration_stage_and_injection", [("cleanup", "cleanup_tablet_wait"), ("end_migration", "handle_tablet_migration_end_migration")], ids=["cleanup", "end_migration"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, migration_stage_and_injection):
+async def test_restart_leaving_replica_during_cleanup(manager: ScyllaClusterManager, migration_stage_and_injection):
     """
     Migrate a tablet from one node to another, and while in some migration
     cleanup stage, either before or after the tablet is cleaned, restart the
@@ -583,7 +711,7 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
     FeatureConfigurations.STRONG_CONSISTENCY, FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY,
     FeatureConfigurations.LOGSTOR_STRONG_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_restart_in_cleanup_stage_after_cleanup(manager: ManagerClient, feature_config: FeatureConfig):
+async def test_restart_in_cleanup_stage_after_cleanup(manager: ScyllaClusterManager, feature_config: FeatureConfig):
     """
     Migrate a tablet from one node to another, and restart the leaving replica during
     the tablet cleanup stage, after tablet cleanup is completed.

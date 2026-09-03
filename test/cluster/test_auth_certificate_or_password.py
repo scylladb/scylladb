@@ -33,7 +33,7 @@ from cassandra.auth import PlainTextAuthProvider             # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT  # type: ignore
 from cassandra.policies import WhiteListRoundRobinPolicy     # type: ignore
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.driver_utils import safe_driver_shutdown
 
 logger = logging.getLogger(__name__)
@@ -164,7 +164,7 @@ async def _start_server(manager, tmp_path):
     return servers[0]
 
 
-async def test_cql_optional_client_cert(manager: ManagerClient, tmp_path):
+async def test_cql_optional_client_cert(manager: ScyllaClusterManager, tmp_path):
     """Test CertificateOrPasswordAuthenticator with require_client_auth=optional.
 
     This tests that a single TLS CQL port accepts both certificate-bearing
@@ -250,7 +250,8 @@ async def test_cql_optional_client_cert(manager: ManagerClient, tmp_path):
         # server may close the connection prematurely and the driver reports a
         # generic connection closed message instead. Accept that too.
         # The important thing is that the connection failed.
-        assert any('SSL' in t or 'tls' in t.lower() or 'certificate' in t.lower() or 'Broken pipe' in t or 'already closed' in t.lower() for t in error_texts), \
+        assert any('SSL' in t or 'tls' in t.lower() or 'certificate' in t.lower() or 'Broken pipe' in t
+                   or 'Connection reset' in t or 'already closed' in t.lower() for t in error_texts), \
             f"Expected an SSL/TLS error for untrusted cert, got: {error_texts}"
     finally:
         safe_driver_shutdown(cluster_bad_cert)
@@ -281,7 +282,7 @@ async def test_cql_optional_client_cert(manager: ManagerClient, tmp_path):
         safe_driver_shutdown(cluster_no_rule_cert)
 
 
-async def test_cql_plain_port(manager: ManagerClient, tmp_path):
+async def test_cql_plain_port(manager: ScyllaClusterManager, tmp_path):
     """Test CertificateOrPasswordAuthenticator on an unencrypted CQL port.
 
     On a plain (non-TLS) connection there is no TLS handshake and thus no

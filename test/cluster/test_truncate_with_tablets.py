@@ -7,9 +7,9 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from cassandra.protocol import InvalidRequest
 from cassandra.cluster import TruncateError
 from cassandra.policies import FallthroughRetryPolicy
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import get_topology_coordinator, new_test_keyspace, FeatureConfig, feature_configs, \
-    FeatureConfigurations, count_rows
+    FeatureConfigurations, count_rows, trigger_stepdown
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for
 import time
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_migration(manager: ManagerClient, feature_config: FeatureConfig):
+async def test_truncate_while_migration(manager: ScyllaClusterManager, feature_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
@@ -66,7 +66,7 @@ async def test_truncate_while_migration(manager: ManagerClient, feature_config: 
                                 query_template="SELECT COUNT(*) FROM {ks}.{table}", ks=ks, table='test', keys=keys, partition_key='pk') == 0
 
 
-async def get_raft_leader_and_log(manager: ManagerClient, servers):
+async def get_raft_leader_and_log(manager: ScyllaClusterManager, servers):
     raft_leader_host_id = await get_topology_coordinator(manager)
     for s in servers:
         if raft_leader_host_id == await manager.get_host_id(s.server_id):
@@ -77,7 +77,7 @@ async def get_raft_leader_and_log(manager: ManagerClient, servers):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_with_concurrent_drop(manager: ManagerClient):
+async def test_truncate_with_concurrent_drop(manager: ScyllaClusterManager):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
@@ -131,7 +131,7 @@ async def test_truncate_with_concurrent_drop(manager: ManagerClient):
                                                            FeatureConfigurations.STRONG_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_STRONG_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_node_restart(manager: ManagerClient, feature_config: FeatureConfig):
+async def test_truncate_while_node_restart(manager: ScyllaClusterManager, feature_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled' }
@@ -181,7 +181,7 @@ async def test_truncate_while_node_restart(manager: ManagerClient, feature_confi
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_with_coordinator_crash(manager: ManagerClient):
+async def test_truncate_with_coordinator_crash(manager: ScyllaClusterManager):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled' }
@@ -228,7 +228,7 @@ async def test_truncate_with_coordinator_crash(manager: ManagerClient):
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_truncate_already_waiting(manager: ManagerClient, feature_config: FeatureConfig):
+async def test_truncate_while_truncate_already_waiting(manager: ScyllaClusterManager, feature_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
@@ -322,7 +322,7 @@ async def test_replay_position_check_during_truncate(manager, feature_config: Fe
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_parallel_truncate(manager: ManagerClient, feature_config: FeatureConfig):
+async def test_parallel_truncate(manager: ScyllaClusterManager, feature_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
     cfg = feature_config.get_cluster_cfg(
@@ -370,7 +370,7 @@ async def test_parallel_truncate(manager: ManagerClient, feature_config: Feature
                                 query_template="SELECT COUNT(*) FROM {ks}.{table}", ks=ks, table='test1', keys=keys, partition_key='pk') == 0
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_split_emitted_during_truncate(manager: ManagerClient):
+async def test_split_emitted_during_truncate(manager: ScyllaClusterManager):
     """Tests that truncation handles new compaction groups introduced by tablet
     split after compaction was already disabled on existing groups.
 
@@ -442,3 +442,79 @@ async def test_split_emitted_during_truncate(manager: ManagerClient):
             return tablet_count >= expected_tablet_count or None
         # Give enough time for split to happen in debug mode
         await wait_for(finished_splitting, time.time() + 120)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_truncate_by_stale_coordinator_with_foreign_session(manager: ScyllaClusterManager):
+    """A coordinator which loses leadership while parked in handle_topology_ordered_op()
+    must not truncate under a session it does not own.
+
+    handle_topology_ordered_op() reads _topology.session after releasing the group0 guard,
+    so a deposed coordinator can pick up the session of an unrelated operation which is in
+    flight. Replicas accept the RPC and truncate the table a second time, after the user's
+    TRUNCATE already returned.
+    """
+    logger.info('Bootstrapping cluster')
+    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled' }
+
+    servers = []
+    servers.append(await manager.server_add(config=cfg))
+    servers.append(await manager.server_add(config=cfg))
+    servers.append(await manager.server_add(config=cfg))
+
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    # Keep the load balancer out of the picture, it would set sessions of its own
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
+        await cql.run_async(f'CREATE TABLE {ks}.ta (pk int PRIMARY KEY, c int);')
+        await cql.run_async(f'CREATE TABLE {ks}.tb (pk int PRIMARY KEY, c int);')
+
+        keys = range(128)
+        await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.ta (pk, c) VALUES ({k}, {k});') for k in keys])
+
+        (stale_coord, stale_coord_log) = await get_raft_leader_and_log(manager, servers)
+        stale_coord_host_id = await manager.get_host_id(stale_coord.server_id)
+        # Drive CQL through a node unaffected by the leadership change below
+        client_host = next(h for (s, h) in zip(servers, hosts) if s != stale_coord)
+
+        # Park the coordinator between release_guard() and the session read
+        await manager.api.enable_injection(stale_coord.ip_addr, 'truncate_table_wait', one_shot=True)
+        trunc_a = cql.run_async(f'TRUNCATE TABLE {ks}.ta', host=client_host)
+        await manager.api.wait_for_injection_enter(stale_coord.ip_addr, 'truncate_table_wait')
+
+        # Make it lose leadership while parked. The new coordinator re-runs the truncate
+        # from scratch and finalizes the request, so the client's TRUNCATE completes.
+        await trigger_stepdown(manager, stale_coord)
+
+        async def coordinator_moved():
+            return await get_topology_coordinator(manager) != stale_coord_host_id or None
+        await wait_for(coordinator_moved, time.time() + 60)
+        await trunc_a
+
+        # Data written after TRUNCATE ta completed must survive
+        await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.ta (pk, c) VALUES ({k}, {k});') for k in keys])
+
+        # Hold an unrelated operation's session open by parking the current coordinator
+        (coord, _) = await get_raft_leader_and_log(manager, servers)
+        await manager.api.enable_injection(coord.ip_addr, 'truncate_table_wait', one_shot=True)
+        trunc_b = cql.run_async(f'TRUNCATE TABLE {ks}.tb', host=client_host)
+        await manager.api.wait_for_injection_enter(coord.ip_addr, 'truncate_table_wait')
+
+        # Release the stale coordinator. It must notice that it is not the coordinator of
+        # this truncate anymore instead of sending the ta RPCs under tb's session.
+        mark = await stale_coord_log.mark()
+        await manager.api.message_injection(stale_coord.ip_addr, 'truncate_table_wait')
+        await stale_coord_log.wait_for('is no longer the current operation', from_mark=mark, timeout=60)
+
+        # tb's finalization barrier drains tb's session, joining with any RPC admitted
+        # under it, so once trunc_b returns the stale ta truncate has completed too.
+        await manager.api.message_injection(coord.ip_addr, 'truncate_table_wait')
+        await trunc_b
+
+        row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.ta', consistency_level=ConsistencyLevel.ALL))
+        assert row[0].count == len(keys)
+
+        row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.tb', consistency_level=ConsistencyLevel.ALL))
+        assert row[0].count == 0

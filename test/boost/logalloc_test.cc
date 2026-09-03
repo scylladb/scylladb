@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <deque>
 
+#include <seastar/core/chunked_fifo.hh>
 #include <seastar/core/circular_buffer.hh>
 #include <seastar/core/format.hh>
 #include <seastar/core/thread.hh>

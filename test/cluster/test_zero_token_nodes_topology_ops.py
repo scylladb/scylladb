@@ -9,14 +9,14 @@ import time
 
 from cassandra.cluster import ConsistencyLevel
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import check_node_log_for_failed_mutations, start_writes
 
 
 @pytest.mark.parametrize('tablets_enabled', [True, False])
-async def test_zero_token_nodes_topology_ops(manager: ManagerClient, tablets_enabled: bool):
+async def test_zero_token_nodes_topology_ops(manager: ScyllaClusterManager, tablets_enabled: bool):
     """
     Test that:
     - adding a zero-token node in the gossip-based topology fails

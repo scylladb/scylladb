@@ -11,13 +11,13 @@ import logging
 import time
 
 import pytest
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts
 
 logger = logging.getLogger(__name__)
 
 
-async def test_restart_cluster(manager: ManagerClient) -> None:
+async def test_restart_cluster(manager: ScyllaClusterManager) -> None:
     """Test that cluster can restart fine after all nodes are stopped gracefully"""
     servers = await manager.servers_add(3)
     cql = manager.get_cql()

@@ -41,13 +41,9 @@ Backup Process
 #. **Native Configuration**: 
 
    * For `native` backup to work without interference to users' workload, it is
-     best to limit io-scheduling. See :ref:`backup_io_throughput_mb_per_sec <confprop_backup_io_throughput_mb_per_sec>` for details.
+     best to limit io-scheduling. See :ref:`stream_io_throughput_mb_per_sec <confprop_stream_io_throughput_mb_per_sec>` for details.     
    * For `native` backup to work, ScyllaDB node must have access to the S3 bucket.
      See :ref:`Configuring Object Storage <object-storage-configuration>` for details.
-   * The restore process, as well as :doc:`nodetool refresh </operating-scylla/nodetool-commands/refresh>`
-     (with or without :ref:`--load-and-stream <nodetool-refresh-load-and-stream>`), run in the same I/O
-     scheduling group as backup and are throttled by the same
-     :ref:`backup_io_throughput_mb_per_sec <confprop_backup_io_throughput_mb_per_sec>` setting.
 
 Restore Process
 ---------------

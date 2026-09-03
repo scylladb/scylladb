@@ -10,7 +10,7 @@ import time
 import pytest
 
 from test.cluster.util import get_current_group0_config
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import wait_for
 
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_bootstrap_with_quick_group0_join(manager: ManagerClient):
+async def test_bootstrap_with_quick_group0_join(manager: ScyllaClusterManager):
     """Regression test for https://scylladb.atlassian.net/browse/SCYLLADB-959.
 
     The bug was that when the bootstrapping node joined group0 before reaching

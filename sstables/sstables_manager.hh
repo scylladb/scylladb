@@ -27,6 +27,7 @@
 #include "reader_concurrency_semaphore.hh"
 #include "utils/s3/creds.hh"
 #include <boost/intrusive/list.hpp>
+#include <boost/intrusive/set.hpp>
 #include "sstable_compressor_factory.hh"
 #include "sstables/sstables_manager_subscription.hh"
 
@@ -118,7 +119,9 @@ public:
 
     storage_manager(const db::config&, config cfg);
     shared_ptr<object_storage_client> get_endpoint_client(sstring endpoint);
-    bool is_known_endpoint(sstring endpoint) const;
+    // With no type (default), just checks that the endpoint is configured at all.
+    // With a type ("s3"/"gs"), also checks that the endpoint is configured as that type.
+    bool is_known_endpoint(sstring endpoint, sstring type = "") const;
     sstring get_endpoint_type(sstring endpoint);
     future<> stop();
     std::vector<sstring> endpoints(sstring type = "") const noexcept;
@@ -128,7 +131,7 @@ class sstables_manager {
     using list_type = boost::intrusive::list<sstable,
             boost::intrusive::member_hook<sstable, sstable::manager_list_link_type, &sstable::_manager_list_link>,
             boost::intrusive::constant_time_size<false>>;
-    using set_type = boost::intrusive::set<sstable,
+    using set_type = boost::intrusive::multiset<sstable,
             boost::intrusive::member_hook<sstable, sstable::manager_set_link_type, &sstable::_manager_set_link>,
             boost::intrusive::constant_time_size<false>,
             boost::intrusive::compare<sstable::lesser_reclaimed_memory>>;
@@ -245,14 +248,15 @@ public:
         return _storage->get_endpoint_client(std::move(endpoint));
     }
 
-    bool is_known_endpoint(sstring endpoint) const {
+    bool is_known_endpoint(sstring endpoint, sstring type = "") const {
         SCYLLA_ASSERT(_storage != nullptr);
-        return _storage->is_known_endpoint(std::move(endpoint));
+        return _storage->is_known_endpoint(std::move(endpoint), std::move(type));
     }
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
     const config& get_config() const noexcept { return _config; }
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
+    const gms::feature_service& get_features() const noexcept { return _features; }
     const std::vector<sstables::file_io_extension*>& file_io_extensions() const { return _file_io_extensions; }
 
     // Get the highest supported sstable version, according to cluster features.
@@ -355,6 +359,9 @@ private:
     // The method is idempotent and for an sstable that is deleted, it is called both
     // during unlink and during deactivation.
     void reclaim_memory_and_stop_tracking_sstable(sstable* sst);
+    // Unlink the sstable from _reclaimed, if it is linked. Erasing by key would
+    // remove an arbitrary sstable with the same total_memory_reclaimed().
+    void erase_from_reclaimed(sstable* sst) noexcept;
 private:
     db::large_data_handler& get_large_data_handler() const {
         return _large_data_handler;

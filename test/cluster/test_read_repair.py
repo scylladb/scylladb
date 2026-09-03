@@ -17,7 +17,7 @@ from cassandra.pool import Host  # type: ignore
 
 from test.pylib.util import wait_for_cql_and_get_hosts, execute_with_tracing
 from test.pylib.internal_types import ServerInfo
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace
 
 
@@ -183,7 +183,7 @@ incremental_repair_test_data = [pytest.param(row_tombstone_data, id="row-tombsto
 
 
 @pytest.mark.parametrize("data_class", incremental_repair_test_data)
-async def test_incremental_read_repair(data_class: DataClass, manager: ManagerClient):
+async def test_incremental_read_repair(data_class: DataClass, manager: ScyllaClusterManager):
     """Stress the incremental read repair logic
 
     Write a long stream of row tombstones, with a live row before and after.
@@ -221,8 +221,9 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ManagerCl
                 await manager.server_stop_gracefully(other_node.server_id)
 
             await manager.driver_connect(node)
+            cql, _ = await manager.get_ready_cql([node])
 
-            await data_class.write_data(manager.get_cql(), ks, total_rows, node_live_rows, all_live_rows)
+            await data_class.write_data(cql, ks, total_rows, node_live_rows, all_live_rows)
 
             for other_node in other_nodes:
                 await manager.server_start(other_node.server_id)

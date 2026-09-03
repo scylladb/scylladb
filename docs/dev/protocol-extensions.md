@@ -45,10 +45,16 @@ SUPPORTED/STARTUP messages.
 client in STARTUP request, as a `map<text, text>`. This column may be useful
 for debugging and monitoring purposes.
 
-Drivers can send additional data in STARTUP, e.g. load balancing policy, retry
-policy, timeouts, and other configuration.
-Such data should be sent in `CLIENT_OPTIONS` key, as JSON. The recommended
-structure of this JSON will be decided in the future.
+Drivers may include additional metadata in the STARTUP request. For example, a
+driver may send its configuration - load balancing policy, retry policy,
+timeouts - as JSON under the DRIVER_CONFIG key, and a randomly generated
+per-session identifier under the SESSION_ID key, which lets the connections of
+one session be correlated with each other.
+
+A driver sending DRIVER_CONFIG must validate its size client side and omit the
+option if it exceeds 32 KiB, so that reporting the configuration never prevents
+a connection from being established. SESSION_ID is a UUID, so it is inherently
+bounded.
 
 ## Host ID discovery
 

@@ -25,6 +25,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/all.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <flat_map>
 
 #include "db/config.hh"
@@ -1229,20 +1230,15 @@ void view_updates::generate_update(
         // Note:
         // 1. By reaching here we know that updatable_view_key_cols has at
         //    least one member (in CQL, it's always one, in Alternator it
-        //    may be two).
+        //    may be two or more).
         // 2. Because has_new_row, we know all elements in that array have
         //    after.has_value() true, so we can use after.get_ts() et al.
         api::timestamp_type new_row_ts = updatable_view_key_cols[0].after.get_ts();
-        // This is the Alternator-only support for *two* regular base columns
-        // that become view key columns. The timestamp we use is the *maximum*
-        // of the two key columns, as explained in pull-request #17172.
-        if (updatable_view_key_cols.size() > 1) {
-            auto second_ts = updatable_view_key_cols[1].after.get_ts();
-            new_row_ts = std::max(new_row_ts, second_ts);
-            // Alternator isn't supposed to have more than two updatable view key columns!
-            if (updatable_view_key_cols.size() != 2) [[unlikely]] {
-                utils::on_internal_error(format("Unexpected updatable_view_key_col length {}", updatable_view_key_cols.size()));
-            }
+        // This is the Alternator-only support for *two or more* regular base
+        // columns that become view key columns. The timestamp we use is the
+        // *maximum* of those key columns, as explained in pull-request #17172.
+        for (size_t i = 1; i < updatable_view_key_cols.size(); ++i) {
+            new_row_ts = std::max(new_row_ts, updatable_view_key_cols[i].after.get_ts());
         }
         // We assume that either updatable_view_key_cols has just one column
         // (the only situation allowed in CQL) or if there is more then one
@@ -1254,25 +1250,20 @@ void view_updates::generate_update(
     if (has_old_row) {
         // As explained in #19977, when there is one updatable_view_key_cols
         // (the only case allowed in CQL) the deletion timestamp is before's
-        // timestamp. As explained in #17119, if there are two of them (only
-        // possible in Alternator), we take the maximum.
+        // timestamp. As explained in #17119, if there are two or more of them
+        // (only possible in Alternator), we take the maximum.
         // Note:
         // 1. By reaching here we know that updatable_view_key_cols has at
         //    least one member (in CQL, it's always one, in Alternator it
-        //    may be two).
+        //    may be two or more).
         // 2. Because has_old_row, we know all elements in that array have
         //    before.has_value() true, so we can use before.get_ts().
         auto old_row_ts = updatable_view_key_cols[0].before.get_ts();
-        if (updatable_view_key_cols.size() > 1) {
-            // This is the Alternator-only support for two regular base
-            // columns that become view key columns. See explanation in
-            // view_updates::compute_row_marker().
-            auto second_ts = updatable_view_key_cols[1].before.get_ts();
-            old_row_ts = std::max(old_row_ts, second_ts);
-            // Alternator isn't supposed to have more than two updatable view key columns!
-            if (updatable_view_key_cols.size() != 2) [[unlikely]] {
-                utils::on_internal_error(format("Unexpected updatable_view_key_col length {}", updatable_view_key_cols.size()));
-            }
+        // This is the Alternator-only support for two or more regular base
+        // columns that become view key columns. See explanation in
+        // view_updates::compute_row_marker().
+        for (size_t i = 1; i < updatable_view_key_cols.size(); ++i) {
+            old_row_ts = std::max(old_row_ts, updatable_view_key_cols[i].before.get_ts());
         }
         if (has_new_row) {
             if (same_row) {
@@ -2494,7 +2485,6 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
         }
     }
 
-    auto all_views = _db.get_views();
     auto doesnt_use_tablets = [&] (const view_ptr& v) {
         return !_db.find_keyspace(v->ks_name()).uses_tablets();
     };
@@ -2505,17 +2495,36 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
         return _db.column_family_exists(v->view_info()->base_id()) && !loaded_views.contains(v->id())
                 && !vbi.built_views.contains(v->id());
     };
-    for (auto&& view : all_views | std::views::filter(doesnt_use_tablets) | std::views::filter(is_new)) {
+    auto new_views = _db.get_views() | std::views::filter(doesnt_use_tablets) | std::views::filter(is_new) | std::ranges::to<std::vector>();
+    auto base_ids = new_views | std::views::transform([] (const auto& view) {
+        return view->view_info()->base_id();
+    }) | std::ranges::to<std::set>();
+
+    // The view builder subscribes to schema change events just before this method is called,
+    // so a view created earlier gets no `on_create_view()` notification and never goes through
+    // `dispatch_create_view()`. Such a view is picked up here instead and treated as an existing,
+    // unfinished one, so we have to flush its base table here, the way `handle_create_view_local()`
+    // does for newly created views. Otherwise the view would miss some updates.
+    for (auto& base_id: base_ids) {
+        auto& step = get_or_create_build_step(base_id);
+        co_await coroutine::all(
+            [&step] -> future<> {
+                co_await step.base->await_pending_writes(); },
+            [&step] -> future<> {
+                co_await step.base->await_pending_streams(); });
+        co_await flush_base(step.base, _as);
+    }
+    for (auto&& view : new_views) {
         vbi.bookkeeping_ops.push_back(add_new_view(view, get_or_create_build_step(view->view_info()->base_id())));
     }
 
-    return parallel_for_each(_base_to_build_step, [this] (auto& p) {
+    co_await parallel_for_each(_base_to_build_step, [this] (auto& p) {
         return initialize_reader_at_current_token(p.second);
-    }).then([&vbi] {
-        return seastar::when_all_succeed(vbi.bookkeeping_ops.begin(), vbi.bookkeeping_ops.end()).handle_exception([] (std::exception_ptr ep) {
-            vlogger.warn("Failed to update materialized view bookkeeping while synchronizing view builds on all shards ({}), continuing anyway.", ep);
-        });
     });
+    auto bookkeeping_fut = co_await coroutine::as_future(seastar::when_all_succeed(vbi.bookkeeping_ops.begin(), vbi.bookkeeping_ops.end()));
+    if (bookkeeping_fut.failed()) {
+        vlogger.warn("Failed to update materialized view bookkeeping while synchronizing view builds on all shards ({}), continuing anyway.", bookkeeping_fut.get_exception());
+    }
 }
 
 service::query_state& view_builder_query_state() {

@@ -8,7 +8,7 @@ import asyncio
 import pytest
 import logging
 import time
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
 from test.cluster.util import new_test_keyspace, reconnect_driver, wait_for_cql_and_get_hosts
 
@@ -16,7 +16,7 @@ from test.cluster.util import new_test_keyspace, reconnect_driver, wait_for_cql_
 logger = logging.getLogger(__name__)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_batchlog_replay_while_a_node_is_down(manager: ManagerClient) -> None:
+async def test_batchlog_replay_while_a_node_is_down(manager: ScyllaClusterManager) -> None:
     """ Test that batchlog replay handles the case when a node is down while replaying a batch.
         Reproduces issue #24599.
     1. Create a cluster with 3 nodes.
@@ -76,7 +76,7 @@ async def test_batchlog_replay_while_a_node_is_down(manager: ManagerClient) -> N
         await wait_for(batchlog_empty, time.time() + 60)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_batchlog_replay_aborted_on_shutdown(manager: ManagerClient) -> None:
+async def test_batchlog_replay_aborted_on_shutdown(manager: ScyllaClusterManager) -> None:
     """ Similar to the previous test, but also verifies that the batchlog replay is aborted on shutdown,
         and node shutdown is not stuck.
     1. Create a cluster with 3 nodes.
@@ -139,7 +139,7 @@ async def test_batchlog_replay_aborted_on_shutdown(manager: ManagerClient) -> No
         await wait_for(batchlog_empty, time.time() + 60)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_batchlog_replay_includes_cdc(manager: ManagerClient) -> None:
+async def test_batchlog_replay_includes_cdc(manager: ScyllaClusterManager) -> None:
     """ Test that when a batch is replayed from the batchlog, it includes CDC mutations.
     1. Create a cluster with a single node.
     2. Create a table with CDC enabled.
@@ -201,7 +201,7 @@ async def test_batchlog_replay_includes_cdc(manager: ManagerClient) -> None:
         assert len(result2) == 1, f"Expected 1 CDC mutation for key 40, got {len(result2)}"
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_drop_mutations_for_dropped_table(manager: ManagerClient) -> None:
+async def test_drop_mutations_for_dropped_table(manager: ScyllaClusterManager) -> None:
     """
     This test is an adjusted version of `test_batchlog_replay_while_a_node_is_down`.
     We want to verify that batchlog replay is aborted when the corresponding table has been dropped.
@@ -290,7 +290,7 @@ async def test_drop_mutations_for_dropped_table(manager: ManagerClient) -> None:
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("repair_cache", [True, False])
-async def test_batchlog_replay_failure_during_repair(manager: ManagerClient, repair_cache: bool) -> None:
+async def test_batchlog_replay_failure_during_repair(manager: ScyllaClusterManager, repair_cache: bool) -> None:
     """
     We want to verify that repair_time will not be updated if batchlog replay fails.
 

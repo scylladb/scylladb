@@ -8,9 +8,9 @@ from typing import Optional, List, Any
 import pytest
 import logging
 
-from test.pylib.internal_types import IPAddress, HostID
+from test.pylib.internal_types import IPAddress, HostID, ServerInfo
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.pylib.manager_client import ManagerClient, ServerInfo
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import gather_safely
 from test.cluster.util import get_current_group0_config, wait_for_token_ring_and_group0_consistency
 
@@ -18,7 +18,7 @@ from test.cluster.util import get_current_group0_config, wait_for_token_ring_and
 logger = logging.getLogger(__name__)
 
 
-async def make_servers(manager: ManagerClient, servers_num: int,
+async def make_servers(manager: ScyllaClusterManager, servers_num: int,
                        config: Optional[dict[str, Any]] = None) -> List[ServerInfo]:
     """ Create servers with the given configuration.
 
@@ -60,7 +60,7 @@ async def make_servers(manager: ManagerClient, servers_num: int,
     return servers_ordered
 
 
-async def test_raft_replace_ignore_nodes(manager: ManagerClient) -> None:
+async def test_raft_replace_ignore_nodes(manager: ScyllaClusterManager) -> None:
     """Replace 3 dead nodes.
 
        This is a slow test with a 7 node cluster and 3 replace operations,
@@ -108,7 +108,7 @@ async def test_raft_replace_ignore_nodes(manager: ManagerClient) -> None:
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
 
-async def test_raft_remove_ignore_nodes(manager: ManagerClient) -> None:
+async def test_raft_remove_ignore_nodes(manager: ScyllaClusterManager) -> None:
     """Remove 3 dead nodes.
 
        This is a slow test with a 7 node cluster and 3 removenode operations,

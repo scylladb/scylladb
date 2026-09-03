@@ -10,7 +10,11 @@
 
 #pragma once
 
+#include <optional>
+#include <string_view>
+
 #include "timeout_config.hh"
+#include "service/pager/query_plan.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "audit/audit.hh"
 #include "utils/chunked_string.hh"
@@ -115,6 +119,19 @@ public:
     }
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const = 0;
+
+    // The plan this statement scans, to be checked against the one a paging state
+    // pins. Disengaged for statements that are never paged. See #18992.
+    virtual std::optional<service::pager::query_plan> query_plan_for_paging() const {
+        return std::nullopt;
+    }
+
+    // The keyspace this statement's table lives in, which re-parsing it has to
+    // resolve an unqualified table name against rather than the connection's own.
+    // Borrowed from the statement, so only valid while it lives.
+    virtual std::optional<std::string_view> keyspace_for_reparse() const {
+        return std::nullopt;
+    }
 
     // Statements which keep their result set metadata elsewhere, e.g. in a
     // selection, override this instead of setting _metadata.

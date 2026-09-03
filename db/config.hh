@@ -278,8 +278,9 @@ public:
     named_value<uint32_t> logstor_disk_size_in_mb;
     named_value<uint32_t> logstor_file_size_in_mb;
     named_value<bool> logstor_format_on_startup;
-    named_value<uint32_t> logstor_separator_delay_limit_ms;
-    named_value<uint32_t> logstor_separator_max_memory_in_mb;
+    named_value<bool> logstor_sparse_files;
+    named_value<double> logstor_compaction_trigger_threshold;
+    named_value<float> logstor_compaction_max_shares;
     named_value<uint32_t> file_cache_size_in_mb;
     named_value<uint32_t> memtable_flush_queue_size;
     named_value<uint32_t> memtable_flush_writers;
@@ -473,6 +474,7 @@ public:
     named_value<float> sstable_compression_dictionaries_autotrainer_tick_period_in_seconds;
     named_value<uint64_t> sstable_compression_dictionaries_min_training_dataset_bytes;
     named_value<float> sstable_compression_dictionaries_min_training_improvement_factor;
+    named_value<sstring> speculative_retry_user_table_default;
     named_value<bool> uuid_sstable_identifiers_enabled;
     named_value<bool> table_digest_insensitive_to_expiry;
     named_value<bool> enable_dangerous_direct_import_of_cassandra_counters;

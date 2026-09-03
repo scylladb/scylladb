@@ -12,6 +12,7 @@
 #include <map>
 #include <optional>
 #include <memory>
+#include <chrono>
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"

@@ -467,7 +467,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
             auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
             auto paging_state = rows->rs().get_metadata().paging_state();
             SCYLLA_ASSERT(paging_state);
-            return make_lw_shared<service::pager::paging_state>(*paging_state);
+            return paging_state;
         };
 
         auto expect_more_pages = [] (::shared_ptr<cql_transport::messages::result_message> res, bool more_pages_expected) {
@@ -558,7 +558,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
                     position_in_partition_view::for_partition_start(),
                     paging_state->get_remaining(), paging_state->get_query_uuid(),
                     paging_state->get_last_replicas(), paging_state->get_query_read_repair_decision(),
-                    paging_state->get_rows_fetched_for_last_partition());
+                    paging_state->get_rows_fetched_for_last_partition(), std::nullopt);
 
             qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
@@ -572,7 +572,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
             // not to return rows (since no row matches an empty partition key)
             auto paging_state = make_lw_shared<service::pager::paging_state>(partition_key::make_empty(),
                     position_in_partition_view::for_partition_start(),
-                    1, query_id::create_random_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 1);
+                    1, query_id::create_random_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 1, std::nullopt);
             auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
             auto res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get();
@@ -846,7 +846,7 @@ SEASTAR_TEST_CASE(test_local_index_paging) {
             auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
             auto paging_state = rows->rs().get_metadata().paging_state();
             SCYLLA_ASSERT(paging_state);
-            return make_lw_shared<service::pager::paging_state>(*paging_state);
+            return paging_state;
         };
 
         eventually([&] {

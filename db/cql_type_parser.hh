@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <string_view>
 #include <vector>
 #include <seastar/core/sstring.hh>
 
@@ -36,7 +37,9 @@ public:
     ~raw_builder();
 
     void add(sstring name, std::vector<sstring> field_names, std::vector<sstring> field_types);
-    future<std::vector<user_type>> build();
+    // description identifies the caller's context (e.g. "schema merge"), and is used to
+    // disambiguate the error thrown if the user defined types form a dependency cycle.
+    future<std::vector<user_type>> build(std::string_view description);
 private:
     class impl;
     std::unique_ptr<impl>

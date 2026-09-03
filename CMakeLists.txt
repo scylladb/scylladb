@@ -112,9 +112,10 @@ else()
     set(Seastar_EXCLUDE_APPS_FROM_ALL ON CACHE BOOL "" FORCE)
     set(Seastar_EXCLUDE_TESTS_FROM_ALL ON CACHE BOOL "" FORCE)
     set(Seastar_IO_URING ON CACHE BOOL "" FORCE)
-    set(Seastar_SCHEDULING_GROUPS_COUNT 24 CACHE STRING "" FORCE)
+    set(Seastar_SCHEDULING_GROUPS_COUNT 25 CACHE STRING "" FORCE)
     set(Seastar_UNUSED_RESULT_ERROR ON CACHE BOOL "" FORCE)
     set(Seastar_OPENSSL OFF CACHE BOOL "" FORCE)
+    set(Seastar_LTTNG OFF CACHE BOOL "" FORCE)
     # Match configure.py's build_seastar_shared_libs: Debug and Dev
     # build Seastar as a shared library, others build it static.
     if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "Dev")
@@ -268,6 +269,10 @@ if (Scylla_USE_PRECOMPILED_HEADER)
     # Match configure.py: -fpch-validate-input-files-content tells the compiler
     # to check content of stdafx.hh if timestamps don't match (important for
     # ccache/git workflows where timestamps may not be preserved).
+    # scylla-precompiled-header needs the flag on its own: the content hashes
+    # are recorded when the PCH is written, and add_compile_options() below only
+    # applies to targets created after it.
+    target_compile_options(scylla-precompiled-header PRIVATE -fpch-validate-input-files-content)
     add_compile_options(-fpch-validate-input-files-content)
   endif()
 else()

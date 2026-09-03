@@ -40,6 +40,8 @@ struct compaction_completion_desc {
     std::vector<sstables::shared_sstable> old_sstables;
     // New, fresh SSTables that should be added to SSTable set, replacing the old ones.
     std::vector<sstables::shared_sstable> new_sstables;
+    // New, fresh GCed-data SSTables that should be added to SSTable set.
+    std::vector<sstables::shared_sstable> new_gc_sstables;
     // Set of compacted partition ranges that should be invalidated in the cache.
     utils::chunked_vector<dht::partition_range> ranges_for_cache_invalidation;
 };

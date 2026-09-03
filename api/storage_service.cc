@@ -53,9 +53,7 @@
 #include "release.hh"
 #include "compaction/compaction_manager.hh"
 #include "compaction/task_manager_module.hh"
-#include "sstables/object_storage_client.hh"
 #include "sstables/sstables.hh"
-#include "sstables/storage.hh"
 #include "replica/database.hh"
 #include "db/extensions.hh"
 #include "db/snapshot-ctl.hh"
@@ -283,6 +281,13 @@ scrub_info parse_scrub_options(const http_context& ctx, std::unique_ptr<http::re
             throw httpd::bad_param_exception("The 'drop_unfixable_sstables' parameter is only valid when 'scrub_mode' is 'SEGREGATE'");
         }
         info.opts.drop_unfixable = compaction::compaction_type_options::scrub::drop_unfixable_sstables::yes;
+    }
+
+    if (req->get_query_param("quarantine_invalid_sstables") != "") {
+        if (scrub_mode != compaction::compaction_type_options::scrub::mode::validate) {
+            throw httpd::bad_param_exception("The 'quarantine_invalid_sstables' parameter is only valid when 'scrub_mode' is 'VALIDATE'");
+        }
+        info.opts.quarantine_sstables = compaction::compaction_type_options::scrub::quarantine_invalid_sstables(req_param<bool>(*req, "quarantine_invalid_sstables", true));
     }
 
     return info;
@@ -558,12 +563,6 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         auto dc = rjson::to_string_view(location["datacenter"]);
         auto prefix = location.HasMember("prefix") ? rjson::to_string_view(location["prefix"]) : std::string_view{};
 
-        // FIXME: once manifest_prefix handling is reworked to combine with
-        // the location prefix, this restriction can be lifted.
-        if (!prefix.empty()) {
-            throw httpd::bad_param_exception("backup location 'prefix' must be empty for now");
-        }
-
         if (!location.HasMember("manifests") || !location["manifests"].IsArray()) {
             throw httpd::bad_param_exception("backup location entry must have 'manifests' array");
         }
@@ -576,8 +575,8 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
             throw httpd::bad_param_exception("backup location 'manifests' array must not be empty");
         }
 
-        apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} datacenter={} endpoint={} bucket={} manifests_count={}",
-                    keyspace, table, snapshot, dc, endpoint, bucket, manifests.size());
+        apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} datacenter={} endpoint={} bucket={} prefix={} manifests_count={}",
+                    keyspace, table, snapshot, dc, endpoint, bucket, prefix, manifests.size());
 
         auto table_id = validate_table(ctx.db.local(), keyspace, table);
         auto task_id = co_await sst_loader.local().restore_tablets(table_id, keyspace, table, snapshot, sstring(endpoint), sstring(bucket), sstring(prefix), std::move(manifests));
@@ -837,26 +836,6 @@ rest_reset_cleanup_needed(http_context& ctx, sharded<service::storage_service>& 
 
 static
 future<json::json_return_type>
-rest_force_flush(http_context& ctx, std::unique_ptr<http::request> req) {
-        apilog.info("flush all tables");
-        co_await ctx.db.invoke_on_all([] (replica::database& db) {
-            return db.flush_all_tables();
-        });
-        co_return json_void();
-}
-
-static
-future<json::json_return_type>
-rest_force_keyspace_flush(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
-        apilog.info("perform_keyspace_flush: keyspace={} tables={}", keyspace, table_infos);
-        auto& db = ctx.db;
-        co_await replica::database::flush_tables_on_all_shards(db, std::move(table_infos));
-        co_return json_void();
-}
-
-static
-future<json::json_return_type>
 rest_logstor_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
         bool major = false;
         if (auto major_param = req->get_query_param("major"); !major_param.empty()) {
@@ -1073,46 +1052,6 @@ future<json::json_return_type>
 rest_is_joined(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         return ss.local().get_operation_mode().then([] (auto mode) {
             return make_ready_future<json::json_return_type>(mode >= service::storage_service::mode::JOINING && mode != service::storage_service::mode::MAINTENANCE);
-        });
-}
-
-static
-future<json::json_return_type>
-rest_is_incremental_backups_enabled(http_context& ctx, std::unique_ptr<http::request> req) {
-        // If this is issued in parallel with an ongoing change, we may see values not agreeing.
-        // Reissuing is asking for trouble, so we will just return true upon seeing any true value.
-        return ctx.db.map_reduce(adder<bool>(), [] (replica::database& db) {
-            for (auto& pair: db.get_keyspaces()) {
-                auto& ks = pair.second;
-                if (ks.incremental_backups_enabled()) {
-                    return true;
-                }
-            }
-            return false;
-        }).then([] (bool val) {
-            return make_ready_future<json::json_return_type>(val);
-        });
-}
-
-static
-future<json::json_return_type>
-rest_set_incremental_backups_enabled(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto val_str = req->get_query_param("value");
-        bool value = (val_str == "True") || (val_str == "true") || (val_str == "1");
-        return ctx.db.invoke_on_all([value] (replica::database& db) {
-            db.set_enable_incremental_backups(value);
-
-            // Change both KS and CF, so they are in sync
-            for (auto& pair: db.get_keyspaces()) {
-                auto& ks = pair.second;
-                ks.set_incremental_backups(value);
-            }
-
-            db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
-                table->set_incremental_backups(value);
-            });
-        }).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
         });
 }
 
@@ -1464,74 +1403,6 @@ rest_retrain_dict(http_context& ctx, sharded<service::storage_service>& ss, serv
     co_await ss.local().publish_new_sstable_dict(t_id, dict, group0_client);
     apilog.debug("retrain_dict: published new dict");
     co_return json_void();
-}
-
-static sstring require_query_param(const http::request& req, std::string_view name) {
-    auto value = req.get_query_param(std::string(name));
-    if (value.empty()) {
-        throw bad_param_exception(fmt::format("Missing required query parameter '{}'", name));
-    }
-    return value;
-}
-
-static const sstring object_storage_prefix = "sstables";
-
-static sstables::object_storage_client& get_object_storage_client(http_context& ctx, const http::request& req) {
-    auto endpoint = require_query_param(req, "endpoint");
-    return *ctx.db.local().get_user_sstables_manager().get_endpoint_client(std::move(endpoint));
-}
-
-static future<> collect_object_storage_entries(abstract_lister& lister, std::vector<sstring>& entries) {
-    while (auto entry = co_await lister.get()) {
-        entries.push_back(entry->name);
-    }
-}
-
-static future<std::vector<sstring>> list_object_storage_entries(sstables::object_storage_client& client, sstring bucket, sstring prefix) {
-    std::vector<sstring> entries;
-    auto lister = client.make_object_lister(std::move(bucket), std::move(prefix), [] (const std::filesystem::path&, const directory_entry&) { return true; });
-    co_await with_closeable(std::move(lister), [&entries] (abstract_lister& lister) {
-        return collect_object_storage_entries(lister, entries);
-    });
-    co_return entries;
-}
-
-static std::optional<sstring> first_path_component(std::string_view path) {
-    if (path.empty()) {
-        return std::nullopt;
-    }
-    auto pos = path.find('/');
-    return sstring(path.substr(0, pos));
-}
-
-static
-future<json::json_return_type>
-rest_object_storage_sstables(http_context& ctx, std::unique_ptr<http::request> req) {
-    auto bucket = require_query_param(*req, "bucket");
-    auto& client = get_object_storage_client(ctx, *req);
-    auto table_entries = co_await list_object_storage_entries(client, bucket, fmt::format("{}/", object_storage_prefix));
-    std::map<sstring, ss::object_storage_sstable> sstables;
-    for (const auto& entry : table_entries) {
-        auto sid = first_path_component(entry);
-        if (!sid) {
-            continue;
-        }
-        auto& sst = sstables[*sid];
-        sst.sstable_id = *sid;
-    }
-    for (auto& [sid_string, sst] : sstables) {
-        auto sid = sstables::sstable_id(utils::UUID(sid_string));
-        auto refs = co_await sstables::list_object_storage_references(client, bucket, object_storage_prefix, sid);
-        std::ranges::sort(refs);
-        sst.num_references = refs.size();
-        sst.references = std::move(refs);
-    }
-    std::vector<ss::object_storage_sstable> result;
-    result.reserve(sstables.size());
-    for (auto& sst : sstables | std::views::values) {
-        result.emplace_back(std::move(sst));
-    }
-    co_return result;
 }
 
 static
@@ -2082,8 +1953,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }
         co_return json::json_return_type(0);
     });
-    ss::force_flush.set(r, gated(ss, rest_bind(rest_force_flush, ctx)));
-    ss::force_keyspace_flush.set(r, gated(ss, rest_bind(rest_force_keyspace_flush, ctx)));
     ss::decommission.set(r, gated(ss, rest_bind(rest_decommission, ss, ssc)));
     ss::logstor_compaction.set(r, gated(ss, rest_bind(rest_logstor_compaction, ctx)));
     ss::logstor_flush.set(r, gated(ss, rest_bind(rest_logstor_flush, ctx)));
@@ -2105,8 +1974,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::is_initialized.set(r, gated(ss, rest_bind(rest_is_initialized, ss)));
     ss::join_ring.set(r, gated(ss, rest_bind(rest_join_ring)));
     ss::is_joined.set(r, gated(ss, rest_bind(rest_is_joined, ss)));
-    ss::is_incremental_backups_enabled.set(r, gated(ss, rest_bind(rest_is_incremental_backups_enabled, ctx)));
-    ss::set_incremental_backups_enabled.set(r, gated(ss, rest_bind(rest_set_incremental_backups_enabled, ctx)));
     ss::rebuild.set(r, gated(ss, rest_bind(rest_rebuild, ss)));
     ss::bulk_load.set(r, gated(ss, rest_bind(rest_bulk_load)));
     ss::bulk_load_async.set(r, gated(ss, rest_bind(rest_bulk_load_async)));
@@ -2134,7 +2001,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_effective_ownership.set(r, gated(ss, rest_bind(rest_get_effective_ownership, ctx, ss)));
     ss::retrain_dict.set(r, gated(ss, rest_bind(rest_retrain_dict, ctx, ss, group0_client)));
     ss::estimate_compression_ratios.set(r, gated(ss, rest_bind(rest_estimate_compression_ratios, ctx, ss)));
-    ss::object_storage_sstables.set(r, gated(ss, rest_bind(rest_object_storage_sstables, ctx)));
     ss::sstable_info.set(r, gated(ss, rest_bind(rest_sstable_info, ctx)));
     ss::logstor_info.set(r, gated(ss, rest_bind(rest_logstor_info, ctx)));
     ss::reload_raft_topology_state.set(r, gated(ss, rest_bind(rest_reload_raft_topology_state, ss, group0_client)));
@@ -2170,8 +2036,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::reset_cleanup_needed.unset(r);
     t::force_keyspace_cleanup_async.unset(r);
     ss::force_keyspace_cleanup.unset(r);
-    ss::force_flush.unset(r);
-    ss::force_keyspace_flush.unset(r);
     ss::logstor_compaction.unset(r);
     ss::logstor_flush.unset(r);
     ss::decommission.unset(r);
@@ -2193,8 +2057,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::is_initialized.unset(r);
     ss::join_ring.unset(r);
     ss::is_joined.unset(r);
-    ss::is_incremental_backups_enabled.unset(r);
-    ss::set_incremental_backups_enabled.unset(r);
     ss::rebuild.unset(r);
     ss::bulk_load.unset(r);
     ss::bulk_load_async.unset(r);
@@ -2220,7 +2082,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_total_hints.unset(r);
     ss::get_ownership.unset(r);
     ss::get_effective_ownership.unset(r);
-    ss::object_storage_sstables.unset(r);
     ss::sstable_info.unset(r);
     ss::logstor_info.unset(r);
     ss::reload_raft_topology_state.unset(r);

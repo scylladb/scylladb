@@ -33,6 +33,7 @@
 #include "transport/messages/result_message.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/as_json_function.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
@@ -610,7 +611,7 @@ select_statement::execute_without_checking_exception_message_aggregate_or_paged(
         auto meta = [&] () -> shared_ptr<const cql3::metadata> {
             if (!p->is_exhausted()) {
                 auto meta = make_shared<metadata>(*_selection->get_result_metadata());
-                meta->set_paging_state(p->state());
+                meta->set_paging_state(p->state(scanned_plan()));
                 return meta;
             } else {
                 return _selection->get_result_metadata();
@@ -628,7 +629,7 @@ select_statement::execute_without_checking_exception_message_aggregate_or_paged(
     }
     std::unique_ptr<cql3::result_set>&& rs = std::move(result_rs).assume_value();
     if (!p->is_exhausted()) {
-        rs->get_metadata().set_paging_state(p->state());
+        rs->get_metadata().set_paging_state(p->state(scanned_plan()));
     }
 
     if (needs_post_filtering()) {
@@ -963,6 +964,8 @@ view_indexed_table_select_statement::process_base_query_results(
         uint32_t internal_page_size) const
 {
     if (paging_state) {
+        // The plan was recorded where the state was built, by the scan of the
+        // index view, and survives the rewriting below. See #18992.
         paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options, internal_page_size);
         _selection->get_result_metadata()->maybe_set_paging_state(std::move(paging_state));
     }
@@ -973,23 +976,25 @@ future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
                                   lw_shared_ptr<query::read_command> cmd,
                                   const query_options& options,
-                                  gc_clock::time_point now) const
+                                  gc_clock::time_point now,
+                                  const cql3::selection::external_values_provider* external_values_provider) const
 {
-    const bool fast_path = !needs_post_query_ordering() && _selection->is_trivial() && !needs_post_filtering();
+    const bool fast_path = !needs_post_query_ordering() && _selection->is_trivial() && !needs_post_filtering() && !external_values_provider;
     if (fast_path) {
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(make_shared<cql_transport::messages::result_message::rows>(result(
             result_generator(_query_schema, std::move(results), std::move(cmd), _selection, _stats),
             _selection->get_result_metadata())
         ));
     }
-    return process_results_complex(std::move(results), std::move(cmd), options, now);
+    return process_results_complex(std::move(results), std::move(cmd), options, now, external_values_provider);
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::process_results_complex(foreign_ptr<lw_shared_ptr<query::result>> results,
                                   lw_shared_ptr<query::read_command> cmd,
                                   const query_options& options,
-                                  gc_clock::time_point now) const {
+                                  gc_clock::time_point now,
+                                  const cql3::selection::external_values_provider* external_values_provider) const {
     cql3::selection::result_set_builder builder(*_selection, now, &options);
     co_return co_await builder.with_thread_if_needed([&] {
         if (needs_post_filtering()) {
@@ -997,11 +1002,11 @@ select_statement::process_results_complex(foreign_ptr<lw_shared_ptr<query::resul
             _stats.filtered_rows_read_total += *results->row_count();
             query::result_view::consume(*results, cmd->slice,
                     cql3::selection::result_set_builder::visitor(builder, *_query_schema,
-                            *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->get_row_limit(), _query_schema, cmd->slice.partition_row_limit())));
+                            *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->get_row_limit(), _query_schema, cmd->slice.partition_row_limit()), external_values_provider));
         } else {
             query::result_view::consume(*results, cmd->slice,
                     cql3::selection::result_set_builder::visitor(builder, *_query_schema,
-                            *_selection));
+                            *_selection, cql3::selection::result_set_builder::nop_filter(), external_values_provider));
         }
         auto rs = builder.build();
 
@@ -1020,6 +1025,10 @@ select_statement::process_results_complex(foreign_ptr<lw_shared_ptr<query::resul
 
 const ::shared_ptr<const restrictions::statement_restrictions> select_statement::get_restrictions() const {
     return _restrictions;
+}
+
+service::pager::query_plan select_statement::scanned_plan() const {
+    return service::pager::primary_index_plan{};
 }
 
 primary_key_select_statement::primary_key_select_statement(schema_ptr schema, uint32_t bound_terms,
@@ -1120,6 +1129,10 @@ view_indexed_table_select_statement::view_indexed_table_select_statement(schema_
     }
 }
 
+service::pager::query_plan view_indexed_table_select_statement::scanned_plan() const {
+    return service::pager::index_plan{_view_schema->id()};
+}
+
 template<typename KeyType>
 requires (std::is_same_v<KeyType, partition_key> || std::is_same_v<KeyType, clustering_key_prefix>)
 static void append_base_key_to_index_ck(std::vector<managed_bytes_view>& exploded_index_ck, const KeyType& base_key, const column_definition& index_cdef) {
@@ -1186,7 +1199,7 @@ lw_shared_ptr<const service::pager::paging_state> view_indexed_table_select_stat
     }
 
     auto index_ck = clustering_key::from_range(std::move(exploded_index_ck));
-    if (partition_key::tri_compare(*_view_schema)(paging_state->get_partition_key(), index_pk) == 0
+    if (paging_state->get_partition_key().equal(*_view_schema, index_pk)
             && (!paging_state->get_clustering_key() || clustering_key::prefix_equal_tri_compare(*_view_schema)(*paging_state->get_clustering_key(), index_ck) == 0)) {
         return paging_state;
     }
@@ -1289,7 +1302,7 @@ view_indexed_table_select_statement::actually_do_execute(query_processor& qp,
                 if (paging_state) {
                     paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options, internal_page_size);
                 }
-                internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
+                internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state));
                 if (needs_post_filtering()) {
                     _stats.filtered_rows_read_total += *results->row_count();
                     query::result_view::consume(*results, cmd->slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection,
@@ -1465,9 +1478,11 @@ view_indexed_table_select_statement::read_posting_list(query_processor& qp,
 
     auto p = service::pager::query_pagers::pager(qp.proxy(), _view_schema, selection,
             state, options, cmd, std::move(partition_ranges), nullptr);
-    return p->fetch_page_result(options.get_page_size(), now, timeout).then(utils::result_wrap([p = std::move(p)] (std::unique_ptr<cql3::result_set> rs)
+    return p->fetch_page_result(options.get_page_size(), now, timeout).then(utils::result_wrap([plan = scanned_plan(), p = std::move(p)] (std::unique_ptr<cql3::result_set> rs)
             -> coordinator_result<::shared_ptr<cql_transport::messages::result_message::rows>> {
-        rs->get_metadata().set_paging_state(p->state());
+        // This pager scans the index view, which is the plan a page of this query
+        // is served by, so record it here rather than stamping it on later. #18992
+        rs->get_metadata().set_paging_state(p->state(plan));
         return ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
     }));
 }
@@ -1952,7 +1967,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
             auto meta = [&] () -> shared_ptr<const cql3::metadata> {
                 if (!p->is_exhausted()) {
                     auto meta = make_shared<metadata>(*_selection->get_result_metadata());
-                    meta->set_paging_state(p->state());
+                    meta->set_paging_state(p->state(scanned_plan()));
                     return meta;
                 } else {
                     return _selection->get_result_metadata();
@@ -1968,7 +1983,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
     return p->fetch_page_result(page_size, now, timeout).then(wrap_result_to_error_message(
             [this, p = std::move(p)](std::unique_ptr<cql3::result_set>&& rs) {
                 if (!p->is_exhausted()) {
-                    rs->get_metadata().set_paging_state(p->state());
+                    rs->get_metadata().set_paging_state(p->state(scanned_plan()));
                 }
 
                 if (needs_post_filtering()) {
@@ -2023,6 +2038,13 @@ void select_statement::prepare_keyspace(const service::client_state& state) {
     cf_statement::prepare_keyspace(state);
     if (_no_from) {
         _session_keyspace = state.get_raw_keyspace();
+    }
+}
+
+void select_statement::prepare_keyspace(std::string_view keyspace) {
+    cf_statement::prepare_keyspace(keyspace);
+    if (_no_from) {
+        _session_keyspace = sstring(keyspace);
     }
 }
 
@@ -2090,11 +2112,34 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     prepared_selectors = maybe_jsonize_select_clause(std::move(prepared_selectors), db, schema);
 
-    std::optional<ann_ordering_info> ann_ordering_info_opt = get_ann_ordering_info(db, schema, _parameters, ctx);
+    // A scoring ORDER BY is prepared here, once, and its resolved call is then offered to the
+    // resolvers. Preparing it in a resolver instead would mean preparing it once per resolver, and
+    // so registering its bind markers more than once.
+    std::optional<expr::expression> prepared_scoring_ordering;
+    if (!_parameters->orderings().empty()) {
+        if (const auto* scoring_ord = std::get_if<raw::select_statement::scoring_function_ordering>(&_parameters->orderings().front().second)) {
+            prepared_scoring_ordering = expr::prepare_expression(scoring_ord->func_expr, db, schema->ks_name(), schema.get(), nullptr);
+            expr::fill_prepare_context(*prepared_scoring_ordering, ctx);
+        }
+    }
+    const expr::function_call* scoring_call = prepared_scoring_ordering
+            ? expr::as_if<expr::function_call>(&*prepared_scoring_ordering)
+            : nullptr;
+
+    std::optional<ann_ordering_info> ann_ordering_info_opt =
+            scoring_call ? get_ann_ordering_info(db, schema, *scoring_call) : std::nullopt;
     bool is_ann_query = ann_ordering_info_opt.has_value();
 
-    std::optional<bm25_ordering_info> bm25_ordering_info_opt = get_bm25_ordering_info(db, schema, _parameters, ctx);
+    std::optional<bm25_ordering_info> bm25_ordering_info_opt =
+            scoring_call ? get_bm25_ordering_info(db, schema, *scoring_call) : std::nullopt;
     bool has_bm25_ordering = bm25_ordering_info_opt.has_value();
+
+    if (prepared_scoring_ordering && !is_ann_query && !has_bm25_ordering) {
+        // A function call in ORDER BY that no scoring-function resolver claimed. The
+        // regular-ordering path below skips scoring orderings, so reject it explicitly
+        // instead of silently ignoring the ORDER BY clause.
+        throw exceptions::invalid_request_exception("Only ANN() and BM25() are supported as scoring functions in ORDER BY");
+    }
 
     if (prepared_selectors.empty() && (!_group_by_columns.empty() || (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled))) {
         // We have a "SELECT * GROUP BY" or "SELECT * ORDER BY ANN" with rescoring enabled. If we leave prepared_selectors
@@ -2113,10 +2158,18 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         prepared_selectors = selection::raw_selector::to_prepared_selectors(select_all, *schema, db, keyspace());
     }
 
-    for (auto& ps : prepared_selectors) {
-        if (expr::is_native_function_call(ps.expr, "bm25")) {
-            throw exceptions::invalid_request_exception("BM25() is not supported in the SELECT clause");
+    // Prepare BM25() calls in SELECT: reject when absent from ORDER BY, or replace
+    // with temporary nodes that an external_values_provider fills at execution time.
+    expr::temporary_allocator temporaries_allocator;
+    if (prepare_bm25_selectors(prepared_selectors, bm25_ordering_info_opt, temporaries_allocator)) {
+        for (auto& term : bm25_ordering_info_opt->selected_bm25_terms) {
+            expr::fill_prepare_context(term, ctx);
         }
+    }
+
+    prepare_ann_selectors(prepared_selectors);
+
+    for (auto& ps : prepared_selectors) {
         expr::fill_prepare_context(ps.expr, ctx);
     }
 
@@ -2146,7 +2199,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     auto selection = prepared_selectors.empty()
                      ? selection::selection::wildcard(schema)
-                     : selection::selection::from_selectors(db, schema, keyspace(), levellized_prepared_selectors);
+                     : selection::selection::from_selectors(db, schema, keyspace(), levellized_prepared_selectors,
+                                                            std::move(temporaries_allocator));
 
     if (is_ann_query && hide_last_column) {
         // Hide the similarity selector from the client by reducing column_count
@@ -2161,17 +2215,25 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     }
 
     auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering() || is_ann_query || has_bm25_ordering,
-            restrictions::check_indexes(!_parameters->is_mutation_fragments()));
+            restrictions::check_indexes(!_parameters->is_mutation_fragments()), _pinned_plan);
 
     const auto& scoring_restrictions = restrictions->get_scoring_function_restrictions();
 
     bool has_bm25_restriction = std::ranges::any_of(scoring_restrictions, [](const expr::binary_operator& binop) {
-        return expr::is_native_function_call(binop.lhs, "bm25");
+        return expr::is_native_function_call(binop.lhs, functions::BM25_FUNCTION_NAME);
     });
     bool is_fts_query = has_bm25_restriction || has_bm25_ordering;
 
     if (is_ann_query && is_fts_query) {
         throw exceptions::invalid_request_exception("BM25 and ANN cannot be combined in the same query");
+    }
+
+    // Scoring restrictions are held out of the filtering machinery, to be interpreted by the
+    // external index that owns the scoring function.  If no such query type was selected,
+    // nothing will interpret them and they would be silently dropped rather than applied.
+    if (!scoring_restrictions.empty() && !is_fts_query && !is_ann_query) {
+        throw exceptions::invalid_request_exception(
+                "A scoring function in the WHERE clause requires a matching ORDER BY clause");
     }
 
     if (_parameters->is_distinct()) {
@@ -2185,7 +2247,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     if (!orderings.empty() && !is_ann_query && !is_fts_query) {
         std::visit([&](auto&& ordering) {
             using T = std::decay_t<decltype(ordering)>;
-            if constexpr (!std::is_same_v<T, select_statement::ann_vector> && !std::is_same_v<T, raw::select_statement::scoring_function_ordering>) {
+            if constexpr (!std::is_same_v<T, raw::select_statement::scoring_function_ordering>) {
                 throwing_assert(!for_view);
                 verify_ordering_is_allowed(*_parameters, *restrictions);
                 prepared_orderings_type prepared_orderings = prepare_orderings(*schema);
@@ -2374,11 +2436,12 @@ select_statement::prepare_restrictions(data_dictionary::database db,
                                        ::shared_ptr<selection::selection> selection,
                                        bool for_view,
                                        bool allow_filtering,
-                                       restrictions::check_indexes do_check_indexes)
+                                       restrictions::check_indexes do_check_indexes,
+                                       restrictions::pinned_plan_opt pinned_plan)
 {
     try {
         return restrictions::analyze_statement_restrictions(db, schema, statement_type::SELECT, _where_clause, ctx,
-            selection->contains_only_static_columns(), for_view, allow_filtering, do_check_indexes);
+            selection->contains_only_static_columns(), for_view, allow_filtering, do_check_indexes, std::move(pinned_plan));
     } catch (const exceptions::unrecognized_entity_exception& e) {
         if (contains_alias(e.entity)) {
             throw exceptions::invalid_request_exception(format("Aliases aren't allowed in the WHERE clause (name: '{}')", e.entity));
@@ -2427,6 +2490,9 @@ select_statement::prepared_orderings_type select_statement::prepare_orderings(co
     prepared_orderings.reserve(_parameters->orderings().size());
 
     for (auto&& [column_id, column_ordering] : _parameters->orderings()) {
+        // Only regular orderings reach here; scoring orderings carry a null column_id and
+        // are handled by their own resolvers.
+        throwing_assert(column_id);
         ::shared_ptr<column_identifier> column = column_id->prepare_column_identifier(schema);
 
         const column_definition* def = schema.get_column_definition(column->name());

@@ -8,7 +8,7 @@ import asyncio
 import random
 import time
 from pathlib import Path
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace
 from cassandra import WriteFailure, WriteTimeout
 from cassandra.protocol import ConfigurationException, ServerError
@@ -21,11 +21,11 @@ logger = logging.getLogger(__name__)
 
 segment_size = 128 * 1024
 
-async def count_logstor_data_files(manager: ManagerClient, server_id: int, shard: int) -> int:
+async def count_logstor_data_files(manager: ScyllaClusterManager, server_id: int, shard: int) -> int:
     workdir = await manager.server_get_workdir(server_id)
     return len(list((Path(workdir) / "logstor").glob(f"ls_{shard}-*-Data.db")))
 
-async def test_config_option_consistency(manager: ManagerClient):
+async def test_config_option_consistency(manager: ScyllaClusterManager):
     """
     Test that logstor storage engine requires the experimental 'logstor' feature to be enabled.
     Without the feature flag, users cannot create logstor tables.
@@ -41,7 +41,7 @@ async def test_config_option_consistency(manager: ManagerClient):
         with pytest.raises(ConfigurationException, match="The experimental feature 'logstor' must be enabled"):
             await cql.run_async(f"CREATE TABLE {ks}.t_logstor (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
 
-async def test_parallel_writes(manager: ManagerClient):
+async def test_parallel_writes(manager: ScyllaClusterManager):
     cmdline = ['--logger-log-level', 'logstor=debug']
     cfg = {'experimental_features': ['logstor']}
     await manager.servers_add(1, cmdline=cmdline, config=cfg)
@@ -59,7 +59,7 @@ async def test_parallel_writes(manager: ManagerClient):
             assert rows[0].pk == i
             assert rows[0].v == i + 1
 
-async def test_parallel_big_writes(manager: ManagerClient):
+async def test_parallel_big_writes(manager: ScyllaClusterManager):
     """
     Perform multiple writes in parallel with large values and validate to test segment switching.
     """
@@ -85,7 +85,7 @@ async def test_parallel_big_writes(manager: ManagerClient):
             assert rows[0].v == f"{i}-{large_value}"
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_write_failure_retires_active_segment(manager: ManagerClient):
+async def test_write_failure_retires_active_segment(manager: ScyllaClusterManager):
     """
     A failed segment write breaks the segment's append semaphore, so the segment must be
     retired and the active segment switched. Otherwise every later write to that segment
@@ -153,7 +153,7 @@ async def test_write_failure_retires_active_segment(manager: ManagerClient):
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("fail_separator_flush", [False, True], ids=["normal", "fail_separator_flush"])
-async def test_recovery_basic(manager: ManagerClient, fail_separator_flush: bool):
+async def test_recovery_basic(manager: ScyllaClusterManager, fail_separator_flush: bool):
     """
     Test that logstor data persists across server restarts.
 
@@ -237,7 +237,7 @@ async def test_recovery_basic(manager: ManagerClient, fail_separator_flush: bool
             assert rows[0].pk == pk, f"Key {pk} has wrong pk value"
             assert rows[0].v == expected_v, f"Key {pk} has wrong value after additional writes"
 
-async def test_recovery_with_segment_reuse(manager: ManagerClient):
+async def test_recovery_with_segment_reuse(manager: ScyllaClusterManager):
     """
     Test recovery after segments have been compacted and reused.
 
@@ -288,7 +288,9 @@ async def test_recovery_with_segment_reuse(manager: ManagerClient):
 
         # Verify compaction ran
         metrics = await manager.metrics.query(servers[0].ip_addr)
-        segments_compacted = metrics.get("scylla_logstor_sm_segments_compacted") or 0
+        segments_in = metrics.get("scylla_logstor_sm_compaction_segments_in") or 0
+        segments_out = metrics.get("scylla_logstor_sm_compaction_segments_out") or 0
+        segments_compacted = segments_in - segments_out
         logger.info(f"Segments compacted: {segments_compacted}")
         assert segments_compacted > 0, "Compaction should have run when filling disk twice"
 
@@ -303,7 +305,7 @@ async def test_recovery_with_segment_reuse(manager: ManagerClient):
             assert len(rows) == 1, f"Key {pk} not found after recovery"
             assert rows[0].v == expected_v, f"Key {pk} value mismatch after recovery"
 
-async def test_grow_logstor_disk_size(manager: ManagerClient):
+async def test_grow_logstor_disk_size(manager: ScyllaClusterManager):
     """
     Test that increasing the configured logstor disk size works correctly.
 
@@ -348,7 +350,7 @@ async def test_grow_logstor_disk_size(manager: ManagerClient):
         assert new_free_segments >= old_free_segments + ((new_disk_size_mb - old_disk_size_mb) * 1024 * 1024) // segment_size, \
             "Free segments should increase after growing disk size"
 
-async def test_shrink_logstor_disk_size_no_data(manager: ManagerClient):
+async def test_shrink_logstor_disk_size_no_data(manager: ScyllaClusterManager):
     """
     Test that shrinking the configured logstor disk size works correctly when
     there is no live data to preserve the extra capacity.
@@ -391,7 +393,7 @@ async def test_shrink_logstor_disk_size_no_data(manager: ManagerClient):
         assert free_segments <= new_disk_size_mb * 1024 * 1024 // segment_size, "Free segments should not exceed total segments after shrinking disk size"
 
 
-async def test_shrink_logstor_disk_size_dead_data(manager: ManagerClient):
+async def test_shrink_logstor_disk_size_dead_data(manager: ScyllaClusterManager):
     """
     Test that shrinking the configured logstor disk size can remove a file when
     all data in that file is dead.
@@ -454,7 +456,7 @@ async def test_shrink_logstor_disk_size_dead_data(manager: ManagerClient):
             f"Expected at most one active segment after shrink with dead data, got {segments_in_use}"
 
 
-async def test_shrink_logstor_disk_size_live_data(manager: ManagerClient):
+async def test_shrink_logstor_disk_size_live_data(manager: ScyllaClusterManager):
     """
     Test that shrinking the configured logstor disk size preserves files that
     still contain live data.
@@ -509,7 +511,7 @@ async def test_shrink_logstor_disk_size_live_data(manager: ManagerClient):
             assert rows[0].v == value, f"Wrong value for key {i} after attempted shrink with live data"
 
 
-async def test_space_accounting_metrics(manager: ManagerClient):
+async def test_space_accounting_metrics(manager: ScyllaClusterManager):
     """
     Verify the space accounting metrics scylla_logstor_sm_live_record_bytes and
     scylla_logstor_sm_live_record_count are correct after writes, overwrites,
@@ -616,7 +618,7 @@ async def test_space_accounting_metrics(manager: ManagerClient):
             f"got {final_live_record_count_after_drop}"
         )
 
-async def test_compaction(manager: ManagerClient):
+async def test_compaction(manager: ScyllaClusterManager):
     """
     Test log compaction by creating dead data and verifying space reclamation.
     """
@@ -650,13 +652,15 @@ async def test_compaction(manager: ManagerClient):
 
         async def segments_compacted():
             metrics = await manager.metrics.query(servers[0].ip_addr)
-            segments_compacted = metrics.get("scylla_logstor_sm_segments_compacted") or 0
+            segments_in = metrics.get("scylla_logstor_sm_compaction_segments_in") or 0
+            segments_out = metrics.get("scylla_logstor_sm_compaction_segments_out") or 0
+            segments_compacted = segments_in - segments_out
             if segments_compacted == 4:
                 return True
             await manager.api.logstor_compaction(servers[0].ip_addr)
         await wait_for(segments_compacted, time.time() + 60)
 
-async def test_drop_table(manager: ManagerClient):
+async def test_drop_table(manager: ScyllaClusterManager):
     """
     Test that DROP TABLE works properly with logstor tables.
     """
@@ -719,7 +723,16 @@ async def test_drop_table(manager: ManagerClient):
             assert rows[0].v == value, f"Expected value of size {value_size} for key {i} in test2 after all operations, but got {len(rows[0].v)}"
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_drop_table_during_logstor_compaction(manager: ManagerClient):
+@pytest.mark.parametrize("operation", ["drop", "truncate"])
+async def test_table_removal_during_logstor_compaction(manager: ScyllaClusterManager, operation: str):
+    """
+    Both DROP and TRUNCATE discard the segments of the table's compaction groups, which has to
+    wait for an ongoing compaction of those groups, so that compaction cannot free a segment that
+    is being discarded, nor add a segment to a group after it was drained.
+
+    DROP runs the same truncate path and only then stops the table, so the two share this
+    critical section, and DROP additionally tears down the already drained compaction groups.
+    """
     cmdline = ['--logger-log-level', 'logstor=trace', '--logger-log-level', 'debug_error_injection=debug', '--smp=1']
     cfg = {
         'experimental_features': ['logstor'],
@@ -750,16 +763,35 @@ async def test_drop_table_during_logstor_compaction(manager: ManagerClient):
         await manager.api.enable_injection(server.ip_addr, inj, one_shot=True)
         log_mark = await server_log.mark()
 
+        # pause a compaction right before it frees the segments it compacted
         await manager.api.logstor_compaction(server.ip_addr)
         await server_log.wait_for(f'{inj}: waiting for message', from_mark=log_mark, timeout=60)
 
-        drop_task = cql.run_async(f"DROP TABLE {ks}.test")
-        await server_log.wait_for(f"Dropping {ks}.test", from_mark=log_mark, timeout=60)
+        # the operation has to wait for the paused compaction instead of racing with it.
+        # both operations log "Truncating" since drop discards the data the same way.
+        statement = "DROP TABLE" if operation == "drop" else "TRUNCATE TABLE"
+        task = cql.run_async(f"{statement} {ks}.test")
+        try:
+            await server_log.wait_for(f"Truncating {ks}.test", from_mark=log_mark, timeout=60)
+            # the operation has reached the point where it waits for an ongoing compaction, which is
+            # the critical section under test. The paused compaction cannot get past the injection on
+            # its own, so the operation stays blocked until the message below is sent.
+            await asyncio.sleep(0.1)
+            assert not task.done(), f"{operation} did not wait for the ongoing compaction"
+        finally:
+            await manager.api.message_injection(server.ip_addr, inj)
 
-        await manager.api.message_injection(server.ip_addr, inj)
-        await drop_task
+        await task
 
-async def test_trigger_separator_flush(manager: ManagerClient):
+        metrics = await manager.metrics.query(server.ip_addr)
+        assert metrics.get("scylla_logstor_sm_live_record_bytes") == 0
+        assert metrics.get("scylla_logstor_sm_live_record_count") == 0
+
+        if operation == "truncate":
+            rows = await cql.run_async(f"SELECT pk FROM {ks}.test")
+            assert len(rows) == 0
+
+async def test_trigger_separator_flush(manager: ScyllaClusterManager):
     """
     Write to 2 tablets, one slower than the other.
     The separator buffer of the slow tablet holds writes from many different segments until it becomes full.
@@ -798,7 +830,7 @@ async def test_trigger_separator_flush(manager: ManagerClient):
             value = f"value_{i}_" + ('x' * (value_size - 20))
             await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
 
-async def test_tablet_split_trigger_by_size(manager: ManagerClient):
+async def test_tablet_split_trigger_by_size(manager: ScyllaClusterManager):
     """
     Test that a logstor table automatically splits tablets when the data size
     exceeds --target-tablet-size-in-bytes.
@@ -849,7 +881,7 @@ async def test_tablet_split_trigger_by_size(manager: ManagerClient):
             assert len(rows) == 1, f"Key {i} not found after tablet split"
             assert rows[0].v == value, f"Wrong value for key {i} after tablet split"
 
-async def test_tablet_split_and_merge(manager: ManagerClient):
+async def test_tablet_split_and_merge(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
@@ -911,7 +943,7 @@ async def test_tablet_split_and_merge(manager: ManagerClient):
 
         await check()
 
-async def test_tablet_migration(manager: ManagerClient):
+async def test_tablet_migration(manager: ScyllaClusterManager):
     """
     Test tablet migration
     """
@@ -946,7 +978,7 @@ async def test_tablet_migration(manager: ManagerClient):
             assert len(rows) == 1, f"Expected 1 row for key {i} after tablet migration, but got {len(rows)}"
             assert rows[0].v == f"{i}_{value}", f"Expected value '{i}_{value}' for key {i} after tablet migration, but got {rows[0].v}"
 
-async def test_tablet_intranode_migration(manager: ManagerClient):
+async def test_tablet_intranode_migration(manager: ScyllaClusterManager):
     """
     Test tablet intranode migration
     """
@@ -981,7 +1013,7 @@ async def test_tablet_intranode_migration(manager: ManagerClient):
             assert rows[0].v == f"{i}_{value}", f"Expected value '{i}_{value}' for key {i} after tablet migration, but got {rows[0].v}"
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_migration_with_compaction(manager: ManagerClient):
+async def test_tablet_migration_with_compaction(manager: ScyllaClusterManager):
     """
     Test that tablet migration is correct when compaction runs concurrently on the source.
     Verifies that data migrated to the destination is intact even when segments are freed
@@ -1073,7 +1105,7 @@ async def test_tablet_migration_with_compaction(manager: ManagerClient):
             assert rows[0].v == expected_v, f"Key {pk} has wrong value after migration with concurrent compaction"
 
 @pytest.mark.asyncio
-async def test_cache(manager: ManagerClient):
+async def test_cache(manager: ScyllaClusterManager):
     """
     Verify the logstor mutation cache works correctly.
     """

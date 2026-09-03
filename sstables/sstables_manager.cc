@@ -8,6 +8,8 @@
 
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/switch_to.hh>
+#include <cctype>
+#include <ranges>
 #include <unordered_map>
 #include <unordered_set>
 #include "utils/log.hh"
@@ -184,8 +186,9 @@ sstring storage_manager::get_endpoint_type(sstring endpoint) {
     return get_endpoint(endpoint).cfg.type();
 }
 
-bool storage_manager::is_known_endpoint(sstring endpoint) const {
-    return _object_storage_endpoints.contains(endpoint);
+bool storage_manager::is_known_endpoint(sstring endpoint, sstring type) const {
+    auto it = _object_storage_endpoints.find(endpoint);
+    return it != _object_storage_endpoints.end() && (type == "" || it->second.cfg.is_storage_of_type(type));
 }
 
 std::vector<sstring> storage_manager::endpoints(sstring type) const noexcept {
@@ -420,8 +423,14 @@ void sstables_manager::reclaim_memory_and_stop_tracking_sstable(sstable* sst) {
     // reclaim any remaining memory from the sstable
     sst->reclaim_memory_from_components();
     // disable further reload of components
-    _reclaimed.erase(*sst);
+    erase_from_reclaimed(sst);
     sst->disable_component_memory_reload();
+}
+
+void sstables_manager::erase_from_reclaimed(sstable* sst) noexcept {
+    if (sst->_manager_set_link.is_linked()) {
+        _reclaimed.erase(_reclaimed.iterator_to(*sst));
+    }
 }
 
 void sstables_manager::add(sstable* sst) {
@@ -525,8 +534,10 @@ void sstables_manager::validate_new_keyspace_storage_options(const data_dictiona
                 throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
             }
             // It's non-system keyspace
-            if (!is_known_endpoint(so.endpoint)) {
-                throw exceptions::configuration_exception(format("Endpoint {} not configured", so.endpoint));
+            // The endpoint must be configured and have the same storage type the keyspace declares
+            auto requested_type = so.type | std::views::transform(&tolower) | std::ranges::to<std::string>();
+            if (!is_known_endpoint(so.endpoint, requested_type)) {
+                throw exceptions::configuration_exception(format("Endpoint {} not configured as {}", so.endpoint, so.type));
             }
         }
     }, so.value);

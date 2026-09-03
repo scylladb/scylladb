@@ -13,7 +13,7 @@ from cassandra.query import SimpleStatement # type: ignore
 from cassandra.cluster import ConsistencyLevel # type: ignore
 from cassandra.protocol import WriteTimeout # type: ignore
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import wait_for_token_ring_and_group0_consistency, new_test_keyspace, reconnect_driver
 
 
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_hints_manager_shutdown_hang(manager: ManagerClient) -> None:
+async def test_hints_manager_shutdown_hang(manager: ScyllaClusterManager) -> None:
     """Reproducer for #8079"""
     s1 = await manager.server_add(config={
         'error_injections_at_startup': ['decrease_hints_flush_period'],

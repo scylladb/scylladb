@@ -7,7 +7,7 @@
 from functools import partial
 from typing import Optional
 from test.pylib.internal_types import IPAddress, ServerInfo
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import InjectionHandler, inject_error_one_shot
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for
@@ -83,7 +83,7 @@ async def check_bootstrap_tasks_tree(tm: TaskManagerClient, module_name: str, se
 
     return (servers, [vt.id for vt in virtual_tasks])
 
-async def check_replace_tasks_tree(manager: ManagerClient, tm: TaskManagerClient, module_name: str, servers: list[ServerInfo],
+async def check_replace_tasks_tree(manager: ScyllaClusterManager, tm: TaskManagerClient, module_name: str, servers: list[ServerInfo],
                           previous_vts: list[TaskID]) -> tuple[list[ServerInfo], list[TaskID]]:
     assert servers, "No servers available"
 
@@ -105,7 +105,7 @@ async def check_replace_tasks_tree(manager: ManagerClient, tm: TaskManagerClient
 
     return servers, previous_vts + [virtual_task.id]
 
-async def check_rebuild_tasks_tree(manager: ManagerClient, tm: TaskManagerClient, module_name: str, servers: list[ServerInfo],
+async def check_rebuild_tasks_tree(manager: ScyllaClusterManager, tm: TaskManagerClient, module_name: str, servers: list[ServerInfo],
                           previous_vts: list[TaskID]) -> tuple[list[ServerInfo], list[TaskID]]:
     async def _all_alive():
         if len(servers) == len(await manager.running_servers()):
@@ -126,7 +126,7 @@ async def check_rebuild_tasks_tree(manager: ManagerClient, tm: TaskManagerClient
 
     return servers, previous_vts + [virtual_task.id]
 
-async def check_remove_node_tasks_tree(manager: ManagerClient, tm: TaskManagerClient,module_name: str, servers: list[ServerInfo],
+async def check_remove_node_tasks_tree(manager: ScyllaClusterManager, tm: TaskManagerClient,module_name: str, servers: list[ServerInfo],
                           previous_vts: list[TaskID]) -> tuple[list[ServerInfo], list[TaskID]]:
     assert servers, "No servers available"
 
@@ -165,7 +165,7 @@ async def poll_for_task(tm: TaskManagerClient, module_name: str, server: ServerI
     return streaming_tasks[0]
 
 
-async def check_decommission_tasks_tree(manager: ManagerClient, tm: TaskManagerClient,module_name: str, servers: list[ServerInfo],
+async def check_decommission_tasks_tree(manager: ScyllaClusterManager, tm: TaskManagerClient,module_name: str, servers: list[ServerInfo],
                           previous_vts: list[TaskID]) -> tuple[list[ServerInfo], list[TaskID]]:
     async def _check_virtual_task(decommissioned_server: ServerInfo, handler):
         logger.info("Checking top level decommission node task")
@@ -194,7 +194,7 @@ async def check_decommission_tasks_tree(manager: ManagerClient, tm: TaskManagerC
     vts_list = await get_new_virtual_tasks_list(tm, module_name, servers[0], previous_vts)
     return servers, previous_vts + [vts_list[0].task_id]
 
-async def test_node_ops_tasks_tree(manager: ManagerClient):
+async def test_node_ops_tasks_tree(manager: ScyllaClusterManager):
     """Test node ops task manager tasks."""
     module_name = "node_ops"
     tm = TaskManagerClient(manager.api)
@@ -219,7 +219,7 @@ async def test_node_ops_tasks_tree(manager: ManagerClient):
         # live node for DROP KEYSPACE.
         await manager.driver_connect()
 
-async def test_node_ops_tasks_ttl(manager: ManagerClient):
+async def test_node_ops_tasks_ttl(manager: ScyllaClusterManager):
     """Test node ops virtual tasks' ttl."""
     module_name = "node_ops"
     tm = TaskManagerClient(manager.api)
@@ -228,9 +228,9 @@ async def test_node_ops_tasks_ttl(manager: ManagerClient):
     time.sleep(3)
     await get_new_virtual_tasks_statuses(tm, module_name, servers, [], expected_task_num=0)
 
-async def test_node_ops_task_wait(manager: ManagerClient):
+async def test_node_ops_task_wait(manager: ScyllaClusterManager):
     """Test node ops virtual task's wait."""
-    async def _decommission(manager: ManagerClient, server: ServerInfo):
+    async def _decommission(manager: ScyllaClusterManager, server: ServerInfo):
         await manager.decommission_node(server.server_id)
 
     async def _wait_for_task(tm: TaskManagerClient, module_name: str, server: ServerInfo, handler: InjectionHandler):

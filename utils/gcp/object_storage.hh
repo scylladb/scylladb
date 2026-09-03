@@ -12,6 +12,7 @@
 #include <string>
 #include <chrono>
 #include <functional>
+#include <unordered_map>
 
 #include <seastar/core/file.hh>
 #include <seastar/core/future.hh>
@@ -36,12 +37,20 @@ namespace utils::gcp::storage {
     /**
      * List info on a named object in a bucket
      */
+    /**
+     * User-defined key/value attributes attached to an object.  The client maps
+     * these onto the `metadata` member of the GCS object resource; callers deal
+     * in plain key/value pairs and need not know that spelling.
+     */
+    using object_metadata = std::unordered_map<std::string, std::string>;
+
     struct object_info {
         std::string name;
         std::string content_type;
         uint64_t size;
         uint64_t generation;
         std::chrono::system_clock::time_point modified;
+        object_metadata metadata;
         // TODO: what info do we need?
     };
 
@@ -134,11 +143,11 @@ namespace utils::gcp::storage {
         /**
          * Copies a named object to @new_name
          */
-        future<> copy_object(std::string_view bucket, std::string_view object_name, std::string_view to_name, seastar::abort_source* = nullptr);
+        future<> copy_object(std::string_view bucket, std::string_view object_name, std::string_view to_name, object_metadata metadata = {}, seastar::abort_source* = nullptr);
         /**
          * Copies a named object to @new_bucket and @new_name
          */
-        future<> copy_object(std::string_view bucket, std::string_view object_name, std::string_view new_bucket, std::string_view to_name, seastar::abort_source* = nullptr);
+        future<> copy_object(std::string_view bucket, std::string_view object_name, std::string_view new_bucket, std::string_view to_name, object_metadata metadata = {}, seastar::abort_source* = nullptr);
 
         /**
          * Merges sub-objects into a new destination. Actual file will be composed in order of subobject in `source_object`.
@@ -154,7 +163,7 @@ namespace utils::gcp::storage {
          * 
          * Note: this will overwrite any existing object of the same name.
          */
-        seastar::data_sink create_upload_sink(std::string_view bucket, std::string_view object_name, rjson::value metadata = {}, seastar::abort_source* = nullptr) const;
+        seastar::data_sink create_upload_sink(std::string_view bucket, std::string_view object_name, object_metadata metadata = {}, seastar::abort_source* = nullptr) const;
         /**
          * Creates a data_source for reading from a named object.
          */
@@ -172,6 +181,10 @@ namespace utils::gcp::storage {
          * Checks if an object exists.
          */
         future<bool> object_exists(std::string_view bucket, std::string_view object_name, seastar::abort_source* as = nullptr) const;
+        /**
+         * Retrieves object metadata.
+         */
+        future<object_info> get_object_info(std::string_view bucket, std::string_view object_name, seastar::abort_source* as = nullptr) const;
         /**
          * Destroys resources. Must be called before releasing object
          */

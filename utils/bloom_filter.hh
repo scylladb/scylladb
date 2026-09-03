@@ -44,10 +44,6 @@ public:
 
     virtual bool is_present(hashed_key key) override;
 
-    virtual void clear() override {
-        _bitset.clear();
-    }
-
     virtual void close() override { }
 
     virtual size_t memory_size() override {
@@ -78,8 +74,6 @@ struct always_present_filter: public i_filter {
 
     virtual void add(const bytes_view& key) override { }
     virtual void add(const hashed_key& key) override { }
-
-    virtual void clear() override { }
 
     virtual void close() override { }
 

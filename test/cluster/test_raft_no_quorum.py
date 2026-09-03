@@ -8,7 +8,7 @@ import logging
 import pytest
 import asyncio
 from test.pylib.internal_types import ServerNum
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot, InjectionHandler, read_barrier
 from test.cluster.util import create_new_test_keyspace
 
@@ -20,7 +20,7 @@ def fixture_raft_op_timeout(build_mode):
     return 10000 if build_mode == 'debug' else 1000
 
 
-async def update_group0_raft_op_timeout(server_id: ServerNum, manager: ManagerClient, timeout: int) -> None:
+async def update_group0_raft_op_timeout(server_id: ServerNum, manager: ScyllaClusterManager, timeout: int) -> None:
     logger.info(f"Updating group0_raft_op_timeout_in_ms on server {server_id} to {timeout}")
     running_ids = [srv.server_id for srv in await manager.running_servers()]
     if server_id in running_ids:
@@ -36,7 +36,7 @@ async def update_group0_raft_op_timeout(server_id: ServerNum, manager: ManagerCl
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
-async def test_cannot_add_new_node(manager: ManagerClient, raft_op_timeout: int) -> None:
+async def test_cannot_add_new_node(manager: ScyllaClusterManager, raft_op_timeout: int) -> None:
     # This test makes sure that trying to add a new node fails with timeout
     # if the majority of the cluster is not available.
     # To exercise this, we start with a cluster of five nodes. This setup lets us check two situations:
@@ -89,7 +89,7 @@ async def test_cannot_add_new_node(manager: ManagerClient, raft_op_timeout: int)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
-async def test_quorum_lost_during_node_join(manager: ManagerClient, raft_op_timeout: int) -> None:
+async def test_quorum_lost_during_node_join(manager: ScyllaClusterManager, raft_op_timeout: int) -> None:
     config = {
         'error_injections_at_startup': [
             {
@@ -132,7 +132,7 @@ async def test_quorum_lost_during_node_join(manager: ManagerClient, raft_op_time
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
-async def test_quorum_lost_during_node_join_response_handler(manager: ManagerClient, raft_op_timeout: int) -> None:
+async def test_quorum_lost_during_node_join_response_handler(manager: ScyllaClusterManager, raft_op_timeout: int) -> None:
     logger.info("starting a first node (the leader)")
     servers = [await manager.server_add()]
 
@@ -205,7 +205,7 @@ async def test_quorum_lost_during_node_join_response_handler(manager: ManagerCli
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
-async def test_cannot_run_operations(manager: ManagerClient, raft_op_timeout: int) -> None:
+async def test_cannot_run_operations(manager: ScyllaClusterManager, raft_op_timeout: int) -> None:
     logger.info("starting a first node (the leader)")
     servers = [await manager.server_add(config={
         'error_injections_at_startup': [
@@ -254,7 +254,7 @@ async def test_cannot_run_operations(manager: ManagerClient, raft_op_timeout: in
 
 @pytest.mark.skip_mode(mode='release', reason='dev mode is sufficient for this test')
 @pytest.mark.skip_mode(mode='debug', reason='dev mode is sufficient for this test')
-async def test_can_restart(manager: ManagerClient, raft_op_timeout: int) -> None:
+async def test_can_restart(manager: ScyllaClusterManager, raft_op_timeout: int) -> None:
     """
     Test that restarts work without group 0 quorum. Stop all five nodes and restart them one by one.
 

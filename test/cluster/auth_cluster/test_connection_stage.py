@@ -27,7 +27,7 @@ import logging
 import time
 import pytest
 from cassandra.auth import PlainTextAuthProvider
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for
 
 
@@ -70,7 +70,7 @@ def make_server_config(auth_type: str) -> dict:
     "cert_bypass",
 ])
 @pytest.mark.skip_mode("release", reason="error injections are not supported in release mode")
-async def test_connection_stage_ready_after_auth(manager: ManagerClient, auth_type: str) -> None:
+async def test_connection_stage_ready_after_auth(manager: ScyllaClusterManager, auth_type: str) -> None:
     """After a successful authentication via any code path in process_startup,
     the connection must be reported as READY in system.clients."""
     server = await manager.server_add(config=make_server_config(auth_type))

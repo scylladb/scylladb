@@ -22,6 +22,7 @@
 # configuring role-based access control, and test_service_levels.py for
 # configuring service levels - both need to be done through CQL.
 
+import json
 import string
 import pytest
 
@@ -161,3 +162,51 @@ def test_alternator_aux_tables(dynamodb, table1, option):
     # Check Streams log table:
     alternator_cdc_schema = scylla_get_schema(dynamodb, cql_table_for_cdclog(table1))
     assert alternator_base_schema[option] == alternator_cdc_schema[option]
+
+# Check that the speculative_retry_user_table_default configuration option
+# applies to Alternator tables - the base table and its auxiliary tables
+# holding a GSI, LSI and CDC log. The option is live-updatable, so the test
+# sets it through the system.config virtual table and restores the original
+# value when done. We can't use the table1 fixture here because the table
+# must be created while the option is set.
+def test_alternator_tables_respect_speculative_retry_config(dynamodb, cql):
+    option = 'speculative_retry_user_table_default'
+    original = json.loads(cql.execute(f"SELECT value FROM system.config WHERE name = '{option}'").one().value)
+    cql.execute(f"UPDATE system.config SET value = '200ms' WHERE name = '{option}'")
+    try:
+        with new_test_table(dynamodb,
+            KeySchema=[
+                # Must have both hash key and range key to allow LSI creation
+                { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+            ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'c', 'AttributeType': 'S' },
+                { 'AttributeName': 'x', 'AttributeType': 'S' },
+            ],
+            LocalSecondaryIndexes=[
+                {   'IndexName': 'lsi_name',
+                    'KeySchema': [
+                        { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'x', 'KeyType': 'RANGE' },
+                    ],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                }
+            ],
+            GlobalSecondaryIndexes=[
+                {   'IndexName': 'gsi_name',
+                    'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                }
+            ],
+            StreamSpecification={
+                'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'
+            }
+            ) as table:
+            assert scylla_get_schema(dynamodb, cql_table_for(table))['speculative_retry'] == '200.00ms'
+            assert scylla_get_schema(dynamodb, cql_table_for_gsi(table, 'gsi_name'))['speculative_retry'] == '200.00ms'
+            assert scylla_get_schema(dynamodb, cql_table_for_lsi(table, 'lsi_name'))['speculative_retry'] == '200.00ms'
+            assert scylla_get_schema(dynamodb, cql_table_for_cdclog(table))['speculative_retry'] == '200.00ms'
+    finally:
+        cql.execute(f"UPDATE system.config SET value = '{original}' WHERE name = '{option}'")

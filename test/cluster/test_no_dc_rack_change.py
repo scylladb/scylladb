@@ -7,11 +7,11 @@
 import pytest
 import logging
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 logger = logging.getLogger(__name__)
 
-async def test_no_dc_rack_change(manager: ManagerClient) -> None:
+async def test_no_dc_rack_change(manager: ScyllaClusterManager) -> None:
     """
     Check that it is not possible to change node's DC or rack during restart.
     """
