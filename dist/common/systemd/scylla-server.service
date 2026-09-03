@@ -9,7 +9,8 @@ Conflicts=abrt-ccpp.service
 Type=notify
 LimitCORE=infinity
 LimitMEMLOCK=infinity
-LimitNOFILE=800000
+# resolved by systemd to the fs.nr_open sysctl
+LimitNOFILE=infinity
 LimitAS=infinity
 LimitNPROC=8096
 # Intel Golden Cove branches > 2GB occupy more slots in the branch target buffer,
