@@ -47,6 +47,8 @@ manifest_json::node_info::node_info(const node_info& e) {
     host_id = e.host_id;
     datacenter = e.datacenter;
     rack = e.rack;
+    first_token = e.first_token;
+    last_token = e.last_token;
 }
 
 manifest_json::node_info::node_info(const db::snapshot_node_entry& e) {
@@ -61,6 +63,8 @@ manifest_json::node_info& manifest_json::node_info::operator=(const node_info& e
         host_id = e.host_id;
         datacenter = e.datacenter;
         rack = e.rack;
+        first_token = e.first_token;
+        last_token = e.last_token;
     }
     return *this;
 }
@@ -69,6 +73,8 @@ void manifest_json::node_info::register_params() {
     add(&host_id, "host_id");
     add(&datacenter, "datacenter");
     add(&rack, "rack");
+    add(&first_token, "first_token");
+    add(&last_token, "last_token");
 }
 
 
