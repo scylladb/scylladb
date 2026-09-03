@@ -510,6 +510,16 @@ future<> sstable_streamer::stream_sstable_mutations(streaming::plan_id ops_uuid,
         sst_set->insert(sst);
     }
 
+    // Streaming these would mean carrying them to the targets alongside the
+    // fragments, which the fragment stream this uses cannot express. Dropping
+    // them would send the data they delete to the targets and resurrect it, so
+    // refuse instead of doing that quietly.
+    if (auto trts = sst_set->token_range_tombstones(); !trts.empty()) {
+        throw std::runtime_error(fmt::format(
+                "load_and_stream: sstables of {}.{} carry token range tombstones ({}), which this path cannot stream",
+                s->ks_name(), s->cf_name(), trts));
+    }
+
     auto start_time = std::chrono::steady_clock::now();
     host_id_vector_replica_set current_targets;
     std::unordered_map<locator::host_id, send_meta_data> metas;
