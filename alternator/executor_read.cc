@@ -933,9 +933,8 @@ static query::clustering_range calculate_ck_bound(schema_ptr schema, const colum
         return query::clustering_range::make(query::clustering_range::bound(ck), query::clustering_range::bound(upper_limit));
     }
     case comparison_operator_type::BEGINS_WITH: {
-        if (raw_value.empty()) {
-            return query::clustering_range::make_open_ended_both_sides();
-        }
+        // raw_value cannot be empty here - get_key_from_typed_value() above
+        // rejects empty key values.
         // NOTICE(sarna): A range starting with given prefix and ending (non-inclusively) with a string "incremented" by a single
         // character at the end. Throws for NUMBER instances.
         if (!ck_cdef.type->is_compatible_with(*utf8_type)) {
