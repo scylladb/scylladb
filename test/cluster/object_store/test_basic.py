@@ -1042,3 +1042,35 @@ async def test_scylla_sstable_dump_scylla_metadata(manager: ScyllaClusterManager
         returncode, out, err = await run_scylla_sstable(bad_args)
         assert returncode != 0
         assert "is not one" in out + err, f"unexpected diagnosis: {out} {err}"
+
+
+async def test_storage_mode_local_refuses_object_storage_keyspace(manager: ScyllaClusterManager, object_storage):
+    '''storage_mode_for_new_keyspaces=local refuses an object-storage keyspace.
+    The cluster has no user keyspace yet, so the setting is the only thing that
+    can refuse it'''
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': object_storage.create_endpoint_conf(),
+           'storage_mode_for_new_keyspaces': 'local'}
+    await manager.server_add(config=cfg)
+
+    cql = manager.get_cql()
+    with pytest.raises(InvalidRequest, match='storage_mode_for_new_keyspaces is set to local'):
+        cql.execute(f'CREATE KEYSPACE {unique_name()} {keyspace_options(object_storage)};')
+
+
+async def test_storage_mode_object_storage_refuses_local_keyspace(manager: ScyllaClusterManager, object_storage):
+    '''the other direction, again on a cluster with no user keyspace yet'''
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': object_storage.create_endpoint_conf(),
+           'storage_mode_for_new_keyspaces': 'object_storage'}
+    await manager.server_add(config=cfg)
+
+    cql = manager.get_cql()
+    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
+                                      'replication_factor': '1'})
+    with pytest.raises(InvalidRequest, match='storage_mode_for_new_keyspaces is set to object_storage'):
+        cql.execute(f'CREATE KEYSPACE {unique_name()} WITH REPLICATION = {replication_opts};')
+
+    # the configured kind is still accepted
+    cql.execute(f'CREATE KEYSPACE {unique_name()} {keyspace_options(object_storage)};')
+
