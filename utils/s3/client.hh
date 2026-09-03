@@ -131,6 +131,7 @@ class client : public enable_shared_from_this<client> {
     semaphore _buffered_dl_sem{max_client_buffered_downloads_in_flight};
     timer<seastar::lowres_clock> _creds_invalidation_timer;
     timer<seastar::lowres_clock> _creds_update_timer;
+    unsigned _creds_consecutive_failures = 0;
     aws_credentials _credentials;
     aws::aws_credentials_provider_chain _creds_provider_chain;
     seastar::gate _config_update_gate;
@@ -159,6 +160,7 @@ class client : public enable_shared_from_this<client> {
     struct private_tag {};
 
     future<> update_credentials_and_rearm();
+    void rearm_creds_retry();
     future<> authorize(http::request&);
     future<group_client&> find_or_create_client();
     future<group_client&> find_or_create_client_slow();
