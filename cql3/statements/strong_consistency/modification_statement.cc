@@ -63,7 +63,7 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
     validate_consistency_level(options.get_consistency());
 
     auto timeout = db::timeout_clock::now() + _statement->get_timeout(qs.get_client_state(), options);
-    auto json_cache = base_statement::json_cache_opt{};
+    auto json_cache = _statement->maybe_prepare_json_cache(options);
     const auto keys = _statement->build_partition_keys(options, json_cache);
     if (keys.size() != 1 || !query::is_single_partition(keys[0])) {
         throw exceptions::invalid_request_exception("Strongly consistent queries can only target a single partition");
