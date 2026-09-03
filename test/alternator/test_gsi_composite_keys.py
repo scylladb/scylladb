@@ -2093,6 +2093,130 @@ def test_gsi_composite_query_pagination_roundtrip(test_table_gsi_2h2r, limit):
     )
 
 
+# Full pagination roundtrip with ScanIndexForward=False. Unlike
+# test_gsi_composite_query_pagination_roundtrip above, which only checks
+# that a paginated Query loses no items, this test also verifies the
+# descending (r1, r2) order across pages - with r1 blocks spanning several
+# r2 values, inserted out of order. test_gsi_composite_scan_pagination
+# below is different again: it covers Scan, which guarantees no order.
+@pytest.mark.parametrize("limit", [1, 3, 10])
+def test_gsi_composite_query_pagination_roundtrip_reverse(test_table_gsi_2h2r, limit):
+    table = test_table_gsi_2h2r
+    h1_val, h2_val = random_string(), random_string()
+    range_keys = [
+        ("a", "a"),
+        ("c", "x"),
+        ("b", "b"),
+        ("a", "q"),
+        ("c", "c"),
+        ("b", "z"),
+        ("d", "d"),
+        ("c", "m"),
+        ("e", "e"),
+        ("d", "n"),
+    ]
+    items = []
+    for r1, r2 in range_keys:
+        item = {
+            "p": random_string(),
+            "h1": h1_val,
+            "h2": h2_val,
+            "r1": r1,
+            "r2": r2,
+        }
+        table.put_item(Item=item)
+        items.append(item)
+    # Wait for the index to converge before checking order.
+    assert_index_query(
+        table,
+        "idx_2h2r",
+        items,
+        KeyConditionExpression="h1 = :h1 AND h2 = :h2",
+        ExpressionAttributeValues={":h1": h1_val, ":h2": h2_val},
+    )
+    got = full_query(
+        table,
+        IndexName="idx_2h2r",
+        ConsistentRead=False,
+        Limit=limit,
+        ScanIndexForward=False,
+        KeyConditionExpression="h1 = :h1 AND h2 = :h2",
+        ExpressionAttributeValues={":h1": h1_val, ":h2": h2_val},
+    )
+    assert got == sorted(items, key=lambda i: (i["r1"], i["r2"]), reverse=True)
+
+
+# Select=COUNT on a composite GSI query returns just the item count.
+def test_gsi_composite_query_select_count(test_table_gsi_2h2r):
+    table = test_table_gsi_2h2r
+    h1_val, h2_val = random_string(), random_string()
+    items = []
+    for i in range(3):
+        item = {
+            "p": random_string(),
+            "h1": h1_val,
+            "h2": h2_val,
+            "r1": f"r1_{i}",
+            "r2": f"r2_{i}",
+        }
+        table.put_item(Item=item)
+        items.append(item)
+    # Wait for the index to converge before counting.
+    assert_index_query(
+        table,
+        "idx_2h2r",
+        items,
+        KeyConditionExpression="h1 = :h1 AND h2 = :h2",
+        ExpressionAttributeValues={":h1": h1_val, ":h2": h2_val},
+    )
+    got = table.query(
+        IndexName="idx_2h2r",
+        ConsistentRead=False,
+        Select="COUNT",
+        KeyConditionExpression="h1 = :h1 AND h2 = :h2",
+        ExpressionAttributeValues={":h1": h1_val, ":h2": h2_val},
+    )
+    assert got["Count"] == len(items)
+    assert "Items" not in got
+
+
+# ProjectionExpression on a composite GSI query returns only the requested
+# attributes.
+def test_gsi_composite_query_projection_expression(test_table_gsi_2h2r):
+    table = test_table_gsi_2h2r
+    h1_val, h2_val = random_string(), random_string()
+    items = []
+    for i in range(2):
+        item = {
+            "p": random_string(),
+            "h1": h1_val,
+            "h2": h2_val,
+            "r1": f"r1_{i}",
+            "r2": f"r2_{i}",
+            "z": random_string(),
+        }
+        table.put_item(Item=item)
+        items.append(item)
+    # Wait for the index to converge.
+    assert_index_query(
+        table,
+        "idx_2h2r",
+        items,
+        KeyConditionExpression="h1 = :h1 AND h2 = :h2",
+        ExpressionAttributeValues={":h1": h1_val, ":h2": h2_val},
+    )
+    got = full_query(
+        table,
+        IndexName="idx_2h2r",
+        ConsistentRead=False,
+        ProjectionExpression="r2, z",
+        KeyConditionExpression="h1 = :h1 AND h2 = :h2",
+        ExpressionAttributeValues={":h1": h1_val, ":h2": h2_val},
+    )
+    expected = [{"r2": item["r2"], "z": item["z"]} for item in items]
+    assert sorted(got, key=lambda i: i["r2"]) == expected
+
+
 # Scan pagination on composite GSI.
 @pytest.mark.parametrize("limit", [1, 2, 5, 8])
 def test_gsi_composite_scan_pagination(dynamodb, limit):
