@@ -899,7 +899,6 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
             "reads_queued_because_need_cpu_permits: {}\n"
             "reads_queued_because_memory_resources: {}\n"
             "reads_queued_because_count_resources: {}\n"
-            "reads_queued_with_eviction: {}\n"
             "total_permits: {}\n"
             "current_permits: {}\n"
             "need_cpu_permits: {}\n"
@@ -922,7 +921,6 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
             stats.reads_queued_because_need_cpu_permits,
             stats.reads_queued_because_memory_resources,
             stats.reads_queued_because_count_resources,
-            stats.reads_queued_with_eviction,
             stats.total_permits,
             stats.current_permits,
             stats.need_cpu_permits,
@@ -1515,49 +1513,40 @@ void reader_concurrency_semaphore::evict_readers_in_background() {
     });
 }
 
-reader_concurrency_semaphore::admit_result
+reader_concurrency_semaphore::reason
 reader_concurrency_semaphore::can_admit_read(const reader_permit::impl& permit) const noexcept {
     if (_resources.memory < 0) [[unlikely]] {
         const auto consumed_memory = oom_protection_consumed_memory();
         if (std::cmp_greater_equal(consumed_memory, get_kill_limit())) {
-            return {can_admit::no, reason::memory_resources};
+            return reason::memory_resources;
         }
         if (std::cmp_greater_equal(consumed_memory, get_serialize_limit())) {
             if (_blessed_permit) {
                 // blessed permit is never in the wait list
-                return {can_admit::no, reason::memory_resources};
+                return reason::memory_resources;
             } else {
                 if (permit.get_state() == reader_permit::state::waiting_for_memory) {
-                    return {can_admit::yes, reason::all_ok};
+                    return reason::all_ok;
                 } else {
-                    return {can_admit::no, reason::memory_resources};
+                    return reason::memory_resources;
                 }
             }
         }
     }
 
     if (permit.get_state() == reader_permit::state::waiting_for_memory) {
-        return {can_admit::yes, reason::all_ok};
+        return reason::all_ok;
     }
 
     if (!_ready_list.empty()) {
-        return {can_admit::no, reason::ready_list};
+        return reason::ready_list;
     }
 
     if (cpu_concurrency_limit_reached()) {
-        return {can_admit::no, reason::need_cpu_permits};
+        return reason::need_cpu_permits;
     }
 
-    const auto reason = has_available_units(permit.base_resources());
-    if (reason != reason::all_ok) {
-        if (_inactive_reads.empty()) {
-            return {can_admit::no, reason};
-        } else {
-            return {can_admit::maybe, reason};
-        }
-    }
-
-    return {can_admit::yes, reason::all_ok};
+    return has_available_units(permit.base_resources());
 }
 
 bool reader_concurrency_semaphore::should_evict_inactive_read(const reader_permit::impl& permit) const noexcept {
@@ -1568,7 +1557,7 @@ bool reader_concurrency_semaphore::should_evict_inactive_read(const reader_permi
         return true;
     }
     if (!_wait_list.empty()) {
-        const auto r = can_admit_read(_wait_list.front()).why;
+        const auto r = can_admit_read(_wait_list.front());
         if (r == reason::memory_resources && permit.resources().memory) {
             return true;
         }
@@ -1600,20 +1589,20 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
         "queued because of count resources"
     };
 
-    const auto [admit, why] = can_admit_read(permit);
+    const auto why = can_admit_read(permit);
     ++(_stats.*stats_table[static_cast<int>(why)]);
     tracing::trace(permit.trace_state(), "[reader concurrency semaphore {}] {}", _name, result_as_string[static_cast<int>(why)]);
-    if (admit != can_admit::yes || !_wait_list.empty()) {
+    if (why != reason::all_ok || !_wait_list.empty()) {
         auto fut = enqueue_waiter(permit, wait_on::admission);
-        if (admit == can_admit::yes && !_wait_list.empty()) {
+        if (why == reason::all_ok && !_wait_list.empty()) {
             // Enters the case where the semaphore can admit waiters yet it has waiters.
             // Hence, wake the execution loop to process the waiters. Since readers are
             // no longer admitted as soon as they can, the resource release could be delayed
             // as well.
             maybe_wake_execution_loop();
-        } else if (admit == can_admit::maybe) {
+        } else if ((why == reason::memory_resources || why == reason::count_resources) && !_inactive_reads.empty()) {
+            // Admission might be possible after evicting some inactive reads.
             tracing::trace(permit.trace_state(), "[reader concurrency semaphore {}] evicting inactive reads in the background to free up resources", _name);
-            ++_stats.reads_queued_with_eviction;
             evict_readers_in_background();
         }
         return fut;
@@ -1629,8 +1618,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
 
 void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
     const auto borrowed_before = _stats.reads_memory_borrowed_from_shared_pool;
-    auto admit = can_admit::no;
-    while (!_wait_list.empty() && (admit = can_admit_read(_wait_list.front()).decision) == can_admit::yes) {
+    while (!_wait_list.empty() && can_admit_read(_wait_list.front()) == reason::all_ok) {
         auto& permit = _wait_list.front();
         dequeue_permit(permit);
         try {
@@ -1684,10 +1672,6 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
             permit.promise().set_exception(std::current_exception());
         }
     }
-    if (admit == can_admit::maybe) {
-        // Evicting readers will trigger another call to `maybe_admit_waiters()` from `signal()`.
-        evict_readers_in_background();
-    }
     if (_stats.reads_memory_borrowed_from_shared_pool > borrowed_before) {
         // We took some memory from the shared pool while admitting. If memory
         // still remains in the pool, hand the wakeup off to the next waiting
@@ -1697,10 +1681,16 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
         // a different semaphore rather than waking ourselves again.
         _shared_pool.maybe_wake_next_waiter();
     }
-    if (admit != can_admit::yes && !_wait_list.empty()) {
+    if (!_wait_list.empty()) {
+        if (!_inactive_reads.empty()) {
+            // Evicting readers will trigger another call to `maybe_admit_waiters()` from `signal()`.
+            evict_readers_in_background();
+        }
         // We have waiters that could not be admitted.  If the shared pool
         // has memory returned by another semaphore, we want to be woken up
         // to re-evaluate admission.
+        // Eviction may not free anything (no inactive read may hold the
+        // resource the waiter needs), so register for the wakeup regardless.
         _shared_pool.request_wakeup(*this);
     }
 }

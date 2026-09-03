@@ -216,8 +216,6 @@ public:
         uint64_t reads_queued_because_memory_resources = 0;
         // Total number of reads enqueued because there weren't enough count resources
         uint64_t reads_queued_because_count_resources = 0;
-        // Total number of reads enqueued to be maybe admitted after evicting some inactive reads
-        uint64_t reads_queued_with_eviction = 0;
         // Total number of permits created so far.
         uint64_t total_permits = 0;
         // Current number of permits.
@@ -338,11 +336,9 @@ private:
     // Check whether permit can be admitted or not.
     // The wait list is not taken into consideration, this is the caller's
     // responsibility.
-    // A return value of can_admit::maybe means admission might be possible if
-    // some of the inactive readers are evicted.
-    enum class can_admit { no, maybe, yes };
-    struct admit_result { can_admit decision; reason why; };
-    admit_result can_admit_read(const reader_permit::impl& permit) const noexcept;
+    // A return value of reason::all_ok means the permit can be admitted, any
+    // other value is the reason why it cannot be.
+    reason can_admit_read(const reader_permit::impl& permit) const noexcept;
 
     bool should_evict_inactive_read(const reader_permit::impl& permit) const noexcept;
 
