@@ -1249,6 +1249,14 @@ compaction_group* table::get_compaction_group(size_t id) const {
     return storage_group_for_id(id).main_compaction_group().get();
 }
 
+compaction_group* table::get_any_compaction_group() const {
+    auto& groups = _sg_manager->storage_groups();
+    if (groups.empty()) {
+        return nullptr;
+    }
+    return groups.begin()->second->main_compaction_group().get();
+}
+
 storage_group& table::storage_group_for_token(dht::token token) const {
     return _sg_manager->storage_group_for_token(token);
 }

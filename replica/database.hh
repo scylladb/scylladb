@@ -716,6 +716,9 @@ private:
 
     std::unique_ptr<storage_group_manager> make_storage_group_manager();
     compaction_group* get_compaction_group(size_t id) const;
+public:
+    compaction_group* get_any_compaction_group() const;
+private:
     // NOTE: all readers must only operate on storage groups, which can provide all data belonging to
     // a given tablet replica. Interfaces below should only be used in the context of writes, for
     // example, to append data to memtable. Iterating on compaction groups is susceptible to races
