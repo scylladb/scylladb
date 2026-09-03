@@ -10,7 +10,7 @@
 import pytest
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, new_test_table
 from cassandra.protocol import InvalidRequest
 
 DEFAULT_CONFIG = {'experimental_features': ['strongly-consistent-tables']}
@@ -36,3 +36,32 @@ async def test_counter_table_creation_during_upgrade(manager: ScyllaClusterManag
     async with new_test_keyspace(manager, SC_KS_OPTS) as ks:
         with pytest.raises(InvalidRequest, match="counters are not yet supported in strongly consistent keyspaces"):
             await cql.run_async(f"CREATE TABLE {ks}.counters (pk int PRIMARY KEY, c counter)")
+
+
+async def test_cell_only_writes_on_sc_logstor_table(manager: ScyllaClusterManager):
+    """
+    UPDATE and column deletes on a logstor table in a strongly consistent
+    keyspace are rejected. logstor needs a row marker or a partition
+    tombstone on every mutation. A write without one fails inside raft
+    apply and aborts the node.
+    """
+    config = {'experimental_features': ['strongly-consistent-tables', 'logstor']}
+    server = await manager.server_add(config=config)
+    cql, _ = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, SC_KS_OPTS) as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int", " WITH storage_engine = 'logstor'") as table:
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (1, 1)")
+
+            update_msg = "UPDATE is not supported on logstor tables in strongly consistent keyspaces"
+            with pytest.raises(InvalidRequest, match=update_msg):
+                await cql.run_async(f"UPDATE {table} SET v = 2 WHERE pk = 1")
+            with pytest.raises(InvalidRequest, match=update_msg):
+                await cql.run_async(f"BEGIN BATCH UPDATE {table} SET v = 2 WHERE pk = 1; APPLY BATCH")
+            with pytest.raises(InvalidRequest, match="Deleting individual columns is not supported on logstor tables in strongly consistent keyspaces"):
+                await cql.run_async(f"DELETE v FROM {table} WHERE pk = 1")
+
+            await cql.run_async(f"DELETE FROM {table} WHERE pk = 1")
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (1, 3)")
+            rows = await cql.run_async(f"SELECT v FROM {table} WHERE pk = 1")
+            assert [r.v for r in rows] == [3]
