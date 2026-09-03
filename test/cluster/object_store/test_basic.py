@@ -1074,3 +1074,20 @@ async def test_storage_mode_object_storage_refuses_local_keyspace(manager: Scyll
     # the configured kind is still accepted
     cql.execute(f'CREATE KEYSPACE {unique_name()} {keyspace_options(object_storage)};')
 
+
+async def test_storage_mode_contradicting_the_cluster_refuses_to_start(manager: ScyllaClusterManager, object_storage):
+    '''flipping the setting on a cluster which already holds data leaves a node
+    that can create no keyspace at all, so it must refuse to start'''
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': object_storage.create_endpoint_conf(),
+           'storage_mode_for_new_keyspaces': 'object_storage'}
+    server = await manager.server_add(config=cfg)
+
+    cql = manager.get_cql()
+    cql.execute(f'CREATE KEYSPACE {unique_name()} {keyspace_options(object_storage)};')
+
+    await manager.server_stop_gracefully(server.server_id)
+    await manager.server_update_config(server.server_id, 'storage_mode_for_new_keyspaces', 'local')
+    await manager.server_start(server.server_id,
+                               expected_error='storage_mode_for_new_keyspaces is local, but this cluster keeps its user data in object storage')
+
