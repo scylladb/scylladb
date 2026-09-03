@@ -99,7 +99,7 @@ void leveled_compaction_strategy::notify_completion(compaction_group_view& table
         }
         target_level = std::max(target_level, int(candidate->get_sstable_level()));
     }
-    state->last_compacted_keys.value().at(min_level) = last->get_last_decorated_key();
+    state->last_compacted_keys.value().at(min_level) = last->get_last_ring_position();
 
     for (int i = leveled_manifest::MAX_LEVELS - 1; i > 0; i--) {
         state->compaction_counter[i]++;
@@ -114,7 +114,7 @@ void leveled_compaction_strategy::notify_completion(compaction_group_view& table
 }
 
 void leveled_compaction_strategy::generate_last_compacted_keys(leveled_compaction_strategy_state& state, leveled_manifest& manifest) {
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
     for (auto i = 0; i < leveled_manifest::MAX_LEVELS - 1; i++) {
         if (manifest.get_level(i + 1).empty()) {
             continue;
@@ -129,7 +129,7 @@ void leveled_compaction_strategy::generate_last_compacted_keys(leveled_compactio
                 max_creation_time = wtime;
             }
         }
-        last_compacted_keys[i] = sstable_with_last_compacted_key->get_last_decorated_key();
+        last_compacted_keys[i] = sstable_with_last_compacted_key->get_last_ring_position();
     }
     state.last_compacted_keys = std::move(last_compacted_keys);
 }
@@ -177,7 +177,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_ssta
     for (auto i = level_info.begin(); i != level_info.end(); ++i) {
         auto& level = *i;
         std::sort(level.begin(), level.end(), [&schema] (const sstables::shared_sstable& a, const sstables::shared_sstable& b) {
-            return dht::ring_position(a->get_first_decorated_key()).less_compare(*schema, dht::ring_position(b->get_first_decorated_key()));
+            return a->get_first_ring_position().less_compare(*schema, b->get_first_ring_position());
         });
     }
 

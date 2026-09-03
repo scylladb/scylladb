@@ -115,11 +115,11 @@ std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run) {
 
     auto frags = run.all() | std::ranges::to<std::vector<shared_sstable>>();
     std::ranges::sort(frags, std::ranges::less(), [] (const shared_sstable& x) {
-        return x->get_first_decorated_key().token();
+        return x->get_first_ring_position().token();
     });
     os << "  Fragments = {\n";
     for (auto& frag : frags) {
-        os << format("    {}={}:{}\n", frag->generation(), frag->get_first_decorated_key().token(), frag->get_last_decorated_key().token());
+        os << format("    {}={}:{}\n", frag->generation(), frag->get_first_ring_position().token(), frag->get_last_ring_position().token());
     }
     os << "  }\n}\n";
     return os;
@@ -278,7 +278,7 @@ bool partitioned_sstable_set::store_as_unleveled(const shared_sstable& sst) cons
     // vector, to avoid triggering quadratic space complexity in the interval map,
     // since many of such sstables would have presence on almost all intervals.
     static constexpr float unleveled_threshold = 0.85f;
-    auto sst_tr = dht::token_range(sst->get_first_decorated_key().token(), sst->get_last_decorated_key().token());
+    auto sst_tr = dht::token_range(sst->get_first_ring_position().token(), sst->get_last_ring_position().token());
     bool as_unleveled = dht::overlap_ratio(_token_range, sst_tr) >= unleveled_threshold;
 
     utils::get_local_injector().inject("sstable_set_insertion_verification", [&] () {

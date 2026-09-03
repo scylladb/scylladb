@@ -435,6 +435,16 @@ public:
     const dht::decorated_key& get_first_decorated_key() const;
     const dht::decorated_key& get_last_decorated_key() const;
 
+    // The first and last position on the ring this sstable occupies.
+    //
+    // Most callers want to know which part of the ring an sstable covers, not
+    // which partition key sits at its edge, and a ring position can express
+    // that with a bare token. Prefer these over the decorated key accessors
+    // above, which are for the two callers which need the key itself and which
+    // have nothing to return for an sstable storing no partitions.
+    dht::ring_position get_first_ring_position() const;
+    dht::ring_position get_last_ring_position() const;
+
     // SSTable comparator using the first key (decorated key).
     std::strong_ordering compare_by_first_key(const sstable& other) const;
 

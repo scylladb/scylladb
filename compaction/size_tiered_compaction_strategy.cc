@@ -331,7 +331,7 @@ size_tiered_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_
 
     if (input.size() >= offstrategy_threshold && mode == reshape_mode::strict) {
         std::sort(input.begin(), input.end(), [&schema] (const sstables::shared_sstable& a, const sstables::shared_sstable& b) {
-            return dht::ring_position(a->get_first_decorated_key()).less_compare(*schema, dht::ring_position(b->get_first_decorated_key()));
+            return a->get_first_ring_position().less_compare(*schema, b->get_first_ring_position());
         });
         // All sstables can be reshaped at once if the amount of overlapping will not cause memory usage to be high,
         // which is possible because partitioned set is able to incrementally open sstables during compaction
@@ -348,7 +348,7 @@ size_tiered_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_
             // token contiguity is preserved iff sstables are disjoint.
             if (bucket.size() > max_sstables) {
                 std::partial_sort(bucket.begin(), bucket.begin() + max_sstables, bucket.end(), [&schema](const sstables::shared_sstable& a, const sstables::shared_sstable& b) {
-                    return a->get_first_decorated_key().tri_compare(*schema, b->get_first_decorated_key()) <= 0;
+                    return dht::ring_position_tri_compare(*schema, a->get_first_ring_position(), b->get_first_ring_position()) <= 0;
                 });
                 bucket.resize(max_sstables);
             }
@@ -371,7 +371,7 @@ size_tiered_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_vi
         if (bucket.size() > max_threshold) {
             // preserve token contiguity
             std::ranges::sort(bucket, [&schema] (const sstables::shared_sstable& a, const sstables::shared_sstable& b) {
-                return a->get_first_decorated_key().tri_compare(*schema, b->get_first_decorated_key()) < 0;
+                return dht::ring_position_tri_compare(*schema, a->get_first_ring_position(), b->get_first_ring_position()) < 0;
             });
         }
         auto it = bucket.begin();

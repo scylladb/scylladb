@@ -2195,8 +2195,8 @@ void shard_of_with_tablets(const std::vector<sstables::shared_sstable>& sstables
 
         // token ranges are distributed across tablets, so we just check for
         // the token range of each sstable
-        auto first_token = sst->get_first_decorated_key().token();
-        auto last_token = sst->get_last_decorated_key().token();
+        auto first_token = sst->get_first_ring_position().token();
+        auto last_token = sst->get_last_ring_position().token();
         // each tablet holds a range of (last_token(i-1), last_token(i)], where
         // "last_token" is the value of the column with the same name in
         // the "system.tablets" table, and "i" is the index of current tablet.

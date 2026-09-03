@@ -440,7 +440,7 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
             }
             compaction::size_tiered_compaction_strategy_options stcs_options;
             compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, stcs_options);
-            std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+            std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
             std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
             auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
             BOOST_REQUIRE(candidate.sstables.size() == sstables.size());
@@ -804,8 +804,8 @@ static bool key_range_overlaps(table_for_tests& cf, const dht::decorated_key& a,
 }
 
 static bool sstable_overlaps(const lw_shared_ptr<replica::column_family>& cf, sstables::shared_sstable candidate1, sstables::shared_sstable candidate2) {
-    auto range1 = wrapping_interval<dht::token>::make(candidate1->get_first_decorated_key()._token, candidate1->get_last_decorated_key()._token);
-    auto range2 = wrapping_interval<dht::token>::make(candidate2->get_first_decorated_key()._token, candidate2->get_last_decorated_key()._token);
+    auto range1 = wrapping_interval<dht::token>::make(candidate1->get_first_ring_position().token(), candidate1->get_last_ring_position().token());
+    auto range2 = wrapping_interval<dht::token>::make(candidate2->get_first_ring_position().token(), candidate2->get_last_ring_position().token());
     return range1.overlaps(range2, dht::token_comparator());
 }
 
@@ -835,7 +835,7 @@ void leveled_01_fn(test_env& env) {
     compaction::size_tiered_compaction_strategy_options stcs_options;
     compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 2);
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.sstables.size() == 2);
@@ -897,7 +897,7 @@ void leveled_02_fn(test_env& env) {
     compaction::size_tiered_compaction_strategy_options stcs_options;
     compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 3);
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.sstables.size() == 3);
@@ -961,7 +961,7 @@ void leveled_03_fn(test_env& env) {
     compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 2);
     BOOST_REQUIRE(manifest.get_level_size(1) == 2);
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.sstables.size() == 3);
@@ -1035,7 +1035,7 @@ void leveled_04_fn(test_env& env) {
     auto level2_score = (double) manifest.get_total_bytes(manifest.get_level(2)) / (double) manifest.max_bytes_for_level(2);
     BOOST_REQUIRE(level2_score < 1.001);
 
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.sstables.size() == 2);
@@ -1107,7 +1107,7 @@ void leveled_06_fn(test_env& env) {
     BOOST_REQUIRE(manifest.get_level_size(1) == 1);
     BOOST_REQUIRE(manifest.get_level_size(2) == 0);
 
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.level == 2);
@@ -1141,7 +1141,7 @@ void leveled_07_fn(test_env& env) {
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     compaction::size_tiered_compaction_strategy_options stcs_options;
     compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, stcs_options);
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     auto desc = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(desc.level == 1);
@@ -1182,7 +1182,7 @@ SEASTAR_TEST_CASE(leveled_fan_out_cache) {
             auto candidates = get_candidates_for_leveled_strategy(*cf);
             compaction::size_tiered_compaction_strategy_options stcs_options;
             compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
-            std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+            std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
             std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
             return manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
         };
@@ -1224,7 +1224,7 @@ void leveled_invariant_fix_fn(test_env& env) {
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     compaction::size_tiered_compaction_strategy_options stcs_options;
     compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, stcs_options);
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
 
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
@@ -1273,7 +1273,7 @@ void leveled_stcs_on_L0_fn(test_env& env) {
     BOOST_REQUIRE(candidates.size() == size_t(l0_sstables_no+1));
     BOOST_REQUIRE(cf->get_sstables()->size() == size_t(l0_sstables_no+1));
 
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     compaction::size_tiered_compaction_strategy_options stcs_options;
 
@@ -1329,7 +1329,7 @@ void overlapping_starved_sstables_fn(test_env& env) {
     add_sstable_for_leveled_test(env, cf, max_sstable_size_in_bytes, /*level*/2, min_key.key(), keys[1].key());
     add_sstable_for_leveled_test(env, cf, max_sstable_size_in_bytes, /*level*/3, min_key.key(), keys[1].key());
 
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     // make strategy think that level 3 wasn't compacted for many rounds
     compaction_counter[3] = compaction::leveled_manifest::NO_COMPACTION_LIMIT+1;
@@ -4637,7 +4637,7 @@ void twcs_single_key_reader_through_compound_set_fn(test_env& env) {
     // sstables with same key but belonging to different windows
     auto sst1 = make_sstable_containing(sst_gen, {make_row(std::chrono::hours(1))}).get();
     auto sst2 = make_sstable_containing(sst_gen, {make_row(std::chrono::hours(5))}).get();
-    BOOST_REQUIRE(sst1->get_first_decorated_key().token() == sst2->get_last_decorated_key().token());
+    BOOST_REQUIRE(sst1->get_first_ring_position().token() == sst2->get_last_ring_position().token());
     auto dkey = sst1->get_first_decorated_key();
 
     set1->insert(std::move(sst1));
@@ -5539,7 +5539,7 @@ static future<> run_incremental_compaction_test(sstables::offstrategy offstrateg
         }).get();
 
         for (unsigned i = 0; i < sstables_nr; i++) {
-            owned_token_ranges.push_back(dht::token_range::make_singular(ssts[i]->get_last_decorated_key().token()));
+            owned_token_ranges.push_back(dht::token_range::make_singular(ssts[i]->get_last_ring_position().token()));
             gens.insert(ssts[i]->generation());
         }
 
@@ -5693,7 +5693,7 @@ void cleanup_during_offstrategy_incremental_compaction_fn(test_env& env) {
     }).get();
 
     for (unsigned i = 0; i < sstables_nr; i++) {
-        owned_token_ranges.push_back(dht::token_range::make_singular(ssts[i]->get_last_decorated_key().token()));
+        owned_token_ranges.push_back(dht::token_range::make_singular(ssts[i]->get_last_ring_position().token()));
         gens.insert(ssts[i]->generation());
     }
 
@@ -6000,11 +6000,11 @@ void splitting_compaction_fn(test_env& env) {
     for (auto& sst : ret.new_sstables) {
         testlog.info("{}: token_groups: [{}, {}], windows: [{}, {}]",
                      sst->get_filename(),
-                     classify_fn(sst->get_first_decorated_key().token()),
-                     classify_fn(sst->get_last_decorated_key().token()),
+                     classify_fn(sst->get_first_ring_position().token()),
+                     classify_fn(sst->get_last_ring_position().token()),
                      window_for(sst->get_stats_metadata().min_timestamp),
                      window_for(sst->get_stats_metadata().max_timestamp));
-        BOOST_REQUIRE_EQUAL(classify_fn(sst->get_first_decorated_key().token()), classify_fn(sst->get_last_decorated_key().token()));
+        BOOST_REQUIRE_EQUAL(classify_fn(sst->get_first_ring_position().token()), classify_fn(sst->get_last_ring_position().token()));
         BOOST_REQUIRE_EQUAL(window_for(sst->get_stats_metadata().min_timestamp), window_for(sst->get_stats_metadata().max_timestamp));
     }
     const size_t expected_output_size = 4; // 2 token groups * 2 windows.
@@ -6023,7 +6023,7 @@ void splitting_compaction_fn(test_env& env) {
     // test exception propagation
     auto throwing_classifier = [&] (dht::token t) -> mutation_writer::token_group_id {
         // skip first and last token, to not trigger exception when checking if sstable needs split.
-        if (t != input->get_first_decorated_key().token() && t != input->get_last_decorated_key().token()) {
+        if (t != input->get_first_ring_position().token() && t != input->get_last_ring_position().token()) {
             throw std::runtime_error("exception");
         }
         return classify_fn(t);

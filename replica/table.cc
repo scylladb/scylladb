@@ -1577,8 +1577,8 @@ compaction_group& tablet_storage_group_manager::compaction_group_for_token_range
 }
 
 compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(const sstables::shared_sstable& sst) const {
-    auto first_token = sst->get_first_decorated_key().token();
-    auto last_token = sst->get_last_decorated_key().token();
+    auto first_token = sst->get_first_ring_position().token();
+    auto last_token = sst->get_last_ring_position().token();
 
     return compaction_group_for_token_range(sstable_desc(sst), first_token, last_token);
 }

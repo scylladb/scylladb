@@ -1956,7 +1956,7 @@ public:
     }
 
     static bool sstable_needs_split(const sstables::shared_sstable& sst, const compaction_type_options::split& opt) {
-        return opt.classifier(sst->get_first_decorated_key().token()) != opt.classifier(sst->get_last_decorated_key().token());
+        return opt.classifier(sst->get_first_ring_position().token()) != opt.classifier(sst->get_last_ring_position().token());
     }
 
     static compaction_descriptor
@@ -2307,8 +2307,8 @@ bool needs_cleanup(const sstables::shared_sstable& sst,
         return true;
     }
 
-    auto first_token = sst->get_first_decorated_key().token();
-    auto last_token = sst->get_last_decorated_key().token();
+    auto first_token = sst->get_first_ring_position().token();
+    auto last_token = sst->get_last_ring_position().token();
     dht::token_range sst_token_range = dht::token_range::make(first_token, last_token);
 
     auto r = std::lower_bound(sorted_owned_ranges.begin(), sorted_owned_ranges.end(), first_token,

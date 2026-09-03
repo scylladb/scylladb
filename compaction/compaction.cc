@@ -1343,7 +1343,7 @@ private:
         auto permit = seastar::get_units(_replacer_lock, 1).get();
         // Replace exhausted sstable(s), if any, by new one(s) in the column family.
         auto not_exhausted = [s = _schema, &dk = sst->get_last_decorated_key()] (sstables::shared_sstable& sst) {
-            return sst->get_last_decorated_key().tri_compare(*s, dk) > 0;
+            return dht::ring_position_tri_compare(*s, sst->get_last_ring_position(), dht::ring_position(dk)) > 0;
         };
         auto exhausted = std::partition(_sstables.begin(), _sstables.end(), not_exhausted);
 
@@ -1381,12 +1381,12 @@ private:
         // all overlapping input sstables have been exhausted.
         auto gc_not_exhausted = [this] (const sstables::shared_sstable& gc_sst) {
             auto gc_range = ::wrapping_interval<dht::token>::make(
-                gc_sst->get_first_decorated_key()._token,
-                gc_sst->get_last_decorated_key()._token);
+                gc_sst->get_first_ring_position().token(),
+                gc_sst->get_last_ring_position().token());
             for (const auto& input_sst : _sstables) {
                 auto input_range = ::wrapping_interval<dht::token>::make(
-                    input_sst->get_first_decorated_key()._token,
-                    input_sst->get_last_decorated_key()._token);
+                    input_sst->get_first_ring_position().token(),
+                    input_sst->get_last_ring_position().token());
                 if (gc_range.overlaps(input_range, dht::token_comparator())) {
                     return true; // overlaps with a remaining input sstable, not exhausted yet
                 }

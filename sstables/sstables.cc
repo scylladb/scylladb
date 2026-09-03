@@ -3617,6 +3617,14 @@ const dht::decorated_key& sstable::get_last_decorated_key() const {
     return *_last;
 }
 
+dht::ring_position sstable::get_first_ring_position() const {
+    return dht::ring_position(get_first_decorated_key());
+}
+
+dht::ring_position sstable::get_last_ring_position() const {
+    return dht::ring_position(get_last_decorated_key());
+}
+
 std::strong_ordering sstable::compare_by_first_key(const sstable& other) const {
     return get_first_decorated_key().tri_compare(*_schema, other.get_first_decorated_key());
 }
@@ -3865,7 +3873,7 @@ future<uint64_t> sstable::estimated_keys_for_range(const dht::token_range& range
     // due to the inexactness of BTI indexes for range queries.
     // Returning something non-zero in this case would be unfortunate,
     // so the extra conditional makes sure that we return 0.
-    auto local_tr = dht::token_range::make({get_first_decorated_key().token()}, {get_last_decorated_key().token()});
+    auto local_tr = dht::token_range::make({get_first_ring_position().token()}, {get_last_ring_position().token()});
     if (!local_tr.overlaps(range, dht::token_comparator())) {
         co_return 0;
     }
@@ -3916,8 +3924,8 @@ sstable::compute_shards_for_this_sstable(const dht::sharder& sharder_) const {
             : nullptr;
     if (!sm || sm->token_ranges.elements.empty()) {
         token_ranges.push_back(dht::partition_range::make(
-                dht::ring_position::starting_at(get_first_decorated_key().token()),
-                dht::ring_position::ending_at(get_last_decorated_key().token())));
+                dht::ring_position::starting_at(get_first_ring_position().token()),
+                dht::ring_position::ending_at(get_last_ring_position().token())));
     } else {
         auto disk_token_range_to_ring_position_range = [] (const disk_token_range& dtr) {
             auto t1 = dht::token(dht::token::kind::key, bytes_view(dtr.left.token));
@@ -4241,8 +4249,8 @@ scylla_metadata::ext_timestamp_stats::map_type sstable::get_ext_timestamp_stats(
 // is fine that some of the partitions inside the sstable does not have a
 // record.
 gc_clock::time_point sstable::get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const {
-    auto start = get_first_decorated_key().token();
-    auto end = get_last_decorated_key().token();
+    auto start = get_first_ring_position().token();
+    auto end = get_last_ring_position().token();
     auto range = dht::token_range(dht::token_range::bound(start, true), dht::token_range::bound(end, true));
     sstlog.trace("sstable={}, ks={}, cf={}, range={}, gc_state={}, estimate", get_filename(), s->ks_name(), s->cf_name(), range, gc_state.is_gc_enabled());
     return gc_state.get_gc_before_for_range(s, range, compaction_time).max_gc_before;
@@ -4264,8 +4272,8 @@ gc_clock::time_point sstable::get_gc_before_for_fully_expire(const gc_clock::tim
                 get_filename(), s->ks_name(), s->cf_name(), deletion_time, seastar::value_of([this] { return get_stats_metadata().min_timestamp; }), s->gc_grace_seconds().count());
         return gc_clock::time_point::min();
     }
-    auto start = get_first_decorated_key().token();
-    auto end = get_last_decorated_key().token();
+    auto start = get_first_ring_position().token();
+    auto end = get_last_ring_position().token();
     auto range = dht::token_range(dht::token_range::bound(start, true), dht::token_range::bound(end, true));
     sstlog.trace("sstable={}, ks={}, cf={}, range={}, get_max_local_deletion_time={}, min_timestamp={}, gc_grace_seconds={}, gc_state={}, query",
             get_filename(), s->ks_name(), s->cf_name(), range, deletion_time, get_stats_metadata().min_timestamp, s->gc_grace_seconds().count(), gc_state.is_gc_enabled());
