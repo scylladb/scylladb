@@ -319,6 +319,12 @@ public:
     // used more than once in the filter.
     void for_filters_on(const noncopyable_function<void(std::string_view)>& func) const;
     operator bool() const { return bool(_imp); }
+    // Tells whether this filter came from the legacy QueryFilter/ScanFilter
+    // parameter rather than from FilterExpression. Used only to name the
+    // right parameter in error messages.
+    bool is_legacy_conditions() const {
+        return _imp && std::holds_alternative<conditions_filter>(*_imp);
+    }
 };
 
 filter::filter(parsed::expression_cache& parsed_expression_cache, const rjson::value& request, request_type rt,
@@ -2240,17 +2246,21 @@ future<executor::request_return_type> executor::query(client_state& client_state
     // A query is not allowed to filter on the partition key or the sort key.
     // The partition key may have up to 4 columns (composite GSI hash key);
     // the sort key may also have up to 4 genuine columns (composite GSI
-    // range key).
+    // range key). Like DynamoDB, name the offending parameter - the legacy
+    // QueryFilter or the newer FilterExpression - in the error message.
+    // FIXME: verify against real DynamoDB the exact wording it emits for
+    // each of the two parameters.
+    std::string_view filter_param = filter.is_legacy_conditions() ? "QueryFilter" : "Filter expression";
     for (const column_definition& cdef : schema->partition_key_columns()) {
         if (filter.filters_on(cdef.name_as_text())) {
             return make_ready_future<request_return_type>(api_error::validation(
-                    format("Filter expression can only contain non-primary key attributes: Partition key attribute: {}", cdef.name_as_text())));
+                    format("{} can only contain non-primary key attributes: Partition key attribute: {}", filter_param, cdef.name_as_text())));
         }
     }
     for (const column_definition& cdef : schema->clustering_key_columns() | std::views::take(number_of_user_specified_range_keys)) {
         if (filter.filters_on(cdef.name_as_text())) {
             return make_ready_future<request_return_type>(api_error::validation(
-                    format("Filter expression can only contain non-primary key attributes: Sort key attribute: {}", cdef.name_as_text())));
+                    format("{} can only contain non-primary key attributes: Sort key attribute: {}", filter_param, cdef.name_as_text())));
         }
     }
 
