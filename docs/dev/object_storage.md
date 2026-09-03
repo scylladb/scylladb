@@ -9,6 +9,14 @@ feature flag is required. Simply configure the object-storage endpoints in
 `scylla.yaml` (see below) and create a keyspace with the desired storage
 options (see `CREATE KEYSPACE` extensions below).
 
+> **Status.** Object-storage keyspaces are supported for tablets only and target
+> archival workloads. A number of capabilities are not available for them -
+> notably snapshots, backup and restore - and some additional configuration is
+> required (`query_page_size_in_bytes`, raised timeouts). See
+> [Object storage keyspaces: status and limitations](../operating-scylla/admin.rst)
+> in the user documentation for the authoritative list. Keep that list and this
+> document in sync when the supported set changes.
+
 ## Configuring AWS S3 access
 
 You can define endpoint details in the `scylla.yaml` file. For example:
@@ -72,7 +80,7 @@ For the EC2 Instance Metadata Service to function correctly, no additional confi
 object_storage_endpoints:
   - name: https://s3.us-east-1.amazonaws.com:443
     aws_region: us-east-1
-    iam_role_arn: arn:aws:iam::123456789012:instance-profile/my-instance-instance-profile
+    iam_role_arn: arn:aws:iam::123456789012:role/my-scylla-role
 ```
 
 ## Creating keyspace with S3
@@ -82,9 +90,11 @@ storage use `CREATE KEYSPACE` with `STORAGE = { 'type': 'S3', 'endpoint': '$endp
 parameters, where `$endpoint_name` should match with the corresponding `name`
 of the configured endpoint in the YAML file above.
 
-In the following example, an endpoint named "s3.us-east-2.amazonaws.com" is
-defined in `scylla.yaml`, and this endpoint is used when creating the
-keyspace "ks".
+In the following example an endpoint is defined in `scylla.yaml` and then used
+when creating the keyspace "ks". Note that the `endpoint` value in `CREATE KEYSPACE`
+is the endpoint `name` copied verbatim: the lookup is an exact string match, so
+`https://s3.us-east-2.amazonaws.com` and `https://s3.us-east-2.amazonaws.com:443`
+are different endpoints.
 
 in `scylla.yaml`:
 
@@ -104,7 +114,7 @@ CREATE KEYSPACE ks
   }
   AND STORAGE = {
    'type' : 'S3',
-   'endpoint' : 's3.us-east-2.amazonaws.com',
+   'endpoint' : 'https://s3.us-east-2.amazonaws.com:443',
    'bucket' : 'bucket-for-testing'
   };
 ```
@@ -119,6 +129,7 @@ in `scylla.yaml`:
 ```yaml
 object_storage_endpoints:
   - name: default
+    type: gs
     credentials_file: <credentials file>|none
 ```
 

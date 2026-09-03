@@ -100,21 +100,26 @@ The :code:`scylla-server` file contains configuration related to starting up the
 Configuring Object Storage
 ----------------------------------
 
-ScyllaDB can communicate directly with S3-compatible object storage. Before
-using features that rely on object storage, you must first enable and
-configure access to the storage endpoints.
+ScyllaDB can communicate directly with S3-compatible object storage and with
+Google Cloud Storage (GCS). Before using features that rely on object storage,
+you must first enable and configure access to the storage endpoints.
 
 Storage endpoints define where data can be stored and are specified in
-the ``scylla.yaml`` configuration file. The relevant section of ``scylla.yaml``
-should follow this format:
+the ``scylla.yaml`` configuration file.
+
+Amazon S3 and S3-compatible stores
+==================================
+
+An endpoint with no ``type`` is treated as S3, but state ``type: s3``
+explicitly so that the backend of each entry is evident.
 
 .. code-block:: yaml
 
    object_storage_endpoints:
      - name: http[s]://<endpoint_address_or_domain_name>[:<port_number>]
+       type: s3
        aws_region: <region_name> # required unless AWS_DEFAULT_REGION is set, e.g. us-east-1
        iam_role_arn: <iam_role> # optional
-
 
 Example:
 
@@ -122,13 +127,68 @@ Example:
 
    object_storage_endpoints:
      - name: https://s3.us-east-1.amazonaws.com
+       type: s3
        aws_region: us-east-1
-       iam_role_arn: arn:aws:iam::123456789012:instance-profile/my-instance-instance-profile
+       iam_role_arn: arn:aws:iam::123456789012:role/my-scylla-role
 
 The ``aws_region`` option can also be specified using 
 the ``AWS_DEFAULT_REGION`` environment variable. An S3 endpoint needs a region
 from one of the two. If neither supplies a non-empty value, ScyllaDB logs an
 error and ignores that endpoint.
+
+.. _object-storage-gcs-config:
+
+Google Cloud Storage
+====================
+
+Set ``type: gs`` to select the GCS backend. The endpoint ``name`` is normally
+``default``, which resolves to the standard GCS endpoint; a URI is only needed
+when using a private proxy or a mock server.
+
+.. code-block:: yaml
+
+   object_storage_endpoints:
+     - name: default
+       type: gs
+       credentials_file: <path to a service-account JSON file> # optional
+
+If ``credentials_file`` is omitted, the default credentials on the machine are
+used - the current user's credentials, or the instance credentials when running
+on a GCE instance. The ``GOOGLE_APPLICATION_CREDENTIALS`` environment variable is
+also honored.
+
+.. warning::
+
+   ``type`` defaults to ``s3`` when it is not specified. A GCS endpoint that
+   omits ``type: gs`` is configured as an S3 endpoint pointing at a Google URL,
+   which fails in ways that are hard to diagnose.
+
+.. _object-storage-endpoint-name:
+
+The endpoint name
+=================
+
+The ``name`` of an endpoint is also its identifier: statements that select an
+object-storage endpoint - such as
+:ref:`CREATE KEYSPACE <cql-keyspace-storage-options>` - must repeat this string
+**exactly**. The lookup is an exact string comparison, so
+``https://s3.us-east-1.amazonaws.com`` and ``https://s3.us-east-1.amazonaws.com:443``
+are two different endpoints even though they address the same server.
+
+Write ``name`` as a URL, for example ``https://s3.us-east-1.amazonaws.com``. The
+scheme selects whether the connection is encrypted; use ``https`` in production.
+The port is taken from the URL; when it is omitted, the scheme default is used
+(443 for ``https``, 80 for ``http``). Do not add a trailing slash or a path: it
+is ignored when connecting, but it still forms part of the endpoint identifier,
+so ``https://s3.us-east-1.amazonaws.com/`` and
+``https://s3.us-east-1.amazonaws.com`` are two different endpoints.
+
+S3 credentials
+==============
+
+This section applies to S3 and S3-compatible endpoints. Credentials for GCS
+endpoints are configured with ``credentials_file``, described in
+:ref:`Google Cloud Storage <object-storage-gcs-config>` above.
 
 The AWS-related credentials options (``aws_access_key_id``,
 ``aws_secret_access_key``, ``aws_session_token``) can be configured using
@@ -138,15 +198,51 @@ the following environment variables:
   - ``AWS_SECRET_ACCESS_KEY``
   - ``AWS_SESSION_TOKEN``
 
-The ScyllaDB S3 client will first attempt to access credentials from environment variables.
-If it fails to obtain credentials, it will then try to retrieve them from the
-AWS Security Token Service (STS) or the EC2 Instance Metadata Service.
+The ScyllaDB S3 client resolves credentials in this order: environment
+variables, the EC2 Instance Metadata Service, and finally the AWS Security
+Token Service (STS). STS additionally requires ``iam_role_arn`` to be set.
+
+``iam_role_arn`` must be the ARN of the IAM **role** to assume
+(``arn:aws:iam::<account>:role/<name>``) - not the ARN of the instance profile
+that contains that role. See `AssumeRole
+<https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html>`_ in
+the AWS documentation.
 
 .. note::
 
    - All AWS-related parameters must be either present or absent as a group.
    - When set, these values are used by the S3 client to sign requests.
    - If not set, requests are sent unsigned, which may not be accepted by all servers.
+
+.. note::
+
+   On EC2, prefer an instance profile or STS so that no long-lived credentials
+   are kept on the node. Object stores that do not provide an EC2-compatible
+   instance metadata service - :ref:`OCI <admin-oci-object-storage>` among them -
+   can only be accessed with credentials supplied through the environment
+   variables above: unlike the GCS client, which reads a service-account file,
+   the S3 client has no file-based credentials provider.
+
+Tuning options
+==============
+
+.. list-table::
+   :widths: 30 15 55
+   :header-rows: 1
+
+   * - Option
+     - Default
+     - Description
+   * - ``object_storage_endpoints``
+     - empty
+     - The list of endpoints described above. Live-updateable: endpoints can be
+       added without restarting the node.
+   * - ``object_storage_connections_per_shard``
+     - 128
+     - Maximum number of connections per shard for **S3** endpoints, distributed
+       across scheduling groups in proportion to their shares so that compaction
+       and streaming traffic does not starve user reads. Live-updateable. The
+       GCS backend ignores this option.
 
 .. _admin-oci-object-storage:
 
@@ -313,12 +409,140 @@ Keyspace storage options
 ------------------------
 
 By default, SStables of a keyspace are stored in a local directory.
-As an alternative, you can configure your keyspace to be stored
-on Amazon S3 or another S3-compatible object store.
+As an alternative, you can configure your keyspace to be stored on Amazon S3,
+another S3-compatible object store, or Google Cloud Storage.
 
 Before creating keyspaces with object storage, you need to
 :ref:`configure <object-storage-configuration>` the object storage
-credentials and endpoint.
+credentials and endpoint. The keyspace is then created with a ``STORAGE``
+option naming that endpoint - see
+:ref:`Keyspace storage options <cql-keyspace-storage-options>` for the CQL
+syntax.
+
+.. important::
+
+   Review :ref:`Object storage keyspaces: status and limitations
+   <object-storage-limitations>` before using this feature. In particular,
+   snapshots and backup are **not available** for object-storage keyspaces.
+
+.. _admin-object-storage-config:
+
+Required configuration
+======================
+
+Object storage has far higher latency than local disks, and the following
+settings must be adjusted before using an object-storage keyspace:
+
+* ``query_page_size_in_bytes: 67108864`` (64 MiB). Without a larger page size,
+  range scans and multi-partition reads issue many small object requests and are
+  liable to time out.
+* Increased request timeouts. The relevant ``scylla.yaml`` options are
+  ``range_request_timeout_in_ms`` (default 10000), ``read_request_timeout_in_ms``
+  (5000) and ``write_request_timeout_in_ms`` (2000); all are live-updateable.
+  See :ref:`scylla.yaml <admin-scylla.yaml>` for the full list. The increase can
+  also be scoped to the affected workload instead of raising the global defaults,
+  with the ``USING TIMEOUT`` CQL extension on individual statements or with a
+  per-service-level timeout. Client-side timeouts are configured in the driver
+  and must be raised to match.
+* ``force_capacity_based_balancing: true``. By default the tablet load balancer
+  equalizes storage utilization, using SSTable sizes fetched from load
+  statistics. Those sizes do not correspond to local disk usage for
+  object-storage keyspaces, so the balancer must be switched to capacity based
+  balancing, which treats tablets as equally sized and balances against node and
+  shard capacity instead. The option is live-updateable.
+
+Verifying keyspace storage
+==========================
+
+.. code-block:: cql
+
+   SELECT keyspace_name, storage_type, storage_options
+   FROM system_schema.scylla_keyspaces;
+
+.. code-block:: none
+
+    keyspace_name | storage_type | storage_options
+   ---------------+--------------+---------------------------------------------------------------------------
+               ks |           S3 | {'bucket': 'my-bucket', 'endpoint': 'https://s3.us-east-1.amazonaws.com'}
+
+``storage_type`` is set only for object-storage keyspaces, to ``S3`` or ``GS``,
+and ``storage_options`` then holds the bucket and endpoint. There is no
+``LOCAL`` value: a keyspace that does not appear here, or appears with a null
+``storage_type``, is not stored on object storage. This table is not a list of
+all keyspaces.
+
+.. _object-storage-limitations:
+
+Object storage keyspaces: status and limitations
+-------------------------------------------------
+
+Object-storage keyspaces target archival workloads: data that is queried
+infrequently and benefits from object-storage pricing. Read latency is
+substantially higher than on local disks, and there is no local disk cache, so
+the cost of a read scales with the number of SSTables it touches.
+
+Supported
+=========
+
+* Tablets.
+* Reads, writes, memtable flush and compaction.
+* Adding, removing, replacing and decommissioning nodes. Tablet migration moves
+  no data for object-storage keyspaces: ownership of the shared objects is
+  transferred by reference instead of copying them.
+* Repair, including incremental repair.
+* Encryption at Rest.
+* Amazon S3 and S3-compatible object stores. Google Cloud Storage works over
+  the same code path, but is **experimental** - see below.
+
+Not supported
+=============
+
+.. list-table::
+   :widths: 35 65
+   :header-rows: 1
+
+   * - Capability
+     - Status
+   * - Snapshots, backup and restore
+     - Not available. ``nodetool snapshot`` fails for object-storage keyspaces
+       with ``Snapshotting non-local tables is not implemented``, and every
+       backup path is built on snapshots. Restoring **into** an object-storage
+       keyspace is likewise unavailable.
+   * - Vnode keyspaces
+     - Not supported. An object-storage keyspace must use tablets, which is the
+       default for new keyspaces.
+   * - Mixed-storage clusters
+     - Not supported. A cluster must use either local storage or object storage
+       for its user keyspaces, not both.
+   * - Materialized views and secondary indexes
+     - Not supported.
+   * - LWT, counters, CDC, Alternator
+     - Not supported.
+   * - Size based tablet load balancing
+     - The load balancer's size based mode treats SSTable sizes as local disk
+       usage, which does not hold for object storage. Set
+       ``force_capacity_based_balancing: true`` as described in
+       :ref:`Required configuration <admin-object-storage-config>`.
+   * - Changing a keyspace's storage type
+     - Not possible. ``ALTER KEYSPACE`` cannot move a keyspace between local and
+       object storage. Moving existing data means creating a second keyspace
+       with the desired storage and copying the data through CQL, reading from
+       one and writing to the other.
+   * - Google Cloud Storage backend
+     - Experimental. ScyllaDB exposes no per-request metrics for the GCS
+       backend, so object-storage request rate, latency, retries and errors
+       cannot be observed. Use S3 for production deployments.
+
+Backup and ScyllaDB Manager
+===========================
+
+ScyllaDB Manager cannot back up object-storage keyspaces, and a backup task that
+includes them fails. There is no way to back up an object-storage keyspace in
+this release.
+
+Storing SSTables in an object store does **not** make them a backup. The objects
+are live SSTables, and ScyllaDB deletes them when the last reference to them
+goes away.
 
 .. _admin-views-with-tablets:
 
