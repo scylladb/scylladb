@@ -77,6 +77,12 @@ static std::unique_ptr<seastar::http::retry_strategy> make_test_retry_strategy()
 // and closes the connection, so each attempt shows up as a fresh accept().
 // Used to observe the raw cadence of client::chunked_download_source's
 // internal retry loop against a sustained retryable failure.
+//
+// Optionally takes a response script: given the 0-based request index, it
+// returns either nullopt (answer with the fixed error status) or a
+// {chunk, start_offset} pair (answer 206 Partial Content with that chunk,
+// against a fixed total object size), letting a test drive a mix of
+// failures and successful partial reads across a connection sequence.
 class fake_http_error_server {
     seastar::server_socket _socket;
     socket_address _address;
@@ -86,6 +92,8 @@ class fake_http_error_server {
     std::vector<std::chrono::steady_clock::time_point> _request_times;
     unsigned _status_code;
     sstring _status_line;
+    uint64_t _total_size = 0;
+    std::function<std::optional<std::pair<sstring, uint64_t>>(unsigned)> _script;
     future<> _accept_loop;
 
     future<> handle_one(connected_socket sock) {
@@ -103,9 +111,17 @@ class fake_http_error_server {
         } catch (...) {
             // Ignore malformed/partial requests; still answer below.
         }
+        auto idx = _request_count++;
         _request_times.push_back(std::chrono::steady_clock::now());
-        _request_count++;
-        auto resp = seastar::format("HTTP/1.1 {} {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", _status_code, _status_line);
+        auto outcome = _script ? _script(idx) : std::nullopt;
+        sstring resp;
+        if (outcome) {
+            auto& [chunk, start] = *outcome;
+            resp = seastar::format("HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {}-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                    start, start + chunk.size() - 1, _total_size, chunk.size(), chunk);
+        } else {
+            resp = seastar::format("HTTP/1.1 {} {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", _status_code, _status_line);
+        }
         try {
             co_await out.write(resp);
             co_await out.flush();
@@ -135,6 +151,17 @@ public:
         , _address(_socket.local_address())
         , _status_code(status_code)
         , _status_line(std::move(status_line))
+        , _accept_loop(accept_loop())
+    {}
+
+    fake_http_error_server(uint64_t total_size, unsigned status_code, sstring status_line,
+                            std::function<std::optional<std::pair<sstring, uint64_t>>(unsigned)> script)
+        : _socket(seastar::listen(socket_address(0x7f000001, 0)))
+        , _address(_socket.local_address())
+        , _status_code(status_code)
+        , _status_line(std::move(status_line))
+        , _total_size(total_size)
+        , _script(std::move(script))
         , _accept_loop(accept_loop())
     {}
 
@@ -208,6 +235,60 @@ SEASTAR_THREAD_TEST_CASE(test_chunked_download_retries_retryable_error_without_b
     BOOST_REQUIRE_LE(close_elapsed.count(), 500);
 
     cln->close().get();
+}
+
+// Regression test for fix point #3: chunked_download_source's retry-attempt
+// counter must reset after an attempt that makes real progress, or a
+// long-lived reader would exhaust its retry budget on unrelated blips spread
+// across its lifetime. Serve a 12-byte object in three 4-byte chunks, with a
+// retryable failure both before the first chunk and right after each of the
+// first two chunks; if the counter isn't reset by the chunk in between, the
+// failure right after it retries from the wrong (higher) backoff level.
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_retry_counter_resets_on_progress) {
+    ::setenv("AWS_ACCESS_KEY_ID", "test", 1);
+    ::setenv("AWS_SECRET_ACCESS_KEY", "test", 1);
+
+    static const std::vector<sstring> chunks = {"AAAA", "BBBB", "CCCC"};
+    const std::unordered_set<unsigned> fail_at = {0, 1, 3, 5};
+
+    fake_http_error_server srv(12, 503, "Slow Down", [chunk_idx = 0u, fail_at](unsigned idx) mutable -> std::optional<std::pair<sstring, uint64_t>> {
+        if (fail_at.contains(idx)) {
+            return std::nullopt;
+        }
+        auto start = chunk_idx * 4;
+        return std::make_pair(chunks.at(chunk_idx++), start);
+    });
+    auto stop_srv = seastar::defer([&] noexcept { srv.stop().get(); });
+
+    s3::endpoint_config cfg = {
+        .port = srv.address().port(),
+        .use_https = false,
+        .region = "local",
+    };
+    auto cln = s3::client::make("127.0.0.1", make_lw_shared<s3::endpoint_config>(std::move(cfg)));
+
+    auto in = input_stream<char>(cln->make_chunked_download_source("/test-bucket/test-object", s3::full_range));
+    auto data = seastar::util::read_entire_stream_contiguous(in).get();
+    in.close().get();
+    cln->close().get();
+
+    BOOST_REQUIRE_EQUAL(data, "AAAABBBBCCCC");
+
+    auto times = srv.request_times();
+    BOOST_REQUIRE_EQUAL(times.size(), 7u);
+    auto gap_ms = [&](size_t a, size_t b) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(times[b] - times[a]).count();
+    };
+    testlog.info("test_chunked_download_retry_counter_resets_on_progress: gap 1->2 (pre-progress backoff): {}ms, "
+                 "gap 3->4 (post-progress retry): {}ms, gap 5->6 (post-progress retry): {}ms",
+                 gap_ms(1, 2), gap_ms(3, 4), gap_ms(5, 6));
+
+    // Before any progress, the second failure backs off for real (attempt# 1: ~50ms).
+    BOOST_REQUIRE_GE(gap_ms(1, 2), 30);
+    // Right after a chunk lands, the next failure must retry from attempt# 0
+    // again (no sleep), not from the accumulated pre-progress attempt count.
+    BOOST_REQUIRE_LE(gap_ms(3, 4), 20);
+    BOOST_REQUIRE_LE(gap_ms(5, 6), 20);
 }
 
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
