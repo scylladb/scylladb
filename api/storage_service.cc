@@ -548,38 +548,54 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
             throw httpd::bad_param_exception("backup locations (in body) must be a JSON array");
         }
 
-        const auto& locations = parsed.GetArray();
-        if (locations.Size() != 1) {
-            throw httpd::bad_param_exception("backup locations array (in body) must contain exactly one entry");
+        if (parsed.Empty()) {
+            throw httpd::bad_param_exception("backup locations array (in body) must not be empty");
         }
 
-        const auto& location = locations[0];
-        if (!location.IsObject()) {
-            throw httpd::bad_param_exception("backup location (in body) must be a JSON object");
+        auto get_member = [] (const auto& location, const char* name) {
+            if (!location.HasMember(name) || !location[name].IsString()) {
+                throw httpd::bad_param_exception(fmt::format("backup location entry must have '{}' string member", name));
+            }
+            return sstring(rjson::to_string_view(location[name]));
+        };
+
+        std::vector<tablet_restore_location> restore_locations;
+        for (const auto& location : parsed.GetArray()) {
+            if (!location.IsObject()) {
+                throw httpd::bad_param_exception("backup location (in body) must be a JSON object");
+            }
+
+            auto endpoint = get_member(location, "endpoint");
+            auto bucket = get_member(location, "bucket");
+            auto dc = get_member(location, "datacenter");
+            auto prefix = location.HasMember("prefix") ? rjson::to_string_view(location["prefix"]) : std::string_view{};
+
+            if (!location.HasMember("manifests") || !location["manifests"].IsArray()) {
+                throw httpd::bad_param_exception("backup location entry must have 'manifests' array");
+            }
+
+            auto manifests = location["manifests"].GetArray() |
+                std::views::transform([] (const auto& m) { return sstring(rjson::to_string_view(m)); }) |
+                std::ranges::to<utils::chunked_vector<sstring>>();
+
+            if (manifests.empty()) {
+                throw httpd::bad_param_exception("backup location 'manifests' array must not be empty");
+            }
+
+            apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} datacenter={} endpoint={} bucket={} prefix={} manifests_count={}",
+                        keyspace, table, snapshot, dc, endpoint, bucket, prefix, manifests.size());
+
+            restore_locations.push_back(tablet_restore_location{
+                .datacenter = std::move(dc),
+                .endpoint = std::move(endpoint),
+                .bucket = std::move(bucket),
+                .prefix = sstring(prefix),
+                .manifests = std::move(manifests),
+            });
         }
-
-        auto endpoint = rjson::to_string_view(location["endpoint"]);
-        auto bucket = rjson::to_string_view(location["bucket"]);
-        auto dc = rjson::to_string_view(location["datacenter"]);
-        auto prefix = location.HasMember("prefix") ? rjson::to_string_view(location["prefix"]) : std::string_view{};
-
-        if (!location.HasMember("manifests") || !location["manifests"].IsArray()) {
-            throw httpd::bad_param_exception("backup location entry must have 'manifests' array");
-        }
-
-        auto manifests = location["manifests"].GetArray() |
-            std::views::transform([] (const auto& m) { return sstring(rjson::to_string_view(m)); }) |
-            std::ranges::to<utils::chunked_vector<sstring>>();
-
-        if (manifests.empty()) {
-            throw httpd::bad_param_exception("backup location 'manifests' array must not be empty");
-        }
-
-        apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} datacenter={} endpoint={} bucket={} prefix={} manifests_count={}",
-                    keyspace, table, snapshot, dc, endpoint, bucket, prefix, manifests.size());
 
         auto table_id = validate_table(ctx.db.local(), keyspace, table);
-        auto task_id = co_await sst_loader.local().restore_tablets(table_id, keyspace, table, snapshot, sstring(endpoint), sstring(bucket), sstring(prefix), std::move(manifests));
+        auto task_id = co_await sst_loader.local().restore_tablets(table_id, keyspace, table, snapshot, std::move(restore_locations));
         co_return json::json_return_type(fmt::to_string(task_id));
     });
 }

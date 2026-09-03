@@ -796,6 +796,8 @@ async def do_test_streaming_scopes(build_mode: str, manager: ScyllaClusterManage
 @pytest.mark.parametrize("topology", [
         topo(rf = 1, nodes = 2, racks = 1, dcs = 1),
         topo(rf = 2, nodes = 2, racks = 2, dcs = 1),
+        topo(rf = 1, nodes = 2, racks = 1, dcs = 2),
+        topo(rf = 2, nodes = 8, racks = 2, dcs = 2),
     ])
 @pytest.mark.parametrize("num_tables, num_restore_nodes", [
         (1, 1),  # single table via a single node
@@ -803,7 +805,7 @@ async def do_test_streaming_scopes(build_mode: str, manager: ScyllaClusterManage
         (2, 2),  # multiple tables dispatched from multiple nodes
     ])
 async def test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, object_storage, topology, num_tables, num_restore_nodes):
-    '''Check that tablet-aware restore works for multiple tables backed up from multiple nodes'''
+    '''Check that tablet-aware restore works for multiple tables backed up from multiple nodes and datacenters'''
     await do_test_restore_tablets(build_mode, manager, object_storage, topology, num_tables, num_restore_nodes)
 
 
@@ -869,11 +871,27 @@ async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager
 
             restore_nodes = servers[:num_restore_nodes]
 
+            servers_per_dc = defaultdict(list)
+            for s in servers:
+                servers_per_dc[s.datacenter].append(s)
+
             async def restore_table(idx, cf):
                 node = restore_nodes[idx % len(restore_nodes)]
                 logger.info(f'Restore table {cf} into {dst_ks}.{cf}_restored via {node.ip_addr}')
-                manifests = [f'{s.server_id}/{cf}/manifest.json' for s in servers]
-                tid = await manager.api.restore_tablets(node.ip_addr, dst_ks, f'{cf}_restored', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, restore_prefix)
+                locations = [
+                    {
+                        "datacenter": dc,
+                        "endpoint": object_storage.address,
+                        "bucket": object_storage.bucket_name,
+                        "prefix": restore_prefix,
+                        "manifests": [f'{s.server_id}/{cf}/manifest.json' for s in dc_servers]
+                    } for dc, dc_servers in servers_per_dc.items()
+                ]
+                if topology.dcs > 1:
+                    # The locations must cover all the DCs the keyspace replicates to
+                    with pytest.raises(HTTPError, match="don't match the datacenters"):
+                        await manager.api.restore_tablets_multidc(node.ip_addr, dst_ks, f'{cf}_restored', snap_name, locations[:1])
+                tid = await manager.api.restore_tablets_multidc(node.ip_addr, dst_ks, f'{cf}_restored', snap_name, locations)
                 status = await manager.api.wait_task(node.ip_addr, tid)
                 assert (status is not None) and (status['state'] == 'done'), f"Restore of {cf} via {node.ip_addr} failed: {status}"
                 assert status['progress_total'] > 0

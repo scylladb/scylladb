@@ -48,6 +48,17 @@ class effective_replication_map;
 class tablet_metadata_guard;
 }
 
+// A single backup location for tablet-aware restore: where in the object
+// storage the sstables of one datacenter's backup live, and the datacenter
+// of the restored cluster they are to be loaded into.
+struct tablet_restore_location {
+    sstring datacenter;
+    sstring endpoint;
+    sstring bucket;
+    sstring prefix;
+    utils::chunked_vector<sstring> manifests;
+};
+
 struct stream_progress {
     float total = 0.;
     float completed = 0.;
@@ -152,7 +163,8 @@ public:
             sstring prefix, std::vector<sstring> sstables,
             sstring endpoint, sstring bucket, stream_scope scope, bool primary_replica);
 
-    future<tasks::task_id> restore_tablets(table_id, sstring keyspace, sstring table, sstring snap_name, sstring endpoint, sstring bucket, sstring prefix, utils::chunked_vector<sstring> manifests);
+    // Takes one backup location per datacenter the keyspace replicates to.
+    future<tasks::task_id> restore_tablets(table_id, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations);
 
     replica::database& local_db() {
         return _db.local();
@@ -200,4 +212,5 @@ struct manifest_summary {
     size_t nr_sstables;
 };
 
-future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+// Manifests coming from a datacenter other than the expected one are rejected.
+future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, sstring expected_datacenter, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl = db::consistency_level::EACH_QUORUM);

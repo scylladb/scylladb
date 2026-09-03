@@ -31,6 +31,7 @@
 #include "streaming/stream_reason.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "locator/network_topology_strategy.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
 #include "utils/error_injection.hh"
@@ -44,6 +45,7 @@
 
 #include <cfloat>
 #include <algorithm>
+#include <set>
 
 static logging::logger llog("sstables_loader");
 
@@ -998,7 +1000,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     auto snapshot_info = co_await sth.get_snapshot_remote_location(snapshot_name, datacenter);
     llog.info("Downloading sstables for tablet {} from {}@{}/{}", tid, snapshot_name, snapshot_info.endpoint, snapshot_info.bucket);
     auto sst_infos = co_await sth.get_snapshot_sstables(snapshot_name, keyspace_name, table_name, datacenter, rack,
-            db::consistency_level::LOCAL_QUORUM, tablet_range.start().transform([] (auto& v) { return v.value(); }), tablet_range.end().transform([] (auto& v) { return v.value(); }));
+            db::consistency_level::QUORUM, tablet_range.start().transform([] (auto& v) { return v.value(); }), tablet_range.end().transform([] (auto& v) { return v.value(); }));
     llog.debug("{} SSTables found for tablet {}", sst_infos.size(), tid);
     if (sst_infos.empty()) {
         // It can happen when the restored table has more tablets than the original.
@@ -1142,7 +1144,7 @@ future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets_for_test
 }
 
 static future<manifest_summary> process_manifest(input_stream<char>& is, sstring keyspace, sstring table,
-                                 const sstring& expected_snapshot_name,
+                                 const sstring& expected_snapshot_name, const sstring& expected_datacenter,
                                  const sstring& manifest_prefix, db::system_distributed_keyspace& sys_dist_ks,
                                  db::consistency_level cl) {
     // Read the entire JSON content
@@ -1175,6 +1177,10 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
     auto& node_obj = rjson::get(parsed, "node");
     auto datacenter = rjson::get<std::string>(node_obj, "datacenter");
     auto rack = rjson::get<std::string>(node_obj, "rack");
+    if (datacenter != expected_datacenter) {
+        throw std::runtime_error(fmt::format("Manifest {} belongs to datacenter '{}', expected '{}'",
+            manifest_prefix, datacenter, expected_datacenter));
+    }
 
     // Process each sstable entry in the manifest
     // FIXME: cleanup of the snapshot-related rows is needed in case anything throws in here.
@@ -1212,7 +1218,7 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
     co_return manifest_summary{tablet_count, sstables->Size()};
 }
 
-future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
+future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, sstring expected_datacenter, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
     if (manifest_prefixes.empty()) {
         throw std::invalid_argument("manifest prefixes list must not be empty");
     }
@@ -1230,7 +1236,7 @@ future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::sto
         sstables::object_name name(bucket, join_path(prefix, manifest_prefix));
         auto source = client->make_download_source(name);
         return seastar::with_closeable(input_stream<char>(std::move(source)), [&] (input_stream<char>& is) {
-            return process_manifest(is, keyspace, table, expected_snapshot_name, manifest_prefix, sys_dist_ks, cl).then([&](manifest_summary ms) {
+            return process_manifest(is, keyspace, table, expected_snapshot_name, expected_datacenter, manifest_prefix, sys_dist_ks, cl).then([&](manifest_summary ms) {
                 size_t count = ms.tablet_count;
                 if (!tablet_count) {
                     tablet_count = count;
@@ -1263,19 +1269,16 @@ class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::ta
         auto s = db.find_schema(_tid);
         auto md = db.get_token_metadata_ptr();
         const auto& topo = md->get_topology();
-        auto dc = topo.get_datacenter();
-        auto dc_racks_it = topo.get_datacenter_racks().find(dc);
-        if (dc_racks_it == topo.get_datacenter_racks().end()) {
-            co_return;
-        }
 
         db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
         tasks::task_manager::task::progress progress = {};
-        co_await max_concurrent_for_each(dc_racks_it->second, 16, [&](const auto& rack_entry) -> future<> {
-            auto p = co_await sth.get_snapshot_sstables_progress(_snap_name, s->ks_name(), s->cf_name(), dc, rack_entry.first);
-            progress.total += p.nr_sstables;
-            progress.completed += p.nr_downloaded_sstables;
-        });
+        for (const auto& [dc, racks] : topo.get_datacenter_racks()) {
+            co_await max_concurrent_for_each(racks, 16, [&](const auto& rack_entry) -> future<> {
+                auto p = co_await sth.get_snapshot_sstables_progress(_snap_name, s->ks_name(), s->cf_name(), dc, rack_entry.first);
+                progress.total += p.nr_sstables;
+                progress.completed += p.nr_downloaded_sstables;
+            });
+        }
         _progress = progress;
     }
 
@@ -1375,14 +1378,51 @@ protected:
     }
 };
 
-future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, sstring endpoint, sstring bucket, sstring prefix, utils::chunked_vector<sstring> manifests) {
-    auto summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, endpoint, bucket, prefix, snap_name, std::move(manifests));
+// Every datacenter the table replicates to restores from its own backup location,
+// so the locations must map one-to-one to the replicated-to datacenters.
+static void check_datacenter_coverage(const replica::table& t, const std::vector<tablet_restore_location>& locations) {
+    auto& rs = t.get_effective_replication_map()->get_replication_strategy();
+    const auto* nts = dynamic_cast<const locator::network_topology_strategy*>(&rs);
+    if (!nts) {
+        throw std::invalid_argument(fmt::format("Table {}.{} does not use NetworkTopologyStrategy", t.schema()->ks_name(), t.schema()->cf_name()));
+    }
 
-    auto datacenter = _db.local().get_token_metadata().get_topology().get_datacenter();
+    auto replicated_dcs = nts->get_datacenters()
+        | std::views::filter([nts] (const sstring& dc) { return nts->get_replication_factor(dc) > 0; })
+        | std::ranges::to<std::set<sstring>>();
+
+    auto location_dcs = locations
+        | std::views::transform(&tablet_restore_location::datacenter)
+        | std::ranges::to<std::set<sstring>>();
+    if (location_dcs.size() != locations.size()) {
+        throw std::invalid_argument("Duplicate datacenters in backup locations");
+    }
+
+    if (location_dcs != replicated_dcs) {
+        throw std::invalid_argument(fmt::format("Backup locations datacenters [{}] don't match the datacenters [{}] keyspace {} replicates to",
+            fmt::join(location_dcs, ", "), fmt::join(replicated_dcs, ", "), t.schema()->ks_name()));
+    }
+}
+
+future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations) {
+    check_datacenter_coverage(_db.local().find_column_family(tid), locations);
 
     db::snapshot_table_helper sth(_sys_dist_ks.qp());
-    // TODO: update state when all restored...
-    co_await sth.insert_snapshot_remote_location(snap_name, datacenter, endpoint, bucket, prefix, db::snapshot_state::remote);
+    manifest_summary summary = { .tablet_count = 0, .nr_sstables = 0 };
+
+    for (auto& loc : locations) {
+        auto loc_summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, loc.endpoint, loc.bucket, loc.prefix, snap_name, loc.datacenter, std::move(loc.manifests));
+        if (summary.tablet_count == 0) {
+            summary.tablet_count = loc_summary.tablet_count;
+        } else if (summary.tablet_count != loc_summary.tablet_count) {
+            throw std::runtime_error(fmt::format("Inconsistent tablet_count values across backup locations: expected {}, datacenter '{}' has {}",
+                summary.tablet_count, loc.datacenter, loc_summary.tablet_count));
+        }
+        summary.nr_sstables += loc_summary.nr_sstables;
+
+        // TODO: update state when all restored...
+        co_await sth.insert_snapshot_remote_location(snap_name, loc.datacenter, loc.endpoint, loc.bucket, loc.prefix, db::snapshot_state::remote);
+    }
 
     auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>({}, container(), keyspace, tid, std::move(snap_name), summary);
     co_return task->id();

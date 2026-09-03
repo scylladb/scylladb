@@ -1012,7 +1012,7 @@
                   },
                   {
                      "name":"backup_source_location",
-                     "description":"Array of backup location objects. Currently, the array must contain exactly one entry.",
+                     "description":"Array of backup location objects, exactly one entry per datacenter the keyspace replicates to.",
                      "required":true,
                      "allowMultiple":false,
                      "type":"array",

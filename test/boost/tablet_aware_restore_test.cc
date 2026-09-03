@@ -364,10 +364,13 @@ SEASTAR_TEST_CASE(test_populate_snapshot_sstables_from_manifests, *boost::unit_t
             auto prefix = backup(env, ep, bucket).get();
             auto manifest_path = prefix + "/manifest.json";
 
-            BOOST_REQUIRE_THROW(populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "unexpected_snapshot", {manifest_path}, db::consistency_level::ONE).get(), std::runtime_error);;
+            auto dc = env.get_storage_proxy().local().get_token_metadata_ptr()->get_topology().get_datacenter();
+
+            BOOST_REQUIRE_THROW(populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "unexpected_snapshot", dc, {manifest_path}, db::consistency_level::ONE).get(), std::runtime_error);
+            BOOST_REQUIRE_THROW(populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "snapshot", "unexpected_dc", {manifest_path}, db::consistency_level::ONE).get(), std::runtime_error);
 
             // populate system_distributed.snapshot_sstables with the content of the snapshot manifest
-            populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "snapshot", {manifest_path}, db::consistency_level::ONE).get();
+            populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "snapshot", dc, {manifest_path}, db::consistency_level::ONE).get();
 
             check_snapshot_sstables(env).get();
     }, false, db_cfg_ptr, 10);
