@@ -682,11 +682,33 @@ void storage_group_manager::clear_storage_groups() {
 }
 
 void storage_group_manager::remove_storage_group(size_t id) {
-    if (auto it = _storage_groups.find(id); it != _storage_groups.end()) {
-        _storage_groups.erase(it);
-    } else {
+    auto it = _storage_groups.find(id);
+    if (it == _storage_groups.end()) {
         throw std::out_of_range(format("remove_storage_group: storage group with id={} not found", id));
     }
+    auto range = to_partition_range(it->second->token_range());
+    _storage_groups.erase(it);
+
+    // Guarantee the cache range owned by this storage group gets invalidated exactly once,
+    // right here, regardless of how we got here:
+    //  - the normal path (table::cleanup_tablet -> ... -> compaction_group::cleanup()) already
+    //    invalidated it atomically with clearing the sstable sets, so this is a cheap no-op;
+    //  - the racing path, where a concurrent ERM update finds the tablet already post-cleanup
+    //    and removes the storage group directly (see update_effective_replication_map below)
+    //    while cleanup_tablet is still mid-flight, never gets to invalidate the cache at all
+    //    once the group disappears from under it (maybe_storage_group_for_id() below returns
+    //    null). This is the only path that removes a group from _storage_groups, so it's the
+    //    right place to make the invalidation unconditional.
+    //
+    // Fire-and-forget: by the time a storage group is removed, routing has already moved this
+    // tablet off this shard, so nothing needs to wait for this synchronously -- only eventual
+    // invalidation for memory reclaim is required.
+    (void) with_gate(_t.async_gate(), [&t = _t, range] () -> future<> {
+        return t.get_row_cache().invalidate(row_cache::external_updater([] {}), range)
+                .handle_exception([range] (std::exception_ptr ex) {
+                    tlogger.warn("Failed to invalidate cache range {} for removed storage group: {}. Ignored", range, ex);
+                });
+    });
 }
 
 storage_group& storage_group_manager::storage_group_for_id(const schema_ptr& s, size_t i) const {
@@ -703,7 +725,6 @@ storage_group* storage_group_manager::maybe_storage_group_for_id(const schema_pt
 }
 
 class single_storage_group_manager final : public storage_group_manager {
-    replica::table& _t;
     storage_group_ptr _single_sg;
     compaction_group* _single_cg;
 
@@ -712,7 +733,7 @@ class single_storage_group_manager final : public storage_group_manager {
     }
 public:
     single_storage_group_manager(replica::table& t)
-        : _t(t)
+        : storage_group_manager(t)
     {
         storage_group_map r;
 
@@ -791,7 +812,6 @@ struct background_merge_guard {
 };
 
 class tablet_storage_group_manager final : public storage_group_manager {
-    replica::table& _t;
     locator::host_id _my_host_id;
     const locator::tablet_map* _tablet_map;
     future<> _stop_fut = make_ready_future();
@@ -909,7 +929,7 @@ private:
     }
 public:
     tablet_storage_group_manager(table& t, const locator::effective_replication_map& erm)
-        : _t(t)
+        : storage_group_manager(t)
         , _my_host_id(erm.get_token_metadata().get_my_id())
         , _tablet_map(&erm.get_token_metadata().tablets().get_tablet_map(schema()->id()))
         , _merge_completion_fiber(merge_completion_fiber())
@@ -5778,6 +5798,13 @@ future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locato
 
     auto sgp = _sg_manager->maybe_storage_group_for_id(_schema, tid.value());
     if (!sgp) {
+        // A racing ERM update (e.g. another migration/split/merge on this table completing
+        // first) can find this tablet already post-cleanup and remove its storage group via
+        // storage_group_manager::remove_storage_group() before we get here. There's nothing
+        // left for us to clean up in that case, but unlike before, that isn't also our only
+        // chance to invalidate the cache: remove_storage_group() itself now guarantees the
+        // cache range is invalidated whenever a storage group is removed, so skipping the rest
+        // of cleanup here is safe.
         tlogger.warn("Storage group for tablet {} is deallocated. Ignore cleanup.", tid);
         co_return;
     }

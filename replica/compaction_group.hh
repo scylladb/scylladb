@@ -474,10 +474,15 @@ using storage_group_map = absl::flat_hash_map<size_t, storage_group_ptr, absl::H
 
 class storage_group_manager {
 protected:
+    // The table owning this manager and its per-shard row_cache. Kept here (rather than only
+    // in each concrete manager) so that removal of a storage group can invalidate the cache
+    // for its range regardless of which concrete manager is in use.
+    replica::table& _t;
     storage_group_map _storage_groups;
 protected:
     virtual future<> stop() = 0;
 public:
+    explicit storage_group_manager(replica::table& t) : _t(t) {}
     virtual ~storage_group_manager();
 
     //    How concurrent loop and updates on the group map works without a lock:

@@ -11,10 +11,13 @@
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/eventually.hh"
+#include "test/boost/sstable_test.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
+#include "replica/compaction_group.hh"
 
 BOOST_AUTO_TEST_SUITE(commitlog_cleanup_test)
 
@@ -221,6 +224,58 @@ SEASTAR_TEST_CASE(test_commitlog_cleanup_record_gc) {
         // the next cleanup should delete them, leaving only a single new cleanup entry.
         step_cf("cf2");
         BOOST_REQUIRE_EQUAL(get_num_records(), 1);
+    }, cfg);
+}
+
+// Reproduces the race described for storage_group_manager::remove_storage_group():
+// a racing effective-replication-map update can remove a tablet's storage group directly
+// (bypassing table::cleanup_tablet's own row-cache invalidation) whenever it finds the
+// tablet already past its cleanup stage. Before the fix, table::cleanup_tablet(), finding
+// no storage group left for the tablet, would just warn and return, leaving the cache
+// range never invalidated. remove_storage_group() must now guarantee that invalidation
+// itself, regardless of which path removes the group.
+SEASTAR_TEST_CASE(test_racing_storage_group_removal_invalidates_cache) {
+    auto cfg = cql_test_config();
+    cfg.db_config->tablets_mode_for_new_keyspaces.set(db::tablets_mode_t::mode::enabled);
+    cfg.initial_tablets = 1;
+
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table ks.cf (pk int, ck int, primary key (pk, ck))").get();
+        e.execute_cql("insert into ks.cf (pk, ck) values (0, 0)").get();
+
+        auto& db = e.local_db();
+        auto& cf = db.find_column_family("ks", "cf");
+
+        // Flush so the subsequent read is served through the cache-populating path.
+        cf.flush().get();
+
+        // Populate the cache for the tablet's whole range (there's a single tablet).
+        e.execute_cql("select * from ks.cf;").get();
+        BOOST_REQUIRE(!cf.get_row_cache().empty());
+
+        // Simulate the race: a concurrent ERM update finds the tablet already
+        // post-cleanup and removes its storage group directly, before
+        // table::cleanup_tablet() ever gets a chance to run its own invalidation
+        // (see storage_group_manager::remove_storage_group() and its caller in
+        // tablet_storage_group_manager::update_effective_replication_map()).
+        //
+        // As in that real caller, keep a copy of the storage group alive across the
+        // removal and stop it explicitly: a storage group's compaction groups must be
+        // stopped (compaction disabled) before their last reference goes away, or their
+        // destructor fires a fatal "not disabled" internal error.
+        auto& sg_manager = column_family_test::get_storage_group_manager(cf);
+        auto sg = sg_manager->storage_groups().at(locator::tablet_id(0).value());
+        sg->stop("racing removal").get();
+        sg_manager->remove_storage_group(locator::tablet_id(0).value());
+
+        // remove_storage_group()'s own invalidation is fire-and-forget, so wait for it.
+        BOOST_REQUIRE(eventually_true([&] { return cf.get_row_cache().empty(); }));
+
+        // table::cleanup_tablet() now finds no storage group for the tablet and takes
+        // its early-return path. This must remain harmless: the cache was already
+        // invalidated above, and no exception should be thrown.
+        cf.cleanup_tablet(db, e.get_system_keyspace().local(), locator::tablet_id(0)).get();
+        BOOST_REQUIRE(cf.get_row_cache().empty());
     }, cfg);
 }
 

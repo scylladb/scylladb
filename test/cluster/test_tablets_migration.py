@@ -37,6 +37,12 @@ async def await_api_task(task, allowed_exception: Optional[Type[Exception]]=None
             raise
 
 
+async def get_cache_partitions(manager: ScyllaClusterManager, server, shard: int) -> float:
+    """Returns the number of row-cache partitions currently cached on the given shard."""
+    metrics = await manager.metrics.query(server.ip_addr)
+    return metrics.get("scylla_cache_partitions", {"shard": str(shard)}) or 0.0
+
+
 @pytest.mark.parametrize("action", ['move', 'add_replica', 'del_replica'])
 async def test_tablet_transition_sanity(manager: ScyllaClusterManager, action):
     logger.info("Bootstrapping cluster")
@@ -716,6 +722,15 @@ async def test_restart_in_cleanup_stage_after_cleanup(manager: ScyllaClusterMana
     Migrate a tablet from one node to another, and restart the leaving replica during
     the tablet cleanup stage, after tablet cleanup is completed.
     Reproduces issue #24857
+
+    Also covers the row-cache invalidation guarantee of
+    storage_group_manager::remove_storage_group(): restarting the leaving replica right
+    after tablet cleanup but before the topology moves past the cleanup stage is the
+    realistic trigger for that race (see the "if the node was restarted after tablet
+    cleanup was run but before moving to the next stage" comment in
+    tablet_storage_group_manager::update_effective_replication_map()). This test asserts
+    that, once the migration completes, the leaving replica's row cache for the migrated
+    tablet's range has been invalidated.
     """
     keyspace_opts = feature_config.get_keyspace_opts(
         "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
@@ -730,7 +745,10 @@ async def test_restart_in_cleanup_stage_after_cleanup(manager: ScyllaClusterMana
         await cql.run_async(feature_config.get_table_opts(
             f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 8}};"))
 
-        total_keys = 10
+        # Enough keys to make it very likely that every one of the 8 tablets ends up
+        # with some cached data, so the migrated tablet's contribution to the shard's
+        # cache-partition count is not just noise.
+        total_keys = 80
         for pk in range(total_keys):
             await cql.run_async(f"INSERT INTO {ks}.test(pk, c) VALUES({pk}, {pk+1})")
         await manager.api.flush_keyspace(servers[0].ip_addr, ks)
@@ -746,6 +764,7 @@ async def test_restart_in_cleanup_stage_after_cleanup(manager: ScyllaClusterMana
             src_server, dst_host_id = servers[0], s1_host_id
         else:
             src_server, dst_host_id = servers[1], s0_host_id
+        src_shard = replica[1]
 
         await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "wait_after_tablet_cleanup", one_shot=False) for s in servers])
 
@@ -762,8 +781,29 @@ async def test_restart_in_cleanup_stage_after_cleanup(manager: ScyllaClusterMana
         await manager.server_start(src_server.server_id)
         await wait_for_cql_and_get_hosts(manager.get_cql(), servers, time.time() + 30)
 
+        # Warm up the row cache on the leaving replica's shard by reading all rows back,
+        # so that the migrated tablet's data (among others') is cached there. Done after
+        # the restart so the baseline reflects the post-restart cache state, not the
+        # unconditional drop to ~0 that a process restart causes on its own.
+        await cql.run_async(f"SELECT * FROM {ks}.test")
+        partitions_after_warmup = await get_cache_partitions(manager, src_server, src_shard)
+        assert partitions_after_warmup > 0, "expected the warm-up read to populate the row cache"
+
         await asyncio.gather(*[manager.api.message_injection(s.ip_addr, "wait_after_tablet_cleanup") for s in servers])
 
         await await_api_task(move_task, allowed_exception=ServerDisconnectedError)
 
         await manager.api.quiesce_topology(servers[0].ip_addr)
+
+        # The tablet's storage group must have been removed from the leaving replica by
+        # now (either at the normal cleanup stage, or -- before the fix for the race this
+        # test targets -- possibly via storage_group_manager::remove_storage_group()
+        # bypassing table::cleanup_tablet()'s own invalidation, if cleanup was still in
+        # flight around the restart). Either way, the row-cache range must end up
+        # invalidated: the shard's cached-partition count must have dropped from what the
+        # warm-up produced (other tablets remaining on the shard keep their own cached
+        # data, so this isn't expected to reach zero).
+        partitions_after_migration = await get_cache_partitions(manager, src_server, src_shard)
+        assert partitions_after_migration < partitions_after_warmup, \
+            f"expected cache partitions on shard {src_shard} of the leaving replica to " \
+            f"drop after tablet migration+cleanup, but {partitions_after_warmup} -> {partitions_after_migration}"
