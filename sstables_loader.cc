@@ -1360,7 +1360,7 @@ protected:
             // remove_unset: the table saved nullopt because it had no hint of its own, and
             // passing nullopt back would leave it pinned at min == max forever.
             co_await loader._ss.local().alter_table_with_tablet_hints(_tid, min_tablet_count, max_tablet_count,
-                    service::wait_balancer::no, true);
+                    service::wait_balancer::no, service::remove_unset::yes);
         } catch (...) {
             llog.error("Failed to restore original schema for table_id {}. Error: {}", _tid, std::current_exception());
         }
