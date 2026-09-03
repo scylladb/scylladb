@@ -1477,6 +1477,7 @@ for t in sorted(perf_tests):
 deps['test/boost/combined_tests'] += [
     'test/boost/aggregate_fcts_test.cc',
     'test/boost/auth_test.cc',
+    'test/boost/client_state_test.cc',
     'test/boost/batchlog_manager_test.cc',
     'test/boost/table_helper_test.cc',
     'test/boost/cache_algorithm_test.cc',
