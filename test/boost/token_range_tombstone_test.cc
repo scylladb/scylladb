@@ -269,46 +269,70 @@ SEASTAR_TEST_CASE(test_apply_to_mutation) {
                 .with_column("v", int32_type, column_kind::regular_column)
                 .build();
 
-        auto make = [&] (int32_t pk) {
+        auto make = [&] (int32_t pk, api::timestamp_type ts) {
             auto key = partition_key::from_single_value(*s, int32_type->decompose(pk));
             mutation m(s, key);
-            m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(pk), 100);
+            m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(pk), ts);
             return m;
         };
 
-        auto m = make(1);
+        auto m = make(1, 100);
         auto t = m.token();
 
         // A tombstone which does not cover the mutation's token leaves it alone.
         {
             auto m2 = m;
-            token_range_tombstone_list l;
-            l.apply(token_range_tombstone(t, dht::token::maximum(), tomb(200)));
-            l.apply_to(m2);
+            m2.apply(token_range_tombstone(t, dht::token::maximum(), tomb(200)));
             BOOST_REQUIRE(m2 == m);
         }
 
         // A tombstone which covers the token acts exactly like a partition
         // tombstone with the same timestamp.
         {
-            auto m2 = m;
-            token_range_tombstone_list l;
-            l.apply(token_range_tombstone::full_ring(tomb(200)));
-            l.apply_to(m2);
-
             auto expected = m;
             expected.partition().apply(tomb(200));
+
+            auto m2 = m;
+            m2.apply(token_range_tombstone::full_ring(tomb(200)));
             BOOST_REQUIRE(m2 == expected);
-            BOOST_REQUIRE(m2.live_row_count() == 0);
+            BOOST_REQUIRE_EQUAL(m2.live_row_count(), 0u);
+
+            // Going through the list gives the same result.
+            auto m3 = m;
+            token_range_tombstone_list l;
+            l.apply(token_range_tombstone::full_ring(tomb(200)));
+            l.apply_to(m3);
+            BOOST_REQUIRE(m3 == expected);
         }
 
         // An older tombstone does not delete newer data.
         {
             auto m2 = m;
-            token_range_tombstone_list l;
-            l.apply(token_range_tombstone::full_ring(tomb(50)));
-            l.apply_to(m2);
-            BOOST_REQUIRE(m2.live_row_count() == 1);
+            m2.apply(token_range_tombstone::full_ring(tomb(50)));
+            BOOST_REQUIRE_EQUAL(m2.live_row_count(), 1u);
+        }
+
+        // Applying a token range tombstone commutes with merging mutations:
+        // it does not matter whether the deletion is applied to the parts or
+        // to the whole.
+        {
+            auto m1 = make(1, 100);
+            auto m2 = make(1, 300);
+            auto trt = token_range_tombstone::full_ring(tomb(200));
+
+            auto whole = m1;
+            whole.apply(m2);
+            whole.apply(trt);
+
+            auto parts = m1;
+            parts.apply(trt);
+            auto m2_deleted = m2;
+            m2_deleted.apply(trt);
+            parts.apply(m2_deleted);
+
+            BOOST_REQUIRE(whole == parts);
+            // The newer write survives the deletion, the older one does not.
+            BOOST_REQUIRE_EQUAL(whole.live_row_count(), 1u);
         }
     });
 }

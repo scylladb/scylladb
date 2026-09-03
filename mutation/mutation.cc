@@ -12,6 +12,7 @@
 #include "mutation.hh"
 #include "query/query-result-writer.hh"
 #include "mutation_rebuilder.hh"
+#include "mutation/token_range_tombstone.hh"
 #include "mutation/json.hh"
 #include "types/collection.hh"
 #include "types/tuple.hh"
@@ -166,6 +167,16 @@ void mutation::apply(const mutation& m) {
 
 void mutation::apply(const mutation_fragment& mf) {
     partition().apply(*schema(), mf);
+}
+
+void mutation::apply(const token_range_tombstone& rt) {
+    if (rt.contains(token())) {
+        partition().apply(rt.tomb());
+    }
+}
+
+void mutation::apply(const token_range_tombstone_list& rts) {
+    partition().apply(rts.search(token()));
 }
 
 mutation& mutation::operator=(const mutation& m) {

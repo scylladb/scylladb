@@ -120,9 +120,7 @@ tombstone token_range_tombstone_list::max_tombstone() const noexcept {
 }
 
 void token_range_tombstone_list::apply_to(mutation& m) const {
-    if (auto t = search(m.token())) {
-        m.partition().apply(t);
-    }
+    m.apply(*this);
 }
 
 token_range_tombstone_list token_range_tombstone_list::slice(const dht::token& start, const dht::token& end) const {
