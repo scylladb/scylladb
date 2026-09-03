@@ -30,6 +30,13 @@ namespace cql3::statements {
 
 namespace {
 
+/// The column the index is built on: the one the rows are ranked by and a fragment is generated from.
+const column_definition& ranked_column(const schema& schema, const secondary_index::index& index) {
+    const auto* cdef = schema.get_column_definition(to_bytes(index.target_column()));
+    throwing_assert(cdef);
+    return *cdef;
+}
+
 std::optional<expr::expression> validate_bm25_where_restriction(const expr::binary_operator& binop,
         const bm25_ordering_info& ordering_info) {
     // "WHERE BM25(c, t) > 0" arrives as BM25_SCORE(c, t) > 0 (see prepare_external_search_relation_lhs()),
@@ -181,6 +188,11 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
     // The score and the rank are matched to a row by primary key.
     if (ordering_info->temporaries.any()) {
         external_search::fetch_primary_key_columns(*selection, *schema);
+    }
+
+    // BM25_HIGHLIGHT() sends the index the text it does not store, so read it even if not selected.
+    if (ordering_info->temporaries.fragment) {
+        selection->add_column_for_post_processing(ranked_column(*schema, ordering_info->index));
     }
 
     return ::make_shared<cql3::statements::fulltext_indexed_table_select_statement>(
