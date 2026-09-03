@@ -489,6 +489,26 @@ struct disk_token_range {
     auto describe_type(sstable_version_types v, Describer f) { return f(left, right); }
 };
 
+// A tombstone which deletes every partition whose token falls into the
+// (start_exclusive, end_inclusive] token range.
+//
+// The tokens are encoded the same way as in disk_token_bound: the 8 byte
+// big-endian token value. An empty string means an infinite bound, that is the
+// beginning of the ring for start_exclusive and its end for end_inclusive, so
+// that a tombstone covering the whole ring costs nothing to store.
+struct disk_token_range_tombstone {
+    disk_string<uint16_t> start_exclusive;
+    disk_string<uint16_t> end_inclusive;
+    int64_t timestamp;
+    // gc_clock::time_point, in seconds since the epoch.
+    int64_t deletion_time;
+
+    template <typename Describer>
+    auto describe_type(sstable_version_types v, Describer f) {
+        return f(start_exclusive, end_inclusive, timestamp, deletion_time);
+    }
+};
+
 // Scylla-specific sharding information.  This is a set of token
 // ranges that are spanned by this sstable.  When loading the
 // sstable, we can see which shards own data in the sstable by
@@ -501,6 +521,22 @@ struct sharding_metadata {
 };
 
 // Scylla-specific list of features an sstable supports.
+// The feature bit space of an sstable is split in half.
+//
+// The lower half holds compatible features. A reader which does not know a
+// compatible feature ignores its bit and reads the sstable anyway; this is how
+// feature bits have always behaved, so the meaning of the existing bits is
+// unchanged.
+//
+// The upper half holds mandatory features. A reader which finds a mandatory
+// bit it does not know refuses the sstable, because reading it while ignoring
+// that feature would silently give wrong answers -- for instance dropping the
+// token range tombstones of a truncated table and resurrecting its data.
+//
+// Note that this only protects against readers which already know about the
+// split. Older readers ignore every bit they do not know, mandatory or not, so
+// a mandatory feature must additionally be gated on a cluster feature until
+// every node in the cluster understands it.
 enum sstable_feature : uint8_t {
     NonCompoundPIEntries = 0,       // See #2993
     NonCompoundRangeTombstones = 1, // See #2986
@@ -512,23 +548,69 @@ enum sstable_feature : uint8_t {
     End = 7,
 };
 
+// Features an sstable cannot be read without. See sstable_feature above.
+//
+// Note: these are stored on disk, never reuse or renumber a value.
+enum sstable_mandatory_feature : uint8_t {
+    // The Scylla.db component carries token range tombstones, which delete
+    // whole partitions. A reader which ignores them returns deleted data.
+    TokenRangeTombstones = 32,
+    MandatoryEnd = 33,
+};
+
 // Scylla-specific features enabled for a particular sstable.
 struct sstable_enabled_features {
+    // The lower half is compatible features, the upper half mandatory ones.
+    static constexpr unsigned mandatory_features_shift = 32;
+    static constexpr uint64_t mandatory_features_mask = ~((uint64_t(1) << mandatory_features_shift) - 1);
+
     uint64_t enabled_features;
 
     bool is_enabled(sstable_feature f) const {
-        return enabled_features & (1 << f);
+        return enabled_features & (uint64_t(1) << f);
     }
 
     void disable(sstable_feature f) {
-        enabled_features &= ~(1<< f);
+        enabled_features &= ~(uint64_t(1) << f);
+    }
+
+    bool is_enabled(sstable_mandatory_feature f) const {
+        return enabled_features & (uint64_t(1) << f);
+    }
+
+    void enable(sstable_mandatory_feature f) {
+        enabled_features |= uint64_t(1) << f;
+    }
+
+    void disable(sstable_mandatory_feature f) {
+        enabled_features &= ~(uint64_t(1) << f);
+    }
+
+    // The mandatory features this build knows how to read.
+    static constexpr uint64_t known_mandatory_features() {
+        uint64_t mask = 0;
+        for (auto f = unsigned(sstable_mandatory_feature::TokenRangeTombstones);
+                f < unsigned(sstable_mandatory_feature::MandatoryEnd); ++f) {
+            mask |= uint64_t(1) << f;
+        }
+        return mask;
+    }
+
+    // The mandatory features which are set but which this build does not know.
+    // An sstable with any of these cannot be read correctly.
+    uint64_t unknown_mandatory_features() const {
+        return enabled_features & mandatory_features_mask & ~known_mandatory_features();
     }
 
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) { return f(enabled_features); }
 
+    // All compatible features. Mandatory features are never enabled by
+    // default: each one is turned on only when the sstable actually uses it,
+    // because enabling one makes the sstable unreadable by builds which do not
+    // know it.
     static sstable_enabled_features all() {
-        return sstable_enabled_features{(1 << sstable_feature::End) - 1};
+        return sstable_enabled_features{(uint64_t(1) << sstable_feature::End) - 1};
     }
 };
 
@@ -557,6 +639,7 @@ enum class scylla_metadata_type : uint32_t {
     Schema = 11,
     ComponentsDigests = 12,
     LargeDataRecords = 13,
+    TokenRangeTombstones = 14,
 };
 
 // UUID is used for uniqueness across nodes, such that an imported sstable
@@ -686,6 +769,7 @@ struct scylla_metadata {
     using sstable_identifier = sstable_identifier_type;
     using sstable_schema = sstable_schema_type;
     using components_digests = disk_hash<uint32_t, component_type, uint32_t>;
+    using token_range_tombstones = disk_array<uint32_t, disk_token_range_tombstone>;
 
     disk_set_of_tagged_union<scylla_metadata_type,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>,
@@ -700,7 +784,8 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::SSTableIdentifier, sstable_identifier>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Schema, sstable_schema>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ComponentsDigests, components_digests>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::LargeDataRecords, large_data_records>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::LargeDataRecords, large_data_records>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::TokenRangeTombstones, token_range_tombstones>
             > data;
     std::optional<uint32_t> digest;
 

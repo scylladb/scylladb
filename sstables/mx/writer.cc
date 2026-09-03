@@ -1880,7 +1880,8 @@ void writer::consume_end_of_stream() {
             ld_records = scylla_metadata::large_data_records{.elements = std::move(records)};
         }
     }
-    _sst.write_scylla_metadata(_shard, std::move(identifier), std::move(ld_stats), std::move(ts_stats), std::move(ld_records));
+    _sst.write_scylla_metadata(_shard, std::move(identifier), std::move(ld_stats), std::move(ts_stats), std::move(ld_records),
+            std::move(_token_range_tombstones));
     if (!_cfg.leave_unsealed) {
         _sst.seal_sstable(_cfg.backup).get();
     }

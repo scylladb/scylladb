@@ -1423,6 +1423,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::Schema: return "schema";
         case sstables::scylla_metadata_type::ComponentsDigests: return "components_digests";
         case sstables::scylla_metadata_type::LargeDataRecords: return "large_data_records";
+        case sstables::scylla_metadata_type::TokenRangeTombstones: return "token_range_tombstones";
     }
     std::abort();
 }
@@ -1551,6 +1552,23 @@ public:
         _writer.Uint64(val.range_tombstones);
         _writer.Key("dead_rows");
         _writer.Uint64(val.dead_rows);
+        _writer.EndObject();
+    }
+    void operator()(const sstables::disk_token_range_tombstone& val) const {
+        // An empty bound is infinity, see disk_token_range_tombstone.
+        auto bound_to_str = [] (const sstables::disk_string<uint16_t>& b) {
+            return b.value.empty() ? std::string("inf")
+                    : fmt::to_string(dht::token(dht::token::kind::key, bytes_view(b.value)));
+        };
+        _writer.StartObject();
+        _writer.Key("start_exclusive");
+        _writer.String(bound_to_str(val.start_exclusive));
+        _writer.Key("end_inclusive");
+        _writer.String(bound_to_str(val.end_inclusive));
+        _writer.Key("timestamp");
+        _writer.Int64(val.timestamp);
+        _writer.Key("deletion_time");
+        _writer.Int64(val.deletion_time);
         _writer.EndObject();
     }
     void operator()(const sstables::scylla_metadata::ext_timestamp_stats& val) const {
