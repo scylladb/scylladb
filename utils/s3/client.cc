@@ -1464,12 +1464,20 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     condition_variable _bg_fiber_cv;
     condition_variable _get_cv;
     future<> _filling_fiber = make_ready_future<>();
+    // The fiber's own retry policy: make_request() below is called with no_retry_strategy
+    // because this reply handler streams the body directly and can't be replayed at the
+    // transport layer, so this loop is the only thing standing between a retryable error
+    // and a request storm.
+    aws::default_aws_retry_strategy _retry_strategy;
+    unsigned _retry_attempts = 0;
+    static constexpr std::chrono::milliseconds _backoff_abort_poll_interval{20};
 
     future<> make_filling_fiber() {
         seastar::http::no_retry_strategy no_retry;
         s3l.trace("Fiber starts cycle for object '{}'", _object_name);
         auto units = try_get_units(_client->_buffered_dl_sem, 1);
         while (!_is_finished) {
+            std::exception_ptr retry_ex;
             try {
                 if (!_is_finished && _buffers_size >= _max_buffers_size * _buffers_low_watermark) {
                     co_await _bg_fiber_cv.when([this] { return _is_finished || (_buffers_size < _max_buffers_size * _buffers_low_watermark); });
@@ -1578,6 +1586,9 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                             s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
                             _buffers.emplace_back(std::move(buf));
                             _get_cv.signal();
+                            // Real progress: don't let unrelated earlier blips count against
+                            // the retry budget for the rest of this reader's lifetime.
+                            _retry_attempts = 0;
                             utils::get_local_injector().inject("break_s3_inflight_req", [] {
                                 // Inject a non-`aws_error` after partial data download to verify proper
                                 // handling and that the fiber retries missing chunks
@@ -1599,6 +1610,31 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                     _get_cv.broken(ex);
                     co_return;
                 }
+                // co_await isn't allowed in a catch handler; do the backoff below,
+                // outside the try/catch, once we know the error is retryable.
+                retry_ex = std::move(ex);
+                // Give up the download slot before backing off, so a multi-second
+                // retry delay doesn't starve the other readers on this shard.
+                units.reset();
+            }
+            if (retry_ex) {
+                // should_retry()'s sleep isn't abortable, so don't await it directly:
+                // poll for close() instead, otherwise close() would block for the
+                // full backoff.
+                auto retry_fut = _retry_strategy.should_retry(retry_ex, _retry_attempts);
+                while (!retry_fut.available() && !_is_finished) {
+                    co_await seastar::sleep(_backoff_abort_poll_interval);
+                }
+                if (_is_finished) {
+                    s3l.trace("Fiber for object '{}' abandoned mid-backoff", _object_name);
+                    co_return;
+                }
+                if (!co_await std::move(retry_fut)) {
+                    s3l.info("Fiber for object '{}' exhausted retries: {}, exiting", _object_name, retry_ex);
+                    _get_cv.broken(retry_ex);
+                    co_return;
+                }
+                ++_retry_attempts;
             }
         }
         s3l.trace("Fiber for object '{}' completed", _object_name);
