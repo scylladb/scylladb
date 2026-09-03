@@ -288,7 +288,7 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
         // A rescoring index allocates no temporary: there the similarity is computed from the row's
         // own vector instead.
         const auto& read = table_results.value();
-        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, &pkeys.value());
+        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, &pkeys.value(), {});
         external_search::drop_unscored_rows(rows, pkeys.value());
         auto similarities = external_search::similarities_of(rows, pkeys.value());
         provider.emplace(

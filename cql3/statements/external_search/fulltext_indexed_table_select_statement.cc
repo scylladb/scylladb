@@ -278,7 +278,7 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
     auto provider = std::optional<external_search::external_search_provider>{};
     if (table_results && _bm25_ordering_info.score_temporary_index) {
         const auto& read = table_results.value();
-        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, &pkeys.value());
+        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, &pkeys.value(), {});
         external_search::drop_unscored_rows(rows, pkeys.value());
         auto similarities = external_search::similarities_of(rows, pkeys.value());
         provider.emplace(
