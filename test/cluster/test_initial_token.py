@@ -9,6 +9,7 @@ import logging
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from cassandra.policies import WhiteListRoundRobinPolicy
+from test.cluster.util import BANNED_NOTIFICATION
 
 logger = logging.getLogger(__name__)
 
@@ -24,4 +25,4 @@ async def test_initial_token(manager: ScyllaClusterManager) -> None:
     res2 = cql2.execute("SELECT tokens From system.local").one()
     assert all([i in res1.tokens for i in tokens[:2]]) and all([i in res2.tokens for i in tokens[-2:]])
     # Try to boot a node with conflicting tokens. It should fail.
-    s2 = await manager.server_add(config=cfg2, expected_error="Bootstrap failed. See earlier errors")
+    s2 = await manager.server_add(config=cfg2, expected_error=f"Bootstrap failed. See earlier errors|{BANNED_NOTIFICATION}")

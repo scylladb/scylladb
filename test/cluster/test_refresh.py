@@ -7,6 +7,7 @@
 #!/usr/bin/env python3
 
 import os
+import glob
 import logging
 import asyncio
 import pytest
@@ -17,13 +18,14 @@ import uuid
 from collections import defaultdict
 
 from cassandra.cluster import ConsistencyLevel
+from cassandra.query import SimpleStatement
 from test.pylib.minio_server import MinioServer
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.object_storage import format_tuples
 from test.cluster.object_store.test_backup import topo, take_snapshot, do_test_streaming_scopes
 from test.cluster.util import new_test_keyspace
 from test.pylib.rest_client import read_barrier
-from test.pylib.util import unique_name, wait_for
+from test.pylib.util import unique_name, wait_for, wait_for_view
 
 logger = logging.getLogger(__name__)
 
@@ -172,3 +174,97 @@ async def test_refresh_deletes_uploaded_sstables(manager: ScyllaClusterManager):
             await wait_for_upload_dir_empty(upload_dir)
 
         shutil.rmtree(tmpbackup)
+
+
+async def wait_for_row_count_on_host(cql, host, ks, table, expected, timeout=120):
+    '''Wait until `table` reports `expected` rows when read through `host`.
+
+    View updates are generated asynchronously, off the staging sstables, so the
+    count has to be polled rather than read once.
+    '''
+    stmt = SimpleStatement(f"SELECT COUNT(*) FROM {ks}.{table}", consistency_level=ConsistencyLevel.LOCAL_ONE)
+    last = None
+    async def has_all_rows():
+        nonlocal last
+        last = (await cql.run_async(stmt, host=host))[0][0]
+        return True if last == expected else None
+    try:
+        await wait_for(has_all_rows, time.time() + timeout, period=1.0, label=f"row_count_{table}")
+    except AssertionError:
+        pytest.fail(f"Expected {expected} rows in {ks}.{table} on {host}, got {last}")
+
+
+@pytest.mark.parametrize("tablets", [False, True])
+async def test_refresh_generates_view_updates(manager: ScyllaClusterManager, tablets):
+    '''
+    Check that load-and-stream generates view updates for the data it brings in.
+
+    The mutations carried by the loaded sstables have never been seen by any replica,
+    so the receiving node must put them in the staging directory and let the view
+    update generator populate the views. The interesting case is a view that is
+    already fully built: there is nothing left for the view builder to pick up, so if
+    the sstable goes to the normal directory instead, the view stays empty forever.
+    '''
+    node_count = 2
+    expected_rows = 64
+    cf = 'cf'
+    mv = 'mv'
+    idx = 'value_idx'
+    schema = "(pk text primary key, value int)"
+
+    cmdline = ['--logger-log-level', 'view_update_generator=debug',
+               '--logger-log-level', 'view_building_worker=debug']
+    servers = await manager.servers_add(node_count, auto_rack_dc="dc1", cmdline=cmdline)
+    cql, hosts = await manager.get_ready_cql(servers)
+    await manager.disable_tablet_balancing()
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}" \
+              f" AND tablets = {{'enabled': {str(tablets).lower()}}}"
+
+    async def table_dir(server, ks):
+        workdir = await manager.server_get_workdir(server.server_id)
+        return glob.glob(os.path.join(workdir, 'data', ks, f'{cf}-*'))[0]
+
+    # The data is produced in a separate keyspace and its sstables are then loaded into
+    # the keyspace under test. That way the table under test never held the rows, so
+    # nothing but the load-and-stream can account for them showing up in its views.
+    async with new_test_keyspace(manager, ks_opts) as src_ks, new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {src_ks}.{cf} {schema}")
+
+        insert_stmt = cql.prepare(f"INSERT INTO {src_ks}.{cf} (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(k), k)) for k in range(expected_rows)))
+
+        # servers[0] holds every partition (RF == node count), so its sstables alone
+        # carry the whole table.
+        logger.info('Flush and snapshot the source table')
+        snap_name = unique_name('refresh_')
+        await manager.api.flush_keyspace(servers[0].ip_addr, src_ks)
+        await manager.api.take_snapshot(servers[0].ip_addr, src_ks, snap_name)
+        snapshot_dir = os.path.join(await table_dir(servers[0], src_ks), 'snapshots', snap_name)
+
+        # The views are created on an empty table, so they are fully built - and no build
+        # is in progress - by the time load-and-stream runs. This is what makes the view
+        # updates the only way for the loaded data to reach them.
+        logger.info('Create the table under test with its views, and wait for them to be built')
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} {schema}")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.{mv} AS SELECT * FROM {ks}.{cf} "
+                            "WHERE pk IS NOT NULL AND value IS NOT NULL PRIMARY KEY (value, pk)")
+        await cql.run_async(f"CREATE INDEX {idx} ON {ks}.{cf} (value)")
+        await wait_for_view(cql, mv, node_count, timeout=300)
+        await wait_for_view(cql, f'{idx}_index', node_count, timeout=300)
+
+        logger.info('Copy the sstables to the upload dir and refresh')
+        upload_dir = os.path.join(await table_dir(servers[0], ks), 'upload')
+        os.makedirs(upload_dir, exist_ok=True)
+        for item in os.listdir(snapshot_dir):
+            if item not in ('manifest.json', 'schema.cql'):
+                shutil.copy2(os.path.join(snapshot_dir, item), os.path.join(upload_dir, item))
+        await manager.api.load_new_sstables(servers[0].ip_addr, ks, cf, scope='all', load_and_stream=True)
+
+        # The base table getting the rows proves the load itself worked; the views are
+        # what the regression broke.
+        for host in hosts:
+            await wait_for_row_count_on_host(cql, host, ks, cf, expected_rows)
+            await wait_for_row_count_on_host(cql, host, ks, mv, expected_rows)
+            await wait_for_row_count_on_host(cql, host, ks, f'{idx}_index', expected_rows)

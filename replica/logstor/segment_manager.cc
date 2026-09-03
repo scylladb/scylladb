@@ -281,6 +281,7 @@ class file_manager {
     std::filesystem::path _base_dir;
     seastar::scheduling_group _sched_group;
     bool _format_on_startup;
+    bool _sparse_files;
 
     file_id_t _next_file_id{0};
 
@@ -300,6 +301,7 @@ public:
         , _base_dir(cfg.base_dir)
         , _sched_group(cfg.compaction_sg)
         , _format_on_startup(cfg.format_on_startup)
+        , _sparse_files(cfg.sparse_files)
         , _open_read_files(static_cast<size_t>(_max_files.actual))
     {}
 
@@ -359,8 +361,14 @@ future<> file_manager::format_file(file_id_t file_id) {
         auto tmp_path = file_path + ".tmp";
         auto tmp_file = co_await seastar::open_file_dma(tmp_path,
                 seastar::open_flags::rw | seastar::open_flags::create | seastar::open_flags::truncate | seastar::open_flags::dsync);
-        co_await tmp_file.allocate(0, _file_size);
-        co_await format_file_region(tmp_file, 0, _file_size);
+        if (_sparse_files) {
+            // Reading a hole yields zeros, so the file is already formatted as
+            // far as the reader is concerned.
+            co_await tmp_file.truncate(_file_size);
+        } else {
+            co_await tmp_file.allocate(0, _file_size);
+            co_await format_file_region(tmp_file, 0, _file_size);
+        }
         co_await tmp_file.close();
 
         // move the temp file to the final location
@@ -977,6 +985,10 @@ public:
 
     uint64_t get_segment_size() const noexcept {
         return _cfg.segment_size;
+    }
+
+    sstring get_segment_file_path(log_segment_id segment_id) const {
+        return sstring(_file_mgr.get_file_path(segment_id_to_file_location(segment_id).file_id).native());
     }
 
     future<> discard_segments(logstor_group&);
@@ -2730,6 +2742,10 @@ const compaction_manager& segment_manager::get_compaction_manager() const noexce
 
 uint64_t segment_manager::get_segment_size() const noexcept {
     return _impl->get_segment_size();
+}
+
+sstring segment_manager::get_segment_file_path(log_segment_id segment_id) const {
+    return _impl->get_segment_file_path(segment_id);
 }
 
 future<> segment_manager::discard_segments(logstor_group& cg) {

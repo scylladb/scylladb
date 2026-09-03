@@ -134,6 +134,10 @@ def make_scylla_conf(mode: str, host_addr: str, seed_addrs: List[str], cluster_n
         'alternator_allow_system_table_write': True,
         'alternator_ttl_period_in_seconds': 0.5,
         'sstable_format': 'mt',
+
+        # Tests create many small clusters; preallocating and zero-filling
+        # logstor files wastes disk space and I/O.
+        'logstor_sparse_files': True,
     }
 
 # Seastar options can not be passed through scylla.yaml, use command line
@@ -365,9 +369,14 @@ class ScyllaServer:
 
         # The basic server configuration (the workdir and the maintenance
         # socket are the server's own) topped by the caller-assembled options.
+        # api_doc_dir defaults to a path relative to the current directory,
+        # which is the server's workdir here, so point it at the source tree -
+        # the same way install.sh points it at the installed copy. Without it
+        # every /api-doc record the server advertises is unusable.
         self.config = {
             'workdir': str(self.workdir.resolve()),
             'maintenance_socket': self.maintenance_socket_path,
+            'api_doc_dir': f"{TOP_SRC_DIR / 'api/api-doc'}/",
         } | config_options
         self.property_file = property_file
         self.append_env = append_env

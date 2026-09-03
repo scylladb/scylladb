@@ -858,7 +858,7 @@ future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, s
     }));
     co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto& ks = this->find_keyspace(v.first);
-        auto&& user_types = co_await create_types_from_schema_partition(*ks.metadata(), v.second);
+        auto&& user_types = co_await create_types_from_schema_partition(*ks.metadata(), v.second, "loading types at startup");
         for (auto&& type : user_types) {
             ks.add_user_type(type);
         }
@@ -966,6 +966,7 @@ database::init_logstor() {
             .file_size = _cfg.logstor_file_size_in_mb() * 1024ull * 1024ull,
             .disk_size = _cfg.logstor_disk_size_in_mb() * 1024ull * 1024ull,
             .format_on_startup = _cfg.logstor_format_on_startup(),
+            .sparse_files = _cfg.logstor_sparse_files(),
             .trigger_compaction_threshold = _cfg.logstor_compaction_trigger_threshold,
             .compaction_sg = _dbcfg.logstor_compaction_scheduling_group,
             .compaction_static_shares = _cfg.compaction_static_shares,
@@ -2371,8 +2372,12 @@ future<> database::do_apply_many(const utils::chunked_vector<frozen_mutation>& m
         auto s = local_schema_registry().get(muts[i].schema_version());
         auto&& cf = find_column_family(muts[i].column_family_id());
 
-        if (cf.uses_logstor()) {
-            continue;
+        // Atomicity here comes from writing all the mutations to the commitlog as one batch, which
+        // a logstor table cannot take part in, having no commitlog. Skipping it instead would also
+        // desynchronize the handles below from the mutations they belong to.
+        if (cf.uses_logstor()) [[unlikely]] {
+            on_internal_error(dblog, format("Cannot apply atomically to a table using logstor: {}.{}",
+                              cf.schema()->ks_name(), cf.schema()->cf_name()));
         }
 
         if (!cl) {

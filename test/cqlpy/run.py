@@ -272,6 +272,11 @@ def run_scylla_cmd(pid, dir):
     }
     return ([scylla_link,
         '--options-file',  source_path + '/conf/scylla.yaml',
+        # api_doc_dir defaults to a path relative to the current directory,
+        # which is wherever this script happened to be started from, so spell
+        # it out - the same way install.sh points it at the installed copy.
+        # Without it every /api-doc record the server advertises is unusable.
+        '--api-doc-dir', source_path + '/api/api-doc/',
         '--developer-mode', '1',
         '--ring-delay-ms', '0',
         '--collectd', '0',
@@ -343,6 +348,8 @@ def run_scylla_cmd(pid, dir):
         '--alternator-ttl-period-in-seconds=0.5',
         '--logstor-disk-size-in-mb=8',
         '--logstor-file-size-in-mb=4',
+        # Don't waste disk space and I/O on formatting logstor files
+        '--logstor-sparse-files=true',
         ], env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same
@@ -415,6 +422,7 @@ def run_precompiled_scylla_cmd(exe, pid, dir):
         cmd.remove('--logstor-disk-size-in-mb=8')
         cmd.remove('--logstor-file-size-in-mb=4')
         cmd.remove('--logstor-separator-max-memory-in-mb=8')
+        cmd.remove('--logstor-sparse-files=true')
     return (cmd, env)
 
 # Get a Cluster object to connect to CQL at the given IP address (and with

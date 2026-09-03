@@ -57,7 +57,8 @@ async def test_upgrade_to_ssl(manager: ScyllaClusterManager) -> None:
         async def reconnect():
             manager.driver_close()
             await manager.driver_connect()
-            return manager.get_cql()
+            cql, _ = await manager.get_ready_cql(servers)
+            return cql
 
         async def run_retry_async(stmt : str):
             lcql = cql

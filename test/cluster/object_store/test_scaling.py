@@ -152,6 +152,10 @@ async def test_scaling(manager: ScyllaClusterManager, object_storage):
                     references = sstable.get("references", [])
                     assert sstable["num_references"] == len(references)
                     assert references, f"SSTable {sstable_id} has no object-storage references"
+                    # The descriptor is reported from the TOC object attributes,
+                    # since the component object names do not carry it.
+                    assert sstable.get("version"), f"SSTable {sstable_id} reports no version"
+                    assert sstable.get("format") == "big", f"SSTable {sstable_id} reports format {sstable.get('format')}"
                     for reference in references:
                         host_id, generation = parse_node_reference(reference)
                         key = (sstable_id, host_id, generation)

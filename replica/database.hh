@@ -898,6 +898,12 @@ public:
         return _logstor != nullptr;
     }
 
+    // The mutation sources of this table for SELECT ... FROM MUTATION_FRAGMENTS(), see
+    // logstor::make_mutation_sources_for_dump(). Only valid when uses_logstor().
+    std::map<sstring, mutation_source> make_logstor_mutation_sources_for_dump(schema_ptr s, const dht::decorated_key& dk, reader_permit permit) {
+        return _logstor->make_mutation_sources_for_dump(std::move(s), *_logstor_index, dk, std::move(permit));
+    }
+
     logstor::primary_index& logstor_index() noexcept {
         return *_logstor_index;
     }
@@ -1759,6 +1765,10 @@ private:
             db::per_partition_rate_limit::info,
             bool /* skip_large_data_guardrails */> _apply_stage;
 
+    // Declared ahead of the tables, since a logstor table holds a pointer to it and its compaction
+    // groups reach for its compaction manager as they are destroyed, so it has to outlive them.
+    std::unique_ptr<logstor::logstor> _logstor;
+
     flat_hash_map<sstring, keyspace> _keyspaces;
     tables_metadata _tables_metadata;
     std::unique_ptr<db::commitlog> _commitlog;
@@ -1773,8 +1783,6 @@ private:
     bool _shutdown = false;
     bool _enable_autocompaction_toggle = false;
     querier_cache _querier_cache;
-
-    std::unique_ptr<logstor::logstor> _logstor;
 
     std::unique_ptr<db::large_data_handler> _large_data_handler;
     std::unique_ptr<db::large_data_handler> _nop_large_data_handler;

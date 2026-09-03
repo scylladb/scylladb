@@ -405,3 +405,60 @@ SEASTAR_TEST_CASE(test_restore_alter_table_with_tablet_hints, *boost::unit_test:
         verify_tablet_options(env, tid, desired_count, true);
     }, false, db_cfg_ptr, 10);
 }
+
+// The tablet restore task pins a table's tablet count with min_tablet_count == max_tablet_count
+// and puts the table's own hints back when it is done. A table which had no hint of its own
+// saves nullopt for both, and nullopt means "leave this hint alone" - so the pin used to stay,
+// leaving the table with min == max and unable to ever split or merge again. Passing
+// remove_unset makes a disengaged hint remove the key instead.
+SEASTAR_TEST_CASE(test_restore_alter_table_with_tablet_hints_removes_unset, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+
+    return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& env) {
+        table_id tid = env.local_db().find_uuid("ks", "cf");
+
+        auto token_metadata = env.local_db().get_token_metadata_ptr();
+        auto& tmap = token_metadata->tablets().get_tablet_map(tid);
+        auto desired_count = tmap.tablet_count();
+
+        auto& ss = env.get_storage_service().local();
+
+        // The table is created without tablet hints of its own.
+        verify_tablet_options(env, tid, desired_count, false);
+
+        // Pin the tablet count, the way the restore task does before it starts restoring.
+        ss.alter_table_with_tablet_hints(tid, desired_count, desired_count).get();
+        verify_tablet_options(env, tid, desired_count, true);
+
+        // Put the saved hints back - both disengaged, because the table had none. The pin has
+        // to go away, otherwise the table is left permanently pinned at min == max.
+        ss.alter_table_with_tablet_hints(tid, std::nullopt, std::nullopt, /*wait_balancer=*/false,
+                                         /*remove_unset=*/true).get();
+        verify_tablet_options(env, tid, desired_count, false);
+    }, false, db_cfg_ptr, 10);
+}
+
+// wait_balancer needs a count to wait for. Two disengaged hints compare equal to each other, so
+// testing the two against each other is not enough - with remove_unset they also get past the
+// no-op return, and the wait would then dereference a disengaged max_tablet_count.
+SEASTAR_TEST_CASE(test_restore_alter_table_with_tablet_hints_rejects_waiting_without_hints, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+
+    return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& env) {
+        table_id tid = env.local_db().find_uuid("ks", "cf");
+        auto desired_count = env.local_db().get_token_metadata_ptr()->tablets().get_tablet_map(tid).tablet_count();
+        auto& ss = env.get_storage_service().local();
+
+        BOOST_REQUIRE_THROW(ss.alter_table_with_tablet_hints(tid, std::nullopt, std::nullopt,
+                                                             /*wait_balancer=*/true, /*remove_unset=*/true).get(),
+                            std::invalid_argument);
+        BOOST_REQUIRE_THROW(ss.alter_table_with_tablet_hints(tid, std::nullopt, desired_count,
+                                                             /*wait_balancer=*/true, /*remove_unset=*/true).get(),
+                            std::invalid_argument);
+
+        // Rejected before anything was announced.
+        verify_tablet_options(env, tid, desired_count, false);
+    }, false, db_cfg_ptr, 10);
+}

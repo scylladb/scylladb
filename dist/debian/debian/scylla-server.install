@@ -9,6 +9,7 @@ usr/lib/systemd/system/*.slice
 usr/bin/scylla
 usr/bin/iotune
 usr/bin/scyllatop
+usr/bin/scylla-tablets
 usr/bin/nodetool
 usr/sbin/scylla*
 usr/sbin/node_health_check
@@ -17,6 +18,7 @@ opt/scylladb/scripts/*
 opt/scylladb/swagger-ui/dist/*
 opt/scylladb/api/api-doc/*
 opt/scylladb/scyllatop/*
+opt/scylladb/lib-python/*
 opt/scylladb/scripts/libexec/*
 opt/scylladb/bin/*
 opt/scylladb/libreloc/*

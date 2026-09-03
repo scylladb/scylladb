@@ -601,6 +601,27 @@ struct convert<db::object_storage_endpoint_param> {
 };
 
 template<>
+struct convert<std::vector<db::object_storage_endpoint_param>> {
+    // Decode each entry on its own, so a malformed entry costs its own
+    // endpoint rather than the whole option.
+    static bool decode(const Node& node, std::vector<db::object_storage_endpoint_param>& endpoints) {
+        if (!node.IsSequence()) {
+            return false;
+        }
+
+        endpoints.clear();
+        for (size_t i = 0; i < node.size(); ++i) {
+            try {
+                endpoints.push_back(db::object_storage_endpoint_param::decode(node[i]));
+            } catch (const std::exception& e) {
+                cfglogger.error("Ignoring object_storage_endpoints entry {}: {}", i, e.what());
+            }
+        }
+        return true;
+    }
+};
+
+template<>
 struct convert<audit::audit_rule> {
     static bool decode(const Node& node, audit::audit_rule& rule) {
         if (!node.IsMap()) {
@@ -983,6 +1004,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , logstor_format_on_startup(this, "logstor_format_on_startup", value_status::Used, true,
         "Controls when logstor data files are formatted. When enabled, all logstor files are formatted during node startup, which increases startup time but ensures optimal write performance immediately after startup. "
         "When disabled, logstor files are formatted lazily on first write, which reduces startup time but may cause slightly degraded write performance on first access to each file.")
+    , logstor_sparse_files(this, "logstor_sparse_files", value_status::Used, false,
+        "Create logstor data files as sparse files. When disabled, each file is preallocated and fully written with zeros, guaranteeing space is available and avoiding fragmentation. "
+        "When enabled, the file is only extended to its nominal size, so unwritten regions consume no disk space. Useful for tests, where the disk space and I/O of formatting files is wasteful.")
     , logstor_compaction_trigger_threshold(this, "logstor_compaction_trigger_threshold", liveness::LiveUpdate, value_status::Used, 0.05,
         "Trigger automatic logstor compaction when the number of available segments drops below this fraction of the total number of logstor segments. A value of 0 disables the trigger threshold.")
     , logstor_compaction_max_shares(this, "logstor_compaction_max_shares", liveness::LiveUpdate, value_status::Used, 2000,
@@ -1745,7 +1769,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , audit_tables(this, "audit_tables", liveness::LiveUpdate, value_status::Used, "", "Comma separated list of table names (<keyspace>.<table>) that will be audited.")
     , audit_keyspaces(this, "audit_keyspaces", liveness::LiveUpdate, value_status::Used, "", "Comma separated list of keyspaces that will be audited. All tables in those keyspaces will be audited")
     , audit_unix_socket_path(this, "audit_unix_socket_path", value_status::Used, "/dev/log", "The path to the unix socket used for writing to syslog. Only applicable when audit is set to syslog.")
-    , audit_syslog_write_buffer_size(this, "audit_syslog_write_buffer_size", value_status::Used, 1048576, "The size (in bytes) of a write buffer used when writing to syslog socket.")
+    , audit_syslog_write_buffer_size(this, "audit_syslog_write_buffer_size", value_status::Unused, 1048576, "The size (in bytes) of a write buffer used when writing to syslog socket.")
      , audit_rules(this, "audit_rules", liveness::LiveUpdate, value_status::Used, {},
         "List of granular audit rules. Each rule has: sinks, categories, qualified_table_names, roles. "
         "When non-empty, these rules extend audit_categories, audit_tables, and audit_keyspaces; "

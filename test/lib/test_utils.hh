@@ -107,6 +107,19 @@ public:
     ~tmp_set_env();
 };
 
+// Removes a variable from the environment for the lifetime of the object.
+// Setting one to the empty string is not the same thing: getenv() still
+// reports it as present.
+class tmp_unset_env {
+    std::string _var, _old;
+    bool _was_set;
+public:
+    explicit tmp_unset_env(std::string_view var);
+    tmp_unset_env(tmp_unset_env&&);
+    tmp_unset_env(const tmp_unset_env&) = delete;
+    ~tmp_unset_env();
+};
+
 bool check_run_test(std::string_view var, bool defval = false);
 
 inline auto check_run_test_decorator(std::string_view test_var, bool def = false) {

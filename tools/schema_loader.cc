@@ -471,7 +471,7 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
             ut_builder.add(name, field_names, field_types);
         }
 
-        auto user_types = ut_builder.build().get();
+        auto user_types = ut_builder.build("offline schema loading").get();
         for (auto&& ut : user_types) {
             utm.add_type(std::move(ut));
         }

@@ -221,8 +221,9 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ScyllaClu
                 await manager.server_stop_gracefully(other_node.server_id)
 
             await manager.driver_connect(node)
+            cql, _ = await manager.get_ready_cql([node])
 
-            await data_class.write_data(manager.get_cql(), ks, total_rows, node_live_rows, all_live_rows)
+            await data_class.write_data(cql, ks, total_rows, node_live_rows, all_live_rows)
 
             for other_node in other_nodes:
                 await manager.server_start(other_node.server_id)

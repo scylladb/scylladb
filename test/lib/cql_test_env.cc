@@ -125,6 +125,10 @@ cql_test_config::cql_test_config(shared_ptr<db::config> cfg)
     db_config->commitlog_use_o_dsync(false);
 
     db_config->rf_rack_valid_keyspaces(true);
+
+    // Preallocating and zero-filling logstor files wastes disk space and I/O
+    // for data that is thrown away when the test ends.
+    db_config->logstor_sparse_files(true);
 }
 
 cql_test_config::cql_test_config(const cql_test_config&) = default;

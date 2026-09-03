@@ -18,6 +18,7 @@
 #include "bytes_ostream.hh"
 #include "internal.hh"
 #include "logical_clock.hh"
+#include "bounded_clock.hh"
 
 namespace raft {
 // Keeps user defined command. A user is responsible to serialize
@@ -240,6 +241,13 @@ struct log_entry {
     term_t term;
     index_t idx;
     std::variant<command, configuration, dummy> data;
+    // LeaseGuard: the leader's bounded-uncertainty time interval, recorded when
+    // the entry was created. Empty unless the leader had leases enabled (and a
+    // synchronized clock) at creation time. Used to reason about the age of a
+    // deposed leader's lease; nullopt means "no lease information" and callers
+    // must fall back to the safe path. Not persisted by all storage backends;
+    // reloaded entries may have this empty even if it was set originally.
+    std::optional<time_bounds> lease_time;
 
     size_t get_size() const;
 };
@@ -392,6 +400,17 @@ struct append_reply {
     // as a heartbeat.
     index_t commit_idx;
     std::variant<rejected, accepted> result;
+    // LeaseGuard: true if this node's bounded clock was usable as of its last
+    // tick, i.e. it could hold a lease and serve local reads were it the leader.
+    // Lets a leader whose own clock has failed hand leadership to a node that
+    // can still use leases, rather than lead a group that has silently lost
+    // them.
+    //
+    // Purely advisory: it is never used to prove anything about time, only to
+    // pick a leadership-transfer target, so a wrong value costs a pointless
+    // transfer and nothing more. False on a node with leases disabled, and on
+    // one that predates this field.
+    bool clock_ok = false;
 };
 
 struct vote_request {

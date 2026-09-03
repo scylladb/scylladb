@@ -415,6 +415,8 @@ The `Lsv3-series <https://learn.microsoft.com/en-us/azure/virtual-machines/lsv3-
        
 More on Azure Lsv3 instances `here <https://learn.microsoft.com/en-us/azure/virtual-machines/lsv3-series/>`_
 
+.. _system-requirements-oci:
+
 Oracle Cloud Infrastructure (OCI)
 ----------------------------------------
 

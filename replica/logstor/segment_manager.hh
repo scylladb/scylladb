@@ -45,6 +45,10 @@ struct segment_manager_config {
     uint64_t file_size = default_file_size;
     uint64_t disk_size;
     bool format_on_startup = true;
+    // Create files sparse: extend them to their nominal size without
+    // preallocating or zero-filling. Saves disk space and I/O, at the cost of
+    // fragmentation and of not reserving space up front.
+    bool sparse_files = false;
     bool compaction_enabled = true;
     size_t max_segments_per_compaction = 32;
     utils::updateable_value<double> trigger_compaction_threshold{0.05};
@@ -130,6 +134,12 @@ public:
     const compaction_manager& get_compaction_manager() const noexcept;
 
     uint64_t get_segment_size() const noexcept;
+
+    // Returns the path of the file holding the given segment (for debug/introspection).
+    // The path is computed from the segment id, the segment is not looked up, so the file
+    // does not have to hold a live segment. The file names are shard local, so this has to
+    // be called on the shard owning the segment.
+    sstring get_segment_file_path(log_segment_id) const;
 
     // Removes all the segments of the group and frees them. Waits for an ongoing compaction of
     // the group and keeps compaction disabled while discarding, so the caller doesn't have to.

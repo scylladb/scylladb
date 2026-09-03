@@ -9,7 +9,7 @@ from cassandra.cluster import TruncateError
 from cassandra.policies import FallthroughRetryPolicy
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import get_topology_coordinator, new_test_keyspace, FeatureConfig, feature_configs, \
-    FeatureConfigurations, count_rows
+    FeatureConfigurations, count_rows, trigger_stepdown
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for
 import time
@@ -442,3 +442,79 @@ async def test_split_emitted_during_truncate(manager: ScyllaClusterManager):
             return tablet_count >= expected_tablet_count or None
         # Give enough time for split to happen in debug mode
         await wait_for(finished_splitting, time.time() + 120)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_truncate_by_stale_coordinator_with_foreign_session(manager: ScyllaClusterManager):
+    """A coordinator which loses leadership while parked in handle_topology_ordered_op()
+    must not truncate under a session it does not own.
+
+    handle_topology_ordered_op() reads _topology.session after releasing the group0 guard,
+    so a deposed coordinator can pick up the session of an unrelated operation which is in
+    flight. Replicas accept the RPC and truncate the table a second time, after the user's
+    TRUNCATE already returned.
+    """
+    logger.info('Bootstrapping cluster')
+    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled' }
+
+    servers = []
+    servers.append(await manager.server_add(config=cfg))
+    servers.append(await manager.server_add(config=cfg))
+    servers.append(await manager.server_add(config=cfg))
+
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    # Keep the load balancer out of the picture, it would set sessions of its own
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
+        await cql.run_async(f'CREATE TABLE {ks}.ta (pk int PRIMARY KEY, c int);')
+        await cql.run_async(f'CREATE TABLE {ks}.tb (pk int PRIMARY KEY, c int);')
+
+        keys = range(128)
+        await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.ta (pk, c) VALUES ({k}, {k});') for k in keys])
+
+        (stale_coord, stale_coord_log) = await get_raft_leader_and_log(manager, servers)
+        stale_coord_host_id = await manager.get_host_id(stale_coord.server_id)
+        # Drive CQL through a node unaffected by the leadership change below
+        client_host = next(h for (s, h) in zip(servers, hosts) if s != stale_coord)
+
+        # Park the coordinator between release_guard() and the session read
+        await manager.api.enable_injection(stale_coord.ip_addr, 'truncate_table_wait', one_shot=True)
+        trunc_a = cql.run_async(f'TRUNCATE TABLE {ks}.ta', host=client_host)
+        await manager.api.wait_for_injection_enter(stale_coord.ip_addr, 'truncate_table_wait')
+
+        # Make it lose leadership while parked. The new coordinator re-runs the truncate
+        # from scratch and finalizes the request, so the client's TRUNCATE completes.
+        await trigger_stepdown(manager, stale_coord)
+
+        async def coordinator_moved():
+            return await get_topology_coordinator(manager) != stale_coord_host_id or None
+        await wait_for(coordinator_moved, time.time() + 60)
+        await trunc_a
+
+        # Data written after TRUNCATE ta completed must survive
+        await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.ta (pk, c) VALUES ({k}, {k});') for k in keys])
+
+        # Hold an unrelated operation's session open by parking the current coordinator
+        (coord, _) = await get_raft_leader_and_log(manager, servers)
+        await manager.api.enable_injection(coord.ip_addr, 'truncate_table_wait', one_shot=True)
+        trunc_b = cql.run_async(f'TRUNCATE TABLE {ks}.tb', host=client_host)
+        await manager.api.wait_for_injection_enter(coord.ip_addr, 'truncate_table_wait')
+
+        # Release the stale coordinator. It must notice that it is not the coordinator of
+        # this truncate anymore instead of sending the ta RPCs under tb's session.
+        mark = await stale_coord_log.mark()
+        await manager.api.message_injection(stale_coord.ip_addr, 'truncate_table_wait')
+        await stale_coord_log.wait_for('is no longer the current operation', from_mark=mark, timeout=60)
+
+        # tb's finalization barrier drains tb's session, joining with any RPC admitted
+        # under it, so once trunc_b returns the stale ta truncate has completed too.
+        await manager.api.message_injection(coord.ip_addr, 'truncate_table_wait')
+        await trunc_b
+
+        row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.ta', consistency_level=ConsistencyLevel.ALL))
+        assert row[0].count == len(keys)
+
+        row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.tb', consistency_level=ConsistencyLevel.ALL))
+        assert row[0].count == 0
