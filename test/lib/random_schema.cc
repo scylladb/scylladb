@@ -462,7 +462,9 @@ data_value generate_bytes_value(std::mt19937& engine, size_t min_size_in_bytes, 
 data_value generate_utf8_value(std::mt19937& engine, size_t min_size_in_bytes, size_t max_size_in_bytes) {
     auto wstr = generate_string_value<std::wstring>(engine, 0, 0x0FFF, min_size_in_bytes, max_size_in_bytes);
 
-    std::locale locale("en_US.utf8");
+    // Constructing a locale is expensive (it loads the locale category files
+    // every time), so do it only once.
+    static const std::locale locale("en_US.utf8");
     using codec = std::codecvt<wchar_t, char, std::mbstate_t>;
     auto& f = std::use_facet<codec>(locale);
 
