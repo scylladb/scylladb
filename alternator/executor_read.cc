@@ -171,7 +171,7 @@ static std::optional<attrs_to_get> calculate_attrs_to_get(const rjson::value& re
 // a table or a materialized view from which to read, based on the TableName
 // and optional IndexName in the request. Only requests like Query and Scan
 // which allow IndexName should use this function.
-enum class table_or_view_type { base, lsi, gsi, vector_index };
+enum class table_or_view_type { base, lsi, gsi };
 static std::pair<schema_ptr, table_or_view_type>
 get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
     table_or_view_type type = table_or_view_type::base;
@@ -1807,10 +1807,12 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     }
 
     // SearchVectors is not "Query", and doesn't support these options which
-    // Query supports: Limit (use TopK), ConsistentRead, ExclusiveStartKey and
-    // ScanIndexForward.
+    // Query supports: Limit (use TopK), ConsistentRead, ExclusiveStartKey,
+    // ScanIndexForward, Select (use BaseRead instead - see below) and
+    // AttributesToGet (use ProjectionExpression).
     static constexpr std::string_view unsupported_query_params[] = {
-        "Limit", "ConsistentRead", "ExclusiveStartKey", "ScanIndexForward"};
+        "Limit", "ConsistentRead", "ExclusiveStartKey", "ScanIndexForward", "Select",
+        "AttributesToGet"};
     for (std::string_view unsupported : unsupported_query_params) {
         if (rjson::find(request, unsupported)) {
             co_return api_error::validation(
@@ -1820,93 +1822,142 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
 
     std::unordered_set<std::string> used_attribute_names;
     std::unordered_set<std::string> used_attribute_values;
-    // Parse the Select parameter and determine which attributes to return.
-    // For a vector index, the default Select is ALL_PROJECTED_ATTRIBUTES,
-    // which is significantly more efficient than ALL_ATTRIBUTES because it
-    // returns what the vector store returned without looking up additional
-    // base-table data.
-    // NOTE: The "Select" option is an Alternator extension (inspired by
-    // DynamoDB's "Query" operation for GSIs) and is not part of the DynamoDB
-    // SearchVectors API. DynamoDB's SearchVectors can *only* return the
-    // columns projected into the vector index - i.e. ALL_PROJECTED_ATTRIBUTES.
-    // We don't plan to support Select=COUNT: The SearchVectors response has
-    // no fields for result counts, and it's usually not interesting to do a
-    // top K nearest neighbor search only to learn there are K results :-)
-    select_type select = parse_select(request, table_or_view_type::vector_index);
-    if (select == select_type::count) {
-        co_return api_error::validation("SearchVectors does not support Select=COUNT");
+    // BaseRead is an Alternator-only extension (SearchVectors has no
+    // equivalent in real DynamoDB, which can only ever return
+    // ALL_PROJECTED_ATTRIBUTES - the columns projected into the vector
+    // index):
+    //   * BaseRead=false (the default) is the DynamoDB-compatible mode: the
+    //     response is built entirely out of what's projected into the
+    //     vector index - a ProjectionExpression naming anything else is
+    //     silently ignored, just like a ProjectionExpression naming an
+    //     attribute the item doesn't have.
+    //   * BaseRead=true unconditionally reads the matching items from the
+    //     base table (except when nothing beyond the base table's own key
+    //     columns could possibly be needed), giving up-to-date data instead
+    //     of whatever was last indexed, and allowing ProjectionExpression
+    //     to name any base table attribute, not just ones projected into
+    //     the index.
+    //   With no explicit ProjectionExpression, both modes
+    //   return the same thing conceptually - the entire item - just from
+    //   different copies of it: BaseRead=false's "entire item" is the
+    //   vector index's own copy (which only ever has the projected
+    //   attributes to begin with - not a restricted view, just what the
+    //   index actually has), while BaseRead=true's is the base table's row.
+    const rjson::value* base_read_v = rjson::find(request, "BaseRead");
+    bool base_read = false;
+    if (base_read_v && !base_read_v->IsNull()) {
+        if (!base_read_v->IsBool()) {
+            co_return api_error::validation("BaseRead parameter must be a boolean");
+        }
+        base_read = base_read_v->GetBool();
     }
+    // What ends up in the response Item is decided below by attrs_to_get_opt
+    // - an attrs_to_get, the same "which attributes to keep" map type used
+    // by GetItem/Query/Scan (std::nullopt there means "no restriction,
+    // return the whole item"). The next few variables - base_key_attrs,
+    // vector_store_attrs and projection_type_all - are just schema/index
+    // facts reused by more than one branch below when computing
+    // attrs_to_get_opt and deciding whether a base-table read is needed;
+    // they don't decide anything by themselves.
+    //
+    // base_key_attrs: the smallest possible projection - just the base
+    // table's own primary key column names (partition + clustering). These
+    // are schema column names, not user input, so there's no risk of
+    // duplicates or overlapping paths to guard against here - a plain map
+    // insertion (not attribute_path_map_add(), which exists for that) is
+    // all that's needed.
+    // attrs_to_get_node holds a std::unique_ptr internally (for nested
+    // ProjectionExpression paths), so attrs_to_get as a whole is move-only -
+    // make_base_key_attrs() is called twice below (for base_key_attrs and to
+    // seed vector_store_attrs) rather than building it once and copying it.
+    auto make_base_key_attrs = [&] {
+        return base_schema->primary_key_columns()
+            | std::views::transform([] (const column_definition& cdef) {
+                return std::make_pair<std::string, alternator::attrs_to_get_node>(cdef.name_as_text(), {}); })
+            | std::ranges::to<alternator::attrs_to_get>();
+    };
+    alternator::attrs_to_get base_key_attrs = make_base_key_attrs();
+    // vector_store_attrs: every attribute name this specific vector index
+    // actually stores and can answer about an item, without ever reading
+    // the base table - base_key_attrs, plus the SearchSchema's
+    // HASH/INLINE_FILTER attributes, plus (for ProjectionType=INCLUDE) the
+    // Projection's NonKeyAttributes.
+    alternator::attrs_to_get vector_store_attrs = make_base_key_attrs();
+    if (ss_info.hash_attribute && !vector_store_attrs.contains(*ss_info.hash_attribute)) {
+        vector_store_attrs.emplace(*ss_info.hash_attribute, alternator::attrs_to_get_node{});
+    }
+    for (const std::string& attr : ss_info.inline_filter_attributes) {
+        if (!vector_store_attrs.contains(attr)) {
+            vector_store_attrs.emplace(attr, alternator::attrs_to_get_node{});
+        }
+    }
+    if (projection) {
+        for (const std::string& attr : *projection) {
+            if (!vector_store_attrs.contains(attr)) {
+                vector_store_attrs.emplace(attr, alternator::attrs_to_get_node{});
+            }
+        }
+    }
+    // projection_type_all: true for ProjectionType=ALL, i.e. the index's
+    // Projection setting (fixed when the index was created) declares every
+    // attribute of the item projected - see get_vector_index_non_key_attributes()
+    // in executor_util.cc for why an engaged-but-empty projection means ALL
+    // (as opposed to a disengaged projection, which means KEYS_ONLY).
+    // Because there's no finite list of "every attribute" to fetch from the
+    // vector store (see vector_store_attrs above), this is the one case
+    // where the default (no explicit ProjectionExpression) response needs a
+    // base-table read even under BaseRead=false - see the base-table
+    // fallback further down.
+    bool projection_type_all = projection.has_value() && projection->empty();
+
+    // set attrs_to_get_opt to the list of attributes that should be returned
+    // in the response (or unset if *all* attributes are request). The user
+    // can set this list *explicitly* via the ProjectionExpression parameter.
+    // If it wasn't given, the default list of attributes to return is
+    // vector_store_attrs.
+    std::optional<alternator::attrs_to_get> explicit_attrs =
+        calculate_attrs_to_get(request, *_parsed_expression_cache, used_attribute_names);
+    const bool has_explicit_attrs = explicit_attrs.has_value();
     std::optional<alternator::attrs_to_get> attrs_to_get_opt;
-    // The attributes actually available from the vector index itself (as
-    // opposed to the base table) are: the base table's key attributes, the
-    // SearchSchema's HASH/INLINE_FILTER attributes, and (for
-    // ProjectionType=KEYS_ONLY/INCLUDE) the Projection's declared
-    // NonKeyAttributes. If the index has ProjectionType=ALL, currently the
-    // vector store can't store all attributes - it only knows how to store
-    // a list of specific attributes - so there's no finite list to build
-    // here (projected_attrs stays disengaged) and we fall back to reading
-    // all the attributes from the base table. This is significantly less
-    // efficient, and we'll need to fix it later.
-    std::optional<alternator::attrs_to_get> projected_attrs;
-    if (!(projection && projection->empty())) {
-        alternator::attrs_to_get key_attrs;
-        for (const column_definition& cdef : base_schema->partition_key_columns()) {
-            attribute_path_map_add("Select", key_attrs, cdef.name_as_text());
-        }
-        for (const column_definition& cdef : base_schema->clustering_key_columns()) {
-            attribute_path_map_add("Select", key_attrs, cdef.name_as_text());
-        }
-        if (ss_info.hash_attribute && !key_attrs.contains(*ss_info.hash_attribute)) {
-            attribute_path_map_add("Select", key_attrs, *ss_info.hash_attribute);
-        }
-        for (const std::string& attr : ss_info.inline_filter_attributes) {
-            if (!key_attrs.contains(attr)) {
-                attribute_path_map_add("Select", key_attrs, attr);
-            }
-        }
-        if (projection) {
-            for (const std::string& attr : *projection) {
-                if (!key_attrs.contains(attr)) {
-                    attribute_path_map_add("Select", key_attrs, attr);
-                }
-            }
-        }
-        projected_attrs = std::move(key_attrs);
-    }
-    if (select == select_type::projection) {
-        // ALL_PROJECTED_ATTRIBUTES (the only option that DynamoDB supports)
-        // means return every attribute projected into the index - exactly
-        // projected_attrs computed above (disengaged for ProjectionType=ALL,
-        // meaning "read everything from the base table"). projected_attrs
-        // isn't needed after this (this branch is mutually exclusive with
-        // the one below that reads it), so it's fine to move from.
-        attrs_to_get_opt = std::move(projected_attrs);
-    } else {
-        attrs_to_get_opt = calculate_attrs_to_get(request, *_parsed_expression_cache, used_attribute_names, select);
-        if (attrs_to_get_opt && projected_attrs) {
-            // An explicit AttributesToGet/ProjectionExpression still can't
-            // reach outside what's actually projected into the vector index:
-            // real DynamoDB's vector index storage physically doesn't have
+    if (has_explicit_attrs) {
+        attrs_to_get_opt = std::move(explicit_attrs);
+        if (!base_read && !projection_type_all) {
+            // In DynamoDB-compatible (BaseRead=false) mode, an explicit
+            // ProjectionExpression still can't reach outside what's
+            // actually projected into the vector index: real
+            // DynamoDB's vector index storage physically doesn't have
             // anything else. The one exception is the vector attribute
-            // itself, which - unlike the ALL_PROJECTED_ATTRIBUTES default
-            // above - can always be requested explicitly (see
+            // itself, which can always be requested explicitly (see
             // test_searchvectors_projectionexpression_vs_projectiontype).
             // An attribute outside this set is silently omitted, not an
             // error - the same way a ProjectionExpression naming an
             // attribute the item doesn't have is silently omitted.
+            // (ProjectionType=ALL is excluded from this restriction because
+            // vector_store_attrs there isn't the real projected set - see
+            // projection_type_all above - so nothing should be filtered out
+            // by it; the base-table fallback below handles ALL instead.)
             std::erase_if(*attrs_to_get_opt, [&] (const auto& kv) {
-                return kv.first != vector_attribute_name && !projected_attrs->contains(kv.first);
+                return kv.first != vector_attribute_name && !vector_store_attrs.contains(kv.first);
             });
         }
+        // BaseRead=true: no restriction at all - that's the whole point.
+    } else {
+        // No explicit request: both BaseRead values mean the same thing
+        // conceptually - "the entire item" - just a different copy of it.
+        //   BaseRead=false: vector_store_attrs, the vector index's own copy
+        //   - which only ever has the projected attributes to begin with,
+        //   so that's its "entire item" (disengaged for ProjectionType=ALL,
+        //   which has no finite list - see projection_type_all above - so
+        //   this falls through to the base-table fallback below just like
+        //   an explicit request naming an unavailable attribute would).
+        //   BaseRead=true: the base table's row, in full (std::nullopt) -
+        //   the only way to ask for "everything" without knowing every
+        //   attribute name in advance, recovering the old Select=
+        //   ALL_ATTRIBUTES' role.
+        attrs_to_get_opt = (!base_read && !projection_type_all)
+            ? std::optional(std::move(vector_store_attrs)) : std::nullopt;
     }
-    // QueryFilter (the old-style API) is not supported for vector search Queries.
-    if (rjson::find(request, "QueryFilter")) {
-        co_return api_error::validation(
-            "SearchVectors does not support QueryFilter; use FilterExpression instead");
-    }
-    // FilterExpression: post-filter the vector search results by any attribute.
-    filter flt(*_parsed_expression_cache, request, filter::request_type::QUERY,
-               used_attribute_names, used_attribute_values);
+
     // SearchConditionExpression: pre-filter sent to the vector store before
     // ANN search. Only attributes declared in the vector index's
     // SearchSchema are allowed.
@@ -1918,60 +1969,127 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
     verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "SearchVectors");
 
+    // FilterExpression: post-filter the vector search results. This is an
+    // Alternator-only extension that does not exist in DynamoDB, and was
+    // inspired by the same feature in Query on GSI/LSI.
+    filter flt(*_parsed_expression_cache, request, filter::request_type::QUERY,
+               used_attribute_names, used_attribute_values);
+    // QueryFilter (the old-style API) is not supported for vector searches.
+    // Use FilterExpression instead.
+    if (rjson::find(request, "QueryFilter")) {
+        co_return api_error::validation(
+            "SearchVectors does not support QueryFilter; use FilterExpression instead");
+    }
+
     // Verify the user has SELECT permission on the base table, as we
     // do for every type of read operation after validating the input
     // parameters.
     co_await verify_permission(_enforce_authorization, _warn_authorization,
             client_state, base_schema, auth::permission::SELECT, _stats);
 
-    // When SELECT=ALL_PROJECTED_ATTRIBUTES with no filter, we can avoid a
-    // base-table fetch entirely (see the fast path below) by asking the
-    // vector store to return, alongside the primary keys, the stored values
-    // of every SearchSchema and Projection attribute beyond the key - the
-    // same attributes that were added to the index's "fc" (filtering
-    // columns) by compute_extra_fc_attributes() in executor.cc, which is
-    // exactly why the vector store has them available. This isn't possible
-    // for ProjectionType=ALL: there's no finite list of attributes to ask
-    // for (see compute_extra_fc_attributes()'s comment), so that case still
-    // needs the base-table fallback.
-    std::vector<std::string> return_columns;
-    if (select == select_type::projection && !flt && !(projection && projection->empty())) {
-        // Calculate return_columns - the list of SearchSchema and Projection
-        // attributes to ask the vector store to return alongside the primary
-        // keys. If one of the attributes we need to return is both a base
-        // key and a SearchSchema attribute, we should not list it in
-        // return_columns, as the vector store already includes the key
+    // The search implementation below has two distinct paths: the fast_path
+    // performs only *only* an ANN request on the vector store, while the
+    // !fast_path case asks the ANN to only return keys - and then goes back
+    // to the base-table to fetch the full items (or parts of them).
+    // Ideal, the "BaseRead" flag is exactly what should determine fast_path,
+    // i.e., we should just have fast_path = !base_read. However, there are
+    // a few additional cases:
+    // 1. If the requested attributes are JUST the key columns, we really
+    //    don't need to read anything beyond what the vector store's ANN
+    //    results already give us - keys can't differ between the vector
+    //    index and the base table. This holds regardless of BaseRead (so it
+    //    can turn a would-be-slow BaseRead=true request into a fast one)
+    //    and regardless of ProjectionType, including ALL, as long as
+    //    attrs_to_get_opt reduces to just the keys - in practice this only
+    //    ever happens for an explicit ProjectionExpression naming just the
+    //    keys: the *default* (no explicit request) either
+    //    already satisfies the main fast_path condition below on its own
+    //    (BaseRead=false, ProjectionType != ALL), or - under BaseRead=true -
+    //    is now the full item, not just the keys (see above), so it's never
+    //    eligible for this shortcut either. This condition is checked below
+    //    in a separate if() (after vs_return_columns is computed) that can
+    //    turn fast_path on but never off, leaving vs_return_columns empty in
+    //    that case - nothing beyond the keys is needed from the vector store
+    //    either.
+    // 2. If ProjectionType=ALL (projection_type_all), we currently CANNOT
+    //    use the fast path even if BaseRead=false. This is because currently
+    //    the vector store cannot store all attributes - just a list of named
+    //    attributes. In this case we call back to !fast_path even if
+    //    BaseRead=false, disobeying the BaseRead=false flag. Unfortunately
+    //    we have no choice - the only other option would be to not allow
+    //    BaseRead=false at all when ProjectionType=ALL.
+    // 3. Similarly, the vector store currently cannot retrieve the indexed
+    //    vector. If this vector is explicitly requested by
+    //    ProjectionExpression, we cannot use the fast path and emulate this
+    //    request inefficiently with the slow path.
+
+    bool fast_path = !base_read && !projection_type_all &&
+        !attrs_to_get_opt->contains(vector_attribute_name);
+
+    // vs_return_columns: the list of SearchSchema and Projection attributes
+    // to ask the vector store to return alongside the primary keys - i.e.
+    // the value passed as ann()'s own "return_columns" parameter. It is
+    // empty in the slow path (we then ask the vector store just for keys),
+    // and in the fast path it currently lists *all* attributes that the
+    // vector store is known to hold (the SearchSchema and Projection
+    // attributes).
+    // FIXME: when there's an explicit ProjectionExpression and/or a
+    // FilterExpression, vs_return_columns could be trimmed down to
+    // just the attributes either of them actually references, instead of
+    // always asking the vector store for everything it has. The current code
+    // is correct - the extra attributes just get discarded afterward by
+    // restrict_to_attrs (see below) - but wastes vector store work
+    // when the real request is narrow than the full projected set.
+    std::vector<std::string> vs_return_columns;
+    if (fast_path) {
+        // If one of the attributes we want the vector store to give us is
+        // both a base key and a SearchSchema attribute, we should not list it
+        // in vs_return_columns, as the vector store already includes the key
         // columns in it's main response, and it's a waste to have it twice
-        // (and will also produce us to produce response JSONs with duplicate
+        // (and will also cause us to produce response JSONs with duplicate
         // members).
-        // return_columns may be a superset of the attributes that will be
-        // returned in the final response's Item, because some of them may be
-        // needed just for the post-filter (flt) below.
         auto is_base_key = [&](const std::string& attr) {
             const column_definition* cdef = base_schema->get_column_definition(to_bytes(attr));
             return cdef && cdef->is_primary_key();
         };
         if (ss_info.hash_attribute && !is_base_key(*ss_info.hash_attribute)) {
-            return_columns.push_back(*ss_info.hash_attribute);
+            vs_return_columns.push_back(*ss_info.hash_attribute);
         }
         for (const std::string& attr : ss_info.inline_filter_attributes) {
             if (!is_base_key(attr)) {
-                return_columns.push_back(attr);
+                vs_return_columns.push_back(attr);
             }
         }
         if (projection) {
             for (const std::string& attr : *projection) {
-                if (std::ranges::contains(return_columns, attr)) {
+                if (std::ranges::contains(vs_return_columns, attr)) {
                     continue;
                 }
                 if (!is_base_key(attr)) {
-                    return_columns.push_back(attr);
+                    vs_return_columns.push_back(attr);
                 }
             }
         }
     }
 
+    // Set fast_path = true in "additional case 1" described above (the
+    // case where the request just needs keys), even if base_read=true.
+    // If we have a FilterExpression, we won't use this shortcut because
+    // the filter *may* reference attributes beyond the keys (FIXME: we
+    // can check if it actually does, rather than just disqualifying
+    // this optimization whenever a FilterExpression exists).
+    if (!flt) {
+        if (attrs_to_get_opt &&
+            std::ranges::all_of(*attrs_to_get_opt, [&] (const auto& kv) {
+                return base_key_attrs.contains(kv.first);
+            })) {
+            fast_path = true;
+        }
+    }
+
     // Query the vector store for the approximate nearest neighbors.
+    // Each returned item includes a key, a score, and optionally additional
+    // attributes specified by vs_return_columns.
     auto timeout = executor::default_timeout();
     abort_on_expiry aoe(timeout);
     // Note that we need routing=false so that the vector store will use
@@ -1980,7 +2098,7 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     // (which is what CQL wants).
     auto pkeys_result = co_await _vsc.ann(
             base_schema->ks_name(), std::string(index_name), base_schema,
-            std::move(search_vec), topk, pre_filter, aoe.abort_source(), /*routing=*/false, return_columns);
+            std::move(search_vec), topk, pre_filter, aoe.abort_source(), /*routing=*/false, vs_return_columns);
     if (!pkeys_result.has_value()) {
         const sstring error_msg = std::visit(vector_search::error_visitor{}, pkeys_result.error());
         co_return api_error::validation(error_msg);
@@ -1989,15 +2107,41 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     _stats.vector_search.items_from_vs += pkeys.size();
     per_table_stats->vector_search.items_from_vs += pkeys.size();
 
-    // For SELECT=ALL_PROJECTED_ATTRIBUTES with no filter, and ProjectionType
-    // other than ALL: skip fetching from the base table entirely, and build
-    // items directly from the key columns returned by the vector store plus
-    // (when applicable) return_columns's values, also returned by the
-    // vector store (see return_columns above). ProjectionType=ALL still
-    // needs the base-table fallback below (no finite attribute list to ask
-    // the vector store for), and so does any request with a filter (a
-    // filter needs the full item to evaluate against).
-    if (select == select_type::projection && !flt && !(projection && projection->empty())) {
+    // restrict_to_attrs() trims item (already fetched more broadly than may
+    // have been asked for - either the full base table row, or every
+    // attribute vector_store_attrs makes available) down to exactly what
+    // attrs asks for, honoring nested ProjectionExpression sub-paths (e.g.
+    // "a.b") via hierarchy_filter(). Shared by the fast path below and the
+    // base-table slow path further down.
+    auto restrict_to_attrs = [&] (rjson::value& item, const alternator::attrs_to_get& attrs) {
+        for (const auto& [attr_name, subpath] : attrs) {
+            if (!subpath.has_value()) {
+                if (rjson::value* toplevel = rjson::find(item, attr_name)) {
+                    if (!hierarchy_filter(*toplevel, subpath)) {
+                        rjson::remove_member(item, attr_name);
+                    }
+                }
+            }
+        }
+        std::vector<std::string> to_remove;
+        for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
+            std::string key(it->name.GetString(), it->name.GetStringLength());
+            if (!attrs.contains(key)) {
+                to_remove.push_back(std::move(key));
+            }
+        }
+        for (const auto& key : to_remove) {
+            rjson::remove_member(item, key);
+        }
+    };
+
+    // fast_path: skip fetching from the base table entirely, and build items
+    // directly from the key columns returned by the vector store plus
+    // (when applicable) vs_return_columns's values, also returned by the
+    // vector store (see vs_return_columns above). See the fast_path
+    // computation above for exactly when this applies; any other case
+    // needs the base-table fallback below.
+    if (fast_path) {
         rjson::value search_results = rjson::empty_array();
         for (const auto& pkey : pkeys) {
             rjson::value item = rjson::empty_object();
@@ -2019,11 +2163,25 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
                     ++exploded_ck_it;
                 }
             }
-            for (const std::string& attr : return_columns) {
+            for (const std::string& attr : vs_return_columns) {
                 auto it = pkey.column_values.find(attr);
                 if (it != pkey.column_values.end()) {
                     rjson::add_with_string_name(item, attr, decode_fc_column_value(attr, it->second, ss_info));
                 }
+            }
+            if (flt && !flt.check(item)) {
+                continue;
+            }
+            // For the default (no explicit ProjectionExpression) case,
+            // item already matches
+            // attrs_to_get_opt precisely - vs_return_columns is exactly
+            // vector_store_attrs's non-key attributes - so this is a no-op.
+            // For an explicit request, vs_return_columns may be a superset of
+            // what was actually asked for (it always includes everything
+            // available, to give FilterExpression above the full picture),
+            // so trim it down now.
+            if (has_explicit_attrs) {
+                restrict_to_attrs(item, *attrs_to_get_opt);
             }
             rjson::value entry = rjson::empty_object();
             rjson::add(entry, "Item", std::move(item));
@@ -2043,25 +2201,11 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
         co_return rjson::print(std::move(response));
     }
 
-    // TODO: For SELECT=SPECIFIC_ATTRIBUTES, if they are part of the projected
-    // attributes, we should use the above optimized code path - not fall through
-    // to the read from the base table as below as we need to do if the specific
-    // attributes contain non-projected columns.
-
-    // The condition below is exactly the one guarding the optimized code
-    // path above, which always co_returns - so reaching here with it true
-    // would mean that path was skipped despite Select=ALL_PROJECTED_ATTRIBUTES
-    // being fully servable from the vector store alone. That should be
-    // unreachable; if it isn't, something upstream is broken and silently
-    // falling back to a base-table read Select=ALL_PROJECTED_ATTRIBUTES is
-    // specifically meant to avoid, so fail loudly instead of masking it.
-    if (select == select_type::projection && !flt && !(projection && projection->empty())) {
-        on_internal_error(elogger,
-            "SearchVectors: about to read from the base table despite Select=ALL_PROJECTED_ATTRIBUTES "
-            "being fully servable from the vector store - this should be unreachable");
-    }
-
-    // Fetch the matching items from the base table and build the response.
+    // If we're here, we're in the slow path (!fast_path) case - basically the
+    // BaseRead=true case with a few footnotes already described above.
+    // We have received from the vector store only the keys for each of the
+    // matching item, and now we go back to the base table to fetch the items
+    // with those keys and build the full response.
     // When a filter is present, we always fetch the full item so that all
     // attributes are available for filter evaluation, regardless of the
     // projection required for the final response.
@@ -2109,44 +2253,28 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
                 // taking the fast-path early-exit above, attrs_to_get was
                 // overridden to fetch the full item (so the filter had every
                 // attribute available to check), and the projection this
-                // request actually asked for (attrs_to_get_opt, be it
-                // ALL_PROJECTED_ATTRIBUTES or an explicit ProjectionExpression)
-                // was never applied - apply it now. This mirrors
-                // describe_items_visitor::end_row() which removes extra
-                // filter attributes from the returned item. When there was no
-                // filter, attrs_to_get already equals attrs_to_get_opt, so
-                // opt_item is already correctly restricted and this is a
-                // no-op.
+                // request actually asked for (attrs_to_get_opt) was never
+                // applied - apply it now, via the same restrict_to_attrs
+                // used by the fast path above. When there was no filter,
+                // attrs_to_get already equals attrs_to_get_opt, so opt_item
+                // is already correctly restricted and this is a no-op.
                 if (flt && attrs_to_get_opt) {
-                    for (const auto& [attr_name, subpath] : *attrs_to_get_opt) {
-                        if (!subpath.has_value()) {
-                            if (rjson::value* toplevel = rjson::find(*opt_item, attr_name)) {
-                                if (!hierarchy_filter(*toplevel, subpath)) {
-                                    rjson::remove_member(*opt_item, attr_name);
-                                }
-                            }
-                        }
-                    }
-                    std::vector<std::string> to_remove;
-                    for (auto it = opt_item->MemberBegin(); it != opt_item->MemberEnd(); ++it) {
-                        std::string key(it->name.GetString(), it->name.GetStringLength());
-                        if (!attrs_to_get_opt->contains(key)) {
-                            to_remove.push_back(std::move(key));
-                        }
-                    }
-                    for (const auto& key : to_remove) {
-                        rjson::remove_member(*opt_item, key);
-                    }
+                    restrict_to_attrs(*opt_item, *attrs_to_get_opt);
                 }
-                if (select == select_type::projection && projection && projection->empty()) {
-                    // ProjectionType=ALL projects every attribute except the
-                    // vector attribute itself: it's "projected" into the
-                    // index (and can be reconstructed) but not returned by
-                    // default - see
-                    // test_searchvectors_projected_vector_reduced_precision.
-                    // It can still be requested explicitly with a
-                    // ProjectionExpression, which takes the select_type::regular
-                    // path below, not this one.
+                if (!has_explicit_attrs) {
+                    // Whenever there was no explicit ProjectionExpression,
+                    // the vector attribute itself is never included by
+                    // default - regardless of BaseRead -
+                    // matching DynamoDB's documented SearchVectors behavior
+                    // ("Vector data is large, and you typically don't need
+                    // it in the response... To include the vector
+                    // attribute, request it with a ProjectionExpression.").
+                    // It can still always be requested explicitly. When
+                    // attrs_to_get_opt is engaged (i.e. vector_store_attrs,
+                    // for ProjectionType=KEYS_ONLY/INCLUDE) it never includes
+                    // it anyway, so this is a no-op - it was never there to
+                    // begin with, or was already dropped by the
+                    // attrs_to_get_opt filtering above.
                     rjson::remove_member(*opt_item, vector_attribute_name);
                 }
                 item = std::move(*opt_item);
