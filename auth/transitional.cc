@@ -108,6 +108,8 @@ const resource_set& transitional_authenticator::protected_resources() const {
             try {
                 return _sasl->evaluate_response(client_response);
             } catch (const exceptions::authentication_exception&) {
+                // Transitional mode: a login that cannot be authenticated
+                // degrades to the anonymous user.
                 _rejected = true;
                 return {};
             }
@@ -118,6 +120,9 @@ const resource_set& transitional_authenticator::protected_resources() const {
         }
 
         virtual future<authenticated_user> get_authenticated_user() const override {
+            if (_rejected) {
+                return make_ready_future<authenticated_user>(anonymous_user());
+            }
             return futurize_invoke([this] {
                 return _sasl->get_authenticated_user().handle_exception([](auto ep) {
                     try {
@@ -131,6 +136,9 @@ const resource_set& transitional_authenticator::protected_resources() const {
         }
 
         const sstring& get_username() const override {
+            if (_rejected) {
+                return anonymous_username;
+            }
             return _sasl->get_username();
         }
 

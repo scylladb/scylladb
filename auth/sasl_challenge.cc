@@ -65,6 +65,9 @@ bool plain_sasl_challenge::is_complete() const {
 }
 
 future<authenticated_user> plain_sasl_challenge::get_authenticated_user() const {
+    if (!_username || !_password) {
+        throw std::logic_error("plain_sasl_challenge::get_authenticated_user() called without credentials");
+    }
     return _when_complete(*_username, *_password);
 }
 
