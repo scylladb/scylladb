@@ -53,6 +53,11 @@
 
 using namespace std::chrono_literals;
 using namespace aws;
+
+namespace {
+constexpr std::chrono::milliseconds creds_retry_backoff_min = 1s;
+constexpr std::chrono::milliseconds creds_retry_backoff_max = 5min;
+}
 template <>
 struct fmt::formatter<s3::tag> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
@@ -91,7 +96,7 @@ client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, pri
         , _creds_invalidation_timer([this] {
             std::ignore = [this]() -> future<> {
                 auto units = co_await get_units(_creds_sem, 1);
-                s3l.info("Credentials update attempt in background failed. Outdated credentials will be discarded, triggering synchronous re-obtainment"
+                s3l.info("Credentials expired. Outdated credentials will be discarded, triggering synchronous re-obtainment"
                          " attempts for future requests.");
                 _credentials = {};
             }();
@@ -103,7 +108,9 @@ client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, pri
                 try {
                     co_await update_credentials_and_rearm();
                 } catch (...) {
-                    _credentials = {};
+                    // chain already logs; keep any still-valid credentials and back off
+                    s3l.warn("Unexpected error updating credentials: {}", std::current_exception());
+                    arm_creds_retry_backoff();
                 }
             }();
         })
@@ -114,10 +121,27 @@ client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, pri
         .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>())
         .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>(_cfg->region, _cfg->role_arn));
 
+    namespace sm = seastar::metrics;
+    _metrics.add_group("s3", {
+        sm::make_counter("credentials_fetch_failures", [this] { return _creds_fetch_failures; },
+                sm::description("Number of times fetching AWS credentials from the provider chain failed"),
+                {sm::label("endpoint")(_host)}),
+    });
+
     _creds_update_timer.arm(lowres_clock::now());
     if (!_retry_strategy) {
         _retry_strategy = std::make_unique<aws::default_aws_retry_strategy>();
     }
+}
+
+// exponential backoff, capped, so failed refreshes don't hammer the chain
+void client::arm_creds_retry_backoff() {
+    _creds_retry_backoff = _creds_retry_backoff == 0ms
+            ? creds_retry_backoff_min
+            : std::min(_creds_retry_backoff * 2, creds_retry_backoff_max);
+    _creds_retry_at = lowres_clock::now() + _creds_retry_backoff;
+    _creds_update_timer.rearm(_creds_retry_at);
+    ++_creds_fetch_failures;
 }
 
 void client::update_config_sync(std::string region, std::string ira) {
@@ -142,6 +166,8 @@ void client::update_config_sync(std::string region, std::string ira) {
             auto units = f.get();
             _creds_provider_chain.invalidate_credentials();
             _credentials = {};
+            _creds_retry_backoff = 0ms;
+            _creds_retry_at = lowres_clock::time_point::min();
             _creds_update_timer.rearm(lowres_clock::now());
         } catch (...) {
             s3l.error("Failed to refresh credentials during config update: {}", std::current_exception());
@@ -184,17 +210,23 @@ shared_ptr<client> client::make(std::string ep, std::string region, std::string 
 }
 
 future<> client::update_credentials_and_rearm() {
-    _credentials = co_await _creds_provider_chain.get_aws_credentials();
-    if (_credentials) {
+    auto new_credentials = co_await _creds_provider_chain.get_aws_credentials();
+    if (new_credentials) {
+        _credentials = std::move(new_credentials);
+        _creds_retry_backoff = 0ms;
+        _creds_retry_at = lowres_clock::time_point::min();
         _creds_invalidation_timer.rearm(_credentials.expires_at);
         _creds_update_timer.rearm(_credentials.expires_at - 1h);
+    } else {
+        // don't clobber still-valid credentials on a transient refresh failure
+        arm_creds_retry_backoff();
     }
 }
 
 future<> client::authorize(http::request& req) {
-    if (!_credentials) [[unlikely]] {
+    if (!_credentials && lowres_clock::now() >= _creds_retry_at) [[unlikely]] {
         auto units = co_await get_units(_creds_sem, 1);
-        if (!_credentials) {
+        if (!_credentials && lowres_clock::now() >= _creds_retry_at) {
             s3l.info("Update creds synchronously");
             co_await update_credentials_and_rearm();
         }

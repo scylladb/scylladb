@@ -131,6 +131,11 @@ class client : public enable_shared_from_this<client> {
     timer<seastar::lowres_clock> _creds_update_timer;
     aws_credentials _credentials;
     aws::aws_credentials_provider_chain _creds_provider_chain;
+    // set once a fetch attempt fails; gates re-entry into the chain until it elapses
+    seastar::lowres_clock::time_point _creds_retry_at = seastar::lowres_clock::time_point::min();
+    std::chrono::milliseconds _creds_retry_backoff{0};
+    uint64_t _creds_fetch_failures = 0;
+    seastar::metrics::metric_groups _metrics;
     seastar::gate _config_update_gate;
     seastar::gate _requests_gate;
 
@@ -153,6 +158,7 @@ class client : public enable_shared_from_this<client> {
     struct private_tag {};
 
     future<> update_credentials_and_rearm();
+    void arm_creds_retry_backoff();
     future<> authorize(http::request&);
     future<group_client&> find_or_create_client();
     future<group_client&> find_or_create_client_slow();
