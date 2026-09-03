@@ -2545,6 +2545,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             startlog.info("Verifying that all of the tablet keyspaces use rack list replication factors");
             db.local().check_rack_list_everywhere(cfg->enforce_rack_list());
 
+            startlog.info("Verifying that the keyspaces agree with storage_mode_for_new_keyspaces");
+            db.local().check_storage_mode_for_new_keyspaces();
+
             // The table-based audit backend needs Raft (via join_cluster)
             // to create its keyspace and table.
             checkpoint(stop_signal, "starting audit storage");

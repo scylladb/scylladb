@@ -3922,6 +3922,28 @@ bool database::enforce_rf_rack_validity_for_keyspace(const db::config& cfg, cons
     return cfg.rf_rack_valid_keyspaces() || ksm.views().size() > 0;
 }
 
+void database::check_storage_mode_for_new_keyspaces() const {
+    const auto configured = _cfg.storage_mode_for_new_keyspaces();
+    if (configured == db::keyspace_storage_mode_t::mode::unset) {
+        return;
+    }
+    const auto kind = get_user_storage_kind();
+    // A cluster with no user keyspaces has nothing to disagree with, and one
+    // which is already mixed predates the setting.
+    if (kind == user_storage_kind::none || kind == user_storage_kind::mixed) {
+        return;
+    }
+    // A node which disagrees with the keyspaces the cluster already has can
+    // create no keyspace at all: one check refuses the configured kind, the
+    // other refuses everything else.
+    const bool cluster_object_storage = kind == user_storage_kind::object_storage;
+    if (cluster_object_storage != (configured == db::keyspace_storage_mode_t::mode::object_storage)) {
+        throw std::runtime_error(seastar::format("storage_mode_for_new_keyspaces is {}, but this cluster keeps its user data in {} storage",
+                                                 configured,
+                                                 cluster_object_storage ? "object" : "local"));
+    }
+}
+
 void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) const {
     const auto& keyspaces = get_keyspaces();
     std::vector<std::string_view> invalid_keyspaces{};

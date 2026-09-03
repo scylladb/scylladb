@@ -2304,6 +2304,7 @@ public:
     // * If not `enforce_rack_list`, a warning will be printed for all keyspaces
     //   that use numeric replication factors, but no exception should be thrown.
     void check_rack_list_everywhere(const bool enforce_rack_list) const;
+    void check_storage_mode_for_new_keyspaces() const;
 
 private:
     // SSTable sampling might require considerable amounts of memory,
