@@ -1419,7 +1419,8 @@ future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_d
     if (with_snapshot) {
         snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
     }
-    auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt)));
+    auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot,
+            std::move(snapshot_name_opt), dropping_table::yes));
     co_await smp::invoke_on_all([&] {
         return table_shards->stop();
     });
@@ -3145,6 +3146,12 @@ static future<> truncate_table_with_tombstone(sharded<database>& sharded_db, con
     //    force_sync, because a truncate should not be acknowledged before it
     //    is durable.
     co_await sharded_db.invoke_on_all([&] (database& db) -> future<> {
+        // Lets a test leave one node without the tombstone, so that repair has
+        // something to reconcile. Truncate itself cannot be made to miss a node:
+        // it refuses to run unless every one of them is up.
+        if (utils::get_local_injector().enter("skip_truncate_token_range_tombstone")) {
+            co_return;
+        }
         auto apply_to = [&] (replica::table& t) -> future<> {
             auto s = t.schema();
             auto fm = freeze_token_range_tombstones(*s, trts);
@@ -3161,7 +3168,8 @@ static future<> truncate_table_with_tombstone(sharded<database>& sharded_db, con
 }
 
 future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
-        const global_table_ptr& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+        const global_table_ptr& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt,
+        dropping_table dropping) {
     auto& cf = *table_shards;
     auto s = cf.schema();
 
@@ -3182,7 +3190,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
 
     dblog.info("Truncating {}.{} {}snapshot", s->ks_name(), s->cf_name(), with_snapshot ? "with auto-" : "without ");
 
-    if (sharded_db.local().features().token_range_tombstones) {
+    if (sharded_db.local().features().token_range_tombstones && !dropping) {
         if (with_snapshot) {
             auto truncated_at = truncated_at_opt.value_or(db_clock::now());
             auto name = snapshot_name_opt.value_or(

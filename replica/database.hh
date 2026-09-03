@@ -2184,7 +2184,13 @@ private:
     struct table_truncate_state;
 
     static future<> snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name, db::snapshot_options opts, snapshot_callback = {});
-    static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, const global_table_ptr&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
+    // dropping_table says that this truncate is a step of dropping the table.
+    // Such a truncate cannot be done by writing a tombstone: the table is on
+    // its way out, and the write would be applied to a table which is being
+    // dropped in the same operation. It discards the data outright instead,
+    // which is what the whole drop is doing anyway.
+    using dropping_table = bool_class<class dropping_table_tag>;
+    static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, const global_table_ptr&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt, dropping_table dropping = dropping_table::no);
     future<> truncate(db::system_keyspace& sys_ks, column_family& cf, std::vector<lw_shared_ptr<replica::table>>& views, const table_truncate_state&);
 public:
     /** Truncates the given column family */
