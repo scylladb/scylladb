@@ -30,6 +30,14 @@ namespace cql3::statements {
 
 namespace {
 
+/// The column the rows are ranked by: the column the index is built on, which every call in the
+/// statement names, and the column a fragment is generated from.
+const column_definition& ranked_column(const schema& schema, const secondary_index::index& index) {
+    const auto* cdef = schema.get_column_definition(to_bytes(index.target_column()));
+    throwing_assert(cdef);
+    return *cdef;
+}
+
 /// The value the given call asks for, or nothing when it is a call to neither.
 std::optional<bm25_value> selected_bm25_value(const expr::function_call& fc) {
     if (expr::is_native_function_call(fc, functions::BM25_FUNCTION_NAME)) {
@@ -214,8 +222,17 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
                 "Full-text search queries do not support additional WHERE restrictions");
     }
 
+    // A score temporary was allocated, so BM25() was selected and a provider will fill it per row by
+    // matching each row to the full-text index's response.
     if (ordering_info->score_temporary_index) {
         external_search::fetch_primary_key_columns(*selection, *schema);
+    }
+
+    // A fragment temporary was allocated, so BM25_HIGHLIGHT() was selected and the index will be asked to
+    // generate the fragment from the row's own text - which it stores none of, so the text has to be
+    // read from every row even when the query does not select the column itself.
+    if (ordering_info->highlight_temporary_index) {
+        external_search::fetch_column(*selection, ranked_column(*schema, ordering_info->index));
     }
 
     return ::make_shared<cql3::statements::fulltext_indexed_table_select_statement>(
