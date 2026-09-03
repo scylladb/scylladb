@@ -1328,8 +1328,10 @@ calculate_bounds_condition_expression(schema_ptr schema,
             first_unset_idx = i;
         }
         if (r.range && max_sk_index_set) {
+            // FIXME: verify against real DynamoDB the message it emits for
+            // this case, and align ours with it.
             throw api_error::validation(
-                    "KeyConditionExpression: only the last constrained RANGE key may skip the equality (=) condition");
+                    "KeyConditionExpression: only the last constrained RANGE key may use a non-equality condition");
         }
         if ((r.eq_value || r.range) && !max_sk_index_set) {
             max_sk_index_set = i;
