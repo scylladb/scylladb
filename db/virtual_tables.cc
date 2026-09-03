@@ -15,6 +15,7 @@
 #include <seastar/json/json_elements.hh>
 #include <seastar/core/reactor.hh>
 
+#include "auth/authenticated_user.hh"
 #include "cdc/generation_service.hh"
 #include "cdc/log.hh"
 #include "cdc/metadata.hh"
@@ -893,7 +894,7 @@ class clients_table : public streaming_virtual_table {
                 if (cd->ssl_protocol) {
                     set_cell(cr.cells(), "ssl_protocol", *cd->ssl_protocol);
                 }
-                set_cell(cr.cells(), "username", cd->username ? *cd->username : sstring("anonymous"));
+                set_cell(cr.cells(), "username", cd->username ? *cd->username : auth::anonymous_username);
                 if (cd->scheduling_group_name) {
                     set_cell(cr.cells(), "scheduling_group", *cd->scheduling_group_name);
                 }

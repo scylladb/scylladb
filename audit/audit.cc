@@ -11,6 +11,7 @@
 #include "audit/audit.hh"
 #include "audit/audit_rule.hh"
 #include "audit/preprocessed_audit_rules.hh"
+#include "auth/authenticated_user.hh"
 #include "utils/rjson.hh"
 #include "db/config.hh"
 #include "cql3/cql_statement.hh"
@@ -336,8 +337,7 @@ future<> audit::log(const audit_info& audit_info, const service::client_state& c
         role = *client_state.user()->name;
     }
     thread_local static sstring no_username("undefined");
-    static const sstring anonymous_username("anonymous");
-    const sstring& username = client_state.user() ? client_state.user()->name.value_or(anonymous_username) : no_username;
+    const sstring& username = client_state.user() ? client_state.user()->name.value_or(auth::anonymous_username) : no_username;
     socket_address client_ip = client_state.get_client_address().addr();
     socket_address node_ip = _token_metadata.get()->get_topology().my_address().addr();
     if (audit_info.alternator_batch_tables()) {
