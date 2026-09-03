@@ -5812,6 +5812,49 @@ BOOST_AUTO_TEST_CASE(evaluate_neg_reversed_type) {
     BOOST_REQUIRE_EQUAL(raw_to<int32_t>(result, int32_type), -5);
 }
 
+// query_options::prepare() reorders _value_views to match the statement's
+// bind-marker order (given by `specs`), but leaves _unset in the client's
+// wire order. get_value_at()/is_unset() index both vectors with the same
+// (spec-order) index, so a named request whose wire order differs from
+// `specs` pairs each value with the wrong client's unset flag.
+BOOST_AUTO_TEST_CASE(query_options_prepare_permutes_unset_incorrectly) {
+    // Statement declares bind markers in this order: a, b, c.
+    std::vector<lw_shared_ptr<column_specification>> specs = {
+        make_lw_shared<column_specification>("ks", "tab", make_shared<column_identifier>("a", true), int32_type),
+        make_lw_shared<column_specification>("ks", "tab", make_shared<column_identifier>("b", true), int32_type),
+        make_lw_shared<column_specification>("ks", "tab", make_shared<column_identifier>("c", true), int32_type),
+    };
+
+    // Client lists them in a different order on the wire: c, a, b, and
+    // marks "b" (its own value, not "a"'s) as UNSET.
+    std::optional<std::vector<std::string_view>> names = std::vector<std::string_view>{"c", "a", "b"};
+    std::vector<cql3::raw_value> values;
+    values.push_back(raw_value::make_value(int32_type->decompose(30))); // c
+    values.push_back(raw_value::make_value(int32_type->decompose(10))); // a
+    values.push_back(raw_value::make_value(int32_type->decompose(20))); // b, but marked unset below
+    cql3::unset_bind_variable_vector unset = {false, false, true}; // c=set, a=set, b=UNSET
+
+    query_options qo(default_cql_config, db::consistency_level::ONE, names,
+        cql3::raw_value_vector_with_unset(std::move(values), std::move(unset)),
+        false, query_options::specific_options::DEFAULT);
+
+    qo.prepare(specs);
+
+    // Correct behaviour: querying by the statement's declared bind-marker
+    // index (0=a, 1=b, 2=c), "b" should read as unset...
+    BOOST_CHECK_MESSAGE(qo.is_unset(1),
+        "bind marker \"b\" (index 1) should be reported unset, matching what the client sent");
+    // ...and "c" should NOT be unset, since the client never marked it so.
+    BOOST_CHECK_MESSAGE(!qo.is_unset(2),
+        "bind marker \"c\" (index 2) should not be reported unset -- the client sent a real value for it");
+
+    // get_value_at() must agree with is_unset(): a marker that is_unset()
+    // says is NOT unset must yield a value rather than throw, and one that
+    // IS unset must throw rather than silently hand back a value.
+    BOOST_CHECK_NO_THROW(qo.get_value_at(2));   // "c" has a real value
+    BOOST_CHECK_THROW(qo.get_value_at(1), exceptions::invalid_request_exception); // "b" is unset
+}
+
 // A temporary is a slot in evaluation_inputs::temporaries; evaluating it is
 // just a lookup by index.
 BOOST_AUTO_TEST_CASE(evaluate_temporary) {

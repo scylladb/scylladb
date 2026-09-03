@@ -131,13 +131,20 @@ void query_options::prepare(const std::vector<lw_shared_ptr<column_specification
 
     auto& names = *_names;
     std::vector<cql3::raw_value_view> ordered_values;
+    unset_bind_variable_vector ordered_unset;
     ordered_values.reserve(specs.size());
+    ordered_unset.reserve(specs.size());
     for (auto&& spec : specs) {
         auto& spec_name = spec->name->text();
         bool found_value_for_name = false;
         for (size_t j = 0; j < names.size(); j++) {
             if (names[j] == spec_name) {
                 ordered_values.emplace_back(_value_views[j]);
+                // _unset is filled in lockstep with _value_views by the wire
+                // reader (transport/request.hh), so it must be reordered the
+                // same way -- otherwise idx j's unset flag ends up paired
+                // with whichever bind marker happened to land at that index.
+                ordered_unset.emplace_back(_unset[j]);
                 found_value_for_name = true;
                 break;
             }
@@ -151,6 +158,7 @@ void query_options::prepare(const std::vector<lw_shared_ptr<column_specification
         }
     }
     _value_views = std::move(ordered_values);
+    _unset = std::move(ordered_unset);
 }
 
 void query_options::fill_value_views()
