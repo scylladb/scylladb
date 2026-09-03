@@ -2155,7 +2155,7 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
     bool init_trace = (bool)!bounced; // If the request was bounced, we already started the trace in the handler
     auto& sg_stats = get_cql_sg_stats();
     auto msg = co_await coroutine::try_future(process_fn(client_state, _query_processor, in, stream,
-        version, permit, trace_state, init_trace, {}, dialect, sg_stats, request_start_timestamp, _memory_available));
+        version, permit, trace_state, init_trace, std::move(cached_fn_calls), dialect, sg_stats, request_start_timestamp, _memory_available));
     while (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&msg)) {
         auto shard = (*bounce_msg)->target_shard();
         auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
@@ -2195,8 +2195,14 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
                 .dialect = dialect,
                 .client_state = client_state,
                 .trace_info = tracing::make_trace_info(trace_state),
-                .cached_fn_calls = std::move(cached_fn_calls),
+                // Forward the pk function values *this* attempt just computed
+                // (cached_vals, extracted above from the bounce message), not
+                // the stale/already-consumed outer parameter -- otherwise the
+                // memoized partition key never survives a node bounce and the
+                // target re-evaluates non-deterministic functions from scratch.
+                .cached_fn_calls = std::move(cached_vals),
             };
+            tracing::trace(trace_state, "Forwarding {} cached pk function value(s) with the request", req.cached_fn_calls.size());
 
             auto response = co_await forward_cql(
                 target_host, shard, (*bounce_msg)->timeout().value(), (*bounce_msg)->is_write().value(),
