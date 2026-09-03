@@ -4114,9 +4114,9 @@ future<> storage_service::update_tablet_metadata(const locator::tablet_metadata_
 }
 
 future<locator::tablet_map> storage_service::build_tablet_map_for_migration(
-        locator::token_metadata_ptr tm,
         const locator::static_effective_replication_map_ptr& erm,
         size_t target_pow2) {
+    const auto& tm = erm->get_token_metadata_ptr();
     const auto& sorted_tokens = tm->sorted_tokens();
 
     // Construct token boundaries: union of vnode tokens + optional pow2 boundaries.
@@ -4366,8 +4366,6 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         //  min           P1            P2            P3          max
         //   |------------|-------------|-------------|------------|
 
-        const auto tmptr = get_token_metadata_ptr();
-
         // Estimate table sizes when pow2 convergence is enabled.
         // The estimates are used by the tablet allocator to determine the
         // target pow2 tablet count per table.
@@ -4422,11 +4420,11 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
                     if (auto it = target_pow2s.find(tid); it != target_pow2s.end()) {
                         target_pow2 = it->second;
                     }
-                    auto tmap = co_await build_tablet_map_for_migration(tmptr, erm, target_pow2);
+                    auto tmap = co_await build_tablet_map_for_migration(erm, target_pow2);
                     co_await append_tablet_map_mutations(tid, cf_name, tmap, target_pow2);
                 }
             } else {
-                auto shared_tmap = co_await build_tablet_map_for_migration(tmptr, erm, 0);
+                auto shared_tmap = co_await build_tablet_map_for_migration(erm, 0);
                 for (const auto& [tid, cf_name] : tables_to_migrate) {
                     co_await append_tablet_map_mutations(tid, cf_name, shared_tmap, 0);
                 }

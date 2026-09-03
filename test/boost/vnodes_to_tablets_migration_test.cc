@@ -201,7 +201,7 @@ static locator::tablet_map build_map(const std::vector<locator::host_id>& hosts,
             "NetworkTopologyStrategy", params, stm.get()->get_topology());
     auto erm = locator::calculate_vnode_effective_replication_map(rs, stm.get()).get();
 
-    return service::storage_service::build_tablet_map_for_migration(stm.get(), erm, 0).get();
+    return service::storage_service::build_tablet_map_for_migration(erm, 0).get();
 }
 
 static locator::tablet_map build_single_node_map(locator::host_id host, unsigned shard_count,

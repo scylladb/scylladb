@@ -383,7 +383,7 @@ public:
     // Builds the initial tablet map for a vnodes-to-tablets migration. Depends on
     // nothing but its arguments, so it is static and can be driven directly with a
     // synthetic topology.
-    static future<locator::tablet_map> build_tablet_map_for_migration(locator::token_metadata_ptr tm,
+    static future<locator::tablet_map> build_tablet_map_for_migration(
             const locator::static_effective_replication_map_ptr& erm,
             size_t target_pow2 = 0);
 private:
