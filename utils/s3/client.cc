@@ -175,6 +175,14 @@ utils::object_storage_bytes client::bytes() const {
     return total;
 }
 
+uint64_t client::get_requests() const {
+    uint64_t total = 0;
+    for (auto& [sg, gc] : _https) {
+        total += gc.http.get_stats()[httpd::GET].ops;
+    }
+    return total;
+}
+
 void client::report_object_storage_metrics(utils::object_storage_metrics_labels labels) {
     _object_storage_metrics_labels = std::move(labels);
     for (auto& [sg, gc] : _https) {
