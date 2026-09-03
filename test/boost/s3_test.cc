@@ -9,6 +9,7 @@
 
 #include <unordered_set>
 #include <regex>
+#include <system_error>
 #include <boost/test/unit_test.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -17,7 +18,11 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/lowres_clock.hh>
+#include <seastar/core/abort_source.hh>
 #include <seastar/http/exception.hh>
+#include <seastar/http/connection_factory.hh>
+#include <seastar/http/request.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/units.hh>
@@ -29,6 +34,7 @@
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "utils/s3/aws_error.hh"
+#include "utils/s3/default_aws_retry_strategy.hh"
 #include "utils/s3/client.hh"
 #include "utils/s3/creds.hh"
 #include "utils/s3/utils/manip_s3.hh"
@@ -68,6 +74,59 @@ public:
 
 static std::unique_ptr<seastar::http::retry_strategy> make_test_retry_strategy() {
     return std::make_unique<test_retry_strategy>();
+}
+
+namespace {
+
+// Connection factory whose every connection attempt fails immediately with
+// a retryable transport error, forcing http::client into its retry-with-
+// backoff loop without needing a real socket or server.
+class always_refused_factory : public seastar::http::connection_factory {
+public:
+    future<connected_socket> make(seastar::abort_source*) override {
+        return make_exception_future<connected_socket>(
+            std::system_error(std::make_error_code(std::errc::connection_refused)));
+    }
+};
+
+} // anonymous namespace
+
+// Reproduces: default_aws_retry_strategy::sleep_before_retry() backs off
+// with plain seastar::sleep() and seastar::http::client never re-checks its
+// abort_source after should_retry() returns, so an abort requested while a
+// request is retrying does not cut the backoff sleep short.
+SEASTAR_THREAD_TEST_CASE(test_default_aws_retry_strategy_backoff_ignores_abort) {
+    auto max_retries = 4u;
+    auto run = [&] (seastar::abort_source* as) {
+        seastar::http::client cln(std::make_unique<always_refused_factory>(), 1, 128 * 1024,
+                                   std::make_unique<aws::default_aws_retry_strategy>(max_retries));
+        auto req = seastar::http::request::make("GET", "test-host", "/");
+        auto start = seastar::lowres_clock::now();
+        BOOST_REQUIRE_THROW(
+            cln.make_request(std::move(req),
+                              [](const seastar::http::reply&, input_stream<char>&&) { return make_ready_future<>(); },
+                              std::nullopt, as)
+                .get(),
+            std::system_error);
+        auto elapsed = seastar::lowres_clock::now() - start;
+        cln.close().get();
+        return elapsed;
+    };
+
+    // Baseline: full exponential backoff with no abort at all:
+    // retry_count 1,2,3 sleep (1<<1..3)*25ms = 50+100+200 = 350ms.
+    auto baseline = run(nullptr);
+    BOOST_REQUIRE_GE(baseline, 300ms);
+
+    // Request abort almost immediately, well before the backoff would
+    // naturally elapse. If the backoff were abortable this run would finish
+    // in a few ms instead of waiting out (most of) the same backoff.
+    seastar::abort_source as;
+    auto abort_fiber = seastar::sleep(5ms).then([&as] { as.request_abort(); });
+    auto aborted = run(&as);
+    abort_fiber.get();
+
+    BOOST_REQUIRE_GE(aborted, 250ms);
 }
 
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
