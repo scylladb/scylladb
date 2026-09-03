@@ -11,7 +11,10 @@
 // re-serializing an identical response body per listener (transport/event_notifier.cc),
 // instead of serializing the body once and sharing it across listeners.
 //
-// This file has two parts:
+// This file has three parts, all calling the real production functions
+// directly (cql_transport::make_schema_change_event_response() and
+// cql_transport::get_or_make_shared_event()/shared_event_cache, both in
+// transport/response.hh) rather than test-local reimplementations:
 //  1. test_fanout_bodies_are_identical_across_listeners: calls the exact
 //     production serialization code the fan-out loop calls per listener and
 //     shows the produced bytes are byte-for-byte identical every time for the
@@ -20,6 +23,13 @@
 //     BOOST_TEST_MESSAGE only (not asserted, since wall-clock deltas are
 //     inherently flaky under scheduler/allocator contention), that the raw
 //     per-listener serialization cost is O(N) with no amortization.
+//  3. test_fanout_shared_cache_constructs_body_once_per_key: exercises the
+//     actual production caching template (get_or_make_shared_event(), shared
+//     by every event_notifier.cc fan-out loop) and the actual production
+//     event builder (make_schema_change_event_response(), the same function
+//     connection::make_schema_change_event() delegates to), asserting the
+//     body is constructed at most once per distinct cache key regardless of
+//     listener count.
 
 #define BOOST_TEST_MODULE core
 
@@ -36,14 +46,9 @@ using namespace std::chrono;
 
 namespace {
 
-// Exactly what cql_server::connection::make_schema_change_event() does
-// (transport/server.cc), which is what event_notifier's fan-out loop calls
-// once per registered listener (transport/event_notifier.cc).
+// Extracts the body bytes from the actual production event-response builder.
 bytes_ostream make_schema_change_body(const event::schema_change& ev, uint8_t version) {
-    response r(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
-    r.write_string("SCHEMA_CHANGE");
-    r.serialize(ev, version);
-    return std::move(r).extract_body();
+    return std::move(*make_schema_change_event_response(ev, version)).extract_body();
 }
 
 // Simulates event_notifier::on_create_column_family's loop body run N times:
@@ -108,9 +113,47 @@ BOOST_AUTO_TEST_CASE(test_fanout_cost_does_not_amortize_with_listener_count) {
 
     // Informational only: wall-clock timing is inherently noisy under
     // scheduler/allocator contention, so it is reported but not asserted on.
+    // The deterministic invariant that used to be checked here (cost does
+    // not amortize with N) is instead covered by
+    // test_fanout_shared_cache_constructs_body_once_per_key below, which
+    // asserts a construction count rather than a timing ratio.
     BOOST_TEST_MESSAGE("small_n=" << small_n << " total_ns=" << small_time.count()
         << " per_op_ns=" << small_per_op);
     BOOST_TEST_MESSAGE("large_n=" << large_n << " total_ns=" << large_time.count()
         << " per_op_ns=" << large_per_op);
     BOOST_TEST_MESSAGE("ratio_of_totals=" << ratio_of_totals << " expected(linear)=" << expected_ratio);
+}
+
+BOOST_AUTO_TEST_CASE(test_fanout_shared_cache_constructs_body_once_per_key) {
+    // Exercises the actual production caching (cql_transport::get_or_make_shared_event,
+    // shared by event_notifier.cc's fan-out loops) and the actual production
+    // event builder (cql_transport::make_schema_change_event_response, the same
+    // function connection::make_schema_change_event() delegates to) -- not a
+    // test-local reimplementation of either.
+    event::schema_change ev(
+        event::schema_change::change_type::CREATED,
+        event::schema_change::target_type::TABLE,
+        "ks", "cf");
+
+    size_t construction_count = 0;
+    cql_transport::shared_event_cache<uint8_t> cache;
+    constexpr size_t n_listeners = 20000;
+
+    for (size_t i = 0; i < n_listeners; ++i) {
+        cql_transport::get_or_make_shared_event(cache, uint8_t{4}, [&] {
+            ++construction_count;
+            return cql_transport::make_schema_change_event_response(ev, 4);
+        });
+    }
+    BOOST_REQUIRE_EQUAL(construction_count, 1u);
+
+    // A second, distinct key adds exactly one more construction, not one per
+    // listener: "once per key", not "once total".
+    for (size_t i = 0; i < n_listeners; ++i) {
+        cql_transport::get_or_make_shared_event(cache, uint8_t{5}, [&] {
+            ++construction_count;
+            return cql_transport::make_schema_change_event_response(ev, 5);
+        });
+    }
+    BOOST_REQUIRE_EQUAL(construction_count, 2u);
 }

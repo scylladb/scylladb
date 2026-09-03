@@ -362,10 +362,15 @@ private:
 
         std::unique_ptr<cql_server::response> make_ready(int16_t stream, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_supported(int16_t stream, const tracing::trace_state_ptr& tr_state) const;
-        std::unique_ptr<cql_server::response> make_topology_change_event(const cql_transport::event::topology_change& event) const;
-        std::unique_ptr<cql_server::response> make_status_change_event(const cql_transport::event::status_change& event) const;
-        std::unique_ptr<cql_server::response> make_schema_change_event(const cql_transport::event::schema_change& event) const;
-        std::unique_ptr<cql_server::response> make_client_routes_change_event(const cql_transport::event::client_routes_change& event) const;
+        // These four return a shared_ptr rather than a unique_ptr, unlike every
+        // other make_*() here: event bodies are identical for every listener at
+        // a given protocol version, so event_notifier builds one and fans it
+        // out to all same-version listeners via write_shared_response() instead
+        // of re-serializing it once per connection.
+        seastar::shared_ptr<cql_server::response> make_topology_change_event(const cql_transport::event::topology_change& event) const;
+        seastar::shared_ptr<cql_server::response> make_status_change_event(const cql_transport::event::status_change& event) const;
+        seastar::shared_ptr<cql_server::response> make_schema_change_event(const cql_transport::event::schema_change& event) const;
+        seastar::shared_ptr<cql_server::response> make_client_routes_change_event(const cql_transport::event::client_routes_change& event) const;
         std::unique_ptr<cql_server::response> make_autheticate(int16_t, std::string_view, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_auth_success(int16_t, bytes, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_auth_challenge(int16_t, bytes, const tracing::trace_state_ptr& tr_state) const;
@@ -373,7 +378,11 @@ private:
         cql3::dialect get_dialect() const;
 
         void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, cql_compression compression = cql_compression::none);
-        
+        // For a response shared read-only across multiple connections on this
+        // same shard (event fan-out) -- never compressed, never mutated after
+        // construction, so a plain shared_ptr (no foreign_ptr) is safe.
+        void write_shared_response(seastar::shared_ptr<cql_server::response> response);
+
         void update_user_scheduling_group(const std::optional<auth::authenticated_user>& usr);
         void update_control_connection_scheduling_group();
         

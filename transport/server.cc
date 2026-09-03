@@ -2224,39 +2224,36 @@ make_result(int16_t stream, messages::result_message& msg, const tracing::trace_
     return response;
 }
 
-std::unique_ptr<cql_server::response>
+seastar::shared_ptr<cql_server::response>
 cql_server::connection::make_topology_change_event(const event::topology_change& event) const
 {
-    auto response = std::make_unique<cql_server::response>(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
+    auto response = seastar::make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
     response->write_string("TOPOLOGY_CHANGE");
     response->write_string(to_string(event.change));
     response->write_inet(event.node);
     return response;
 }
 
-std::unique_ptr<cql_server::response>
+seastar::shared_ptr<cql_server::response>
 cql_server::connection::make_status_change_event(const event::status_change& event) const
 {
-    auto response = std::make_unique<cql_server::response>(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
+    auto response = seastar::make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
     response->write_string("STATUS_CHANGE");
     response->write_string(to_string(event.status));
     response->write_inet(event.node);
     return response;
 }
 
-std::unique_ptr<cql_server::response>
+seastar::shared_ptr<cql_server::response>
 cql_server::connection::make_schema_change_event(const event::schema_change& event) const
 {
-    auto response = std::make_unique<cql_server::response>(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
-    response->write_string("SCHEMA_CHANGE");
-    response->serialize(event, _version);
-    return response;
+    return cql_transport::make_schema_change_event_response(event, _version);
 }
 
-std::unique_ptr<cql_server::response>
+seastar::shared_ptr<cql_server::response>
 cql_server::connection::make_client_routes_change_event(const event::client_routes_change& event) const
 {
-    auto response = std::make_unique<cql_server::response>(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
+    auto response = seastar::make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
     response->write_string("CLIENT_ROUTES_CHANGE");
     response->serialize(event, _version);
     return response;
@@ -2271,6 +2268,13 @@ void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_serv
     });
 }
 
+void cql_server::connection::write_shared_response(seastar::shared_ptr<cql_server::response> response)
+{
+    _ready_to_respond = _ready_to_respond.then([this, response] () mutable {
+        return response->write_message_shared(_write_buf, _version, response);
+    });
+}
+
 future<> cql_server::response::write_message(output_stream<char>& out, uint8_t version, cql_compression compression, seastar::deleter del) {
     if (compression != cql_compression::none) {
         compress(compression);
@@ -2280,6 +2284,22 @@ future<> cql_server::response::write_message(output_stream<char>& out, uint8_t v
         return make_exception_future<>(std::move(frame).assume_error());
     }
     return out.write(std::move(frame).assume_value()).then([this, &out, del = std::move(del)] mutable {
+        return do_for_each(_body.begin(), _body.end(), [&out, del = std::move(del)] (bytes_view fragment) mutable {
+            temporary_buffer<char> buf(reinterpret_cast<char*>(const_cast<signed char*>(fragment.data())), fragment.size(), del.share());
+            return out.write(std::move(buf));
+        }).then([&out] {
+            return out.flush();
+        });
+    });
+}
+
+future<> cql_server::response::write_message_shared(output_stream<char>& out, uint8_t version, seastar::shared_ptr<cql_server::response> self) {
+    utils::result_with_exception_ptr<temporary_buffer<char>> frame = make_frame(version, _body.size());
+    if (!frame) [[unlikely]] {
+        return make_exception_future<>(std::move(frame).assume_error());
+    }
+    auto del = make_deleter([self = std::move(self)] {});
+    return out.write(std::move(frame).assume_value()).then([this, &out, del = std::move(del)] () mutable {
         return do_for_each(_body.begin(), _body.end(), [&out, del = std::move(del)] (bytes_view fragment) mutable {
             temporary_buffer<char> buf(reinterpret_cast<char*>(const_cast<signed char*>(fragment.data())), fragment.size(), del.share());
             return out.write(std::move(buf));
