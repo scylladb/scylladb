@@ -9,11 +9,39 @@
 #pragma once
 
 #include "cql3/selection/selection.hh"
+#include "cql3/values.hh"
 #include "vector_search/vector_store_client.hh"
+
+#include <optional>
+#include <span>
+#include <vector>
 
 class schema;
 
+namespace query {
+class result;
+class partition_slice;
+}
+
 namespace cql3::statements {
+
+/// One row of a base-table read, as an external search sees it.
+struct joined_row {
+    /// Where in the external results the answer naming this row sits, or nothing when none does.
+    std::optional<size_t> answer;
+};
+
+/// Joins an external search's answers to the rows just read from the base table.
+///
+/// Answers are matched by primary key with a cursor that only moves forward, the results being
+/// merged in the index's primary-key order: an answer stepped over names a key the index still knows
+/// about but that is no longer in the base table. Only the keys of `external_results` are read.
+///
+/// `table_results` must be read with `slice`, the slice they were read with: what this produces is
+/// handed back out by position, and only that slice reproduces the walk the result set is built by.
+/// The keys are in the read because external_search::fetch_primary_key_columns() asked for them.
+std::vector<joined_row> join_table_results(const query::result& table_results, const query::partition_slice& slice, const schema& schema,
+        const vector_search::vector_store_client::primary_keys& external_results);
 
 /// Injects external search result scores into result rows.
 /// Matches each base-table row against the ranked result list by PK/CK

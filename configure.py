@@ -578,6 +578,7 @@ scylla_tests = set([
     'test/boost/exceptions_fallback_test',
     'test/boost/exceptions_optimized_test',
     'test/boost/expr_test',
+    'test/boost/external_search_provider_test',
     'test/boost/file_stream_test',
     'test/boost/flush_queue_test',
     'test/boost/fragmented_temporary_buffer_test',

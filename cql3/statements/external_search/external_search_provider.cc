@@ -10,14 +10,98 @@
 
 #include <cmath>
 
-#include "cql3/values.hh"
 #include "keys/keys.hh"
 #include "query/query-request.hh"
+#include "query/query-result-reader.hh"
 #include "schema/schema.hh"
 #include "types/types.hh"
-#include "utils/log.hh"
 
 namespace cql3::statements {
+
+namespace {
+
+/// Walks the rows of a base-table read, joining an external search's answers to them.
+///
+/// It has to visit exactly the rows result_set_builder::visitor emits, in the same order, since what
+/// it produces is handed back out by position. The one rule that does not follow from walking the
+/// same result with the same slice - a partition holding nothing but a static row - is repeated below.
+class row_joiner {
+    const schema& _schema;
+
+    // The cursor only moves forward, which is what makes an answer stepped over a stale one.
+    const vector_search::vector_store_client::primary_keys& _external_results;
+    size_t _next_result = 0;
+
+    std::vector<joined_row>& _rows;
+
+    partition_key _partition_key = partition_key::make_empty();
+    clustering_key_prefix _clustering_key = clustering_key_prefix::make_empty();
+    uint64_t _row_count = 0;
+
+    std::optional<size_t> match() {
+        while (_next_result < _external_results.size()) {
+            const auto& result = _external_results[_next_result++];
+
+            if (!result.partition.key().equal(_schema, _partition_key)) {
+                continue;
+            }
+            if (_schema.clustering_key_size() > 0 && !result.clustering.equal(_schema, _clustering_key)) {
+                continue;
+            }
+            return _next_result - 1;
+        }
+        return std::nullopt;
+    }
+
+    void visit() {
+        _rows.push_back(joined_row{.answer = match()});
+    }
+
+public:
+    row_joiner(const schema& schema, const vector_search::vector_store_client::primary_keys& external_results, std::vector<joined_row>& rows)
+        : _schema(schema)
+        , _external_results(external_results)
+        , _rows(rows) {
+    }
+
+    void accept_new_partition(const partition_key& key, uint64_t row_count) {
+        _partition_key = key;
+        // Stale from the previous partition, exactly as the builder's visitor treats it.
+        _clustering_key = clustering_key_prefix::make_empty();
+        _row_count = row_count;
+    }
+
+    void accept_new_partition(uint64_t row_count) {
+        _clustering_key = clustering_key_prefix::make_empty();
+        _row_count = row_count;
+    }
+
+    void accept_new_row(const clustering_key& key, const query::result_row_view&, const query::result_row_view&) {
+        _clustering_key = key;
+        visit();
+    }
+
+    void accept_new_row(const query::result_row_view&, const query::result_row_view&) {
+        visit();
+    }
+
+    void accept_partition_end(const query::result_row_view&) {
+        if (_row_count == 0) {
+            // The builder emits one row for a partition holding only a static row. No answer can
+            // name it - the index names rows and this partition has none - so the cursor stays put.
+            _rows.push_back(joined_row{.answer = std::nullopt});
+        }
+    }
+};
+
+} // anonymous namespace
+
+std::vector<joined_row> join_table_results(const query::result& table_results, const query::partition_slice& slice, const schema& schema,
+        const vector_search::vector_store_client::primary_keys& external_results) {
+    auto rows = std::vector<joined_row>{};
+    query::result_view::consume(table_results, slice, row_joiner(schema, external_results, rows));
+    return rows;
+}
 
 external_search_provider::external_search_provider(const vector_search::vector_store_client::primary_keys& results, size_t score_slot,
         const schema& schema)
