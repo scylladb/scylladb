@@ -39,12 +39,9 @@ public:
     virtual future<stop_iteration> consume(clustering_row&&) = 0;
     // stop_iteration::yes -> consume(partition_end) - skip remaining partition content
     virtual future<stop_iteration> consume(range_tombstone_change&&) = 0;
-    // FIXME: implement in the consumers once the sstable format carries token
-    // range tombstones. Until the Scylla.db component holds them, an sstable
-    // stream never contains one, so this is unreachable.
-    virtual future<stop_iteration> consume(token_range_tombstone&&) {
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
+    // Deletes whole partitions, and precedes all of them in the stream.
+    // stop_iteration::yes -> consume_sstable_end() - skip remaining partitions in sstable
+    virtual future<stop_iteration> consume(token_range_tombstone&&) = 0;
     // stop_iteration::yes -> consume_end_of_sstable() - skip remaining partitions in sstable
     virtual future<stop_iteration> consume(partition_end&&) = 0;
     // stop_iteration::yes -> full stop - skip remaining sstables

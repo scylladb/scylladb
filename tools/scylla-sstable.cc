@@ -571,6 +571,19 @@ void mutation_fragment_stream_json_writer::start_sstable(const sstables::sstable
     writer().StartArray();
 }
 
+void mutation_fragment_stream_json_writer::token_range_tombstone_element(const ::token_range_tombstone& trt) {
+    writer().StartObject();
+    writer().Key("type");
+    writer().String("token-range-tombstone");
+    writer().Key("start_exclusive");
+    writer().String(fmt::to_string(trt.start_exclusive()));
+    writer().Key("end_inclusive");
+    writer().String(fmt::to_string(trt.end_inclusive()));
+    writer().Key("tombstone");
+    _writer.write(trt.tomb());
+    writer().EndObject();
+}
+
 void mutation_fragment_stream_json_writer::start_partition(const partition_start& ps) {
     const auto& dk = ps.key();
     _clustering_array_created = false;
@@ -657,6 +670,10 @@ class dumping_consumer : public sstable_consumer {
             fmt::print("{}\n", rtc);
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
+        virtual future<stop_iteration> consume(token_range_tombstone&& trt) override {
+            fmt::print("{}\n", trt);
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
         virtual future<stop_iteration> consume(partition_end&& pe) override {
             fmt::print("{{partition_end}}\n");
             return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -698,6 +715,10 @@ class dumping_consumer : public sstable_consumer {
             _writer.partition_element(rtc);
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
+        virtual future<stop_iteration> consume(token_range_tombstone&& trt) override {
+            _writer.token_range_tombstone_element(trt);
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
         virtual future<stop_iteration> consume(partition_end&& pe) override {
             _writer.end_partition();
             return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -734,6 +755,7 @@ public:
     virtual future<stop_iteration> consume(static_row&& sr) override { return _consumer->consume(std::move(sr)); }
     virtual future<stop_iteration> consume(clustering_row&& cr) override { return _consumer->consume(std::move(cr)); }
     virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override { return _consumer->consume(std::move(rtc)); }
+    virtual future<stop_iteration> consume(token_range_tombstone&& trt) override { return _consumer->consume(std::move(trt)); }
     virtual future<stop_iteration> consume(partition_end&& pe) override { return _consumer->consume(std::move(pe)); }
     virtual future<stop_iteration> consume_sstable_end() override { return _consumer->consume_sstable_end(); }
     virtual future<> consume_stream_end() override { return _consumer->consume_stream_end(); }
@@ -1700,6 +1722,10 @@ public:
     }
     future<stop_iteration> consume(range_tombstone_change&& rtc) override {
         _writer.partition_element(rtc);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    future<stop_iteration> consume(token_range_tombstone&& trt) override {
+        _writer.token_range_tombstone_element(trt);
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
     future<stop_iteration> consume(partition_end&&) override {
