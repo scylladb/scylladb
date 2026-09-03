@@ -27,6 +27,11 @@ from test.pylib.util import universalasync_typed_wrap
 
 logger = logging.getLogger(__name__)
 
+# The repair failure reason is a diagnostic looked up after the repair already
+# failed, so it must not hold the failure back. Bound it well below the default
+# request timeout.
+REPAIR_FAILURE_REASON_TIMEOUT = 30
+
 
 class HTTPError(Exception):
     def __init__(self, uri, code, params, json, message):
@@ -96,10 +101,11 @@ class RESTClient(metaclass=ABCMeta):
 
     async def get_json(self, resource_uri: str, host: Optional[str] = None,
                        port: Optional[int] = None, params: Optional[Mapping[str, str]] = None,
-                       allow_failed: bool = False) -> Any:
+                       allow_failed: bool = False, timeout: Optional[float] = None) -> Any:
         """Fetch URL and get JSON. Caller must check JSON content types."""
         ret = await self._fetch("GET", resource_uri, response_type = "json", host = host,
-                                port = port, params = params, allow_failed = allow_failed)
+                                port = port, params = params, allow_failed = allow_failed,
+                                timeout = timeout)
         return ret
 
     async def post(self, resource_uri: str, host: Optional[str] = None,
@@ -578,6 +584,24 @@ class ScyllaRESTAPIClient:
         data = await self.client.get_json("/raft/leader_host", host=node_ip, params=params)
         return HostID(data)
 
+    async def _repair_failure_reason(self, node_ip: str, sequence_number: int) -> str:
+        """Look up why a vnode repair failed.
+
+        repair_status only reports the enum, the reason lives in the coordinator's
+        task. User started repairs are kept for user_task_ttl_in_seconds (1h by
+        default), so the error is still retrievable right after the failure. This
+        keeps a CI failure diagnosable from the test report alone, without the
+        node logs. The lookup is bounded so that an unresponsive node delays the
+        repair failure by seconds rather than by the default request timeout.
+        """
+        try:
+            tasks = await self.get_tasks(node_ip, "repair", timeout=REPAIR_FAILURE_REASON_TIMEOUT)
+            task_id = next(t["task_id"] for t in tasks if t["sequence_number"] == sequence_number)
+            status = await self.get_task_status(node_ip, task_id, timeout=REPAIR_FAILURE_REASON_TIMEOUT)
+            return status.get("error") or f"no error recorded, task state={status.get('state')}"
+        except Exception as e:
+            return f"unavailable ({type(e).__name__}: {e})"
+
     async def repair(self, node_ip: str, keyspace: str, table: str, ranges: str = '', small_table_optimization: bool = False) -> None:
         """Repair the given table and wait for it to complete"""
         vnode_keyspaces = await self.client.get_json(f"/storage_service/keyspaces", host=node_ip, params={"replication": "vnodes"})
@@ -591,7 +615,8 @@ class ScyllaRESTAPIClient:
             sequence_number = await self.client.post_json(f"/storage_service/repair_async/{keyspace}", host=node_ip, params=params)
             status = await self.client.get_json(f"/storage_service/repair_status", host=node_ip, params={"id": str(sequence_number)})
             if status != 'SUCCESSFUL':
-                raise Exception(f"Repair id {sequence_number} on node {node_ip} for table {keyspace}.{table} failed: status={status}")
+                reason = await self._repair_failure_reason(node_ip, sequence_number)
+                raise Exception(f"Repair id {sequence_number} on node {node_ip} for table {keyspace}.{table} failed: status={status}, reason={reason}")
         else:
             if ranges:
                 raise ValueError(f"Ranges parameter is not supported for tablet keyspaces")
@@ -660,11 +685,11 @@ class ScyllaRESTAPIClient:
         assert isinstance(data, list)
         return data
 
-    async def get_task_status(self, node_ip: str, task_id: str):
-        return await self.client.get_json(f'/task_manager/task_status/{task_id}', host=node_ip)
+    async def get_task_status(self, node_ip: str, task_id: str, timeout: Optional[float] = None):
+        return await self.client.get_json(f'/task_manager/task_status/{task_id}', host=node_ip, timeout=timeout)
 
-    async def get_tasks(self, node_ip: str, module: str):
-        return await self.client.get_json(f'/task_manager/list_module_tasks/{module}', host=node_ip)
+    async def get_tasks(self, node_ip: str, module: str, timeout: Optional[float] = None):
+        return await self.client.get_json(f'/task_manager/list_module_tasks/{module}', host=node_ip, timeout=timeout)
 
     async def wait_task(self, node_ip: str, task_id: str):
         return await self.client.get_json(f'/task_manager/wait_task/{task_id}', host=node_ip)
