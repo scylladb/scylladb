@@ -1817,9 +1817,15 @@ public:
         rlogger.debug(">>> Started Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_siz={}",
                 repair.my_host_id(), from_id, repair_meta_id, ks_name, cf_name, schema_version, range, seed, max_row_buf_size);
         try {
-            // Trigger read barrier to ensure that session_id is visible.
-            auto& mm = repair.get_migration_manager();
-            co_await mm.get_group0_barrier().trigger(mm.get_abort_source());
+            if (topo_guard != service::null_topology_guard) {
+                // Trigger read barrier to ensure that session_id is visible.
+                // Repairs without a session (user requested repair) have nothing
+                // to make visible, so skip the barrier: it is a raft round trip
+                // per range, serialized on the node wide group0 operation mutex,
+                // and a transient failure would fail the whole repair.
+                auto& mm = repair.get_migration_manager();
+                co_await mm.get_group0_barrier().trigger(mm.get_abort_source());
+            }
             co_await repair.insert_repair_meta(from_id, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as, topo_guard, repaired_at, incremental_mode);
             co_return repair_row_level_start_response{repair_row_level_start_status::ok};
         } catch (replica::no_such_column_family&) {
