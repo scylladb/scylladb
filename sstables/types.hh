@@ -248,6 +248,7 @@ struct metadata {
     virtual ~metadata() {}
     virtual uint64_t serialized_size(sstable_version_types v) const = 0;
     virtual void write(sstable_version_types v, file_writer& write) const = 0;
+    virtual std::unique_ptr<metadata> clone() const = 0;
 };
 
 template <typename T>
@@ -266,6 +267,9 @@ public:
     }
     virtual void write(sstable_version_types v, file_writer& writer) const override {
         return sstables::write(v, writer, static_cast<const Component&>(*this));
+    }
+    virtual std::unique_ptr<metadata> clone() const final {
+        return std::make_unique<Component>(static_cast<const Component&>(*this));
     }
 };
 
@@ -814,6 +818,27 @@ inline int32_t adjusted_local_deletion_time(gc_clock::time_point local_deletion_
 struct statistics {
     disk_array<uint32_t, std::pair<metadata_type, uint32_t>> offsets; // ordered by metadata_type
     std::unordered_map<metadata_type, std::unique_ptr<metadata>> contents;
+private:
+    std::unordered_map<metadata_type, std::unique_ptr<metadata>> clone_contents() const {
+        std::unordered_map<metadata_type, std::unique_ptr<metadata>> result;
+        for (const auto& [type, md] : contents) {
+            result[type] = md->clone();
+        }
+        return result;
+    }
+public:
+    statistics() = default;
+    ~statistics() = default;
+    statistics(statistics&&) = default;
+    statistics(const statistics& other)
+        : offsets{other.offsets}
+        , contents{other.clone_contents()} {}
+    statistics& operator=(statistics&&) = default;
+    statistics& operator=(const statistics& other) {
+        offsets = other.offsets;
+        contents = other.clone_contents();
+        return *this;
+    }
 };
 
 enum class column_mask : uint8_t {
