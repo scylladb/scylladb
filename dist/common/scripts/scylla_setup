@@ -268,7 +268,7 @@ if __name__ == '__main__':
     parser.add_argument('--no-rsyslog-setup', action='store_true', default=False,
                         help='skip rsyslog setup')
     parser.add_argument('--no-nofiles-setup', action='store_true', default=False,
-                        help='skip LimitNOFILES setup')
+                        help='deprecated, has no effect')
     parser.add_argument('--no-perf-collector-setup', action='store_true', default=False,
                         help='skip perf collector setup')
     parser.add_argument('--rsyslog-server',
@@ -314,7 +314,6 @@ if __name__ == '__main__':
     memory_setup = not args.no_memory_setup
     swap_setup = not args.no_swap_setup
     rsyslog_setup = not args.no_rsyslog_setup
-    nofiles_setup = not args.no_nofiles_setup
     perf_collector_setup = not args.no_perf_collector_setup
     rsyslog_server = args.rsyslog_server
     selinux_reboot_required = False
@@ -539,10 +538,6 @@ if __name__ == '__main__':
                     rsyslog_server = interactive_ask_rsyslog_server()
                 if rsyslog_server:
                     run_setup_script('rsyslog', 'scylla_rsyslog_setup --remote-server ' + rsyslog_server)
-
-    nofiles_setup = interactive_ask_service('Do you want to tune LimitNOFILES run Scylla on large node?', 'Yes - tune LimitNOFILES. No - skip this setup.', nofiles_setup)
-    if nofiles_setup:
-        run_setup_script('LimitNOFILE tuneup', 'scylla_nofile_setup')
 
     if not is_nonroot():
         perf_collector_setup = interactive_ask_service('Do you want to enable the perf data collector?', 'Yes - enables system-wide perf sampling for profiling and diagnostics. The collector runs with minimal overhead. No - skip this step.', perf_collector_setup)
