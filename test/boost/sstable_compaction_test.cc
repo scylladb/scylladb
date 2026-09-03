@@ -185,7 +185,7 @@ static void assert_table_sstable_count(table_for_tests& t, size_t expected_count
     BOOST_REQUIRE(uint64_t(t->get_stats().live_sstable_count) == expected_count);
 }
 
-void compaction_manager_basic(test_env& env) {
+static table_for_tests compaction_manager_basic_prepare(test_env& env) {
     BOOST_REQUIRE(this_smp_shard_count() == 1);
     auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
                 .with_column("p1", utf8_type, column_kind::partition_key)
@@ -193,7 +193,6 @@ void compaction_manager_basic(test_env& env) {
                 .with_column("r1", int32_type)
                 .build();
     auto cf = env.make_table_for_tests(s);
-    auto& cm = cf->get_compaction_manager();
     auto close_cf = deferred_stop(cf);
     cf->set_compaction_strategy(compaction::compaction_strategy_type::size_tiered);
     auto sst_gen = env.make_sst_factory(s);
@@ -216,6 +215,14 @@ void compaction_manager_basic(test_env& env) {
     }
 
     BOOST_REQUIRE(cf->sstables_count() == idx.size());
+    close_cf.cancel();
+    return cf;
+}
+
+void compaction_manager_basic(test_env& env) {
+    table_for_tests cf = compaction_manager_basic_prepare(env);
+    auto close_cf = deferred_stop(cf);
+    auto& cm = cf->get_compaction_manager();
     cf->trigger_compaction();
     // wait for submitted job to finish and there is no pending tasks
     do_until([&cm] {
@@ -250,6 +257,123 @@ SEASTAR_FIXTURE_TEST_CASE(compaction_manager_basic_gcs_test, gcs_fixture, *tests
                                    test_env_config{
                                        .storage = make_test_object_storage_options("GS"),
                                    });
+}
+
+void regular_compaction_validate_test(test_env& env, bool auto_scrub_enabled) {
+    table_for_tests cf = compaction_manager_basic_prepare(env);
+    auto close_cf = deferred_stop(cf);
+    auto& cm = cf->get_compaction_manager();
+
+    auto& ssts = *cf->get_sstables();
+    BOOST_REQUIRE(!ssts.empty());
+    auto sst = ssts.begin()->get()->shared_from_this();
+    sst->set_scrub_time(db_clock::from_time_t(0));
+    auto sst_test = sstables::test(sst);
+    auto toc_digest_opt = sst->get_component_digest(component_type::TOC);
+    BOOST_REQUIRE(toc_digest_opt);
+    sst_test.set_component_metadata_digest(component_type::TOC, *toc_digest_opt ^ 1u);
+
+    if (auto_scrub_enabled) {
+        env.test_compaction_manager().set_scrub_period(std::chrono::seconds(3600));
+    }
+
+    cf->trigger_compaction();
+    // wait for submitted job to finish and there is no pending tasks
+    do_until([&cm, auto_scrub_enabled] {
+        if (auto_scrub_enabled) {
+            return cm.get_stats().errors > 0;
+        }
+        return cm.get_stats().completed_tasks > 0;
+    }, [] {
+        return sleep(std::chrono::milliseconds(100));
+    }).wait();
+
+    if (auto_scrub_enabled) {
+        BOOST_REQUIRE(sst->is_quarantined());
+    } else {
+        BOOST_REQUIRE(!sst->is_quarantined());
+    }
+}
+
+SEASTAR_TEST_CASE(regular_compaction_validates_sstables_which_should_be_scrubbed_auto_scrub_enabled) {
+    return test_env::do_with_async([] (test_env& env) {
+         regular_compaction_validate_test(env, true);
+    });
+}
+
+SEASTAR_TEST_CASE(regular_compaction_validates_sstables_which_should_be_scrubbed_auto_scrub_disabled) {
+    return test_env::do_with_async([] (test_env& env) {
+         regular_compaction_validate_test(env, false);
+    });
+}
+
+void regular_compaction_and_scrub_time(test_env& env) {
+    table_for_tests cf = compaction_manager_basic_prepare(env);
+    auto close_cf = deferred_stop(cf);
+    auto& cm = cf->get_compaction_manager();
+
+    auto& ssts = *cf->get_sstables();
+    BOOST_REQUIRE(!ssts.empty());
+    for (auto& sst : ssts) {
+        sst->set_scrub_time(db_clock::from_time_t(0));
+    }
+
+    env.test_compaction_manager().set_scrub_period(std::chrono::seconds(3600));
+    scoped_error_injection inject{"compaction_regular_compaction_validation_done"};
+
+    cf->trigger_compaction();
+    // wait for submitted job to finish and there is no pending tasks
+    do_until([&cm] {
+        return (cm.get_stats().completed_tasks > 0 &&
+            cm.get_stats().pending_tasks == 0);
+    }, [] {
+        return sleep(std::chrono::milliseconds(100));
+    }).wait();
+
+    BOOST_REQUIRE_GT(utils::get_local_injector().enter_count("compaction_regular_compaction_validation_done"), 0);
+
+    BOOST_CHECK_EQUAL(cf->sstables_count(), 1);
+    auto& new_ssts = *cf->get_sstables();
+    auto& sst = *new_ssts.begin()->get();
+    BOOST_REQUIRE(sst.get_scrub_time());
+    BOOST_REQUIRE(*sst.get_scrub_time() > db_clock::from_time_t(0));
+}
+
+SEASTAR_TEST_CASE(regular_compaction_validates_and_updates_timestamp) {
+    return test_env::do_with_async(regular_compaction_and_scrub_time);
+}
+
+void regular_compaction_quarantine_fail(test_env& env) {
+    table_for_tests cf = compaction_manager_basic_prepare(env);
+    auto close_cf = deferred_stop(cf);
+    auto& cm = cf->get_compaction_manager();
+
+    auto& ssts = *cf->get_sstables();
+    BOOST_REQUIRE(!ssts.empty());
+    auto& sst = *ssts.begin()->get();
+    sst.set_scrub_time(db_clock::from_time_t(0));
+    auto sst_test = sstables::test(sst.shared_from_this());
+    auto toc_digest_opt = sst.get_component_digest(component_type::TOC);
+    BOOST_REQUIRE(toc_digest_opt);
+    sst_test.set_component_metadata_digest(component_type::TOC, *toc_digest_opt ^ 1u);
+
+    env.test_compaction_manager().set_scrub_period(std::chrono::seconds(3600));
+    scoped_error_injection inject{"maybe_validate_component_digests_quarantine_fail"};
+
+    cf->trigger_compaction();
+    // wait for submitted job to finish and there is no pending tasks
+    do_until([&cm] {
+        return cm.get_stats().errors > 0;
+    }, [] {
+        return sleep(std::chrono::milliseconds(100));
+    }).wait();
+
+    BOOST_CHECK_EQUAL(cm.get_stats().active_tasks, 0);
+    BOOST_REQUIRE(!sst.is_quarantined());
+}
+
+SEASTAR_TEST_CASE(regular_compaction_does_not_loop_on_quarantine_fail) {
+    return test_env::do_with_async(regular_compaction_quarantine_fail);
 }
 
 void compact(test_env& env) {
@@ -6374,6 +6498,63 @@ SEASTAR_TEST_CASE(test_perform_component_rewrite_single_sstable_with_backup) {
 
 SEASTAR_TEST_CASE(test_perform_component_rewrite_single_sstable_without_backup) {
     return test_perform_component_rewrite_single_sstable(sstables::update_sstable_id::no);
+}
+
+void do_test_component_rewrite_failure(test_env& env) {
+    simple_schema ss;
+    auto s = ss.schema();
+    auto pk = ss.make_pkey();
+
+    auto mut1 = mutation(s, pk);
+    mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+    auto sst = make_sstable_containing(env.make_sstable(s), {mut1}).get();
+
+    auto table = env.make_table_for_tests(s);
+    auto close_table = deferred_stop(table);
+
+    table->add_sstable_and_update_cache(sst).get();
+
+    auto all_sstables = table->get_sstables();
+    BOOST_REQUIRE(all_sstables->size() == 1);
+    BOOST_REQUIRE(all_sstables->contains(sst));
+
+    auto modifier = [] (sstables::sstable& sst) {
+        sst.update_repaired_at(1);
+    };
+
+    scoped_error_injection abort_retry_wait{"compaction_task_executor_compaction_retry_sleep_aborted"};
+    table->perform_component_rewrite(
+        dht::token_range::make_open_ended_both_sides(),
+        tasks::task_info{},
+        [] (const auto&) { return true; },
+        sstables::component_type::Statistics,
+        std::move(modifier)
+    ).get();
+
+    auto res = sstables::validate_checksums_and_digests(sst, env.make_reader_permit()).get();
+    BOOST_REQUIRE(res.status == sstables::validate_checksums_status::valid);
+}
+
+SEASTAR_TEST_CASE(test_component_rewrite_replacer_failure) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future();
+#endif
+    return test_env::do_with_async([] (test_env& env) {
+        scoped_error_injection replacer_error{"update_sstable_sets_on_compaction_completion_fail"};
+        do_test_component_rewrite_failure(env);
+    });
+}
+
+SEASTAR_TEST_CASE(test_component_rewrite_failure) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future();
+#endif
+    return test_env::do_with_async([] (test_env& env) {
+        scoped_error_injection rewrite_error{"link_with_rewritten_component_fail"};
+        do_test_component_rewrite_failure(env);
+    });
 }
 
 static void object_storage_perform_component_rewrite_single_sstable_fn(test_env& env) {

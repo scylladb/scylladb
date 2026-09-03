@@ -684,6 +684,7 @@ private:
     // with linking or moving the sstable between directories.
     mutable named_semaphore _mutate_sem{1, named_semaphore_exception_factory{"sstable mutate"}};
     std::optional<sstring> _cloned_to_sstable_filename;
+    std::unordered_set<component_type> _components_modified_by_rewrite;
     // Used only for writing sstable.
     scylla_metadata::components_digests _components_digests;
     uint32_t _toc_digest{};
@@ -1127,6 +1128,9 @@ public:
 
     std::optional<uint32_t> get_component_digest(component_type c) const;
 
+    std::optional<db_clock::time_point> get_scrub_time() const;
+    void set_scrub_time(db_clock::time_point scrub_time);
+
     // Gets ratio of droppable tombstone. A tombstone is considered droppable here
     // for cells and tombstones expired before the time point "GC before", which
     // is the point before which expiring data can be purged.
@@ -1271,7 +1275,14 @@ public:
             std::function<void(sstable&)> modifier,
             update_sstable_id);
     // Must be called in a seastar thread
-    void write_component_with_metadata(component_type type, scylla_metadata metadata);
+    void write_component_with_metadata_and_modifier(component_type type, scylla_metadata metadata, std::function<void(sstable&)> modifier);
+private:
+    future<uint64_t> component_filesize(component_type type) const noexcept;
+public:
+    // Component rewrite may modify the in-memory representation of the original
+    // sstable. This function undoes those changes, by re-reading affected
+    // components from file.
+    future<> recover_from_component_rewrite();
 };
 
 // Validate checksums

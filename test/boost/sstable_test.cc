@@ -445,6 +445,56 @@ SEASTAR_TEST_CASE(statistics_rewrite) {
     });
 }
 
+static future<uint64_t> calculate_actual_on_disk_size(shared_sstable sst) {
+    return map_reduce(
+        sst->all_components(),
+        [sst] (const auto& p) {
+            return file_size(sst->get_filename(p.first).format());
+        },
+        uint64_t{0},
+        std::plus{}
+    );
+}
+
+static future<shared_sstable> mutate_sstable(test_env& env, shared_sstable sst, std::function<void(sstables::sstable&)> modifier, sstables::component_type type = sstables::component_type::Statistics, sstables::update_sstable_id update_id = sstables::update_sstable_id::no) {
+    auto toc_path = fmt::to_string(sst->toc_filename());
+    auto dir_path = std::filesystem::path(toc_path).parent_path().string();
+
+    auto creator = [&env, &dir_path] (shared_sstable sst) {
+        return env.make_sstable(sst->get_schema(), dir_path, sst->get_version());
+    };
+
+    auto new_sst = co_await sst->link_with_rewritten_component(std::move(creator), type, std::move(modifier), update_id);
+    co_await sst->unlink();
+    co_return new_sst;
+}
+
+static void do_test_link_with_rewritten_component_size(test_env& env) {
+    auto random_spec = tests::make_random_schema_specification(
+        "ks",
+        std::uniform_int_distribution<size_t>(1, 4),
+        std::uniform_int_distribution<size_t>(2, 4),
+        std::uniform_int_distribution<size_t>(2, 8),
+        std::uniform_int_distribution<size_t>(2, 8));
+    auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+    auto schema = random_schema.schema();
+
+    const auto muts = tests::generate_random_mutations(random_schema, 1000).get();
+    auto sst = make_sstable_containing(env.make_sstable(schema, sstable::version_types::me), muts).get();
+
+    auto before_size = calculate_actual_on_disk_size(sst).get();
+    BOOST_REQUIRE_EQUAL(before_size, sst->bytes_on_disk());
+
+    auto new_sst = mutate_sstable(env, std::move(sst), std::identity{}).get();
+
+    auto after_size = calculate_actual_on_disk_size(new_sst).get();
+    BOOST_REQUIRE_EQUAL(after_size, new_sst->bytes_on_disk());
+}
+
+SEASTAR_TEST_CASE(test_link_with_rewritten_component_bytes_on_disk) {
+    return test_env::do_with_async(do_test_link_with_rewritten_component_size);
+}
+
 // Tests for reading a large partition for which the index contains a
 // "promoted index", i.e., a sample of the column names inside the partition,
 // with which we can avoid reading the entire partition when we look only

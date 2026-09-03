@@ -287,6 +287,8 @@ def test_scylla_sstable_dump_component(cql, test_keyspace, scylla_path, scylla_d
         for sst_name, sst_metadata in json_out["sstables"].items():
             assert "sharding" in sst_metadata, f"Expected 'sharding' metadata in sstable scylla-metadata: sstable={sst_name}: {sst_metadata}"
             assert sst_metadata["sharding"] != [], f"Expected non-empty sharding metadata in sstable scylla-metadata: sstable={sst_name}: {sst_metadata}"
+            assert "scrub_time" in sst_metadata, f"Expected 'scrub_time' in json output: {json_out}"
+            assert sst_metadata["scrub_time"] > 0, f"Expected non-zero 'scrub_time'"
 
 @pytest.mark.parametrize("components_spec", [
     None,                           # None -> --all-components

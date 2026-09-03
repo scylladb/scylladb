@@ -83,18 +83,40 @@ public:
 
 class test_env_compaction_manager {
     tasks::task_manager _tm;
+    utils::updateable_value_source<uint32_t> _scrub_time_source;
     compaction::compaction_manager _cm;
 
 public:
     test_env_compaction_manager()
-        : _cm(_tm, compaction::compaction_manager::for_testing_tag{})
-    {}
+        : _scrub_time_source(0)
+        , _cm(_tm, compaction::compaction_manager::for_testing_tag{})
+    {
+        _cm._cfg.scrub_period = utils::updateable_value<uint32_t>{_scrub_time_source};
+    }
 
     compaction::compaction_manager& get_compaction_manager() { return _cm; }
 
     void propagate_replacement(compaction::compaction_group_view& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);
 
     future<> perform_compaction(shared_ptr<compaction::compaction_task_executor> task);
+
+    void register_compacting(compaction::compaction_group_view &t, std::span<shared_sstable> ssts);
+
+    void deregister_compacting(compaction::compaction_group_view &t, std::span<shared_sstable> ssts);
+
+    void set_scrub_time_source(uint32_t value) {
+        _scrub_time_source.set(value);
+    }
+
+    void set_scrub_period(std::chrono::seconds period);
+
+    void trigger_auto_scrub_timer();
+    std::optional<lowres_clock::time_point> next_automatic_scrub() const;
+    void set_automatic_scrub_timer_expiration(lowres_clock::time_point timestamp);
+
+    std::unordered_map<compaction::compaction_group_view*, compaction::compaction_state>& get_compaction_state() {
+        return _cm._compaction_state;
+    }
 };
 
 struct test_env_config {

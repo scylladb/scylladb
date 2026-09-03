@@ -2585,6 +2585,10 @@ compaction_group::do_update_sstable_sets_on_compaction_completion(compaction::co
     // if the deletion fails (note deletion of shared sstables can take
     // unbounded time, because all shards must agree on the deletion).
 
+    utils::get_local_injector().inject("update_sstable_sets_on_compaction_completion_fail", [] {
+        throw std::runtime_error{"update_sstable_sets_on_compaction_completion_fail error injection"};
+    });
+
     // make sure all old sstables belong *ONLY* to current shard before we proceed to their deletion.
     for (auto& sst : desc.old_sstables) {
         auto shards = sst->get_shards_for_this_sstable();

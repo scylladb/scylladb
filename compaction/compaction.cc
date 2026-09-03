@@ -1619,10 +1619,14 @@ private:
         compaction_type_options::scrub::drop_unfixable_sstables _drop_unfixable_sstables;
 
     private:
+        [[noreturn]] void throw_invalid_sstable_compaction_aborted_exception(sstring ks, sstring cf, sstring reason) {
+            throw scrub_abort_invalid_sstable_compaction_aborted_exception{std::move(ks), std::move(cf), std::move(reason)};
+        }
+
         void maybe_abort_scrub(std::function<void()> report_error) {
             if (_scrub_mode == compaction_type_options::scrub::mode::abort) {
                 report_error();
-                throw compaction_aborted_exception(_schema->ks_name(), _schema->cf_name(), "scrub compaction found invalid data");
+                throw_invalid_sstable_compaction_aborted_exception(_schema->ks_name(), _schema->cf_name(), "scrub compaction found invalid data");
             }
             ++_validation_errors;
         }
@@ -1734,7 +1738,7 @@ private:
             bool should_abort = _scrub_mode == compaction_type_options::scrub::mode::abort ||
                     (_scrub_mode == compaction_type_options::scrub::mode::segregate && !_drop_unfixable_sstables);
             if (should_abort) {
-                throw compaction_aborted_exception(
+                throw_invalid_sstable_compaction_aborted_exception(
                         _schema->ks_name(),
                         _schema->cf_name(),
                         format("scrub compaction failed due to unrecoverable error: {}", e));
@@ -2191,6 +2195,56 @@ static std::unique_ptr<compaction> make_compaction(compaction_group_view& table_
     return descriptor.options.visit(visitor_factory);
 }
 
+static future<std::vector<sstables::shared_sstable>> maybe_rewrite_with_timestamp(compaction_descriptor descriptor, compaction_group_view& table_s) {
+    auto creator = [&table_s] (sstables::shared_sstable sst) {
+        return table_s.make_sstable(sst->state(), sst->get_version());
+    };
+    auto modifier = [] (sstables::sstable& sst) {
+        sst.set_scrub_time(db_clock::now());
+    };
+
+    std::vector<sstables::shared_sstable> new_sstables;
+    std::exception_ptr ex;
+
+    try {
+        for (auto& sst : descriptor.sstables) {
+            // Automatic scrub only uses scrub in validate mode for sstables with
+            // a Scylla component.
+            // Nothing else currently may update the scrub time when using
+            // scrub in validate mode.
+            if (!sst->has_scylla_component()) {
+                on_internal_error(clogger, fmt::format("Cannot rewrite {} with updated scrub time, missing scylla-metadata component", sst));
+            }
+
+            auto rewritten = co_await sst->link_with_rewritten_component(creator, component_type::Scylla, modifier, sstables::update_sstable_id::yes);
+            new_sstables.push_back(rewritten);
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+
+    if (ex) {
+        for (auto& sst : descriptor.sstables) {
+            try {
+                co_await sst->recover_from_component_rewrite();
+            } catch (...) {
+                clogger.warn("Failed to recover from component rewrite: {}", std::current_exception());
+            }
+        }
+        for (auto& sst : new_sstables) {
+            co_await sst->unlink();
+        }
+        std::rethrow_exception(std::move(ex));
+    }
+
+    co_await seastar::async( [descriptor = std::move(descriptor), &new_sstables] mutable {
+        descriptor.replacer({std::move(descriptor.sstables), new_sstables});
+    });
+
+    co_return new_sstables;
+}
+
 static future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, sstables::read_monitor_generator& monitor_generator) {
     auto schema = table_s.schema();
     auto permit = table_s.make_compaction_reader_permit();
@@ -2198,8 +2252,11 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
     uint64_t validation_errors = 0;
     cdata.compaction_size = std::ranges::fold_left(descriptor.sstables | std::views::transform([] (auto& sst) { return sst->data_size(); }), int64_t(0), std::plus{});
 
+    const auto& options = descriptor.options.as<compaction_type_options::scrub>();
+    auto logger_level = options.is_automatic ? log_level::debug : log_level::info;
+
     for (const auto& sst : descriptor.sstables) {
-        clogger.info("Scrubbing in validate mode {}", sst->get_filename());
+        clogger.log(logger_level, "Scrubbing in validate mode {}", sst->get_filename());
 
         validation_errors += co_await sst->validate(permit, cdata.abort, [&schema] (sstring what) {
             scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, what);
@@ -2210,11 +2267,14 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
             throw compaction_stopped_exception(schema->ks_name(), schema->cf_name(), cdata.stop_requested);
         }
 
-        clogger.info("Finished scrubbing in validate mode {} - sstable is {}", sst->get_filename(), validation_errors == 0 ? "valid" : "invalid");
+        clogger.log(logger_level, "Finished scrubbing in validate mode {} - sstable is {}", sst->get_filename(), validation_errors == 0 ? "valid" : "invalid");
     }
 
-    using scrub = compaction_type_options::scrub;
-    if (validation_errors != 0 && descriptor.options.as<scrub>().quarantine_sstables == scrub::quarantine_invalid_sstables::yes) {
+
+    std::vector<sstables::shared_sstable> new_sstables;
+    if (validation_errors == 0 && options.update_timestamp) {
+        new_sstables = co_await maybe_rewrite_with_timestamp(std::move(descriptor), table_s);
+    } else if (validation_errors != 0 && options.quarantine_sstables) {
         for (auto& sst : descriptor.sstables) {
             try {
                 co_await sst->change_state(sstables::sstable_state::quarantine);
@@ -2225,7 +2285,7 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
     }
 
     co_return compaction_result {
-        .new_sstables = {},
+        .new_sstables = std::move(new_sstables),
         .stats = {
             .ended_at = db_clock::now(),
             .validation_errors = validation_errors,
@@ -2236,7 +2296,7 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
 future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, compaction_progress_monitor& progress_monitor) {
     progress_monitor.set_generator(std::make_unique<compaction_read_monitor_generator>(table_s, use_backlog_tracker::no));
     auto d = defer([&] noexcept { progress_monitor.reset_generator(); });
-    auto res = co_await scrub_sstables_validate_mode(descriptor, cdata, table_s, *progress_monitor._generator);
+    auto res = co_await scrub_sstables_validate_mode(std::move(descriptor), cdata, table_s, *progress_monitor._generator);
     co_return res;
 }
 
@@ -2255,12 +2315,41 @@ future<compaction_result> rewrite_sstables_component(compaction_descriptor descr
             return table_s.make_sstable(sst->state(), sst->get_version());
         };
         result.new_sstables.reserve(descriptor.sstables.size());
-        for (auto& sst : descriptor.sstables) {
-            auto rewritten = sst->link_with_rewritten_component(creator, options.component_to_rewrite, options.modifier, options.update_id).get();
-            result.new_sstables.push_back(rewritten);
+        std::vector<sstables::shared_sstable> modified_sstables;
+        modified_sstables.reserve(descriptor.sstables.size());
+        bool replacer_reached = false;
+
+        std::exception_ptr ex;
+        try {
+            for (auto& sst : descriptor.sstables) {
+                modified_sstables.emplace_back(sst);
+                auto rewritten = sst->link_with_rewritten_component(creator, options.component_to_rewrite, options.modifier, options.update_id).get();
+                result.new_sstables.push_back(rewritten);
+            }
+
+            replacer_reached = true;
+            descriptor.replacer({std::move(descriptor.sstables), result.new_sstables});
+        } catch (...) {
+            ex = std::current_exception();
         }
 
-        descriptor.replacer({std::move(descriptor.sstables), result.new_sstables});
+        if (ex) [[unlikely]] {
+            for (auto& original : modified_sstables) {
+                try {
+                    original->recover_from_component_rewrite().get();
+                } catch (...) {
+                    clogger.warn("Failed to recover from component rewrite: {}", std::current_exception());
+                }
+            }
+
+            if (!replacer_reached) {
+                for (auto& rewritten : result.new_sstables) {
+                    rewritten->unlink().get();
+                }
+            }
+
+            std::rethrow_exception(std::move(ex));
+        }
 
         result.stats.ended_at = db_clock::now();
         return result;
