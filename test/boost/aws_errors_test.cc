@@ -240,6 +240,18 @@ BOOST_AUTO_TEST_CASE(TestHelperFunctions) {
                         utils::http::retryable::no);
 }
 
+BOOST_AUTO_TEST_CASE(TestFromHttpCodeMessage) {
+    // Named cases (aws_error_definitions.cc.in) carry no _message, so from_http_code's
+    // unconditional append leaves a leading-space artifact ahead of "HTTP code: ...".
+    auto forbidden = aws::aws_error::from_http_code(seastar::http::reply::status_type::forbidden);
+    BOOST_REQUIRE_EQUAL(forbidden.get_error_message(), " HTTP code: 403 Forbidden");
+
+    // 483 has no named case and no seastar status_strings entry, so the default branch's
+    // already-code-bearing message gets the code appended a second time.
+    auto unmapped = aws::aws_error::from_http_code(static_cast<seastar::http::reply::status_type>(483));
+    BOOST_REQUIRE_EQUAL(unmapped.get_error_message(), "Erroneous HTTP code has been encountered. Reason: 483 HTTP code: 483");
+}
+
 BOOST_AUTO_TEST_CASE(TestNestedException) {
     // Test nested exceptions where the innermost is a system_error
     try {
