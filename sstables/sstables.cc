@@ -85,6 +85,7 @@
 #include "readers/mutation_source.hh"
 #include "readers/reversing.hh"
 #include "readers/forwardable.hh"
+#include "readers/token_range_tombstone_prepending.hh"
 #include "sstables/trie/bti_index.hh"
 #include "partition_slice_builder.hh"
 
@@ -3121,11 +3122,18 @@ sstable::make_reader(
 ) {
     const auto reversed = slice.is_reversed();
 
+    // Token range tombstones delete whole partitions, so they precede all of
+    // them in the stream. They are not stored with the partitions, so the
+    // reader below never produces them; prepend them here.
+    auto prepend_token_range_tombstones = [this] (mutation_reader r) {
+        return make_token_range_tombstone_prepending_reader(std::move(r), _token_range_tombstones);
+    };
+
     auto index_caching = use_caching(global_cache_index_pages && !slice.options.contains(query::partition_slice::option::bypass_cache));
     auto index_reader = make_index_reader(permit, trace_state, index_caching, range.is_singular());
 
     if (_version >= version_types::mc && (!reversed || range.is_singular())) {
-        return mx::make_reader(
+        return prepend_token_range_tombstones(mx::make_reader(
             shared_from_this(),
             std::move(query_schema),
             std::move(permit),
@@ -3137,7 +3145,7 @@ sstable::make_reader(
             mon,
             integrity,
             std::move(index_reader),
-            single_partition_read_murmur_hash);
+            single_partition_read_murmur_hash));
     }
 
     // Multi-partition reversed queries are not yet supported natively in the mx reader.
@@ -3154,7 +3162,7 @@ sstable::make_reader(
         if (fwd) {
             rd = make_forwardable(std::move(rd));
         }
-        return rd;
+        return prepend_token_range_tombstones(std::move(rd));
     }
 
     if (reversed) {
@@ -3165,11 +3173,11 @@ sstable::make_reader(
         if (fwd) {
             rd = make_forwardable(std::move(rd));
         }
-        return rd;
+        return prepend_token_range_tombstones(std::move(rd));
     }
 
-    return kl::make_reader(shared_from_this(), query_schema, std::move(permit),
-                range, slice, std::move(trace_state), fwd, fwd_mr, mon);
+    return prepend_token_range_tombstones(kl::make_reader(shared_from_this(), query_schema, std::move(permit),
+                range, slice, std::move(trace_state), fwd, fwd_mr, mon));
 }
 
 mutation_reader

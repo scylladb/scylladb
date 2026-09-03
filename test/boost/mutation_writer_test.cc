@@ -334,6 +334,11 @@ public:
         _current_mutation->apply(mutation_fragment(*_schema, _permit, std::move(cr)));
         return stop_iteration::no;
     }
+    stop_iteration consume(token_range_tombstone&&) {
+        // The test streams are built from mutations, which never produce these.
+        BOOST_FAIL("unexpected token_range_tombstone");
+        return stop_iteration::no;
+    }
     stop_iteration consume(range_tombstone_change&& rtc) {
         maybe_throw();
         BOOST_REQUIRE(_current_mutation);

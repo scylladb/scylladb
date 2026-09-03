@@ -819,6 +819,16 @@ class incremental_reader_selector : public reader_selector {
         return _selector_position.is_max() || dht::ring_position_tri_compare(*_s, _selector_position, pr_end()) > 0;
     }
 public:
+    // This selector creates readers lazily, as the scan crosses into the token
+    // range of each sstable, so the combining reader cannot wait for the
+    // readers to report their token range tombstones: by then it would already
+    // have emitted partitions the late ones delete. Declare them up front
+    // instead. This needs no I/O, the lists are held in memory with the rest of
+    // the sstable's Scylla metadata.
+    virtual token_range_tombstone_list token_range_tombstones() const override {
+        return _sstables->token_range_tombstones();
+    }
+
     explicit incremental_reader_selector(schema_ptr s,
             lw_shared_ptr<const sstable_set> sstables,
             const dht::partition_range& pr,
@@ -895,8 +905,11 @@ public:
 // The returned function uses the bloom filter to check whether the given sstable
 // may have a partition given by the ring position `pos`.
 //
-// Returning `false` means the sstable doesn't have such a partition.
-// Returning `true` means it may, i.e. we don't know whether or not it does.
+// Returning `false` means the sstable has nothing to say about such a partition.
+// Returning `true` means it may have it, i.e. we don't know whether or not it
+// does -- or that it deletes it: an sstable whose token range tombstones cover
+// the partition's token stores no key for it, so its bloom filter says no, but
+// it must be read all the same or the deletion is missed.
 //
 // Assumes the given `pos` and `schema` are alive during the function's lifetime.
 static std::predicate<const sstable&> auto
@@ -904,7 +917,7 @@ make_pk_filter(const dht::ring_position& pos, const utils::hashed_key& hash, con
     return [&pos, hash, cmp = dht::ring_position_comparator(schema)] (const sstable& sst) {
         return cmp(pos, sst.get_first_decorated_key()) >= 0 &&
                cmp(pos, sst.get_last_decorated_key()) <= 0 &&
-               sst.filter_has_key(hash);
+               (sst.filter_has_key(hash) || sst.token_range_tombstones().search(pos.token()));
     };
 }
 
@@ -1054,7 +1067,8 @@ time_series_sstable_set::create_single_key_sstable_reader(
     //    into new sstables in the middle of the partition query. TWCS sstables will usually pass
     //    this condition.
     // 3. The sstables cannot have partition tombstones for the same reason as above.
-    //    TWCS sstables will usually pass this condition.
+    //    TWCS sstables will usually pass this condition. A token range tombstone
+    //    deletes whole partitions, so it counts as one.
     // 4. The optimized query path must be enabled.
     using sst_entry = std::pair<position_in_partition, shared_sstable>;
     if (!_enable_optimized_twcs_queries
@@ -1062,7 +1076,8 @@ time_series_sstable_set::create_single_key_sstable_reader(
             || std::any_of(_sstables->begin(), _sstables->end(),
                 [] (const sst_entry& e) {
                     return e.second->get_version() < sstable_version_types::md
-                        || e.second->may_have_partition_tombstones();
+                        || e.second->may_have_partition_tombstones()
+                        || !e.second->token_range_tombstones().empty();
     })) {
         // Some of the conditions were not satisfied so we use the standard query path.
         return sstable_set_impl::create_single_key_sstable_reader(

@@ -17,6 +17,7 @@
 #include "readers/combined.hh"
 #include "readers/delegating.hh"
 #include "readers/delegating_impl.hh"
+#include "readers/token_range_tombstone_prepending.hh"
 #include "readers/empty.hh"
 #include "readers/mutation_reader.hh"
 #include "readers/forwardable.hh"
@@ -34,6 +35,37 @@
 #include <stack>
 
 extern logging::logger mrlog;
+
+namespace {
+
+// See make_token_range_tombstone_prepending_reader().
+class token_range_tombstone_prepending_reader : public delegating_reader {
+    token_range_tombstone_list _tombstones;
+    bool _emitted = false;
+public:
+    token_range_tombstone_prepending_reader(mutation_reader&& r, token_range_tombstone_list tombstones)
+        : delegating_reader(std::move(r))
+        , _tombstones(std::move(tombstones))
+    { }
+    virtual future<> fill_buffer() override {
+        if (!_emitted) {
+            _emitted = true;
+            for (const auto& trt : _tombstones) {
+                push_mutation_fragment(*_schema, _permit, token_range_tombstone(trt));
+            }
+        }
+        return delegating_reader::fill_buffer();
+    }
+};
+
+} // anonymous namespace
+
+mutation_reader make_token_range_tombstone_prepending_reader(mutation_reader r, token_range_tombstone_list tombstones) {
+    if (tombstones.empty()) {
+        return r;
+    }
+    return make_mutation_reader<token_range_tombstone_prepending_reader>(std::move(r), std::move(tombstones));
+}
 
 mutation_reader make_delegating_reader(mutation_reader& r) {
     return make_mutation_reader<delegating_reader>(r);

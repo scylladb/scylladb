@@ -3093,6 +3093,7 @@ void purged_tombstone_consumer_sstable_fn(test_env& env) {
         stop_iteration consume(static_row&& sr, tombstone, bool) { return _writer.consume(std::move(sr)); }
         stop_iteration consume(clustering_row&& cr, row_tombstone tomb, bool) { return _writer.consume(std::move(cr)); }
         stop_iteration consume(range_tombstone_change&& rtc) { return _writer.consume(std::move(rtc)); }
+        stop_iteration consume(token_range_tombstone&& trt) { return _writer.consume(std::move(trt)); }
 
         stop_iteration consume_end_of_partition() { return _writer.consume_end_of_partition(); }
         void consume_end_of_stream() { _writer.consume_end_of_stream(); _sst->open_data().get(); }
