@@ -236,6 +236,13 @@ protected:
     // different storage backend, e.g. by the strongly consistent statements.
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const;
+
+    // The part of do_execute() which does not depend on the storage backend:
+    // schema and primary key validation, tracing, statistics and the write
+    // consistency guardrail. Every do_execute() implementation calls it first.
+    // Throws when the guardrail forbids the consistency level; returns the
+    // warning to attach to the result when the guardrail merely warns.
+    std::optional<sstring> begin_execution(query_processor& qp, service::query_state& qs, const query_options& options) const;
 private:
     friend class modification_statement_executor;
 public:

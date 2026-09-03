@@ -29,6 +29,7 @@ future<::shared_ptr<result_message>> strongly_consistent<Base>::do_execute(
     // narrow the access of the overrides used below.
     const cql3::statements::modification_statement& stmt = *this;
 
+    auto warning = this->begin_execution(qp, qs, options);
     validate_write_consistency_level(options.get_consistency());
 
     auto timeout = db::timeout_clock::now() + stmt.get_timeout(qs.get_client_state(), options);
@@ -68,6 +69,9 @@ future<::shared_ptr<result_message>> strongly_consistent<Base>::do_execute(
     });
 
     auto result = seastar::make_shared<result_message::void_message>();
+    if (warning) {
+        result->add_warning(std::move(*warning));
+    }
 
     if (qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
         const auto& groups_manager = coordinator.get().get_groups_manager();
