@@ -15,11 +15,10 @@ from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from typing import Any, Optional, AsyncIterator
 
+import pytest
 import universalasync
 from aiohttp import request, BaseConnector, ClientTimeout
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
-
-from test.pylib.skip_types import skip_env
 
 from test.pylib.internal_types import IPAddress, HostID
 from test.pylib.util import universalasync_typed_wrap
@@ -800,7 +799,10 @@ class InjectionHandler():
 async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: str,
                        parameters: dict[str, Any] = {}) -> AsyncIterator[InjectionHandler]:
     """Attempts to inject an error. Works only in specific build modes: debug,dev,sanitize.
-       It will trigger a test to be skipped if attempting to enable an injection has no effect.
+       It will fail a test if attempting to enable an injection has no effect.
+       Intended for suites that start their own Scylla (e.g. cluster), so the build mode
+       is known. Suites that can run against a foreign server (e.g. cqlpy) should keep
+       their own skipping helper.
        This is a context manager for enabling and disabling when done, therefore it can't be
        used for one shot.
     """
@@ -808,7 +810,9 @@ async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: 
     enabled = await api.get_enabled_injections(node_ip)
     logging.info(f"Error injections enabled on {node_ip}: {enabled}")
     if injection not in enabled:
-        skip_env("Error injection not enabled in Scylla - try compiling in dev/debug/sanitize mode")
+        pytest.fail(f"Failed to enable the error injection {injection}. Error injections are "
+                    "disabled in release mode, so the test must be marked with "
+                    "skip_mode(mode='release')")
     try:
         yield InjectionHandler(api, injection, node_ip)
     finally:
@@ -818,14 +822,19 @@ async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: 
 
 async def inject_error_one_shot(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: str, parameters: dict[str, Any] = {}) -> InjectionHandler:
     """Attempts to inject an error. Works only in specific build modes: debug,dev,sanitize.
-       It will trigger a test to be skipped if attempting to enable an injection has no effect.
+       It will fail a test if attempting to enable an injection has no effect.
+       Intended for suites that start their own Scylla (e.g. cluster), so the build mode
+       is known. Suites that can run against a foreign server (e.g. cqlpy) should keep
+       their own skipping helper.
        This is a one-shot injection enable.
     """
     await api.enable_injection(node_ip, injection, True, parameters)
     enabled = await api.get_enabled_injections(node_ip)
     logging.info(f"Error injections enabled on {node_ip}: {enabled}")
     if injection not in enabled:
-        skip_env("Error injection not enabled in Scylla - try compiling in dev/debug/sanitize mode")
+        pytest.fail(f"Failed to enable the error injection {injection}. Error injections are "
+                    "disabled in release mode, so the test must be marked with "
+                    "skip_mode(mode='release')")
     return InjectionHandler(api, injection, node_ip)
 
 
