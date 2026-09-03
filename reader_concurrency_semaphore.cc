@@ -1517,20 +1517,25 @@ void reader_concurrency_semaphore::evict_readers_in_background() {
     _evicting = true;
     // Evict inactive readers in the background while wait list isn't empty
     // This is safe since stop() closes _gate;
-    (void)with_gate(_close_readers_gate, [this] {
-        return repeat([this] {
-            auto it = std::ranges::find_if(_inactive_reads, [this] (const reader_permit::impl& permit) {
-                return should_evict_inactive_read(permit);
-            });
-            if (it == _inactive_reads.end()) {
-                _evicting = false;
-                return make_ready_future<stop_iteration>(stop_iteration::yes);
-            }
+    (void)try_with_gate(_close_readers_gate, [this] {
+        return yield().then([this] {
+            return repeat([this] {
+                auto it = std::ranges::find_if(_inactive_reads, [this] (const reader_permit::impl& permit) {
+                    return should_evict_inactive_read(permit);
+                });
+                if (it == _inactive_reads.end()) {
+                    _evicting = false;
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
 
-            return detach_inactive_reader(*it, evict_reason::permit).close().then([] {
-                return stop_iteration::no;
+                return detach_inactive_reader(*it, evict_reason::permit).close().then([] {
+                    return stop_iteration::no;
+                });
             });
         });
+    }).handle_exception([this] (std::exception_ptr ex) {
+        _evicting = false;
+        rcslog.warn("Failed to evict readers in the background: {}", ex);
     });
 }
 
