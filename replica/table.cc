@@ -739,7 +739,8 @@ public:
 
     void update_effective_replication_map(const locator::effective_replication_map_ptr& old_erm,
                                           const locator::effective_replication_map& erm,
-                                          noncopyable_function<void()> refresh_mutation_source) override {}
+                                          noncopyable_function<void()> refresh_mutation_source,
+                                          const locator::tablet_metadata_change_hint* tablet_hint) override {}
 
     compaction_group& compaction_group_for_token(dht::token token) const override {
         return get_compaction_group();
@@ -793,9 +794,13 @@ struct background_merge_guard {
 class tablet_storage_group_manager final : public storage_group_manager {
     replica::table& _t;
     locator::host_id _my_host_id;
-    // get_rack_uuid() is a pure function of the erm's topology; counter ids derive from it.
-    // Cached and refreshed alongside _tablet_map in update_effective_replication_map().
+    // Rack location of the current erm's topology and its derived get_rack_uuid()
+    // (which determines counter ids), cached and refreshed together in
+    // update_effective_replication_map().
+    locator::endpoint_dc_rack _rack_location;
     utils::UUID _rack_uuid;
+    // Points into table::_erm's tablet_metadata, which keeps it alive.
+    // Refreshed together with _erm in update_effective_replication_map().
     const locator::tablet_map* _tablet_map;
     future<> _stop_fut = make_ready_future();
     // Every table replica that completes split work will load the seq number from tablet metadata into its local
@@ -928,6 +933,7 @@ public:
     tablet_storage_group_manager(table& t, const locator::effective_replication_map& erm)
         : _t(t)
         , _my_host_id(erm.get_token_metadata().get_my_id())
+        , _rack_location(erm.get_topology().get_location())
         , _rack_uuid(erm.get_topology().get_rack_uuid())
         , _tablet_map(&erm.get_token_metadata().tablets().get_tablet_map(schema()->id()))
         , _merge_completion_fiber(merge_completion_fiber())
@@ -964,7 +970,8 @@ public:
 
     void update_effective_replication_map(const locator::effective_replication_map_ptr& old_erm,
                                           const locator::effective_replication_map& erm,
-                                          noncopyable_function<void()> refresh_mutation_source) override;
+                                          noncopyable_function<void()> refresh_mutation_source,
+                                          const locator::tablet_metadata_change_hint* tablet_hint) override;
 
     compaction_group& compaction_group_for_token(dht::token token) const override;
     utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const override;
@@ -3883,10 +3890,21 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(locator::effec
 void tablet_storage_group_manager::update_effective_replication_map(
         const locator::effective_replication_map_ptr& old_erm,
         const locator::effective_replication_map& erm,
-        noncopyable_function<void()> refresh_mutation_source)
+        noncopyable_function<void()> refresh_mutation_source,
+        const locator::tablet_metadata_change_hint* tablet_hint)
 {
     auto* new_tablet_map = &erm.get_token_metadata().tablets().get_tablet_map(schema()->id());
     auto* old_tablet_map = std::exchange(_tablet_map, new_tablet_map);
+    // For a tablet-metadata-only change, a shared map means this table's placement
+    // is unchanged. An absent hint means this may be a schema change, so retain the
+    // old behavior and run the update even when the tablet_map is shared. The rack
+    // location can still change independently; comparing it also covers _rack_uuid
+    // while keeping the no-op path free of get_rack_uuid()'s per-call format+hash work.
+    if (tablet_hint && old_tablet_map == new_tablet_map
+            && erm.get_topology().get_location() == _rack_location) {
+        return;
+    }
+    _rack_location = erm.get_topology().get_location();
     _rack_uuid = erm.get_topology().get_rack_uuid();
 
     size_t old_tablet_count = old_tablet_map->tablet_count();
@@ -3944,7 +3962,12 @@ void tablet_storage_group_manager::update_effective_replication_map(
         }
     }
 
-    // update the per compaction group tombstone GC enabled flag
+    // Update the per compaction group tombstone GC enabled flag and counter id.
+    // There is a single replica in a rack, so we can reuse a single counter id for all replicas
+    // in a rack. Replicas in different racks use different counter ids.
+    // During migration there are two active counter replicas in a rack, then the pending
+    // replica uses a variation of the rack's counter id, so there are at most two distinct
+    // counter ids per rack.
     for_each_storage_group([&] (size_t group_id, storage_group& sg) {
         const locator::tablet_id tid = static_cast<locator::tablet_id>(group_id);
         auto [tombstone_gc_enabled, cid] = tombstone_gc_and_counter_id(*new_tablet_map, tid);
@@ -4006,7 +4029,8 @@ future<> table::update_repaired_at_for_merge() {
     }
 }
 
-void table::update_effective_replication_map(locator::effective_replication_map_ptr erm) {
+void table::update_effective_replication_map(locator::effective_replication_map_ptr erm,
+        const locator::tablet_metadata_change_hint* tablet_hint) {
     auto old_erm = std::exchange(_erm, std::move(erm));
 
     auto refresh_mutation_source = [this] {
@@ -4015,7 +4039,7 @@ void table::update_effective_replication_map(locator::effective_replication_map_
     };
 
     if (uses_tablets()) {
-        _sg_manager->update_effective_replication_map(old_erm, *_erm, refresh_mutation_source);
+        _sg_manager->update_effective_replication_map(old_erm, *_erm, refresh_mutation_source, tablet_hint);
     }
     if (old_erm) {
         old_erm->invalidate();

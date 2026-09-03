@@ -1042,7 +1042,8 @@ public:
     void set_schema(schema_ptr);
     db::commitlog* commitlog() const;
     const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
-    void update_effective_replication_map(locator::effective_replication_map_ptr);
+    void update_effective_replication_map(locator::effective_replication_map_ptr,
+            const locator::tablet_metadata_change_hint* tablet_hint = nullptr);
     [[gnu::always_inline]] bool uses_tablets() const;
     int64_t calculate_tablet_count() const;
 private:
