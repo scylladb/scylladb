@@ -151,12 +151,13 @@ public:
     }
 };
 
-// Reproduces: client::chunked_download_source::make_filling_fiber() (utils/s3/client.cc)
-// passes seastar::http::no_retry_strategy into client::make_request and re-implements
-// retries itself in its outer loop, with no sleep/jitter/attempt-cap between a retryable
-// failure and the next attempt. Point it at a server that always answers 503 (Service
-// Unavailable, classified retryable::yes by aws_error::from_http_code) and observe the
-// raw request cadence over a short, fixed wall-clock window.
+// Regression test for client::chunked_download_source::make_filling_fiber()
+// (utils/s3/client.cc): it passes seastar::http::no_retry_strategy into
+// client::make_request and re-implements retrying itself in its outer loop.
+// That loop now backs off (via aws::default_aws_retry_strategy) instead of
+// hammering the endpoint. Point it at a server that always answers 503
+// (Service Unavailable, classified retryable::yes by aws_error::from_http_code)
+// and check the raw request cadence over a short, fixed wall-clock window.
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_retries_retryable_error_without_backoff) {
     ::setenv("AWS_ACCESS_KEY_ID", "test", 1);
     ::setenv("AWS_SECRET_ACCESS_KEY", "test", 1);
@@ -170,10 +171,8 @@ SEASTAR_THREAD_TEST_CASE(test_chunked_download_retries_retryable_error_without_b
         .region = "local",
     };
     auto cln = s3::client::make("127.0.0.1", make_lw_shared<s3::endpoint_config>(std::move(cfg)));
-    auto close_client = seastar::defer([&] { cln->close().get(); });
 
     auto in = input_stream<char>(cln->make_chunked_download_source("/test-bucket/test-object", s3::full_range));
-    auto close_in = seastar::deferred_close(in);
 
     // Let the retry loop run freely for a short, fixed window.
     seastar::sleep(1s).get();
@@ -181,16 +180,13 @@ SEASTAR_THREAD_TEST_CASE(test_chunked_download_retries_retryable_error_without_b
     auto count = srv.request_count();
     testlog.info("test_chunked_download_retries_retryable_error_without_backoff: {} requests observed in 1s", count);
 
-    // A retry policy with any real backoff (even a modest fixed delay, let
-    // alone exponential) would issue no more than a handful of attempts in
-    // this window. A tight loop with no delay issues orders of magnitude
-    // more. This assertion encodes the expected, backed-off behavior and
-    // is expected to FAIL against the current unbounded tight-loop retry.
+    // A backed-off retry policy issues no more than a handful of attempts in
+    // this window; a tight loop with no delay would issue orders of
+    // magnitude more.
     BOOST_REQUIRE_LE(count, 15u);
 
-    // No backoff/jitter: consecutive attempts land back-to-back. A real
-    // backoff strategy would show a growing (or at least non-trivial) gap
-    // between attempts instead of every gap being near-zero.
+    // With backoff, gaps between attempts grow; only the very first retry
+    // (no prior wait) should land back-to-back.
     auto times = srv.request_times();
     BOOST_REQUIRE_GE(times.size(), 2u);
     unsigned near_zero_gaps = 0;
@@ -202,6 +198,16 @@ SEASTAR_THREAD_TEST_CASE(test_chunked_download_retries_retryable_error_without_b
     }
     testlog.info("test_chunked_download_retries_retryable_error_without_backoff: {}/{} gaps < 5ms", near_zero_gaps, times.size() - 1);
     BOOST_REQUIRE_LE(near_zero_gaps, times.size() / 2);
+
+    // close() awaits the filling fiber; the backoff sleep isn't abortable, so
+    // close() must not be stuck waiting out the fiber's current backoff.
+    auto close_start = std::chrono::steady_clock::now();
+    in.close().get();
+    auto close_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - close_start);
+    testlog.info("test_chunked_download_retries_retryable_error_without_backoff: close() took {}ms", close_elapsed.count());
+    BOOST_REQUIRE_LE(close_elapsed.count(), 500);
+
+    cln->close().get();
 }
 
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
