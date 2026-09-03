@@ -261,8 +261,9 @@ public:
 
     public:
 
-        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix = "", size_t objects_per_page = 64, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
-        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, lister::filter_type filter, size_t objects_per_page = 64, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
+        // 256 keys (~60KB XML body) cuts round trips 4x over the old 64 while staying well under Seastar's 128KiB large-alloc threshold for the contiguous body read
+        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix = "", size_t objects_per_page = 256, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
+        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, lister::filter_type filter, size_t objects_per_page = 256, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
 
         future<std::optional<directory_entry>> get() override;
         future<> close() noexcept override;

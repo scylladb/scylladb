@@ -597,13 +597,9 @@ SEASTAR_THREAD_TEST_CASE(test_client_list_objects_proxy) {
 
 // Reproducer for the bucket_lister round-trip-count candidate: lists the same
 // population once via bucket_lister's real production default (no
-// objects_per_page override, i.e. max-keys=64, as every in-tree caller uses
+// objects_per_page override, i.e. max-keys=256, as every in-tree caller uses
 // it) and once with max-keys pinned to S3's actual ListObjectsV2 ceiling
-// (1000). Each variant gets its own prefix so its ListObjectsV2 calls are
-// individually attributable in the s3=trace log (see s3_test.py, which greps
-// "GET /?list-type=2 (prefix=<x>)" per variant and asserts the count against
-// ceil(N/max-keys)) -- there's no in-process counter to assert on directly,
-// since the s3 client doesn't expose a request counter.
+// (1000).
 void client_list_objects_round_trip_scale(const client_maker_function& client_maker, int nr_objects) {
     s3_test_fixture guard(client_maker);
     auto client = guard.client();
