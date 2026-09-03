@@ -1775,7 +1775,7 @@ def test_gsi_composite_query_rk_begins_with_all_ff_does_not_leak_past_eq_prefix(
 # FilterExpression referencing a composite HASH attr - should fail.
 def test_gsi_composite_filter_on_hash_attr_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
-    with pytest.raises(ClientError, match="ValidationException.*[fF]ilter.*[kK]ey"):
+    with pytest.raises(ClientError, match="ValidationException.*Filter [Ee]xpression can only contain"):
         full_query(
             table,
             IndexName="idx_2h2r",
@@ -1789,7 +1789,7 @@ def test_gsi_composite_filter_on_hash_attr_rejected(test_table_gsi_2h2r):
 # FilterExpression referencing a composite RANGE attr - should fail.
 def test_gsi_composite_filter_on_range_attr_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
-    with pytest.raises(ClientError, match="ValidationException.*[fF]ilter.*[kK]ey"):
+    with pytest.raises(ClientError, match="ValidationException.*Filter [Ee]xpression can only contain"):
         full_query(
             table,
             IndexName="idx_2h2r",
@@ -1888,7 +1888,7 @@ def test_gsi_composite_query_key_condition_with_aliases(test_table_gsi_2h2r):
 # attribute of the queried index.
 def test_gsi_composite_filter_on_key_attr_with_alias_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
-    with pytest.raises(ClientError, match="ValidationException.*[fF]ilter.*[kK]ey"):
+    with pytest.raises(ClientError, match="ValidationException.*Filter [Ee]xpression can only contain"):
         full_query(
             table,
             IndexName="idx_2h2r",
