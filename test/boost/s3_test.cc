@@ -620,25 +620,25 @@ SEASTAR_THREAD_TEST_CASE(test_client_list_objects_proxy) {
 
 // Reproducer for the bucket_lister round-trip-count candidate: lists the same
 // population once via bucket_lister's real production default (no
-// objects_per_page override, i.e. max-keys=64, as every in-tree caller uses
+// objects_per_page override, i.e. max-keys=100, as every in-tree caller uses
 // it) and once with max-keys pinned to S3's actual ListObjectsV2 ceiling
-// (1000). Each variant gets its own prefix so its ListObjectsV2 calls are
-// individually attributable in the s3=trace log (see s3_test.py, which greps
-// "GET /?list-type=2 (prefix=<x>)" per variant and asserts the count against
-// ceil(N/max-keys)) -- there's no in-process counter to assert on directly,
-// since the s3 client doesn't expose a request counter.
+// (1000), and checks the actual number of ListObjectsV2 round trips each
+// pagination makes (via client::total_get_requests()), not just correctness.
 void client_list_objects_round_trip_scale(const client_maker_function& client_maker, int nr_objects) {
     s3_test_fixture guard(client_maker);
     auto client = guard.client();
     const sstring& bucket = guard.bucket();
     const sstring default_prefix("default/");
     const sstring pinned_prefix("pinned/");
+    constexpr size_t default_page_size = 100;
+    constexpr size_t pinned_page_size = 1000;
 
     auto default_names = populate_bucket(client, bucket, default_prefix, nr_objects);
     auto pinned_names = populate_bucket(client, bucket, pinned_prefix, nr_objects);
 
     {
         // production default: no objects_per_page argument
+        auto requests_before = client->total_get_requests();
         s3::client::bucket_lister lister(client, bucket, default_prefix);
         auto close_lister = deferred_close(lister);
         while (auto de = lister.get().get()) {
@@ -647,10 +647,18 @@ void client_list_objects_round_trip_scale(const client_maker_function& client_ma
             default_names.erase(it);
         }
         BOOST_REQUIRE(default_names.empty());
+        // See the pinned-page-size block below: a multi-page listing whose
+        // last page is exactly full needs one more, empty-continuation request.
+        auto expected_requests = (nr_objects + default_page_size - 1) / default_page_size;
+        if (static_cast<size_t>(nr_objects) > default_page_size && static_cast<size_t>(nr_objects) % default_page_size == 0) {
+            expected_requests++;
+        }
+        BOOST_REQUIRE_EQUAL(client->total_get_requests() - requests_before, expected_requests);
     }
     {
         // objects_per_page pinned to the S3 ListObjectsV2 max-keys ceiling
-        s3::client::bucket_lister lister(client, bucket, pinned_prefix, 1000);
+        auto requests_before = client->total_get_requests();
+        s3::client::bucket_lister lister(client, bucket, pinned_prefix, pinned_page_size);
         auto close_lister = deferred_close(lister);
         while (auto de = lister.get().get()) {
             auto it = pinned_names.find(de->name);
@@ -658,6 +666,15 @@ void client_list_objects_round_trip_scale(const client_maker_function& client_ma
             pinned_names.erase(it);
         }
         BOOST_REQUIRE(pinned_names.empty());
+        // When a multi-page listing's last page exactly fills the page size,
+        // S3's ListObjectsV2 (and minio, matching it) still marks it
+        // truncated, requiring one more, empty-continuation request. A
+        // single page that exactly fills the bucket doesn't have this quirk.
+        auto expected_requests = (nr_objects + pinned_page_size - 1) / pinned_page_size;
+        if (static_cast<size_t>(nr_objects) > pinned_page_size && static_cast<size_t>(nr_objects) % pinned_page_size == 0) {
+            expected_requests++;
+        }
+        BOOST_REQUIRE_EQUAL(client->total_get_requests() - requests_before, expected_requests);
     }
 }
 

@@ -210,6 +210,10 @@ public:
                                   std::unique_ptr<throttling_controller> tc, global_factory gf = {});
     static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, global_factory gf = {}, unsigned connections_per_shard = endpoint_config::default_connections_per_shard);
 
+    // Total completed GET requests across all scheduling groups; reuses the
+    // existing per-method http::client stats. For tests/diagnostics.
+    uint64_t total_get_requests() const noexcept;
+
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
     future<stats> get_object_stats(sstring object_name, seastar::abort_source* = nullptr);
     future<object_info> get_object_info(sstring object_name, seastar::abort_source* = nullptr);
@@ -283,8 +287,16 @@ public:
 
     public:
 
-        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix = "", size_t objects_per_page = 64, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
-        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, lister::filter_type filter, size_t objects_per_page = 64, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
+        // max-keys bounds key *count*, not response bytes: S3 keys run up to 1024 UTF-8
+        // bytes each, and read_entire_stream_contiguous() has no size cap, so the page
+        // size must be chosen from the worst case, not a typical one. Per <Contents>
+        // entry: up to 1024 bytes of key plus ~200 bytes of surrounding XML
+        // (LastModified/ETag/Size/StorageClass tags) = ~1224 bytes worst case. 100
+        // entries is ~120KB, safely under Seastar's 128KiB large-alloc threshold even
+        // if every key in the page hits the S3 max -- and ~36% fewer round trips
+        // than the old 64.
+        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix = "", size_t objects_per_page = 100, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
+        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, lister::filter_type filter, size_t objects_per_page = 100, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
 
         future<std::optional<directory_entry>> get() override;
         future<> close() noexcept override;
