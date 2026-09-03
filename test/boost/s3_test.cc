@@ -566,7 +566,7 @@ void client_missing_prefix(const client_maker_function& client_maker) {
     const auto name = guard.object_path("testobject");
 
     BOOST_REQUIRE_EXCEPTION(client->get_object_size(name).get(), storage_io_error, [](const storage_io_error& e) {
-        return e.code().value() == ENOENT && std::string(e.what()).contains("Reason:  HTTP code: 404 Not Found");
+        return e.code().value() == ENOENT && std::string(e.what()).contains("Reason: HTTP code: 404 Not Found");
     });
 }
 
