@@ -23,6 +23,7 @@
 #include "readers/delegating.hh"
 #include "readers/forwardable.hh"
 #include "readers/nonforwardable.hh"
+#include "readers/token_range_tombstone_prepending.hh"
 #include "cache_mutation_reader.hh"
 #include "replica/partition_snapshot_reader.hh"
 #include "keys/clustering_key_filter.hh"
@@ -52,7 +53,11 @@ row_cache::create_underlying_reader(read_context& ctx, mutation_source& src, con
     schema_ptr entry_schema = to_query_domain(ctx.slice(), _schema);
     auto reader = src.make_mutation_reader(entry_schema, ctx.permit(), pr, ctx.slice(), ctx.trace_state(), streamed_mutation::forwarding::yes);
     ctx.on_underlying_created();
-    return reader;
+    // Take the underlying's token range tombstones for ourselves rather than
+    // letting them flow into the cached partitions: the cache keeps them beside
+    // the data, see row_cache::_token_range_tombstones. The population path
+    // must not see them either, or they would end up inside cache entries.
+    return make_token_range_tombstone_absorbing_reader(std::move(reader), _token_range_tombstones);
 }
 
 static thread_local mutation_application_stats dummy_app_stats;
@@ -798,6 +803,12 @@ row_cache::make_reader_opt(schema_ptr s,
         return std::make_unique<read_context>(*this, s, permit, range, slice, gc_state, get_max_purgeable, trace_state, fwd_mr);
     };
 
+    // The tombstones are kept beside the cached partitions, so every reader has
+    // to emit them; a partition served from cache carries no trace of them.
+    auto prepend_token_range_tombstones = [this] (mutation_reader r) {
+        return make_token_range_tombstone_prepending_reader(std::move(r), _token_range_tombstones);
+    };
+
     if (query::is_single_partition(range) && !fwd_mr) {
         tracing::trace(trace_state, "Querying cache for range {} and slice {}",
                 range, seastar::value_of([&slice] { return slice.get_all_ranges(); }));
@@ -821,7 +832,13 @@ row_cache::make_reader_opt(schema_ptr s,
         });
 
         if (mr && fwd == streamed_mutation::forwarding::yes) {
-            return make_forwardable(std::move(*mr));
+            return prepend_token_range_tombstones(make_forwardable(std::move(*mr)));
+        } else if (mr) {
+            return prepend_token_range_tombstones(std::move(*mr));
+        } else if (!_token_range_tombstones.empty()) {
+            // Nothing cached for this partition, but our tombstones may still
+            // delete it in another source, so they have to be emitted.
+            return prepend_token_range_tombstones(make_empty_mutation_reader(std::move(s), std::move(permit)));
         } else {
             return mr;
         }
@@ -831,9 +848,9 @@ row_cache::make_reader_opt(schema_ptr s,
                    range, seastar::value_of([&slice] { return slice.get_all_ranges(); }));
     auto mr = make_scanning_reader(range, make_context());
     if (fwd == streamed_mutation::forwarding::yes) {
-        return make_forwardable(std::move(mr));
+        return prepend_token_range_tombstones(make_forwardable(std::move(mr)));
     } else {
-        return mr;
+        return prepend_token_range_tombstones(std::move(mr));
     }
 }
 
@@ -855,11 +872,16 @@ mutation_reader row_cache::make_nonpopulating_reader(schema_ptr schema, reader_p
         auto&& pos = range.start()->value();
         partitions_type::bound_hint hint;
         auto i = _partitions.lower_bound(pos, cmp, hint);
+        // See row_cache::_token_range_tombstones: they are kept beside the
+        // cached partitions, so a reader has to emit them.
+        auto prepend_token_range_tombstones = [this] (mutation_reader r) {
+            return make_token_range_tombstone_prepending_reader(std::move(r), _token_range_tombstones);
+        };
         if (hint.match) {
             cache_entry& e = *i;
             upgrade_entry(e);
             tracing::trace(ts, "Reading partition {} from cache", pos);
-            return replica::make_partition_snapshot_reader<false, dummy_accounter>(
+            return prepend_token_range_tombstones(replica::make_partition_snapshot_reader<false, dummy_accounter>(
                     schema,
                     std::move(permit),
                     e.key(),
@@ -869,10 +891,10 @@ mutation_reader row_cache::make_nonpopulating_reader(schema_ptr schema, reader_p
                     _tracker.region(),
                     _read_section,
                     {},
-                    streamed_mutation::forwarding::no);
+                    streamed_mutation::forwarding::no));
         } else {
             tracing::trace(ts, "Partition {} is not found in cache", pos);
-            return make_empty_mutation_reader(std::move(schema), std::move(permit));
+            return prepend_token_range_tombstones(make_empty_mutation_reader(std::move(schema), std::move(permit)));
         }
     });
 }
@@ -1125,6 +1147,12 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
 }
 
 future<> row_cache::update(external_updater eu, replica::memtable& m, preemption_source& preempt_src) {
+    // The memtable's token range tombstones delete whole partitions, including
+    // partitions the memtable has no entry for, so they cannot be merged entry
+    // by entry the way the partitions below are. Because the cache keeps them
+    // beside the data rather than inside it, taking them is just a merge of two
+    // lists; nothing cached has to be touched or invalidated.
+    _token_range_tombstones.apply(m.token_range_tombstones());
     m._merging_into_cache = true;
     return do_update(std::move(eu), m, [this] (logalloc::allocating_section& alloc,
             row_cache::partitions_type::iterator cache_i, replica::memtable_entry& mem_e, partition_presence_checker& is_present,
@@ -1159,6 +1187,7 @@ future<> row_cache::update(external_updater eu, replica::memtable& m, preemption
 }
 
 future<> row_cache::update_invalidating(external_updater eu, replica::memtable& m) {
+    _token_range_tombstones.apply(m.token_range_tombstones());
     return do_update(std::move(eu), m, [this] (logalloc::allocating_section& alloc,
         row_cache::partitions_type::iterator cache_i, replica::memtable_entry& mem_e, partition_presence_checker& is_present,
         real_dirty_memory_accounter& acc, const partitions_type::bound_hint&, preemption_source&)

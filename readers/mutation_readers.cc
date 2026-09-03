@@ -60,6 +60,60 @@ public:
 
 } // anonymous namespace
 
+namespace {
+
+// See make_token_range_tombstone_absorbing_reader().
+class token_range_tombstone_absorbing_reader : public mutation_reader::impl {
+    mutation_reader _underlying;
+    token_range_tombstone_list& _into;
+public:
+    token_range_tombstone_absorbing_reader(mutation_reader&& r, token_range_tombstone_list& into)
+        : impl(r.schema(), r.permit())
+        , _underlying(std::move(r))
+        , _into(into)
+    { }
+    virtual future<> fill_buffer() override {
+        while (!is_buffer_full() && !is_end_of_stream()) {
+            co_await _underlying.fill_buffer();
+            while (!_underlying.is_buffer_empty()) {
+                auto mf = _underlying.pop_mutation_fragment();
+                if (mf.is_token_range_tombstone()) {
+                    _into.apply(mf.as_token_range_tombstone());
+                    continue;
+                }
+                push_mutation_fragment(std::move(mf));
+            }
+            _end_of_stream = _underlying.is_end_of_stream();
+        }
+    }
+    virtual future<> next_partition() override {
+        clear_buffer_to_next_partition();
+        if (is_buffer_empty()) {
+            _end_of_stream = false;
+            co_await _underlying.next_partition();
+        }
+    }
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+        clear_buffer();
+        _end_of_stream = false;
+        return _underlying.fast_forward_to(pr);
+    }
+    virtual future<> fast_forward_to(position_range pr) override {
+        clear_buffer();
+        _end_of_stream = false;
+        return _underlying.fast_forward_to(std::move(pr));
+    }
+    virtual future<> close() noexcept override {
+        return _underlying.close();
+    }
+};
+
+} // anonymous namespace
+
+mutation_reader make_token_range_tombstone_absorbing_reader(mutation_reader r, token_range_tombstone_list& into) {
+    return make_mutation_reader<token_range_tombstone_absorbing_reader>(std::move(r), into);
+}
+
 mutation_reader make_token_range_tombstone_prepending_reader(mutation_reader r, token_range_tombstone_list tombstones) {
     if (tombstones.empty()) {
         return r;

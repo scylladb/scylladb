@@ -21,3 +21,13 @@
 //
 // Returns the underlying reader unchanged if the list is empty.
 mutation_reader make_token_range_tombstone_prepending_reader(mutation_reader underlying, token_range_tombstone_list);
+
+// Returns a reader which takes the token range tombstones out of the
+// underlying reader's stream and merges them into `into`, emitting none of them
+// itself. `into` must outlive the reader.
+//
+// This is for a consumer which keeps the tombstones itself and emits them on
+// its own terms, as the row cache does: the cache serves partitions without
+// consulting the source they came from, so it has to hold the tombstones rather
+// than let them pass through into the cached data.
+mutation_reader make_token_range_tombstone_absorbing_reader(mutation_reader underlying, token_range_tombstone_list& into);

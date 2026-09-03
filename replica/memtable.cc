@@ -16,6 +16,7 @@
 #include "mutation/mutation_partition_view.hh"
 #include "readers/empty.hh"
 #include "readers/forwardable.hh"
+#include "readers/token_range_tombstone_prepending.hh"
 #include "sstables/types.hh"
 #include "keys/keys.hh"
 #include "db/large_data_handler.hh"
@@ -725,6 +726,11 @@ memtable::make_mutation_reader_opt(schema_ptr query_schema,
                       streamed_mutation::forwarding fwd,
                       mutation_reader::forwarding fwd_mr) {
     bool is_reversed = slice.is_reversed();
+    // Token range tombstones are not stored with the partitions, so no reader
+    // below produces them; they are prepended here.
+    auto prepend_token_range_tombstones = [this] (mutation_reader r) {
+        return make_token_range_tombstone_prepending_reader(std::move(r), _token_range_tombstones);
+    };
     if (query::is_single_partition(range) && !fwd_mr) {
         const query::ring_position& pos = range.start()->value();
         auto snp = _table_shared_data.read_section(*this, [&] () -> partition_snapshot_ptr {
@@ -737,34 +743,52 @@ memtable::make_mutation_reader_opt(schema_ptr query_schema,
             }
         });
         if (!snp) {
-            return {};
+            // The partition is not here, but a token range tombstone of ours
+            // may still delete it in another source, so it has to be emitted.
+            if (_token_range_tombstones.empty()) {
+                return {};
+            }
+            return prepend_token_range_tombstones(make_empty_mutation_reader(std::move(query_schema), std::move(permit)));
         }
         auto dk = pos.as_decorated_key();
         auto cr = query::clustering_key_filter_ranges::get_ranges(*query_schema, slice, dk.key());
         bool digest_requested = slice.options.contains<query::partition_slice::option::with_digest>();
         auto rd = make_partition_snapshot_reader_from_snp_schema(is_reversed, std::move(permit), std::move(dk), std::move(cr), std::move(snp), digest_requested, *this, _table_shared_data.read_section, shared_from_this(), fwd, *this);
         rd.upgrade_schema(query_schema);
-        return rd;
+        return prepend_token_range_tombstones(std::move(rd));
     } else {
         auto res = make_mutation_reader<scanning_reader>(std::move(query_schema), shared_from_this(), std::move(permit), range, slice, fwd_mr);
         if (fwd == streamed_mutation::forwarding::yes) {
-            return make_forwardable(std::move(res));
+            return prepend_token_range_tombstones(make_forwardable(std::move(res)));
         } else {
-            return res;
+            return prepend_token_range_tombstones(std::move(res));
         }
     }
 }
 
 mutation_reader
 memtable::make_flush_reader(schema_ptr s, reader_permit permit) {
+    // Flushing has to carry the token range tombstones into the sstable, or
+    // the deletion would be lost when the memtable goes away.
     if (!_merged_into_cache) {
         revert_flushed_memory();
-        return make_mutation_reader<flush_reader>(std::move(s), std::move(permit), shared_from_this());
+        return make_token_range_tombstone_prepending_reader(
+                make_mutation_reader<flush_reader>(std::move(s), std::move(permit), shared_from_this()),
+                _token_range_tombstones);
     } else {
         auto& full_slice = s->full_slice();
-        return make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), std::move(permit),
-                      query::full_partition_range, full_slice, mutation_reader::forwarding::no);
+        return make_token_range_tombstone_prepending_reader(
+                make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), std::move(permit),
+                        query::full_partition_range, full_slice, mutation_reader::forwarding::no),
+                _token_range_tombstones);
     }
+}
+
+void
+memtable::apply(const token_range_tombstone& trt) {
+    // Deliberately outside of any allocating section: the list is a plain heap
+    // object, not part of the LSA region. See memtable::apply() in the header.
+    _token_range_tombstones.apply(trt);
 }
 
 void
@@ -778,6 +802,9 @@ memtable::update(db::rp_handle&& h) {
 
 future<>
 memtable::apply(memtable& mt, reader_permit permit) {
+    // The reader below turns the other memtable into mutations, which cannot
+    // carry a tombstone spanning partitions, so take those directly.
+    _token_range_tombstones.apply(mt._token_range_tombstones);
     if (auto reader_opt = mt.make_mutation_reader_opt(_schema, std::move(permit), query::full_partition_range, _schema->full_slice())) {
         return with_closeable(std::move(*reader_opt), [this] (auto&& rd) mutable {
             return consume_partitions(rd, [self = this->shared_from_this()] (mutation&& m) {
