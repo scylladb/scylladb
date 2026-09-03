@@ -70,6 +70,7 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
     for (size_t i = 0; i < _statements.size(); ++i) {
         const auto& stmt = _statements[i].statement->inner_statement();
         const auto& statement_options = options.for_statement(i);
+        stmt.restrictions().validate_primary_key(statement_options);
         auto json_cache = stmt.maybe_prepare_json_cache(statement_options);
         auto keys = stmt.build_partition_keys(statement_options, json_cache);
 

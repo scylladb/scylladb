@@ -462,3 +462,24 @@ def test_debug_selects_on_sc_table(cql, sc_keyspace, test_keyspace):
 
         with new_materialized_view(cql, ec_table, '*', 'v, pk', 'v is not null and pk is not null') as mv:
             assert list(cql.execute(f"PRUNE MATERIALIZED VIEW {mv} WHERE v = 2")) == []
+
+
+def test_null_primary_key_on_sc_table(cql, sc_keyspace):
+    """
+    Null primary key values are rejected on strongly consistent writes,
+    as on eventually consistent ones. Without the check a null clustering
+    key value was accepted and the write changed nothing.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)")
+        with pytest.raises(InvalidRequest, match="Invalid null value in condition for column ck"):
+            cql.execute(insert, [1, None, 1])
+        with pytest.raises(InvalidRequest, match="Invalid null value in condition for column pk"):
+            cql.execute(insert, [None, 1, 1])
+
+        batch = BatchStatement(batch_type=BatchType.UNLOGGED)
+        batch.add(insert, [1, None, 1])
+        with pytest.raises(InvalidRequest, match="Invalid null value in condition for column ck"):
+            cql.execute(batch)
+
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE pk = 1")) == []

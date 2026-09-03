@@ -55,6 +55,7 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
         std::optional<service::group0_guard> guard) const
 {
     validate_write_consistency_level(options.get_consistency());
+    _statement->restrictions().validate_primary_key(options);
 
     auto timeout = db::timeout_clock::now() + _statement->get_timeout(qs.get_client_state(), options);
     auto json_cache = _statement->maybe_prepare_json_cache(options);
