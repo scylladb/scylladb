@@ -251,6 +251,9 @@ public:
     void update_connections_per_shard(unsigned connections_per_shard);
     // Bytes moved to and from objects by this client, for its owner to report.
     utils::object_storage_bytes bytes() const;
+    // Completed GET requests across all scheduling groups. Exposed for tests
+    // that need to assert on round-trip counts (e.g. bucket_lister paging).
+    uint64_t get_requests() const;
     // Reports the http client metrics under the labels the caller supplies. The
     // client keeps one http client per scheduling group and names the class
     // label after it, so the caller supplies only the type and the endpoint.
