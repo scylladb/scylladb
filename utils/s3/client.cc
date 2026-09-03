@@ -91,7 +91,7 @@ client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, pri
         , _creds_invalidation_timer([this] {
             std::ignore = [this]() -> future<> {
                 auto units = co_await get_units(_creds_sem, 1);
-                s3l.info("Credentials update attempt in background failed. Outdated credentials will be discarded, triggering synchronous re-obtainment"
+                s3l.info("Credentials expired. Outdated credentials will be discarded, triggering synchronous re-obtainment"
                          " attempts for future requests.");
                 _credentials = {};
             }();
@@ -184,8 +184,10 @@ shared_ptr<client> client::make(std::string ep, std::string region, std::string 
 }
 
 future<> client::update_credentials_and_rearm() {
-    _credentials = co_await _creds_provider_chain.get_aws_credentials();
-    if (_credentials) {
+    auto new_credentials = co_await _creds_provider_chain.get_aws_credentials();
+    if (new_credentials) {
+        // don't clobber still-valid credentials on a transient refresh failure
+        _credentials = std::move(new_credentials);
         _creds_invalidation_timer.rearm(_credentials.expires_at);
         _creds_update_timer.rearm(_credentials.expires_at - 1h);
     }
