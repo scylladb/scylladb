@@ -134,6 +134,18 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chun
             break;
         }
 
+        // Per node, and an operator can change it between restarts, so the check
+        // above against the cluster's own keyspaces stays the first word.
+        const auto configured_mode = cfg.storage_mode_for_new_keyspaces();
+        const bool configured_is_object_storage = configured_mode == db::keyspace_storage_mode_t::mode::object_storage;
+        if (configured_mode != db::keyspace_storage_mode_t::mode::unset && wants_object_storage != configured_is_object_storage) {
+            throw exceptions::invalid_request_exception(
+                seastar::format("Cannot create keyspace '{}' in {} storage: storage_mode_for_new_keyspaces is set to {}",
+                                _name,
+                                wants_object_storage ? "object" : "local",
+                                configured_mode));
+        }
+
         // If the new keyspace uses tablets, as long as there are features
         // which aren't supported by tablets we want to warn the user that
         // they will not be usable on the new keyspace - and suggest how a
