@@ -11,6 +11,7 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/statements/external_search/external_function.hh"
 #include "cql3/values.hh"
+#include "utils/managed_bytes.hh"
 #include "vector_search/vector_store_client.hh"
 
 #include <optional>
@@ -18,6 +19,7 @@
 #include <vector>
 
 class schema;
+class column_definition;
 
 namespace query {
 class result;
@@ -32,10 +34,13 @@ struct joined_row {
     std::optional<size_t> external_result;
     /// True if the row is left out of the result set; see join_table_results().
     bool dropped = false;
+    /// The values of the columns the join was asked to read out of the row, in the order asked.
+    std::vector<managed_bytes_opt> columns;
 };
 
-/// Walks the rows just read from the base table, one joined_row per row, matching each to the
-/// external result that names it when `external_results` is given. The walk visits exactly the
+/// Walks the rows just read from the base table, one joined_row per row, reading `columns` out of
+/// every row and, when `external_results` is given, matching each to the external result that
+/// names it. The walk visits exactly the
 /// rows the result set is built from, in the same order; `slice` must be the slice
 /// `table_results` were read with.
 ///
@@ -49,8 +54,14 @@ struct joined_row {
 ///
 /// Matching compares primary keys, so `slice` must include the key columns; it asserts if they are
 /// missing. A null `external_results` skips matching, leaving every row unnamed and none dropped.
+///
+/// Each column of `columns` is read from where the row keeps it: a key column from the key, any
+/// other from the cells `slice` asked for, which must therefore include it; it asserts if it does
+/// not, a column nobody asked for having nothing to read. A row with no value
+/// for a column - a regular column of a partition holding nothing but a static row, say - gets an
+/// absent value. Nothing is deserialized.
 std::vector<joined_row> join_table_results(const query::result& table_results, const query::partition_slice& slice, const schema& schema,
-        const vector_search::vector_store_client::primary_keys* external_results);
+        const vector_search::vector_store_client::primary_keys* external_results, std::span<const column_definition* const> columns);
 
 /// The similarity of each joined row, as the values of one temporary: null for a row that has none
 /// to report (see join_table_results()).
