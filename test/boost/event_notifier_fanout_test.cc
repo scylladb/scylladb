@@ -11,16 +11,15 @@
 // re-serializing an identical response body per listener (transport/event_notifier.cc),
 // instead of serializing the body once and sharing it across listeners.
 //
-// This file has one part:
-//  1. test_fanout_bodies_are_identical_across_listeners: calls the exact
-//     production serialization code the fan-out loop calls per listener and
-//     shows the produced bytes are byte-for-byte identical every time for the
-//     same event, i.e. recomputing them per listener is pure waste.
+// Exercises the actual production caching template (get_or_make_shared_event(),
+// shared by every event_notifier.cc fan-out loop) and the actual production
+// event builder (make_schema_change_event_response(), the same function
+// connection::make_schema_change_event() delegates to), asserting the body is
+// constructed at most once per distinct cache key regardless of listener count.
 
 #define BOOST_TEST_MODULE core
 
 #include <boost/test/unit_test.hpp>
-#include <vector>
 
 #include "transport/event.hh"
 #include "transport/response.hh"
@@ -28,34 +27,31 @@
 
 using namespace cql_transport;
 
-namespace {
-
-// Exactly what cql_server::connection::make_schema_change_event() does
-// (transport/server.cc), which is what event_notifier's fan-out loop calls
-// once per registered listener (transport/event_notifier.cc).
-bytes_ostream make_schema_change_body(const event::schema_change& ev, uint8_t version) {
-    response r(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
-    r.write_string("SCHEMA_CHANGE");
-    r.serialize(ev, version);
-    return std::move(r).extract_body();
-}
-
-}
-
-BOOST_AUTO_TEST_CASE(test_fanout_bodies_are_identical_across_listeners) {
-    // The whole premise of "serialize once, fan out" being possible is that
-    // the bytes are the same for every listener. Confirm that's true for the
-    // actual production serialization, not an assumption.
+BOOST_AUTO_TEST_CASE(test_fanout_shared_cache_constructs_body_once_per_key) {
     event::schema_change ev(
         event::schema_change::change_type::CREATED,
         event::schema_change::target_type::TABLE,
         "ks", "cf");
 
-    auto first = make_schema_change_body(ev, 4);
-    BOOST_REQUIRE_GT(first.size(), 0u);
-    for (int i = 0; i < 50; ++i) {
-        auto body = make_schema_change_body(ev, 4);
-        BOOST_REQUIRE_EQUAL(body.size(), first.size());
-        BOOST_REQUIRE(body == first);
+    size_t construction_count = 0;
+    cql_transport::shared_event_cache<uint8_t> cache;
+    constexpr size_t n_listeners = 20000;
+
+    for (size_t i = 0; i < n_listeners; ++i) {
+        cql_transport::get_or_make_shared_event(cache, uint8_t{4}, [&] {
+            ++construction_count;
+            return cql_transport::make_schema_change_event_response(ev, 4);
+        });
     }
+    BOOST_REQUIRE_EQUAL(construction_count, 1u);
+
+    // A second, distinct key adds exactly one more construction, not one per
+    // listener: "once per key", not "once total".
+    for (size_t i = 0; i < n_listeners; ++i) {
+        cql_transport::get_or_make_shared_event(cache, uint8_t{5}, [&] {
+            ++construction_count;
+            return cql_transport::make_schema_change_event_response(ev, 5);
+        });
+    }
+    BOOST_REQUIRE_EQUAL(construction_count, 2u);
 }
