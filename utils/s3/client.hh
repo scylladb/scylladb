@@ -114,6 +114,7 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_);
 [[noreturn]] void map_s3_client_exception(std::exception_ptr ex);
 
 class client : public enable_shared_from_this<client> {
+    friend struct client_test_helper; // grants tests access to the credentials-refresh internals
     class multipart_upload;
     class copy_s3_object;
     class upload_sink_base;
