@@ -4730,6 +4730,66 @@ SEASTAR_FIXTURE_TEST_CASE(basic_ics_controller_correctness_gcs_test, gcs_fixture
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
+// Backlog must be the same whether sstables are added one at a time or all at once.
+SEASTAR_TEST_CASE(size_tiered_backlog_deferred_matches_bulk) {
+    return test_env::do_with_async([](test_env& env) {
+        auto s = schema_builder(this_smp_shard_count(), "tests", "backlog_deferred_vs_bulk")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type)
+                .build();
+        auto keys = tests::generate_partition_keys(2, s, local_shard_only::yes);
+
+        constexpr int N = 50;
+        std::vector<sstables::shared_sstable> ssts;
+        for (int i = 0; i < N; i++) {
+            auto sst = sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key());
+            sstables::test(sst).set_data_file_size((i % 7 + 1) * 1024 * 1024);
+            ssts.push_back(sst);
+        }
+
+        compaction::size_tiered_compaction_strategy_options stcs_options;
+
+        compaction::size_tiered_backlog_tracker deferred(stcs_options);
+        for (auto& sst : ssts) {
+            deferred.replace_sstables({}, {sst});
+        }
+
+        compaction::size_tiered_backlog_tracker bulk(stcs_options);
+        bulk.replace_sstables({}, ssts);
+
+        BOOST_CHECK_CLOSE(deferred.backlog({}, {}), bulk.backlog({}, {}), 0.0001);
+    });
+}
+
+namespace {
+// Test double whose backlog() always throws.
+struct throwing_backlog_tracker_impl : public compaction::compaction_backlog_tracker::impl {
+    std::shared_ptr<int> calls;
+    explicit throwing_backlog_tracker_impl(std::shared_ptr<int> c) : calls(std::move(c)) {}
+    void replace_sstables(const std::vector<sstables::shared_sstable>&, const std::vector<sstables::shared_sstable>&) override {}
+    double backlog(const compaction::compaction_backlog_tracker::ongoing_writes&, const compaction::compaction_backlog_tracker::ongoing_compactions&) const override {
+        (*calls)++;
+        throw std::runtime_error("injected backlog computation failure");
+    }
+};
+}
+
+// A throwing impl must disable the tracker, not propagate to compaction_backlog_manager.
+BOOST_AUTO_TEST_CASE(compaction_backlog_tracker_isolates_backlog_exception) {
+    auto calls = std::make_shared<int>(0);
+    compaction::compaction_backlog_tracker tracker(std::make_unique<throwing_backlog_tracker_impl>(calls));
+
+    BOOST_REQUIRE_EQUAL(tracker.backlog(), compaction_controller::disable_backlog);
+    BOOST_REQUIRE_EQUAL(*calls, 1);
+
+    // Now disabled: a second call must not reach the (still-throwing) impl again.
+    BOOST_REQUIRE_EQUAL(tracker.backlog(), compaction_controller::disable_backlog);
+    BOOST_REQUIRE_EQUAL(*calls, 1);
+
+    // replace_sstables() on a disabled tracker must be a safe no-op.
+    tracker.replace_sstables({}, {});
+}
+
 void test_major_does_not_miss_data_in_memtable_fn(test_env& env) {
     auto builder = schema_builder(this_smp_shard_count(), "tests", "test_major_does_not_miss_data_in_memtable")
             .with_column("id", utf8_type, column_kind::partition_key)

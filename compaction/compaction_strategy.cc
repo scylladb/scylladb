@@ -270,6 +270,11 @@ size_tiered_backlog_tracker::sstables_backlog_contribution size_tiered_backlog_t
 }
 
 double size_tiered_backlog_tracker::backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const {
+    if (_backlog_dirty) {
+        _contrib = calculate_sstables_backlog_contribution(_all | std::ranges::to<std::vector>(), _stcs_options);
+        _backlog_dirty = false;
+    }
+
     inflight_component compacted = compacted_backlog(oc);
 
     auto total_backlog_bytes = std::ranges::fold_left(_contrib.sstables | std::views::transform([] (const sstables::shared_sstable& sst) {
@@ -319,12 +324,11 @@ void size_tiered_backlog_tracker::replace_sstables(const std::vector<sstables::s
             }
         }
     }
-    auto tmp_contrib = calculate_sstables_backlog_contribution(tmp_all | std::ranges::to<std::vector>(), _stcs_options);
-
     std::invoke([&] () noexcept {
         _all = std::move(tmp_all);
         _total_bytes = tmp_total_bytes;
-        _contrib = std::move(tmp_contrib);
+        // Defer recalculation to the next backlog() call, mirroring incremental_backlog_tracker.
+        _backlog_dirty = true;
     });
 }
 
