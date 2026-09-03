@@ -66,6 +66,7 @@
 #include "sstables_loader.hh"
 
 #include "idl/join_node.dist.hh"
+#include "idl/strong_consistency/groups_manager.dist.hh"
 #include "idl/storage_service.dist.hh"
 #include "replica/exceptions.hh"
 #include "service/paxos/prepare_response.hh"
@@ -2166,11 +2167,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     fmt::format("tablet draining failed: {}, moving {} to {}, due to {}", gid, replica, trinfo.pending_replica, reason));
             };
 
+            const bool is_strong_consistency = tmap.has_raft_info();
+
+            auto rollback_stage = is_strong_consistency ?
+                locator::tablet_transition_stage::sc_rollback :
+                locator::tablet_transition_stage::cleanup_target;
+
             switch (trinfo.stage) {
-                case locator::tablet_transition_stage::allow_write_both_read_old:
+                case locator::tablet_transition_stage::allow_write_both_read_old: /* start_migration */
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
                         if (check_excluded_replicas()) {
-                            transition_to(locator::tablet_transition_stage::cleanup_target);
+                            transition_to(rollback_stage);
                             break;
                         }
                     }
@@ -2187,29 +2194,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             .set_session(last_token, session_id(utils::UUID_gen::get_time_UUID()));
                     }
                     break;
-                case locator::tablet_transition_stage::write_both_read_old:
+                case locator::tablet_transition_stage::write_both_read_old: /* sc_add_nonvoter */
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
                         if (check_excluded_replicas()) {
-                            transition_to(locator::tablet_transition_stage::cleanup_target);
+                            transition_to(rollback_stage);
                             break;
                         }
                     }
-                    if (trinfo.transition == locator::tablet_transition_kind::rebuild_v2) {
+                    if (trinfo.transition == locator::tablet_transition_kind::rebuild_v2 && !is_strong_consistency) {
                         transition_to_with_barrier(locator::tablet_transition_stage::rebuild_repair);
                     } else {
                         transition_to_with_barrier(locator::tablet_transition_stage::streaming);
                     }
                     break;
                 case locator::tablet_transition_stage::write_both_read_old_fallback_cleanup:
-                    transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
+                    transition_to_with_barrier(rollback_stage);
                     break;
                 case locator::tablet_transition_stage::rebuild_repair: {
                     if (action_failed(tablet_state.rebuild_repair)) {
                         bool fail = utils::get_local_injector().enter("rebuild_repair_stage_fail");
                         if (fail || check_excluded_replicas()) {
-                            rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::cleanup_target);
+                            rtlogger.debug("Will set tablet {} stage to {}", gid, rollback_stage);
                             get_mutation_builder()
-                                    .set_stage(last_token, locator::tablet_transition_stage::cleanup_target)
+                                    .set_stage(last_token, rollback_stage)
                                     .del_session(last_token);
                             break;
                         }
@@ -2242,7 +2249,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 // The state "streaming" is needed to ensure that stale stream_tablet() RPC doesn't
                 // get admitted before global_tablet_token_metadata_barrier() is finished for earlier
                 // stage in case of coordinator failover.
-                case locator::tablet_transition_stage::streaming: {
+                case locator::tablet_transition_stage::streaming: /* sc_snapshot_transfer */ {
                     if (action_failed(tablet_state.streaming) || utils::get_local_injector().enter("stream_tablet_fail")) {
                         std::optional<sstring> rollback;
 
@@ -2278,9 +2285,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         }
 
                         if (rollback) {
-                            rtlogger.debug("Will set tablet {} stage to {}: {}", gid, locator::tablet_transition_stage::cleanup_target, *rollback);
+                            rtlogger.debug("Will set tablet {} stage to {}: {}", gid, rollback_stage, *rollback);
                             get_mutation_builder()
-                                .set_stage(last_token, locator::tablet_transition_stage::cleanup_target)
+                                .set_stage(last_token, rollback_stage)
                                 .del_session(last_token);
                             break;
                         }
@@ -2295,23 +2302,51 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             rtlogger.info("Skipped tablet streaming ({}) of {} as no pending replica found", trinfo.transition, gid);
                             return make_ready_future<>();
                         }
-                        rtlogger.info("Initiating tablet streaming ({}) of {} to {}", trinfo.transition, gid, *trinfo.pending_replica);
                         auto dst = trinfo.pending_replica->host;
-                        return do_with(gids, [this, dst] (const auto& gids) {
-                            return do_for_each(gids, [this, dst] (locator::global_tablet_id gid) {
-                                return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
-                                           dst, _as, raft::server_id(dst.uuid()), gid);
+                        if (is_strong_consistency) {
+                            rtlogger.info("Initiating sc snapshot transfer ({}) of {} to {}", trinfo.transition, gid, *trinfo.pending_replica);
+                            auto gids_and_group = gids | std::views::transform([&] (const auto& gid) {
+                                return std::make_pair(gid, tmap.get_tablet_raft_info(gid.tablet).group_id);
+                            }) | std::ranges::to<std::vector>();
+
+                            return do_with(gids_and_group, [this, dst, session_id = trinfo.session_id] (const auto& gids_and_group) {
+                                return do_for_each(gids_and_group, [this, dst, session_id] (const auto& gid_and_group) {
+                                    auto [gid, group_id] = gid_and_group;
+                                    return ser::groups_manager_rpc_verbs::send_wait_for_snapshot_transfer(&_messaging,
+                                            dst, _as, raft::server_id(dst.uuid()), gid, group_id, session_id.uuid());
+                                });
                             });
-                        });
+                        } else {
+                            rtlogger.info("Initiating tablet streaming ({}) of {} to {}", trinfo.transition, gid, *trinfo.pending_replica);
+                            return do_with(gids, [this, dst] (const auto& gids) {
+                                return do_for_each(gids, [this, dst] (locator::global_tablet_id gid) {
+                                    return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
+                                               dst, _as, raft::server_id(dst.uuid()), gid);
+                                });
+                            });
+                        }
                     })) {
-                        rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_new);
-                        get_mutation_builder()
-                            .set_stage(last_token, locator::tablet_transition_stage::write_both_read_new)
-                            .del_session(last_token);
+                        if (is_strong_consistency) {
+                            // The barrier fences off stale snapshot transfer RPCs, so the
+                            // session guarding them is not needed anymore. Deleting it here
+                            // keeps the invariant the non-SC path has below: no migration
+                            // session outlives the snapshot transfer / streaming stage.
+                            if (do_barrier()) {
+                                rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::sc_become_voter);
+                                get_mutation_builder()
+                                    .set_stage(last_token, locator::tablet_transition_stage::sc_become_voter)
+                                    .del_session(last_token);
+                            }
+                        } else {
+                            rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_new);
+                            get_mutation_builder()
+                                .set_stage(last_token, locator::tablet_transition_stage::write_both_read_new)
+                                .del_session(last_token);
+                        }
                     }
                 }
                     break;
-                case locator::tablet_transition_stage::write_both_read_new: {
+                case locator::tablet_transition_stage::write_both_read_new: /* sc_become_voter */ {
                     utils::get_local_injector().inject("crash-in-tablet-write-both-read-new", [] {
                         rtlogger.info("crash-in-tablet-write-both-read-new hit, killing the node");
                         _exit(1);
@@ -2338,10 +2373,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         // than excluded_old for intra-node migration.
                         if (excluded_new > excluded_old && trinfo.transition != locator::tablet_transition_kind::intranode_migration) {
                             rtlogger.debug("During {} stage of {} {} new nodes and {} old nodes were excluded", trinfo.stage, gid, excluded_new, excluded_old);
-                            if (_feature_service.tablets_intermediate_fallback_cleanup) {
+                            if (_feature_service.tablets_intermediate_fallback_cleanup && !is_strong_consistency) {
                                 transition_to(locator::tablet_transition_stage::write_both_read_old_fallback_cleanup);
+                            } else if (is_strong_consistency) {
+                                transition_to(rollback_stage);
                             } else {
-                                transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
+                                transition_to_with_barrier(rollback_stage);
                             }
                             break;
                         }
@@ -2378,6 +2415,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         transition_to(locator::tablet_transition_stage::end_migration);
                     }
                 }
+                    break;
+                case locator::tablet_transition_stage::sc_rollback:
+                    transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
                     break;
                 case locator::tablet_transition_stage::cleanup_target:
                     if (do_barrier()) {

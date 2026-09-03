@@ -4949,6 +4949,10 @@ future<> storage_service::local_topology_barrier() {
         rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: stale versions released, draining closing sessions", version);
         co_await get_topology_session_manager().drain_closing_sessions();
 
+        rtlogger.debug("raft_topology_cmd::barrier_and_drain version {}: waiting for strongly consistent tablet raft groups to converge", version);
+        co_await ss._groups_manager.local_topology_barrier(ss._shared_token_metadata.get(),
+                lowres_clock::now() + std::chrono::minutes(1), ss._abort_source);
+
         rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: done", version);
     });
 }
@@ -5684,11 +5688,15 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
 
     co_await do_tablet_operation(tablet, "Cleanup", [this, tablet] (locator::tablet_metadata_guard& guard) -> future<tablet_operation_result> {
         shard_id shard;
+        std::optional<raft::group_id> group_id;
 
         {
             auto tm = guard.get_token_metadata();
             auto& tmap = guard.get_tablet_map();
             auto *trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+            if (tmap.has_raft_info()) {
+                group_id = tmap.get_tablet_raft_info(tablet.tablet).group_id;
+            }
 
             // Check if the request is still valid.
             // If there is mismatch, it means this cleanup was canceled and the coordinator moved on.
@@ -5716,6 +5724,26 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
                 shard = trinfo->pending_replica->shard;
             } else {
                 throw std::runtime_error(fmt::format("Tablet {} stage is not at cleanup/cleanup_target", tablet));
+            }
+        }
+        if (group_id) {
+            // The raft group of a strongly consistent tablet must be gone before its
+            // storage is cleaned up: nothing may apply raft entries to a tablet whose
+            // compaction groups have been stopped, and a late apply would kill the raft
+            // server's applier fiber, which is a fatal background error.
+            //
+            // groups_manager::update() tears the group down as soon as the stage that
+            // ended this node's membership is published, and the barrier that precedes
+            // this cleanup waits for the teardown to complete. Failing here means that
+            // ordering broke, so fail the cleanup rather than corrupt the tablet - the
+            // coordinator retries it.
+            const auto running = co_await _groups_manager.container().invoke_on(shard,
+                    [group_id = *group_id] (strong_consistency::groups_manager& gm) {
+                return gm.is_group_running(group_id);
+            });
+            if (running) {
+                throw std::runtime_error(fmt::format("Tablet {} still has a running raft group {} on shard {}",
+                        tablet, *group_id, shard));
             }
         }
         co_await _db.invoke_on(shard, [tablet, &sys_ks = _sys_ks, &vbw = _view_building_worker] (replica::database& db) -> future<> {
