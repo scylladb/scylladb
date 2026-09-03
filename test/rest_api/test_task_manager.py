@@ -6,7 +6,7 @@ import time
 
 from ..cqlpy.util import new_test_table, new_test_keyspace
 from test.rest_api.rest_util import new_test_module, new_test_task, set_tmp_task_ttl, ThreadWrapper, scylla_inject_error, set_tmp_user_task_ttl
-from test.rest_api.task_manager_utils import check_field_correctness, check_status_correctness, assert_task_does_not_exist, list_modules, get_task_status, list_tasks, get_task_status_recursively, wait_for_task, drain_module_tasks, abort_task
+from test.rest_api.task_manager_utils import check_field_correctness, check_status_correctness, assert_task_does_not_exist, list_modules, get_task_status, list_tasks, get_task_status_recursively, wait_for_task, wait_for_task_allow_unregistered, wait_for_task_unregistration, drain_module_tasks, abort_task
 
 long_time = 1000000000
 
@@ -393,39 +393,53 @@ def test_task_folding(rest_api):
             task_folding5(rest_api)
             task_folding6(rest_api)
 
-@pytest.mark.skip_mode(mode='release', reason='task_manager components is not available in release')
+# Checks that aborting a task does not touch its impl once the task is unregistered.
+# The test relies on ASAN to catch the use-after-free, so it's run in debug mode only.
+@pytest.mark.skip_mode(mode=['release', 'dev', 'sanitize', 'coverage'], reason='the test needs ASAN to detect the use-after-free it checks for')
 def test_abort_on_unregistered_task(cql, this_dc, rest_api):
     module_name = "compaction"
     drain_module_tasks(rest_api, module_name)
-    with set_tmp_task_ttl(rest_api, long_time):
-        with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
-            schema = 'p int, v text, primary key (p)'
-            with new_test_table(cql, keyspace, schema) as t0:
-                stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
-                cql.execute(stmt, [0, 'hello'])
-                cql.execute(stmt, [1, 'world'])
+    # Unregister tasks as soon as they are complete.
+    with set_tmp_task_ttl(rest_api, 0):
+        with set_tmp_user_task_ttl(rest_api, 0):
+            with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+                schema = 'p int, v text, primary key (p)'
+                with new_test_table(cql, keyspace, schema) as t0:
+                    stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
+                    cql.execute(stmt, [0, 'hello'])
+                    cql.execute(stmt, [1, 'world'])
 
-                compaction_injection = "compaction_major_keyspace_compaction_task_impl_run"
-                abort_injection = "tasks_abort_children"
-                with scylla_inject_error(rest_api, compaction_injection, True): # Stops running compaction.
-                    with scylla_inject_error(rest_api, abort_injection, True):  # Stops task abort.
-                        # Start compaction.
-                        resp = rest_api.send("POST", f"tasks/compaction/keyspace_compaction/{keyspace}")
-                        resp.raise_for_status()
-                        task_id = resp.json()
+                    compaction_injection = "compaction_major_keyspace_compaction_task_impl_run_fail"
+                    abort_injection = "tasks_abort_children"
+                    with scylla_inject_error(rest_api, compaction_injection, True): # Stops running compaction.
+                        with scylla_inject_error(rest_api, abort_injection, True):  # Stops task abort.
+                            # Start compaction. It stops on the injection.
+                            resp = rest_api.send("POST", f"tasks/compaction/keyspace_compaction/{keyspace}")
+                            resp.raise_for_status()
+                            task_id = resp.json()
 
-                        # Abort compaction.
-                        abort_task(rest_api, task_id)
+                            # Abort compaction. abort_children() stops on the injection.
+                            abort_task(rest_api, task_id)
 
-                        # Resume compaction.
-                        resp = rest_api.send("POST", f"v2/error_injection/injection/{compaction_injection}/message")
-                        resp.raise_for_status()
+                            # wait_task blocks until the task is complete, so it has to be
+                            # sent before the compaction is resumed. The task may be
+                            # unregistered before the request is handled, as its ttl is 0.
+                            wait_thread = ThreadWrapper(target=wait_for_task_allow_unregistered, args=(rest_api, task_id,))
+                            wait_thread.start()
 
-                        # Wait until compaction is done and unregister the task.
-                        wait_for_task(rest_api, task_id)
-                        get_task_status(rest_api, task_id)
+                            # Fail the compaction. The injection throws, so the task fails
+                            # immediately instead of running the compaction.
+                            resp = rest_api.send("POST", f"v2/error_injection/injection/{compaction_injection}/message")
+                            resp.raise_for_status()
 
-                        # Resume abort.
-                        resp = rest_api.send("POST", f"v2/error_injection/injection/{abort_injection}/message")
-                        resp.raise_for_status()
+                            wait_thread.join()
+
+                            # With ttl set to 0 the task is unregistered as soon as it's
+                            # complete and its impl is destroyed.
+                            wait_for_task_unregistration(rest_api, task_id)
+
+                            # Resume abort. abort_children() must not use the impl of the
+                            # task, which does not exist anymore.
+                            resp = rest_api.send("POST", f"v2/error_injection/injection/{abort_injection}/message")
+                            resp.raise_for_status()
     drain_module_tasks(rest_api, module_name)

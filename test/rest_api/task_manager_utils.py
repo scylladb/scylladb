@@ -1,4 +1,5 @@
 import requests
+import time
 
 # api calls
 def list_modules(rest_api):
@@ -29,6 +30,23 @@ def wait_for_task(rest_api, task_id):
     resp = rest_api.send("GET", f"task_manager/wait_task/{task_id}")
     resp.raise_for_status()
     return resp.json()
+
+# Waits until the task is complete. Unlike wait_for_task, it allows the task to be
+# unregistered before the request is handled, which may happen if its ttl is short.
+def wait_for_task_allow_unregistered(rest_api, task_id):
+    resp = rest_api.send("GET", f"task_manager/wait_task/{task_id}")
+    assert resp.status_code in [requests.codes.ok, requests.codes.bad_request], f"Invalid status code: {resp.status_code}"
+
+# Waits until the task is unregistered from task manager.
+def wait_for_task_unregistration(rest_api, task_id, timeout=60):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        resp = rest_api.send("GET", f"task_manager/task_status/{task_id}")
+        if resp.status_code == requests.codes.bad_request:
+            return
+        resp.raise_for_status()
+        time.sleep(0.1)
+    assert False, f"Task {task_id} was not unregistered in {timeout} seconds"
 
 def get_task_status_recursively(rest_api, task_id):
     resp = rest_api.send("GET", f"task_manager/task_status_recursive/{task_id}")
