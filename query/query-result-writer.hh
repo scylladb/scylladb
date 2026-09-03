@@ -15,6 +15,7 @@
 #include "utils/digester.hh"
 #include "keys/full_position.hh"
 #include "mutation/tombstone.hh"
+#include "mutation/token_range_tombstone.hh"
 #include "idl/query.dist.hh"
 #include "idl/query.dist.impl.hh"
 
@@ -219,6 +220,9 @@ public:
     // Requires that cr.has_any_live_data()
     stop_iteration consume(clustering_row&& cr, row_tombstone current_tombstone);
     stop_iteration consume(range_tombstone_change&&) { return stop_iteration::no; }
+    // The compactor folds a covering token range tombstone into each
+    // partition's tombstone, so nothing is left to do here.
+    stop_iteration consume(token_range_tombstone&&) { return stop_iteration::no; }
     uint64_t consume_end_of_stream();
 };
 
@@ -236,6 +240,9 @@ public:
     stop_iteration consume(static_row&& sr, tombstone t, bool);
     stop_iteration consume(clustering_row&& cr, row_tombstone t, bool);
     stop_iteration consume(range_tombstone_change&& rtc);
+    // The compactor folds a covering token range tombstone into each
+    // partition's tombstone, so nothing is left to do here.
+    stop_iteration consume(token_range_tombstone&&) { return stop_iteration::no; }
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream();
 };

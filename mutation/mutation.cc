@@ -278,6 +278,12 @@ public:
     stop_iteration consume(clustering_row&& cr) {
         return consume_fragment(std::move(cr));
     }
+    stop_iteration consume(token_range_tombstone&& trt) {
+        // A mutation covers a single partition, so splitting one never
+        // produces a token range tombstone.
+        return stop_iteration::no;
+    }
+
     stop_iteration consume(range_tombstone_change&& rtc) {
         return consume_fragment(std::move(rtc));
     }

@@ -447,6 +447,7 @@ public:
         return consume(std::move(cr), row_tombstone{}, bool{});
     }
     stop_iteration consume(range_tombstone_change&& rtc);
+    stop_iteration consume(token_range_tombstone&& trt);
 
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream();
@@ -1249,6 +1250,11 @@ stop_iteration compacted_fragments_writer::consume(clustering_row&& cr, row_tomb
         _current_partition.is_splitting_partition = true;
     }
     return stop_iteration::no;
+}
+
+stop_iteration compacted_fragments_writer::consume(token_range_tombstone&& trt) {
+    maybe_abort_compaction();
+    return _compaction_writer->writer.consume(std::move(trt));
 }
 
 stop_iteration compacted_fragments_writer::consume(range_tombstone_change&& rtc) {

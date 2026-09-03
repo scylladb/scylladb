@@ -19,6 +19,7 @@
 #include "idl/mutation.dist.impl.hh"
 #include "readers/mutation_reader.hh"
 #include "converting_mutation_partition_applier.hh"
+#include "utils/on_internal_error.hh"
 #include "mutation_partition_view.hh"
 
 //
@@ -249,6 +250,13 @@ public:
         }
         _current_rtc = std::move(rtc);
         return ret;
+    }
+
+    // FIXME: a frozen mutation describes a single partition, so it has no
+    // place for a tombstone which spans partitions. Freezing one has to wait
+    // until the write path can carry token range tombstones.
+    future<stop_iteration> consume(token_range_tombstone&& trt) {
+        utils::on_internal_error(fmt::format("fragmenting_mutation_freezer: cannot freeze {}", trt));
     }
 
     future<stop_iteration> consume(partition_end&&) {

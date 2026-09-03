@@ -5,6 +5,10 @@
 #include "mutation/mutation_rebuilder.hh"
 #include "reader_permit.hh"
 #include "mutation/range_tombstone_assembler.hh"
+#include "utils/on_internal_error.hh"
+#include <seastar/util/log.hh>
+
+extern logging::logger mrlog;
 
 class mutation_fragment_v1_stream final {
     mutation_reader _reader;
@@ -32,6 +36,11 @@ public:     // consume() methods need to be visible to concepts like MutationFra
             return wrap(std::move(*rt_opt));
         }
         return std::nullopt;
+    }
+    mutation_fragment_opt consume(token_range_tombstone mf) {
+        // The v1 fragment format has no representation for a token range
+        // tombstone. Dropping it would silently resurrect deleted data.
+        on_internal_error(mrlog, format("mutation_fragment_v1_stream: cannot represent {}", mf));
     }
     mutation_fragment_opt consume(partition_start mf) {
         _rt_assembler.reset();

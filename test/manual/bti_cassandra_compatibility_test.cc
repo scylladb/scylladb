@@ -463,6 +463,11 @@ void do_test(const test_config& cfg) {
                     }
                     _wr.consume(std::move(rt));
                 }
+                void consume(token_range_tombstone trt) {
+                    // Cassandra has no equivalent, so the sstables this
+                    // compares against never carry one.
+                    _wr.consume(std::move(trt));
+                }
                 void consume(partition_start ps) {
                     _wr.consume_new_partition(std::move(ps.key()));
                     _wr.consume(ps.partition_tombstone());

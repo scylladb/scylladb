@@ -408,6 +408,7 @@ public:
     void operator()(const range_tombstone_change& rt) {
         ++_mt._table_stats.memtable_range_tombstone_reads;
     }
+    void operator()(const token_range_tombstone&) {}
     void operator()(const partition_start& ph) {}
     void operator()(const partition_end& eop) {}
 };
@@ -586,6 +587,8 @@ public:
     void operator()(const range_tombstone_change& rtc) {
         _accounter.update_bytes_read(rtc.minimal_memory_usage(_schema));
     }
+
+    void operator()(const token_range_tombstone&) {}
 
     void operator()(const static_row& sr) {
         _accounter.update_bytes_read(sr.external_memory_usage(_schema));

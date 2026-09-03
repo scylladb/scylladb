@@ -19,6 +19,8 @@
 
 class mutation;
 class mutation_partition;
+class schema;
+class position_in_partition_view;
 
 // A tombstone which deletes all partitions whose token falls into the
 // token interval (start, end].
@@ -81,7 +83,20 @@ public:
         return _start <= other._end && other._start <= _end;
     }
 
-    size_t memory_usage() const noexcept { return sizeof(token_range_tombstone); }
+    // A token range tombstone lives outside of any partition. It only ever
+    // appears at the head of a mutation fragment stream, before the first
+    // partition_start, so it is never compared against a position inside a
+    // partition; it reports the same position as partition_start does.
+    position_in_partition_view position() const;
+
+    size_t external_memory_usage(const schema&) const noexcept { return 0; }
+    size_t memory_usage(const schema& s) const noexcept {
+        return sizeof(token_range_tombstone) + external_memory_usage(s);
+    }
+
+    bool equal(const schema&, const token_range_tombstone& other) const noexcept {
+        return *this == other;
+    }
 
     std::strong_ordering operator<=>(const token_range_tombstone&) const noexcept = default;
     bool operator==(const token_range_tombstone&) const noexcept = default;

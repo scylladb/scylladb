@@ -100,6 +100,10 @@ public:
         return write(mutation_fragment_v2(*_schema, _permit, std::move(cr)));
     }
 
+    future<> consume(token_range_tombstone&& trt) {
+        return _bucket_writer.consume(mutation_fragment_v2(*_schema, _permit, std::move(trt)));
+    }
+
     future<> consume(range_tombstone_change&& rtc) {
         _current_tombstone = rtc.tombstone();
         return write(mutation_fragment_v2(*_schema, _permit, std::move(rtc)));

@@ -43,6 +43,14 @@ public:
         return stop_iteration::no;
     }
 
+    stop_iteration consume(token_range_tombstone&& trt) {
+        // Applies to every partition, so every target has to see it.
+        for_each_target([&] (mutation_rebuilder_v2& m) {
+            m.consume(token_range_tombstone(trt));
+        });
+        return stop_iteration::no;
+    }
+
     stop_iteration consume(range_tombstone_change&& rtc) {
         if (_last_rt) {
             _mutations[*_last_rt].consume(range_tombstone_change(rtc.position(), {}));

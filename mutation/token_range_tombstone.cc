@@ -8,8 +8,13 @@
 
 #include "mutation/token_range_tombstone.hh"
 #include "mutation/mutation.hh"
+#include "mutation/position_in_partition.hh"
 
 #include <algorithm>
+
+position_in_partition_view token_range_tombstone::position() const {
+    return position_in_partition_view::for_partition_start();
+}
 
 token_range_tombstone_list::token_range_tombstone_list(std::initializer_list<token_range_tombstone> rts) {
     for (auto&& rt : rts) {

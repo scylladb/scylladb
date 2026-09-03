@@ -86,6 +86,10 @@ public:
         return write(mutation_fragment_v2(*_schema, _permit, std::move(cr)));
     }
 
+    future<> consume(token_range_tombstone&& trt) {
+        return _current_writer->consume(mutation_fragment_v2(*_schema, _permit, std::move(trt)));
+    }
+
     future<> consume(range_tombstone_change&& rt) {
         return write(mutation_fragment_v2(*_schema, _permit, std::move(rt)));
     }

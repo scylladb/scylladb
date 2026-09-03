@@ -2985,6 +2985,9 @@ public:
 
         return stop_iteration::no;
     }
+    stop_iteration consume(token_range_tombstone&&) {
+        return stop_iteration::no;
+    }
     stop_iteration consume_end_of_partition() {
         _mutation.consume_end_of_partition();
         auto mut_opt = _mutation.consume_end_of_stream();
@@ -3615,6 +3618,10 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
             builder.consume(std::move(rtc));
             return stop_iteration(++rows >= row_limit);
         }
+        stop_iteration consume(token_range_tombstone&& trt) {
+            builder.consume(std::move(trt));
+            return stop_iteration::no;
+        }
         stop_iteration consume_end_of_partition() {
             builder.consume_end_of_partition();
             return stop_iteration::yes;
@@ -3857,6 +3864,9 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_detach_state) {
             testlog.trace("consume(range_tombstone) ret={}", ret);
             return stop_iteration(ret);
         }
+        stop_iteration consume(token_range_tombstone&&) {
+            return stop_iteration::no;
+        }
         stop_iteration consume_end_of_partition() {
             testlog.trace("consume_end_of_partition()");
             return stop_iteration(final_stop);
@@ -3943,6 +3953,10 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_validator) {
         }
         stop_iteration consume(range_tombstone_change&& rtc) {
             auto _ = std::move(rtc);
+            return stop_iteration::no;
+        }
+        stop_iteration consume(token_range_tombstone&& trt) {
+            auto _ = std::move(trt);
             return stop_iteration::no;
         }
         stop_iteration consume_end_of_partition() {
@@ -4259,6 +4273,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_compactor_sticky_max_purgeable) {
         stop_iteration consume(static_row&& sr, tombstone, bool) { return _mr.consume(std::move(sr)); }
         stop_iteration consume(clustering_row&& cr, row_tombstone, bool) { return _mr.consume(std::move(cr)); }
         stop_iteration consume(range_tombstone_change&& rtc) { return _mr.consume(std::move(rtc)); }
+        stop_iteration consume(token_range_tombstone&& trt) { return _mr.consume(std::move(trt)); }
         stop_iteration consume_end_of_partition() { return _mr.consume_end_of_partition(); }
         mutation_opt consume_end_of_stream() { return _mr.consume_end_of_stream(); }
     };

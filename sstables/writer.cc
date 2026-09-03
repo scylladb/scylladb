@@ -60,6 +60,12 @@ stop_iteration sstable_writer::consume(range_tombstone_change&& rtc) {
     return _impl->consume(std::move(rtc));
 }
 
+stop_iteration sstable_writer::consume(token_range_tombstone&& trt) {
+    _impl->_validator(mutation_fragment_v2::kind::token_range_tombstone, position_in_partition_view::for_partition_start(), {});
+    _impl->_token_range_tombstones.apply(trt);
+    return stop_iteration::no;
+}
+
 stop_iteration sstable_writer::consume_end_of_partition() {
     _impl->_validator.on_end_of_partition();
     return _impl->consume_end_of_partition();

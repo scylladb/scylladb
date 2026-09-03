@@ -14,6 +14,7 @@
 #include "idl/mutation.dist.impl.hh"
 #include "frozen_mutation.hh"
 #include <seastar/coroutine/maybe_yield.hh>
+#include "utils/on_internal_error.hh"
 
 using namespace db;
 
@@ -304,6 +305,14 @@ frozen_mutation_fragment_v2 freeze(const schema& s, const mutation_fragment_v2& 
                     .write_key(ps.key().key())
                     .write_partition_tombstone(ps.partition_tombstone())
                 .end_partition_start();
+        },
+        [&] (const token_range_tombstone& trt) {
+            // FIXME: the mutation_fragment_v2 IDL variant has no arm for a
+            // token range tombstone yet.
+            utils::on_internal_error(fmt::format("freeze(): cannot freeze {}", trt));
+            // Unreachable, present so that every visitor arm deduces the same
+            // return type.
+            return std::move(writer).write_fragment_partition_end(partition_end{});
         },
         [&] (const partition_end& pe) {
             return std::move(writer).write_fragment_partition_end(pe);

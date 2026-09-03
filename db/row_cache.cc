@@ -846,6 +846,7 @@ mutation_reader row_cache::make_nonpopulating_reader(schema_ptr schema, reader_p
         void operator()(const clustering_row&) {}
         void operator()(const static_row&) {}
         void operator()(const range_tombstone_change&) {}
+        void operator()(const token_range_tombstone&) {}
         void operator()(const partition_start&) {}
         void operator()(const partition_end&) {}
     };

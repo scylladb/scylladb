@@ -41,6 +41,7 @@ public:
     stop_iteration consume(static_row&& sr);
     stop_iteration consume(clustering_row&& cr);
     stop_iteration consume(range_tombstone_change&& rtc);
+    stop_iteration consume(token_range_tombstone&& trt);
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream();
     void set_repaired_at(int64_t repaired_at);
