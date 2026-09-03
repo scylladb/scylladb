@@ -155,6 +155,38 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_token_range_tombstone) {
     }
 }
 
+// A frozen mutation can carry token range tombstones alongside its partition,
+// which is how a deletion of whole partitions reaches a replica and the
+// commitlog. Such a mutation has no partition of its own.
+SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_token_range_tombstones) {
+    schema_ptr s = new_table()
+        .with_column("pk_col", bytes_type, column_kind::partition_key)
+        .with_column("reg", bytes_type)
+        .build();
+    auto tomb = tombstone(4321, gc_clock::time_point(gc_clock::duration(8765)));
+
+    token_range_tombstone_list trts;
+    trts.apply(token_range_tombstone(dht::token(-10), dht::token(10), tomb));
+    trts.apply(token_range_tombstone(dht::token(100), dht::token::maximum(), tomb));
+
+    auto fm = freeze_token_range_tombstones(*s, trts);
+    BOOST_REQUIRE_EQUAL(fm.column_family_id(), s->id());
+    BOOST_REQUIRE_EQUAL(fm.schema_version(), s->version());
+    BOOST_REQUIRE(fm.token_range_tombstones().equal(trts));
+
+    // Round trip through the wire representation, which is what the commitlog
+    // and the write path store.
+    auto fm2 = frozen_mutation(bytes_ostream(fm.representation()));
+    BOOST_REQUIRE(fm2.token_range_tombstones().equal(trts));
+
+    // An ordinary mutation carries none, and still decodes.
+    auto key = partition_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("k"))));
+    mutation m(s, key);
+    m.set_clustered_cell(clustering_key::make_empty(), "reg",
+            data_value(bytes("v")), api::timestamp_type(1));
+    BOOST_REQUIRE(freeze(m).token_range_tombstones().empty());
+}
+
 SEASTAR_TEST_CASE(test_deserialization_using_wrong_schema_throws) {
     return seastar::async([] {
         schema_ptr s1 = new_table()
