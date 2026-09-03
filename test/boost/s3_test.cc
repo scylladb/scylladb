@@ -18,8 +18,11 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/net/api.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/util/defer.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/units.hh>
 #include <seastar/core/metrics_api.hh>
@@ -127,6 +130,204 @@ static std::unique_ptr<seastar::http::retry_strategy> make_test_retry_strategy()
 // for a server that does not exist.
 static std::unique_ptr<seastar::http::retry_strategy> make_unretrying_test_retry_strategy() {
     return std::make_unique<test_retry_strategy>(0ms);
+}
+
+// Answers every request with a fixed HTTP status and closes the connection,
+// so each attempt is a fresh accept().
+class fake_http_error_server {
+    seastar::server_socket _socket;
+    socket_address _address;
+    seastar::gate _gate;
+    bool _go_on = true;
+    unsigned _request_count = 0;
+    std::vector<std::chrono::steady_clock::time_point> _request_times;
+    unsigned _status_code;
+    sstring _status_line;
+    future<> _accept_loop;
+
+    future<> handle_one(connected_socket sock) {
+        auto in = sock.input();
+        auto out = output_stream<char>(sock.output().detach(), 1024);
+        try {
+            sstring received;
+            while (received.find("\r\n\r\n") == sstring::npos) {
+                auto buf = co_await in.read();
+                if (buf.empty()) {
+                    break;
+                }
+                received += sstring(buf.get(), buf.size());
+            }
+        } catch (...) {
+            // Ignore malformed/partial requests; still answer below.
+        }
+        _request_times.push_back(std::chrono::steady_clock::now());
+        _request_count++;
+        auto resp = seastar::format("HTTP/1.1 {} {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", _status_code, _status_line);
+        try {
+            co_await out.write(resp);
+            co_await out.flush();
+        } catch (...) {
+        }
+        co_await out.close();
+        co_await in.close();
+    }
+
+    future<> accept_loop() {
+        while (_go_on) {
+            try {
+                auto ar = co_await _socket.accept();
+                // Fire-and-forget, tracked by _gate so stop() can drain it.
+                (void)seastar::with_gate(_gate, [this, sock = std::move(ar.connection)]() mutable {
+                    return handle_one(std::move(sock));
+                }).handle_exception([](std::exception_ptr) {});
+            } catch (...) {
+                break;
+            }
+        }
+    }
+
+public:
+    fake_http_error_server(unsigned status_code, sstring status_line)
+        : _socket(seastar::listen(socket_address(0x7f000001, 0)))
+        , _address(_socket.local_address())
+        , _status_code(status_code)
+        , _status_line(std::move(status_line))
+        , _accept_loop(accept_loop())
+    {}
+
+    const socket_address& address() const { return _address; }
+    unsigned request_count() const { return _request_count; }
+    const std::vector<std::chrono::steady_clock::time_point>& request_times() const { return _request_times; }
+
+    future<> stop() {
+        if (std::exchange(_go_on, false)) {
+            _socket.abort_accept();
+            co_await std::move(_accept_loop);
+            co_await _gate.close();
+        }
+    }
+};
+
+// make_filling_fiber() retries on its own: a sustained 500 (retryable, not
+// throttling) must be backed off, not hammered.
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_retries_retryable_error_with_backoff) {
+    ::setenv("AWS_ACCESS_KEY_ID", "test", 1);
+    ::setenv("AWS_SECRET_ACCESS_KEY", "test", 1);
+
+    fake_http_error_server srv(500, "Internal Server Error");
+    auto stop_srv = seastar::defer([&]() noexcept { srv.stop().get(); });
+
+    s3::endpoint_config cfg = {
+        .port = srv.address().port(),
+        .use_https = false,
+        .region = "local",
+    };
+    auto cln = s3::client::make("127.0.0.1", make_lw_shared<s3::endpoint_config>(std::move(cfg)));
+
+    auto in = input_stream<char>(cln->make_chunked_download_source("/test-bucket/test-object", s3::full_range));
+
+    // Let the retry loop run freely for a short, fixed window.
+    seastar::sleep(1s).get();
+
+    auto count = srv.request_count();
+    testlog.info("test_chunked_download_retries_retryable_error_with_backoff: {} requests observed in 1s", count);
+
+    // A tight loop would issue orders of magnitude more.
+    BOOST_REQUIRE_LE(count, 15u);
+
+    // Only the first retry (no prior wait) lands back-to-back.
+    auto times = srv.request_times();
+    BOOST_REQUIRE_GE(times.size(), 2u);
+    unsigned near_zero_gaps = 0;
+    for (size_t i = 1; i < times.size(); i++) {
+        auto gap = std::chrono::duration_cast<std::chrono::milliseconds>(times[i] - times[i - 1]);
+        if (gap.count() < 5) {
+            near_zero_gaps++;
+        }
+    }
+    testlog.info("test_chunked_download_retries_retryable_error_with_backoff: {}/{} gaps < 5ms", near_zero_gaps, times.size() - 1);
+    BOOST_REQUIRE_LE(near_zero_gaps, times.size() / 2);
+
+    // The backoff sleep isn't abortable; close() must not wait it out.
+    auto close_start = std::chrono::steady_clock::now();
+    in.close().get();
+    auto close_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - close_start);
+    testlog.info("test_chunked_download_retries_retryable_error_with_backoff: close() took {}ms", close_elapsed.count());
+    BOOST_REQUIRE_LE(close_elapsed.count(), 500);
+
+    cln->close().get();
+}
+
+namespace {
+struct counting_throttling_controller final : public s3::throttling_controller {
+    uint64_t throttled = 0;
+    uint64_t not_throttled = 0;
+    seastar::future<> acquire(seastar::abort_source*) override { return seastar::make_ready_future<>(); }
+    void on_throttled() override { ++throttled; }
+    void on_not_throttled() override { ++not_throttled; }
+    uint64_t throttles() const override { return throttled; }
+    uint64_t freezes() const override { return 0; }
+    double refused_ratio() const override { return 0.0; }
+};
+}
+
+// The fiber bypasses the retry strategy, so it must report throttling itself.
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_reports_throttling_to_send_brake) {
+    ::setenv("AWS_ACCESS_KEY_ID", "test", 1);
+    ::setenv("AWS_SECRET_ACCESS_KEY", "test", 1);
+
+    fake_http_error_server srv(503, "Slow Down");
+    auto stop_srv = seastar::defer([&]() noexcept { srv.stop().get(); });
+
+    s3::endpoint_config cfg = {
+        .port = srv.address().port(),
+        .use_https = false,
+        .region = "local",
+    };
+    auto tc = std::make_unique<counting_throttling_controller>();
+    auto& counts = *tc;
+    auto cln = s3::client::make("127.0.0.1", make_lw_shared<s3::endpoint_config>(std::move(cfg)), make_test_retry_strategy(), std::move(tc));
+
+    auto in = input_stream<char>(cln->make_chunked_download_source("/test-bucket/test-object", s3::full_range));
+    seastar::sleep(200ms).get();
+    in.close().get();
+
+    BOOST_REQUIRE_GE(counts.throttled, 1u);
+    BOOST_REQUIRE_EQUAL(counts.not_throttled, 0u);
+
+    cln->close().get();
+}
+
+// An abort mid-backoff must end the read now, not after the (up to 60s) backoff.
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_abort_interrupts_backoff) {
+    ::setenv("AWS_ACCESS_KEY_ID", "test", 1);
+    ::setenv("AWS_SECRET_ACCESS_KEY", "test", 1);
+
+    fake_http_error_server srv(503, "Slow Down");
+    auto stop_srv = seastar::defer([&]() noexcept { srv.stop().get(); });
+
+    s3::endpoint_config cfg = {
+        .port = srv.address().port(),
+        .use_https = false,
+        .region = "local",
+    };
+    auto cln = s3::client::make("127.0.0.1", make_lw_shared<s3::endpoint_config>(std::move(cfg)));
+
+    seastar::abort_source as;
+    auto in = input_stream<char>(cln->make_chunked_download_source("/test-bucket/test-object", s3::full_range, &as));
+    auto read = in.read();
+    // Past the first failure, into the 1s throttle backoff before the first retry.
+    seastar::sleep(200ms).get();
+    auto abort_start = std::chrono::steady_clock::now();
+    as.request_abort();
+    BOOST_REQUIRE_THROW(read.get(), std::exception);
+    auto abort_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - abort_start);
+    testlog.info("test_chunked_download_abort_interrupts_backoff: read failed {}ms after abort", abort_elapsed.count());
+    BOOST_REQUIRE_LE(abort_elapsed.count(), 500);
+    BOOST_REQUIRE_EQUAL(srv.request_count(), 1u);
+
+    in.close().get();
+    cln->close().get();
 }
 
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
