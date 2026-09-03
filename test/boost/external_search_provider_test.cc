@@ -7,8 +7,9 @@
  */
 
 // Covers join_table_results(), which lines an external search's answers up with the rows a base-table
-// read returned. What it produces is handed back out by position, so the walk has to visit exactly
-// the rows the result set is built from - which is what most of these cases pin.
+// read returned, and similarities_of(), which turns those into a temporary's values. What the join
+// produces is handed back out by position, so the walk has to visit exactly the rows the result set
+// is built from - which is what most of these cases pin.
 
 #include <boost/test/unit_test.hpp>
 
@@ -87,10 +88,22 @@ size_t emitted_rows(schema_ptr s, const query::partition_slice& slice, const que
     return query::result_set::from_raw_result(s, slice, rows).rows().size();
 }
 
-/// The joined rows of `table_results`.
+float score_of(std::span<const cql3::raw_value> values, size_t row) {
+    const auto& value = values[row];
+    BOOST_REQUIRE(!value.is_null());
+    return value.view().deserialize<float>(*float_type);
+}
+
+/// The joined rows of `table_results`, with nothing read out of them beyond the answer naming each.
 std::vector<joined_row> join(schema_ptr s, const query::partition_slice& slice, const query::result& table_results,
         const primary_keys& external_results) {
     return join_table_results(table_results, slice, *s, external_results);
+}
+
+/// An answer as similarities_of() sees it. It reads only the score: which answer belongs to which row
+/// was settled by the join, so the keys are never looked at and need not be real.
+vector_search::primary_key answer(float similarity) {
+    return {dht::decorated_key{dht::token(), partition_key::make_empty()}, clustering_key_prefix::make_empty(), similarity};
 }
 
 /// The answer each joined row was given, in the order the rows are emitted.
@@ -255,3 +268,40 @@ SEASTAR_THREAD_TEST_CASE(test_a_singular_range_read_yields_no_static_only_partit
     BOOST_REQUIRE_EQUAL(emitted_rows(s, slice, rows), 0u);
     BOOST_REQUIRE(join(s, slice, rows, primary_keys{}).empty());
 }
+
+// What the index said about a row becomes that row's value, or drops it: a row it no longer names has
+// no relevance to report, and neither does one it scored with something that is not a number.
+BOOST_AUTO_TEST_CASE(test_similarities_are_read_off_the_joined_rows) {
+    auto results = primary_keys{answer(0.5f), answer(std::numeric_limits<float>::quiet_NaN()), answer(0.75f)};
+    auto rows = std::vector<joined_row>{{0}, {1}, {std::nullopt}, {2}};
+
+    auto dropped = std::vector<bool>(rows.size(), false);
+    auto similarities = similarities_of(rows, results, dropped);
+
+    BOOST_REQUIRE_EQUAL(dropped.size(), 4u);
+    BOOST_REQUIRE_EQUAL(similarities.size(), 4u);
+    BOOST_REQUIRE(!dropped[0]);
+    BOOST_REQUIRE(dropped[1]); // not a number
+    BOOST_REQUIRE(dropped[2]); // no answer
+    BOOST_REQUIRE(!dropped[3]);
+    BOOST_REQUIRE_EQUAL(score_of(similarities, 0), 0.5f);
+    BOOST_REQUIRE_EQUAL(score_of(similarities, 3), 0.75f);
+    BOOST_REQUIRE(similarities[1].is_null());
+    BOOST_REQUIRE(similarities[2].is_null());
+}
+
+// Drops accumulate: a row another search already dropped is passed over and given no value of its
+// own, so several searches can fill their temporaries against one list of rows to leave out.
+BOOST_AUTO_TEST_CASE(test_a_row_already_dropped_stays_dropped) {
+    auto results = primary_keys{answer(0.5f), answer(0.75f)};
+    auto rows = std::vector<joined_row>{{0}, {1}};
+
+    auto dropped = std::vector<bool>{true, false};
+    auto similarities = similarities_of(rows, results, dropped);
+
+    BOOST_REQUIRE(dropped[0]);
+    BOOST_REQUIRE(!dropped[1]);
+    BOOST_REQUIRE(similarities[0].is_null());
+    BOOST_REQUIRE_EQUAL(score_of(similarities, 1), 0.75f);
+}
+
