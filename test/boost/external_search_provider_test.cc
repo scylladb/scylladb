@@ -97,7 +97,12 @@ float score_of(std::span<const cql3::raw_value> values, size_t row) {
 /// The joined rows of `table_results`, with nothing read out of them beyond the answer naming each.
 std::vector<joined_row> join(schema_ptr s, const query::partition_slice& slice, const query::result& table_results,
         const primary_keys& external_results) {
-    return join_table_results(table_results, slice, *s, external_results);
+    return join_table_results(table_results, slice, *s, *cql3::selection::selection::wildcard(s), external_results, {});
+}
+
+int32_t int_of(const managed_bytes_opt& value) {
+    BOOST_REQUIRE(value);
+    return value_cast<int32_t>(int32_type->deserialize(managed_bytes_view(*value)));
 }
 
 /// An answer as similarities_of() sees it. It reads only the score: which answer belongs to which row
@@ -303,6 +308,50 @@ BOOST_AUTO_TEST_CASE(test_a_row_already_dropped_stays_dropped) {
     BOOST_REQUIRE(!dropped[1]);
     BOOST_REQUIRE(similarities[0].is_null());
     BOOST_REQUIRE_EQUAL(score_of(similarities, 1), 0.75f);
+}
+
+// A column of any kind can be read out of every row, for a follow-up request that needs what the
+// index does not store. A key column is read from the key, the rest from the row's cells.
+SEASTAR_THREAD_TEST_CASE(test_columns_are_read_out_of_every_row) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto s = make_schema(true);
+    auto slice = make_slice(*s);
+    auto selection = cql3::selection::selection::wildcard(s);
+    auto columns = std::vector<const column_definition*>{
+            s->get_column_definition("pk"),
+            s->get_column_definition("ck"),
+            s->get_column_definition("s"),
+            s->get_column_definition("v"),
+    };
+
+    auto m = mutation(s, pkey(*s, 1));
+    m.set_static_cell("s", data_value(7), api::new_timestamp());
+    m.set_clustered_cell(ckey(*s, 10), "v", data_value(100), api::new_timestamp());
+    m.set_clustered_cell(ckey(*s, 20), "v", data_value(200), api::new_timestamp());
+    auto rows = read_rows(s, semaphore.make_permit(), {m}, slice);
+
+    auto joined = join_table_results(rows, slice, *s, *selection, primary_keys{}, columns);
+    BOOST_REQUIRE_EQUAL(joined.size(), 2u);
+    BOOST_REQUIRE_EQUAL(joined[0].columns.size(), 4u);
+    BOOST_REQUIRE_EQUAL(int_of(joined[0].columns[0]), 1);
+    BOOST_REQUIRE_EQUAL(int_of(joined[0].columns[1]), 10);
+    BOOST_REQUIRE_EQUAL(int_of(joined[0].columns[2]), 7);
+    BOOST_REQUIRE_EQUAL(int_of(joined[0].columns[3]), 100);
+    BOOST_REQUIRE_EQUAL(int_of(joined[1].columns[1]), 20);
+    BOOST_REQUIRE_EQUAL(int_of(joined[1].columns[3]), 200);
+
+    // The pseudo-row of a partition holding nothing but a static row has no clustering key and no
+    // cells of its own, and reads as absent rather than as another row's value.
+    auto static_only = mutation(s, pkey(*s, 2));
+    static_only.set_static_cell("s", data_value(9), api::new_timestamp());
+    auto static_rows = read_rows(s, semaphore.make_permit(), {static_only}, slice);
+
+    auto static_joined = join_table_results(static_rows, slice, *s, *selection, primary_keys{}, columns);
+    BOOST_REQUIRE_EQUAL(static_joined.size(), 1u);
+    BOOST_REQUIRE_EQUAL(int_of(static_joined[0].columns[0]), 2);
+    BOOST_REQUIRE(!static_joined[0].columns[1]);
+    BOOST_REQUIRE_EQUAL(int_of(static_joined[0].columns[2]), 9);
+    BOOST_REQUIRE(!static_joined[0].columns[3]);
 }
 
 // The provider's position moves for every row it is offered, dropped ones included - otherwise the

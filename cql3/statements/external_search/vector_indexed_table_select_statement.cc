@@ -289,7 +289,7 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
         // The similarity the index reported is matched to a row by its primary key, so it can only be
         // lined up with the rows now that they are read. A rescoring index allocates no temporary:
         // there the similarity is computed from the row's own vector instead.
-        auto rows = join_table_results(*table_results.rows.value(), table_results.command->slice, *_schema, pkeys.value());
+        auto rows = join_table_results(*table_results.rows.value(), table_results.command->slice, *_schema, *_selection, pkeys.value(), {});
         auto dropped = std::vector<bool>(rows.size(), false);
         auto similarities = similarities_of(rows, pkeys.value(), dropped);
         provider.emplace(

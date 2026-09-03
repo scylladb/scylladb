@@ -310,7 +310,7 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
     if (table_results.rows && _bm25_ordering_info.score_temporary_index) {
         // The relevance the index reported is matched to a row by its primary key, so it can only be
         // lined up with the rows now that they are read.
-        auto rows = join_table_results(*table_results.rows.value(), table_results.command->slice, *_schema, pkeys.value());
+        auto rows = join_table_results(*table_results.rows.value(), table_results.command->slice, *_schema, *_selection, pkeys.value(), {});
         auto dropped = std::vector<bool>(rows.size(), false);
         auto similarities = similarities_of(rows, pkeys.value(), dropped);
         provider.emplace(

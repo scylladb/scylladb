@@ -10,16 +10,44 @@
 
 #include <cmath>
 
+#include "cql3/expr/expr-utils.hh"
 #include "keys/keys.hh"
 #include "query/query-request.hh"
 #include "query/query-result-reader.hh"
 #include "schema/schema.hh"
 #include "types/types.hh"
 #include "utils/assert.hh"
+#include "utils/on_internal_error.hh"
+
+#include <seastar/core/format.hh>
+
+#include <algorithm>
 
 namespace cql3::statements {
 
 namespace {
+
+/// Where in the values get_non_pk_values() hands back the given column sits. That vector is aligned
+/// with the selection's columns, which is the order the slice asks the replicas for them in too.
+size_t column_index_in(const selection::selection& selection, const column_definition& column) {
+    const auto& columns = selection.get_columns();
+    auto it = std::ranges::find(columns, &column);
+    if (it == columns.end()) {
+        utils::on_internal_error(seastar::format("column {} is wanted from every row but was not asked for", column.name_as_text()));
+    }
+    return std::distance(columns.begin(), it);
+}
+
+/// The component a key column holds in the key it is part of, or nothing where the key does not
+/// reach that far - a prefix, or a key the read was not asked to send back.
+template <typename Key>
+managed_bytes_opt key_component(const Key& key, const schema& schema, const column_definition& column) {
+    auto components = key.explode(schema);
+    if (components.size() <= column.component_index()) {
+        return std::nullopt;
+    }
+    return managed_bytes(components[column.component_index()]);
+}
 
 /// Walks the rows of a base-table read, joining an external search's answers to them.
 ///
@@ -28,10 +56,17 @@ namespace {
 /// same result with the same slice - a partition holding nothing but a static row - is repeated below.
 class row_joiner {
     const schema& _schema;
+    const selection::selection& _selection;
 
     // The cursor only moves forward, which is what makes an answer stepped over a stale one.
     const vector_search::vector_store_client::primary_keys& _external_results;
     size_t _next_result = 0;
+
+    // What to read out of every row, and where each column sits in the values get_non_pk_values()
+    // hands back - unused for a key column, which is read from the key itself.
+    std::span<const column_definition* const> _columns;
+    std::vector<size_t> _column_indexes;
+    bool _reads_non_key_column = false;
 
     std::vector<joined_row>& _rows;
 
@@ -54,15 +89,51 @@ class row_joiner {
         return std::nullopt;
     }
 
-    void visit() {
-        _rows.push_back(joined_row{.answer = match()});
+    std::vector<managed_bytes_opt> read_columns(const query::result_row_view& static_row, const query::result_row_view* row) const {
+        if (_columns.empty()) {
+            return {};
+        }
+
+        auto non_key = _reads_non_key_column ? expr::get_non_pk_values(_selection, static_row, row) : std::vector<managed_bytes_opt>{};
+        auto values = std::vector<managed_bytes_opt>{};
+        values.reserve(_columns.size());
+        for (size_t i = 0; i < _columns.size(); ++i) {
+            const auto& column = *_columns[i];
+            switch (column.kind) {
+            case column_kind::partition_key:
+                values.push_back(key_component(_partition_key, _schema, column));
+                break;
+            case column_kind::clustering_key:
+                values.push_back(key_component(_clustering_key, _schema, column));
+                break;
+            default:
+                values.push_back(std::move(non_key[_column_indexes[i]]));
+                break;
+            }
+        }
+        return values;
+    }
+
+    void visit(const query::result_row_view& static_row, const query::result_row_view* row) {
+        auto answer = match();
+        _rows.push_back(joined_row{.answer = answer, .columns = read_columns(static_row, row)});
     }
 
 public:
-    row_joiner(const schema& schema, const vector_search::vector_store_client::primary_keys& external_results, std::vector<joined_row>& rows)
+    row_joiner(const schema& schema, const selection::selection& selection,
+            const vector_search::vector_store_client::primary_keys& external_results, std::span<const column_definition* const> columns,
+            std::vector<joined_row>& rows)
         : _schema(schema)
+        , _selection(selection)
         , _external_results(external_results)
+        , _columns(columns)
         , _rows(rows) {
+        _column_indexes.reserve(columns.size());
+        for (const auto* column : columns) {
+            const auto is_key_column = column->is_primary_key();
+            _column_indexes.push_back(is_key_column ? 0 : column_index_in(selection, *column));
+            _reads_non_key_column = _reads_non_key_column || !is_key_column;
+        }
     }
 
     void accept_new_partition(const partition_key& key, uint64_t row_count) {
@@ -77,20 +148,20 @@ public:
         _row_count = row_count;
     }
 
-    void accept_new_row(const clustering_key& key, const query::result_row_view&, const query::result_row_view&) {
+    void accept_new_row(const clustering_key& key, const query::result_row_view& static_row, const query::result_row_view& row) {
         _clustering_key = key;
-        visit();
+        visit(static_row, &row);
     }
 
-    void accept_new_row(const query::result_row_view&, const query::result_row_view&) {
-        visit();
+    void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
+        visit(static_row, &row);
     }
 
-    void accept_partition_end(const query::result_row_view&) {
+    void accept_partition_end(const query::result_row_view& static_row) {
         if (_row_count == 0) {
             // The builder emits one row for a partition holding only a static row. No answer can
             // name it - the index names rows and this partition has none - so the cursor stays put.
-            _rows.push_back(joined_row{.answer = std::nullopt});
+            _rows.push_back(joined_row{.answer = std::nullopt, .columns = read_columns(static_row, nullptr)});
         }
     }
 };
@@ -98,9 +169,10 @@ public:
 } // anonymous namespace
 
 std::vector<joined_row> join_table_results(const query::result& table_results, const query::partition_slice& slice, const schema& schema,
-        const vector_search::vector_store_client::primary_keys& external_results) {
+        const selection::selection& selection, const vector_search::vector_store_client::primary_keys& external_results,
+        std::span<const column_definition* const> columns) {
     auto rows = std::vector<joined_row>{};
-    query::result_view::consume(table_results, slice, row_joiner(schema, external_results, rows));
+    query::result_view::consume(table_results, slice, row_joiner(schema, selection, external_results, columns, rows));
     return rows;
 }
 
