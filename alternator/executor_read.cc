@@ -2262,10 +2262,6 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
             *_parsed_expression_cache, request, ss_info,
             _proxy.data_dictionary().get_config().alternator_vector_search_extra_operators(),
             used_attribute_names, used_attribute_values);
-    const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
-    verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "SearchVectors");
-    const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
-    verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "SearchVectors");
 
     // FilterExpression: post-filter the vector search results. This is an
     // Alternator-only extension that does not exist in DynamoDB, and was
@@ -2278,6 +2274,11 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
         co_return api_error::validation(
             "SearchVectors does not support QueryFilter; use FilterExpression instead");
     }
+
+    const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
+    verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "SearchVectors");
+    const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
+    verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "SearchVectors");
 
     // Verify the user has SELECT permission on the base table, as we
     // do for every type of read operation after validating the input
