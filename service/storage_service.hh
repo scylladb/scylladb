@@ -146,6 +146,7 @@ class node_ops_meta_data;
 
 using start_hint_manager = seastar::bool_class<class start_hint_manager_tag>;
 using loosen_constraints = seastar::bool_class<class loosen_constraints_tag>;
+using wait_balancer = seastar::bool_class<class wait_balancer_tag>;
 
 struct token_metadata_change {
     std::vector<locator::mutable_token_metadata_ptr> pending_token_metadata_ptr{this_smp_shard_count()};
@@ -1115,7 +1116,7 @@ public:
     future<> alter_table_with_tablet_hints(table_id tid,
                                            std::optional<size_t> min_tablet_count,
                                            std::optional<size_t> max_tablet_count,
-                                           bool wait_balancer = true,
+                                           wait_balancer wait_for_balancer = wait_balancer::yes,
                                            bool remove_unset = false);
 
     friend class join_node_rpc_handshaker;

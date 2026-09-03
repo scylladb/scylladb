@@ -3172,11 +3172,11 @@ future<> storage_service::wait_for_topology_not_busy() {
 future<> storage_service::alter_table_with_tablet_hints(table_id tid,
                                                         std::optional<size_t> min_tablet_count,
                                                         std::optional<size_t> max_tablet_count,
-                                                        bool wait_balancer,
+                                                        wait_balancer wait_for_balancer,
                                                         bool remove_unset) {
     if (this_shard_id() != 0) {
         co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.alter_table_with_tablet_hints(tid, min_tablet_count, max_tablet_count, wait_balancer, remove_unset);
+            return ss.alter_table_with_tablet_hints(tid, min_tablet_count, max_tablet_count, wait_for_balancer, remove_unset);
         });
     }
 
@@ -3185,7 +3185,7 @@ future<> storage_service::alter_table_with_tablet_hints(table_id tid,
         co_return;
     }
 
-    if (wait_balancer && (!min_tablet_count || !max_tablet_count || *min_tablet_count != *max_tablet_count)) {
+    if (wait_for_balancer && (!min_tablet_count || !max_tablet_count || *min_tablet_count != *max_tablet_count)) {
         throw std::invalid_argument(format(
             "wait_balancer requires both min_tablet_count and max_tablet_count to be provided and equal, got min={} max={}",
             min_tablet_count ? to_sstring(*min_tablet_count) : "nullopt",
@@ -3236,7 +3236,7 @@ future<> storage_service::alter_table_with_tablet_hints(table_id tid,
         }
     }
 
-    if (!wait_balancer) {
+    if (!wait_for_balancer) {
         co_return;
     }
 

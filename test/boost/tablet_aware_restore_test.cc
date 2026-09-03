@@ -433,8 +433,8 @@ SEASTAR_TEST_CASE(test_restore_alter_table_with_tablet_hints_removes_unset, *boo
 
         // Put the saved hints back - both disengaged, because the table had none. The pin has
         // to go away, otherwise the table is left permanently pinned at min == max.
-        ss.alter_table_with_tablet_hints(tid, std::nullopt, std::nullopt, /*wait_balancer=*/false,
-                                         /*remove_unset=*/true).get();
+        ss.alter_table_with_tablet_hints(tid, std::nullopt, std::nullopt,
+                                         service::wait_balancer::no, /*remove_unset=*/true).get();
         verify_tablet_options(env, tid, desired_count, false);
     }, false, db_cfg_ptr, 10);
 }
@@ -452,10 +452,10 @@ SEASTAR_TEST_CASE(test_restore_alter_table_with_tablet_hints_rejects_waiting_wit
         auto& ss = env.get_storage_service().local();
 
         BOOST_REQUIRE_THROW(ss.alter_table_with_tablet_hints(tid, std::nullopt, std::nullopt,
-                                                             /*wait_balancer=*/true, /*remove_unset=*/true).get(),
+                                                             service::wait_balancer::yes, /*remove_unset=*/true).get(),
                             std::invalid_argument);
         BOOST_REQUIRE_THROW(ss.alter_table_with_tablet_hints(tid, std::nullopt, desired_count,
-                                                             /*wait_balancer=*/true, /*remove_unset=*/true).get(),
+                                                             service::wait_balancer::yes, /*remove_unset=*/true).get(),
                             std::invalid_argument);
 
         // Rejected before anything was announced.
