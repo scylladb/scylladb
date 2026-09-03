@@ -272,6 +272,11 @@ def run_scylla_cmd(pid, dir):
     }
     return ([scylla_link,
         '--options-file',  source_path + '/conf/scylla.yaml',
+        # api_doc_dir defaults to a path relative to the current directory,
+        # which is wherever this script happened to be started from, so spell
+        # it out - the same way install.sh points it at the installed copy.
+        # Without it every /api-doc record the server advertises is unusable.
+        '--api-doc-dir', source_path + '/api/api-doc/',
         '--developer-mode', '1',
         '--ring-delay-ms', '0',
         '--collectd', '0',
@@ -316,6 +321,7 @@ def run_scylla_cmd(pid, dir):
         # test/alternator/run.
         '--experimental-features=udf',
         '--experimental-features=views-with-tablets',
+        '--experimental-features=logstor',
         '--enable-tablets=true',
         '--enable-user-defined-functions', '1',
         # Views with tablets refuse to work if this option is not on :-(
@@ -340,6 +346,10 @@ def run_scylla_cmd(pid, dir):
         # The expiration scanner's period (started for Alternator but
         # now also CQL)
         '--alternator-ttl-period-in-seconds=0.5',
+        '--logstor-disk-size-in-mb=8',
+        '--logstor-file-size-in-mb=4',
+        # Don't waste disk space and I/O on formatting logstor files
+        '--logstor-sparse-files=true',
         ], env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same
@@ -407,6 +417,12 @@ def run_precompiled_scylla_cmd(exe, pid, dir):
         cmd.remove('--rf-rack-valid-keyspaces=1')
     if major < [2025,2]:
         cmd.remove('--group0-raft-op-timeout-in-ms=300000')
+    if major < [2026,2]:
+        cmd.remove('--experimental-features=logstor')
+        cmd.remove('--logstor-disk-size-in-mb=8')
+        cmd.remove('--logstor-file-size-in-mb=4')
+        cmd.remove('--logstor-separator-max-memory-in-mb=8')
+        cmd.remove('--logstor-sparse-files=true')
     return (cmd, env)
 
 # Get a Cluster object to connect to CQL at the given IP address (and with
@@ -515,17 +531,17 @@ def _has_marker_expression(pytest_args: list[str]) -> bool:
 def _prepare_pytest_args(pytest_args: list[str]) -> list[str]:
     """Prepare pytest arguments for runpy wrappers.
 
-    By default, runpy wrappers skip tests marked ``nightly`` to keep
+    By default, runpy wrappers skip tests marked ``tier2`` to keep
     local and per-PR runs focused and fast.
 
     Marker policy:
-    * if no marker expression is provided, add ``-m 'not nightly'``;
+    * if no marker expression is provided, add ``-m 'not tier2'``;
     * if marker expression is provided, keep it unchanged.
     """
     prepared_args = list(pytest_args)
     if _has_marker_expression(prepared_args):
         return prepared_args
-    return ["-m", "not nightly"] + prepared_args
+    return ["-m", "not tier2"] + prepared_args
 
 def run_pytest(pytest_dir, additional_parameters):
     global run_with_temporary_dir_pids
@@ -558,3 +574,23 @@ def setup_ssl_certificate(dir):
     # FIXME: error checking (if "openssl" isn't found, for example)
     os.system(f'openssl genrsa 2048 > "{dir}/scylla.key"')
     os.system(f'openssl req -new -x509 -nodes -sha256 -days 365 -subj "/C=IL/ST=None/L=None/O=None/OU=None/CN=example.com" -key "{dir}/scylla.key" -out "{dir}/scylla.crt"')
+
+# Set up mTLS (mutual TLS) certificates for testing client certificate
+# authentication. Creates:
+#   dir/ca.key, dir/ca.crt    - a self-signed CA certificate
+#   dir/client.key, dir/client.crt - a client certificate with CN "cassandra",
+#                                    signed by the above CA
+# The CA certificate (dir/ca.crt) should be passed to Scylla as the truststore
+# so that Scylla can verify client certificates. The client key and certificate
+# can be used by test clients to authenticate themselves.
+def setup_mtls_certificate(dir):
+    # FIXME: error checking (if "openssl" isn't found, for example)
+    # Create a self-signed CA certificate
+    os.system(f'openssl genrsa 2048 > "{dir}/ca.key"')
+    os.system(f'openssl req -new -x509 -nodes -sha256 -days 365 -subj "/CN=TestCA" -key "{dir}/ca.key" -out "{dir}/ca.crt"')
+    # Create a client key and a certificate signing request with CN "cassandra",
+    # matching the role already used in Alternator tests.
+    os.system(f'openssl genrsa 2048 > "{dir}/client.key"')
+    os.system(f'openssl req -new -sha256 -subj "/CN=cassandra" -key "{dir}/client.key" -out "{dir}/client.csr"')
+    # Sign the client certificate with the CA
+    os.system(f'openssl x509 -req -sha256 -days 365 -in "{dir}/client.csr" -CA "{dir}/ca.crt" -CAkey "{dir}/ca.key" -CAcreateserial -out "{dir}/client.crt"')

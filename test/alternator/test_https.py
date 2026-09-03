@@ -15,6 +15,7 @@ import urllib.parse
 import ssl
 
 from test.pylib.skip_types import skip_env
+from .util import get_cert
 
 @pytest.fixture(scope="module")
 def https_url(dynamodb):
@@ -22,6 +23,17 @@ def https_url(dynamodb):
     if not url.startswith('https://'):
         skip_env("HTTPS-specific tests are skipped without the '--https' option")
     yield url
+
+# If running these tests with mTLS authentication (test/alternator/run
+# --https --mtls), this is the (cert_file, key_file) tuple to use as a
+# client certificate, or None if not using mTLS. The tests in this file
+# bypass boto3 and connect directly with urllib3, so unlike other tests,
+# they need to explicitly load this certificate themselves to authenticate
+# under mTLS - without it, the TLS handshake itself is rejected by a server
+# configured with require_client_auth=true.
+@pytest.fixture(scope="module")
+def https_cert(dynamodb):
+    yield get_cert(dynamodb)
 
 # Test which TLS versions are supported. We require that both TLS 1.2 and 1.3
 # must be supported, and the older TLS 1.1 version may either work or be
@@ -38,7 +50,7 @@ def https_url(dynamodb):
     ('TLSv1_1', False),
     ('TLSv1_2', True),
     ('TLSv1_3', True)])
-def test_tls_versions(https_url, tls_version_and_support_required):
+def test_tls_versions(https_url, https_cert, tls_version_and_support_required):
     tls_version, support_required = tls_version_and_support_required
     context = ssl.create_default_context()
     context.minimum_version = getattr(ssl.TLSVersion, tls_version)
@@ -47,6 +59,11 @@ def test_tls_versions(https_url, tls_version_and_support_required):
     # certificates in tests.
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
+    # Under mTLS, the server requires a client certificate at the TLS
+    # handshake level, regardless of what we're testing here (the supported
+    # TLS versions) - so load it if we're testing with --mtls.
+    if https_cert:
+        context.load_cert_chain(certfile=https_cert[0], keyfile=https_cert[1])
     with urllib3.PoolManager(ssl_context=context, retries=0) as pool:
         try:
             # preload_content=False tells the library not to read the content
@@ -79,7 +96,7 @@ def test_tls_versions(https_url, tls_version_and_support_required):
 # security reason for doing this, and doesn't want us to allow an unencrypted
 # HTTP request to be sent over the HTTPS port. So let's verify that an HTTP
 # request on an HTTPS port indeed does not work.
-def test_http_on_https(https_url):
+def test_http_on_https(https_url, https_cert):
     # Take an https URL, replace the https by http. If the port is not
     # explicitly specified we need to assume it is the default https port
     # (443) and need to add it explicitly, because it's not the default for
@@ -93,7 +110,11 @@ def test_http_on_https(https_url):
 
     # CERT_NONE causes the client to not verify the server certificate,
     # and is needed because we use self-signed certificates in tests.
-    with urllib3.PoolManager(retries=0, cert_reqs=ssl.CERT_NONE) as pool:
+    # Under mTLS, we also need to present our own client certificate, or
+    # else the https_url sanity-check request below will be rejected at
+    # the TLS handshake level.
+    cert_kwargs = {'cert_file': https_cert[0], 'key_file': https_cert[1]} if https_cert else {}
+    with urllib3.PoolManager(retries=0, cert_reqs=ssl.CERT_NONE, **cert_kwargs) as pool:
         # Sanity check: the original https:// URL works. This is useful to
         # know so that if the http:// URL does *not* work - as we expect -
         # we can be sure this is a real success of the test and not some

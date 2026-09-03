@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from test.cluster.dtest.ccmlib.scylla_node import ScyllaNode
     from test.cluster.dtest.dtest_config import DTestConfig
     from test.cluster.dtest.dtest_setup_overrides import DTestSetupOverrides
-    from test.pylib.manager_client import ManagerClient
+    from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
 DEFAULT_PROTOCOL_VERSION = 4
@@ -61,7 +61,7 @@ class DTestSetup:
     def __init__(self,
                  dtest_config: DTestConfig | None = None,
                  setup_overrides: DTestSetupOverrides | None = None,
-                 manager: ManagerClient | None = None,
+                 manager: ScyllaClusterManager | None = None,
                  scylla_mode: str | None = None,
                  cluster_name: str = "test"):
         self.dtest_config = dtest_config
@@ -303,10 +303,18 @@ class DTestSetup:
             # longer than a test timeout.
             reconnection_policy=ExponentialReconnectionPolicy(1.0, 4.0),
         )
-        session = cluster.connect(wait_for_all_pools=True)
+        try:
+            session = cluster.connect(wait_for_all_pools=True)
 
-        if keyspace is not None:
-            session.set_keyspace(keyspace)
+            if keyspace is not None:
+                session.set_keyspace(keyspace)
+        except BaseException:
+            # The Cluster constructor already started the driver's "Task Scheduler" thread,
+            # and Cluster has no __del__, so a half-built Cluster would keep that thread
+            # running forever and eventually crash the pytest worker with
+            # "cannot schedule new futures after shutdown".
+            safe_driver_shutdown(cluster)
+            raise
 
         if keep_session:
             self.connections.append(session)

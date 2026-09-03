@@ -570,6 +570,7 @@ scylla_tests = set([
     'test/boost/dynamic_bitset_test',
     'test/boost/encrypted_file_test',
     'test/boost/encryption_at_rest_test',
+    'test/boost/http_error_classification_test',
     'test/boost/enum_option_test',
     'test/boost/enum_set_test',
     'test/boost/estimated_histogram_test',
@@ -688,6 +689,7 @@ scylla_tests = set([
     'test/manual/sstable_scan_footprint_test',
     'test/perf/memory_footprint_test',
     'test/perf/perf_cache_eviction',
+    'test/perf/perf_canonical_mutation',
     'test/perf/perf_commitlog',
     'test/perf/perf_cql_parser',
     'test/perf/perf_hash',
@@ -702,6 +704,7 @@ scylla_tests = set([
     'test/unit/row_cache_stress_test',
     'test/unit/cross_shard_barrier_test',
     'test/boost/address_map_test',
+    'test/boost/endpoint_state_merge_test',
 ]) | ldap_tests
 
 perf_tests = set([
@@ -725,6 +728,7 @@ raft_tests = set([
     'test/raft/many_test',
     'test/raft/raft_server_test',
     'test/raft/fsm_test',
+    'test/raft/log_indexed_container_test',
     'test/raft/etcd_test',
     'test/raft/raft_sys_table_storage_test',
     'test/raft/discovery_test',
@@ -909,6 +913,7 @@ scylla_core = (['message/messaging_service.cc',
                 'replica/mutation_dump.cc',
                 'replica/querier.cc',
                 'replica/logstor/segment_io.cc',
+                'replica/logstor/compaction.cc',
                 'replica/logstor/segment_manager.cc',
                 'replica/logstor/logstor.cc',
                 'replica/logstor/write_buffer.cc',
@@ -978,6 +983,7 @@ scylla_core = (['message/messaging_service.cc',
                 'sstables/compress.cc',
                 'sstables/compressor.cc',
                 'sstables/checksummed_data_source.cc',
+                'sstables/digest_checked_data_source.cc',
                 'sstables/sstable_mutation_reader.cc',
                 'compaction/compaction.cc',
                 'compaction/compaction_strategy.cc',
@@ -1034,6 +1040,7 @@ scylla_core = (['message/messaging_service.cc',
                 'cql3/functions/castas_fcts.cc',
                 'cql3/functions/error_injection_fcts.cc',
                 'cql3/statements/strong_consistency/modification_statement.cc',
+                'cql3/statements/strong_consistency/batch_statement.cc',
                 'cql3/statements/strong_consistency/select_statement.cc',
                 'cql3/statements/strong_consistency/statement_helpers.cc',
                 'cql3/functions/vector_similarity_fcts.cc',
@@ -1069,6 +1076,7 @@ scylla_core = (['message/messaging_service.cc',
                 'cql3/statements/external_search/external_index_select_statement.cc',
                 'cql3/statements/external_search/vector_indexed_table_select_statement.cc',
                 'cql3/statements/external_search/fulltext_indexed_table_select_statement.cc',
+                'cql3/statements/external_search/external_score_provider.cc',
                 'cql3/statements/external_search/filter.cc',
                 'cql3/statements/use_statement.cc',
                 'cql3/statements/index_prop_defs.cc',
@@ -1204,6 +1212,7 @@ scylla_core = (['message/messaging_service.cc',
                 'utils/http_client_error_processing.cc',
                 'utils/rest/client.cc',
                 'utils/s3/aws_error.cc',
+                'utils/s3/aws_error_definitions.cc',
                 'utils/s3/client.cc',
                 'utils/s3/default_aws_retry_strategy.cc',
                 'utils/s3/credentials_providers/aws_credentials_provider.cc',
@@ -1312,6 +1321,7 @@ scylla_core = (['message/messaging_service.cc',
                 'auth/role_or_anonymous.cc',
                 'auth/sasl_challenge.cc',
                 'auth/certificate_authenticator.cc',
+                'auth/certificate_or_password_authenticator.cc',
                 'auth/saslauthd_authenticator.cc',
                 'tracing/tracing.cc',
                 'tracing/trace_keyspace_helper.cc',
@@ -1408,6 +1418,7 @@ api = ['api/api.cc',
        Json2Code('api/api-doc/storage_service.json'),
        Json2Code('api/api-doc/lsa.json'),
        'api/storage_service.cc',
+       'api/storage_manager.cc',
        'api/token_metadata.cc',
        Json2Code('api/api-doc/commitlog.json'),
        'api/commitlog.cc',
@@ -1642,6 +1653,7 @@ tests_not_using_seastar_test_framework = set([
     'test/manual/message',
     'test/perf/memory_footprint_test',
     'test/perf/perf_cache_eviction',
+    'test/perf/perf_canonical_mutation',
     'test/perf/perf_cql_parser',
     'test/perf/perf_hash',
     'test/perf/perf_mutation',
@@ -1657,6 +1669,14 @@ tests_not_using_seastar_test_framework = set([
 
 COVERAGE_INST_FLAGS = ['-fprofile-instr-generate', '-fcoverage-mapping', f'-fprofile-list=./{PROFILES_LIST_FILE_NAME}']
 if args.coverage:
+    # Coverage tracking uses the same branch-counting machinery as PGO, so they don't play nice with each other
+    assert not args.pgo
+    assert not args.cspgo
+    assert not args.use_profile
+    # If args.use_profile is None, a default profile might be used.
+    # With coverage enabled, we want no profile at all, so we explicitly disable any profile use
+    # by setting "".
+    args.use_profile = ""
     for _, mode in filter(lambda m: m[0] != "coverage", modes.items()):
         mode['cxx_ld_flags'] += ' ' + ' '.join(COVERAGE_INST_FLAGS)
         mode['cxx_ld_flags'] = mode['cxx_ld_flags'].strip()
@@ -1689,6 +1709,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/aggregate_fcts_test.cc',
     'test/boost/auth_cache_test.cc',
     'test/boost/auth_test.cc',
+    'test/boost/client_state_test.cc',
     'test/boost/batchlog_manager_test.cc',
     'test/boost/table_helper_test.cc',
     'test/boost/cache_algorithm_test.cc',
@@ -1708,6 +1729,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/database_test.cc',
     'test/boost/data_listeners_test.cc',
     'test/boost/disk_space_monitor_test.cc',
+    'test/boost/digest_checked_data_source_test.cc',
     'test/boost/error_injection_test.cc',
     'test/boost/extensions_test.cc',
     'test/boost/filtering_test.cc',
@@ -1738,9 +1760,11 @@ deps['test/boost/combined_tests'] += [
     'test/boost/row_cache_test.cc',
     'test/boost/schema_change_test.cc',
     'test/boost/schema_registry_test.cc',
+    'test/boost/scrub_test.cc',
     'test/boost/secondary_index_test.cc',
     'test/boost/sessions_test.cc',
     'test/boost/simple_value_with_expiry_test.cc',
+    'test/boost/speculative_retry_config_test.cc',
     'test/boost/sstable_compaction_test.cc',
     'test/boost/sstable_compressor_factory_test.cc',
     'test/boost/sstable_compression_config_test.cc',
@@ -1789,6 +1813,7 @@ deps['test/boost/rolling_max_tracker_test'] = ['test/boost/rolling_max_tracker_t
 deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_test.cc']
 deps['test/boost/summary_test'] = ['test/boost/summary_test.cc']
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
+deps['test/perf/perf_canonical_mutation'] += ['seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_commitlog'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_row_cache_reads'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
 deps['test/boost/reusable_buffer_test'] = [
@@ -1817,10 +1842,12 @@ deps['test/raft/randomized_nemesis_test'] = ['test/raft/randomized_nemesis_test.
 deps['test/raft/failure_detector_test'] = ['test/raft/failure_detector_test.cc', 'service/direct_failure_detector/failure_detector.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
 deps['test/raft/many_test'] = ['test/raft/many_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc', 'test/lib/eventually.cc'] + scylla_raft_dependencies
 deps['test/raft/fsm_test'] =  ['test/raft/fsm_test.cc', 'test/raft/helpers.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
+deps['test/raft/log_indexed_container_test'] =  ['test/raft/log_indexed_container_test.cc', 'test/raft/helpers.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
 deps['test/raft/etcd_test'] =  ['test/raft/etcd_test.cc', 'test/raft/helpers.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
 deps['test/raft/raft_sys_table_storage_test'] = ['test/raft/raft_sys_table_storage_test.cc'] + \
     scylla_core + alternator + scylla_tests_generic_dependencies
 deps['test/boost/address_map_test'] = ['test/boost/address_map_test.cc'] + scylla_core + alternator
+deps['test/boost/endpoint_state_merge_test'] = ['test/boost/endpoint_state_merge_test.cc'] + scylla_core + alternator
 deps['test/raft/discovery_test'] =  ['test/raft/discovery_test.cc',
                                      'test/raft/helpers.cc',
                                      'test/lib/log.cc',
@@ -2202,9 +2229,10 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
         '-DSeastar_DEPRECATED_OSTREAM_FORMATTERS=OFF',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
-        '-DSeastar_SCHEDULING_GROUPS_COUNT=24',
+        '-DSeastar_SCHEDULING_GROUPS_COUNT=25',
         '-DSeastar_IO_URING=ON',
         '-DSeastar_OPENSSL=OFF',
+        '-DSeastar_LTTNG=OFF', # https://scylladb.atlassian.net/browse/SCYLLADB-3797, https://bugs.lttng.org/issues/1438
     ]
 
     if compiler_cache:
@@ -2498,9 +2526,6 @@ def write_build_file(f,
         rule serializer
             command = ./idl-compiler.py --ns ser -f $in -o $out
             description = IDL compiler $out
-        rule aws_service_errors
-            command = ./utils/s3/gen_aws_service_errors.py --output-dir $out_dir
-            description = AWS service errors generator $out
         rule ninja
             command = {ninja} -C $subdir $target
             restat = 1
@@ -2645,7 +2670,7 @@ def write_build_file(f,
                         $builddir/{mode}/gen/${{stem}}Parser.cpp
                 description = ANTLR3 $in
             rule checkhh.{mode}
-              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags --include $in -c -o $out $builddir/{mode}/gen/empty.cc -USCYLLA_USE_PRECOMPILED_HEADER
+              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -include $in -c -o $out $builddir/{mode}/gen/empty.cc -USCYLLA_USE_PRECOMPILED_HEADER
               description = CHECKHH $in
               depfile = $out.d
             rule test.{mode}
@@ -2658,10 +2683,6 @@ def write_build_file(f,
                         && touch $out
               description = RUST_LIB $out
             ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, **modeval))
-        aws_errors_gen_dir = '$builddir/{}/gen'.format(mode)
-        aws_errors_gen_hh = '{}/utils/s3/aws_error_definitions_generated.hh'.format(aws_errors_gen_dir)
-        aws_errors_gen_cc = '{}/utils/s3/aws_error_definitions_generated.cc'.format(aws_errors_gen_dir)
-        aws_errors_gen_obj = aws_errors_gen_cc.replace('.cc', '.o')
         f.write(
             'build {mode}-build: phony {artifacts} {wasms}\n'.format(
                 mode=mode,
@@ -2703,11 +2724,6 @@ def write_build_file(f,
             objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
                     for src in srcs
                     if src.endswith('.cc')]
-            # If the binary consumes utils/s3/aws_error.cc, it also needs
-            # the generated aws_error_definitions_generated.o (which
-            # provides the aws_error::get_errors() map).
-            if 'utils/s3/aws_error.cc' in srcs:
-                objs.append(aws_errors_gen_obj)
             has_rust = False
             for dep in deps[binary]:
                 if isinstance(dep, Antlr3Grammar):
@@ -2845,10 +2861,6 @@ def write_build_file(f,
         gen_headers += list(ragels.keys())
         gen_headers += list(rust_headers.keys())
         gen_headers.append('$builddir/{}/gen/rust/cxx.h'.format(mode))
-        # The AWS error definitions header is included (transitively) by
-        # anything that touches utils/s3/aws_error.hh, so it must exist on
-        # disk before any translation unit is compiled.
-        gen_headers.append(aws_errors_gen_hh)
         gen_headers_dep = ' '.join(gen_headers)
 
         for hh in rust_headers:
@@ -2877,19 +2889,6 @@ def write_build_file(f,
         for hh in serializers:
             src = serializers[hh]
             f.write('build {}: serializer {} | idl-compiler.py\n'.format(hh, src))
-        f.write('build {hh} {cc}: aws_service_errors | utils/s3/gen_aws_service_errors.py utils/s3/aws_error_definitions.hh.in utils/s3/aws_error_definitions.cc.in\n'
-                '  out_dir = {out_dir}\n'.format(
-                    hh=aws_errors_gen_hh, cc=aws_errors_gen_cc,
-                    out_dir=aws_errors_gen_dir))
-        # Compile the generated .cc so it can be linked into any binary
-        # that consumes utils/s3/aws_error.cc (see the objs loop above).
-        # The generated .cc lives under $builddir/{mode}/gen/utils/s3/ but
-        # still uses `#include "aws_error.hh"` inherited from the template,
-        # so we add an extra -iquote for utils/s3 to resolve it.
-        f.write('build {obj}: cxx.{mode} {cc} | {profile_dep}\n'
-                '  obj_cxxflags = -iquote utils/s3\n'.format(
-                    obj=aws_errors_gen_obj, mode=mode, cc=aws_errors_gen_cc,
-                    profile_dep=profile_dep))
         for hh in ragels:
             src = ragels[hh]
             f.write('build {}: ragel {}\n'.format(hh, src))
@@ -3059,14 +3058,14 @@ def write_build_file(f,
     for mode in build_modes:
         server_rpms_dir = f'$builddir/dist/{mode}/redhat/RPMS/{arch}'
         server_rpms = [f'{server_rpms_dir}/{scylla_product}{suffix}-{rpm_ver}.{arch}.rpm'
-                       for suffix in ['', '-server', '-debuginfo', '-conf', '-kernel-conf']]
+                       for suffix in ['', '-server', '-debuginfo', '-conf', '-kernel-conf', '-perf-collector']]
         cqlsh_rpms = [f'tools/cqlsh/build/redhat/RPMS/{arch}/{scylla_product}-cqlsh-{rpm_ver}.{arch}.rpm']
         python3_rpms = [f'tools/python3/build/redhat/RPMS/{arch}/{scylla_product}-python3-{rpm_ver}.{arch}.rpm']
         all_rpms = server_rpms + cqlsh_rpms + python3_rpms
 
         server_deb_dir = f'$builddir/dist/{mode}/debian'
         server_debs = [f'{server_deb_dir}/{scylla_product}{suffix}_{deb_ver}_{deb_arch}.deb'
-                       for suffix in ['', '-server', '-server-dbg', '-conf', '-kernel-conf']]
+                       for suffix in ['', '-server', '-server-dbg', '-conf', '-kernel-conf', '-perf-collector']]
         server_debs += [f'{server_deb_dir}/scylla-enterprise{suffix}_{deb_ver}_all.deb'
                         for suffix in ['', '-server', '-conf', '-kernel-conf']]
         cqlsh_debs = [f'tools/cqlsh/build/debian/{scylla_product}-cqlsh_{deb_ver}_{deb_arch}.deb',

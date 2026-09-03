@@ -208,7 +208,14 @@ def parse_cmd_line() -> argparse.Namespace:
     if args.skip_patterns and args.k:
         parser.error(palette.fail('arguments --skip and -k are mutually exclusive, please use only one of them'))
 
-    if not args.modes:
+    if args.exe_path or args.exe_url:
+        if args.modes:
+            parser.error(palette.fail('arguments --exe-path/--exe-url and --mode are mutually exclusive, please use only one of them'))
+        # The executable under test is given explicitly, so no configured
+        # build is required; the pytest runner derives the "custom_exe" mode
+        # from the executable options.
+        args.modes = []
+    elif not args.modes:
         try:
             args.modes = get_configured_modes()
         except Exception:
@@ -363,6 +370,10 @@ def run_pytest(options: argparse.Namespace) -> int:
         args.append(f'-k={options.k}')
     if options.extra_scylla_cmdline_options:
         args.append(f'--extra-scylla-cmdline-options={options.extra_scylla_cmdline_options}')
+    if options.exe_path:
+        args.append(f'--exe-path={options.exe_path}')
+    if options.exe_url:
+        args.append(f'--exe-url={options.exe_url}')
     if not options.save_log_on_success:
         args.append('--allure-no-capture')
     else:

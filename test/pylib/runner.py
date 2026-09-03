@@ -35,29 +35,25 @@ from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, HOST_ID, path_to
 from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.ldap_server import start_ldap
 from test.pylib.minio_server import MinioServer
-from test.pylib.pool import Pool
 from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
     SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info
 from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
 from test.pylib.host_registry import HostRegistry
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
-from test.pylib.scylla_cluster import (
-    ScyllaCluster,
-    ScyllaServer,
-    get_current_version_description,
-    merge_cmdline_options,
-)
+from test.pylib.scylla_cluster import ScyllaCluster
+from test.pylib.scylla_server import merge_cmdline_options
 from test.pylib.skip_reason_plugin import skip_marker
 from test.pylib.util import get_modes_to_run, scale_timeout_by_mode, get_xdist_worker_id, LogPrefixAdapter
 from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
 
 if TYPE_CHECKING:
-    import argparse
     from collections.abc import Generator, AsyncGenerator
 
     import _pytest.nodes
     import _pytest.scope
+
+    from test.pylib.scylla_cluster import ClusterFactory
 
 
 TEST_CONFIG_FILENAME = "test_config.yaml"
@@ -75,8 +71,6 @@ logger = logging.getLogger(__name__)
 
 # Store pytest config globally so we can access it in hooks that only receive report
 _pytest_config: pytest.Config | None = None
-
-_cluster_pools: dict[str, Pool[ScyllaCluster]] = {}
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -132,7 +126,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 PHASE_REPORT_KEY = pytest.StashKey[dict[str, pytest.CollectReport]]()
 
 # Set by the `manager` fixture so the log collector in pytest_runtest_makereport
-# can gather manager-owned logs: {"client": ManagerClient, "logs": {name: path}}.
+# can gather manager-owned logs: {"manager": ScyllaClusterManager, "logs": {name: path}}.
 MANAGER_LOGS_KEY = pytest.StashKey[dict[str, object]]()
 
 FAILED_TEST_DIR = "failed_test"
@@ -312,22 +306,70 @@ def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
 
 
 @pytest.fixture(scope="module")
-def testpy_suite_clusters(request: pytest.FixtureRequest,
-                          build_mode: str,
-                          suite_log_dir: pathlib.Path,
-                          scylla_binary: str) -> Pool[ScyllaCluster]:
+def testpy_cluster_factory(request: pytest.FixtureRequest,
+                           build_mode: str,
+                           suite_log_dir: pathlib.Path,
+                           scylla_binary: str) -> ClusterFactory:
+    """A factory of Scylla clusters configured for the current suite and build mode."""
     suite_config = get_params_stash(node=request.node)[TEST_SUITE]
-    suite_key = os.path.join(suite_config.path, build_mode)
-    pool = _cluster_pools.get(suite_key)
-    if not pool:
-        _cluster_pools[suite_key] = pool = create_suite_pool(
-            suite_config=suite_config,
-            options=request.config.option,
+    options = request.config.option
+
+    # environment variables that should be the base of all processes running in this suit
+    base_env = {}
+
+    if options.coverage and (build_mode in options.coverage_modes) and bool(suite_config.cfg.get("coverage", True)):
+        # Set the coverage data from each instrumented object to use the same file (and merged into it with locking)
+        # as long as we don't need test specific coverage data, this looks sufficient. The benefit of doing this in
+        # this way is that the storage will not be bloated with coverage files (each can weigh 10s of MBs so for several
+        # thousands of tests it can easily reach 10 of GBs)
+        # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
+        base_env["LLVM_PROFILE_FILE"] = str(suite_log_dir / "coverage" / suite_config.name / "%m.profraw")
+
+    cluster_size = suite_config.cfg.get("cluster", {}).get("initial_size", 1)
+
+    async def create_cluster(logger: logging.Logger | logging.LoggerAdapter) -> ScyllaCluster:
+        cluster = ScyllaCluster(
+            logger=logger,
+            vardir=suite_log_dir,
+            replicas=cluster_size,
             mode=build_mode,
-            log_dir=suite_log_dir,
+            cmdline_options=suite_config.cfg.get("extra_scylla_cmdline_options", []),
+            cmdline_options_override=options.extra_scylla_cmdline_options.split(),
+            config_options=suite_config.cfg.get("extra_scylla_config_options", {}),
+            append_env=base_env,
             scylla_exe=scylla_binary,
+            save_log_on_success=options.save_log_on_success,
         )
-    return pool
+
+        async def stop() -> None:
+            await cluster.stop()
+
+        artifacts.add_exit_artifact(stop)
+
+        if not options.save_log_on_success:
+            # recycle() already deletes a cluster's directories; this is the
+            # fallback for one that is never recycled, e.g. because the run
+            # was interrupted.
+            async def uninstall() -> None:
+                await cluster.uninstall()
+
+            artifacts.add_exit_artifact(uninstall)
+
+        await cluster.install_and_start()
+        # If cluster failed to start, raise the exception immediately
+        # so a broken cluster is never handed out to tests
+        if cluster.start_exception is not None:
+            # Clean up the broken cluster before raising
+            try:
+                await cluster.recycle()
+            except Exception:
+                # Report it and raise the start failure, which is the more
+                # useful of the two.
+                logger.warning("Failed to recycle the cluster that failed to start", exc_info=True)
+            raise cluster.start_exception
+        return cluster
+
+    return create_cluster
 
 
 @pytest.fixture(scope="module")
@@ -342,16 +384,15 @@ def scylla_binary(request: pytest.FixtureRequest, build_mode: str) -> str:
 
 @pytest.fixture(scope="module")
 async def scylla_cluster(request: pytest.FixtureRequest,
-                         testpy_suite_clusters: Pool[ScyllaCluster],
+                         testpy_cluster_factory: ClusterFactory,
                          build_mode: str,
                          testpy_shortname: str,
                          testpy_uname: str) -> AsyncGenerator[ScyllaCluster]:
-    """Lease a ScyllaCluster from the pool for the tests in a module.
+    """Create a ScyllaCluster for the tests in a module.
 
-    Gets a cluster from the suite's pool, runs the before-test hook and
+    Builds a cluster with the suite's factory, runs the before-test hook and
     yields it to the module's tests. Once the module is done the cluster is
-    always returned to the pool marked dirty, so it is recycled rather than
-    reused by a later module.
+    recycled, so a later module always starts from a fresh one.
     """
     logger_prefix = f"{build_mode}/"
     cluster_logger = LogPrefixAdapter(logging.getLogger(logger_prefix), {"prefix": logger_prefix})
@@ -361,7 +402,7 @@ async def scylla_cluster(request: pytest.FixtureRequest,
     is_before_test_ok = False
     is_after_test_ok = False
     try:
-        cluster: ScyllaCluster = await testpy_suite_clusters.get(cluster_logger)
+        cluster = await testpy_cluster_factory(cluster_logger)
         cluster.before_test(testpy_uname)
         cluster_logger.info("Leasing Scylla cluster %s for test %s", cluster, testpy_uname)
         server_log_filename = cluster.server_log_filename()
@@ -383,7 +424,7 @@ async def scylla_cluster(request: pytest.FixtureRequest,
     finally:
         if cluster is not None:
             cluster_logger.info("Test %s finished", testpy_uname)
-            await testpy_suite_clusters.put(cluster, is_dirty=True)
+            await cluster.recycle()
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Config) -> None:
@@ -635,7 +676,7 @@ def pytest_runtest_makereport(item, call):
                     f.write(section[1] + "\n")
 
         # Single source of truth for attaching failed-test logs. cqlpy/alternator
-        # expose a pooled `scylla_cluster`; topology suites publish MANAGER_LOGS_KEY.
+        # expose a `scylla_cluster`; topology suites publish MANAGER_LOGS_KEY.
         if report.failed:
             # C++ items (and early setup failures) lack `funcargs`; nothing to collect.
             funcargs = getattr(item, "funcargs", {})
@@ -649,15 +690,15 @@ def pytest_runtest_makereport(item, call):
                     failed_test_dir_path = make_failed_test_dir(item.config, build_mode, item.name)
 
                     if cluster is not None:
-                        # Copy the pooled server log before the cluster is recycled (unlinks it).
+                        # Copy the server log before the cluster teardown closes it.
                         server_log = cluster.server_log_filename()
                         if server_log is not None and pathlib.Path(server_log).is_file():
                             shutil.copyfile(server_log, failed_test_dir_path / pathlib.Path(server_log).name)
 
                     if manager_logs is not None:
-                        # Manager owns the servers; gather via ManagerClient (sync-callable
-                        # since ManagerClient is universalasync-wrapped).
-                        manager_logs["client"].gather_related_logs(failed_test_dir_path, manager_logs["logs"])
+                        # Manager owns the servers; gather via ScyllaClusterManager (sync-callable
+                        # since ScyllaClusterManager is universalasync-wrapped).
+                        manager_logs["manager"].gather_related_logs(failed_test_dir_path, manager_logs["logs"])
 
                     record_failed_test_artifacts(
                         config=item.config,
@@ -760,10 +801,10 @@ def modify_pytest_item(item: pytest.Item, run_ids: defaultdict[tuple[str, str], 
             raise TypeError(f"Failed to process skip_mode mark, {mark} for test {item}, error {e}")
 
     if (any(mark.name == "xfail" for mark in item.iter_markers("xfail"))
-            and not any(mark.name == "nightly" for mark in item.iter_markers("nightly"))):
-        item.add_marker(pytest.mark.nightly)
+            and not any(mark.name == "tier2" for mark in item.iter_markers("tier2"))):
+        item.add_marker(pytest.mark.tier2)
 
-    if (any(mark.name in ("perf", "manual", "unstable") for mark in item.iter_markers())
+    if (any(mark.name in ("perf", "manual", "no_parallel") for mark in item.iter_markers())
             and not any(mark.name == "non_gating" for mark in item.iter_markers("non_gating"))):
         item.add_marker(pytest.mark.non_gating)
 
@@ -875,105 +916,3 @@ def prepare_environment(tempdir_base: pathlib.Path,
     start_3rd_party_services(tempdir_base=tempdir_base, toxiproxy_byte_limit=toxiproxy_byte_limit)
 
 
-def create_suite_pool(suite_config: TestSuiteConfig,
-                      options: argparse.Namespace,
-                      mode: str,
-                      log_dir: pathlib.Path,
-                      scylla_exe: str) -> Pool[ScyllaCluster]:
-    # environment variables that should be the base of all processes running in this suit
-    base_env = {}
-
-    if options.coverage and (mode in options.coverage_modes) and bool(suite_config.cfg.get("coverage", True)):
-        # Set the coverage data from each instrumented object to use the same file (and merged into it with locking)
-        # as long as we don't need test specific coverage data, this looks sufficient. The benefit of doing this in
-        # this way is that the storage will not be bloated with coverage files (each can weigh 10s of MBs so for several
-        # thousands of tests it can easily reach 10 of GBs)
-        # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
-        base_env["LLVM_PROFILE_FILE"] = str(log_dir / "coverage" / suite_config.name / "%m.profraw")
-
-    cluster_size = suite_config.cfg.get("cluster", {}).get("initial_size", 1)
-    pool_size = suite_config.cfg.get("pool_size", int(os.getenv("CLUSTER_POOL_SIZE", 2)))
-
-    def create_server(create_cfg: ScyllaCluster.CreateServerParams):
-        cmdline_options = suite_config.cfg.get("extra_scylla_cmdline_options", [])
-        if type(cmdline_options) == str:
-            cmdline_options = [cmdline_options]
-        cmdline_options = merge_cmdline_options(cmdline_options, create_cfg.cmdline_from_test)
-        cmdline_options = merge_cmdline_options(cmdline_options, options.extra_scylla_cmdline_options.split())
-        # There are multiple sources of config options, with increasing priority
-        # (if two sources provide the same config option, the higher priority one wins):
-        # 1. the defaults
-        # 2. suite-specific config options (in "extra_scylla_config_options")
-        # 3. config options from tests (when servers are added during a test)
-        config_options = {
-            "authenticator": "PasswordAuthenticator",
-            "authorizer": "CassandraAuthorizer",
-            "tablets_initial_scale_factor": 4 if mode == "release" else 2,
-            **suite_config.cfg.get("extra_scylla_config_options", {}),
-            **create_cfg.config_from_test,
-        }
-        server = ScyllaServer(
-            mode=mode,
-            version=(create_cfg.version or get_current_version_description(scylla_exe)),
-            vardir=log_dir,
-            logger=create_cfg.logger,
-            cluster_name=create_cfg.cluster_name,
-            ip_addr=create_cfg.ip_addr,
-            seeds=create_cfg.seeds,
-            cmdline_options=cmdline_options,
-            config_options=config_options,
-            property_file=create_cfg.property_file,
-            append_env=base_env,
-            server_encryption=create_cfg.server_encryption)
-
-        return server
-
-    async def create_cluster(logger: logging.Logger | logging.LoggerAdapter) -> ScyllaCluster:
-        cluster = ScyllaCluster(logger, cluster_size, create_server)
-
-        async def stop() -> None:
-            await cluster.stop()
-
-        artifacts.add_exit_artifact(stop)
-
-        if not options.save_log_on_success:
-            # If a test fails, we might want to keep the data dirs.
-            async def uninstall() -> None:
-                await cluster.uninstall()
-
-            artifacts.add_exit_artifact(uninstall)
-
-        await cluster.install_and_start()
-        # If cluster failed to start, raise the exception immediately
-        # so the pool doesn't return a broken cluster to tests
-        if cluster.start_exception is not None:
-            # Clean up the broken cluster before raising
-            try:
-                await cluster.stop()
-                if cluster.api is not None:
-                    cluster.api.close()
-                    cluster.api = None
-                await cluster.release_ips()
-            except:
-                pass  # Ignore cleanup errors
-            raise cluster.start_exception
-        return cluster
-
-    async def recycle_cluster(cluster: ScyllaCluster) -> None:
-        """When a dirty cluster is returned to the cluster pool,
-           stop it and release the used IPs. We don't necessarily uninstall() it yet,
-           which would delete the log file and directory - we might want to preserve
-           these if it came from a failed test.
-        """
-        await cluster.stop()
-        for srv in cluster.servers.values():
-            if srv.log_file is not None:
-                srv.log_file.close()
-            srv.maintenance_socket_dir.cleanup()
-        # Close API client to release connector resources
-        if cluster.api is not None:
-            cluster.api.close()
-            cluster.api = None
-        await cluster.release_ips()
-
-    return Pool(pool_size, create_cluster, recycle_cluster)

@@ -6,13 +6,13 @@
 
 import logging
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 import pytest
 
 logger = logging.getLogger(__name__)
 
 @pytest.mark.prepare_3_racks_cluster
-async def test_gossiper_endpoints(manager: ManagerClient) -> None:
+async def test_gossiper_endpoints(manager: ScyllaClusterManager) -> None:
     servers = await manager.running_servers()
     servers_ips = [await manager.get_host_ip(server.server_id) for server in servers]
 
@@ -40,7 +40,7 @@ async def test_gossiper_endpoints(manager: ManagerClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_natural_failure_detection(manager: ManagerClient, failure_detector_timeout) -> None:
+async def test_natural_failure_detection(manager: ScyllaClusterManager, failure_detector_timeout) -> None:
     """Verify that the failure detector detects a killed node as DOWN
     without using the convict mechanism, relying on natural detection."""
     servers = await manager.servers_add(3, config={'failure_detector_timeout_in_ms': failure_detector_timeout})

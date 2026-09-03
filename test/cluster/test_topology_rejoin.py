@@ -6,13 +6,13 @@
 """
 Test rejoin of a server after it was stopped suddenly (crash-like)
 """
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 import pytest
 
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
-async def test_start_after_sudden_stop(manager: ManagerClient, random_tables) -> None:
+async def test_start_after_sudden_stop(manager: ScyllaClusterManager, random_tables) -> None:
     """Tests a server can rejoin the cluster after being stopped suddenly"""
     servers = await manager.running_servers()
     table = await random_tables.add_table(ncolumns=5)

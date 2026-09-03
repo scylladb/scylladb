@@ -97,6 +97,12 @@ add_scylla_test(encryption_at_rest_test
   KIND SEASTAR
   LIBRARIES
     encryption)
+add_scylla_test(http_error_classification_test
+  KIND SEASTAR
+  LIBRARIES
+    encryption)
+add_scylla_test(endpoint_state_merge_test
+  KIND SEASTAR)
 add_scylla_test(enum_option_test
   KIND BOOST)
 add_scylla_test(enum_set_test
@@ -341,6 +347,7 @@ add_scylla_test(combined_tests
     aggregate_fcts_test.cc
     auth_cache_test.cc
     auth_test.cc
+    client_state_test.cc
     batchlog_manager_test.cc
     table_helper_test.cc
     cache_algorithm_test.cc
@@ -360,6 +367,7 @@ add_scylla_test(combined_tests
     database_test.cc
     data_listeners_test.cc
     disk_space_monitor_test.cc
+    digest_checked_data_source_test.cc
     error_injection_test.cc
     extensions_test.cc
     filtering_test.cc
@@ -390,9 +398,11 @@ add_scylla_test(combined_tests
     row_cache_test.cc
     schema_change_test.cc
     schema_registry_test.cc
+    scrub_test.cc
     secondary_index_test.cc
     sessions_test.cc
     simple_value_with_expiry_test.cc
+    speculative_retry_config_test.cc
     sstable_compaction_test.cc
     sstable_compressor_factory_test.cc
     sstable_compression_config_test.cc

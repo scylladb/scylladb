@@ -8,7 +8,7 @@ import asyncio
 import pytest
 import logging
 import time
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import reconnect_driver
@@ -17,7 +17,7 @@ from test.pylib.random_tables import Column, TextType
 logger = logging.getLogger(__name__)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_reboot(request, manager: ManagerClient):
+async def test_reboot(request, manager: ScyllaClusterManager):
     # Check that commitlog provides durability in case of a node reboot.
     #
     # 1. start a node with commitlog_sync: batch

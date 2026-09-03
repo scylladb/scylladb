@@ -24,6 +24,7 @@
 #include "collectd.hh"
 #include "endpoint_snitch.hh"
 #include "compaction_manager.hh"
+#include "storage_manager.hh"
 #include "hinted_handoff.hh"
 #include "error_injection.hh"
 #include "authorization_cache.hh"
@@ -295,6 +296,14 @@ future<> set_server_compaction_manager(http_context& ctx, sharded<compaction::co
 
 future<> unset_server_compaction_manager(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_compaction_manager(ctx, r); });
+}
+
+future<> set_server_storage_manager(http_context& ctx, sharded<sstables::storage_manager>& sstm) {
+    return ctx.http_server.set_routes([&ctx, &sstm] (routes& r) { set_storage_manager(ctx, r, sstm); });
+}
+
+future<> unset_server_storage_manager(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_storage_manager(ctx, r); });
 }
 
 future<> set_server_done(http_context& ctx) {

@@ -8,6 +8,8 @@
 
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/switch_to.hh>
+#include <cctype>
+#include <ranges>
 #include <unordered_map>
 #include <unordered_set>
 #include "utils/log.hh"
@@ -29,6 +31,55 @@
 namespace sstables {
 
 logging::logger smlogger("sstables_manager");
+
+const storage& atomic_deletion::get_storage(const std::vector<shared_sstable>& ssts) {
+    auto& storage = ssts.front()->get_storage();
+    for (const auto& sst : ssts | std::views::drop(1)) {
+        auto& other_storage = sst->get_storage();
+        if (storage != other_storage) {
+            on_internal_error(smlogger, fmt::format(
+                    "atomic_deletion created with SSTables from different storage contexts: front={} front_storage={} offending={} offending_storage={}",
+                    ssts.front()->get_filename(), storage.prefix(),
+                    sst->get_filename(), other_storage.prefix()));
+        }
+    }
+    return storage;
+}
+
+atomic_deletion::atomic_deletion(std::vector<shared_sstable> ssts)
+    : _ssts(std::move(ssts))
+    , _storage(_ssts.empty() ? nullptr : &get_storage(_ssts))
+    , _impl(_storage ? _storage->make_atomic_deletion_impl() : nullptr) {
+}
+
+future<> atomic_deletion::commit() {
+    if (empty()) {
+        co_return;
+    }
+    if (utils::get_local_injector().enter("delete_atomically_before_prepare")) {
+        throw std::runtime_error("delete_atomically_before_prepare");
+    }
+    co_await _impl->commit(_ssts);
+    utils::get_local_injector().inject("delete_atomically_after_prepare",
+            [] { throw std::runtime_error("delete_atomically_after_prepare"); });
+}
+
+future<> atomic_deletion::execute() noexcept {
+    if (empty()) {
+        co_return;
+    }
+    try {
+        co_await coroutine::parallel_for_each(_ssts, [this] (shared_sstable sst) {
+            return sst->unlink(this);
+        });
+        utils::get_local_injector().inject("delete_atomically_after_unlink",
+                [] { throw std::runtime_error("delete_atomically_after_unlink"); });
+        co_await _impl->finalize();
+    } catch (...) {
+        // After commit(), the SSTables will be deleted even after a crash.
+        smlogger.warn("SSTables deletion failed after commit: {}. Will be retried on restart.", std::current_exception());
+    }
+}
 
 sstables_manager::sstables_manager(
     sstring name, db::large_data_handler& large_data_handler, db::corrupt_data_handler& corrupt_data_handler, struct config cfg, gms::feature_service& feat, cache_tracker& ct, directory_semaphore& dir_sem,
@@ -135,8 +186,9 @@ sstring storage_manager::get_endpoint_type(sstring endpoint) {
     return get_endpoint(endpoint).cfg.type();
 }
 
-bool storage_manager::is_known_endpoint(sstring endpoint) const {
-    return _object_storage_endpoints.contains(endpoint);
+bool storage_manager::is_known_endpoint(sstring endpoint, sstring type) const {
+    auto it = _object_storage_endpoints.find(endpoint);
+    return it != _object_storage_endpoints.end() && (type == "" || it->second.cfg.is_storage_of_type(type));
 }
 
 std::vector<sstring> storage_manager::endpoints(sstring type) const noexcept {
@@ -371,8 +423,14 @@ void sstables_manager::reclaim_memory_and_stop_tracking_sstable(sstable* sst) {
     // reclaim any remaining memory from the sstable
     sst->reclaim_memory_from_components();
     // disable further reload of components
-    _reclaimed.erase(*sst);
+    erase_from_reclaimed(sst);
     sst->disable_component_memory_reload();
+}
+
+void sstables_manager::erase_from_reclaimed(sstable* sst) noexcept {
+    if (sst->_manager_set_link.is_linked()) {
+        _reclaimed.erase(_reclaimed.iterator_to(*sst));
+    }
 }
 
 void sstables_manager::add(sstable* sst) {
@@ -409,29 +467,8 @@ void sstables_manager::maybe_done() {
     }
 }
 
-future<> sstables_manager::delete_atomically(std::vector<shared_sstable> ssts) {
-    if (ssts.empty()) {
-        co_return;
-    }
-
-    // All sstables here belong to the same table, thus they do live
-    // in the same storage so it's OK to get the deleter from _signal_mana
-    // front element. The deleter implementation is welcome to check
-    // that sstables from the vector really live in it.
-    auto& storage = ssts.front()->get_storage();
-    auto ctx = co_await storage.atomic_delete_prepare(ssts);
-
-    utils::get_local_injector().inject("delete_atomically_after_prepare",
-            [] { throw std::runtime_error("delete_atomically_after_prepare"); });
-
-    co_await coroutine::parallel_for_each(ssts, [&ctx] (shared_sstable sst) {
-        return sst->unlink(&ctx);
-    });
-
-    utils::get_local_injector().inject("delete_atomically_after_unlink",
-            [] { throw std::runtime_error("delete_atomically_after_unlink"); });
-
-    co_await storage.atomic_delete_complete(std::move(ctx));
+atomic_deletion sstables_manager::make_atomic_deletion(std::vector<shared_sstable> ssts) {
+    return atomic_deletion(std::move(ssts));
 }
 
 future<utils::chunked_vector<sstable_snapshot_metadata>> sstables_manager::take_snapshot(std::vector<shared_sstable> ssts, sstring name) {
@@ -497,8 +534,10 @@ void sstables_manager::validate_new_keyspace_storage_options(const data_dictiona
                 throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
             }
             // It's non-system keyspace
-            if (!is_known_endpoint(so.endpoint)) {
-                throw exceptions::configuration_exception(format("Endpoint {} not configured", so.endpoint));
+            // The endpoint must be configured and have the same storage type the keyspace declares
+            auto requested_type = so.type | std::views::transform(&tolower) | std::ranges::to<std::string>();
+            if (!is_known_endpoint(so.endpoint, requested_type)) {
+                throw exceptions::configuration_exception(format("Endpoint {} not configured as {}", so.endpoint, so.type));
             }
         }
     }, so.value);

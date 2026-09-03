@@ -21,9 +21,11 @@
 
 #include "enum_set.hh"
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <set>
+#include <vector>
 
 namespace db {
 
@@ -77,6 +79,7 @@ protected:
     sstring _table;
     sstring _query;
     bool _batch; // used only for unpacking batches in CQL, not relevant for Alternator
+    std::optional<std::vector<std::reference_wrapper<const audit_info>>> _batch_infos;
     std::optional<audit_table_set> _alternator_batch_tables;
 public:
     audit_info(statement_category cat, sstring keyspace, sstring table, bool batch)
@@ -107,6 +110,10 @@ public:
     sstring category_string() const;
     statement_category category() const { return _category; }
     bool batch() const { return _batch; }
+    void set_batch_infos(std::vector<std::reference_wrapper<const audit_info>> batch_infos) {
+        _batch_infos = std::move(batch_infos);
+    }
+    const std::optional<std::vector<std::reference_wrapper<const audit_info>>>& batch_infos() const { return _batch_infos; }
 };
 
 using audit_info_ptr = std::unique_ptr<audit_info>;

@@ -610,11 +610,12 @@ public:
         }
     }
 
-    error_injection_parameters get_injection_parameters(std::string_view name) {
+    const error_injection_parameters &get_injection_parameters(std::string_view name) {
         if (auto data = get_data(name); data) {
             return data->shared_data->parameters;
         }
-        return {};
+        static error_injection_parameters empty;
+        return empty;
     }
 
     future<> enable_on_all(const std::string_view& injection_name, bool one_shot = false, error_injection_parameters parameters = {}) {
@@ -775,8 +776,9 @@ public:
     void set_parameter(std::string_view injection_name, sstring parameter_name, sstring parameter_value) { }
 
     [[gnu::always_inline]]
-    error_injection_parameters get_injection_parameters(std::string_view name) {
-        return {};
+    const error_injection_parameters &get_injection_parameters(std::string_view name) {
+        static error_injection_parameters empty;
+        return empty;
     }
 
     [[gnu::always_inline]]

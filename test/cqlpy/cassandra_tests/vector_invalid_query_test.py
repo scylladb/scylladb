@@ -12,7 +12,15 @@ from .porting import *
 from ..util import is_scylla
 
 ANN_LIMIT_ERROR = "Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than %s. LIMIT was %s"
-ANN_ONLY_SUPPORTED_ON_VECTOR_MESSAGE = "ANN ordering is only supported on float vector indexes"
+# ANN() is an ordinary function as far as preparation is concerned - the vector search claims the
+# ORDER BY clause only after the call has been resolved - so in Scylla these three diagnostics come
+# from function resolution and are worded in terms of the function's arguments.
+CASSANDRA_ANN_ONLY_SUPPORTED_ON_VECTOR_MESSAGE = "ANN ordering is only supported on float vector indexes"
+SCYLLA_ANN_ONLY_SUPPORTED_ON_VECTOR_MESSAGE = "requires a float vector argument"
+CASSANDRA_ANN_WRONG_DIMENSIONS_MESSAGE = "Invalid vector literal"
+SCYLLA_ANN_WRONG_DIMENSIONS_MESSAGE = "All arguments must have the same vector dimensions"
+CASSANDRA_ANN_UNDEFINED_COLUMN_MESSAGE = "Undefined column name bad_col"
+SCYLLA_ANN_UNDEFINED_COLUMN_MESSAGE = "Unrecognized name bad_col"
 ANN_REQUIRES_INDEX_MESSAGE = "ANN ordering by vector requires the column to be indexed"
 SCYLLA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = "ANN ordering by vector does not support filtering"
 CASSANDRA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = "ANN ordering by vector requires all restricted column(s) to be indexed"
@@ -68,7 +76,7 @@ def test_cannot_query_wrong_number_of_dimensions(cql, test_keyspace):
 
         assert_invalid_message(
             cql, table,
-            "Invalid vector literal",
+            SCYLLA_ANN_WRONG_DIMENSIONS_MESSAGE if is_scylla(cql) else CASSANDRA_ANN_WRONG_DIMENSIONS_MESSAGE,
             "SELECT * FROM %s ORDER BY val ANN OF [2.5, 3.5] LIMIT 5"
         )
 
@@ -117,7 +125,7 @@ def test_invalid_column_name_with_ann(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c int, v int, PRIMARY KEY (k, c))") as table:
         assert_invalid_message(
             cql, table,
-            f"Undefined column name bad_col",
+            SCYLLA_ANN_UNDEFINED_COLUMN_MESSAGE if is_scylla(cql) else CASSANDRA_ANN_UNDEFINED_COLUMN_MESSAGE,
             "SELECT k FROM %s ORDER BY bad_col ANN OF [1.0] LIMIT 1"
         )
 
@@ -135,7 +143,8 @@ def test_cannot_order_with_ann_on_non_vector_column(cql, test_keyspace):
         # Scylla doesn't support custom indexes on int columns so we use a regular index.
         execute(cql, table, "CREATE INDEX c_index ON %s (v)")
         assert_invalid_message(
-            cql, table, ANN_ONLY_SUPPORTED_ON_VECTOR_MESSAGE,
+            cql, table,
+            SCYLLA_ANN_ONLY_SUPPORTED_ON_VECTOR_MESSAGE if is_scylla(cql) else CASSANDRA_ANN_ONLY_SUPPORTED_ON_VECTOR_MESSAGE,
             "SELECT * FROM %s ORDER BY v ANN OF 1 LIMIT 1"
         )
 

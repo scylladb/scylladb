@@ -26,18 +26,24 @@ namespace alternator {
 
 static logging::logger alogger("alternator-auth");
 
-future<std::string> get_key_from_roles(service::storage_proxy& proxy, std::string username) {
+future<std::string> get_key_from_roles(service::storage_proxy& proxy, std::string username, bool get_password) {
     schema_ptr schema = proxy.data_dictionary().find_schema(db::system_keyspace::NAME, "roles");
     partition_key pk = partition_key::from_single_value(*schema, utf8_type->decompose(username));
     dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*schema, pk))};
     std::vector<query::clustering_range> bounds{query::clustering_range::make_open_ended_both_sides()};
-    const column_definition* salted_hash_col = schema->get_column_definition(bytes("salted_hash"));
     const column_definition* can_login_col = schema->get_column_definition(bytes("can_login"));
-    if (!salted_hash_col || !can_login_col) {
+    const column_definition* salted_hash_col = schema->get_column_definition(bytes("salted_hash"));
+    if (!can_login_col || (get_password && !salted_hash_col)) {
         co_await coroutine::return_exception(api_error::unrecognized_client(fmt::format("Credentials cannot be fetched for: {}", username)));
     }
-    auto selection = cql3::selection::selection::for_columns(schema, {salted_hash_col, can_login_col});
-    auto partition_slice = query::partition_slice(std::move(bounds), {}, query::column_id_vector{salted_hash_col->id, can_login_col->id}, selection->get_query_options());
+    std::vector<const column_definition*> columns{can_login_col};
+    query::column_id_vector col_ids{can_login_col->id};
+    if (get_password) {
+        columns.push_back(salted_hash_col);
+        col_ids.push_back(salted_hash_col->id);
+    }
+    auto selection = cql3::selection::selection::for_columns(schema, std::move(columns));
+    auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(col_ids), selection->get_query_options());
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice,
             proxy.get_max_result_size(partition_slice), query::tombstone_limit(proxy.get_tombstone_limit()));
     auto cl = db::consistency_level::LOCAL_ONE;
@@ -54,13 +60,16 @@ future<std::string> get_key_from_roles(service::storage_proxy& proxy, std::strin
         co_await coroutine::return_exception(api_error::unrecognized_client(fmt::format("User not found: {}", username)));
     }
     const auto& result = result_set->rows().front();
-    bool can_login = result[1] && value_cast<bool>(boolean_type->deserialize(*result[1]));
+    bool can_login = result[0] && value_cast<bool>(boolean_type->deserialize(*result[0]));
     if (!can_login) {
         // This is a valid role name, but has "login=False" so should not be
         // usable for authentication (see #19735).
         co_await coroutine::return_exception(api_error::unrecognized_client(fmt::format("Role {} has login=false so cannot be used for login", username)));
     }
-    const managed_bytes_opt& salted_hash = result.front();
+    if (!get_password) {
+        co_return std::string();
+    }
+    const managed_bytes_opt& salted_hash = result[1];
     if (!salted_hash) {
         co_await coroutine::return_exception(api_error::unrecognized_client(fmt::format("No password found for user: {}", username)));
     }

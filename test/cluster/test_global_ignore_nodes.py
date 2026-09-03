@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.scylla_cluster import ReplaceConfig
 import pytest
 import uuid
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
-async def test_global_ignored_nodes_list(manager: ManagerClient, random_tables) -> None:
+async def test_global_ignored_nodes_list(manager: ScyllaClusterManager, random_tables) -> None:
     """This test creates a 5 node cluster with two nodes down (A and B). It removes A while
        specifying B in ignored nodes list. Then is downs one more node and replaces it while
        B is down and still in the cluster without specifying it as ignored, but it still succeeds

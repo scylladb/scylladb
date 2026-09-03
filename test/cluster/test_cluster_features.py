@@ -14,7 +14,8 @@ from typing import Set, Optional, List
 from cassandra.cluster import Session  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host        # type: ignore # pylint: disable=no-name-in-module
 
-from test.pylib.manager_client import ManagerClient, ServerInfo
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature, get_supported_features, get_enabled_features
 from test.cluster.util import reconnect_driver
@@ -31,7 +32,7 @@ TEST_FEATURE_ENABLE_ERROR_INJECTION = "features_enable_test_feature"
 ERROR_INJECTIONS_AT_STARTUP_CONFIG_KEY = "error_injections_at_startup"
 
 
-async def get_error_injections_enabled_at_startup(manager: ManagerClient, srv: ServerInfo) -> Set[str]:
+async def get_error_injections_enabled_at_startup(manager: ScyllaClusterManager, srv: ServerInfo) -> Set[str]:
     # TODO: An "error injection enabled at startup" might not be a string, but a dictionary
     #       with some options. The tests in this module only use strings, but it's worth
     #       keeping that in mind here in case dicts start being used.
@@ -42,13 +43,13 @@ async def get_error_injections_enabled_at_startup(manager: ManagerClient, srv: S
     return set(injections)
 
 
-async def change_support_for_test_feature_and_restart(manager: ManagerClient, srvs: [ServerInfo], enable: bool, expected_error: Optional[str] = None) -> None:
+async def change_support_for_test_feature_and_restart(manager: ScyllaClusterManager, srvs: [ServerInfo], enable: bool, expected_error: Optional[str] = None) -> None:
     """Stops all provided nodes, changes their support for test-only feature
        and restarts them.
     """
     logging.info(f"Reconfiguring and restarting nodes {srvs} to {'enable' if enable else 'disable'} support for {TEST_FEATURE_NAME}")
 
-    async def adjust_feature_in_config(manager: ManagerClient, srv: ServerInfo, enable: bool):
+    async def adjust_feature_in_config(manager: ScyllaClusterManager, srv: ServerInfo, enable: bool):
         injections = await get_error_injections_enabled_at_startup(manager, srv)
         if enable:
             injections.add(TEST_FEATURE_ENABLE_ERROR_INJECTION)
@@ -61,7 +62,7 @@ async def change_support_for_test_feature_and_restart(manager: ManagerClient, sr
     await asyncio.gather(*(manager.server_start(srv.server_id, expected_error) for srv in srvs))
 
 
-async def test_rolling_upgrade_happy_path(manager: ManagerClient) -> None:
+async def test_rolling_upgrade_happy_path(manager: ScyllaClusterManager) -> None:
     """Simulates an upgrade of a cluster by doing a rolling restart
        and marking the test-only feature as supported on restarted nodes.
     """
@@ -93,7 +94,7 @@ async def test_rolling_upgrade_happy_path(manager: ManagerClient) -> None:
     await asyncio.gather(*(wait_for_feature(TEST_FEATURE_NAME, cql, h, time.time() + 60) for h in hosts))
 
 
-async def test_downgrade_after_partial_upgrade(manager: ManagerClient) -> None:
+async def test_downgrade_after_partial_upgrade(manager: ScyllaClusterManager) -> None:
     """Simulates a partial upgrade of a cluster by enabling the test features
        in all nodes but one, then downgrading the upgraded nodes.
     """
@@ -120,7 +121,7 @@ async def test_downgrade_after_partial_upgrade(manager: ManagerClient) -> None:
         assert TEST_FEATURE_NAME not in await get_supported_features(cql, host)
 
 
-async def test_joining_old_node_fails(manager: ManagerClient) -> None:
+async def test_joining_old_node_fails(manager: ScyllaClusterManager) -> None:
     """Upgrades the cluster to enable a new feature. Then, it first tries to
        add a new node without the feature, and then replace an existing node
        with a new node without the feature. The new node should fail to join
@@ -153,7 +154,7 @@ async def test_joining_old_node_fails(manager: ManagerClient) -> None:
     await manager.server_start(new_server_info.server_id, expected_error="Feature check failed|received notification of being banned from the cluster from")
 
 
-async def test_downgrade_after_successful_upgrade_fails(manager: ManagerClient) -> None:
+async def test_downgrade_after_successful_upgrade_fails(manager: ScyllaClusterManager) -> None:
     """Upgrades the cluster to enable the test feature. Then, shuts down all nodes,
        disables support for the feature, then restarts all nodes. All nodes
        should fail to start as none of them support the test feature.
@@ -181,7 +182,7 @@ async def test_downgrade_after_successful_upgrade_fails(manager: ManagerClient) 
     link="https://github.com/scylladb/scylladb/issues/14194",
     reason="Nodes removed from the cluster may prevent features from being enabled for A_VERY_LONG_TIME (3 days) ",
 )
-async def test_partial_upgrade_can_be_finished_with_removenode(manager: ManagerClient) -> None:
+async def test_partial_upgrade_can_be_finished_with_removenode(manager: ScyllaClusterManager) -> None:
     """Upgrades all but one node in the cluster to enable the test feature.
        Then, the last one is shut down and removed via `nodetool removenode`.
        After that, the test only feature should be enabled on all nodes.

@@ -12,9 +12,10 @@ import pathlib
 import contextlib
 import time
 
-from test.pylib.manager_client import ManagerClient, ServerInfo
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import read_barrier, HTTPError
-from test.pylib.scylla_cluster import ScyllaVersionDescription
+from test.pylib.scylla_server import ScyllaVersionDescription
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature
 from test.cluster.util import reconnect_driver
 from cassandra.cluster import ConsistencyLevel
@@ -25,7 +26,7 @@ from cassandra.query import SimpleStatement
 logger = logging.getLogger(__name__)
 
 
-async def test_upgrade_and_rollback(manager: ManagerClient, scylla_2025_1: ScyllaVersionDescription, scylla_binary: pathlib.Path):
+async def test_upgrade_and_rollback(manager: ScyllaClusterManager, scylla_2025_1: ScyllaVersionDescription, scylla_binary: pathlib.Path):
 
     logger.info("Bootstrapping cluster")
     servers = (await manager.servers_add(2, cmdline=[

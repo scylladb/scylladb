@@ -1,0 +1,81 @@
+From a04c1eced55f2f3ea8dbd3d17db0b6df271c0809 Mon Sep 17 00:00:00 2001
+From: Stefan Weigl-Bosker <stefan@s00.xyz>
+Date: Mon, 18 May 2026 10:47:14 -0400
+Subject: [PATCH] [X86] Fix EVEX compression for VPMOV*2M + KMOV with tied mask
+ use (#198220)
+
+When scanning uses of the mask produced by `VPMOV*2M`, we previously bailed out as soon as we encountered a write. For tied read/write mask instructions such as `KSHIFTR*`, which both read and write the same mask register, the pass could miss the use, fold the earlier `KMOV`, and erase the `VPMOV*2M` def even though the mask was still live.
+
+Disclaimer: LLM came up with the MIR tests and explained this pass to me.
+
+Fixes #198197
+
+(cherry picked from commit f0fc9d0abf7024ceb5cb827b16f02c10e54fe0fd)
+---
+ llvm/lib/Target/X86/X86CompressEVEX.cpp        | 12 ++++++------
+ llvm/test/CodeGen/X86/evex-to-vex-compress.mir | 12 ++++++++++++
+ 2 files changed, 18 insertions(+), 6 deletions(-)
+
+diff --git a/llvm/lib/Target/X86/X86CompressEVEX.cpp b/llvm/lib/Target/X86/X86CompressEVEX.cpp
+index c1faf7d1aa1e..b8fbcd2582de 100644
+--- a/llvm/lib/Target/X86/X86CompressEVEX.cpp
++++ b/llvm/lib/Target/X86/X86CompressEVEX.cpp
+@@ -271,12 +271,6 @@ static bool tryCompressVPMOVPattern(MachineInstr &MI, MachineBasicBlock &MBB,
+ 
+   for (MachineInstr &CurMI : llvm::make_range(
+            std::next(MachineBasicBlock::iterator(MI)), MBB.end())) {
+-    if (CurMI.modifiesRegister(MaskReg, TRI)) {
+-      if (!KMovMI)
+-        return false; // Mask clobbered before use
+-      break;
+-    }
+-
+     if (CurMI.readsRegister(MaskReg, TRI)) {
+       if (KMovMI)
+         return false; // Fail: Mask has MULTIPLE uses
+@@ -295,6 +289,12 @@ static bool tryCompressVPMOVPattern(MachineInstr &MI, MachineBasicBlock &MBB,
+       }
+     }
+ 
++    if (CurMI.modifiesRegister(MaskReg, TRI)) {
++      if (!KMovMI)
++        return false; // Mask clobbered before use
++      break;
++    }
++
+     if (!KMovMI && CurMI.modifiesRegister(SrcVecReg, TRI)) {
+       return false; // SrcVecReg modified before it could be used by MOVMSK
+     }
+diff --git a/llvm/test/CodeGen/X86/evex-to-vex-compress.mir b/llvm/test/CodeGen/X86/evex-to-vex-compress.mir
+index b33a1d571c81..575f0c7d6a4f 100644
+--- a/llvm/test/CodeGen/X86/evex-to-vex-compress.mir
++++ b/llvm/test/CodeGen/X86/evex-to-vex-compress.mir
+@@ -914,6 +914,12 @@ body: |
+   $k0 = VPMOVD2MZ256kr                         $ymm0
+   $eax = KMOVBrk                               $k0
+   $ebx = KMOVBrk                               $k0
++  ; CHECK: $k0 = VPMOVD2MZ256kr                $ymm0
++  ; CHECK: $eax = KMOVBrk                      $k0
++  ; CHECK: $k0 = KSHIFTRBki                    $k0, 2
++  $k0 = VPMOVD2MZ256kr                         $ymm0
++  $eax = KMOVBrk                               $k0
++  $k0 = KSHIFTRBki                             $k0, 2
+   ; CHECK: $k0 = VPMOVB2MZ256kr                $ymm0
+   ; CHECK: $eax = KMOVWrk                      $k0
+   $k0 = VPMOVB2MZ256kr                         $ymm0
+@@ -1803,6 +1809,12 @@ body: |
+   $k0 = VPMOVD2MZ128kr                         $xmm0
+   $eax = KMOVBrk                               $k0
+   $ebx = KMOVBrk                               $k0
++  ; CHECK: $k0 = VPMOVD2MZ128kr                $xmm0
++  ; CHECK: $eax = KMOVBrk                      $k0
++  ; CHECK: $k0 = KSHIFTRBki                    $k0, 2
++  $k0 = VPMOVD2MZ128kr                         $xmm0
++  $eax = KMOVBrk                               $k0
++  $k0 = KSHIFTRBki                             $k0, 2
+   ; CHECK: $k0 = VPMOVB2MZ128kr                $xmm0
+   ; CHECK: $eax = KMOVBrk                      $k0
+   $k0 = VPMOVB2MZ128kr                         $xmm0
+-- 
+2.50.1
+

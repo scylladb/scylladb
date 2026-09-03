@@ -299,6 +299,7 @@ class utils::gcp::storage::client::impl {
     seastar::semaphore& _limits;
     seastar::http::client _client;
     shared_ptr<seastar::tls::certificate_credentials> _certs;
+    seastar::gate _gate;
     future<> authorize(request_wrapper& req, const std::string& scope);
 public:
     impl(const utils::http::url_info&, std::optional<google_credentials>, seastar::semaphore*, shared_ptr<seastar::tls::certificate_credentials> creds);
@@ -541,6 +542,9 @@ using namespace std::chrono_literals;
  */
 future<>
 utils::gcp::storage::client::impl::send_with_retry(const std::string& path, const std::string& scope, body_variant body, std::string_view content_type, handler_func_ex handler, httpclient::method_type op, key_values headers, seastar::abort_source* as) {
+    // Held for the whole request. close() waits for the gate before closing
+    // _client, so no http connection can outlive it.
+    auto holder = _gate.hold();
     rest::request_wrapper req(_endpoint);
     req.target(path);
     req.method(op);
@@ -558,7 +562,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
     req.add_header("Content-Length", std::to_string(req.request().content_length));
 
     gcp_storage.trace("Sending: {}", redacted_request_type {
-        req.request(),
+        req,
         bearer_filter()
     });
 
@@ -651,6 +655,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
 }
 
 future<> utils::gcp::storage::client::impl::close() {
+    co_await _gate.close();
     co_await _client.close();
 }
 
@@ -746,11 +751,19 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
     auto end = offset + len;
 
     for (;;) {
-        auto range = fmt::format("bytes {}-{}/{}"
-            , offset // first byte
-            , last // last byte
-            , final ? std::to_string(end) : "*"s
-        );
+        // A zero-length chunk names no bytes, so it must not name a last byte:
+        // "bytes 0-0/0" claims byte 0 exists in an object declared to be empty,
+        // and GCS rejects it with 400. "bytes */<total>" is the documented form
+        // for finalizing a session without sending data. This covers both a
+        // genuinely empty object and the case where earlier writes happened to
+        // drain the buffer exactly, leaving nothing for the final chunk.
+        auto range = len == 0
+            ? fmt::format("bytes */{}", end)
+            : fmt::format("bytes {}-{}/{}"
+                , offset // first byte
+                , last // last byte
+                , final ? std::to_string(end) : "*"s
+            );
 
         try {
             if (_session_path.empty()) {
@@ -1148,6 +1161,23 @@ future<> utils::gcp::storage::client::delete_bucket(std::string_view bucket_in, 
     }
 }
 
+// The GCS object resource carries user-defined attributes in its "metadata"
+// member.  Callers hand us plain key/value pairs, so building that member -- and
+// knowing that this is where GCS keeps them -- belongs here rather than in the
+// generic object-storage layer above.
+static rjson::value make_object_resource(const utils::gcp::storage::object_metadata& metadata) {
+    if (metadata.empty()) {
+        return {};
+    }
+    rjson::value members = rjson::empty_object();
+    for (const auto& [key, value] : metadata) {
+        rjson::add_with_string_name(members, key, rjson::from_string(value));
+    }
+    rjson::value resource = rjson::empty_object();
+    rjson::add(resource, "metadata", std::move(members));
+    return resource;
+}
+
 static utils::gcp::storage::object_info create_info(const rjson::value& item) {
     utils::gcp::storage::object_info info;
 
@@ -1156,6 +1186,17 @@ static utils::gcp::storage::object_info create_info(const rjson::value& item) {
     info.size = std::stoull(rjson::get<std::string>(item, "size"));
     info.generation = std::stoull(rjson::get<std::string>(item, "generation"));
     info.modified = parse_rfc3339(rjson::get<std::string>(item, "updated"));
+    // An object with no user-defined attributes has no "metadata" member at all,
+    // but treat an explicit null as the same thing rather than failing the whole
+    // listing over it.
+    if (auto metadata = rjson::find(item, "metadata"); metadata && !metadata->IsNull()) {
+        if (!metadata->IsObject()) {
+            throw utils::gcp::storage::failed_operation("Malformed object metadata");
+        }
+        for (const auto& member : metadata->GetObject()) {
+            info.metadata.emplace(member.name.GetString(), rjson::to_string(member.value));
+        }
+    }
 
     return info;
 }
@@ -1275,7 +1316,7 @@ future<> utils::gcp::storage::client::delete_object(std::string_view bucket_in, 
 // See https://cloud.google.com/storage/docs/copying-renaming-moving-objects
 // GCP does not support moveTo across buckets.
 future<> utils::gcp::storage::client::rename_object(std::string_view bucket, std::string_view object_name, std::string_view new_bucket, std::string_view new_name, seastar::abort_source* as) {
-    co_await copy_object(bucket, object_name, new_bucket, new_name, as);
+    co_await copy_object(bucket, object_name, new_bucket, new_name, object_metadata{}, as);
     co_await delete_object(bucket, object_name, as);
 }
 
@@ -1314,8 +1355,9 @@ future<> utils::gcp::storage::client::rename_object(std::string_view bucket_in, 
 // See https://cloud.google.com/storage/docs/copying-renaming-moving-objects
 // Copying an object in GCP can only process a certain amount of data in one call
 // Must keep doing it until all data is copied, and check response.
-future<> utils::gcp::storage::client::copy_object(std::string_view bucket_in, std::string_view object_name_in, std::string_view new_bucket_in, std::string_view to_name_in, seastar::abort_source* as) {
+future<> utils::gcp::storage::client::copy_object(std::string_view bucket_in, std::string_view object_name_in, std::string_view new_bucket_in, std::string_view to_name_in, object_metadata metadata, seastar::abort_source* as) {
     std::string bucket(bucket_in), object_name(object_name_in), new_bucket(new_bucket_in), to_name(to_name_in);
+    auto resource = make_object_resource(metadata);
 
     auto path = fmt::format("/storage/v1/b/{}/o/{}/rewriteTo/b/{}/o/{}"
         , bucket
@@ -1323,7 +1365,7 @@ future<> utils::gcp::storage::client::copy_object(std::string_view bucket_in, st
         , new_bucket
         , seastar::http::internal::url_encode(to_name)
     );
-    std::string body = "{}";
+    std::string body = resource.IsObject() ? rjson::print(resource) : "{}";
 
     for (;;) {
         auto res = co_await _impl->send_with_retry(path
@@ -1352,7 +1394,9 @@ future<> utils::gcp::storage::client::copy_object(std::string_view bucket_in, st
         auto size = rjson::get<uint64_t>(resp, "objectSize");
 
         // Call 2+ must include the rewriteToken
-        body = fmt::format("{{\"rewriteToken\": \"{}\"}}", token);
+        rjson::value rewrite_request = resource.IsObject() ? rjson::copy(resource) : rjson::empty_object();
+        rjson::add(rewrite_request, "rewriteToken", token);
+        body = rjson::print(rewrite_request);
 
         gcp_storage.debug("Partial copy of {}:{} to {}:{} ({}/{})", bucket, object_name, new_bucket, to_name, written, size);
     }
@@ -1398,12 +1442,12 @@ future<utils::gcp::storage::object_info> utils::gcp::storage::client::merge_obje
     co_return create_info(resp);
 }
 
-future<> utils::gcp::storage::client::copy_object(std::string_view bucket, std::string_view object_name, std::string_view to_name, seastar::abort_source* as) {
-    co_await copy_object(bucket, object_name, bucket, to_name, as);
+future<> utils::gcp::storage::client::copy_object(std::string_view bucket, std::string_view object_name, std::string_view to_name, object_metadata metadata, seastar::abort_source* as) {
+    co_await copy_object(bucket, object_name, bucket, to_name, std::move(metadata), as);
 }
 
-seastar::data_sink utils::gcp::storage::client::create_upload_sink(std::string_view bucket, std::string_view object_name, rjson::value metadata, seastar::abort_source* as) const {
-    return seastar::data_sink(std::make_unique<object_data_sink>(_impl, bucket, object_name, std::move(metadata), as));
+seastar::data_sink utils::gcp::storage::client::create_upload_sink(std::string_view bucket, std::string_view object_name, object_metadata metadata, seastar::abort_source* as) const {
+    return seastar::data_sink(std::make_unique<object_data_sink>(_impl, bucket, object_name, make_object_resource(metadata), as));
 }
 
 seekable_data_source utils::gcp::storage::client::create_download_source(std::string_view bucket, std::string_view object_name, seastar::abort_source* as) const {
@@ -1432,6 +1476,19 @@ future<bool> storage::client::object_exists(std::string_view bucket, std::string
         throw;
     }
     co_return true;
+}
+
+future<utils::gcp::storage::object_info> storage::client::get_object_info(std::string_view bucket_in, std::string_view object_name_in, seastar::abort_source* as) const {
+    std::string bucket(bucket_in), object_name(object_name_in);
+    gcp_storage.debug("Get object metadata {}:{}", bucket, object_name);
+
+    auto path = fmt::format("/storage/v1/b/{}/o/{}", bucket, seastar::http::internal::url_encode(object_name));
+    auto res = co_await _impl->send_with_retry(path, GCP_OBJECT_SCOPE_READ_ONLY, ""s, ""s, httpclient::method_type::GET, {}, as);
+    if (res.result() != status_type::ok) {
+        throw failed_operation(
+            fmt::format("Could not retrieve object metadata {}:{}: {} ({})", bucket, object_name, res.result(), get_gcp_error_message(res.body())));
+    }
+    co_return create_info(rjson::parse(res.body()));
 }
 
 future<> utils::gcp::storage::client::close() {

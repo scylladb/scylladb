@@ -113,6 +113,83 @@ SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_and_reload_of_bloom_filter) 
     });
 }
 
+// Reproducer for https://github.com/scylladb/scylladb/issues/31202.
+// Sstables with the same partition estimate have equally sized bloom filters,
+// so they share the key of the manager's reclaimed set. All of them have to be
+// tracked, otherwise their filters are never reloaded.
+SEASTAR_TEST_CASE(test_reclaim_and_reload_of_equal_sized_bloom_filters) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto schema_ptr = ss.schema();
+        auto& sst_mgr = env.manager();
+
+        auto [sst1, sst1_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 70);
+        auto [sst2, sst2_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 70);
+        BOOST_REQUIRE_EQUAL(sst1_bf_memory, sst2_bf_memory);
+        // both filters fit under the threshold
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), 0);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_reclaimable_memory(), sst1_bf_memory + sst2_bf_memory);
+
+        // drop the threshold to reclaim both filters
+        env.db_config().components_memory_reclaim_threshold.set(0);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst_mgr.get_total_memory_reclaimed(); }, sst1_bf_memory + sst2_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_reclaimed_set().size(), 2);
+        BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), 0);
+        BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), 0);
+
+        // restore the threshold; both filters have to be reloaded
+        env.db_config().components_memory_reclaim_threshold.set(0.2);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst_mgr.get_total_memory_reclaimed(); }, 0);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_reclaimed_set().size(), 0);
+        BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), sst1_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), sst2_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_reclaimable_memory(), sst1_bf_memory + sst2_bf_memory);
+    }, {
+        // limit available memory to the sstables_manager to test reclaiming.
+        // this will set the reclaim threshold to 200 bytes.
+        .available_memory = 1000
+    });
+}
+
+// Reproducer for https://github.com/scylladb/scylladb/issues/31202.
+// Disposing an sstable reclaims its components, which gives it the same
+// reclaimed memory as an sstable already tracked in the reclaimed set. The
+// tracked sstable must not be evicted from the set by the disposal.
+SEASTAR_TEST_CASE(test_reclaimed_bloom_filter_survives_disposal_of_equal_sized_sstable) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto schema_ptr = ss.schema();
+        auto& sst_mgr = env.manager();
+
+        auto [sst1, sst1_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 70);
+        auto [sst2, sst2_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 70);
+        BOOST_REQUIRE_EQUAL(sst1_bf_memory, sst2_bf_memory);
+
+        // dropping one of the two equally sized filters brings the total memory
+        // usage back under the threshold, so exactly one of them is reclaimed.
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst_mgr.get_total_memory_reclaimed(); }, sst1_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_reclaimed_set().size(), 1);
+        // the victim is chosen by the manager, so identify it instead of assuming it
+        const bool sst1_reclaimed = sst1->filter_memory_size() == 0;
+        auto& reclaimed_sst = sst1_reclaimed ? sst1 : sst2;
+        auto& loaded_sst = sst1_reclaimed ? sst2 : sst1;
+        BOOST_REQUIRE_EQUAL(loaded_sst->filter_memory_size(), sst1_bf_memory);
+
+        // The disposal reclaims the loaded sstable's filter, giving it the same
+        // reclaimed memory as its twin. The twin must remain in the set...
+        dispose_and_stop_tracking_bf_memory(std::move(loaded_sst), sst_mgr);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_reclaimed_set().size(), 1);
+        // ...and its filter must be reloaded once the disposal frees up memory.
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return reclaimed_sst->filter_memory_size(); }, sst1_bf_memory);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst_mgr.get_total_memory_reclaimed(); }, 0);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_reclaimed_set().size(), 0);
+    }, {
+        // limit available memory to the sstables_manager to test reclaiming.
+        // this will set the reclaim threshold to 100 bytes.
+        .available_memory = 500
+    });
+}
+
 // Reproducer for https://github.com/scylladb/scylladb/issues/18398.
 SEASTAR_TEST_CASE(test_reclaimed_bloom_filter_deletion_from_disk) {
     return test_env::do_with_async([] (test_env& env) {
@@ -265,7 +342,8 @@ SEASTAR_TEST_CASE(test_bloom_filter_reload_after_unlink) {
         simple_schema ss;
         auto schema = ss.schema();
 
-        auto mut = mutation(schema, ss.make_pkey(1));
+        // make_pkey() picks a key owned by this shard, unlike make_pkey(n).
+        auto mut = mutation(schema, ss.make_pkey());
         mut.partition().apply_insert(*schema, ss.make_ckey(1), ss.new_timestamp());
 
         // bloom filter will be reclaimed automatically due to low memory
@@ -317,9 +395,10 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_after_unlink) {
         simple_schema ss;
         auto schema = ss.schema();
 
+        // make_pkeys() picks keys owned by this shard, unlike make_pkey(n).
         utils::chunked_vector<mutation> mutations;
-        for (int i = 0; i < 10; i++) {
-            auto mut = mutation(schema, ss.make_pkey(i));
+        for (auto& pk : ss.make_pkeys(10)) {
+            auto mut = mutation(schema, pk);
             mut.partition().apply_insert(*schema, ss.make_ckey(1), ss.new_timestamp());
             mutations.push_back(std::move(mut));
         }
@@ -332,10 +411,10 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_after_unlink) {
         BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), 0);
 
         // hold a copy of shared sst object in async thread to test reclaim after unlink
-        utils::get_local_injector().enable("test_bloom_filter_reload_after_unlink");
+        utils::get_local_injector().enable("test_bloom_filter_reclaim_after_unlink");
         auto async_sst_holder = seastar::async([sst1] {
             // do nothing just hold a copy of sst and wait for message signalling test completion
-            utils::get_local_injector().inject("test_bloom_filter_reload_after_unlink", [] (auto& handler) {
+            utils::get_local_injector().inject("test_bloom_filter_reclaim_after_unlink", [] (auto& handler) {
                 auto ret = handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{5});
                 return ret;
             }).get();
@@ -363,7 +442,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_after_unlink) {
         sst2.release();
 
         // message async thread to complete waiting and thus release its copy of sst, triggering deactivation
-        utils::get_local_injector().receive_message("test_bloom_filter_reload_after_unlink");
+        utils::get_local_injector().receive_message("test_bloom_filter_reclaim_after_unlink");
         async_sst_holder.get();
 
         REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return active_list.size(); }, 0);

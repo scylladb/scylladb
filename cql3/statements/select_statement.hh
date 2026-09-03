@@ -35,6 +35,7 @@ class query_processor;
 
 namespace selection {
     class selection;
+    class external_values_provider;
 } // namespace selection
 
 namespace restrictions {
@@ -100,7 +101,8 @@ public:
     bool _may_use_token_aware_routing = false;
 private:
     future<shared_ptr<cql_transport::messages::result_message>> process_results_complex(foreign_ptr<lw_shared_ptr<query::result>> results,
-        lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now) const;
+        lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now,
+        const cql3::selection::external_values_provider* external_values_provider = nullptr) const;
     void detect_range_scan();
 protected :
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_processor& qp,
@@ -125,6 +127,14 @@ public:
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
+    virtual std::optional<service::pager::query_plan> query_plan_for_paging() const override {
+        return scanned_plan();
+    }
+
+    virtual std::optional<std::string_view> keyspace_for_reparse() const override {
+        return keyspace();
+    }
+
     virtual bool should_reclassify_control_connection() const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute(query_processor& qp,
@@ -148,7 +158,8 @@ public:
         std::optional<service::cas_shard> cas_shard) const;
 
     future<shared_ptr<cql_transport::messages::result_message>> process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
-        lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now) const;
+        lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now,
+        const cql3::selection::external_values_provider* external_values_provider = nullptr) const;
 
     const sstring& keyspace() const;
 
@@ -163,6 +174,10 @@ public:
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 
 protected:
+    // The plan this statement scans, recorded in the paging state it hands out
+    // so that a later page keeps reading the same thing. See #18992.
+    virtual service::pager::query_plan scanned_plan() const;
+
     uint64_t get_limit(const query_options& options, const optimized_optional<expr::expression>& limit, bool is_per_partition_limit = false) const;
     static uint64_t get_inner_loop_limit(uint64_t limit, bool is_aggregate);
 
@@ -228,6 +243,9 @@ public:
                                    const secondary_index::index& index,
                                    schema_ptr view_schema,
                                    std::unique_ptr<cql3::attributes> attrs);
+
+protected:
+    virtual service::pager::query_plan scanned_plan() const override;
 
 private:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_processor& qp,

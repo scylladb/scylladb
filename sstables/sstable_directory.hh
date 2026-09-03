@@ -315,9 +315,9 @@ public:
     //
     // This function only solves the second problem for now.
 
-    // Creates the deletion log for atomic deletion of sstables at `base_dir` (helper for the
-    // above function that's also used by tests)
-    // Returns the name of the pending_delete_log and an unordered_set of sstable prefixes.
+    // Creates and commits the deletion log for atomic deletion of sstables at `base_dir`.
+    // On success, all sstables listed in the log will eventually be deleted.
+    // Returns the name of the pending_delete_log.
     static future<sstring> create_pending_deletion_log(opened_directory& base_dir, const std::vector<shared_sstable>& ssts);
 
     static bool compare_sstable_storage_prefix(std::string_view a, std::string_view b) noexcept;

@@ -117,6 +117,25 @@ SEASTAR_THREAD_TEST_CASE(test_udts) {
     ).get().size(), 2);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_bind_markers_rejected) {
+    db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
+
+    // The loader never evaluates the USING attributes of a dropped-columns
+    // statement, so a marker there used to be swallowed silently. Nothing can
+    // ever bind a value in a schema file, so any marker must be refused.
+    BOOST_REQUIRE_THROW(tools::load_schemas(
+                dbcfg,
+                "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int); "
+                "INSERT INTO system_schema.dropped_columns (keyspace_name, table_name, column_name, dropped_time, type) VALUES ('ks', 'cf', 'v2', 1631011979170675, 'int') USING TIMESTAMP ?; "
+    ).get(), std::exception);
+    BOOST_REQUIRE_THROW(tools::load_schemas(
+                dbcfg,
+                "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int); "
+                "INSERT INTO system_schema.dropped_columns (keyspace_name, table_name, column_name, dropped_time, type) VALUES ('ks', 'cf', 'v2', 1631011979170675, 'int') USING TIMESTAMP :ts; "
+    ).get(), std::exception);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_dropped_columns) {
     db::config dbcfg;
     dbcfg.rf_rack_valid_keyspaces(true);
@@ -231,6 +250,39 @@ SEASTAR_THREAD_TEST_CASE(test_materialized_view) {
                     "    PRIMARY KEY (v, pk);").get(),
             {view_type::view});
 };
+
+/// A view whose WHERE clause has more relations than the default
+/// max_relations_in_where_clause of 100 can only be created by a node with a
+/// raised limit. The tools cannot know that configuration, so they have to load
+/// such a schema regardless of the limit.
+/// Regression test for SCYLLADB-3583.
+SEASTAR_THREAD_TEST_CASE(test_materialized_view_above_default_relation_limit) {
+    db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
+
+    constexpr unsigned relations = 110;
+    std::string column_definitions;
+    std::string key_columns;
+    std::string where;
+    for (unsigned i = 0; i < relations; ++i) {
+        const auto column = fmt::format("c{}", i);
+        column_definitions += fmt::format("{} int, ", column);
+        key_columns += i ? fmt::format(", {}", column) : column;
+        where += i ? fmt::format(" AND {} IS NOT NULL", column) : fmt::format("{} IS NOT NULL", column);
+    }
+
+    check_views(
+            tools::load_schemas(
+                    dbcfg,
+                    fmt::format(
+                            "CREATE TABLE ks.cf ({}v int, PRIMARY KEY ({})); "
+                            "CREATE MATERIALIZED VIEW ks.cf_by_c AS"
+                            "    SELECT * FROM ks.cf"
+                            "    WHERE {}"
+                            "    PRIMARY KEY ({});",
+                            column_definitions, key_columns, where, key_columns)).get(),
+            {view_type::view});
+}
 
 SEASTAR_THREAD_TEST_CASE(test_index) {
     db::config dbcfg;

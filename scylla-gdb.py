@@ -29,6 +29,157 @@ def align_up(ptr, alignment):
     return ptr + alignment - res
 
 
+# Note: this workaround was AI-generated without much thought put into it.
+# It was tested at the time of this writing.
+# It doesn't deserve more effort than that.
+class thread_local_storage:
+    """Locates the thread-local variables of the Scylla executable.
+
+    Evaluating a thread-local variable with `gdb.parse_and_eval()` doesn't
+    always work. On aarch64 gdb fails to compute the address of thread-local
+    variables with internal linkage (`static thread_local`, or `thread_local`
+    of a type from an anonymous namespace), and evaluates them to
+    "value has been optimized out" instead. See
+    https://sourceware.org/bugzilla/show_bug.cgi?id=27886
+
+    We work around that. All thread-local variables of the executable live in
+    a single contiguous per-thread block, and the ELF symbol table assigns
+    each of them a fixed offset within that block (that's what the value of a
+    `.tdata`/`.tbss` symbol is). So one thread-local variable which gdb *can*
+    locate is enough to locate all the others: subtracting its symbol table
+    offset from the address gdb computed for it gives us the address of the
+    block for the selected thread, and adding the offset of the wanted
+    variable gives us its address.
+
+    Thread-local variables with external linkage, e.g. `seastar::local_engine`,
+    are located correctly by gdb even on aarch64, and serve as such anchors.
+    """
+
+    # Thread-local variables with external linkage, tried in order until one of
+    # them can be located by gdb.
+    anchor_candidates = [
+        'seastar::local_engine',
+        'seastar::g_current_context',
+        'seastar::smp::_this_smp',
+    ]
+
+    # Symbol visibility, printed by objdump in front of the symbol name.
+    _visibility_re = re.compile(r'^\.(hidden|protected|internal) ')
+
+    # Suffix which LTO appends to the name of a symbol with internal linkage,
+    # to keep it unique after translation units are merged. The debug info
+    # keeps the original name, so we have to strip it.
+    _private_suffix_re = re.compile(r'\.(llvm|lto_priv|__uniq)\.[0-9A-Za-z_]+$')
+
+    def __init__(self):
+        self._offsets = {}
+        self._anchor = None
+
+    def _symbol_offsets(self, demangle):
+        """Offset of every thread-local symbol of the executable within the TLS block."""
+        if demangle in self._offsets:
+            return self._offsets[demangle]
+        executable = gdb.current_progspace().filename
+        if executable is None:
+            raise gdb.error('Cannot locate thread-local variables: no executable file loaded')
+        command = ['objdump', '--syms'] + (['--demangle'] if demangle else [])
+        try:
+            output = subprocess.check_output(command + [executable], text=True)
+        except (OSError, subprocess.CalledProcessError) as e:
+            raise gdb.error('Cannot locate thread-local variables: reading the symbol table of {} '
+                            'with objdump failed: {}'.format(executable, e))
+        offsets = {}
+        ambiguous = set()
+        # The interesting lines look like (with a tab in front of the size):
+        #   0000000000021900 l       .tbss\t0000000000003200              seastar::memory::cpu_mem
+        # For a thread-local symbol the value column is the offset within the
+        # TLS block instead of an address, which is exactly what we want.
+        for line in output.splitlines():
+            head, tab, tail = line.partition('\t')
+            columns = head.split()
+            if not tab or len(columns) < 2 or columns[-1] not in ('.tdata', '.tbss'):
+                continue
+            size_and_name = tail.split(None, 1)
+            if len(size_and_name) < 2:
+                continue
+            name = self._visibility_re.sub('', size_and_name[1].strip())
+            name = self._private_suffix_re.sub('', name)
+            offset = int(columns[0], 16)
+            if offsets.setdefault(name, offset) != offset:
+                # Variables with internal linkage from different translation
+                # units can share a name. We have no way of telling which one
+                # the caller means, so we refuse to guess.
+                ambiguous.add(name)
+        for name in ambiguous:
+            del offsets[name]
+        self._offsets[demangle] = offsets
+        return offsets
+
+    def _offset_of(self, symbol):
+        """Offset of the thread-local variable `symbol` within the TLS block."""
+        # The linkage name is the mangled one for clang, but gcc doesn't emit
+        # one for variables with internal linkage, and gdb then falls back to
+        # the plain name. So try to match a mangled symbol table first, and a
+        # demangled one second.
+        for demangle in (False, True):
+            offsets = self._symbol_offsets(demangle)
+            if symbol.linkage_name in offsets:
+                return offsets[symbol.linkage_name]
+        raise gdb.error('"{}" is not an unambiguous thread-local symbol of {}'
+                        .format(symbol.linkage_name, gdb.current_progspace().filename))
+
+    def _block_address(self):
+        """Address of the selected thread's block of thread-local variables."""
+        for name in [self._anchor] if self._anchor else self.anchor_candidates:
+            symbol = self._lookup_symbol(name)
+            if symbol is None:
+                continue
+            try:
+                address = int(gdb.parse_and_eval("'{}'".format(name)).address)
+                offset = self._offset_of(symbol)
+            except (gdb.error, TypeError):
+                continue
+            self._anchor = name
+            return address - offset
+        raise gdb.error('Cannot locate thread-local variables: gdb could not locate any of {}'
+                        .format(', '.join(self.anchor_candidates)))
+
+    @staticmethod
+    def _lookup_symbol(name):
+        return gdb.lookup_global_symbol(name) or gdb.lookup_static_symbol(name)
+
+    def get(self, name):
+        """The selected thread's instance of the thread-local variable `name`."""
+        name = name.lstrip(':')
+        try:
+            value = gdb.parse_and_eval("'{}'".format(name))
+            if not value.is_optimized_out:
+                return value
+        except gdb.error:
+            pass
+        symbol = self._lookup_symbol(name)
+        if symbol is None:
+            raise gdb.error('No symbol "{}" in current context.'.format(name))
+        address = self._block_address() + self._offset_of(symbol)
+        if symbol.type.code in (gdb.TYPE_CODE_REF, gdb.TYPE_CODE_RVALUE_REF):
+            # A thread-local reference is stored as a pointer to the referee.
+            referee = symbol.type.target().pointer()
+            return gdb.Value(address).cast(referee.pointer()).dereference().dereference()
+        return gdb.Value(address).cast(symbol.type.pointer()).dereference()
+
+
+_thread_local_storage = thread_local_storage()
+
+
+def thread_local_var(name):
+    """The selected thread's instance of the thread-local variable `name`.
+
+    Use this instead of `gdb.parse_and_eval()` for thread-local variables,
+    which gdb can't always locate on its own. See `thread_local_storage`.
+    """
+    return _thread_local_storage.get(name)
+
+
 def template_arguments(gdb_type):
     n = 0
     while True:
@@ -1477,7 +1628,7 @@ class sharded:
 
 def get_lsa_segment_pool():
     try:
-        tracker = gdb.parse_and_eval('\'logalloc::tracker_instance\'')
+        tracker = thread_local_var('logalloc::tracker_instance')
         tracker_impl = std_unique_ptr(tracker["_impl"]).get().dereference()
         return std_unique_ptr(tracker_impl["_segment_pool"]).get().dereference()
     except gdb.error:
@@ -1908,7 +2059,7 @@ class scylla_task_histogram(gdb.Command):
             return
 
         size = args.size
-        cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
+        cpu_mem = thread_local_var('seastar::memory::cpu_mem')
         page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
         mem_start = cpu_mem['memory']
 
@@ -1987,7 +2138,7 @@ class scylla_task_histogram(gdb.Command):
 
 
 def find_vptrs():
-    cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
+    cpu_mem = thread_local_var('seastar::memory::cpu_mem')
     page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
     mem_start = cpu_mem['memory']
     vptr_type = gdb.lookup_type('uintptr_t').pointer()
@@ -2305,7 +2456,7 @@ class span(object):
 
 
 def spans():
-    cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
+    cpu_mem = thread_local_var('seastar::memory::cpu_mem')
     page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
     nr_pages = int(cpu_mem['nr_pages'])
     pages = cpu_mem['pages']
@@ -2527,7 +2678,7 @@ class scylla_memory(gdb.Command):
         gdb.write('\n')
 
     def invoke(self, arg, from_tty):
-        cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
+        cpu_mem = thread_local_var('seastar::memory::cpu_mem')
         page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
         free_mem = int(cpu_mem['nr_free_pages']) * page_size
         total_mem = int(cpu_mem['nr_pages']) * page_size
@@ -2761,7 +2912,7 @@ class scylla_heapprof(gdb.Command):
             return
 
         root = ProfNode(None)
-        cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
+        cpu_mem = thread_local_var('seastar::memory::cpu_mem')
         site = cpu_mem['alloc_site_list_head']
 
         while site:
@@ -2828,7 +2979,7 @@ class scylla_heapprof(gdb.Command):
 
 
 def get_seastar_memory_start_and_size():
-    cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
+    cpu_mem = thread_local_var('seastar::memory::cpu_mem')
     page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
     total_mem = int(cpu_mem['nr_pages']) * page_size
     start = int(cpu_mem['memory'])
@@ -2941,7 +3092,7 @@ class scylla_ptr(gdb.Command):
             return scylla_ptr._is_seastar_allocator_used
 
         try:
-            gdb.parse_and_eval('&\'seastar::memory::cpu_mem\'')
+            thread_local_var('seastar::memory::cpu_mem')
             scylla_ptr._is_seastar_allocator_used = True
             return True
         except:
@@ -2963,7 +3114,7 @@ class scylla_ptr(gdb.Command):
 
         owning_thread.switch()
 
-        cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
+        cpu_mem = thread_local_var('seastar::memory::cpu_mem')
         page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
         offset = ptr - int(cpu_mem['memory'])
         ptr_page_idx = offset / page_size
@@ -3196,7 +3347,7 @@ def resolve(addr, cache=True, startswith=None):
 
 class lsa_regions(object):
     def __init__(self):
-        lsa_tracker = std_unique_ptr(gdb.parse_and_eval('\'logalloc::tracker_instance\'._impl'))
+        lsa_tracker = std_unique_ptr(thread_local_var('logalloc::tracker_instance')['_impl'])
         self._regions = lsa_tracker['_regions']
         self._region = self._regions['_M_impl']['_M_start']
 
@@ -3236,7 +3387,7 @@ class lsa_object_descriptor(object):
         return self.value / 2
 
     def migrator_ptr(self):
-        static_migrators = gdb.parse_and_eval("'::debug::static_migrators'")
+        static_migrators = thread_local_var('debug::static_migrators')
         return static_migrators['_migrators']['_M_impl']['_M_start'][self.value >> 1]
 
     def migrator(self):
@@ -5284,14 +5435,14 @@ class scylla_small_objects(gdb.Command):
 
     @staticmethod
     def get_object_sizes():
-        cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
+        cpu_mem = thread_local_var('seastar::memory::cpu_mem')
         small_pools = cpu_mem['small_pools']
         nr = int(small_pools['nr_small_pools'])
         return [int(small_pools['_u']['a'][i]['_object_size']) for i in range(nr)]
 
     @staticmethod
     def find_small_pools(object_size):
-        cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
+        cpu_mem = thread_local_var('seastar::memory::cpu_mem')
         small_pools = cpu_mem['small_pools']
         small_pools_a = small_pools['_u']['a']
         nr = int(small_pools['nr_small_pools'])
@@ -6461,10 +6612,10 @@ class scylla_repairs(gdb.Command):
             return
 
         gdb.write('Repairs for which this node is leader:\n')
-        for rm in intrusive_list(gdb.parse_and_eval('debug::repair_meta_for_masters._repair_metas'), link='_tracker_link'):
+        for rm in intrusive_list(thread_local_var('debug::repair_meta_for_masters')['_repair_metas'], link='_tracker_link'):
             self.process(rm, args.memory)
         gdb.write('Repairs for which this node is follower:\n')
-        for rm in intrusive_list(gdb.parse_and_eval('debug::repair_meta_for_followers._repair_metas'), link='_tracker_link'):
+        for rm in intrusive_list(thread_local_var('debug::repair_meta_for_followers')['_repair_metas'], link='_tracker_link'):
             self.process(rm, args.memory)
 
 

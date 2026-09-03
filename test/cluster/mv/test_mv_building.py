@@ -8,9 +8,9 @@ import pytest
 import logging
 import random
 import time
-from test.pylib.manager_client import ManagerClient, wait_for_cql_and_get_hosts
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.tablets import get_tablet_replica
-from test.pylib.util import wait_for, wait_for_view
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, wait_for_view
 from test.cluster.util import get_topology_coordinator, new_test_keyspace, reconnect_driver
 
 from cassandra.cluster import ConsistencyLevel  # type: ignore
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # For more context, see: https://github.com/scylladb/scylladb/issues/21232.
 # This test reproduces the issue in non-tablet mode.
 @pytest.mark.skip_mode(mode='debug', reason='the test needs to do some work which takes too much time in debug mode')
-async def test_view_building_scheduling_group(manager: ManagerClient):
+async def test_view_building_scheduling_group(manager: ScyllaClusterManager):
     # Note: The view building coordinator works in the gossiping scheduling group,
     #       and we intentionally omit it here.
     # Note: We include "view" for keyspaces that don't use the view building coordinator
@@ -74,7 +74,7 @@ async def test_view_building_scheduling_group(manager: ManagerClient):
 # A sanity check test ensures that starting and shutting down Scylla when view building is
 # disabled is conducted properly and we don't run into any issues.
 @pytest.mark.check_nodes_for_errors
-async def test_start_scylla_with_view_building_disabled(manager: ManagerClient):
+async def test_start_scylla_with_view_building_disabled(manager: ScyllaClusterManager):
     server = await manager.server_add(config={"view_building": "false"})
     # The test framework will make sure no errors have been reported.
     # We could simply grep the logs of the node, searching for "ERROR".
@@ -86,7 +86,7 @@ async def test_start_scylla_with_view_building_disabled(manager: ManagerClient):
 # of the base table). The state of the view table corresponding to the index
 # may become inconsistent with the base table because they got detached.
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_view_building_during_drop_index(manager: ManagerClient):
+async def test_view_building_during_drop_index(manager: ScyllaClusterManager):
     server = await manager.server_add()
     cql = manager.get_cql()
     await manager.api.enable_injection(server.ip_addr, "view_builder_consume_end_of_partition_delay", one_shot=True)
@@ -116,7 +116,7 @@ async def test_view_building_during_drop_index(manager: ManagerClient):
 # is completed eventually and is correct.
 # Reproduces #22989
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_interrupt_view_build_shard_registration(manager: ManagerClient):
+async def test_interrupt_view_build_shard_registration(manager: ScyllaClusterManager):
     cmdline = ['--smp=4']
     servers = await manager.servers_add(1, cmdline=cmdline)
     server = servers[0]
@@ -160,7 +160,7 @@ async def test_interrupt_view_build_shard_registration(manager: ManagerClient):
 # even if a build step is empty due to resharding.
 # Reproduces https://github.com/scylladb/scylladb/issues/26523
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_empty_build_step_after_reshard(manager: ManagerClient):
+async def test_empty_build_step_after_reshard(manager: ScyllaClusterManager):
     server = await manager.server_add(cmdline=['--smp', '1', '--logger-log-level', 'view=debug'])
     partitions = random.sample(range(1000), 129) # need more than 128 to allow the first build step to finish and save the progress
     logger.info(f"Using partitions: {partitions}")
@@ -202,7 +202,7 @@ async def test_empty_build_step_after_reshard(manager: ManagerClient):
 #
 # Reproduces scylladb/scylladb#26686.
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_backoff_when_node_fails_task_rpc(manager: ManagerClient):
+async def test_backoff_when_node_fails_task_rpc(manager: ScyllaClusterManager):
     """
     Scenario:
     1. Set up a cluster. Two racks are sufficient.
@@ -310,7 +310,7 @@ async def test_backoff_when_node_fails_task_rpc(manager: ManagerClient):
 # and resumes correctly once they come back.
 # Migrated from dtest materialized_views_test.py::TestMaterializedViews::test_do_not_finish_view_building_with_hints
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_do_not_finish_view_builder_with_nodes_down(manager: ManagerClient):
+async def test_do_not_finish_view_builder_with_nodes_down(manager: ScyllaClusterManager):
     """Test that the view builder does not complete while replica nodes are down,
     and finishes successfully after they are restarted."""
     node_count = 3

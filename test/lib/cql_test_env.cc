@@ -50,6 +50,7 @@
 #include "db/batchlog_manager.hh"
 #include "schema/schema_builder.hh"
 #include "schema/compression_initializer.hh"
+#include "schema/speculative_retry_initializer.hh"
 #include "db/view/view_building_state.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/log.hh"
@@ -96,6 +97,7 @@ future<scheduling_groups> get_scheduling_groups() {
         _scheduling_groups->compaction_scheduling_group = co_await create_scheduling_group("compaction", 1000);
         _scheduling_groups->maintenance_compaction_scheduling_group = co_await create_scheduling_group("maintenance_compaction", 200);
         _scheduling_groups->memory_compaction_scheduling_group = co_await create_scheduling_group("mem_compaction", 1000);
+        _scheduling_groups->logstor_compaction_scheduling_group = co_await create_scheduling_group("logstor_compaction", 1000);
         _scheduling_groups->streaming_scheduling_group = co_await create_scheduling_group("streaming", 200);
         _scheduling_groups->statement_scheduling_group = co_await create_scheduling_group("statement", 1000);
         _scheduling_groups->memtable_scheduling_group = co_await create_scheduling_group("memtable", 1000);
@@ -123,6 +125,10 @@ cql_test_config::cql_test_config(shared_ptr<db::config> cfg)
     db_config->commitlog_use_o_dsync(false);
 
     db_config->rf_rack_valid_keyspaces(true);
+
+    // Preallocating and zero-filling logstor files wastes disk space and I/O
+    // for data that is thrown away when the test ends.
+    db_config->logstor_sparse_files(true);
 }
 
 cql_test_config::cql_test_config(const cql_test_config&) = default;
@@ -221,6 +227,7 @@ private:
         return cql3::dialect{
             .duplicate_bind_variable_names_refer_to_same_variable = _db.local().get_config().cql_duplicate_bind_variable_names_refer_to_same_variable(),
             .max_relations_in_where_clause = _db.local().get_config().max_relations_in_where_clause(),
+            .in_bind_variable_name_uses_uppercase_operator = _db.local().get_config().cql_in_bind_variable_name_uses_uppercase_operator(),
         };
     }
 
@@ -612,6 +619,7 @@ private:
             register_compression_initializer(*cfg, [this] {
                 return bool(_feature_service.local().sstable_compression_dicts);
             });
+            register_speculative_retry_initializer(*cfg);
 
             // Important to restore schema initializers during shutdown to
             // support tests that repeatedly create `cql_test_env` instances.
@@ -665,6 +673,7 @@ private:
             dbcfg.compaction_scheduling_group = scheduling_groups.compaction_scheduling_group;
             dbcfg.maintenance_compaction_scheduling_group = scheduling_groups.maintenance_compaction_scheduling_group;
             dbcfg.memory_compaction_scheduling_group = scheduling_groups.memory_compaction_scheduling_group;
+            dbcfg.logstor_compaction_scheduling_group = scheduling_groups.logstor_compaction_scheduling_group;
             dbcfg.streaming_scheduling_group = scheduling_groups.streaming_scheduling_group;
             dbcfg.statement_scheduling_group = scheduling_groups.statement_scheduling_group;
             dbcfg.memtable_scheduling_group = scheduling_groups.memtable_scheduling_group;
@@ -1065,6 +1074,10 @@ private:
             replica::distributed_loader::init_non_system_keyspaces(_db, _proxy, _sys_ks).get();
 
             _db.invoke_on_all([] (replica::database& db) {
+                return db.recover_logstor();
+            }).get();
+
+            _db.invoke_on_all([] (replica::database& db) {
                 db.get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<replica::table> table) {
                     replica::table& t = *table;
                     t.enable_auto_compaction();
@@ -1310,7 +1323,7 @@ public:
             local_qp().get_cql_stats());
         auto qs = make_query_state();
         auto& lqo = *qo;
-        return local_qp().execute_batch_without_checking_exception_message(batch, *qs, lqo, {}).then([qs, batch, qo = std::move(qo)] (auto msg) {
+        return local_qp().execute_batch_without_checking_exception_message(batch, *qs, lqo, batch->get_statements().size(), {}).then([qs, batch, qo = std::move(qo)] (auto msg) {
             return cql_transport::messages::propagate_exception_as_future(std::move(msg));
         });
     }

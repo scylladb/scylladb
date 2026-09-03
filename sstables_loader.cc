@@ -229,7 +229,7 @@ private:
         sstables::sstable_open_config cfg {
             .unsealed_sstable = true,
         };
-        co_await sst->load(table.get_effective_replication_map()->get_sharder(*table.schema()), cfg);
+        co_await sst->load(_erm->get_sharder(*table.schema()), cfg);
         co_await table.add_new_sstable_and_update_cache(sst, [&sst_manager, sst] (sstables::shared_sstable loading_sst) -> future<> {
             if (loading_sst == sst) {
                 auto writer_cfg = sst_manager.configure_writer(loading_sst->get_origin());
@@ -956,6 +956,15 @@ future<sstables::shared_sstable> sstables_loader::attach_sstable(table_id tid, c
     co_return sst;
 }
 
+// Joins a backup location's prefix with a path that is relative to it, the same
+// way cluster-wide backup composes its object keys (db/snapshot/cluster_backup.cc).
+static sstring join_path(std::string_view prefix, std::string_view relative_path) {
+    if (prefix.empty()) {
+        return sstring(relative_path);
+    }
+    return fmt::format("{}/{}", prefix, relative_path);
+}
+
 future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid, locator::tablet_metadata_guard& guard) {
     auto& tmap = guard.get_tablet_map();
 
@@ -964,7 +973,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         throw std::runtime_error(fmt::format("No transition info for tablet {}", tid));
     }
     if (!trinfo->session_id) {
-        throw std::runtime_error(fmt::format("Restore of tablet {} was cancelled", tid));
+        throw std::runtime_error(fmt::format("Restore of tablet {} was aborted", tid));
     }
     if (trinfo->snapshot_name.empty()) {
         throw std::runtime_error(format("No snapshot name for tablet {} restore transition", tid));
@@ -1016,7 +1025,8 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
 
     std::unordered_map<sstring, std::vector<sstring>> toc_names_by_prefix;
     for (const auto& e : fully) {
-        toc_names_by_prefix[e.prefix].emplace_back(e.toc_name);
+        // e.prefix is relative to the backup location's own prefix (snapshot_remote_locations.prefix).
+        toc_names_by_prefix[join_path(snapshot_info.prefix, e.prefix)].emplace_back(e.toc_name);
     }
 
     auto ep_type = _storage_manager.get_endpoint_type(snapshot_info.endpoint);
@@ -1202,7 +1212,7 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
     co_return manifest_summary{tablet_count, sstables->Size()};
 }
 
-future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring expected_snapshot_name, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
+future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
     if (manifest_prefixes.empty()) {
         throw std::invalid_argument("manifest prefixes list must not be empty");
     }
@@ -1216,8 +1226,8 @@ future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::sto
     size_t nr_sstables = 0;
 
     co_await seastar::max_concurrent_for_each(manifest_prefixes, 16, [&] (const sstring& manifest_prefix) {
-        // Download the manifest JSON file
-        sstables::object_name name(bucket, manifest_prefix);
+        // Manifest entries are relative to the backup location's prefix, same as start_restore.
+        sstables::object_name name(bucket, join_path(prefix, manifest_prefix));
         auto source = client->make_download_source(name);
         return seastar::with_closeable(input_stream<char>(std::move(source)), [&] (input_stream<char>& is) {
             return process_manifest(is, keyspace, table, expected_snapshot_name, manifest_prefix, sys_dist_ks, cl).then([&](manifest_summary ms) {
@@ -1347,7 +1357,9 @@ protected:
 
         try {
             llog.info("Restoring table with tid {} to the original schema", _tid);
-            co_await loader._ss.local().alter_table_with_tablet_hints(_tid, min_tablet_count, max_tablet_count, false);
+            // remove_unset: the table saved nullopt because it had no hint of its own, and
+            // passing nullopt back would leave it pinned at min == max forever.
+            co_await loader._ss.local().alter_table_with_tablet_hints(_tid, min_tablet_count, max_tablet_count, false, true);
         } catch (...) {
             llog.error("Failed to restore original schema for table_id {}. Error: {}", _tid, std::current_exception());
         }
@@ -1364,7 +1376,7 @@ protected:
 };
 
 future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, sstring endpoint, sstring bucket, sstring prefix, utils::chunked_vector<sstring> manifests) {
-    auto summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, endpoint, bucket, snap_name, std::move(manifests));
+    auto summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, endpoint, bucket, prefix, snap_name, std::move(manifests));
 
     auto datacenter = _db.local().get_token_metadata().get_topology().get_datacenter();
 

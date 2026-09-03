@@ -8,7 +8,7 @@ Test replacing node in different scenarios
 """
 import time
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import wait_for_token_ring_and_group0_consistency, wait_for_cql_and_get_hosts, wait_for
 import pytest
 import logging
@@ -20,7 +20,7 @@ from test.pylib.random_tables import RandomTables, Column, TextType
 logger = logging.getLogger(__name__)
 
 
-async def test_replace_different_ip(manager: ManagerClient) -> None:
+async def test_replace_different_ip(manager: ScyllaClusterManager) -> None:
     """Replace an existing node with new node using a different IP address"""
     servers = await manager.servers_add(3)
     logger.info(f"cluster started, servers {servers}")
@@ -65,7 +65,7 @@ async def test_replace_different_ip(manager: ManagerClient) -> None:
         await wait_for(check_peers_and_gossiper, time.time() + 60)
         logger.info(f"server {s} system.peers and gossiper state is valid")
 
-async def test_replace_different_ip_using_host_id(manager: ManagerClient) -> None:
+async def test_replace_different_ip_using_host_id(manager: ScyllaClusterManager) -> None:
     """Replace an existing node with new node reusing the replaced node host id"""
     servers = await manager.servers_add(3)
     await manager.server_stop(servers[0].server_id, convict=True)
@@ -73,7 +73,7 @@ async def test_replace_different_ip_using_host_id(manager: ManagerClient) -> Non
     await manager.server_add(replace_cfg)
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
-async def test_replace_reuse_ip(request, manager: ManagerClient) -> None:
+async def test_replace_reuse_ip(request, manager: ScyllaClusterManager) -> None:
     """Replace an existing node with new node using the same IP address"""
     servers = await manager.servers_add(3, auto_rack_dc="dc1")
     host2 = (await wait_for_cql_and_get_hosts(manager.get_cql(), [servers[2]], time.time() + 60))[0]
@@ -126,7 +126,7 @@ async def test_replace_reuse_ip(request, manager: ManagerClient) -> None:
     await manager.server_sees_other_server(servers[1].ip_addr, servers[0].ip_addr)
     await manager.server_sees_other_server(servers[2].ip_addr, servers[0].ip_addr)
 
-async def test_replace_reuse_ip_using_host_id(manager: ManagerClient) -> None:
+async def test_replace_reuse_ip_using_host_id(manager: ScyllaClusterManager) -> None:
     """Replace an existing node with new node using the same IP address and same host id"""
     servers = await manager.servers_add(3)
     await manager.server_stop(servers[0].server_id, convict=True)

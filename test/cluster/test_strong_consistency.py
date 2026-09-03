@@ -8,15 +8,15 @@ import re
 from datetime import datetime
 from typing import Tuple
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import gather_safely, wait_for, Host
-from test.cluster.util import new_test_keyspace, new_test_table, reconnect_driver
+from test.cluster.util import new_test_keyspace, new_test_table
 from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
 from cassandra.policies import FallthroughRetryPolicy
 from cassandra.protocol import InvalidRequest
-from cassandra.query import SimpleStatement, BoundStatement
+from cassandra.query import SimpleStatement, BoundStatement, BatchStatement, BatchType
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_replicas
 from test.pylib.rest_client import read_barrier
 
@@ -39,7 +39,7 @@ DEFAULT_CMDLINE = [
     ]
 
 
-async def wait_for_leader(manager: ManagerClient, s: ServerInfo, group_id: str):
+async def wait_for_leader(manager: ScyllaClusterManager, s: ServerInfo, group_id: str):
     async def get_leader_host_id():
         result = await manager.api.get_raft_leader(s.ip_addr, group_id)
         return None if uuid.UUID(result).int == 0 else result
@@ -86,7 +86,7 @@ def assert_raft_state_continuity(state_before: dict, state_after: dict, context:
 # Verify that reads and writes to raft tables for strongly consistent tablets
 # are always routed to the expected shards, according to the tablet's
 # assignment.
-async def assert_no_cross_shard_routing(manager: ManagerClient, server: ServerInfo):
+async def assert_no_cross_shard_routing(manager: ScyllaClusterManager, server: ServerInfo):
     log = await manager.server_open_log(server.server_id)
 
     # Check partitioner logs
@@ -113,12 +113,12 @@ async def assert_no_cross_shard_routing(manager: ManagerClient, server: ServerIn
             f"but partitioner computed shard {shard_from_partitioner}."
         )
 
-async def get_table_raft_group_id(manager: ManagerClient, ks: str, table: str):
+async def get_table_raft_group_id(manager: ScyllaClusterManager, ks: str, table: str):
     table_id = await manager.get_table_id(ks, table)
     rows = await manager.get_cql().run_async(f"SELECT raft_group_id FROM system.tablets where table_id = {table_id}")
     return str(rows[0].raft_group_id)
 
-async def test_basic_write_read(manager: ManagerClient, build_mode: str):
+async def test_basic_write_read(manager: ScyllaClusterManager, build_mode: str):
 
     logger.info("Bootstrapping cluster")
     cmdline = DEFAULT_CMDLINE
@@ -330,7 +330,7 @@ async def test_basic_write_read(manager: ManagerClient, build_mode: str):
     # To check that the servers can be stopped gracefully. By default the test runner just kills them.
     await gather_safely(*[manager.server_stop_gracefully(s.server_id) for s in servers])
 
-async def test_multi_shard_write_read(manager: ManagerClient):
+async def test_multi_shard_write_read(manager: ScyllaClusterManager):
     """
     Verify that strongly consistent tables work correctly on non-shard-0.
 
@@ -365,7 +365,7 @@ async def test_multi_shard_write_read(manager: ManagerClient):
 
     await gather_safely(*[manager.server_stop_gracefully(s.server_id) for s in servers])
 
-async def test_sc_multishard_metadata_reads(manager: ManagerClient):
+async def test_sc_multishard_metadata_reads(manager: ScyllaClusterManager):
     """
     Verify that multi-shard reads of raft metadata for strongly-consistent tables work correctly.
     """
@@ -451,7 +451,7 @@ async def test_sc_multishard_metadata_reads(manager: ManagerClient):
 
     await manager.server_stop_gracefully(server.server_id)
 
-async def test_sc_persistence_restart_with_smp_increase(manager: ManagerClient):
+async def test_sc_persistence_restart_with_smp_increase(manager: ScyllaClusterManager):
     """
     Verify that the metadata for strongly-consistent tables
     is preserved after increasing shard count (--smp).
@@ -480,8 +480,7 @@ async def test_sc_persistence_restart_with_smp_increase(manager: ManagerClient):
 
             await manager.server_update_cmdline(server.server_id, ['--smp=4'])
             await manager.server_restart(server.server_id)
-            await reconnect_driver(manager)
-            cql = manager.get_cql()
+            (cql, hosts) = await manager.get_ready_cql([server])
 
             # We can't read the internal raft state directly, so we perform extra writes
             # which should cause raft table updates based on the loaded state after restart.
@@ -502,7 +501,7 @@ async def test_sc_persistence_restart_with_smp_increase(manager: ManagerClient):
     await manager.server_stop_gracefully(server.server_id)
 
 
-async def test_sc_persistence_with_compaction(manager: ManagerClient):
+async def test_sc_persistence_with_compaction(manager: ScyllaClusterManager):
     """
     Verify that compaction of system.raft_groups works correctly.
 
@@ -532,8 +531,7 @@ async def test_sc_persistence_with_compaction(manager: ManagerClient):
 
             # Restart to verify compacted SSTables are correctly readable by raft server
             await manager.server_restart(server.server_id)
-            await reconnect_driver(manager)
-            cql = manager.get_cql()
+            (cql, hosts) = await manager.get_ready_cql([server])
 
             # We can't read the internal raft state directly, so we perform extra writes
             # which should cause raft table updates based on the loaded state after restart.
@@ -548,7 +546,7 @@ async def test_sc_persistence_with_compaction(manager: ManagerClient):
     await manager.server_stop_gracefully(server.server_id)
 
 
-async def test_sc_persistence_after_crash(manager: ManagerClient):
+async def test_sc_persistence_after_crash(manager: ScyllaClusterManager):
     """
     Verify that metadata for strongly-consistent tables is recovered
     after a non-graceful stop (crash simulation).
@@ -569,8 +567,7 @@ async def test_sc_persistence_after_crash(manager: ManagerClient):
             await manager.server_stop(server.server_id, convict=False)
 
             await manager.server_start(server.server_id)
-            await reconnect_driver(manager)
-            cql = manager.get_cql()
+            (cql, hosts) = await manager.get_ready_cql([server])
 
             # We can't read the internal raft state directly, so we perform extra writes
             # which should cause raft table updates based on the loaded state after restart.
@@ -585,7 +582,7 @@ async def test_sc_persistence_after_crash(manager: ManagerClient):
     await manager.server_stop_gracefully(server.server_id)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_no_schema_when_apply_write(manager: ManagerClient):
+async def test_no_schema_when_apply_write(manager: ScyllaClusterManager):
     servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     # We don't want `servers[2]` to be a Raft leader (for both group0 and strong consistency groups),
     # because we want `servers[2]` to receive Raft commands from others.
@@ -629,7 +626,7 @@ async def test_no_schema_when_apply_write(manager: ManagerClient):
         assert row.new_col == 30
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_old_schema_when_apply_write(manager: ManagerClient):
+async def test_old_schema_when_apply_write(manager: ScyllaClusterManager):
     servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     # We don't want `servers[2]` to be a Raft leader (for both group0 and strong consistency groups),
     # because we want `servers[2]` to receive Raft commands from others.
@@ -670,7 +667,7 @@ async def test_old_schema_when_apply_write(manager: ManagerClient):
         assert row.c == 20
         assert row.new_col is None
 
-async def test_reject_user_provided_timestamps(manager: ManagerClient):
+async def test_reject_user_provided_timestamps(manager: ScyllaClusterManager):
     """
     A simple validation test that makes sure that we don't accept
     user-provided timestamps in queries to strongly consistent tables.
@@ -700,7 +697,7 @@ async def test_reject_user_provided_timestamps(manager: ManagerClient):
             #     ...
             #   APPLY BATCH
 
-async def test_forward_cql_prepared_with_bound_values(manager: ManagerClient):
+async def test_forward_cql_prepared_with_bound_values(manager: ScyllaClusterManager):
     """
     When we prepare an statement not on the leader, we should
     still be able to forward it to the leader with bound values.
@@ -742,7 +739,7 @@ async def test_forward_cql_prepared_with_bound_values(manager: ManagerClient):
                 logger.info(f"Trace event: {event.description}")
                 assert "Prepared statement not found on target" not in event.description
 
-async def test_forward_cql_cache_invalidation(manager: ManagerClient):
+async def test_forward_cql_cache_invalidation(manager: ScyllaClusterManager):
     """
     Test that cql forwarding works after invalidation of prepared statement cache on schema changes.
     """
@@ -784,7 +781,7 @@ async def test_forward_cql_cache_invalidation(manager: ManagerClient):
             assert prepared_not_found_after > prepared_not_found_before
 
 @pytest.mark.skip_mode('release', "error injections aren't enabled in release mode")
-async def test_forward_cql_exception_passthrough(manager: ManagerClient):
+async def test_forward_cql_exception_passthrough(manager: ScyllaClusterManager):
     """
     Verify that coordinator exception returned on the target replica is correctly returned to the client.
     """
@@ -851,7 +848,7 @@ async def test_forward_cql_exception_passthrough(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode("release", "error injections aren't enabled in release mode")
-async def test_drop_table_during_insert(manager: ManagerClient):
+async def test_drop_table_during_insert(manager: ScyllaClusterManager):
     """Regression test for SCYLLADB-1450: node crashes when DROP TABLE races with
     an in-flight DML on a strongly-consistent table.
 
@@ -904,7 +901,7 @@ async def test_drop_table_during_insert(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-async def test_timed_out_queries(manager: ManagerClient):
+async def test_timed_out_queries(manager: ScyllaClusterManager):
     """
     A simple test verifying that we don't get stuck for an indefinite amount
     of time while reading from or writing to a strongly consistent table.
@@ -918,12 +915,12 @@ async def test_timed_out_queries(manager: ManagerClient):
     s1 = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
     cql, _ = await manager.get_ready_cql([s1])
 
-    async def try_query_with_timeout(exception_type, stmt: str, error_injection_name: str, timeout_sec: float):
+    async def try_query_with_timeout(exception_type, stmt: str, error_injection_name: str, timeout_sec: float, add_timeout: bool):
         await manager.api.enable_injection(s1.ip_addr, error_injection_name, one_shot=True)
 
         request_timeout_ms = 100
 
-        stmt_fut = cql.run_async(f"{stmt} USING TIMEOUT {request_timeout_ms}ms")
+        stmt_fut = cql.run_async(f"{stmt} USING TIMEOUT {request_timeout_ms}ms" if add_timeout else stmt)
         await manager.api.wait_for_injection_enter(s1.ip_addr, error_injection_name)
 
         sleep_length = timeout_sec + (request_timeout_ms / 1000)
@@ -940,7 +937,7 @@ async def test_timed_out_queries(manager: ManagerClient):
                 return True
             pytest.fail(f"Unexpected exception: {e}")
 
-    async def try_query(exception_type, stmt: str, error_injection_name: str):
+    async def try_query(exception_type, stmt: str, error_injection_name: str, add_timeout: bool = True):
         # We cannot predict if the relevant timer will be triggered in time.
         # Even in not-really-extreme situations, it can take more time
         # than we expect. To avoid flakiness, we're going to attempt to
@@ -950,7 +947,7 @@ async def test_timed_out_queries(manager: ManagerClient):
         # so it shouldn't have a relevant impact on the length of the test.
         timeout_sec = 0.1
         while True:
-            result = await try_query_with_timeout(exception_type, stmt, error_injection_name, timeout_sec)
+            result = await try_query_with_timeout(exception_type, stmt, error_injection_name, timeout_sec, add_timeout)
             if result:
                 break
             if timeout_sec > 60:
@@ -989,10 +986,20 @@ async def test_timed_out_queries(manager: ManagerClient):
             for error_injection_name in write_error_injections:
                 await try_write(error_injection_name)
 
+            # Case 3: Batch.
+            batch_stmt = f"""
+                BEGIN BATCH USING TIMEOUT 100ms
+                INSERT INTO {table} (pk, v) VALUES (19, 23);
+                INSERT INTO {table} (pk, v) VALUES (19, 24);
+                APPLY BATCH
+            """
+            for error_injection_name in write_error_injections:
+                await try_query(WriteTimeout, batch_stmt, error_injection_name, add_timeout=False)
+
             # Sanity check: Nothing broke and we can still write to the table.
             await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (17, 7)")
 
-    # Case 3: Waiting for the leader during a write.
+    # Case 4: Waiting for the leader during a write.
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
             # We can only emulate the leader not being chosen yet. Otherwise, we would
@@ -1003,7 +1010,7 @@ async def test_timed_out_queries(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-async def test_queries_while_dropping_table(manager: ManagerClient):
+async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
     """Verify that in-flight reads and writes are promptly aborted when
     a strongly consistent table is dropped.
 
@@ -1112,7 +1119,7 @@ async def test_queries_while_dropping_table(manager: ManagerClient):
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 @pytest.mark.parametrize("target", ["leader", "follower"])
-async def test_queries_when_shutting_down(manager: ManagerClient, target: str):
+async def test_queries_when_shutting_down(manager: ScyllaClusterManager, target: str):
     """
     Verify that Scylla has be stopped despite hanging opeartions
     to strongly consistent tables. The test drops AppendEntries
@@ -1202,7 +1209,7 @@ async def test_queries_when_shutting_down(manager: ManagerClient, target: str):
     reason="Speed up abortion of applier fiber in raft::server_impl::abort",
 )
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-async def test_abort_state_machine_apply_after_dropping_table(manager: ManagerClient):
+async def test_abort_state_machine_apply_after_dropping_table(manager: ScyllaClusterManager):
     """
     This test verifies that ongoing executions of state_machine::apply are
     aborted when their corresponding Raft group is being removed. We test
@@ -1271,7 +1278,7 @@ async def test_abort_state_machine_apply_after_dropping_table(manager: ManagerCl
     reason="Speed up abortion of applier fiber in raft::server_impl::abort",
 )
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-async def test_abort_state_machine_apply_during_shutdown(manager: ManagerClient):
+async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterManager):
     """
     This test verifies that ongoing executions of state_machine::apply are
     aborted when a node is shutting down.
@@ -1343,7 +1350,7 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ManagerClient)
         assert len(rows) == 1
         assert rows[0].v == 13
 
-async def test_leader_cache_eliminates_redirect(manager: ManagerClient):
+async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
     """
     Verify that after a non-replica node learns the leader location via a redirect,
     subsequent write requests from that node go directly to the leader without a redirect.
@@ -1442,7 +1449,7 @@ async def test_leader_cache_eliminates_redirect(manager: ManagerClient):
             assert rows[0].value == 25
 
 @pytest.mark.asyncio
-async def test_read_forwarding(manager: ManagerClient):
+async def test_read_forwarding(manager: ScyllaClusterManager):
     """
     Verify read forwarding behavior for strongly consistent tables:
     - CL=QUORUM reads (linearizable) are forwarded to the raft leader
@@ -1536,7 +1543,7 @@ async def test_read_forwarding(manager: ManagerClient):
                 assert rows[0].c == i * 10, f"Linearizability violation: pk={100 + i}, expected c={i * 10}, got c={rows[0].c}"
 
 
-async def test_write_from_non_replica_after_leader_down(manager: ManagerClient):
+async def test_write_from_non_replica_after_leader_down(manager: ScyllaClusterManager):
     """
     Verify that if a raft group leader goes down, a non-replica node can still
     successfully write by detecting the stale leader cache entry and evicting it.
@@ -1608,3 +1615,148 @@ async def test_write_from_non_replica_after_leader_down(manager: ManagerClient):
             rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 2", host=non_replica_host)
             assert len(rows) == 1
             assert rows[0].c == 2
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batch_mode", ["text", "prepared"], ids=["text", "prepared"])
+async def test_batch(manager: ScyllaClusterManager, batch_mode):
+    """
+    Verify strongly consistent BATCH behavior for both paths:
+    - textual CQL BATCH,
+    - native protocol BATCH (prepared BatchStatement).
+
+    Success cases:
+    - same-partition batch succeeds (default logged for text, explicit logged for prepared),
+    - mixed statement types in one partition succeed.
+
+    Rejection cases:
+    - batch touching multiple tables,
+    - batch touching multiple partitions,
+    - statement touching multiple partition keys,
+    - counter batch.
+    """
+
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql, _ = await manager.get_ready_cql([server])
+
+    def _prepared_batch_type(kind):
+        if kind == "logged":
+            return BatchType.LOGGED
+        if kind == "unlogged":
+            return BatchType.UNLOGGED
+        if kind == "counter":
+            return BatchType.COUNTER
+        raise ValueError(f"Unexpected batch kind: {kind}")
+
+    def _render_text_statement(table_name, op, args):
+        if op == "insert":
+            pk, ck, v = args
+            return f"INSERT INTO {table_name} (pk, ck, v) VALUES ({pk}, {ck}, {v})"
+        if op == "update":
+            v, pk, ck = args
+            return f"UPDATE {table_name} SET v = {v} WHERE pk = {pk} AND ck = {ck}"
+        if op == "delete":
+            pk, ck = args
+            return f"DELETE FROM {table_name} WHERE pk = {pk} AND ck = {ck}"
+        if op == "delete_in":
+            pk1, pk2, ck = args
+            return f"DELETE FROM {table_name} WHERE pk IN ({pk1}, {pk2}) AND ck = {ck}"
+        if op == "counter_add":
+            delta, pk = args
+            return f"UPDATE {table_name} SET c = c + {delta} WHERE pk = {pk}"
+        raise ValueError(f"Unexpected operation: {op}")
+
+    def _make_batch_runner(table_name, *, counter_table=False):
+        prepared_statements = {}
+        if batch_mode == "prepared":
+            if counter_table:
+                prepared_statements = {
+                    "counter_add": cql.prepare(f"UPDATE {table_name} SET c = c + ? WHERE pk = ?"),
+                }
+            else:
+                prepared_statements = {
+                    "insert": cql.prepare(f"INSERT INTO {table_name} (pk, ck, v) VALUES (?, ?, ?)"),
+                    "update": cql.prepare(f"UPDATE {table_name} SET v = ? WHERE pk = ? AND ck = ?"),
+                    "delete": cql.prepare(f"DELETE FROM {table_name} WHERE pk = ? AND ck = ?"),
+                    "delete_in": cql.prepare(f"DELETE FROM {table_name} WHERE pk IN (?, ?) AND ck = ?"),
+                }
+
+        async def _run(ops, *, kind):
+            if batch_mode == "prepared":
+                batch = BatchStatement(batch_type=_prepared_batch_type(kind))
+                for op, args in ops:
+                    batch.add(prepared_statements[op], args)
+                return await cql.run_async(batch)
+
+            if kind == "counter":
+                begin = "BEGIN COUNTER BATCH"
+            elif kind == "unlogged":
+                begin = "BEGIN UNLOGGED BATCH"
+            elif kind == "logged":
+                begin = "BEGIN BATCH"
+            else:
+                raise ValueError(f"Unexpected batch kind: {kind}")
+            lines = [begin]
+            lines.extend(f"{_render_text_statement(table_name, op, args)};" for op, args in ops)
+            lines.append("APPLY BATCH")
+            return await cql.run_async("\n".join(lines))
+
+        return _run
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table:
+            run_batch = _make_batch_runner(table)
+
+            await run_batch([
+                ("insert", (1, 1, 10)),
+                ("insert", (1, 2, 20)),
+                ("insert", (1, 3, 30)),
+            ], kind="logged")
+
+            rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 1")
+            assert len(rows) == 3
+            rows_by_ck = {r.ck: r.v for r in rows}
+            assert rows_by_ck == {1: 10, 2: 20, 3: 30}
+
+            await run_batch([
+                ("update", (99, 1, 1)),
+                ("delete", (1, 3)),
+            ], kind="unlogged")
+
+            rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 1")
+            assert len(rows) == 2
+            rows_by_ck = {r.ck: r.v for r in rows}
+            assert rows_by_ck == {1: 99, 2: 20}
+
+            with pytest.raises(InvalidRequest, match="same partition"):
+                await run_batch([
+                    ("insert", (1, 1, 10)),
+                    ("insert", (2, 1, 20)),
+                ], kind="unlogged")
+
+            with pytest.raises(InvalidRequest, match="single partition"):
+                await run_batch([
+                    ("delete_in", (1, 2, 1)),
+                ], kind="unlogged")
+
+            async with new_test_table(manager, ks, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as other_table:
+                with pytest.raises(InvalidRequest, match="same table"):
+                    if batch_mode == "prepared":
+                        batch = BatchStatement(batch_type=BatchType.UNLOGGED)
+                        batch.add(cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)"), (1, 1, 10))
+                        batch.add(cql.prepare(f"INSERT INTO {other_table} (pk, ck, v) VALUES (?, ?, ?)"), (1, 1, 20))
+                        await cql.run_async(batch)
+                    else:
+                        await cql.run_async(f"""
+                            BEGIN UNLOGGED BATCH
+                            INSERT INTO {table} (pk, ck, v) VALUES (1, 1, 10);
+                            INSERT INTO {other_table} (pk, ck, v) VALUES (1, 1, 20);
+                            APPLY BATCH
+                        """)
+
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c counter") as table:
+            run_counter_batch = _make_batch_runner(table, counter_table=True)
+
+            with pytest.raises(InvalidRequest, match="Counter batches are not supported"):
+                await run_counter_batch([
+                    ("counter_add", (1, 1)),
+                ], kind="counter")

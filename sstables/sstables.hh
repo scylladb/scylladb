@@ -286,6 +286,10 @@ public:
     // put it into the desired destination assigning the given generation
     future<> pick_up_from_upload(sstable_state to, generation_type new_generation);
 
+    // The sstable generation represents the node/shard reference to the sstable.
+    // When the sstable is created, the sstable identifier is equal to the sstable generation,
+    // but over time, e.g. when a sstable is migrated across shards or nodes, its identifier
+    // remains stable, while the generation changes to reflect the new node/shard reference.
     generation_type generation() const {
         return _generation;
     }
@@ -333,7 +337,7 @@ public:
         encoding_stats enc_stats,
         shard_id shard = this_shard_id());
 
-    // Validates the content of the sstable.
+    // Validates the content of the sstable and component digests.
     // Reports all errors via the provided error handler.
     // Returns the count of all validation errors found.
     // Can be aborted via the abort-source parameter.
@@ -341,7 +345,7 @@ public:
     // (e.g. parse error), it will return with validation error count seen up to
     // the abort. In the latter case it will call the error-handler before doing so.
     future<uint64_t> validate(reader_permit permit, abort_source& abort,
-            std::function<void(sstring)> error_handler, sstables::read_monitor& monitor = default_read_monitor(), bool validate_index = false);
+            std::function<void(sstring)> error_handler, sstables::read_monitor& monitor = default_read_monitor());
 
     encoding_stats get_encoding_stats_for_compaction() const;
 
@@ -369,6 +373,12 @@ public:
 
     bool marked_for_deletion() const {
         return _marked_for_deletion == mark_for_deletion::marked;
+    }
+
+    // Undo mark_for_deletion(). Used when the intent to delete could not be
+    // recorded durably, so the sstable must be left in place.
+    void unmark_for_deletion() {
+        _marked_for_deletion = mark_for_deletion::none;
     }
 
     const std::set<generation_type>& compaction_ancestors() const {
@@ -460,9 +470,9 @@ public:
 
     // Delete the sstable by unlinking all sstable files
     // Ignores all errors.
-    // When ctx is provided, it indicates the call is part of an atomic
-    // deletion sequence where atomic_delete_prepare has already been called.
-    future<> unlink(const atomic_delete_context* ctx = nullptr) noexcept;
+    // When deletion is provided, it indicates the call is part of an atomic
+    // deletion sequence that has already been committed.
+    future<> unlink(const atomic_deletion* deletion = nullptr) noexcept;
 
     db::large_data_handler& get_large_data_handler() {
         return _large_data_handler;
@@ -613,6 +623,27 @@ private:
     } _marked_for_deletion = mark_for_deletion::none;
     bool _active = true;
 
+    // Some sstables are produced by performing a metadata update on another sstable.
+    // For example, at the time of this writing, to update repaired_at,
+    // we create a new sstable which shares (by filesystem hardlinks) all files
+    // with the old sstable, except for a fresh Statistics.db which contains
+    // the new repaired_at.
+    // 
+    // Normally the encryption layer adds encryption settings to components based
+    // on the sstable's _schema (and/or the global per-node config).
+    // This works for normal writes where all components have the same schema,
+    // but it doesn't work for single-component rewrites.
+    //
+    // The schema (and/or config) during the rewrite might be different than during the
+    // original write. Using it could result in an sstable where the rewritten
+    // component has different encryption parameters from other components, which
+    // is illegal.
+    // 
+    // We need some way to tell the encryption layer that it's dealing with
+    // a rewrite, not a fresh write. In this case it should ignore schema/config
+    // and strictly obey scylla_metadata.
+    bool _created_by_component_rewrite = false;
+
     db_clock::time_point _now;
 
     io_error_handler _read_error_handler;
@@ -719,6 +750,10 @@ private:
                                std::optional<scylla_metadata::large_data_stats> ld_stats,
                                std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
                                std::optional<scylla_metadata::large_data_records> ld_records = std::nullopt);
+    sstable_id ensure_sstable_identifier();
+    // Verifies that the sstable identifier persisted in the Scylla metadata
+    // agrees with the one this sstable is known by, when both are known.
+    void validate_sstable_identifier() const;
 
     future<> read_filter(sstable_open_config cfg = {});
 
@@ -759,15 +794,14 @@ private:
     // and so max_local_deletion_time should be discarded for those.
     void validate_max_local_deletion_time();
     void validate_partitioner();
-    void validate_component_digest(component_type type, uint32_t computed_digest) const;
     // Read component data and validate the digest.
     future<> compute_and_validate_component_digest(component_type type);
     future<> validate_scylla_digest_value();
 public:
+    void validate_component_digest(component_type type, uint32_t computed_digest) const;
     using skip_data_digest = bool_class<struct skip_data_digest_tag>;
     future<> validate_digests(skip_data_digest skip_data = skip_data_digest::no);
 private:
-    future<> validate_index_digest() const;
     // Read the Scylla component self-digest from file.
     // Should only be called by sstables which have a Scylla file digest.
     future<uint32_t> read_scylla_file_digest() const;
@@ -885,6 +919,11 @@ private:
     void write_toc(std::unique_ptr<crc32_digest_file_writer> w);
     static future<uint32_t> read_digest_from_file(file f);
     static future<lw_shared_ptr<checksum>> read_checksum_from_file(file f);
+
+    void set_sstable_identifier(sstable_id sid) noexcept {
+        _sstable_identifier = sid;
+    }
+
 public:
 
     shareable_components& get_shared_components() const {
@@ -1142,7 +1181,18 @@ public:
         return _unlinked_at;
     }
 
-    // sstable_id is null iff not present in scylla_metadata
+    // The sstable identifier identifies the sstable globally across all nodes, shards, and over time.
+    // When the sstable is created, the sstable identifier is equal to the sstable generation,
+    // but over time, e.g. when a sstable is migrated across shards or nodes, its identifier
+    // remains stable, while the generation changes to reflect the new node/shard reference.
+    //
+    // On object-storage, the sstable identifier comes as part of the sstable prefix,
+    // while the generation is used to identify the node reference to the sstable.
+    // The generation-based references control the sstable lifetime across migrations, sstable sharing,
+    // and across snapshot and backup operations.
+    //
+    // The sstable_identifier is null iff not present in scylla_metadata
+    // It is required to be set for all sstables stored on object storage.
     const optimized_optional<sstable_id>& sstable_identifier() const noexcept {
         return _sstable_identifier;
     }
@@ -1206,6 +1256,12 @@ public:
     future<> copy_components(const sstable& src);
     bool should_update_repaired_at(int64_t repaired_at) const;
 
+    // See _created_by_component_rewrite. Consulted by file_io_extensions (e.g.
+    // encryption) so the rewritten component matches the parent sstable's
+    // original on-disk encoding rather than the current schema.
+    void mark_created_by_component_rewrite() noexcept { _created_by_component_rewrite = true; }
+    bool created_by_component_rewrite() const noexcept { return _created_by_component_rewrite; }
+
     // Creates a new sstable by linking all sstable components except for the specified component,
     // which is created by calling the provided sstable_creator function and then written to the disc.
     // The modifier function is called on the new sstable before writing the component
@@ -1216,6 +1272,8 @@ public:
             update_sstable_id);
     // Must be called in a seastar thread
     void write_component_with_metadata(component_type type, scylla_metadata metadata);
+private:
+    future<uint64_t> component_filesize(component_type type) const noexcept;
 };
 
 // Validate checksums
@@ -1352,6 +1410,10 @@ public:
     virtual ~sstable_stream_sink() = default;
     // Stream to the component file
     virtual future<output_stream<char>> output(const file_open_options&, const file_output_stream_options&) = 0;
+
+    // Validate the streamed sstable integrity, by verifying against stored digests, if available;
+    virtual future<> validate_integrity() = 0;
+
     // closes this component. If this is the last component in a set (see "last_component" in creating method below)
     // the table on disk will be sealed.
     // Returns sealed sstable if last, or nullptr otherwise.

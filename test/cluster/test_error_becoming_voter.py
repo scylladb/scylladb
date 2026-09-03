@@ -10,14 +10,14 @@ import time
 
 from cassandra import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts
 
 
 logger = logging.getLogger(__name__)
 
 
-async def test_error_while_becoming_voter(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+async def test_error_while_becoming_voter(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     """
     Test that a node is starting successfully if while joining a cluster and becoming a voter, it
     receives an unknown commit status error.

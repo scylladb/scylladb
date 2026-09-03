@@ -86,6 +86,7 @@ target_sources(api
     messaging_service.cc
     raft.cc
     service_levels.cc
+    storage_manager.cc
     storage_proxy.cc
     storage_service.cc
     stream_manager.cc

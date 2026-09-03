@@ -950,6 +950,13 @@ This setting does not affect reads with consistency level ``ALL`` because they a
 Note that frequently reading from additional replicas can hurt cluster performance.
 When in doubt, keep the default ``99PERCENTILE``.
 
+The default value for newly created tables which do not specify ``speculative_retry``
+(``99PERCENTILE``) can be changed with the ``speculative_retry_user_table_default``
+configuration option in ``scylla.yaml``. The option applies at table creation time
+only; changing it does not affect already existing tables. The value used for a new
+table is taken from the node that coordinates its creation, so the option should be
+set identically on all nodes.
+
 
 .. _cql-compaction-options:
 
@@ -1334,7 +1341,8 @@ A table can be truncated using the ``TRUNCATE`` statement:
    
    truncate_statement: TRUNCATE [ TABLE ] `table_name`
                      : [ USING TIMEOUT `timeout` ]
-   timeout: `duration`
+   timeout: `duration` | `bind_marker`
+   bind_marker: '?' | ':' `identifier`
 
 Note that ``TRUNCATE TABLE foo`` is allowed for consistency with other DDL statements, but tables are the only object
 that can be truncated currently and so the ``TABLE`` keyword can be omitted.
@@ -1346,6 +1354,10 @@ The ``USING TIMEOUT`` clause allows specifying a timeout for a specific request.
 For example::
 
   TRUNCATE TABLE users USING TIMEOUT 5m;
+
+In a prepared statement, the timeout can be given as a bind marker::
+
+  TRUNCATE TABLE users USING TIMEOUT ?;
 
 .. caution:: Do not run any operation on a table that is being truncated. Truncate operation is an administrative operation, and running any other operation on the same table in parallel may cause the truncating table's data to end up in an undefined state.
 

@@ -98,6 +98,13 @@ sstables::run_id sstable_run::run_identifier() const {
     return (_all.empty()) ? run_id() : (*_all.begin())->run_identifier();
 }
 
+db_clock::time_point sstable_run::data_file_write_time() const {
+    if (_all.empty()) {
+        return db_clock::time_point();
+    }
+    return std::ranges::max(_all | std::views::transform([](const shared_sstable& s) { return s->data_file_write_time(); }));
+}
+
 std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run) {
     os << "Run = {\n";
     if (run.all().empty()) {
@@ -923,7 +930,14 @@ filter_sstable_for_reader_by_ck(std::vector<shared_sstable>&& sstables, replica:
     stats->clustering_filter_count++;
     stats->sstables_checked_by_clustering_filter += sstables.size();
 
+    // `sstable::may_contain_rows()` interprets the ranges using the table (non-reversed)
+    // schema, so a native-reversed slice must have its range bounds put back in table order.
     auto ck_filtering_all_ranges = slice.get_all_ranges();
+    if (slice.is_reversed()) {
+        for (auto& r : ck_filtering_all_ranges) {
+            r = query::reverse(r);
+        }
+    }
     // fast path to include all sstables if only one full range was specified.
     // For example, this happens if query only specifies a partition key.
     if (ck_filtering_all_ranges.size() == 1 && ck_filtering_all_ranges[0].is_full()) {
@@ -1059,7 +1073,14 @@ time_series_sstable_set::create_single_key_sstable_reader(
     };
 
     auto pk_filter = make_pk_filter(pos, hash, *schema);
-    auto ck_filter = [ranges = slice.get_all_ranges()] (const sstable& sst) { return sst.may_contain_rows(ranges); };
+    // See the comment in `filter_sstable_for_reader_by_ck()`.
+    auto ck_ranges = slice.get_all_ranges();
+    if (slice.is_reversed()) {
+        for (auto& r : ck_ranges) {
+            r = query::reverse(r);
+        }
+    }
+    auto ck_filter = [ranges = std::move(ck_ranges)] (const sstable& sst) { return sst.may_contain_rows(ranges); };
 
     // We're going to pass this filter into sstable_position_reader_queue. The queue guarantees that
     // the filter is going to be called at most once for each sstable and exactly once after

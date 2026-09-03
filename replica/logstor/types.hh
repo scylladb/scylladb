@@ -52,6 +52,11 @@ struct log_record {
     canonical_mutation mut;
 };
 
+struct log_record_bytes_view {
+    bytes_view header;
+    bytes_view data;
+};
+
 struct segment_sequence {
     uint64_t value;
 

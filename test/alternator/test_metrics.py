@@ -304,6 +304,30 @@ def test_batch_get_item(test_table_s, metrics):
         test_table_s.meta.client.batch_get_item(RequestItems = {
             test_table_s.name: {'Keys': [{'p': random_string()}], 'ConsistentRead': True}})
 
+# Reproduces issue #30754:
+def test_table_batch_get_item(test_table_s, metrics):
+    with check_table_increases_operation(metrics, ['BatchGetItem'], test_table_s.name, expected_value=1):
+        test_table_s.meta.client.batch_get_item(RequestItems = {
+            test_table_s.name: {'Keys': [{'p': random_string()}, {'p': random_string()}], 'ConsistentRead': True}})
+
+def test_table_batch_get_item_counted_on_validation_error(test_table_s, metrics):
+    p = random_string()
+    with check_table_increases_operation(metrics, ['BatchGetItem'], test_table_s.name, expected_value=1):
+        with pytest.raises(ClientError):
+            test_table_s.meta.client.batch_get_item(RequestItems = {
+                test_table_s.name: {'Keys': [{'p': p}, {'p': p}], 'ConsistentRead': True}})
+
+def test_table_batch_get_item_counted_on_authorization_error(dynamodb, cql, test_table_s, metrics):
+    with new_role(cql, superuser=True) as (super_role, super_key):
+        with new_dynamodb(dynamodb, super_role, super_key) as auth_dynamodb:
+            with scylla_config_auth_temporary(auth_dynamodb, True, False):
+                with new_role(cql) as (role, key):
+                    with new_dynamodb(dynamodb, role, key) as d:
+                        with check_table_increases_operation(metrics, ['BatchGetItem'], test_table_s.name, expected_value=1):
+                            with pytest.raises(ClientError, match='AccessDeniedException'):
+                                d.meta.client.batch_get_item(RequestItems = {
+                                    test_table_s.name: {'Keys': [{'p': random_string()}], 'ConsistentRead': True}})
+
 def test_batch_write_item_count(test_table_s, metrics):
     with check_increases_operation(metrics, ['BatchWriteItem'], metric_name='scylla_alternator_batch_item_count', expected_value=2):
         test_table_s.meta.client.batch_write_item(RequestItems = {
@@ -427,6 +451,7 @@ def test_query_vector_operations(vs, metrics):
 #  * scylla_alternator_vector_search_query_items_from_vs,
 #  * scylla_alternator_vector_search_query_items_from_base_table
 # are incremented as needed for a vector search query.
+# Test both global and per-table versions of these metrics.
 # This test requires a configured vector store and will be skipped otherwise.
 def test_query_vector_item_metrics(vs, metrics, needs_vector_store):
     with new_test_table(vs,
@@ -447,39 +472,59 @@ def test_query_vector_item_metrics(vs, metrics, needs_vector_store):
         vs_metric = 'scylla_alternator_vector_search_query_items_from_vs'
         returned_metric = 'scylla_alternator_vector_search_query_returned_items'
         base_metric = 'scylla_alternator_vector_search_query_items_from_base_table'
+        # The same metrics also exist per-table:
+        table_vs_metric = 'scylla_alternator_table_vector_search_query_items_from_vs'
+        table_returned_metric = 'scylla_alternator_table_vector_search_query_returned_items'
+        table_base_metric = 'scylla_alternator_table_vector_search_query_items_from_base_table'
+        table_labels = {'cf': table.name}
         the_metrics = get_metrics(metrics)
         before = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        before_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
         result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2, Select='ALL_ATTRIBUTES')
         assert result['Count'] == 2
         the_metrics = get_metrics(metrics)
         after = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        after_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
         assert after[vs_metric] - before[vs_metric] == 2
         assert after[returned_metric] - before[returned_metric] == 2
         assert after[base_metric] - before[base_metric] == 2
+        assert after_table[table_vs_metric] - before_table[table_vs_metric] == 2
+        assert after_table[table_returned_metric] - before_table[table_returned_metric] == 2
+        assert after_table[table_base_metric] - before_table[table_base_metric] == 2
 
         # A SELECT=COUNT query doesn't return any items, so increments only
         # items_from_vs, not the other two:
         the_metrics = get_metrics(metrics)
         before = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        before_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
         result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2, Select='COUNT')
         assert result['Count'] == 2
         the_metrics = get_metrics(metrics)
         after = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        after_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
         assert after[vs_metric] - before[vs_metric] == 2
         assert after[returned_metric] - before[returned_metric] == 0
         assert after[base_metric] - before[base_metric] == 0
+        assert after_table[table_vs_metric] - before_table[table_vs_metric] == 2
+        assert after_table[table_returned_metric] - before_table[table_returned_metric] == 0
+        assert after_table[table_base_metric] - before_table[table_base_metric] == 0
 
         # A SELECT=ALL_PROJECTED_ATTRIBUTES query increments items_from_vs
         # and returned_items, but not items_from_base_table.
         the_metrics = get_metrics(metrics)
         before = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        before_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
         result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2, Select='ALL_PROJECTED_ATTRIBUTES')
         assert result['Count'] == 2
         the_metrics = get_metrics(metrics)
         after = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        after_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
         assert after[vs_metric] - before[vs_metric] == 2
         assert after[returned_metric] - before[returned_metric] == 2
         assert after[base_metric] - before[base_metric] == 0
+        assert after_table[table_vs_metric] - before_table[table_vs_metric] == 2
+        assert after_table[table_returned_metric] - before_table[table_returned_metric] == 2
+        assert after_table[table_base_metric] - before_table[table_base_metric] == 0
 
 # Test counters for DescribeEndpoints:
 def test_describe_endpoints_operations(dynamodb, metrics):
@@ -1034,7 +1079,7 @@ def test_batch_write_item_size_separate_tables_track_metrics_independently(dynam
 def test_unsupported_operation(dynamodb, metrics):
     with check_increases_metric(metrics, ['scylla_alternator_unsupported_operations', 'scylla_alternator_total_operations']):
         req = get_signed_request(dynamodb, 'BoguousOperationName', '{}')
-        requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+        requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
 
 # Test that also supported operations (such as DescribeEndPoints in this
 # example) increment the total_operations metric:
@@ -1554,7 +1599,7 @@ def test_system_errors(dynamodb, test_table_s, metrics):
         req = get_signed_request(dynamodb, 'DescribeEndpoints', payload)
         headers = dict(req.headers)
         headers.update({'Content-Encoding': 'garbage'})
-        r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+        r = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
         assert r.status_code == 500
 
 # Test that reads_before_write is incremented exactly once per RMW operation.

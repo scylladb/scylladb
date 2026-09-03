@@ -7,14 +7,14 @@ import logging
 import asyncio
 
 from test.cluster.util import new_test_keyspace
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 import pytest
 
 logger = logging.getLogger(__name__)
 
-async def test_truncation_on_drop(manager: ManagerClient):
+async def test_truncation_on_drop(manager: ScyllaClusterManager):
     await manager.server_add()
     cql = manager.get_cql()
 
@@ -38,16 +38,15 @@ async def test_truncation_on_drop(manager: ManagerClient):
         row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM system.truncated where table_uuid={table_id}'))
         assert row[0].count == 0
 
-async def test_truncation_records_pruned_on_dirty_restart(manager: ManagerClient):
+async def test_truncation_records_pruned_on_dirty_restart(manager: ScyllaClusterManager):
     server = await manager.server_add()
     cql = manager.get_cql()
 
     async def restart():
         await manager.server_stop(server.server_id, convict=False)
         await manager.server_start(server.server_id)
-        manager.driver_close()
-        await manager.driver_connect()
-        return manager.cql
+        cql, _ = await manager.get_ready_cql([server])
+        return cql
     
     # Create a keyspace
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:

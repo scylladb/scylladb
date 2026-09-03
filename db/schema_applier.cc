@@ -436,9 +436,9 @@ future<> schema_applier::merge_types()
             new_keyspaces_per_shard.emplace(ks->metadata()->name(), std::ref(*ks));
         }
 
-        af.created = co_await create_types(db, diff.created, new_keyspaces_per_shard);
-        af.altered = co_await create_types(db, diff.altered, new_keyspaces_per_shard);
-        af.dropped = co_await create_types(db, diff.dropped, new_keyspaces_per_shard);
+        af.created = co_await create_types(db, diff.created, new_keyspaces_per_shard, "schema merge: created types");
+        af.altered = co_await create_types(db, diff.altered, new_keyspaces_per_shard, "schema merge: altered types");
+        af.dropped = co_await create_types(db, diff.dropped, new_keyspaces_per_shard, "schema merge: dropped types");
     });
 
     co_await _types_storage.init(_proxy.local().get_db(), _affected_keyspaces, _affected_user_types);

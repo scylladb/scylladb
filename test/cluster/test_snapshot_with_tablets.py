@@ -7,13 +7,14 @@ import logging
 import os
 import json
 
-from test.pylib.manager_client import ManagerClient, ServerInfo
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.internal_types import ServerInfo
 from test.cluster.object_store.test_backup import do_test_snapshot_on_all_nodes
 
 logger = logging.getLogger(__name__)
 
 
-async def get_snapshot_path(manager:ManagerClient, server, keyspace:str, table:str, snapshot_name:str):
+async def get_snapshot_path(manager:ScyllaClusterManager, server, keyspace:str, table:str, snapshot_name:str):
     """Gets snapshot path files for server and snapshot"""
     workdir = await manager.server_get_workdir(server.server_id)
     data_path = os.path.join(workdir, 'data', keyspace)
@@ -25,7 +26,7 @@ async def get_snapshot_path(manager:ManagerClient, server, keyspace:str, table:s
             return snapshot_path
     raise RuntimeError(f"No column family directories found in {data_path} for {table}")
 
-async def get_snapshot_files(manager:ManagerClient, server, keyspace:str, table:str, snapshot_name:str):
+async def get_snapshot_files(manager:ScyllaClusterManager, server, keyspace:str, table:str, snapshot_name:str):
     """Gets TOC files from server"""
     snapshot_path = await get_snapshot_path(manager, server, keyspace, table, snapshot_name)
     return [
@@ -33,19 +34,19 @@ async def get_snapshot_files(manager:ManagerClient, server, keyspace:str, table:
         if f.is_file() and f.name.endswith('TOC.txt')
     ]
 
-async def get_snapshot_manifest(manager:ManagerClient, server, keyspace:str, table:str, snapshot_name:str):
+async def get_snapshot_manifest(manager:ScyllaClusterManager, server, keyspace:str, table:str, snapshot_name:str):
     """Gets TOC files from server"""
     snapshot_path = await get_snapshot_path(manager, server, keyspace, table, snapshot_name)
     with open(os.path.join(snapshot_path, 'manifest.json'), encoding='utf-8') as f:
         return json.load(f)
 
 
-async def test_snapshot_on_all_nodes(manager: ManagerClient):
+async def test_snapshot_on_all_nodes(manager: ScyllaClusterManager):
     """
     Tests that a topology operation snapshot is done on all nodes,
     not just the initiator.
     """
-    async def check(manager: ManagerClient, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+    async def check(manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
         cql = manager.get_cql()
         # Collect snapshot files from each server
         for s in servers:

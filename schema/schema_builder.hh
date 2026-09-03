@@ -192,6 +192,11 @@ public:
         return *this;
     }
 
+    schema_builder& set_speculative_retry(const speculative_retry& retry) {
+        _raw._props.speculative_retry = retry;
+        return *this;
+    }
+
     const speculative_retry& get_speculative_retry() const {
         return _raw._props.speculative_retry;
     }

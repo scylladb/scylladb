@@ -27,6 +27,8 @@ all_can_run_compaction_groups_except:
 custom_args:
     mutation_reader_test:
         - '-c3 -m2G'
+    scrub_test:
+        - '-c1 -m2G --logger-log-level compaction=debug --logger-log-level compaction_manager=debug --logger-log-level s3=trace --logger-log-level gcp_storage=trace --logger-log-level http=trace --logger-log-level default_http_retry_strategy=trace'
     sstable_test:
         - '-c1 -m2G'
     sstable_datafile_test:
@@ -51,6 +53,9 @@ custom_args:
         - '-c2 -m2G --logger-log-level s3=trace --logger-log-level http=trace --logger-log-level default_http_retry_strategy=trace'
     batchlog_manager_test:
         - '-c2 -m2G --logger-log-level batchlog_manager=trace:debug_error_injection=trace:testlog=trace'
+    # Purely CPU-bound, single-threaded, and it allocates nothing but its own buffers.
+    stream_compressor_test:
+        - '-c1 -m512M'
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test
 # Tests skipped in debug/sanitize modes because they use many iterations

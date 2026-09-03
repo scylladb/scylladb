@@ -26,6 +26,14 @@ table or column silently does nothing (issue VECTOR-641).
 
 ## Implementation overview
 
+### Authorization
+
+To support least-privilege authorization, ScyllaDB supports the `TEXT_SEARCH_INDEXING`
+permission as an alternative to the `SELECT` permission for full-text-indexed reads.
+It is grantable only on `ALL KEYSPACES`. A role with this permission can read fulltext-indexed base
+tables, their CDC log tables, and the system tables needed by Vector Store; it cannot read
+unrelated non-fulltext tables unless it also has the `SELECT` permission.
+
 ### Query routing and prepare
 
 An FTS query is identified at prepare time by the presence of a `BM25(column, term)` call

@@ -10,7 +10,7 @@ import logging
 import time
 
 from test.pylib.internal_types import IPAddress
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error
 from test.cluster.util import new_test_keyspace
 
@@ -18,7 +18,7 @@ from test.cluster.util import new_test_keyspace
 logger = logging.getLogger(__name__)
 
 
-async def test_query_rebounce(manager: ManagerClient):
+async def test_query_rebounce(manager: ScyllaClusterManager):
     """
     Issue https://github.com/scylladb/scylladb/issues/15465.
 

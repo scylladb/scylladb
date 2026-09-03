@@ -17,6 +17,7 @@
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/with_scheduling_group.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/defer.hh>
 #include "seastarx.hh"
@@ -38,6 +39,7 @@
 #include "utils/aws_sigv4.hh"
 #include "client_data.hh"
 #include "utils/updateable_value.hh"
+#include "utils/exceptions.hh"
 #include <zlib.h>
 #include "alternator/http_compression.hh"
 
@@ -48,6 +50,16 @@ using request = http::request;
 using reply = http::reply;
 
 namespace alternator {
+// Converts an exception pointer to an `api_error` value.
+static api_error convert_exception_ptr_to_api_error(std::exception_ptr eptr) {
+    if (auto* ae = try_catch<api_error>(eptr)) {
+        return std::move(*ae);
+    } else if (auto* re = try_catch<rjson::error>(eptr)) {
+        return api_error::validation(re->what());
+    } else {
+        return api_error::internal(format("Internal server error: {}", eptr));
+    }
+}
 
 inline std::vector<std::string_view> split(std::string_view text, char separator) {
     std::vector<std::string_view> tokens;
@@ -131,25 +143,7 @@ public:
          sstring accept_encoding = _response_compressor.get_accepted_encoding(*req);
          return seastar::futurize_invoke(_handle, std::move(req)).then_wrapped(
             [this, rep = std::move(rep), accept_encoding=std::move(accept_encoding)](future<executor::request_return_type> resf) mutable {
-             if (resf.failed()) {
-                 // Exceptions of type api_error are wrapped as JSON and
-                 // returned to the client as expected. Other types of
-                 // exceptions are unexpected, and returned to the user
-                 // as an internal server error:
-                 try {
-                     resf.get();
-                 } catch (api_error &ae) {
-                     generate_error_reply(*rep, ae);
-                 } catch (rjson::error & re) {
-                     generate_error_reply(*rep,
-                             api_error::validation(re.what()));
-                 } catch (...) {
-                     generate_error_reply(*rep,
-                             api_error::internal(format("Internal server error: {}", std::current_exception())));
-                 }
-                 return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
-             }
-             auto res = resf.get();
+             auto res = !resf.failed() ? resf.get() : convert_exception_ptr_to_api_error(resf.get_exception());
              return std::visit(overloaded_functor {
                 [&] (std::string&& str) {
                     return _response_compressor.generate_reply(std::move(rep), std::move(accept_encoding),
@@ -322,21 +316,29 @@ static void authentication_error(alternator::stats& stats, bool enforce_authoriz
 future<std::string> server::verify_signature(const request& req, const chunked_content& content) {
     if (!_enforce_authorization.get() && !_warn_authorization.get()) {
         slogger.debug("Skipping authorization");
-        return make_ready_future<std::string>();
+        co_return std::string();
+    }
+    // If the connection uses mTLS and presented a verified client certificate,
+    // authenticate using this certificate (using auth_certificate_role_queries
+    // to map the subject DN or SAN to a CQL role name).
+    // Only if the connection does *not* have a client certificate at all, do
+    // we fall through to the SigV4 signature verification below.
+    if (auto role = co_await try_mtls_authentication(req)) {
+        co_return std::move(*role);
     }
     auto host_it = req._headers.find("Host");
     if (host_it == req._headers.end()) {
         authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
             api_error::invalid_signature("Host header is mandatory for signature verification"), 
             "", req.get_client_address());
-        return make_ready_future<std::string>();
+        co_return std::string();
     }
     auto authorization_it = req._headers.find("Authorization");
     if (authorization_it == req._headers.end()) {
         authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
             api_error::missing_authentication_token("Authorization header is mandatory for signature verification"),
             "", req.get_client_address());
-        return make_ready_future<std::string>();
+        co_return std::string();
     }
     std::string host = host_it->second;
     std::string_view authorization_header = authorization_it->second;
@@ -345,7 +347,7 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
         authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
             api_error::invalid_signature(fmt::format("Authorization header must use AWS4-HMAC-SHA256 algorithm: {}", authorization_header)),
             "", req.get_client_address());
-        return make_ready_future<std::string>();
+        co_return std::string();
     }
     authorization_header.remove_prefix(pos+1);
     std::string credential;
@@ -382,7 +384,7 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
     if (credential_split.size() != 5) {
         authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
             api_error::validation(fmt::format("Incorrect credential information format: {}", credential)), "", req.get_client_address());
-        return make_ready_future<std::string>();
+        co_return std::string();
     }
     std::string user(credential_split[0]);
     std::string datestamp(credential_split[1]);
@@ -433,44 +435,89 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
     auto cache_getter = [&proxy = _proxy] (std::string username) {
         return get_key_from_roles(proxy, std::move(username));
     };
-    return _key_cache.get_ptr(user, cache_getter).then_wrapped([this, &req, &content,
-                                                    user = std::move(user),
-                                                    host = std::move(host),
-                                                    datestamp = std::move(datestamp),
-                                                    signed_headers_str = std::move(signed_headers_str),
-                                                    signed_headers_map = std::move(signed_headers_map),
-                                                    modified_values = std::move(modified_values),
-                                                    region = std::move(region),
-                                                    service = std::move(service),
-                                                    user_signature = std::move(user_signature)] (future<key_cache::value_ptr> key_ptr_fut) {
-        key_cache::value_ptr key_ptr(nullptr);
-        try {
-            key_ptr = key_ptr_fut.get();
-        } catch (const api_error& e) {
-            authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
-                e, user, req.get_client_address());
-            return std::string();
-        }
-        std::string signature;
-        try {
-            signature = utils::aws::get_signature(user, *key_ptr, std::string_view(host), "/", req._method,
-                datestamp, signed_headers_str, signed_headers_map, &content, region, service, "");
-        } catch (const std::exception& e) {
-            authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
-                api_error::invalid_signature(fmt::format("invalid signature: {}", e.what())),
-                user, req.get_client_address());
-            return std::string();
-        }
+    key_cache::value_ptr key_ptr(nullptr);
+    try {
+        key_ptr = co_await _key_cache.get_ptr(user, cache_getter);
+    } catch (const api_error& e) {
+        authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
+            e, user, req.get_client_address());
+        co_return std::string();
+    }
+    std::string signature;
+    try {
+        signature = utils::aws::get_signature(user, *key_ptr, std::string_view(host), "/", req._method,
+            datestamp, signed_headers_str, signed_headers_map, &content, region, service, "");
+    } catch (const std::exception& e) {
+        authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
+            api_error::invalid_signature(fmt::format("invalid signature: {}", e.what())),
+            user, req.get_client_address());
+        co_return std::string();
+    }
+    if (signature != std::string_view(user_signature)) {
+        _key_cache.remove(user);
+        authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
+            api_error::unrecognized_client("wrong signature"),
+            user, req.get_client_address());
+        co_return std::string();
+    }
+    co_return user;
+}
 
-        if (signature != std::string_view(user_signature)) {
-            _key_cache.remove(user);
-            authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
-                api_error::unrecognized_client("wrong signature"),
-                user, req.get_client_address());
-            return std::string();
+future<std::optional<std::string>> server::try_mtls_authentication(const request& req) {
+    if (!req.tls_dn) {
+        co_return std::nullopt;
+    }
+    const std::string& subject = req.tls_dn->subject;
+    // Following the logic in auth::certificate_authenticator, we reformat the
+    // SAN list req.tls_san into a single comma-separated string altname_str
+    // and then pass regular expressions from auth_certificate_role_queries
+    // over this string. We only do this string formatting if there is any
+    // ALTNAME pattern in auth_certificate_role_queries that would need it.
+    std::optional<std::string> altname_str;
+    boost::smatch m;
+    for (const auto& [src, expr] : _cert_patterns) {
+        const std::string* source_str;
+        if (src == cert_pattern::source_type::subject) {
+            source_str = &subject;
+        } else {
+            if (!altname_str) {
+                altname_str = req.tls_san
+                    ? fmt::format("{}", fmt::join(*req.tls_san, ","))
+                    : std::string{};
+            }
+            source_str = &*altname_str;
         }
-        return user;
-    });
+        if (boost::regex_search(*source_str, m, expr) && m.size() > 1) {
+            std::string role = m[1].str();
+            // Before returning "role", verify that the role really exists
+            // and has can_login=true. This check is cached (see
+            // _mtls_role_cache) since on a long-lived connection it would
+            // otherwise be repeated on every single request.
+            auto cache_getter = [&proxy = _proxy] (std::string role) {
+                return get_key_from_roles(proxy, std::move(role), /*get_password=*/false).then([] (std::string) {
+                    return true;
+                });
+            };
+            try {
+                co_await _mtls_role_cache.get_ptr(role, cache_getter);
+            } catch (const api_error& e) {
+                authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
+                    e, role, req.get_client_address());
+                co_return std::string();
+            }
+            co_return role;
+        }
+    }
+    // A client certificate was presented and verified by the TLS layer,
+    // but it did not match any configured auth_certificate_role_queries
+    // pattern. Reject the request rather than falling through to SigV4:
+    // a client that presents a certificate must authenticate via mTLS.
+    authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
+        api_error::unrecognized_client(fmt::format(
+            "mTLS: client certificate subject '{}' did not match any auth_certificate_role_queries pattern",
+            subject)),
+        "", req.get_client_address());
+    co_return std::string();
 }
 
 static tracing::trace_state_ptr create_tracing_session(tracing::tracing& tracing_instance) {
@@ -809,19 +856,20 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
             co_return api_error::validation("Request content must be an object");
         }
         std::unique_ptr<audit::audit_info_alternator> audit_info;
-        std::exception_ptr ex = {};
-        executor::request_return_type ret;
-        try {
-            ret = co_await callback(_executor, client_state, trace_state, make_service_permit(std::move(units)), std::move(json_request), std::move(req), audit_info);
-        } catch (...) {
-            ex = std::current_exception();
-        }
+
+        // We need to futurize here as `callback` might be a normal function returning a future and
+        // if that function throws `as_future` won't catch it - the exception will be propagated to the caller and
+        // `audit::inspect` will not be called.
+        auto ret_fut = co_await seastar::coroutine::as_future(
+            seastar::futurize_invoke(
+                callback,
+                _executor, client_state, trace_state, make_service_permit(std::move(units)), std::move(json_request), std::move(req), audit_info
+            )
+        );
+        auto ret = ret_fut.failed() ? convert_exception_ptr_to_api_error(ret_fut.get_exception()) : ret_fut.get();
         if (audit_info) {
-            bool error = ex != nullptr || std::holds_alternative<api_error>(ret);
-            co_await audit::inspect(*audit_info, client_state, error);
-        }
-        if (ex) {
-            co_return coroutine::exception(std::move(ex));
+            bool has_error = std::holds_alternative<api_error>(ret);
+            co_await audit::inspect(*audit_info, client_state, has_error);
         }
         co_return ret;
     };
@@ -862,6 +910,47 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
         , _auth_service(auth_service)
         , _sl_controller(sl_controller)
         , _key_cache(1024, 1min, slogger)
+        , _mtls_role_cache(1024, 1min, slogger)
+        , _cert_patterns([&proxy]() {
+            // Pre-compile the patterns from auth_certificate_role_queries
+            // so verify_signature() can match mTLS certificate subjects and
+            // Subject Alternative Names without recompiling regexes on every
+            // request. Both SUBJECT and ALTNAME entries are accepted.
+            std::vector<cert_pattern> patterns;
+            for (const auto& q : proxy.data_dictionary().get_config().auth_certificate_role_queries()) {
+                auto source_it = q.find("source");
+                auto query_it  = q.find("query");
+                if (source_it == q.end() || query_it == q.end()) { continue; }
+                sstring source = source_it->second;
+                std::transform(source.begin(), source.end(), source.begin(), ::toupper);
+                cert_pattern::source_type src;
+                if (source == "SUBJECT") {
+                    src = cert_pattern::source_type::subject;
+                } else if (source == "ALTNAME") {
+                    src = cert_pattern::source_type::altname;
+                } else {
+                    throw std::invalid_argument(fmt::format(
+                        "auth_certificate_role_queries: source '{}' is not supported"
+                        " (supported values: SUBJECT, ALTNAME)",
+                        source_it->second));
+                }
+                boost::regex expr;
+                try {
+                    expr = boost::regex(std::string(query_it->second));
+                } catch (const boost::regex_error& e) {
+                    throw std::invalid_argument(fmt::format(
+                        "auth_certificate_role_queries: invalid regex '{}': {}",
+                        query_it->second, e.what()));
+                }
+                if (expr.mark_count() != 1) {
+                    throw std::invalid_argument(fmt::format(
+                        "auth_certificate_role_queries: pattern '{}' must have exactly one capture group (has {})",
+                        query_it->second, expr.mark_count()));
+                }
+                patterns.push_back({src, std::move(expr)});
+            }
+            return patterns;
+        }())
         , _max_users_query_size_in_trace_output(1024)
         , _enabled_servers{}
         , _pending_requests("alternator::server::pending_requests")

@@ -64,7 +64,7 @@ about timestamps in the sstable, like: `min_live_timestamp`, and `min_live_row_m
 
 `sstable_identifier` (tag 10): a uuid identifying the sstable for its whole lifetime.
 It is derived from the sstable uuid generation, upon creation (or uniquely generated
-if the sstable has numerical generation).  Yet, unlike the sstable that may
+if the sstable has numerical generation).  Yet, unlike the sstable generation that may
 change if the sstable is migrated to a different shard or node, the sstable
 identifier is stable and copied with the rest of the scylla metadata.
 

@@ -9,38 +9,38 @@ Tests that are specific to the raft-based cluster feature implementation.
 import asyncio
 import time
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature
 from test.cluster import test_cluster_features
 import pytest
 
 
-async def test_rolling_upgrade_happy_path(manager: ManagerClient) -> None:
+async def test_rolling_upgrade_happy_path(manager: ScyllaClusterManager) -> None:
     await manager.servers_add(3, auto_rack_dc="dc1")
     await test_cluster_features.test_rolling_upgrade_happy_path(manager)
 
 
-async def test_downgrade_after_partial_upgrade(manager: ManagerClient) -> None:
+async def test_downgrade_after_partial_upgrade(manager: ScyllaClusterManager) -> None:
     await manager.servers_add(3, auto_rack_dc="dc1")
     await test_cluster_features.test_downgrade_after_partial_upgrade(manager)
 
 
-async def test_joining_old_node_fails(manager: ManagerClient) -> None:
+async def test_joining_old_node_fails(manager: ScyllaClusterManager) -> None:
     await manager.servers_add(3, auto_rack_dc="dc1")
     await test_cluster_features.test_joining_old_node_fails(manager)
 
 
-async def test_downgrade_after_successful_upgrade_fails(manager: ManagerClient) -> None:
+async def test_downgrade_after_successful_upgrade_fails(manager: ScyllaClusterManager) -> None:
     await manager.servers_add(3, auto_rack_dc="dc1")
     await test_cluster_features.test_downgrade_after_successful_upgrade_fails(manager)
 
 
-async def test_partial_upgrade_can_be_finished_with_removenode(manager: ManagerClient) -> None:
+async def test_partial_upgrade_can_be_finished_with_removenode(manager: ScyllaClusterManager) -> None:
     await manager.servers_add(3, auto_rack_dc="dc1")
     await test_cluster_features.test_partial_upgrade_can_be_finished_with_removenode(manager)
 
 
-async def test_cannot_disable_cluster_feature_after_all_declare_support(manager: ManagerClient) -> None:
+async def test_cannot_disable_cluster_feature_after_all_declare_support(manager: ScyllaClusterManager) -> None:
     """Upgrade all nodes to support the test cluster feature, but suppress
        the topology coordinator and prevent it from enabling the feature.
        Try to downgrade one of the nodes - it should fail because of the

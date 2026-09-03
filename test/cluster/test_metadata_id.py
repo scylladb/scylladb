@@ -9,7 +9,6 @@ import pytest
 
 from test.cluster.util import new_test_keyspace, new_test_table
 
-from test.cluster.conftest import cluster_con
 from cassandra.policies import WhiteListRoundRobinPolicy
 
 logger = logging.getLogger(__name__)
@@ -18,7 +17,7 @@ async def create_server_and_cqls(manager, cqls_num):
     server = await manager.server_add()
 
     def create_cluster_connection():
-        return cluster_con([server.ip_addr],
+        return manager.con_gen([server.ip_addr],
             load_balancing_policy=WhiteListRoundRobinPolicy([server.ip_addr])).connect()
 
     return tuple(create_cluster_connection() for _ in range(cqls_num))

@@ -11,11 +11,11 @@ import asyncio
 import logging
 
 from test.cluster.util import get_coordinator_host
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_gossiper_empty_self_id_on_shadow_round(manager: ManagerClient):
+async def test_gossiper_empty_self_id_on_shadow_round(manager: ScyllaClusterManager):
     """
     Test gossiper race condition on bootstrap that can lead to an empty self host ID sent in replies to other nodes.
       1. Enable gossiper_publish_local_state_pause on one of the nodes to pause gossiper in

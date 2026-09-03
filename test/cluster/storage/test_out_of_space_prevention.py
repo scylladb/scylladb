@@ -17,9 +17,9 @@ from cassandra.query import SimpleStatement
 from typing import Callable
 
 from test.cluster.util import get_topology_coordinator, new_test_keyspace, new_test_table, reconnect_driver
-from test.pylib.manager_client import ManagerClient, wait_for_cql_and_get_hosts
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.tablets import get_tablet_count
-from test.pylib.util import Host
+from test.pylib.util import Host, wait_for_cql_and_get_hosts
 from test.cluster.storage.conftest import space_limited_servers
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ global_cmdline = ["--disk-space-monitor-normal-polling-interval-in-seconds", "1"
                   ]
 
 
-async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Callable) -> None:
+async def test_user_writes_rejection(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=global_cmdline) as servers:
         cql, hosts = await manager.get_ready_cql(servers)
 
@@ -121,7 +121,7 @@ async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Ca
                 await cql.run_async(SimpleStatement(next(wgen), consistency_level=ConsistencyLevel.ALL))
 
 
-async def test_autotoggle_compaction(manager: ManagerClient, volumes_factory: Callable) -> None:
+async def test_autotoggle_compaction(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     cmdline = [*global_cmdline,
                "--logger-log-level", "compaction=debug"]
     async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=cmdline) as servers:
@@ -167,7 +167,7 @@ async def test_autotoggle_compaction(manager: ManagerClient, volumes_factory: Ca
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_critical_utilization_during_decommission(manager: ManagerClient, volumes_factory: Callable) -> None:
+async def test_critical_utilization_during_decommission(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     """
     Test that decommission fails when the target node reaches critical disk utilization level during streaming.
 
@@ -221,7 +221,7 @@ async def test_critical_utilization_during_decommission(manager: ManagerClient, 
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_reject_split_compaction(manager: ManagerClient, volumes_factory: Callable) -> None:
+async def test_reject_split_compaction(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=global_cmdline) as servers:
         cql, _ = await manager.get_ready_cql(servers)
 
@@ -249,7 +249,7 @@ async def test_reject_split_compaction(manager: ManagerClient, volumes_factory: 
                     await log.wait_for(f"Split task .* for table {cf} .* stopped, reason: Compaction for {cf} was stopped due to: drain", from_mark=mark)
 
 
-async def test_split_compaction_not_triggered(manager: ManagerClient, volumes_factory: Callable) -> None:
+async def test_split_compaction_not_triggered(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     cmd = [*global_cmdline,
            "--logger-log-level", "compaction=debug"]
     async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=cmd) as servers:
@@ -282,7 +282,7 @@ async def test_split_compaction_not_triggered(manager: ManagerClient, volumes_fa
                     assert await s1_log.grep(f"compaction.*Split {cf}", from_mark=s1_mark) == []
 
 
-async def test_tablet_repair(manager: ManagerClient, volumes_factory: Callable) -> None:
+async def test_tablet_repair(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=global_cmdline) as servers:
         cql, _ = await manager.get_ready_cql(servers)
 
@@ -348,7 +348,7 @@ async def test_tablet_repair(manager: ManagerClient, volumes_factory: Callable) 
                 await manager.api.wait_task(servers[0].ip_addr, task_id)
 
 
-async def test_autotoggle_reject_incoming_migrations(manager: ManagerClient, volumes_factory: Callable) -> None:
+async def test_autotoggle_reject_incoming_migrations(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=global_cmdline) as servers:
         await manager.disable_tablet_balancing()
 
@@ -407,7 +407,7 @@ async def test_autotoggle_reject_incoming_migrations(manager: ManagerClient, vol
                 mark, _ = await log.wait_for("Streaming for tablet migration .* successful", from_mark=mark)
 
 
-async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_factory: Callable) -> None:
+async def test_node_restart_while_tablet_split(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     cmd = [*global_cmdline,
            "--logger-log-level", "compaction=debug"]
     async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=cmd) as servers:
@@ -475,7 +475,7 @@ async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_f
 
 # Verify that new sstable produced by repair cannot be split, if disk utilization level is critical.
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
-async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes_factory: Callable) -> None:
+async def test_repair_failure_on_split_rejection(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     cmd = [*global_cmdline,
            "--logger-log-level", "compaction=debug"]
     async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=cmd) as servers:
@@ -566,7 +566,7 @@ global_cmdline_with_disabled_monitor = [
     "--tablet-load-stats-refresh-interval-in-seconds", "1",
 ]
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_sstables_incrementally_released_during_streaming(manager: ManagerClient, volumes_factory: Callable) -> None:
+async def test_sstables_incrementally_released_during_streaming(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     """
     Test that source node will not run out of space if major compaction rewrites the sstables being streamed.
     Expects the file streaming and major will both release sstables incrementally, reducing chances of 2x
@@ -648,7 +648,7 @@ async def test_sstables_incrementally_released_during_streaming(manager: Manager
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_load_and_stream_rejected_on_critical_disk(manager: ManagerClient, volumes_factory: Callable) -> None:
+async def test_load_and_stream_rejected_on_critical_disk(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     """
     Test that load-and-stream (nodetool refresh --load-and-stream) is blocked
     by out-of-space protection when the target node reaches critical disk utilization

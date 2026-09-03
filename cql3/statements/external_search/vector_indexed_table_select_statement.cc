@@ -11,6 +11,7 @@
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/functions/functions.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/util.hh"
@@ -19,6 +20,7 @@
 #include "exceptions/exceptions.hh"
 #include "index/vector_index.hh"
 #include "types/vector.hh"
+#include "utils/assert.hh"
 
 #include <seastar/core/future.hh>
 #include <seastar/core/on_internal_error.hh>
@@ -48,41 +50,37 @@ std::vector<float> get_ann_ordering_vector(const select_statement::prepared_ann_
 std::optional<ann_ordering_info> get_ann_ordering_info(
         data_dictionary::database db,
         schema_ptr schema,
-        lw_shared_ptr<const raw::select_statement::parameters> parameters,
-        prepare_context& ctx) {
+        const expr::function_call& fc) {
 
-    if (parameters->orderings().empty()) {
+    // Both 'ORDER BY ANN(column, query_vector)' and the legacy
+    // 'ORDER BY column ANN OF query_vector' are parsed into an ann() call.
+    if (!expr::is_native_function_call(fc, functions::ANN_FUNCTION_NAME)) {
         return std::nullopt;
     }
 
-    auto [column_id, ordering] = parameters->orderings().front();
-    const auto& ann_vector = std::get_if<raw::select_statement::ann_vector>(&ordering);
-    if (!ann_vector) {
-        return std::nullopt;
+    // The call has been resolved, which for ann() infers the vector type and dimension of the query
+    // vector from the ordered column - so the argument count, a query vector of the wrong dimension
+    // and an argument that is not a float vector have all been rejected already.
+    throwing_assert(fc.args.size() == 2);
+
+    const auto* ann_column = expr::as_if<expr::column_value>(&fc.args[0]);
+    if (!ann_column) {
+        throw exceptions::invalid_request_exception("First argument to ANN() must be a column reference");
+    }
+    const column_definition* def = ann_column->col;
+
+    if (expr::find_in_expression<expr::column_value>(fc.args[1], [] (const expr::column_value&) { return true; })) {
+        throw exceptions::invalid_request_exception("Second argument to ANN() must not be a column reference");
     }
 
-    ::shared_ptr<column_identifier> column = column_id->prepare_column_identifier(*schema);
-    const column_definition* def = schema->get_column_definition(column->name());
-    if (!def) {
-        throw exceptions::invalid_request_exception(
-                fmt::format("Undefined column name {}", column->text()));
-    }
-
-    if (!def->type->is_vector() || static_cast<const vector_type_impl*>(def->type.get())->get_elements_type()->get_kind() != abstract_type::kind::float_kind) {
-        throw exceptions::invalid_request_exception("ANN ordering is only supported on float vector indexes");
-    }
-
-    auto e =  expr::prepare_expression(*ann_vector, db, schema->ks_name(), nullptr, def->column_specification);
-    expr::fill_prepare_context(e, ctx);
-
-    raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering = std::make_pair(std::move(def), std::move(e));
+    raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering = std::make_pair(def, fc.args[1]);
 
     auto cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
 
     auto indexes = sim.list_indexes();
-    auto it = std::find_if(indexes.begin(), indexes.end(), [&prepared_ann_ordering](const auto& ind) {
-        return secondary_index::vector_index::is_vector_index_on_column(ind.metadata(), prepared_ann_ordering.first->name_as_text());
+    auto it = std::ranges::find_if(indexes, [def] (const auto& ind) {
+        return secondary_index::vector_index::is_vector_index_on_column(ind.metadata(), def->name_as_text());
     });
 
     if (it == indexes.end()) {
@@ -94,6 +92,18 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
         std::move(prepared_ann_ordering),
         secondary_index::vector_index::is_rescoring_enabled(it->metadata().options())
     };
+}
+
+void prepare_ann_selectors(const std::vector<selection::prepared_selector>& prepared_selectors) {
+    for (const auto& ps : prepared_selectors) {
+        // Nested occurrences (e.g. ANN(...) + 1) count too: they would otherwise reach the
+        // ANN scalar function body at execution time.
+        if (expr::find_in_expression<expr::function_call>(ps.expr, [] (const expr::function_call& fc) {
+                return expr::is_native_function_call(fc, functions::ANN_FUNCTION_NAME);
+            })) {
+            throw exceptions::invalid_request_exception("ANN() is not supported in the SELECT clause");
+        }
+    }
 }
 
 uint32_t add_similarity_function_to_selectors(
@@ -153,6 +163,12 @@ select_statement::ordering_comparator_type get_similarity_ordering_comparator(st
         ::shared_ptr<const restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
         ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
         std::optional<expr::expression> per_partition_limit, cql_stats& stats, const secondary_index::index& index, std::unique_ptr<attributes> attrs) {
+
+    // Threshold filtering - WHERE ANN(column, query_vector) > score - is not implemented yet,
+    // so the ann() restrictions claimed for this query have nothing to interpret them.
+    if (!restrictions->get_scoring_function_restrictions().empty()) {
+        throw exceptions::invalid_request_exception("ANN() is not supported in the WHERE clause");
+    }
 
     auto prepared_filter = external_search::prepare_filter(*restrictions, parameters->allow_filtering());
 

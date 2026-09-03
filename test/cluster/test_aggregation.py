@@ -11,7 +11,7 @@ import random
 
 from cassandra.cluster import NoHostAvailable  # type: ignore
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.cluster.util import new_test_keyspace, new_test_table
@@ -21,7 +21,7 @@ pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cancel_mapreduce(manager: ManagerClient):
+async def test_cancel_mapreduce(manager: ScyllaClusterManager):
     """
     This test verifies that stopping the supercoordinator of a mapreduce task cancels
     outgoing queries to other nodes, which would otherwise prevent the shutdown.

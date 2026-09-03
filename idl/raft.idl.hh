@@ -54,6 +54,11 @@ struct append_reply {
     raft::term_t current_term;
     raft::index_t commit_idx;
     std::variant<raft::append_reply::rejected, raft::append_reply::accepted> result;
+    // Trailing optional field: a peer that predates it simply omits it, and we
+    // decode false, which is the conservative value (it only ever suppresses a
+    // leadership transfer). A plain bool with a default rather than an optional:
+    // "not sent" and "clock unhealthy" mean the same thing to every consumer.
+    bool clock_ok [[version 2026.3]] = false;
 };
 
 struct append_request {

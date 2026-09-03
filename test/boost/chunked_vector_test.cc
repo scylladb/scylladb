@@ -582,3 +582,123 @@ BOOST_AUTO_TEST_CASE(test_swap) {
     BOOST_REQUIRE(std::ranges::equal(v1, std::array{2, 4}));
     BOOST_REQUIRE(std::ranges::equal(v2, std::array{1}));
 }
+
+// resize() value-initializes its elements, so unlike exception_safe_class the
+// element type has to be default-constructible and can't be handed a checker.
+static exception_safety_checker* resize_checker = nullptr;
+
+class default_constructible_exception_safe_class {
+public:
+    default_constructible_exception_safe_class() {
+        resize_checker->add_live_object();
+    }
+    default_constructible_exception_safe_class(const default_constructible_exception_safe_class&) {
+        resize_checker->add_live_object();
+    }
+    default_constructible_exception_safe_class(default_constructible_exception_safe_class&&) noexcept {
+        resize_checker->add_live_object_noexcept();
+    }
+    ~default_constructible_exception_safe_class() {
+        resize_checker->del_live_object();
+    }
+};
+
+// resize() constructs a whole chunk at a time, so cover growth that crosses
+// chunk boundaries and growth starting mid-chunk, for a type that is neither
+// trivially constructible nor trivially destructible.
+BOOST_AUTO_TEST_CASE(test_resize_across_chunk_boundary) {
+    constexpr size_t chunk_size = 512;
+    using chunked_vector = utils::chunked_vector<std::string, chunk_size>;
+    constexpr size_t max_chunk_capacity = chunked_vector::max_chunk_capacity();
+    static_assert(max_chunk_capacity > 1);
+
+    // Grow from empty, across several chunks, ending mid-chunk.
+    chunked_vector v;
+    v.resize(3 * max_chunk_capacity + max_chunk_capacity / 2);
+    BOOST_REQUIRE_EQUAL(v.size(), 3 * max_chunk_capacity + max_chunk_capacity / 2);
+    for (auto& s : v) {
+        BOOST_REQUIRE(s.empty());
+    }
+
+    // Grow from a partial last chunk left by shrink_to_fit(), preserving the
+    // existing elements.
+    chunked_vector w;
+    for (size_t i = 0; i < max_chunk_capacity + max_chunk_capacity / 2; ++i) {
+        w.push_back(fmt::to_string(i));
+    }
+    w.shrink_to_fit();
+    BOOST_REQUIRE_EQUAL(w.capacity(), w.size());
+    const auto old_size = w.size();
+    w.resize(4 * max_chunk_capacity);
+    BOOST_REQUIRE_EQUAL(w.size(), 4 * max_chunk_capacity);
+    for (size_t i = 0; i < old_size; ++i) {
+        BOOST_REQUIRE_EQUAL(w[i], fmt::to_string(i));
+    }
+    for (size_t i = old_size; i < w.size(); ++i) {
+        BOOST_REQUIRE(w[i].empty());
+    }
+
+    // Growing to the current size is a no-op, and growing to an exact chunk
+    // multiple keeps the elements intact.
+    w.resize(4 * max_chunk_capacity);
+    BOOST_REQUIRE_EQUAL(w.size(), 4 * max_chunk_capacity);
+    w.resize(5 * max_chunk_capacity);
+    BOOST_REQUIRE_EQUAL(w.size(), 5 * max_chunk_capacity);
+    for (size_t i = 0; i < old_size; ++i) {
+        BOOST_REQUIRE_EQUAL(w[i], fmt::to_string(i));
+    }
+}
+
+// The batched construction must value-initialize (not default-initialize) the
+// new elements, including when the batch is memset-able.
+BOOST_AUTO_TEST_CASE(test_resize_value_initializes) {
+    constexpr size_t chunk_size = 1024;
+    using chunked_vector = utils::chunked_vector<uint64_t, chunk_size>;
+    constexpr size_t max_chunk_capacity = chunked_vector::max_chunk_capacity();
+
+    chunked_vector v;
+    // Dirty a chunk's worth of memory, then release it, so that a freshly
+    // allocated chunk is likely to be served from the same non-zero memory.
+    v.resize(max_chunk_capacity);
+    for (auto& x : v) {
+        x = ~uint64_t(0);
+    }
+    v.clear();
+
+    v.push_back(~uint64_t(0));
+    v.resize(2 * max_chunk_capacity + 1);
+    BOOST_REQUIRE_EQUAL(v.size(), 2 * max_chunk_capacity + 1);
+    BOOST_REQUIRE_EQUAL(v[0], ~uint64_t(0));
+    for (size_t i = 1; i < v.size(); ++i) {
+        BOOST_REQUIRE_EQUAL(v[i], uint64_t(0));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(tests_resize_exception_safety) {
+    constexpr size_t chunk_size = 512;
+    using chunked_vector = utils::chunked_vector<default_constructible_exception_safe_class, chunk_size>;
+    constexpr size_t max_chunk_capacity = chunked_vector::max_chunk_capacity();
+    static_assert(max_chunk_capacity > 1);
+
+    auto checker = exception_safety_checker();
+    resize_checker = &checker;
+    {
+        chunked_vector v;
+        v.resize(max_chunk_capacity / 2);
+        BOOST_REQUIRE_EQUAL(size_t(checker.live_objects()), v.size());
+
+        // Throw while constructing the batch that fills the second chunk.
+        checker.set_countdown(max_chunk_capacity);
+        try {
+            v.resize(4 * max_chunk_capacity);
+            BOOST_REQUIRE(false);
+        } catch (...) {
+        }
+        // The partially constructed batch is rolled back, so size() still
+        // accounts for every live element.
+        BOOST_REQUIRE_EQUAL(size_t(checker.live_objects()), v.size());
+        BOOST_REQUIRE_LT(v.size(), 4 * max_chunk_capacity);
+    }
+    BOOST_REQUIRE(checker.ok());
+    resize_checker = nullptr;
+}

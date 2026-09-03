@@ -24,3 +24,66 @@ jobs:
           labels: "backport/none\nbackport/\\d{4}\\.\\d+\nbackport/\\d+\\.\\d+"
           use_regex: true
           add_comment: false
+      # A backport label alone is not enough: the backport itself needs a "Fixes:"
+      # reference in the PR body. Checking it here, next to the label check, means
+      # the author learns about it up front instead of after the merge, when the
+      # backport runs and fails. PRs labelled backport/none are exempt - nothing
+      # will be backported, so no reference is required.
+      - name: Require a Fixes reference when the PR is to be backported
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            // The event payload is the snapshot from when the run was queued, and
+            // we slept a minute since; re-read the PR so labels and body are current.
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            const backportLabels = (pr.labels || [])
+              .map(l => l.name)
+              // Same shape as the labels the check above requires, minus backport/none.
+              .filter(name => /^backport\/\d+\.\d+$/.test(name));
+
+            if (backportLabels.length === 0) {
+              core.info('No backport/<release> label on this PR; a Fixes reference is not required.');
+              return;
+            }
+
+            const repo = context.payload.repository.full_name;
+            const escaped = repo.replace('/', '\\/');
+            // Deliberately the exact pattern from backport-pr-fixes-validation.yaml,
+            // which runs on the generated backport PR and is the strictest check in
+            // the chain (auto-backport.py is more lenient, so it is not the binding
+            // constraint). Anything looser here would let a PR pass, get backported,
+            // and only then fail - which is what this check exists to prevent. Keep
+            // the two patterns identical.
+            const pattern = `Fixes:? ((?:#|${escaped}#|https://github\\.com/${escaped}/issues/)(\\d+)|(?:https://scylladb\\.atlassian\\.net/browse/)?([A-Z]+-\\d+))`;
+
+            if (new RegExp(pattern).test(pr.body || '')) {
+              core.info(`PR body has a valid Fixes reference; ${backportLabels.join(', ')} is fine.`);
+              return;
+            }
+
+            const error = `PR body does not contain a valid 'Fixes' reference, so it can not be backported to ${backportLabels.join(', ')}.`;
+            // Comment best-effort: PRs from forks run with a read-only token, in
+            // which case the failed check is the only signal the author gets.
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+              });
+              if (!comments.some(c => (c.body || '').includes("does not contain a valid 'Fixes' reference"))) {
+                await github.rest.issues.createComment({
+                  issue_number: context.issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: `:warning: ${error}`,
+                });
+              }
+            } catch (e) {
+              core.warning(`Could not comment on the PR: ${e.message}`);
+            }
+            core.setFailed(error);

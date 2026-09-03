@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 from test.pylib.rest_client import inject_error, read_barrier
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.cluster.util import wait_for_cdc_generations_publishing, \
         check_system_topology_and_cdc_generations_v3_consistency
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cdc_generation_clearing(manager: ManagerClient):
+async def test_cdc_generation_clearing(manager: ScyllaClusterManager):
     """Test that obsolete CDC generations are removed from CDC_GENERATIONS_V3 and TOPOLOGY.committed_cdc_generations
        if their timestamp is old enough according to the topology coordinator's clock."""
     logger.info("Bootstrapping first node")
@@ -90,7 +90,7 @@ async def test_cdc_generation_clearing(manager: ManagerClient):
         await check_system_topology_and_cdc_generations_v3_consistency(manager, hosts)
 
 
-async def test_unpublished_cdc_generations_arent_cleared(manager: ManagerClient):
+async def test_unpublished_cdc_generations_arent_cleared(manager: ScyllaClusterManager):
     """Test that unpublished CDC generations aren't removed from CDC_GENERATIONS_V3 and
        TOPOLOGY.committed_cdc_generations regardless of their timestamps."""
     logger.info("Bootstrapping first node")

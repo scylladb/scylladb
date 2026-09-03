@@ -9,14 +9,14 @@ import pytest
 import time
 import logging
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.cluster.util import reconnect_driver, trigger_snapshot, get_topology_coordinator, get_raft_log_size, get_raft_snap_id, create_new_test_keyspace
 from test.pylib.rest_client import inject_error_one_shot
 
 logger = logging.getLogger(__name__)
 
-async def test_raft_snapshot_truncation(manager: ManagerClient):
+async def test_raft_snapshot_truncation(manager: ScyllaClusterManager):
     """
     Check that after snapshot creation, snapshot_trailing_size is taken into consideration,
       issue https://github.com/scylladb/scylladb/issues/16817

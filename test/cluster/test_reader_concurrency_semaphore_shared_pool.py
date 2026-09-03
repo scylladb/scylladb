@@ -11,7 +11,7 @@ import time
 from cassandra.query import SimpleStatement
 from cassandra import ConsistencyLevel
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
 
 from .util import new_test_keyspace, new_test_table
@@ -27,12 +27,12 @@ BORROWED_MEMORY_METRIC = "scylla_database_reads_memory_borrowed_from_shared_pool
 MAIN_POOL_LABELS = {"class": "unnamed"}
 
 
-async def _pool_metric(manager: ManagerClient, ip_addr: str, name: str) -> int:
+async def _pool_metric(manager: ScyllaClusterManager, ip_addr: str, name: str) -> int:
     metrics = await manager.metrics.query(ip_addr)
     return int(metrics.get(name, MAIN_POOL_LABELS) or 0)
 
 
-async def test_shared_pool_live_resize_under_reads(manager: ManagerClient):
+async def test_shared_pool_live_resize_under_reads(manager: ScyllaClusterManager):
     """
     Change reader_concurrency_semaphore_shared_pool_fraction live (0.2 -> 0 -> 0.5)
     while a continuous stream of reads is in flight, verifying via metrics that

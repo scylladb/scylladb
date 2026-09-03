@@ -7,6 +7,10 @@
  */
 #pragma once
 
+#include <algorithm>
+#include <memory>
+#include <vector>
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/temporary_buffer.hh>
@@ -17,7 +21,10 @@
 #include <seastar/core/queue.hh>
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/shared_future.hh>
+#include <seastar/core/expiring_fifo.hh>
+#include <seastar/core/timed_out_error.hh>
 
+#include "replica/exceptions.hh"
 #include "replica/logstor/ondisk.hh"
 #include "schema/schema_fwd.hh"
 #include "types.hh"
@@ -25,11 +32,21 @@
 
 namespace replica {
 
-class compaction_group;
-
 namespace logstor {
 
-class segment_manager;
+class logstor_group;
+
+struct write_target {
+    logstor_group* cg = nullptr;
+    // Keeps the group from being reported as empty while the write is in flight: until the record
+    // is in a segment and in the index, the group's own state does not account for it, and a tablet
+    // split ACKs a pre-split group once it looks empty.
+    seastar::gate::holder non_empty_holder;
+    // Keeps the group from finishing its stop() while the write is in flight. It is released only
+    // when the write target is dropped, which for a separator-eligible record is after the record
+    // was handed to the group's separator buffer, so a group that stopped has nothing left to come.
+    seastar::gate::holder alive_holder;
+};
 
 // Writer for log records that handles serialization and size computation
 class log_record_writer {
@@ -73,9 +90,52 @@ public:
     const log_record& record() const {
         return _record;
     }
+
+    const log_record_header& header() const {
+        return _record.header;
+    }
+};
+
+// Writer for log records that stores pre-serialized bytes.
+// Used in compaction and separator rewriting to avoid deserialization.
+class log_record_bytes_writer {
+
+    using ostream = seastar::simple_memory_output_stream;
+
+    log_record_header _header;
+    bytes_view _header_bytes;
+    bytes_view _data_bytes;
+
+public:
+    log_record_bytes_writer(log_record_header header, log_record_bytes_view record_bytes)
+        : _header(std::move(header))
+        , _header_bytes(record_bytes.header)
+        , _data_bytes(record_bytes.data)
+    {}
+
+    const log_record_header& header() const { return _header; }
+
+    size_t header_size() const { return _header_bytes.size(); }
+    size_t data_size() const { return _data_bytes.size(); }
+    size_t size() const { return header_size() + data_size(); }
+
+    void write(ostream& out) const;
+};
+
+template <typename T>
+concept log_record_writer_concept = requires(const T& w, seastar::simple_memory_output_stream& out) {
+    { w.header() } -> std::convertible_to<const log_record_header&>;
+    { w.header_size() } -> std::convertible_to<size_t>;
+    { w.data_size() } -> std::convertible_to<size_t>;
+    { w.size() } -> std::convertible_to<size_t>;
+    { w.write(out) };
 };
 
 using log_location_with_holder = std::tuple<log_location, seastar::gate::holder>;
+
+struct buffered_write_result {
+    future<log_location_with_holder> persisted;
+};
 
 // Serializes one in-memory logstor buffer.
 //
@@ -141,33 +201,63 @@ public:
 
     bool can_fit(size_t data_size) const noexcept;
 
-    bool can_fit(const log_record_writer& writer) const noexcept {
+    template <log_record_writer_concept Writer>
+    bool can_fit(const Writer& writer) const noexcept {
         return can_fit(writer.size());
+    }
+
+    bool can_fit(size_t header_size, size_t data_size) const noexcept {
+        return can_fit(header_size + data_size);
     }
 
     bool has_data() const noexcept;
 
-    size_t max_record_size() const noexcept;
+    // The largest record that fits an empty buffer of this size and kind. The kinds differ in what
+    // they carry ahead of their records, so a record can fit a buffer of one kind and not of the
+    // other.
+    static constexpr size_t max_record_size(size_t buffer_size, segment_kind kind) noexcept {
+        const size_t overhead = header_size(kind) + ondisk::record_header_size;
+        return buffer_size > overhead ? buffer_size - overhead : 0;
+    }
+
+    // The largest record that fits an empty buffer of this size whatever its kind. A record is
+    // written to a segment of one kind and can be rewritten into a segment of the other - the
+    // separator rewrites the records of a mixed segment into full segments of their compaction
+    // group - so a record that logstor accepts at all has to fit both.
+    static constexpr size_t max_record_size_any_kind(size_t buffer_size) noexcept {
+        return std::min(max_record_size(buffer_size, segment_kind::mixed),
+                        max_record_size(buffer_size, segment_kind::full));
+    }
+
+    size_t max_record_size() const noexcept {
+        return max_record_size(_buffer_size, _segment_kind);
+    }
 
     size_t net_data_size() const noexcept { return _net_data_size; }
     size_t record_count() const noexcept { return _record_count; }
     segment_kind kind() const noexcept { return _segment_kind; }
 
-    append_result append(const log_record_writer& writer);
+    template <log_record_writer_concept Writer>
+    append_result append(const Writer& writer);
+
     size_t sealed_size(size_t alignment) const noexcept;
 
-    static size_t estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size);
+    static size_t estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size, segment_kind);
 
     bool with_segment_header() const noexcept {
         return _segment_kind == segment_kind::full;
     }
 
-    size_t header_size() const noexcept {
+    static constexpr size_t header_size(segment_kind kind) noexcept {
         size_t s = ondisk::buffer_header_size;
-        if (with_segment_header()) {
+        if (kind == segment_kind::full) {
             s += ondisk::segment_header_size;
         }
         return s;
+    }
+
+    size_t header_size() const noexcept {
+        return header_size(_segment_kind);
     }
 
     static bool validate_header(const ondisk::buffer_header& bh) {
@@ -185,6 +275,9 @@ private:
     // table is set for segment_kind::full
     void write_header(segment_sequence segment_seq, std::optional<table_id> table);
 
+    template <std::invocable<ostream&> WriteRecordPayload>
+    append_result append_record(const log_record_header& header, size_t header_size, size_t data_size, WriteRecordPayload write_payload);
+
     void pad_to_alignment(size_t alignment);
     void finalize(size_t alignment);
 
@@ -200,16 +293,17 @@ private:
 // follow-up work such as index updates. For mixed buffers it also keeps copies
 // of appended records so separator rewriting can replay them after the flush.
 class write_buffer {
-    raw_write_buffer _raw;
-    shared_promise<log_location> _written;
-    seastar::gate _write_gate;
-
+public:
     struct record_in_buffer {
         log_record_writer writer;
         future<log_location> loc;
-        compaction_group* cg;
-        seastar::gate::holder cg_holder;
+        write_target target;
     };
+
+private:
+    raw_write_buffer _raw;
+    shared_promise<log_location> _written;
+    seastar::gate _write_gate;
 
     std::vector<record_in_buffer> _records_copy;
 
@@ -226,6 +320,7 @@ public:
     write_buffer& operator=(write_buffer&&) noexcept = default;
 
     future<> close();
+    bool is_closed() const noexcept;
 
     const char* data() const noexcept { return _raw.data(); }
     size_t serialized_size() const noexcept { return _raw.serialized_size(); }
@@ -234,7 +329,8 @@ public:
     size_t offset_in_buffer() const noexcept { return _raw.offset_in_buffer(); }
 
     bool can_fit(size_t data_size) const noexcept { return _raw.can_fit(data_size); }
-    bool can_fit(const log_record_writer& writer) const noexcept { return _raw.can_fit(writer); }
+    template <log_record_writer_concept Writer>
+    bool can_fit(const Writer& writer) const noexcept { return _raw.can_fit(writer); }
     bool has_data() const noexcept { return _raw.has_data(); }
 
     size_t max_record_size() const noexcept { return _raw.max_record_size(); }
@@ -253,83 +349,304 @@ public:
     // Returns a future that will be resolved with the log location once flushed and a gate holder
     // that keeps the write buffer open. The gate should be held for index updates after the write
     // is done.
-    future<log_location_with_holder> write(log_record_writer, compaction_group*, seastar::gate::holder cg_holder);
+    template <log_record_writer_concept Writer>
+    future<log_location_with_holder> write(Writer writer, write_target target = {});
 
-    future<log_location_with_holder> write(log_record_writer writer) {
-        return write(std::move(writer), nullptr, {});
-    }
+    // Complete all tracked writes with their locations when the buffer is flushed to base_location
+    future<> complete_writes(log_location base_location);
+    future<> abort_writes(std::exception_ptr);
 
 private:
     bool with_record_copy() const noexcept {
         return _raw.kind() == segment_kind::mixed;
     }
 
-    std::vector<record_in_buffer>& records_for_separator();
+    std::vector<record_in_buffer> take_separator_records();
 
-    /// Complete all tracked writes with their locations when the buffer is flushed to base_location
-    future<> complete_writes(log_location base_location);
-    future<> abort_writes(std::exception_ptr);
-
+    friend class buffered_writer;
     friend class segment_manager_impl;
+    friend struct separator_buffer;
 };
 
-// Manages a fixed-size circular ring of write_buffers.
+extern template raw_write_buffer::append_result raw_write_buffer::append<log_record_writer>(const log_record_writer&);
+extern template raw_write_buffer::append_result raw_write_buffer::append<log_record_bytes_writer>(const log_record_bytes_writer&);
+
+extern template future<log_location_with_holder> write_buffer::write<log_record_writer>(log_record_writer, write_target);
+extern template future<log_location_with_holder> write_buffer::write<log_record_bytes_writer>(log_record_bytes_writer, write_target);
+
+class write_buffer_pool;
+
+// Gives a borrowed write_buffer back to its pool, along with the pool unit acquired for it.
+class write_buffer_returner {
+    write_buffer_pool* _pool = nullptr;
+    seastar::semaphore_units<> _units;
+
+public:
+    write_buffer_returner() = default;
+    write_buffer_returner(write_buffer_pool& pool, seastar::semaphore_units<> units) noexcept
+        : _pool(&pool), _units(std::move(units)) {}
+
+    void operator()(write_buffer* wb) noexcept;
+};
+
+// A write_buffer borrowed from a write_buffer_pool. reset() gives it back, and so does destruction,
+// which is what keeps the pool's accounting right on every path out of a compaction, including the
+// ones that throw.
+using owned_write_buffer = std::unique_ptr<write_buffer, write_buffer_returner>;
+
+// Pool of write_buffer's for segment building, primarily for compaction output buffers.
+// Hands out at most `capacity` buffers concurrently, created on demand and reused up to `max_cached`.
+// Buffers must be closed before reuse; owners are responsible for closing before the owned_write_buffer
+// goes out of scope. stop() must be called after all users have stopped.
+class write_buffer_pool {
+public:
+    struct config {
+        // The most buffers the pool may have out at once.
+        size_t capacity{0};
+        size_t buffer_size{0};
+        segment_kind kind{segment_kind::full};
+        // Buffers built at construction rather than at the point of use. Must not exceed max_cached,
+        // or they would not all be kept.
+        size_t preallocate{0};
+        // The most returned buffers kept for reuse. Must not exceed capacity.
+        size_t max_cached{0};
+    };
+
+    struct stats {
+        uint64_t allocation_waits{0};
+        uint64_t buffers_dropped{0};
+        uint64_t buffers_created{0};
+    };
+
+private:
+    size_t _buffer_size;
+    segment_kind _kind;
+    size_t _max_cached;
+    size_t _capacity;
+
+    // Buffers ready to be handed out. Never longer than _max_cached, and reserved for it up front,
+    // so that returning a buffer to it never allocates - it has to be infallible, being the last
+    // step of an owner's destructor.
+    std::vector<std::unique_ptr<write_buffer>> _free;
+    // Buffers that are currently out with an owner.
+    size_t _in_use{0};
+
+    seastar::semaphore _available_sem;
+    bool _stopped{false};
+    stats _stats;
+
+public:
+
+    explicit write_buffer_pool(config);
+
+    future<> stop();
+
+    future<owned_write_buffer> allocate(abort_source& as);
+    future<std::vector<owned_write_buffer>> allocate_many(size_t count, abort_source& as);
+
+    void return_buffer(write_buffer* wb, seastar::semaphore_units<> pool_units) noexcept;
+
+    // Changes the number of buffers the pool may have out at once. Lowering it does not take back
+    // any of the buffers that are already out - it only makes the pool hand out that many fewer
+    // before the returns catch up - but it does free the ones it no longer needs to keep.
+    void set_capacity(size_t capacity);
+
+    size_t capacity() const noexcept { return _capacity; }
+
+    // Buffers that are currently out with an owner.
+    size_t used_buffer_count() const noexcept { return _in_use; }
+
+    // Buffers that exist, and therefore the memory the pool holds - including the ones it dropped,
+    // whose memory it never gets back, see drop_buffer().
+    size_t allocated_buffer_count() const noexcept {
+        return _in_use + _free.size() + static_cast<size_t>(_stats.buffers_dropped);
+    }
+
+    const stats& get_stats() const noexcept {
+        return _stats;
+    }
+
+private:
+    bool would_wait(size_t count) const noexcept {
+        return _available_sem.available_units() < static_cast<ssize_t>(count) || _available_sem.waiters() > 0;
+    }
+
+    // Permanently removes a buffer from the pool after it could not be taken back.
+    void drop_buffer(std::unique_ptr<write_buffer> wb, seastar::semaphore_units<>& pool_units) noexcept;
+};
+
+// Configuration passed to buffered_writer constructor (excluding the flush function).
+struct buffered_writer_config {
+    size_t buffer_size;
+    size_t ring_size;
+    seastar::scheduling_group flush_sg;
+    size_t max_queued_write_bytes{0};
+    std::chrono::milliseconds sync_period{0};
+};
+
+// Manages a circular ring of write_buffers.
 //
 // Writers append to the head buffer.  A single consumer coroutine drains the
 // tail.  The head advances when the current head buffer is full (can't fit the
 // next write) or when the consumer seals it.  Writers wait if the ring is full
 // (all buffers are pending flush).
 class buffered_writer {
-    // Number of buffers in the ring.  Must be >= 2 (one head + at least one
-    // that can be in-flight with the consumer).
-    static constexpr size_t ring_size = 5;
-
-    segment_manager& _sm;
     seastar::scheduling_group _flush_sg;
+    size_t _buffer_size;
+    size_t _ring_size;
+    std::chrono::milliseconds _sync_period;
+    seastar::noncopyable_function<future<>(write_buffer&)> _flush_func;
 
-    // The ring of buffers, indexed modulo ring_size.
+    // The ring of buffers, indexed modulo _ring_size.
     std::vector<write_buffer> _ring;
 
-    // Monotonically increasing indices; the actual slot is idx % ring_size.
+    // Monotonically increasing indices; the actual slot is idx % _ring_size.
     // _head: next slot writers append to.
-    // _tail: next slot the consumer will flush.
-    // Invariant: _head >= _tail && _head - _tail < ring_size.
+    // _dispatch_tail: next slot the consumer will dispatch via _flush_func.
+    // _tail: oldest slot not yet safe to reuse.
+    // Invariant: _head >= _dispatch_tail >= _tail && _head - _tail < _ring_size.
     size_t _head{0};
+    size_t _dispatch_tail{0};
     size_t _tail{0};
 
-    // Notified when _tail advances (a slot becomes free for the head to move into)
-    // or when the head buffer is switched.
-    seastar::condition_variable _head_can_advance;
+    struct in_flight_write {
+        std::optional<future<>> completion;
 
-    // Notified when data is written to the head buffer (consumer may wake up).
-    seastar::condition_variable _tail_can_advance;
+        bool idle() const noexcept {
+            return !completion;
+        }
+
+        bool ready() const noexcept {
+            return completion && completion->available();
+        }
+
+        void start(future<> f) {
+            completion.emplace(std::move(f));
+        }
+
+        future<> take_completion() {
+            auto f = std::move(*completion);
+            completion.reset();
+            return f;
+        }
+
+        void reset() noexcept {
+            completion.reset();
+        }
+    };
+
+    std::vector<in_flight_write> _in_flight;
+
+    struct queued_write {
+        seastar::promise<buffered_write_result> accepted_pr; // written to buffer
+        seastar::promise<log_location_with_holder> persisted_pr; // written to a segment
+        log_record_writer writer;
+        write_target target;
+        db::timeout_clock::time_point timeout;
+        uint64_t id;
+        size_t write_size;
+
+        queued_write(log_record_writer writer, write_target target, db::timeout_clock::time_point timeout, uint64_t id, size_t write_size)
+            : writer(std::move(writer))
+            , target(std::move(target))
+            , timeout(timeout)
+            , id(id)
+            , write_size(write_size) {
+        }
+
+        void fail_timeout() noexcept {
+            auto ep = std::make_exception_ptr(seastar::timed_out_error{});
+            accepted_pr.set_exception(ep);
+            persisted_pr.set_exception(ep);
+        }
+    };
+
+    struct on_queued_write_expiry {
+        buffered_writer* owner{};
+
+        void operator()(queued_write& w) noexcept {
+            owner->on_queued_write_removed(w);
+            w.fail_timeout();
+            owner->on_queued_writes_changed();
+        }
+    };
+
+    // Wakes the consumer whenever a state change may let it make forward
+    // progress again: queued writes arrive, the head buffer gains data or
+    // advances, a flush completes, a tail is reclaimed, or shutdown begins.
+    seastar::condition_variable _consumer_progress_cv;
+
+    // Notified when queued writes are removed or expired, so flush() can wait
+    // for the pre-flush queue boundary to advance.
+    seastar::condition_variable _queued_writes_changed;
+
+    // Notified when the tail is advanced by the consumer.
+    seastar::condition_variable _tail_advanced;
+
+    seastar::expiring_fifo<queued_write, on_queued_write_expiry, db::timeout_clock> _queued_writes;
+    size_t _queued_write_bytes{0};
+    size_t _max_queued_write_bytes{0};
+
+    seastar::timer<db::timeout_clock> _head_flush_timer;
+    bool _head_deadline_expired = false;
+
+    // Monotonically increasing id assigned to queued writes. flush() snapshots
+    // this counter and waits until all queued writes with lower ids are gone.
+    uint64_t _next_queued_write_id = 0;
 
     seastar::gate _async_gate;
 
     // The single flush-consumer fiber, running for the lifetime of the writer.
     future<> _consumer{make_ready_future<>()};
 
-    write_buffer& head_buf() noexcept { return _ring[_head % ring_size]; }
-    write_buffer& tail_buf() noexcept { return _ring[_tail % ring_size]; }
+    auto&& head_buf(this auto&& self) noexcept { return self._ring[self._head % self._ring_size]; }
+    auto&& tail_buf(this auto&& self) noexcept { return self._ring[self._tail % self._ring_size]; }
 
-    // The ring is full when all ring_size slots are occupied. Advancing the
+    auto&& tail_write(this auto&& self) noexcept { return self._in_flight[self._tail % self._ring_size]; }
+    auto&& dispatch_tail_write(this auto&& self) noexcept { return self._in_flight[self._dispatch_tail % self._ring_size]; }
+
+    // The ring is full when all _ring_size slots are occupied. Advancing the
     // head further would make the new head slot collide with the tail slot.
-    bool ring_full() const noexcept { return _head - _tail == ring_size - 1; }
+    bool ring_full() const noexcept { return _head - _tail == _ring_size - 1; }
+
+    bool has_pending_buffers() const noexcept;
+    bool should_rotate_head_for_flush() const noexcept;
+    bool maybe_advance_head() noexcept;
+
+    std::optional<future<log_location_with_holder>> append_to_head_buffer(log_record_writer&, write_target);
+
+    bool try_dispatch_next_buffer();
+    future<> run_dispatched_write(size_t idx);
+    future<bool> reclaim_completed_tails();
+
+    future<bool> drain_queued_writes();
+
+    void on_queued_write_removed(const queued_write&) noexcept;
+    void fail_queued_write(queued_write&, std::exception_ptr) noexcept;
+    void on_queued_writes_changed() noexcept;
+
+    void arm_head_flush_timer();
+    void on_head_flush_timer() noexcept;
+    void cancel_head_flush_timer() noexcept;
+
+    future<> consumer_loop();
 
 public:
-    explicit buffered_writer(segment_manager& sm, seastar::scheduling_group flush_sg);
+    explicit buffered_writer(buffered_writer_config cfg,
+            seastar::noncopyable_function<future<>(write_buffer&)> flush_func);
 
     buffered_writer(const buffered_writer&) = delete;
     buffered_writer& operator=(const buffered_writer&) = delete;
 
     future<> start();
     future<> stop();
+    future<> flush();
 
-    future<log_location_with_holder> write(log_record, db::timeout_clock::time_point timeout, compaction_group* cg = nullptr, seastar::gate::holder cg_holder = {});
+    future<buffered_write_result> write_to_buffer(log_record_writer, db::timeout_clock::time_point timeout, write_target target = {});
+    future<log_location_with_holder> write(log_record_writer, db::timeout_clock::time_point timeout, write_target target = {});
 
-private:
-    // The flush consumer loop.
-    future<> consumer_loop();
+    size_t queued_write_count() const noexcept { return _queued_writes.size(); }
+
 };
 
 }

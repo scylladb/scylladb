@@ -7,7 +7,7 @@
 # Tests for CDC tables in tablets enabled keyspaces
 
 from collections import defaultdict
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import wait_for
 from test.pylib.tablets import get_tablet_count, get_base_table, get_tablet_replicas
@@ -33,7 +33,7 @@ class CdcStreamState(IntEnum):
 # verifying that CDC streams for the table are created. Then we write to the table and verify
 # the CDC log entries are created in the table's streams.
 @pytest.mark.parametrize("with_alter", [pytest.param(False, id="create"), pytest.param(True, id="alter")])
-async def test_create_cdc_with_tablets(manager: ManagerClient, with_alter: bool):
+async def test_create_cdc_with_tablets(manager: ScyllaClusterManager, with_alter: bool):
     servers = await manager.servers_add(1)
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
@@ -70,7 +70,7 @@ async def test_create_cdc_with_tablets(manager: ManagerClient, with_alter: bool)
 
 # Create tables with CDC and verify the CDC streams are removed from the
 # system tables when the tables or keyspaces are dropped.
-async def test_drop_table_and_drop_keyspace_removes_cdc_streams(manager: ManagerClient):
+async def test_drop_table_and_drop_keyspace_removes_cdc_streams(manager: ScyllaClusterManager):
     servers = await manager.servers_add(1)
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks1:
@@ -103,7 +103,7 @@ async def test_drop_table_and_drop_keyspace_removes_cdc_streams(manager: Manager
 
 # Create a table with CDC, then disable CDC and drop the CDC log table, and create CDC again.
 # Verify streams are created and cleaned up correctly.
-async def test_drop_and_recreate_cdc(manager: ManagerClient):
+async def test_drop_and_recreate_cdc(manager: ScyllaClusterManager):
     await manager.servers_add(1)
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
@@ -167,7 +167,7 @@ async def validate_virtual_tables(manager, servers, cql, log_table_id, ks, table
 # Read CDC stream information from the virtual tables system.cdc_timestamps and system.cdc_streams
 # and verify it against the internal CDC tables.
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cdc_virtual_tables(manager: ManagerClient):
+async def test_cdc_virtual_tables(manager: ScyllaClusterManager):
     cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
     servers = await manager.servers_add(1, config=cfg)
     cql = manager.get_cql()
@@ -207,7 +207,7 @@ async def test_cdc_virtual_tables(manager: ManagerClient):
         await validate_virtual_tables(manager, servers, cql, log_table_id, ks, 'test')
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cdc_virtual_tables_with_multiple_cdc_tables(manager: ManagerClient):
+async def test_cdc_virtual_tables_with_multiple_cdc_tables(manager: ScyllaClusterManager):
     cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
     servers = await manager.servers_add(1, config=cfg)
     cql = manager.get_cql()
@@ -245,7 +245,7 @@ async def test_cdc_virtual_tables_with_multiple_cdc_tables(manager: ManagerClien
 # get the same result.
 # Then trigger tablet merge and do the same, verifying streams are merged.
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cdc_stream_split_and_merge_basic(manager: ManagerClient):
+async def test_cdc_stream_split_and_merge_basic(manager: ScyllaClusterManager):
     cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
     servers = await manager.servers_add(1, config=cfg)
     cql = manager.get_cql()
@@ -309,7 +309,7 @@ async def test_cdc_stream_split_and_merge_basic(manager: ManagerClient):
 # Test that base table writes and their corresponding CDC log writes are co-located on the same replica.
 # We create a 2-node cluster with RF=1, stop one node, and verify that the partitions available
 # on the alive node work correctly for both base table and CDC log.
-async def test_cdc_colocation(manager: ManagerClient):
+async def test_cdc_colocation(manager: ScyllaClusterManager):
     # Create 2-node cluster to test co-location
     servers = await manager.servers_add(2)
     cql = manager.get_cql()
@@ -370,7 +370,7 @@ async def test_cdc_colocation(manager: ManagerClient):
 # and wait until the old streams are garbage collected and we have a single stream set again.
 # Verify the remaining stream set is equal to the most recent stream set.
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cdc_stream_garbage_collection(manager: ManagerClient):
+async def test_cdc_stream_garbage_collection(manager: ScyllaClusterManager):
     cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1, 'error_injections_at_startup': ['short_cdc_streams_gc_refresh_interval' ] }
     servers = await manager.servers_add(1, config=cfg)
     cql = manager.get_cql()

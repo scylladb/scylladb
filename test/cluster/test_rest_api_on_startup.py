@@ -1,7 +1,7 @@
 # Copyright (C) 2025-present ScyllaDB
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 import asyncio
 from datetime import datetime, timedelta
@@ -13,7 +13,7 @@ from test.pylib.rest_client import HTTPError
 
 logger = logging.getLogger(__name__)
 
-async def test_rest_api_on_startup(request, manager: ManagerClient):
+async def test_rest_api_on_startup(request, manager: ScyllaClusterManager):
 
     host = None
     stop_loop = False

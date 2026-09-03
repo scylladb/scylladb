@@ -378,8 +378,10 @@ bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column
     auto& value = get_typed_value(key_typed_value, type_to_string(column.type), column.name_as_text(), "key column");
     std::string_view value_view = rjson::to_string_view(value);
     if (value_view.empty()) {
+        const std::string_view type_word = column.type == utf8_type ? " string" :
+                column.type == bytes_type ? " binary" : "";
         throw api_error::validation(
-                format("The AttributeValue for a key attribute cannot contain an empty string value. Key: {}", column.name_as_text()));
+                fmt::format("The AttributeValue for a key attribute cannot contain an empty{} value. Key: {}", type_word, column.name_as_text()));
     }
     if (column.type == bytes_type) {
         // FIXME: it's difficult at this point to get information if value was provided
@@ -417,7 +419,7 @@ rjson::value json_key_column_value(bytes_view cell, const column_definition& col
 
 partition_key pk_from_json(const rjson::value& item, schema_ptr schema) {
     std::vector<bytes> raw_pk;
-    // FIXME: this is a loop, but we really allow only one partition key column.
+    // This is a loop because we allow composite partition keys for GSI.
     for (const column_definition& cdef : schema->partition_key_columns()) {
         bytes raw_value = get_key_column_value(item, cdef);
         raw_pk.push_back(std::move(raw_value));
@@ -461,7 +463,7 @@ position_in_partition pos_from_json(const rjson::value& item, schema_ptr schema)
     if (is_alternator_ks) {
         return position_in_partition::for_key(ck_from_json(item, schema));
     }
-    
+
     const auto region_item = rjson::find(item, scylla_paging_region);
     const auto weight_item = rjson::find(item, scylla_paging_weight);
     if (bool(region_item) != bool(weight_item)) {

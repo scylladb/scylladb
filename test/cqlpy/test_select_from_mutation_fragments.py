@@ -371,6 +371,39 @@ def test_paging(cql, test_table, scylla_only):
 
 
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_paging_across_mutation_sources(cql, test_keyspace, scylla_only):
+    """ Test that a page ending inside one mutation source doesn't chop up the next ones.
+
+    MUTATION_FRAGMENTS() output rows are ordered by mutation source first (e.g.
+    all "row-cache" rows, then all "sstable:..." rows). A page resumes where the
+    previous one stopped, e.g. mid-way through "row-cache", so that becomes the
+    starting point of the next page's query. That starting point only makes sense
+    for "row-cache" - the "sstable:..." source comes after it and was never reached
+    by the previous page, so it should be read from its own beginning, not from
+    wherever "row-cache" happened to stop.
+    """
+    with util.new_test_table(cql, test_keyspace, 'pk int, ck int, v int, s int static, PRIMARY KEY (pk, ck)') as test_table:
+        cql.execute(f"UPDATE {test_table} SET s = 0 WHERE pk = 0")
+        cql.execute(f"INSERT INTO {test_table} (pk, ck, v) VALUES (0, 0, 0)")
+        cql.execute(f"INSERT INTO {test_table} (pk, ck, v) VALUES (0, 1, 1)")
+        nodetool.flush(cql, f"{test_table}")
+        # Read the partition, so that it is in the row cache as well as in the sstable.
+        assert len(list(cql.execute(f"SELECT v FROM {test_table} WHERE pk = 0"))) == 2
+
+        query = f"SELECT * FROM MUTATION_FRAGMENTS({test_table}) WHERE pk = 0"
+        expected = list(cql.execute(query))
+        # A partition start, a static row, two rows and a partition end, in the
+        # row cache and in the sstable.
+        assert len(expected) == 10
+
+        # Every page size puts the page boundary somewhere else, including
+        # inside the row-cache source, which is what loses the sstable source.
+        for page_size in range(1, len(expected)):
+            statement = cassandra.query.SimpleStatement(query, fetch_size=page_size)
+            assert list(cql.execute(statement)) == expected, f"fetch_size={page_size} lost fragments"
+
+
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_slicing_rows(cql, test_table, scylla_only):
     """ Test that slicing rows from underlying works. """
     pk1 = util.unique_key_int()

@@ -3,11 +3,11 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import BANNED_NOTIFICATION, new_test_keyspace
 import pytest
 import logging
 import asyncio
@@ -26,7 +26,7 @@ def init_random_seed():
     logger.info("Random seed: %s", seed)
 
 
-async def get_running_servers(manager: ManagerClient):
+async def get_running_servers(manager: ScyllaClusterManager):
     """ Return the running servers in randomized order.
 
         This helps to avoid making any assumptions on the order of the servers,
@@ -38,20 +38,20 @@ async def get_running_servers(manager: ManagerClient):
     return servers
 
 
-async def inject_error_on(manager: ManagerClient, error_name: str, servers: list[ServerInfo]):
+async def inject_error_on(manager: ScyllaClusterManager, error_name: str, servers: list[ServerInfo]):
     """ Inject an error on the given servers. """
     errs = [manager.api.enable_injection(s.ip_addr, error_name, one_shot=True) for s in servers]
     await asyncio.gather(*errs)
 
 
-async def remove_error_on(manager: ManagerClient, error_name: str, servers: list[ServerInfo]):
+async def remove_error_on(manager: ScyllaClusterManager, error_name: str, servers: list[ServerInfo]):
     """ Remove an error injection on the given servers. """
     errs = [manager.api.disable_injection(s.ip_addr, error_name) for s in servers]
     await asyncio.gather(*errs)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
+async def test_tablet_drain_failure_during_decommission(manager: ScyllaClusterManager):
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     servers = [await manager.server_add(config=cfg) for _ in range(3)]
 
@@ -75,7 +75,7 @@ async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
 
 @pytest.mark.prepare_3_nodes_cluster
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_topology_streaming_failure(request, manager: ManagerClient):
+async def test_topology_streaming_failure(request, manager: ScyllaClusterManager):
     """Fail streaming while doing a topology operation"""
     init_random_seed()
     # decommission failure
@@ -95,7 +95,7 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     s = await manager.server_add(start=False, config={
         'error_injections_at_startup': ['stream_ranges_fail']
     })
-    await manager.server_start(s.server_id, expected_error="Bootstrap failed. See earlier errors")
+    await manager.server_start(s.server_id, expected_error=f"Bootstrap failed. See earlier errors|{BANNED_NOTIFICATION}")
     servers = await get_running_servers(manager)
     assert s not in servers
     matches = [await log.grep("raft_topology - rollback.*after bootstrapping failure, moving transition state to left token ring",
@@ -107,7 +107,7 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     s = await manager.server_add(start=False)
     await inject_error_on(manager, "raft_topology_barrier_fail", servers)
     try:
-        await manager.server_start(s.server_id, expected_error="Bootstrap failed. See earlier errors")
+        await manager.server_start(s.server_id, expected_error=f"Bootstrap failed. See earlier errors|{BANNED_NOTIFICATION}")
         servers = await get_running_servers(manager)
         assert s not in servers
         matches = [await log.grep("raft_topology - rollback.*after bootstrapping failure, moving transition state to left token ring",
@@ -131,7 +131,7 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     s = await manager.server_add(start=False, replace_cfg=replace_cfg, config={
         'error_injections_at_startup': ['stream_ranges_fail']
     })
-    await manager.server_start(s.server_id, expected_error="Replace failed. See earlier errors")
+    await manager.server_start(s.server_id, expected_error=f"Replace failed. See earlier errors|{BANNED_NOTIFICATION}")
     servers = await get_running_servers(manager)
     assert s not in servers
     matches = [await log.grep("raft_topology - rollback.*after replacing failure, moving transition state to left token ring",

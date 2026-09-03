@@ -42,11 +42,11 @@ bloom_filter::bloom_filter(int hashes, bitmap&& bs, filter_format format) noexce
     , _hash_count(hashes)
     , _format(format)
 {
-    _stats.memory_size += memory_size();
+    _shard_stats.memory_size += memory_size();
 }
 
 bloom_filter::~bloom_filter() noexcept {
-    _stats.memory_size -= memory_size();
+    _shard_stats.memory_size -= memory_size();
 }
 
 bool bloom_filter::is_present(hashed_key key) {

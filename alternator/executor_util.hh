@@ -34,6 +34,7 @@
 #include "alternator/attribute_path.hh"
 #include "audit/audit.hh"
 #include "utils/managed_bytes.hh"
+#include "exceptions/coordinator_result.hh"
 
 namespace query { class partition_slice; class result; }
 namespace cql3::selection { class selection; }
@@ -41,6 +42,7 @@ namespace data_dictionary { class database; }
 namespace service { class storage_proxy; class client_state; }
 
 namespace alternator {
+class api_error;
 
 /// The body_writer is used for streaming responses - where the response body
 /// is written in chunks to the output_stream. This allows for efficient
@@ -194,6 +196,12 @@ future<> verify_create_permission(bool enforce_authorization, bool warn_authoriz
 // attribute_types.
 void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string, std::string>* attribute_types = nullptr, const std::map<sstring, sstring>* tags = nullptr);
 
+// Returns how many of the *leading* clustering-key columns of the given
+// schema are genuine, user-specified RANGE key attributes. The rest of the
+// clustering columns, if any, were added by Alternator for the materialized
+// view's sake and must not be reported to the user.
+uint8_t genuine_range_key_count(const schema&, const std::map<sstring, sstring>* tags);
+
 /// is_big() checks approximately if the given JSON value is "bigger" than
 /// the given big_size number of bytes. The goal is to *quickly* detect
 /// oversized JSON that, for example, is too large to be serialized to a
@@ -250,4 +258,6 @@ std::optional<rjson::value> describe_single_item(schema_ptr,
 /// help avoid large allocations/many re-allocs.
 body_writer make_streamed(rjson::value&&);
 
+/// Convert an exception from the coordinator_exception_container to an api_error with proper error message.
+api_error create_api_error_from_coordinators_exception(const exceptions::coordinator_exception_container &exc);
 } // namespace alternator

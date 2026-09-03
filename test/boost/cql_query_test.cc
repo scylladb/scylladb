@@ -5004,14 +5004,10 @@ static size_t count_rows_fetched(::shared_ptr<cql_transport::messages::result_me
     return rows->rs().result_set().size();
 };
 
-static lw_shared_ptr<service::pager::paging_state> extract_paging_state(::shared_ptr<cql_transport::messages::result_message> res) {
+static lw_shared_ptr<const service::pager::paging_state> extract_paging_state(::shared_ptr<cql_transport::messages::result_message> res) {
     auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
     BOOST_REQUIRE(rows);
-    auto paging_state = rows->rs().get_metadata().paging_state();
-    if (!paging_state) {
-        return nullptr;
-    }
-    return make_lw_shared<service::pager::paging_state>(*paging_state);
+    return rows->rs().get_metadata().paging_state();
 };
 
 namespace cql_query_test {
@@ -5065,7 +5061,7 @@ SEASTAR_THREAD_TEST_CASE(test_query_limit) {
 
                     try {
                         bool has_more_pages = true;
-                        lw_shared_ptr<service::pager::paging_state> paging_state = nullptr;
+                        lw_shared_ptr<const service::pager::paging_state> paging_state = nullptr;
                         size_t next_expected_row_idx = 0;
                         while (has_more_pages) {
                             // FIXME: even though we chose a large page size, for reversed queries we may still obtain multiple pages.
@@ -5983,6 +5979,41 @@ SEASTAR_TEST_CASE(test_bind_variable_type_checking_disabled) {
 
         auto msg = e.execute_cql("SELECT a, b FROM tab1 WHERE p = 0").get();
         assert_that(msg).is_rows().with_rows({{a, b}});
+    }, cql_test_config{db_config});
+}
+
+static sstring prepared_variable_names(cql_test_env& e, const sstring& query) {
+    const auto prepared = e.local_qp().get_prepared(e.prepare(query).get());
+    BOOST_REQUIRE(prepared);
+    sstring names;
+    for (const auto& spec : prepared->bound_names) {
+        if (!names.empty()) {
+            names += ", ";
+        }
+        names += spec->name->text();
+    }
+    return names;
+}
+
+SEASTAR_TEST_CASE(test_in_bind_variable_name) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tab (p int, c int, v int, PRIMARY KEY (p, c))").get();
+
+        BOOST_REQUIRE_EQUAL(prepared_variable_names(e, "SELECT * FROM tab WHERE p = ? AND c IN ?"), "p, IN(c)");
+        // The IF condition of an LWT statement is prepared as an expression rather than
+        // as a restriction, so the name is reached along a different path.
+        BOOST_REQUIRE_EQUAL(prepared_variable_names(e, "UPDATE tab SET v = 1 WHERE p = 0 AND c = 0 IF v IN ?"), "IN(v)");
+    });
+}
+
+SEASTAR_TEST_CASE(test_in_bind_variable_name_lowercase_operator) {
+    auto db_config = make_shared<db::config>();
+    db_config->cql_in_bind_variable_name_uses_uppercase_operator(false);
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tab (p int, c int, v int, PRIMARY KEY (p, c))").get();
+
+        BOOST_REQUIRE_EQUAL(prepared_variable_names(e, "SELECT * FROM tab WHERE p = ? AND c IN ?"), "p, in(c)");
+        BOOST_REQUIRE_EQUAL(prepared_variable_names(e, "UPDATE tab SET v = 1 WHERE p = 0 AND c = 0 IF v IN ?"), "in(v)");
     }, cql_test_config{db_config});
 }
 
@@ -7115,6 +7146,90 @@ SEASTAR_TEST_CASE(test_widening_value_into_wider_sink) {
             .with_size(1)
             .with_row({double_type->decompose(double(3.5))});
     });
+}
+
+// The parser counts markers for one statement at a time, but used to hand
+// every statement of a multi-statement parse all the markers it had seen so
+// far, so a later statement inherited the markers of the ones before it.
+SEASTAR_TEST_CASE(test_a_parsed_statement_gets_only_the_markers_of_its_text) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE ks.tbl (pk int PRIMARY KEY)").get();
+
+        auto& qp = e.local_qp();
+        auto stmts = cql3::query_processor::parse_statements(
+                "INSERT INTO ks.tbl (pk) VALUES (?); SELECT * FROM ks.tbl;", cql3::internal_dialect());
+        BOOST_REQUIRE_EQUAL(stmts.size(), 2);
+        auto insert = stmts[0]->prepare(qp.db(), qp.get_cql_stats(), qp.get_cql_config());
+        BOOST_REQUIRE_EQUAL(insert->bound_names.size(), 1);
+        auto select = stmts[1]->prepare(qp.db(), qp.get_cql_stats(), qp.get_cql_config());
+        BOOST_REQUIRE_EQUAL(select->bound_names.size(), 0);
+
+        // A marker name is only a name within its own statement: reused in a
+        // later one, it is that statement's own marker, not a reference to
+        // the marker the name stood for before.
+        auto named = cql3::query_processor::parse_statements(
+                "INSERT INTO ks.tbl (pk) VALUES (:a); INSERT INTO ks.tbl (pk) VALUES (:a);", cql3::internal_dialect());
+        BOOST_REQUIRE_EQUAL(named.size(), 2);
+        for (auto& stmt : named) {
+            BOOST_REQUIRE_EQUAL(stmt->prepare(qp.db(), qp.get_cql_stats(), qp.get_cql_config())->bound_names.size(), 1);
+        }
+    });
+}
+
+// Reproduces a bug in which TWCS sstable sets filtered sstables by clustering key
+// using the query-schema (reversed) ranges, which `sstable::may_contain_rows()`
+// interprets as table-schema ranges. Both the optimized TWCS read path
+// (`time_series_sstable_set::create_single_key_sstable_reader()`) and the regular
+// path (`filter_sstable_for_reader_by_ck()`) had the bug, so we exercise both,
+// switching between them with the `enable_optimized_twcs_queries` option.
+static void test_twcs_reversed_restricted_query(bool enable_optimized_twcs_queries) {
+    do_with_cql_env_thread([enable_optimized_twcs_queries] (cql_test_env& e) {
+        e.execute_cql(
+                format("CREATE TABLE tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck))"
+                " WITH compaction = {{"
+                "   'compaction_window_size': '1',"
+                "   'compaction_window_unit': 'MINUTES',"
+                "   'enable_optimized_twcs_queries': '{}',"
+                // Compactions would merge the sstables together, defeating the
+                // purpose of the test.
+                "   'enabled': 'false',"
+                "   'class': 'org.apache.cassandra.db.compaction.TimeWindowCompactionStrategy'"
+                "}}", enable_optimized_twcs_queries ? "true" : "false")).get();
+
+        // One sstable per clustering key, so that each sstable has a narrow
+        // min/max clustering position range.
+        constexpr int n = 10;
+        for (int i = 0; i < n; ++i) {
+            e.execute_cql(format("INSERT INTO tbl (pk, ck, v) VALUES (0, {}, {})", i, i)).get();
+            e.db().invoke_on_all([] (replica::database& db) {
+                return db.flush_all_memtables();
+            }).get();
+        }
+
+        auto count = [&e] (const sstring& q) {
+            auto msg = e.execute_cql(q).get();
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+            BOOST_REQUIRE(rows);
+            return rows->rs().result_set().size();
+        };
+
+        BOOST_CHECK_EQUAL(count("SELECT * FROM tbl WHERE pk = 0 BYPASS CACHE"), n);
+        BOOST_CHECK_EQUAL(count("SELECT * FROM tbl WHERE pk = 0 ORDER BY ck DESC BYPASS CACHE"), n);
+        BOOST_CHECK_EQUAL(count("SELECT * FROM tbl WHERE pk = 0 AND ck >= 5 BYPASS CACHE"), n - 5);
+        BOOST_CHECK_EQUAL(count("SELECT * FROM tbl WHERE pk = 0 AND ck >= 5 ORDER BY ck DESC BYPASS CACHE"), n - 5);
+        BOOST_CHECK_EQUAL(count("SELECT * FROM tbl WHERE pk = 0 AND ck < 5 BYPASS CACHE"), 5);
+        BOOST_CHECK_EQUAL(count("SELECT * FROM tbl WHERE pk = 0 AND ck < 5 ORDER BY ck DESC BYPASS CACHE"), 5);
+        BOOST_CHECK_EQUAL(count("SELECT * FROM tbl WHERE pk = 0 AND ck >= 3 AND ck <= 6 BYPASS CACHE"), 4);
+        BOOST_CHECK_EQUAL(count("SELECT * FROM tbl WHERE pk = 0 AND ck >= 3 AND ck <= 6 ORDER BY ck DESC BYPASS CACHE"), 4);
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_twcs_reversed_restricted_query_optimized) {
+    test_twcs_reversed_restricted_query(true);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_twcs_reversed_restricted_query_regular) {
+    test_twcs_reversed_restricted_query(false);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

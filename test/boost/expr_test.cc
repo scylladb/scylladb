@@ -4036,8 +4036,8 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_empty) {
 
     expression expected = make_bool_const(true);
 
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_empty, db, "test_ks", table_schema.get(), nullptr), expected);
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_empty, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_empty, db, "test_ks", table_schema.get(), nullptr, internal_dialect()), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_empty, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
                         expected);
 }
 
@@ -4052,7 +4052,7 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_empty_with_int_receiver) {
 
     ::lw_shared_ptr<column_specification> int_receiver = make_receiver(int32_type);
 
-    BOOST_REQUIRE_THROW(prepare_expression(conj_empty, db, "test_ks", table_schema.get(), int_receiver),
+    BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(conj_empty, db, "test_ks", table_schema.get(), int_receiver, internal_dialect()),
                         exceptions::invalid_request_exception);
 }
 
@@ -4066,8 +4066,8 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_one_untyped_const_false) {
 
     expression expected = make_bool_const(false);
 
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr), expected);
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), nullptr, internal_dialect()), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
                         expected);
 }
 
@@ -4081,8 +4081,8 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_one_untyped_const_true) {
 
     expression expected = make_bool_const(true);
 
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr), expected);
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), nullptr, internal_dialect()), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
                         expected);
 }
 
@@ -4096,8 +4096,8 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_one_untyped_const_null) {
 
     expression expected = constant::make_null(boolean_type);
 
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr), expected);
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), nullptr, internal_dialect()), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
                         expected);
 }
 
@@ -4110,9 +4110,9 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_one_int_untyped_const_0) {
     expression conj_one = conjunction{
         .children = {make_int_untyped("0")}};
 
-    BOOST_REQUIRE_THROW(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr),
+    BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), nullptr, internal_dialect()),
                         exceptions::invalid_request_exception);
-    BOOST_REQUIRE_THROW(prepare_expression(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+    BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
                         exceptions::invalid_request_exception);
 }
 
@@ -4127,9 +4127,9 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_bools_and_one_int_untyped_const_0) {
                      make_int_untyped("1"),
                      make_bool_untyped("true")}};
 
-    BOOST_REQUIRE_THROW(prepare_expression(conj, db, "test_ks", table_schema.get(), nullptr),
+    BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(conj, db, "test_ks", table_schema.get(), nullptr, internal_dialect()),
                         exceptions::invalid_request_exception);
-    BOOST_REQUIRE_THROW(prepare_expression(conj, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+    BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(conj, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
                         exceptions::invalid_request_exception);
 }
 
@@ -4142,9 +4142,9 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_and_of_ints_is_invalid) {
         .children = {make_int_untyped("0"),
                      make_int_untyped("1")}};
 
-    BOOST_REQUIRE_THROW(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr),
+    BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), nullptr, internal_dialect()),
                         exceptions::invalid_request_exception);
-    BOOST_REQUIRE_THROW(prepare_expression(conj_one, db, "test_ks", table_schema.get(), make_receiver(int32_type)),
+    BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(conj_one, db, "test_ks", table_schema.get(), make_receiver(int32_type), internal_dialect()),
                         exceptions::invalid_request_exception);
 }
 
@@ -4177,12 +4177,12 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_many_elements) {
                                  conjunction{.children = {make_bool_const(false),
                                                           column_value(table_schema->get_column_definition("b2"))}}}};
 
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_many, db, "test_ks", table_schema.get(), nullptr), expected);
-    BOOST_REQUIRE_EQUAL(prepare_expression(conj_many, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_many, db, "test_ks", table_schema.get(), nullptr, internal_dialect()), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(conj_many, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
                         expected);
 
     // Integer receiver is rejected
-    BOOST_REQUIRE_THROW(prepare_expression(conj_many, db, "test_ks", table_schema.get(), make_receiver(int32_type)),
+    BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(conj_many, db, "test_ks", table_schema.get(), make_receiver(int32_type), internal_dialect()),
                         exceptions::invalid_request_exception);
 }
 
@@ -4192,17 +4192,17 @@ void test_prepare_good_binary_operator(expression good_binop_unprepared,
                                        data_dictionary::database db,
                                        const schema_ptr& table_schema) {
     // Preparing without a receiver works as expected
-    BOOST_REQUIRE_EQUAL(prepare_expression(good_binop_unprepared, db, "test_ks", table_schema.get(), nullptr),
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(good_binop_unprepared, db, "test_ks", table_schema.get(), nullptr, internal_dialect()),
                         expected_prepared);
 
     // Preparing with boolean receiver works as expected
     BOOST_REQUIRE_EQUAL(
-        prepare_expression(good_binop_unprepared, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+        prepare_expression_allowing_relations(good_binop_unprepared, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
         expected_prepared);
 
     // reversed boolean type is also accepted
-    BOOST_REQUIRE_EQUAL(prepare_expression(good_binop_unprepared, db, "test_ks", table_schema.get(),
-                                           make_receiver(reversed_type_impl::get_instance(boolean_type))),
+    BOOST_REQUIRE_EQUAL(prepare_expression_allowing_relations(good_binop_unprepared, db, "test_ks", table_schema.get(),
+                                                              make_receiver(reversed_type_impl::get_instance(boolean_type)), internal_dialect()),
                         expected_prepared);
 
     // Receivers with non-bool type are rejected.
@@ -4250,11 +4250,11 @@ void test_prepare_good_binary_operator(expression good_binop_unprepared,
         user_type_impl::get_instance("test_ks", "test_ut", {"field1", "field2"}, {boolean_type, float_type}, true)};
 
     for (const data_type& invalid_receiver_type : invalid_receiver_types) {
-        BOOST_REQUIRE_THROW(prepare_expression(good_binop_unprepared, db, "test_ks", table_schema.get(),
-                                               make_receiver(invalid_receiver_type)),
+        BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(good_binop_unprepared, db, "test_ks", table_schema.get(),
+                                                                  make_receiver(invalid_receiver_type), internal_dialect()),
                             exceptions::invalid_request_exception);
-        BOOST_REQUIRE_THROW(prepare_expression(good_binop_unprepared, db, "test_ks", table_schema.get(),
-                                               make_receiver(reversed_type_impl::get_instance(invalid_receiver_type))),
+        BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(good_binop_unprepared, db, "test_ks", table_schema.get(),
+                                                                  make_receiver(reversed_type_impl::get_instance(invalid_receiver_type)), internal_dialect()),
                             exceptions::invalid_request_exception);
     }
 }
@@ -4388,10 +4388,10 @@ void test_prepare_binary_operator_invalid_rhs_values(const expression& good_bino
         binary_operator invalid_binop = as<binary_operator>(good_binop);
         invalid_binop.rhs = invalid_rhs;
 
-        BOOST_REQUIRE_THROW(prepare_expression(invalid_binop, db, "test_ks", table_schema.get(), nullptr),
+        BOOST_REQUIRE_THROW(prepare_expression_allowing_relations(invalid_binop, db, "test_ks", table_schema.get(), nullptr, internal_dialect()),
                             exceptions::invalid_request_exception);
         BOOST_REQUIRE_THROW(
-            prepare_expression(invalid_binop, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+            prepare_expression_allowing_relations(invalid_binop, db, "test_ks", table_schema.get(), make_receiver(boolean_type), internal_dialect()),
             exceptions::invalid_request_exception);
     }
 }
@@ -5254,7 +5254,7 @@ BOOST_AUTO_TEST_CASE(test_aggregation_depth) {
             },
     };
     auto compared = expression(binary_operator(avg_r, oper_t::EQ, avg_sum_r));
-    compared = prepare_expression(compared, db, "test_ks", schema.get(), nullptr);
+    compared = prepare_expression_allowing_relations(compared, db, "test_ks", schema.get(), nullptr, internal_dialect());
  
     BOOST_REQUIRE_EQUAL(aggregation_depth(compared), 2);
 }
@@ -5810,4 +5810,149 @@ BOOST_AUTO_TEST_CASE(evaluate_neg_reversed_type) {
     expression neg_expr = unary_operator{unary_oper_t::NEG, ck_col};
     raw_value result = evaluate(neg_expr, inputs);
     BOOST_REQUIRE_EQUAL(raw_to<int32_t>(result, int32_type), -5);
+}
+
+// A temporary is a slot in evaluation_inputs::temporaries; evaluating it is
+// just a lookup by index.
+BOOST_AUTO_TEST_CASE(evaluate_temporary) {
+    std::vector<raw_value> temporaries = {make_int_raw(11), make_text_raw("abc"), raw_value::make_null()};
+    auto inputs = evaluation_inputs{.temporaries = temporaries};
+
+    BOOST_REQUIRE_EQUAL(evaluate(temporary{.index = 0, .type = int32_type}, inputs), make_int_raw(11));
+    BOOST_REQUIRE_EQUAL(evaluate(temporary{.index = 1, .type = utf8_type}, inputs), make_text_raw("abc"));
+    BOOST_REQUIRE_EQUAL(evaluate(temporary{.index = 2, .type = int32_type}, inputs), raw_value::make_null());
+}
+
+// temporary used to have no operator==, so comparing two of them resolved to
+// operator==(const expression&, const expression&) through the implicit
+// converting constructor and recursed forever. These comparisons must simply
+// terminate; that they return the right answer is a bonus.
+BOOST_AUTO_TEST_CASE(temporary_equality) {
+    temporary t0{.index = 0, .type = int32_type};
+    temporary t0_again{.index = 0, .type = int32_type};
+    temporary t1{.index = 1, .type = int32_type};
+    temporary t0_other_type{.index = 0, .type = utf8_type};
+
+    BOOST_REQUIRE(t0 == t0_again);
+    BOOST_REQUIRE(!(t0 == t1));
+    BOOST_REQUIRE(!(t0 == t0_other_type));
+
+    // Also through expression, which is how it is reached in practice.
+    BOOST_REQUIRE(expression(t0) == expression(t0_again));
+    BOOST_REQUIRE(!(expression(t0) == expression(t1)));
+
+    // And nested, so the recursion goes through a non-leaf node on the way in.
+    expression call0 = function_call{.func = functions::function_name::native_function("f"), .args = {t0}};
+    expression call0_again = function_call{.func = functions::function_name::native_function("f"), .args = {t0_again}};
+    expression call1 = function_call{.func = functions::function_name::native_function("f"), .args = {t1}};
+    BOOST_REQUIRE(call0 == call0_again);
+    BOOST_REQUIRE(!(call0 == call1));
+
+    // replaced_expr participates too.
+    temporary t0_replacing{.index = 0, .type = int32_type, .replaced_expr = make_int_const(7)};
+    BOOST_REQUIRE(!(t0 == t0_replacing));
+    BOOST_REQUIRE(t0_replacing == (temporary{.index = 0, .type = int32_type, .replaced_expr = make_int_const(7)}));
+}
+
+// A temporary that stands in for an expression the user did write has to show
+// that expression in result-set metadata - otherwise an unaliased column comes
+// back named "@temporary0".
+BOOST_AUTO_TEST_CASE(temporary_printer) {
+    expression plain = temporary{.index = 3, .type = int32_type};
+    BOOST_REQUIRE_EQUAL(format("{:user}", plain), "@temporary3");
+    BOOST_REQUIRE_EQUAL(format("{:debug}", plain), "@temporary3");
+    BOOST_REQUIRE_EQUAL(format("{:result_set_metadata}", plain), "@temporary3");
+
+    expression replaced_call = make_token({make_column("p1"), make_column("p2")});
+    expression replacing = temporary{.index = 3, .type = int32_type, .replaced_expr = replaced_call};
+
+    // Metadata shows only what it stands for, with no trace of the temporary.
+    sstring metadata = format("{:result_set_metadata}", replacing);
+    BOOST_REQUIRE_EQUAL(metadata, format("{:result_set_metadata}", replaced_call));
+    BOOST_REQUIRE(metadata.find("temporary") == sstring::npos);
+
+    // Debug output keeps the slot index, since that is the point of debug output.
+    BOOST_REQUIRE(format("{:debug}", replacing).find("@temporary(3,") == 0);
+
+    // User output names the replaced expression but marks it as a temporary.
+    BOOST_REQUIRE(format("{:user}", replacing).find("@temporary(") == 0);
+}
+
+// A slot handed out is never handed out again, whoever asks.
+BOOST_AUTO_TEST_CASE(temporary_allocator_hands_out_distinct_slots) {
+    temporary_allocator allocator;
+    BOOST_REQUIRE_EQUAL(allocator.nr_allocated(), 0);
+
+    std::vector<size_t> slots;
+    for (int i = 0; i != 4; ++i) {
+        slots.push_back(allocator.allocate());
+    }
+    BOOST_REQUIRE_EQUAL(slots, (std::vector<size_t>{0, 1, 2, 3}));
+    BOOST_REQUIRE_EQUAL(allocator.nr_allocated(), 4);
+
+    // Handing it on carries the high-water mark, which is how a selection takes
+    // over allocating. It moves rather than copies, so there is never a second
+    // allocator handing out slots the first one thinks are free.
+    static_assert(!std::copyable<temporary_allocator>);
+    temporary_allocator taken_over = std::move(allocator);
+    BOOST_REQUIRE_EQUAL(taken_over.allocate(), 4);
+    BOOST_REQUIRE_EQUAL(taken_over.nr_allocated(), 5);
+}
+
+// Aggregation takes fresh slots from the allocator, never one somebody else took.
+BOOST_AUTO_TEST_CASE(split_aggregation_allocates_fresh_temporaries) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression count_r = prepare_expression(
+        function_call{
+            .func = functions::function_name::native_function("count"),
+            .args = {column_value(table_schema->get_column_definition("r"))},
+        },
+        db, "test_ks", table_schema.get(), nullptr);
+
+    auto temporary_index_of = [] (const expression& e) {
+        // Both loops reference their state through the aggregate's first argument.
+        const auto& call = as<function_call>(e);
+        return as<temporary>(call.args[0]).index;
+    };
+    auto slots_of = [] (const auto& inner_loop) {
+        std::vector<size_t> slots;
+        for (const auto& step : inner_loop) {
+            slots.push_back(step.temporary);
+        }
+        return slots;
+    };
+
+    for (size_t already_taken : {size_t(0), size_t(1), size_t(5)}) {
+        temporary_allocator allocator;
+        for (size_t i = 0; i != already_taken; ++i) {
+            allocator.allocate();
+        }
+
+        std::vector<expression> selectors = {count_r};
+        auto split = split_aggregation(selectors, allocator);
+
+        BOOST_REQUIRE_EQUAL(split.inner_loop.size(), 1);
+        // The step's slot is the one both loops actually reference.
+        BOOST_REQUIRE_EQUAL(slots_of(split.inner_loop), std::vector<size_t>{already_taken});
+        BOOST_REQUIRE_EQUAL(temporary_index_of(split.inner_loop[0].expr), already_taken);
+        BOOST_REQUIRE_EQUAL(temporary_index_of(split.outer_loop[0]), already_taken);
+        // And the allocator knows how many slots exist afterwards, which is what
+        // sizes the temporaries vector.
+        BOOST_REQUIRE_EQUAL(allocator.nr_allocated(), already_taken + 1);
+    }
+
+    // Two aggregates take two distinct slots.
+    temporary_allocator allocator;
+    for (int i = 0; i != 4; ++i) {
+        allocator.allocate();
+    }
+    std::vector<expression> two = {count_r, count_r};
+    auto split = split_aggregation(two, allocator);
+    BOOST_REQUIRE_EQUAL(split.inner_loop.size(), 2);
+    BOOST_REQUIRE_EQUAL(slots_of(split.inner_loop), (std::vector<size_t>{4, 5}));
+    BOOST_REQUIRE_EQUAL(temporary_index_of(split.inner_loop[0].expr), 4);
+    BOOST_REQUIRE_EQUAL(temporary_index_of(split.inner_loop[1].expr), 5);
+    BOOST_REQUIRE_EQUAL(allocator.nr_allocated(), 6);
 }

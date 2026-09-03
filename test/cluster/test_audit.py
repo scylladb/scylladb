@@ -35,18 +35,17 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.query import BatchStatement, BatchType, SimpleStatement, named_tuple_factory
 from botocore.exceptions import ClientError
 
-from test.cluster.conftest import cluster_con
 from test.cluster.dtest.dtest_class import create_ks, wait_for
 from test.cluster.dtest.tools.assertions import assert_invalid
 from test.cluster.dtest.tools.data import rows_to_list, run_in_parallel
 
 from test.cluster.test_alternator import alternator_config, get_alternator, unique_table_name
 from test.pylib.driver_utils import safe_driver_shutdown
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import read_barrier
 from test.pylib.skip_types import skip_env
 from test.pylib.util import wait_for as wait_for_async
-from test.pylib.scylla_cluster import ScyllaVersionDescription
+from test.pylib.scylla_server import ScyllaVersionDescription
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +68,7 @@ class AuditRowMustNotExistError(Exception):
 class AuditTester:
     audit_default_settings = {"audit": "table", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
 
-    def __init__(self, manager: ManagerClient, rules_mode: bool = False):
+    def __init__(self, manager: ScyllaClusterManager, rules_mode: bool = False):
         self.manager = manager
         self._prev_config_keys: set[str] = set()
         # When True, legacy audit_categories/keyspaces/tables config is
@@ -174,6 +173,7 @@ class AuditTester:
                 await self.manager.server_update_config(srv.server_id, config_options=full_cfg)
                 await self.manager.server_start(srv.server_id)
                 await self.manager.driver_connect(auth_provider=auth_provider)
+                await self.manager.get_ready_cql([srv])
             else:
                 # Server stays up — only push live-updatable keys.
                 live_cfg = {k: v for k, v in target_config.items() if k in LIVE_AUDIT_KEYS}
@@ -284,7 +284,8 @@ class AuditTester:
 
         self._prev_config_keys = set(target_config.keys())
 
-        cql = self.manager.get_cql()
+        current_servers = await self.manager.running_servers()
+        cql, _ = await self.manager.get_ready_cql(current_servers)
         cql.get_execution_profile(EXEC_PROFILE_DEFAULT).consistency_level = ConsistencyLevel.ONE
         audit_mode = target_config.get("audit") or ""
         if "table" not in audit_mode:
@@ -596,7 +597,7 @@ class CQLAuditTester(AuditTester):
 
     AUDIT_LOG_QUERY = "SELECT * FROM audit.audit_log"
 
-    def __init__(self, manager: ManagerClient, helper: AuditBackend | None = None, rules_mode: bool = False):
+    def __init__(self, manager: ScyllaClusterManager, helper: AuditBackend | None = None, rules_mode: bool = False):
         super().__init__(manager, rules_mode=rules_mode)
         self.server_addresses: list[str] = []
         self.helper: AuditBackend | None = helper
@@ -735,7 +736,17 @@ class CQLAuditTester(AuditTester):
     def assert_exactly_n_audit_entries_were_added(self, session: Session, expected_entries: int):
         counts_before = self.get_audit_entries_count_dict(session)
         yield
-        counts_after = self.get_audit_entries_count_dict(session)
+
+        counts_after: dict[str, int] = {}
+
+        def audit_entry_counts_reached_expected():
+            nonlocal counts_after
+            counts_after = self.get_audit_entries_count_dict(session)
+            assert set(counts_before.keys()) == set(counts_after.keys()), f"audit modes changed (before: {list(counts_before.keys())} after: {list(counts_after.keys())})"
+            return all(counts_after[mode] - count_before >= expected_entries for mode, count_before in counts_before.items())
+
+        wait_for(audit_entry_counts_reached_expected, timeout=60)
+
         assert set(counts_before.keys()) == set(counts_after.keys()), f"audit modes changed (before: {list(counts_before.keys())} after: {list(counts_after.keys())})"
         for mode, count_before in counts_before.items():
             count_after = counts_after[mode]
@@ -1259,6 +1270,29 @@ class CQLAuditTester(AuditTester):
                 assert len(errors) == 1
                 error = next(iter(errors))
                 assert isinstance(error, AuthenticationFailed)
+
+    async def _test_negative_audit_records_auth_no_login(self):
+        """
+        Test that a valid password on a role that is not permitted to log in is
+        audited as a failed AUTH attempt (SCYLLADB-3964).
+        """
+        session = await self.prepare(user="cassandra", password="cassandra", create_keyspace=False)
+        session.execute("CREATE ROLE no_login_role WITH PASSWORD = 'no_login_role' AND LOGIN = false")
+
+        expected_entry = AuditEntry(category="AUTH", statement="LOGIN", table="", ks="", user="no_login_role", cl="", error=True)
+        with self.assert_entries_were_added(session, [expected_entry], filter_out_cassandra_auth=True):
+            try:
+                servers = await self.manager.running_servers()
+                no_login_auth = PlainTextAuthProvider(username="no_login_role", password="no_login_role")
+                await self.manager.get_cql_exclusive(servers[0], auth_provider=no_login_auth)
+                pytest.fail()
+            except NoHostAvailable as e:
+                errors = e.errors.values()
+                assert len(errors) == 1
+                error = next(iter(errors))
+                assert isinstance(error, AuthenticationFailed)
+
+        session.execute("DROP ROLE IF EXISTS no_login_role")
 
     async def _test_negative_audit_records_admin(self):
         """
@@ -1953,7 +1987,7 @@ class CQLAuditTester(AuditTester):
     async def _test_config_no_liveupdate(self, helper_class, audit_config_changer):
         """
         Test audit config parameters that don't allow config changes.
-        Modification of "audit", "audit_unix_socket_path", and "audit_syslog_write_buffer_size" should be forbidden.
+        Modification of "audit" and "audit_unix_socket_path" should be forbidden.
         """
         with helper_class() as helper, audit_config_changer() as config_changer:
             session = await self.prepare(helper=helper)
@@ -1971,10 +2005,9 @@ class CQLAuditTester(AuditTester):
             auditted_query = SimpleStatement("INSERT INTO test_config_no_lifeupdate (userid, password, name) VALUES ('user2', 'password2', 'second user');", consistency_level=ConsistencyLevel.QUORUM)
             expected_new_entries = [AuditEntry(category="DML", statement=auditted_query.query_string, table="test_config_no_lifeupdate", ks="ks", user="anonymous", cl="QUORUM", error=False)]
 
-            # Modifications of "audit", "audit_unix_socket_path", "audit_syslog_write_buffer_size" are forbidden and will fail
+            # Modifications of "audit" and "audit_unix_socket_path" are forbidden and will fail
             await config_changer.change_config(self, {"audit": "none"}, expected_result=self.AuditConfigChanger.ExpectedResult.FAILURE_UNUPDATABLE_PARAM)
             await config_changer.change_config(self, {"audit_unix_socket_path": "/path/"}, expected_result=self.AuditConfigChanger.ExpectedResult.FAILURE_UNUPDATABLE_PARAM)
-            await config_changer.change_config(self, {"audit_syslog_write_buffer_size": "123123123"}, expected_result=self.AuditConfigChanger.ExpectedResult.FAILURE_UNUPDATABLE_PARAM)
 
             # Despite unsuccesful attempts to change config, audit works as expected
             with self.assert_entries_were_added(session, expected_new_entries, merge_duplicate_rows=False):
@@ -2014,7 +2047,7 @@ class CQLAuditTester(AuditTester):
 
             logger.info("Connecting to maintenance socket")
             endpoint = UnixSocketEndPoint(socket_path)
-            maint_cluster = cluster_con([endpoint],
+            maint_cluster = manager.con_gen([endpoint],
                                         load_balancing_policy=WhiteListRoundRobinPolicy([endpoint]))
             maint_session = maint_cluster.connect()
 
@@ -2501,7 +2534,7 @@ verify_legacy_and_rules = pytest.mark.parametrize("rules_mode", [
 
 
 @verify_legacy_and_rules
-async def test_audit_table_noauth(manager: ManagerClient, rules_mode: bool):
+async def test_audit_table_noauth(manager: ScyllaClusterManager, rules_mode: bool):
     """Table backend, no auth, single node — groups all tests that share this config."""
     t = CQLAuditTester(manager, rules_mode=rules_mode)
     await t._test_using_non_existent_keyspace(AuditBackendTable)
@@ -2528,11 +2561,12 @@ async def test_audit_table_noauth(manager: ManagerClient, rules_mode: bool):
 # AuditBackendTable, auth (cassandra), rf=1
 
 @verify_legacy_and_rules
-async def test_audit_table_auth(manager: ManagerClient, rules_mode: bool):
+async def test_audit_table_auth(manager: ScyllaClusterManager, rules_mode: bool):
     """Table backend, auth enabled, single node."""
     t = CQLAuditTester(manager, rules_mode=rules_mode)
     await t._test_user_password_masking(AuditBackendTable)
     await t._test_negative_audit_records_auth()
+    await t._test_negative_audit_records_auth_no_login()
     await t._test_negative_audit_records_admin()
     await t._test_negative_audit_records_dml()
     await t._test_negative_audit_records_dcl()
@@ -2545,7 +2579,7 @@ async def test_audit_table_auth(manager: ManagerClient, rules_mode: bool):
 # AuditBackendTable, auth (cassandra), rf=3
 
 @verify_legacy_and_rules
-async def test_audit_table_auth_multinode(manager: ManagerClient, rules_mode: bool):
+async def test_audit_table_auth_multinode(manager: ScyllaClusterManager, rules_mode: bool):
     """Table backend, auth enabled, multi-node (rf=3)."""
     t = CQLAuditTester(manager, rules_mode=rules_mode)
     await t._test_negative_audit_records_ddl()
@@ -2553,50 +2587,50 @@ async def test_audit_table_auth_multinode(manager: ManagerClient, rules_mode: bo
 
 # AuditBackendTable, standalone / special config
 
-async def test_audit_type_none_standalone(manager: ManagerClient):
+async def test_audit_type_none_standalone(manager: ScyllaClusterManager):
     """audit=None — verify no auditing occurs."""
     await CQLAuditTester(manager)._test_audit_type_none()
 
 
-async def test_audit_type_invalid_standalone(manager: ManagerClient):
+async def test_audit_type_invalid_standalone(manager: ScyllaClusterManager):
     """audit=invalid — server should fail to start."""
     await CQLAuditTester(manager)._test_audit_type_invalid()
 
 
-async def test_composite_audit_type_invalid_standalone(manager: ManagerClient):
+async def test_composite_audit_type_invalid_standalone(manager: ScyllaClusterManager):
     """audit=table,syslog,invalid — server should fail to start."""
     await CQLAuditTester(manager)._test_composite_audit_type_invalid()
 
 
-async def test_audit_empty_settings_standalone(manager: ManagerClient):
+async def test_audit_empty_settings_standalone(manager: ScyllaClusterManager):
     """audit=none — verify no auditing occurs."""
     await CQLAuditTester(manager)._test_audit_empty_settings()
 
 
-async def test_composite_audit_empty_settings_standalone(manager: ManagerClient):
+async def test_composite_audit_empty_settings_standalone(manager: ScyllaClusterManager):
     """audit=table,syslog,none — verify no auditing occurs."""
     await CQLAuditTester(manager)._test_composite_audit_empty_settings()
 
 
-async def test_audit_categories_invalid_standalone(manager: ManagerClient):
+async def test_audit_categories_invalid_standalone(manager: ScyllaClusterManager):
     """Invalid audit_categories — server should fail to start."""
     await CQLAuditTester(manager)._test_audit_categories_invalid()
 
 
 # No verify_legacy_and_rules, because it's a replica failure test, so it's enough to test it in one mode
-async def test_insert_failure_standalone(manager: ManagerClient):
+async def test_insert_failure_standalone(manager: ScyllaClusterManager):
     """7-node topology, audit=table, no auth — standalone due to unique topology."""
     await CQLAuditTester(manager)._test_insert_failure_doesnt_report_success()
 
 
 @verify_legacy_and_rules
-async def test_service_level_statements_standalone(manager: ManagerClient, rules_mode: bool):
+async def test_service_level_statements_standalone(manager: ScyllaClusterManager, rules_mode: bool):
     """audit=table, auth, cmdline=--smp 1 — standalone due to special cmdline."""
     await CQLAuditTester(manager, rules_mode=rules_mode)._test_service_level_statements()
 
 
 @verify_legacy_and_rules
-async def test_audit_maintenance_socket_user_creation(manager: ManagerClient, rules_mode: bool):
+async def test_audit_maintenance_socket_user_creation(manager: ScyllaClusterManager, rules_mode: bool):
     """Verify that creating a superuser via the maintenance socket is audited."""
     t = CQLAuditTester(manager, rules_mode=rules_mode)
     await t._test_audit_maintenance_socket_user_creation(manager, AuditBackendTable)
@@ -2607,7 +2641,7 @@ async def test_audit_maintenance_socket_user_creation(manager: ManagerClient, ru
 # AuditBackendSyslog, no auth, rf=1
 
 @verify_legacy_and_rules
-async def test_audit_syslog_noauth(manager: ManagerClient, rules_mode: bool):
+async def test_audit_syslog_noauth(manager: ScyllaClusterManager, rules_mode: bool):
     """Syslog backend, no auth, single node."""
     t = CQLAuditTester(manager, rules_mode=rules_mode)
     Syslog = functools.partial(AuditBackendSyslog, socket_path=syslog_socket_path)
@@ -2627,7 +2661,7 @@ async def test_audit_syslog_noauth(manager: ManagerClient, rules_mode: bool):
 # AuditBackendSyslog, auth, rf=1
 
 @verify_legacy_and_rules
-async def test_audit_syslog_auth(manager: ManagerClient, rules_mode: bool):
+async def test_audit_syslog_auth(manager: ScyllaClusterManager, rules_mode: bool):
     """Syslog backend, auth enabled, single node."""
     t = CQLAuditTester(manager, rules_mode=rules_mode)
     Syslog = functools.partial(AuditBackendSyslog, socket_path=syslog_socket_path)
@@ -2639,7 +2673,7 @@ async def test_audit_syslog_auth(manager: ManagerClient, rules_mode: bool):
 # AuditBackendComposite, no auth, rf=1
 
 @verify_legacy_and_rules
-async def test_audit_composite_noauth(manager: ManagerClient, rules_mode: bool):
+async def test_audit_composite_noauth(manager: ScyllaClusterManager, rules_mode: bool):
     """Composite backend (table+syslog), no auth, single node."""
     t = CQLAuditTester(manager, rules_mode=rules_mode)
     Composite = functools.partial(AuditBackendComposite, socket_path=syslog_socket_path)
@@ -2659,7 +2693,7 @@ async def test_audit_composite_noauth(manager: ManagerClient, rules_mode: bool):
 # AuditBackendComposite, auth, rf=1
 
 @verify_legacy_and_rules
-async def test_audit_composite_auth(manager: ManagerClient, rules_mode: bool):
+async def test_audit_composite_auth(manager: ScyllaClusterManager, rules_mode: bool):
     """Composite backend (table+syslog), auth enabled, single node."""
     t = CQLAuditTester(manager, rules_mode=rules_mode)
     Composite = functools.partial(AuditBackendComposite, socket_path=syslog_socket_path)
@@ -2680,8 +2714,8 @@ _composite = functools.partial(AuditBackendComposite, socket_path=syslog_socket_
     pytest.param(_composite, CQLAuditTester.AuditSighupConfigChanger, id="composite-sighup"),
     pytest.param(_composite, CQLAuditTester.AuditCqlConfigChanger, id="composite-cql"),
 ])
-async def test_config_no_liveupdate(manager: ManagerClient, helper_class, config_changer):
-    """Non-live audit config params (audit, audit_unix_socket_path, audit_syslog_write_buffer_size) must be unmodifiable."""
+async def test_config_no_liveupdate(manager: ScyllaClusterManager, helper_class, config_changer):
+    """Non-live audit config params (audit, audit_unix_socket_path) must be unmodifiable."""
     await CQLAuditTester(manager)._test_config_no_liveupdate(helper_class, config_changer)
 
 
@@ -2693,7 +2727,7 @@ async def test_config_no_liveupdate(manager: ManagerClient, helper_class, config
     pytest.param(_composite, CQLAuditTester.AuditSighupConfigChanger, id="composite-sighup"),
     pytest.param(_composite, CQLAuditTester.AuditCqlConfigChanger, id="composite-cql"),
 ])
-async def test_config_liveupdate(manager: ManagerClient, helper_class, config_changer):
+async def test_config_liveupdate(manager: ScyllaClusterManager, helper_class, config_changer):
     """Live-updatable audit config params (categories, keyspaces, tables) must be modifiable at runtime."""
     await CQLAuditTester(manager)._test_config_liveupdate(helper_class, config_changer)
 
@@ -2703,12 +2737,12 @@ async def test_config_liveupdate(manager: ManagerClient, helper_class, config_ch
     pytest.param(_syslog, id="syslog"),
     pytest.param(_composite, id="composite"),
 ])
-async def test_parallel_syslog_audit(manager: ManagerClient, helper_class):
+async def test_parallel_syslog_audit(manager: ScyllaClusterManager, helper_class):
     """Cluster must not fail when multiple queries are audited in parallel."""
     await CQLAuditTester(manager)._test_parallel_syslog_audit(helper_class)
 
 async def test_upgrade_preserves_ddl_audit_for_tables(
-        manager: ManagerClient,
+        manager: ScyllaClusterManager,
         scylla_2025_1: ScyllaVersionDescription,
         scylla_binary: Path):
     """Verify that upgrading from 2025.1 to master preserves DDL auditing
@@ -2766,7 +2800,7 @@ async def test_upgrade_preserves_ddl_audit_for_tables(
     )
 
 
-async def test_audit_rules(manager: ManagerClient):
+async def test_audit_rules(manager: ScyllaClusterManager):
     """Behaviors specific to audit_rules that the legacy config cannot express."""
     await CQLAuditTester(manager)._test_audit_rules_matching()
     await CQLAuditTester(manager)._test_audit_rules_liveupdate()
@@ -2774,7 +2808,7 @@ async def test_audit_rules(manager: ManagerClient):
     await CQLAuditTester(manager)._test_audit_rules_sink_mismatch_warning()
 
 
-async def test_audit_rules_with_auth(manager: ManagerClient):
+async def test_audit_rules_with_auth(manager: ScyllaClusterManager):
     """audit_rules behaviors that require authentication: role filtering and cache notifications."""
     await CQLAuditTester(manager)._test_audit_rules_role_filtering()
     await CQLAuditTester(manager)._test_audit_rules_auth_with_empty_tables()
@@ -2784,7 +2818,7 @@ async def test_audit_rules_with_auth(manager: ManagerClient):
 
 # Alternator audit regression test
 
-async def test_alternator_basic_ops_audit_disabled(manager: ManagerClient):
+async def test_alternator_basic_ops_audit_disabled(manager: ScyllaClusterManager):
     # Basic Alternator operations must not crash when audit is disabled.
     config = alternator_config | {'audit': 'none'}
     server = await manager.server_add(config=config)

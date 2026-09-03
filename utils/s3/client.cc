@@ -8,10 +8,10 @@
 
 #include <fmt/format.h>
 #include <exception>
+#include <cctype>
 #include <initializer_list>
 #include <memory>
 #include <numeric>
-#include <regex>
 #include <stdexcept>
 #if __has_include(<rapidxml.h>)
 #include <rapidxml.h>
@@ -454,7 +454,10 @@ http::client::reply_handler client::wrap_handler(http::request& request,
             }
             if (possible_error->get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
                 s3l.warn("Request failed with EXPIRED_TOKEN. Resetting credentials");
-                _credentials = {};
+                {
+                    auto units = co_await get_units(_creds_sem, 1);
+                    _credentials = {};
+                }
                 should_retry = utils::http::retryable::yes;
                 co_await authorize(request);
             }
@@ -498,6 +501,9 @@ future<> client::make_request(http::request req,
                               error_handler err_handler,
                               std::optional<http::reply::status_type> expected,
                               seastar::abort_source* as) {
+    // Held for the whole request. close() waits for the gate before closing
+    // the http clients, so no http connection can outlive them.
+    auto holder = _requests_gate.hold();
     auto request = std::move(req);
     auto handler = wrap_handler(request, std::move(handle), expected);
     co_await authorize(request);
@@ -514,6 +520,9 @@ future<> client::make_request(http::request req,
                               error_handler err_handler,
                               std::optional<http::reply::status_type> expected,
                               seastar::abort_source* as) {
+    // Held across the lookup as well: find_or_create_client() can suspend and
+    // insert into _https, which close() must not drain in that window.
+    auto holder = _requests_gate.hold();
     auto& gc = co_await find_or_create_client();
     auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
@@ -564,6 +573,36 @@ future<stats> client::get_object_stats(sstring object_name, seastar::abort_sourc
         return make_ready_future<>();
     }, as);
     co_return st;
+}
+
+static constexpr std::string_view object_metadata_header_prefix = "x-amz-meta-";
+
+static void add_object_metadata_headers(http::request& req, const object_metadata& metadata) {
+    for (const auto& [key, value] : metadata) {
+        req._headers[fmt::format("{}{}", object_metadata_header_prefix, key)] = value;
+    }
+}
+
+static bool has_object_metadata_header_prefix(std::string_view name) {
+    return name.size() >= object_metadata_header_prefix.size()
+            && std::equal(object_metadata_header_prefix.begin(), object_metadata_header_prefix.end(), name.begin(), [] (char lhs, char rhs) {
+                return std::tolower(lhs) == std::tolower(rhs);
+            });
+}
+
+future<object_info> client::get_object_info(sstring object_name, seastar::abort_source* as) {
+    object_info info;
+    co_await get_object_header(std::move(object_name), [&info] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+        for (const auto& [name, value] : rep._headers) {
+            if (has_object_metadata_header_prefix(name)) {
+                auto key = name.substr(object_metadata_header_prefix.size());
+                std::ranges::transform(key, key.begin(), ::tolower);
+                info.metadata.emplace(std::move(key), value);
+            }
+        }
+        return make_ready_future<>();
+    }, as);
+    co_return info;
 }
 
 future<bool> client::object_exists(sstring object_name, seastar::abort_source* as) {
@@ -713,9 +752,10 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
     co_return std::move(*ret);
 }
 
-future<> client::put_object(sstring object_name, temporary_buffer<char> buf, seastar::abort_source* as) {
+future<> client::put_object(sstring object_name, temporary_buffer<char> buf, object_metadata metadata, seastar::abort_source* as) {
     s3l.trace("PUT {}", object_name);
     auto req = http::request::make("PUT", _host, object_name);
+    add_object_metadata_headers(req, metadata);
     auto len = buf.size();
     req.write_body("bin", len, [buf = std::move(buf)] (output_stream<char>&& out_) -> future<> {
         auto out = std::move(out_);
@@ -737,9 +777,10 @@ future<> client::put_object(sstring object_name, temporary_buffer<char> buf, sea
     }, http::reply::status_type::ok, as);
 }
 
-future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs, seastar::abort_source* as) {
+future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs, object_metadata metadata, seastar::abort_source* as) {
     s3l.trace("PUT {} (buffers)", object_name);
     auto req = http::request::make("PUT", _host, object_name);
+    add_object_metadata_headers(req, metadata);
     auto len = bufs.size();
     req.write_body("bin", len, [bufs = std::move(bufs)] (output_stream<char>&& out_) -> future<> {
         auto out = std::move(out_);
@@ -858,7 +899,13 @@ protected:
     utils::chunked_vector<sstring> _part_etags;
     named_gate _bg_flushes;
     std::optional<tag> _tag;
+    object_metadata _metadata;
     seastar::abort_source* _as;
+    // Set once this sink has produced its object, either with a plain PUT or with
+    // a completed multipart upload. finalize_upload() clears _upload_id and
+    // output_stream::close() flushes a second time, so upload_started() alone
+    // cannot tell "nothing was ever written" from "already uploaded".
+    bool _object_produced = false;
 
     future<> start_upload();
     future<> finalize_upload();
@@ -870,11 +917,21 @@ protected:
         return !_upload_id.empty();
     }
 
-    multipart_upload(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag, seastar::abort_source* as)
+    // Create the object even though nothing was written into the sink. A
+    // zero-length component is still a component, and object stores hold
+    // zero-length objects. Without this the object is silently missing.
+    future<> put_empty_object() {
+        s3l.trace("PUT empty object {}", _object_name);
+        _object_produced = true;
+        return _client->put_object(_object_name, temporary_buffer<char>(), _metadata);
+    }
+
+    multipart_upload(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<tag> tag, seastar::abort_source* as)
         : _client(std::move(cln))
         , _object_name(std::move(object_name))
         , _bg_flushes("s3::client::multipart_upload::bg_flushes")
         , _tag(std::move(tag))
+        , _metadata(std::move(metadata))
         , _as(as)
     {
     }
@@ -885,15 +942,15 @@ public:
 
 class client::copy_s3_object final : multipart_upload {
 public:
-    copy_s3_object(shared_ptr<client> cln, sstring source_object, sstring target_object, size_t part_size, std::optional<tag> tag, abort_source* as)
-        : multipart_upload(std::move(cln), std::move(target_object), std::move(tag), as)
+    copy_s3_object(shared_ptr<client> cln, sstring source_object, sstring target_object, object_metadata metadata, size_t part_size, std::optional<tag> tag, abort_source* as)
+        : multipart_upload(std::move(cln), std::move(target_object), std::move(metadata), std::move(tag), as)
         , _max_copy_part_size(part_size)
         , _source_object(std::move(source_object)) {
         assert(_max_copy_part_size > 0 && _max_copy_part_size <= _default_copy_part_size);
     }
 
-    copy_s3_object(shared_ptr<client> cln, sstring source_object, sstring target_object, std::optional<tag> tag, abort_source* as)
-        : copy_s3_object(std::move(cln), std::move(source_object), std::move(target_object), _default_copy_part_size, std::move(tag), as) {}
+    copy_s3_object(shared_ptr<client> cln, sstring source_object, sstring target_object, object_metadata metadata, std::optional<tag> tag, abort_source* as)
+        : copy_s3_object(std::move(cln), std::move(source_object), std::move(target_object), std::move(metadata), _default_copy_part_size, std::move(tag), as) {}
 
     future<> copy() {
         auto source_size = co_await _client->get_object_size(_source_object);
@@ -911,6 +968,10 @@ private:
             req._headers["x-amz-tagging"] = seastar::format("{}={}", _tag->key, _tag->value);
         }
         req._headers["x-amz-copy-source"] = _source_object;
+        if (!_metadata.empty()) {
+            req._headers["x-amz-metadata-directive"] = "REPLACE";
+            add_object_metadata_headers(req, _metadata);
+        }
 
         co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::ok, _as);
     }
@@ -978,16 +1039,16 @@ private:
     sstring _source_object;
 };
 
-future<> client::copy_object(sstring source_object, sstring target_object, std::optional<size_t> part_size, std::optional<tag> tag, seastar::abort_source* as) {
+future<> client::copy_object(sstring source_object, sstring target_object, object_metadata metadata, std::optional<size_t> part_size, std::optional<tag> tag, seastar::abort_source* as) {
     if (!part_size)
-        co_return co_await copy_s3_object(shared_from_this(), std::move(source_object), std::move(target_object), tag, as).copy();
-    co_return co_await copy_s3_object(shared_from_this(), std::move(source_object), std::move(target_object), part_size.value(), tag, as).copy();
+        co_return co_await copy_s3_object(shared_from_this(), std::move(source_object), std::move(target_object), std::move(metadata), tag, as).copy();
+    co_return co_await copy_s3_object(shared_from_this(), std::move(source_object), std::move(target_object), std::move(metadata), part_size.value(), tag, as).copy();
 }
 
 class client::upload_sink_base : public multipart_upload, public data_sink_impl {
 public:
-    upload_sink_base(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag, seastar::abort_source* as)
-        : multipart_upload(std::move(cln), std::move(object_name), std::move(tag), as)
+    upload_sink_base(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<tag> tag, seastar::abort_source* as)
+        : multipart_upload(std::move(cln), std::move(object_name), std::move(metadata), std::move(tag), as)
     {
     }
 
@@ -1071,6 +1132,7 @@ future<> client::multipart_upload::start_upload() {
     if (_tag) {
         rep._headers["x-amz-tagging"] = seastar::format("{}={}", _tag->key, _tag->value);
     }
+    add_object_metadata_headers(rep, _metadata);
     co_await _client->make_request(std::move(rep), [this] (const http::reply& rep, input_stream<char>&& in_) -> future<> {
         auto in = std::move(in_);
         auto body = co_await util::read_entire_stream_contiguous(in);
@@ -1097,7 +1159,7 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     req._headers["Content-Length"] = seastar::format("{}", size);
     req.set_query_param("partNumber", seastar::format("{}", part_number + 1));
     req.set_query_param("uploadId", _upload_id);
-    req.write_body("bin", size, [this, part_number, bufs = std::move(bufs), p = std::move(mpu)] (output_stream<char>&& out_) mutable -> future<> {
+    req.write_body("bin", size, [this, part_number, bufs = std::move(bufs)] (output_stream<char>&& out_) mutable -> future<> {
         auto out = std::move(out_);
         std::exception_ptr ex;
         s3l.trace("upload {} part data (upload id {})", part_number, _upload_id);
@@ -1113,8 +1175,6 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
         if (ex) {
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
-        // note: At this point the buffers are sent, but the response is not yet
-        // received. However, claim is released and next part may start uploading
     });
 
     // Do upload in the background so that several parts could go in parallel.
@@ -1138,7 +1198,7 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
         // ... the exact exception only remains in logs
         s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
-    }).finally([gh = std::move(gh)] {});
+    }).finally([gh = std::move(gh), mpu = std::move(mpu)] {});
 }
 
 future<> client::multipart_upload::abort_upload() {
@@ -1155,6 +1215,10 @@ future<> client::multipart_upload::abort_upload() {
 }
 
 future<> client::multipart_upload::finalize_upload() {
+    // Set before the request rather than after it: on failure the caller aborts the
+    // upload, which clears _upload_id, and a later flush must not then mistake this
+    // sink for one that never wrote anything and PUT an empty object over it.
+    _object_produced = true;
     s3l.trace("wait for {} parts to complete (upload id {})", _part_etags.size(), _upload_id);
     co_await _bg_flushes.close();
 
@@ -1218,9 +1282,15 @@ class client::upload_sink final : public client::upload_sink_base {
     }
 
 public:
-    upload_sink(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag = {}, seastar::abort_source* as = nullptr)
-        : upload_sink_base(std::move(cln), std::move(object_name), std::move(tag), as)
+    upload_sink(shared_ptr<client> cln, sstring object_name, object_metadata metadata = {}, std::optional<tag> tag = {}, seastar::abort_source* as = nullptr)
+        : upload_sink_base(std::move(cln), std::move(object_name), std::move(metadata), std::move(tag), as)
     {}
+
+    // True while nothing has been written into the sink, so it has no object to
+    // copy-upload from. Used by upload_jumbo_sink to skip such a piece.
+    bool empty() const noexcept {
+        return _bufs.size() == 0 && !upload_started();
+    }
 
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
         append_buffers(_bufs, std::move(data));
@@ -1228,15 +1298,19 @@ public:
     }
 
     virtual future<> flush() override {
-        if (_bufs.size() != 0) {
+        if (!_object_produced) {
             // This is handy for small objects that are uploaded via the sink. It makes
-            // upload happen in one REST call, instead of three (create + PUT + wrap-up)
+            // upload happen in one REST call, instead of three (create + PUT + wrap-up).
+            // Empty _bufs get here too and make the zero-length object
             if (!upload_started()) {
                 s3l.trace("Sink fallback to plain PUT for {}", _object_name);
-                co_return co_await _client->put_object(_object_name, std::move(_bufs));
+                _object_produced = true;
+                co_return co_await _client->put_object(_object_name, std::move(_bufs), std::move(_metadata));
             }
 
-            co_await upload_part(std::move(_bufs));
+            if (_bufs.size() != 0) {
+                co_await upload_part(std::move(_bufs));
+            }
         }
         if (upload_started()) {
             std::exception_ptr ex;
@@ -1311,17 +1385,17 @@ class client::upload_jumbo_sink final : public upload_sink_base {
 
     future<> maybe_flush() {
         if (_current->parts_count() >= _maximum_parts_in_piece) {
-            auto next = std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count() + 1), piece_tag);
+            auto next = std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count() + 1), object_metadata{}, piece_tag);
             co_await upload_part(std::exchange(_current, std::move(next)));
             s3l.trace("Initiated {} piece (upload_id {})", parts_count(), _upload_id);
         }
     }
 
 public:
-    upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as)
-        : upload_sink_base(std::move(cln), std::move(object_name), std::nullopt, as)
+    upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as)
+        : upload_sink_base(std::move(cln), std::move(object_name), std::move(metadata), std::nullopt, as)
         , _maximum_parts_in_piece(max_parts_per_piece.value_or(maximum_parts_in_piece))
-        , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), piece_tag))
+        , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), object_metadata{}, piece_tag))
     {}
 
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
@@ -1331,7 +1405,15 @@ public:
 
     virtual future<> flush() override {
         if (_current) {
-            co_await upload_part(std::exchange(_current, nullptr));
+            auto piece = std::exchange(_current, nullptr);
+            if (piece->empty()) {
+                // Nothing was written into the piece, so upload_sink::flush()
+                // would not create its object and the copy-upload below would
+                // fail with NoSuchKey, leaving the ETag list short. Drop it.
+                co_await piece->close();
+            } else {
+                co_await upload_part(std::move(piece));
+            }
         }
         if (upload_started()) {
             std::exception_ptr ex;
@@ -1344,6 +1426,8 @@ public:
                 co_await abort_upload();
                 std::rethrow_exception(ex);
             }
+        } else if (!_object_produced) {
+            co_await put_empty_object();
         }
     }
 
@@ -1356,20 +1440,15 @@ public:
     }
 };
 
-data_sink client::make_upload_sink(sstring object_name, seastar::abort_source* as) {
-    return data_sink(std::make_unique<upload_sink>(shared_from_this(), std::move(object_name), std::nullopt, as));
+data_sink client::make_upload_sink(sstring object_name, object_metadata metadata, seastar::abort_source* as) {
+    return data_sink(std::make_unique<upload_sink>(shared_from_this(), std::move(object_name), std::move(metadata), std::nullopt, as));
 }
 
-data_sink client::make_upload_jumbo_sink(sstring object_name, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as) {
-    return data_sink(std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), max_parts_per_piece, as));
+data_sink client::make_upload_jumbo_sink(sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as) {
+    return data_sink(std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), std::move(metadata), max_parts_per_piece, as));
 }
 
 class client::chunked_download_source final : public seastar::data_source_impl {
-    struct content_range {
-        uint64_t start;
-        uint64_t end;
-        uint64_t total;
-    };
     shared_ptr<client> _client;
     sstring _object_name;
     seastar::abort_source* _as;
@@ -1385,16 +1464,6 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     condition_variable _bg_fiber_cv;
     condition_variable _get_cv;
     future<> _filling_fiber = make_ready_future<>();
-
-    static content_range parse_content_range(const std::string& header) {
-        static const std::regex pattern(R"(bytes (\d+)-(\d+)/(\d+))");
-        std::smatch match;
-
-        if (std::regex_match(header, match, pattern)) {
-            return {std::stoull(match[1].str()), std::stoull(match[2].str()), std::stoull(match[3].str())};
-        }
-        throw std::runtime_error("Invalid Content-Range header format");
-    }
 
     future<> make_filling_fiber() {
         seastar::http::no_retry_strategy no_retry;
@@ -1422,43 +1491,56 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                     co_return;
                 }
 
+                // The object size is not known yet, so ask for the whole object and
+                // learn the size from Content-Length. Requesting a byte range instead
+                // would fail on an empty object: no byte range is satisfiable when the
+                // object is zero-length (RFC 7233), so the server answers 416. Only the
+                // first request per object is range-less, the rest are chunked below.
+                const bool discover_size = _range == s3::full_range;
                 range current_range{0};
-                if (_range == s3::full_range) {
-                    current_range = {0, _max_buffers_size};
-                    s3l.trace(
-                        "No download range for object '{}' was provided. Setting the download range to `_max_buffers_size` {}", _object_name, current_range);
-                } else if (_is_contiguous_mode) {
-                    current_range = _range;
-                    s3l.trace("Setting contiguous download mode for '{}', range: {}", _object_name, current_range);
-                } else {
-                    // In non-contiguous mode we download the object in chunks of _max_buffers_size
-                    current_range = {_range.offset(), std::min(_range.length(), _max_buffers_size - _buffers_size)};
-                    s3l.trace("Setting ranged download mode for '{}', range: {}", _object_name, current_range);
-                }
-                if (current_range.length() == 0) {
-                    s3l.trace("Fiber for object '{}' completed downloading, signals EOS and leaving fiber", _object_name);
-                    _buffers.emplace_back(temporary_buffer<char>());
-                    _get_cv.signal();
-                    _is_finished = true;
-                    co_return;
+                if (!discover_size) {
+                    if (_is_contiguous_mode) {
+                        current_range = _range;
+                        s3l.trace("Setting contiguous download mode for '{}', range: {}", _object_name, current_range);
+                    } else {
+                        // In non-contiguous mode we download the object in chunks of _max_buffers_size
+                        current_range = {_range.offset(), std::min(_range.length(), _max_buffers_size - _buffers_size)};
+                        s3l.trace("Setting ranged download mode for '{}', range: {}", _object_name, current_range);
+                    }
+                    if (current_range.length() == 0) {
+                        s3l.trace("Fiber for object '{}' completed downloading, signals EOS and leaving fiber", _object_name);
+                        _buffers.emplace_back(temporary_buffer<char>());
+                        _get_cv.signal();
+                        _is_finished = true;
+                        co_return;
+                    }
                 }
 
                 auto req = http::request::make("GET", _client->_host, _object_name);
-                req._headers["Range"] = current_range.to_header_string();
+                if (!discover_size) {
+                    req._headers["Range"] = current_range.to_header_string();
+                }
 
-                s3l.trace("Fiber for object '{}' will make HTTP request within range {}", _object_name, current_range);
+                if (discover_size) {
+                    s3l.trace("Fiber for object '{}' will request the whole object", _object_name);
+                } else {
+                    s3l.trace("Fiber for object '{}' will make HTTP request within range {}", _object_name, current_range);
+                }
                 co_await _client->make_request(
                     std::move(req),
-                    [this, &units, pf_length = current_range.length()](group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
+                    [this, &units, discover_size, pf_length = discover_size ? 0 : current_range.length()](
+                        group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
                         if (reply._status != http::reply::status_type::ok && reply._status != http::reply::status_type::partial_content) {
                             s3l.warn("Fiber for object '{}' failed: {}. Exiting", _object_name, reply._status);
                             throw httpd::unexpected_status_error(reply._status);
                         }
                         gc.prefetch_bytes += pf_length;
-                        if (_range == s3::full_range && !reply.get_header("Content-Range").empty()) {
-                            auto content_range_header = parse_content_range(reply.get_header("Content-Range"));
-                            _range = range{content_range_header.start, content_range_header.total};
-                            s3l.trace("No range for object '{}' was provided. Setting the range to {} from the Content-Range header", _object_name, _range);
+                        if (discover_size) {
+                            // A zero length here needs no special case: the read loop
+                            // below sees an empty buffer with nothing left to fetch and
+                            // signals EOS on its own.
+                            _range = range{0, reply.content_length};
+                            s3l.trace("No range for object '{}' was provided. Setting the range to {} from Content-Length", _object_name, _range);
                         }
                         auto in = std::move(in_);
                         while (_buffers_size < _max_buffers_size && !_is_finished) {
@@ -1604,7 +1686,12 @@ data_source client::make_download_source(sstring object_name, range download_ran
 auto client::download_source::request_body() -> future<external_body> {
     auto req = http::request::make("GET", _client->_host, _object_name);
     s3l.trace("GET {} download range {}", _object_name, _range);
-    req._headers["Range"] = _range.to_header_string();
+    if (_range != s3::full_range) {
+        // Asking for the whole object needs no Range header, and adding one would
+        // make an empty object unreadable: no byte range is satisfiable when the
+        // object is zero-length (RFC 7233), so the server answers 416.
+        req._headers["Range"] = _range.to_header_string();
+    }
 
     auto bp = std::make_unique<std::optional<promise<external_body>>>(std::in_place);
     auto& p = *bp;
@@ -1710,6 +1797,8 @@ class client::do_upload_file : private multipart_upload {
     future<> upload_part(file f, uint64_t offset, uint64_t part_size, uint64_t part_number) {
         // upload a part in a multipart upload, see
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
+        //
+        // The claim is held for the whole request, including the response
         auto mpu = co_await claim_unit(_client->_mpus_sem, _as);
 
         auto req = http::request::make("PUT", _client->_host, _object_name);
@@ -1717,7 +1806,7 @@ class client::do_upload_file : private multipart_upload {
         req.set_query_param("partNumber", to_sstring(part_number + 1));
         req.set_query_param("uploadId", _upload_id);
         s3l.trace("PUT part {}, {} bytes (upload id {})", part_number, part_size, _upload_id);
-        req.write_body("bin", part_size, [f=std::move(f), mpu=std::move(mpu), offset, part_size, &progress = _progress] (output_stream<char>&& out_) {
+        req.write_body("bin", part_size, [f=std::move(f), offset, part_size, &progress = _progress] (output_stream<char>&& out_) {
             auto input = make_file_input_stream(f, offset, part_size, input_stream_options());
             auto output = std::move(out_);
             return copy_to(std::move(input), std::move(output), _transmit_size, progress);
@@ -1786,7 +1875,7 @@ public:
                    size_t part_size,
                    upload_progress& up,
                    seastar::abort_source* as)
-        : multipart_upload(std::move(cln), std::move(object_name), std::move(tag), as)
+        : multipart_upload(std::move(cln), std::move(object_name), object_metadata{}, std::move(tag), as)
         , _path{std::move(path)}
         , _part_size(part_size)
         , _progress(up)
@@ -1973,6 +2062,7 @@ future<> client::close() noexcept {
     s3l.info("Closing S3 client...");
 
     co_await _config_update_gate.close();
+    co_await _requests_gate.close();
     {
         auto units = co_await get_units(_creds_sem, 1);
         _creds_invalidation_timer.cancel();

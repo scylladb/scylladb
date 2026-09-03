@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 import pytest
 import logging
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 @pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-2784", reason="can't make it work with the new join procedure, without error recovery")
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_blocked_bootstrap(manager: ManagerClient):
+async def test_blocked_bootstrap(manager: ScyllaClusterManager):
     """
     Scenario:
     1. Start a cluster with nodes node1, node2, node3

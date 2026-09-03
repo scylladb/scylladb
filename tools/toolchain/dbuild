@@ -158,8 +158,8 @@ if [ -z "$is_podman" ]; then
     unset TMP_PASSWD
     uid="$(id -u)"
     gid="$(id -g)"
+    groups_csv="$(id -G | tr ' ' ',')"
     docker_common_args+=(
-       -u "$uid:$gid"
        "${group_args[@]}"
        -v /etc/passwd:/etc/passwd:ro
        -v /etc/group:/etc/group:ro
@@ -167,6 +167,30 @@ if [ -z "$is_podman" ]; then
        --tmpfs "/run/user/$uid:rw,exec,nosuid,nodev,mode=700,uid=$uid,gid=$gid"
        --pids-limit -1
        )
+    # Propagate the host's subuid/subgid ranges so nested rootless podman
+    # (used e.g. by test/pylib/dockerized_service.py to run mock services
+    # such as local-kms) has enough sub-IDs to unpack container images.
+    # Without this, the toolchain image's own (empty) /etc/subuid and
+    # /etc/subgid are used instead, causing failures like:
+    #   "potentially insufficient UIDs or GIDs available in user namespace"
+    if [[ -r /etc/subuid ]]; then
+        docker_common_args+=(-v /etc/subuid:/etc/subuid:ro)
+    fi
+    if [[ -r /etc/subgid ]]; then
+        docker_common_args+=(-v /etc/subgid:/etc/subgid:ro)
+    fi
+    # We used to start the container directly as the host uid:gid via
+    # "docker run -u uid:gid". However, the toolchain image ships
+    # newuidmap/newgidmap without the setuid bit, so a nested rootless
+    # podman (spawned e.g. by test/pylib/dockerized_service.py to run mock
+    # services such as local-kms) fails with:
+    #   "should have setuid or have filecaps setuid"
+    # Fixing that up requires root, so instead we start the container as
+    # root, grant the setuid bit on newuidmap/newgidmap, and then drop
+    # privileges to the host uid/gid/groups with setpriv before exec'ing
+    # the real command.
+    privdrop_prelude='for f in /usr/bin/newuidmap /usr/bin/newgidmap /usr/sbin/newuidmap /usr/sbin/newgidmap; do [ -e "$f" ] && chmod u+s "$f" 2>/dev/null; done'
+    args=(/bin/bash -c "$privdrop_prelude"'; exec setpriv --reuid='"$uid"' --regid='"$gid"' --groups='"$groups_csv"' -- "$@"' -- "${args[@]}")
 fi
 
 # --pids-limit is not supported on podman with cgroupsv1

@@ -18,7 +18,7 @@ import ssl
 import struct
 import time
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
 
 logger = logging.getLogger(__name__)
@@ -315,7 +315,7 @@ PROXY_SERVER_CONFIG = {
 
 
 @pytest.fixture(scope="function")
-async def proxy_server(manager: ManagerClient):
+async def proxy_server(manager: ScyllaClusterManager):
     """
     Fixture that creates a server with all proxy protocol ports enabled.
     Returns a tuple of (server, manager).

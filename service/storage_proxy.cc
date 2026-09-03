@@ -396,13 +396,11 @@ public:
             locator::host_id addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
             const query::read_command& cmd, const dht::partition_range& pr,
             fencing_token fence) {
-        tracing::trace(tr_state, "read_mutation_data: sending a message to /{}", addr);
         auto&& [result, hit_rate, opt_exception] = co_await ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_ms, addr, timeout, cmd, pr, fence);
         if (opt_exception.has_value() && *opt_exception) {
             co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
         }
 
-        tracing::trace(tr_state, "read_mutation_data: got response from /{}", addr);
         co_return rpc::tuple{make_foreign(::make_lw_shared<reconcilable_result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())};
     }
 
@@ -412,14 +410,12 @@ public:
             const query::read_command& cmd, const dht::partition_range& pr,
             query::digest_algorithm digest_algo, db::per_partition_rate_limit::info rate_limit_info,
             fencing_token fence) {
-        tracing::trace(tr_state, "read_data: sending a message to /{}", addr);
         auto&& [result, hit_rate, opt_exception] =
             co_await ser::storage_proxy_rpc_verbs::send_read_data(&_ms, addr, timeout, cmd, pr, digest_algo, rate_limit_info, fence);
         if (opt_exception.has_value() && *opt_exception) {
             co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
         }
 
-        tracing::trace(tr_state, "read_data: got response from /{}", addr);
         co_return rpc::tuple{make_foreign(::make_lw_shared<query::result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())};
     }
 
@@ -429,14 +425,12 @@ public:
             const query::read_command& cmd, const dht::partition_range& pr,
             query::digest_algorithm digest_algo, db::per_partition_rate_limit::info rate_limit_info,
             fencing_token fence) {
-        tracing::trace(tr_state, "read_digest: sending a message to /{}", addr);
         auto&& [d, t, hit_rate, opt_exception, opt_last_pos] =
             co_await ser::storage_proxy_rpc_verbs::send_read_digest(&_ms, addr, timeout, cmd, pr, digest_algo, rate_limit_info, fence);
         if (opt_exception.has_value() && *opt_exception) {
             co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
         }
 
-        tracing::trace(tr_state, "read_digest: got response from /{}", addr);
         co_return rpc::tuple{d, t ? t.value() : api::missing_timestamp, hit_rate.value_or(cache_temperature::invalid()), opt_last_pos ? std::move(*opt_last_pos) : std::nullopt};
     }
 
@@ -1728,9 +1722,7 @@ protected:
     shared_ptr<storage_proxy> _proxy;
     locator::effective_replication_map_ptr _effective_replication_map_ptr;
     tracing::trace_state_ptr _trace_state;
-    db::consistency_level _cl;
     size_t _total_block_for = 0;
-    db::write_type _type;
     std::unique_ptr<mutation_holder> _mutation_holder;
     host_id_vector_replica_set _targets; // who we sent this mutation to and still pending response
     // added dead_endpoints as a member here as well. This to be able to carry the info across
@@ -1738,9 +1730,11 @@ protected:
     // it should not be a huge burden. (flw)
     host_id_vector_topology_change _dead_endpoints;
     size_t _cl_acks = 0;
+    db::consistency_level _cl;
+    db::write_type _type;
+    error _error = error::NONE;
     bool _cl_achieved = false;
     bool _throttled = false;
-    error _error = error::NONE;
     std::optional<sstring> _message;
     size_t _failed = 0; // only failures that may impact consistency
     size_t _all_failures = 0; // total amount of failures
@@ -1775,8 +1769,8 @@ public:
             host_id_vector_topology_change dead_endpoints = {}, is_cancellable cancellable = is_cancellable::no)
             : _id(p->get_next_response_id()), _proxy(std::move(p))
             , _effective_replication_map_ptr(std::move(erm))
-            , _trace_state(trace_state), _cl(cl), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
-              _dead_endpoints(std::move(dead_endpoints)), _stats(stats), _expire_timer([this] { timeout_cb(); }), _permit(std::move(permit)),
+            , _trace_state(trace_state), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
+              _dead_endpoints(std::move(dead_endpoints)), _cl(cl), _type(type), _stats(stats), _expire_timer([this] { timeout_cb(); }), _permit(std::move(permit)),
               _rate_limit_info(rate_limit_info), _view_backlog(max_backlog()) {
         // original comment from cassandra:
         // during bootstrap, include pending endpoints in the count
@@ -3105,6 +3099,10 @@ void storage_proxy_stats::stats::register_stats() {
 
         sm::make_total_operations("background_read_repairs", read_repair_repaired_background,
                        sm::description("number of background read repairs"),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
+
+        sm::make_total_operations("read_repairs_diff_found_total", read_repair_diff_found,
+                       sm::description("number of read repairs in which the full-data reconciliation found actual differences between replicas and repair mutations were sent"),
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("read_timeouts", [this]{return read_timeouts.count(); },
@@ -4884,6 +4882,7 @@ future<result<>> storage_proxy::schedule_repair(locator::effective_replication_m
     if (diffs.empty()) {
         return make_ready_future<result<>>(bo::success());
     }
+    get_stats().read_repair_diff_found++;
     return mutate_internal(
             diffs |
                     std::views::values |
@@ -5539,11 +5538,13 @@ public:
             auto it = std::ranges::find_if(v, [] (auto&& ver) {
                     return bool(ver.par);
             });
-            auto m = mutation(_schema, it->par->mut().key());
-            for (const version& ver : v) {
-                if (ver.par) {
+            // The first version has nothing to be merged with, so it is unfrozen
+            // into the reconciled mutation directly instead of being applied to it.
+            auto m = co_await unfreeze_gently(it->par->mut(), _schema);
+            for (auto i = std::next(it); i != v.end(); ++i) {
+                if (i->par) {
                     mutation_application_stats app_stats;
-                    co_await apply_gently(m.partition(), schema, ver.par->mut().partition(), schema, app_stats);
+                    co_await apply_gently(m.partition(), schema, i->par->mut().partition(), schema, app_stats);
                 }
             }
             auto live_row_count = m.live_row_count();
@@ -5696,6 +5697,7 @@ protected:
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
             return _proxy->apply_fence_on_ready(_proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state), fence, _proxy->my_host_id(*_effective_replication_map_ptr));
         } else {
+            tracing::trace(_trace_state, "read_mutation_data: sending a message to /{}", ep);
             const bool format_reverse_required = cmd->slice.is_reversed() && !_native_reversed_queries_enabled;
             cmd = format_reverse_required ? reversed(::make_lw_shared(*cmd)) : cmd;
 
@@ -5721,6 +5723,7 @@ protected:
             tracing::trace(_trace_state, "read_data: querying locally");
             return _proxy->apply_fence_on_ready(_proxy->query_result_local(_effective_replication_map_ptr, _schema, _cmd, _partition_range, opts, _trace_state, timeout, adjust_rate_limit_for_local_operation(_rate_limit_info)), fence, _proxy->my_host_id(*_effective_replication_map_ptr));
         } else {
+            tracing::trace(_trace_state, "read_data: sending a message to /{}", ep);
             const bool format_reverse_required = _cmd->slice.is_reversed() && !_native_reversed_queries_enabled;
             auto cmd = format_reverse_required ? reversed(::make_lw_shared(*_cmd)) : _cmd;
             return _proxy->remote().send_read_data(ep, timeout, _trace_state, *cmd, _partition_range, opts.digest_algo, _rate_limit_info, fence);
@@ -5749,6 +5752,7 @@ protected:
                 try {
                   if (!f.failed()) {
                     auto v = f.get();
+                    tracing::trace(_trace_state, "read_mutation_data: got response from /{}", ep);
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_mutate_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->get_stats().mutation_data_read_completed.get_ep_stat(get_topology(), ep);
@@ -5775,6 +5779,7 @@ protected:
                 try {
                   if (!f.failed()) {
                     auto v = f.get();
+                    tracing::trace(_trace_state, "read_data: got response from /{}", ep);
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->get_stats().data_read_completed.get_ep_stat(get_topology(), ep);
@@ -5802,6 +5807,7 @@ protected:
                 try {
                   if (!f.failed()) {
                     auto v = f.get();
+                    tracing::trace(_trace_state, "read_digest: got response from /{}", ep);
                     _cf->set_hit_rate(ep, std::get<2>(v));
                     resolver->add_digest(ep, std::get<0>(v), std::get<1>(v), std::get<3>(std::move(v)));
                     ++_proxy->get_stats().digest_read_completed.get_ep_stat(get_topology(), ep);
@@ -6774,6 +6780,19 @@ storage_proxy::query_result(schema_ptr query_schema,
     storage_proxy::coordinator_query_options query_options,
     std::optional<cas_shard> shard)
 {
+    // First we check if the table_name from injected error matches, then we 'enter' it - the latter will consume `one-shot` injections,
+    // that's why we need to validate table_name first.
+    const auto &injection_params = utils::get_local_injector().get_injection_parameters("alternator_query_result_timeout");
+    if (!injection_params.empty()) {
+        auto it = injection_params.find(sstring{ "table_name" });
+        if (it != injection_params.end() && it->second == query_schema->cf_name() && utils::get_local_injector().enter("alternator_query_result_timeout")) {
+            return make_ready_future<result<coordinator_query_result>>(
+                // Note: we don't care about the actual values of the exception fields, since this is just for testing Alternator's error handling.
+                exceptions::read_timeout_exception{ "Alternator's error injection: timeout", cl, 0, 1, false }
+            );
+        }
+
+    }
     if (slogger.is_enabled(logging::log_level::trace) || qlogger.is_enabled(logging::log_level::trace)) {
         static thread_local int next_id = 0;
         auto query_id = next_id++;

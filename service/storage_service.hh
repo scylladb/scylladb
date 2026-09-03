@@ -140,7 +140,7 @@ struct join_node_request_result;
 struct join_node_response_params;
 struct join_node_response_result;
 
-enum class disk_error { regular, commit };
+enum class disk_error { regular, commit, logstor };
 
 class node_ops_meta_data;
 
@@ -379,9 +379,14 @@ private:
     void register_metrics();
     future<> snitch_reconfigured();
 
-    locator::tablet_map build_tablet_map_for_migration(const locator::token_metadata& tm,
+public:
+    // Builds the initial tablet map for a vnodes-to-tablets migration. Depends on
+    // nothing but its arguments, so it is static and can be driven directly with a
+    // synthetic topology.
+    static future<locator::tablet_map> build_tablet_map_for_migration(locator::token_metadata_ptr tm,
             const locator::static_effective_replication_map_ptr& erm,
-            size_t target_pow2 = 0) const;
+            size_t target_pow2 = 0);
+private:
     future<std::unordered_map<table_id, uint64_t>> collect_table_sizes_for_migration(
         const locator::token_metadata& tm,
         const locator::tablet_aware_replication_strategy* trs,
@@ -1104,10 +1109,14 @@ public:
     // hints are applied; if both are disengaged the call is a no-op. When
     // wait_balancer is set, waits for the load balancer to reach the requested
     // tablet count (which requires both hints to be engaged and equal).
+    // When remove_unset is set, a disengaged hint removes that key from the table's
+    // tablet options instead of leaving it unchanged - needed to put back the schema
+    // of a table which had no hint of its own.
     future<> alter_table_with_tablet_hints(table_id tid,
                                            std::optional<size_t> min_tablet_count,
                                            std::optional<size_t> max_tablet_count,
-                                           bool wait_balancer = true);
+                                           bool wait_balancer = true,
+                                           bool remove_unset = false);
 
     friend class join_node_rpc_handshaker;
     friend class node_ops::node_ops_virtual_task;

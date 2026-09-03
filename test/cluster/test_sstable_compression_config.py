@@ -13,7 +13,8 @@ import asyncio
 import logging
 
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature
-from test.pylib.manager_client import ManagerClient, ScyllaVersionDescription
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.scylla_server import ScyllaVersionDescription
 from test.cluster.test_alternator import alternator_config, get_alternator
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ def yaml_to_cmdline(config):
 
 
 @pytest.mark.parametrize('cfg_source', ['yaml', 'cmdline'])
-async def test_chunk_size_negative(manager: ManagerClient, cfg_source: str):
+async def test_chunk_size_negative(manager: ScyllaClusterManager, cfg_source: str):
     config = {
         'sstable_compression_user_table_options': {
             'sstable_compression': 'LZ4Compressor',
@@ -46,7 +47,7 @@ async def test_chunk_size_negative(manager: ManagerClient, cfg_source: str):
 
 
 @pytest.mark.parametrize('cfg_source', ['yaml', 'cmdline'])
-async def test_chunk_size_beyond_max(manager: ManagerClient, cfg_source: str):
+async def test_chunk_size_beyond_max(manager: ScyllaClusterManager, cfg_source: str):
     config = {
         'sstable_compression_user_table_options': {
             'sstable_compression': 'LZ4Compressor',
@@ -61,7 +62,7 @@ async def test_chunk_size_beyond_max(manager: ManagerClient, cfg_source: str):
 
 
 @pytest.mark.parametrize('cfg_source', ['yaml', 'cmdline'])
-async def test_chunk_size_not_power_of_two(manager: ManagerClient, cfg_source: str):
+async def test_chunk_size_not_power_of_two(manager: ScyllaClusterManager, cfg_source: str):
     config = {
         'sstable_compression_user_table_options': {
             'sstable_compression': 'LZ4Compressor',
@@ -77,7 +78,7 @@ async def test_chunk_size_not_power_of_two(manager: ManagerClient, cfg_source: s
 
 
 @pytest.mark.parametrize('cfg_source', ['yaml', 'cmdline'])
-async def test_crc_check_chance_out_of_bounds(manager: ManagerClient, cfg_source: str):
+async def test_crc_check_chance_out_of_bounds(manager: ScyllaClusterManager, cfg_source: str):
     config = {
         'sstable_compression_user_table_options': {
             'sstable_compression': 'LZ4Compressor',
@@ -91,7 +92,7 @@ async def test_crc_check_chance_out_of_bounds(manager: ManagerClient, cfg_source
     else:
         await manager.server_add(cmdline=yaml_to_cmdline(config), expected_error=expected_error)
 
-async def test_default_compression_on_upgrade(manager: ManagerClient, scylla_2025_1: ScyllaVersionDescription, scylla_binary: Path):
+async def test_default_compression_on_upgrade(manager: ScyllaClusterManager, scylla_2025_1: ScyllaVersionDescription, scylla_binary: Path):
     """
     Check that the default SSTable compression algorithm is:
     * LZ4Compressor if SSTABLE_COMPRESSION_DICTS is disabled.
@@ -143,7 +144,7 @@ async def test_default_compression_on_upgrade(manager: ManagerClient, scylla_202
     await create_table_and_check_compression(cql, "test_ks", "table_after_upgrade", "LZ4WithDictsCompressor", "after upgrade and feature enabled")
 
 
-async def test_alternator_tables_respect_compression_config(manager: ManagerClient):
+async def test_alternator_tables_respect_compression_config(manager: ScyllaClusterManager):
     """
     Check that the default compression settings for all Alternator tables (base
     tables and auxiliary tables for GSIs, LSIs and Streams) are taken from the
@@ -228,7 +229,7 @@ async def test_alternator_tables_respect_compression_config(manager: ManagerClie
         table.delete()
 
 
-async def test_cql_base_tables_respect_compression_config(manager: ManagerClient):
+async def test_cql_base_tables_respect_compression_config(manager: ScyllaClusterManager):
     """
     Check that the default compression settings for CQL base tables are taken
     from the `sstable_compression_user_table_options` config option.
@@ -258,7 +259,7 @@ async def test_cql_base_tables_respect_compression_config(manager: ManagerClient
         await cql.run_async(f"DROP KEYSPACE {ks}")
 
 
-async def test_cql_aux_tables_respect_compression_config(manager: ManagerClient):
+async def test_cql_aux_tables_respect_compression_config(manager: ScyllaClusterManager):
     """
     Check that the default compression settings for CQL auxiliary tables
     (materialized views, secondary indexes and CDC logs) are taken from the

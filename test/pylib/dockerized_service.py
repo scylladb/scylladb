@@ -37,10 +37,16 @@ class _PortInUseError(RuntimeError):
 
 
 class DockerizedServer:
-    """class for running an external dockerized service image, typically mock server"""
+    """class for running an external dockerized service image, typically mock server
+
+    The container's stderr is written to ``<log_dir>/<logfilenamebase>-<uuid>.log``.
+    Callers must point ``log_dir`` at a directory CI archives (i.e. somewhere under
+    ``--tmpdir``/testlog), otherwise the container log is lost with the per-test
+    temporary directory and post-mortem analysis of a container failure is impossible.
+    """
     # pylint: disable=too-many-instance-attributes
 
-    def __init__(self, image, tmpdir, logfilenamebase, 
+    def __init__(self, image, log_dir, logfilenamebase,
                  success_string : Callable[[str, int], bool] | str,
                  failure_string : Callable[[str, int], bool] | str,
                  docker_args : Callable[[str, int], list[str]] | list[str] = [],
@@ -49,12 +55,12 @@ class DockerizedServer:
                  port = None):
         self.image = image
         self.host = host
-        self.tmpdir = tmpdir
+        self.log_dir = log_dir
         self.logfilenamebase = logfilenamebase
         self.docker_args: Callable[[str, int], list[str]] = (lambda host,port : docker_args) if isinstance(docker_args, list) else docker_args
         self.image_args: Callable[[str, int], list[str]] = (lambda host,port : image_args) if isinstance(image_args, list) else image_args
-        self.is_success_line = lambda line, port : success_string in line if isinstance(success_string, str) else success_string
-        self.is_failure_line = lambda line, port : failure_string in line if isinstance(failure_string, str) else failure_string
+        self.is_success_line = lambda line, port : success_string.lower() in line.lower() if isinstance(success_string, str) else success_string
+        self.is_failure_line = lambda line, port : failure_string.lower() in line.lower() if isinstance(failure_string, str) else failure_string
         self.logfile = None
         self.port = None
         self.proc = None
@@ -91,8 +97,13 @@ class DockerizedServer:
 
     async def _start_attempt(self, exe, name):
         """Launch the container once. Raises _PortInUseError if the host port could not be bound."""
-        logfilename = (pathlib.Path(self.tmpdir) / name).with_suffix(".log")
+        log_dir = pathlib.Path(self.log_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        logfilename = (log_dir / name).with_suffix(".log")
         self.logfile = logfilename.open("wb")
+        # Logged at INFO so the archived pytest log always points at the container
+        # log file, even when the container starts fine and only misbehaves later.
+        logger.info("Container %s stderr is captured in %s", name, logfilename)
 
         docker_args = self.docker_args(self.host, self.service_port)
         image_args = self.image_args(self.host, self.service_port)
@@ -132,9 +143,18 @@ class DockerizedServer:
                 while True:
                     data = proc.stderr.readline()
                     if not data:
+                        rc = proc.poll()
+                        level = logging.DEBUG
                         if f:
-                            loop.call_soon_threadsafe(f.set_exception, RuntimeError("Log EOF"))
-                        logger.debug("EOF received")
+                            level = logging.ERROR
+                            self.logfile.close()
+                            self.logfile = None
+                            with logfilename.open('r') as lf:
+                                for line in lf:
+                                    logger.error(line)
+                            loop.call_soon_threadsafe(f.set_exception, RuntimeError(f"Log EOF, return code {rc}"))
+
+                        logger.log(level, "EOF received: %s", rc)
                         break
                     line = data.decode()
                     self.logfile.write(data)

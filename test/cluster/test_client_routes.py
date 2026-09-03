@@ -7,7 +7,7 @@ import logging
 import time
 import uuid
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError
 from test.pylib.util import wait_for
 from test.cluster.util import trigger_snapshot
@@ -45,7 +45,7 @@ def generate_client_routes_entry(i):
         "alternator_https_port": 8004
     }
 
-async def test_client_routes(request, manager: ManagerClient):
+async def test_client_routes(request, manager: ScyllaClusterManager):
     num_servers = 3
     cql = None
     # Run three nodes one by one
@@ -71,7 +71,7 @@ async def test_client_routes(request, manager: ManagerClient):
     await manager.api.client.delete("/v2/client-routes", host=running_server.ip_addr, json=[generate_client_routes_entry(0)])
     await wait_for_expected_client_routes_size(cql, num_servers)
 
-async def test_client_routes_node_restart(request, manager: ManagerClient):
+async def test_client_routes_node_restart(request, manager: ScyllaClusterManager):
     """
     This test verifies that a node receives updates if client routes were updated
     when the node was down.
@@ -89,7 +89,7 @@ async def test_client_routes_node_restart(request, manager: ManagerClient):
     await wait_for_expected_client_routes_size(cql, 1)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_client_routes_upgrade(request, manager: ManagerClient):
+async def test_client_routes_upgrade(request, manager: ScyllaClusterManager):
     """
     This test verifies updating the system to a version with the CLIENT_ROUTES feature in the following steps:
       1. Create 2 nodes with the CLIENT_ROUTES feature disabled.
@@ -132,7 +132,7 @@ async def test_client_routes_upgrade(request, manager: ManagerClient):
     await wait_for(client_routes_ready, time.time() + 60)
 
 
-async def test_client_routes_lost_quorum(request, manager: ManagerClient):
+async def test_client_routes_lost_quorum(request, manager: ScyllaClusterManager):
     """
     This test verifies that `/v2/client-routes` fails with a timeout if the Raft quorum cannot be reached.
     """
@@ -191,7 +191,7 @@ async def wait_for_expected_event_num(expected_num, received_events):
         return None
     await wait_for(lambda: expected_event_num(expected_num), time.time() + 60)
 
-async def test_events(request, manager: ManagerClient, monkeypatch):
+async def test_events(request, manager: ScyllaClusterManager, monkeypatch):
     """
     This test verifies client routes change events in the following steps:
       1. Add one new entry to client_routes.
@@ -230,7 +230,7 @@ async def test_events(request, manager: ManagerClient, monkeypatch):
     assert received_events[2]["host_ids"] == [generate_host_id(0)]
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-async def test_client_routes_snapshot_transfer(request, manager: ManagerClient, monkeypatch):
+async def test_client_routes_snapshot_transfer(request, manager: ScyllaClusterManager, monkeypatch):
     """
     This test verifies that client routes change events are sent when client_routes
     data is propagated via snapshot transfer:
@@ -269,7 +269,7 @@ async def test_client_routes_snapshot_transfer(request, manager: ManagerClient, 
     assert received_events[0]["host_ids"] == [generate_host_id(1)]
     await log.wait_for("transfer snapshot: raft snapshot includes client_routes mutation")
 
-async def test_huge_event(request, manager: ManagerClient, monkeypatch):
+async def test_huge_event(request, manager: ScyllaClusterManager, monkeypatch):
     """
     This test verifies that an event can be sent to the driver even when it contains many host_ids and connection_ids.
     """

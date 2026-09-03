@@ -7,13 +7,13 @@ import logging
 import pytest
 import asyncio
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import check_token_ring_and_group0_consistency
 
 logger = logging.getLogger(__name__)
 
 
-async def test_left_node_notification(manager: ManagerClient) -> None:
+async def test_left_node_notification(manager: ScyllaClusterManager) -> None:
     """
     Create a 3-node multi-DC cluster with 2 nodes in dc1 and 1 node in dc2.
     Then decommission both dc1 nodes, ensuring the topology remains consistent,

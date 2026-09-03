@@ -65,6 +65,9 @@ private:
             all_mutation_sources.emplace("virtual-table", tbl.as_mutation_source());
             return all_mutation_sources;
         }
+        if (tbl.uses_logstor()) {
+            return tbl.make_logstor_mutation_sources_for_dump(_underlying_schema, _dk, _permit);
+        }
         {
             auto mss = tbl.select_memtables_as_mutation_sources(_dk.token());
             for (size_t i = 0; i < mss.size(); ++i) {
@@ -147,6 +150,31 @@ private:
         return query::clustering_range(transform_range_bound(cr.start(), false), transform_range_bound(cr.end(), true));
     }
 
+    // Each output row's clustering key starts with the mutation source name, e.g.
+    // ("row-cache", region, ck..., weight) or ("sstable:/some/path", region, ck..., weight).
+    // So a clustering range can span several sources at once, like from
+    // ("row-cache", pos) to ("sstable:/some/path", end) - but its start and end bounds
+    // only mean something for the sources they name. A source that just happens to sit
+    // between the two bounds should be read in full, not cut down to `pos`.
+    //
+    // This function takes such a range plus one `source` from that span, and hands back
+    // the range with whichever bound doesn't belong to `source` removed, e.g. asking for
+    // "sstable:/some/path" above drops the row-cache start bound and keeps only `end`.
+    static exploded_clustering_range narrow_to_source(const exploded_clustering_range& cr,
+            const interval<sstring>& ms_int, const sstring& source) {
+        auto start = cr.start();
+        auto end = cr.end();
+        // A bound naming no source at all (a fully-open range) constrains nothing,
+        // so leaving it alone here changes nothing either.
+        if (!ms_int.start() || ms_int.start()->value() != source) {
+            start = std::nullopt;
+        }
+        if (!ms_int.end() || ms_int.end()->value() != source) {
+            end = std::nullopt;
+        }
+        return exploded_clustering_range(std::move(start), std::move(end));
+    }
+
     void create_underlying_mutation_sources() {
         const auto all_mutation_sources = create_all_mutation_sources();
         const auto ms_end = all_mutation_sources.end();
@@ -183,13 +211,13 @@ private:
                 continue;
             }
 
-            const auto region_int = transform_range<int8_t>(exploded_cr, 1).transform([] (int8_t v) { return partition_region(v); });
-            const auto transformed_cr = transform_to_underlying_cr(exploded_cr);
             while (ms_it != ms_end && ms_int.contains(ms_it->first,  std::compare_three_way{})) {
+                const auto source_cr = narrow_to_source(exploded_cr, ms_int, ms_it->first);
+                const auto region_int = transform_range<int8_t>(source_cr, 1).transform([] (int8_t v) { return partition_region(v); });
                 auto& e = prepared_mutation_sources[ms_it->first];
                 e.ms = ms_it->second;
                 maybe_push(e.region_intervals, region_int, std::compare_three_way{});
-                maybe_push(e.underlying_crs, transformed_cr, clustering_key_view::tri_compare(*_underlying_schema));
+                maybe_push(e.underlying_crs, transform_to_underlying_cr(source_cr), clustering_key_view::tri_compare(*_underlying_schema));
                 ++ms_it;
             }
         }

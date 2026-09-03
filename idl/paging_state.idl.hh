@@ -25,6 +25,16 @@ enum class read_repair_decision : uint8_t {
 
 namespace service {
 namespace pager {
+
+// Arms of query_plan. Their order is the order they are written in, so it may
+// not change; see service/pager/query_plan.hh.
+struct primary_index_plan {
+};
+
+struct index_plan {
+    table_id view_id;
+};
+
 class paging_state {
     partition_key get_partition_key();
     std::optional<clustering_key> get_clustering_key();
@@ -37,6 +47,8 @@ class paging_state {
     uint32_t get_rows_fetched_for_last_partition_high_bits() [[version 4.3]] = 0;
     bound_weight get_clustering_key_weight() [[version 5.1]] = bound_weight::equal;
     partition_region get_partition_region() [[version 5.1]] = partition_region::clustered;
+    // The plan that produced this state, disengaged when none was recorded.
+    std::optional<std::variant<service::pager::primary_index_plan, service::pager::index_plan>> get_query_plan() [[version 2026.4]] = std::nullopt;
 };
 }
 }
