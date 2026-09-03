@@ -2255,12 +2255,41 @@ future<compaction_result> rewrite_sstables_component(compaction_descriptor descr
             return table_s.make_sstable(sst->state(), sst->get_version());
         };
         result.new_sstables.reserve(descriptor.sstables.size());
-        for (auto& sst : descriptor.sstables) {
-            auto rewritten = sst->link_with_rewritten_component(creator, options.component_to_rewrite, options.modifier, options.update_id).get();
-            result.new_sstables.push_back(rewritten);
+        std::vector<sstables::shared_sstable> modified_sstables;
+        modified_sstables.reserve(descriptor.sstables.size());
+        bool replacer_reached = false;
+
+        std::exception_ptr ex;
+        try {
+            for (auto& sst : descriptor.sstables) {
+                modified_sstables.emplace_back(sst);
+                auto rewritten = sst->link_with_rewritten_component(creator, options.component_to_rewrite, options.modifier, options.update_id).get();
+                result.new_sstables.push_back(rewritten);
+            }
+
+            replacer_reached = true;
+            descriptor.replacer({std::move(descriptor.sstables), result.new_sstables});
+        } catch (...) {
+            ex = std::current_exception();
         }
 
-        descriptor.replacer({std::move(descriptor.sstables), result.new_sstables});
+        if (ex) [[unlikely]] {
+            for (auto& original : modified_sstables) {
+                try {
+                    original->recover_from_component_rewrite().get();
+                } catch (...) {
+                    clogger.warn("Failed to recover from component rewrite: {}", std::current_exception());
+                }
+            }
+
+            if (!replacer_reached) {
+                for (auto& rewritten : result.new_sstables) {
+                    rewritten->unlink().get();
+                }
+            }
+
+            std::rethrow_exception(std::move(ex));
+        }
 
         result.stats.ended_at = db_clock::now();
         return result;

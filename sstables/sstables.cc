@@ -1645,11 +1645,11 @@ bool sstable::should_update_repaired_at(int64_t repaired_at) const {
 // This efficiently creates a modified SSTable without copying all files.
 // 1. Create a new SSTable object with a new generation number
 //    - The creator function determines the new generation
-// 2. Hard-link all components EXCEPT the one being rewritten and Scylla metadata
+// 2. Copy in-memory component metadata from the source SSTable
+//    - This doesn't deep copy _components, just copies the foreign_ptr
+// 3. Hard-link all components EXCEPT the one being rewritten and Scylla metadata
 //    - The component being rewritten will be written fresh (not linked)
 //    - Scylla metadata must be rewritten to include the new component's digest
-// 3. Copy in-memory component metadata from the source SSTable
-//    - This doesn't deep copy _components, just copies the foreign_ptr
 // 4. Apply the modifier function to the new SSTable's components
 // 5. Re-read the Scylla metadata from disk
 //    - Ensures we have the latest on-disk metadata (not potentially modified in-memory state)
@@ -1687,6 +1687,9 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         // component below, causing a file-not-found abort. See SCYLLADB-3263.
         auto lock = get_units(_mutate_sem, 1).get();
 
+        std::unordered_set<component_type> excluded_components = {component, component_type::Scylla};
+        _components_modified_by_rewrite.insert_range(excluded_components);
+
         auto new_sst = creator(shared_from_this());
         auto generation = new_sst->generation();
         auto sid = this->sstable_identifier();
@@ -1707,8 +1710,18 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         // The rest of the sstable is hard-linked and its scylla_metadata is carried over.
         new_sst->mark_created_by_component_rewrite();
 
-        _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla}, *sid).get();
         new_sst->copy_components(*this).get();
+
+        if (new_sst->_marked_for_deletion == mark_for_deletion::none) {
+            new_sst->_marked_for_deletion = mark_for_deletion::implicit;
+        }
+
+        _storage->link_with_excluded_components(*this, generation, excluded_components, *sid).get();
+
+        new_sst->_metadata_size_on_disk = _metadata_size_on_disk;
+        parallel_for_each(excluded_components, coroutine::lambda([this, new_sst] (component_type type) -> future<> {
+            new_sst->_metadata_size_on_disk -= co_await component_filesize(type);
+        })).get();
 
         modifier(*new_sst);
 
@@ -1720,10 +1733,24 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         new_sst->write_component_with_metadata(component, std::move(metadata));
 
         new_sst->_shards = this->_shards;
-        new_sst->seal_sstable(false).get();
-        new_sst->open_data().get();
 
-        _cloned_to_sstable_filename = new_sst->component_basename(component_type::Data);
+        utils::get_local_injector().inject("link_with_rewritten_component_fail", [] {
+            throw std::runtime_error{"link_with_rewritten_component_fail error injection"};
+        });
+
+        new_sst->seal_sstable(false).get();
+
+        try {
+            new_sst->open_data().get();
+
+            _cloned_to_sstable_filename = new_sst->component_basename(component_type::Data);
+        } catch (...) {
+            if (new_sst->_marked_for_deletion == mark_for_deletion::none) {
+                new_sst->_marked_for_deletion = mark_for_deletion::implicit;
+            }
+            throw;
+        }
+
         return new_sst;
     });
 }
@@ -1762,6 +1789,46 @@ void sstable::write_component_with_metadata(component_type type, scylla_metadata
     // mirroring read_scylla_metadata(). Otherwise a rewritten sstable would
     // report zeroed features (e.g. losing ShadowableTombstones).
     _features = _components->scylla_metadata->get_features();
+}
+
+future<uint64_t> sstable::component_filesize(component_type type) const noexcept {
+    return open_file(type, open_flags::ro).then([] (file f) {
+        return with_closeable(std::move(f), std::mem_fn(&file::size));
+    });
+}
+
+future<> sstable::recover_from_component_rewrite() {
+    auto lock = co_await get_units(_mutate_sem, 1);
+
+    if (_unlinked_at) {
+        co_return;
+    }
+
+    _cloned_to_sstable_filename = std::nullopt;
+
+    if (has_scylla_component() && _components_modified_by_rewrite.contains(component_type::Scylla)) {
+        scylla_metadata metadata;
+        co_await read_simple<component_type::Scylla>(metadata);
+        _components->scylla_metadata = std::move(metadata);
+    }
+
+    for (auto component : _components_modified_by_rewrite) {
+        switch (component) {
+        case component_type::Scylla:
+            // Handled before.
+            break;
+        case component_type::Statistics: {
+            statistics stats{};
+            co_await read_simple_and_verify_digest<component_type::Statistics>(stats);
+            _components->statistics = std::move(stats);
+            break;
+        }
+        default:
+            on_internal_error(sstlog, fmt::format("Rewrite of component {} not supported, cannot recover from changes", component));
+        }
+    }
+
+    _components_modified_by_rewrite.clear();
 }
 
 future<> sstable::read_summary() noexcept {
