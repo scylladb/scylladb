@@ -22,15 +22,23 @@ using namespace seastar::http;
 
 namespace aws {
 
-static seastar::future<> sleep_before_retry(size_t attempted_retries) {
+static seastar::future<> sleep_before_retry(size_t attempted_retries, seastar::abort_source* as) {
     if (attempted_retries == 0) {
         return seastar::make_ready_future();
     }
     constexpr size_t scale_factor = 25;
-    return seastar::sleep(std::chrono::milliseconds((1UL << attempted_retries) * scale_factor));
+    auto d = std::chrono::milliseconds((1UL << attempted_retries) * scale_factor);
+    if (!as) {
+        return seastar::sleep(d);
+    }
+    // Report the abort the same way a pre-request abort_requested() check would,
+    // so callers don't have to special-case a mid-backoff sleep_aborted.
+    return seastar::sleep_abortable(d, *as).handle_exception_type([as] (const seastar::sleep_aborted&) {
+        return seastar::make_exception_future<>(as->abort_requested_exception_ptr());
+    });
 }
 
-default_aws_retry_strategy::default_aws_retry_strategy(unsigned max_retries) : _max_retries(max_retries) {
+default_aws_retry_strategy::default_aws_retry_strategy(unsigned max_retries, seastar::abort_source* as) : _max_retries(max_retries), _as(as) {
 }
 
 seastar::future<bool> default_aws_retry_strategy::should_retry(std::exception_ptr error, unsigned attempted_retries) const {
@@ -42,7 +50,7 @@ seastar::future<bool> default_aws_retry_strategy::should_retry(std::exception_pt
     bool should_retry = err.is_retryable() == utils::http::retryable::yes;
     if (should_retry) {
         rs_logger.debug("AWS HTTP client request failed. Reason: {}. Retry# {}", err.get_error_message(), attempted_retries);
-        co_await sleep_before_retry(attempted_retries);
+        co_await sleep_before_retry(attempted_retries, _as);
     } else {
         rs_logger.warn("AWS HTTP client encountered non-retryable error. Reason: {}. Code: {}. Retry# {}",
                        err.get_error_message(),

@@ -21,6 +21,7 @@
 #include "utils/s3/creds.hh"
 #include "credentials_providers/aws_credentials_provider_chain.hh"
 #include "utils/s3/client_fwd.hh"
+#include "utils/s3/default_aws_retry_strategy.hh"
 
 using namespace seastar;
 class memory_data_sink_buffers;
@@ -152,6 +153,11 @@ class client : public enable_shared_from_this<client> {
     http::client::reply_handler wrap_handler(http::request& request,
                                                            http::client::reply_handler handler,
                                                            std::optional<http::reply::status_type> expected);
+
+    // If as and _retry_strategy allow it, a request-scoped retry strategy copy bound
+    // to as, so should_retry()'s backoff sleep can be aborted despite lacking an
+    // abort_source parameter itself.
+    std::optional<aws::default_aws_retry_strategy> retry_strategy_for_abort_source(seastar::abort_source* as) const;
 
     future<> make_request(http::request req,
                           http::client::reply_handler handle = ignore_reply,

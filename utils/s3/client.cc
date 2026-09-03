@@ -482,11 +482,26 @@ http::client::reply_handler client::wrap_handler(http::request& request,
     };
 }
 
+std::optional<aws::default_aws_retry_strategy> client::retry_strategy_for_abort_source(seastar::abort_source* as) const {
+    if (as) {
+        if (auto* drs = dynamic_cast<const aws::default_aws_retry_strategy*>(_retry_strategy.get())) {
+            return aws::default_aws_retry_strategy(drs->max_retries(), as);
+        }
+    }
+    return std::nullopt;
+}
+
 future<> client::make_request(http::request req,
                               http::client::reply_handler handle,
                               std::optional<http::reply::status_type> expected,
                               seastar::abort_source* as) {
-    return make_request(
+    if (auto rs = retry_strategy_for_abort_source(as)) {
+        co_return co_await make_request(
+            std::move(req), std::move(handle), *rs, [](std::exception_ptr ex) {
+                map_s3_client_exception(std::move(ex));
+            }, expected, as);
+    }
+    co_return co_await make_request(
         std::move(req), std::move(handle), *_retry_strategy, [](std::exception_ptr ex) {
             map_s3_client_exception(std::move(ex));
         }, expected, as);
@@ -522,7 +537,13 @@ future<> client::make_request(http::request req,
 }
 
 future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
-    return make_request(
+    if (auto rs = retry_strategy_for_abort_source(as)) {
+        co_return co_await make_request(
+            std::move(req), std::move(handle_ex), *rs, [](std::exception_ptr ex) {
+                map_s3_client_exception(std::move(ex));
+            }, expected, as);
+    }
+    co_return co_await make_request(
         std::move(req), std::move(handle_ex), *_retry_strategy, [](std::exception_ptr ex) {
             map_s3_client_exception(std::move(ex));
         }, expected, as);

@@ -91,42 +91,48 @@ public:
 
 } // anonymous namespace
 
-// Reproduces: default_aws_retry_strategy::sleep_before_retry() backs off
-// with plain seastar::sleep() and seastar::http::client never re-checks its
-// abort_source after should_retry() returns, so an abort requested while a
-// request is retrying does not cut the backoff sleep short.
+// default_aws_retry_strategy now takes its own abort_source and sleeps the
+// backoff with sleep_abortable(), so an abort requested mid-backoff cuts the
+// sleep short instead of waiting it out.
 SEASTAR_THREAD_TEST_CASE(test_default_aws_retry_strategy_backoff_ignores_abort) {
     auto max_retries = 4u;
     auto run = [&] (seastar::abort_source* as) {
         seastar::http::client cln(std::make_unique<always_refused_factory>(), 1, 128 * 1024,
-                                   std::make_unique<aws::default_aws_retry_strategy>(max_retries));
+                                   std::make_unique<aws::default_aws_retry_strategy>(max_retries, as));
         auto req = seastar::http::request::make("GET", "test-host", "/");
         auto start = seastar::lowres_clock::now();
-        BOOST_REQUIRE_THROW(
+        std::exception_ptr ex;
+        try {
             cln.make_request(std::move(req),
                               [](const seastar::http::reply&, input_stream<char>&&) { return make_ready_future<>(); },
                               std::nullopt, as)
-                .get(),
-            std::system_error);
+                .get();
+        } catch (...) {
+            ex = std::current_exception();
+        }
         auto elapsed = seastar::lowres_clock::now() - start;
         cln.close().get();
-        return elapsed;
+        BOOST_REQUIRE(ex);
+        return std::make_pair(elapsed, ex);
     };
 
     // Baseline: full exponential backoff with no abort at all:
     // retry_count 1,2,3 sleep (1<<1..3)*25ms = 50+100+200 = 350ms.
-    auto baseline = run(nullptr);
+    auto [baseline, baseline_ex] = run(nullptr);
     BOOST_REQUIRE_GE(baseline, 300ms);
+    BOOST_REQUIRE_THROW(std::rethrow_exception(baseline_ex), std::system_error);
 
     // Request abort almost immediately, well before the backoff would
-    // naturally elapse. If the backoff were abortable this run would finish
-    // in a few ms instead of waiting out (most of) the same backoff.
+    // naturally elapse. The backoff is abortable now, so this run finishes
+    // in a few ms instead of waiting out (most of) the same backoff, and
+    // surfaces the same abort exception a pre-request abort would.
     seastar::abort_source as;
     auto abort_fiber = seastar::sleep(5ms).then([&as] { as.request_abort(); });
-    auto aborted = run(&as);
+    auto [aborted, aborted_ex] = run(&as);
     abort_fiber.get();
 
-    BOOST_REQUIRE_GE(aborted, 250ms);
+    BOOST_REQUIRE_LT(aborted, 100ms);
+    BOOST_REQUIRE_THROW(std::rethrow_exception(aborted_ex), seastar::abort_requested_exception);
 }
 
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
