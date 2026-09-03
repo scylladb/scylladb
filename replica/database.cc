@@ -2205,6 +2205,21 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
 
     data_listeners().on_write(m_schema, m);
 
+    // Token range tombstones ride along with the partition but belong to no
+    // partition, so they are applied separately, to every compaction group
+    // their range covers. Usually there are none.
+    if (auto trts = m.token_range_tombstones(); !trts.empty()) [[unlikely]] {
+        for (const auto& trt : trts) {
+            cf.apply(trt);
+        }
+        if (m.is_token_range_tombstones_only()) {
+            // There is no partition to apply, and applying one would route by
+            // the placeholder key, which points at a tablet this node need not
+            // hold any storage for.
+            return make_ready_future<>();
+        }
+    }
+
     if (m.representation().size() > 128*1024) {
         // Big mutation: unfreeze_gently (yields), then check guardrails on
         // the already-deserialized mutation before applying.

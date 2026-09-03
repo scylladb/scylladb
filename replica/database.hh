@@ -1079,6 +1079,13 @@ public:
     future<> apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h,
                    db::timeout_clock::time_point tmo, shared_ptr<db::large_data_guardrail_base> guardrails, db::large_data_violation_type* violations_out = nullptr);
     future<> apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point tmo);
+    // Applies a tombstone which deletes a range of tokens.
+    //
+    // Unlike a mutation this belongs to no partition, so it cannot be routed to
+    // a single compaction group by key. It goes to every compaction group its
+    // token range overlaps, because each of them holds part of the data it
+    // deletes.
+    void apply(const token_range_tombstone& trt);
 
     // Returns at most "cmd.limit" rows
     // The saved_querier parameter is an input-output parameter which contains
