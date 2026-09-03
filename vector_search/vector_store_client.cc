@@ -56,6 +56,7 @@ using operation_type = httpd::operation_type;
 using port_number = vector_search::vector_store_client::port_number;
 using primary_key = vector_search::primary_key;
 using primary_keys = vector_search::vector_store_client::primary_keys;
+using reply_content = std::vector<seastar::temporary_buffer<char>>;
 using documents = vector_search::vector_store_client::documents;
 using highlights = vector_search::vector_store_client::highlights;
 using service_reply_format_error = vector_search::vector_store_client::service_reply_format_error;
@@ -416,15 +417,11 @@ struct vector_store_client::impl {
         }
     }
 
-    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as)
-            -> future<std::expected<primary_keys, ann_error>> {
+    auto post_to_index(std::string_view op, http_path path, json_content content, abort_source& as) -> future<std::expected<reply_content, ann_error>> {
         if (is_disabled()) {
-            vslogger.error("Disabled Vector Store while calling ann");
+            vslogger.error("Disabled Vector Store while calling {}", op);
             co_return std::unexpected{disabled{}};
         }
-
-        auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
-        auto content = write_ann_json(std::move(vs_vector), limit, filter);
 
         auto resp = co_await request(operation_type::POST, std::move(path), std::move(content), as);
         if (!resp) {
@@ -441,8 +438,19 @@ struct vector_store_client::impl {
             co_return std::unexpected{service_error{resp->status, std::move(error_content)}};
         }
 
+        co_return std::move(resp->content);
+    }
+
+    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as)
+            -> future<std::expected<primary_keys, ann_error>> {
+        auto content =
+                co_await post_to_index("ann", format("/api/v1/indexes/{}/{}/ann", keyspace, name), write_ann_json(std::move(vs_vector), limit, filter), as);
+        if (!content) {
+            co_return std::unexpected{content.error()};
+        }
+
         try {
-            co_return read_ann_json(rjson::parse(std::move(resp->content)), schema);
+            co_return read_ann_json(rjson::parse(std::move(*content)), schema);
         } catch (const rjson::error& e) {
             vslogger.error("Vector Store returned invalid JSON: {}", e.what());
             co_return std::unexpected{service_reply_format_error{}};
@@ -451,31 +459,13 @@ struct vector_store_client::impl {
 
     auto bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, abort_source& as)
             -> future<std::expected<primary_keys, fts_error>> {
-        if (is_disabled()) {
-            vslogger.error("Disabled Vector Store while calling bm25");
-            co_return std::unexpected{disabled{}};
-        }
-
-        auto path = format("/api/v1/indexes/{}/{}/bm25", keyspace, name);
-        auto content = write_bm25_json(std::move(fts_query), limit);
-
-        auto resp = co_await request(operation_type::POST, std::move(path), std::move(content), as);
-        if (!resp) {
-            co_return std::unexpected{std::visit(
-                    [](auto&& err) {
-                        return fts_error{err};
-                    },
-                    resp.error())};
-        }
-
-        if (resp->status != status_type::ok) {
-            auto error_content = decode_error_message(resp->content);
-            vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status, error_content);
-            co_return std::unexpected{service_error{resp->status, std::move(error_content)}};
+        auto content = co_await post_to_index("bm25", format("/api/v1/indexes/{}/{}/bm25", keyspace, name), write_bm25_json(std::move(fts_query), limit), as);
+        if (!content) {
+            co_return std::unexpected{content.error()};
         }
 
         try {
-            co_return read_bm25_json(rjson::parse(std::move(resp->content)), schema);
+            co_return read_bm25_json(rjson::parse(std::move(*content)), schema);
         } catch (const rjson::error& e) {
             vslogger.error("Vector Store returned invalid JSON: {}", e.what());
             co_return std::unexpected{service_reply_format_error{}};
@@ -484,31 +474,14 @@ struct vector_store_client::impl {
 
     auto highlight(keyspace_name keyspace, index_name name, query_string fts_query, documents docs, abort_source& as)
             -> future<std::expected<highlights, fts_error>> {
-        if (is_disabled()) {
-            vslogger.error("Disabled Vector Store while calling highlight");
-            co_return std::unexpected{disabled{}};
-        }
-
-        auto path = format("/api/v1/indexes/{}/{}/highlight", keyspace, name);
-        auto content = write_highlight_json(std::move(fts_query), docs);
-
-        auto resp = co_await request(operation_type::POST, std::move(path), std::move(content), as);
-        if (!resp) {
-            co_return std::unexpected{std::visit(
-                    [](auto&& err) {
-                        return fts_error{err};
-                    },
-                    resp.error())};
-        }
-
-        if (resp->status != status_type::ok) {
-            auto error_content = decode_error_message(resp->content);
-            vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status, error_content);
-            co_return std::unexpected{service_error{resp->status, std::move(error_content)}};
+        auto content = co_await post_to_index(
+                "highlight", format("/api/v1/indexes/{}/{}/highlight", keyspace, name), write_highlight_json(std::move(fts_query), docs), as);
+        if (!content) {
+            co_return std::unexpected{content.error()};
         }
 
         try {
-            co_return read_highlight_json(rjson::parse(std::move(resp->content)), docs.size());
+            co_return read_highlight_json(rjson::parse(std::move(*content)), docs.size());
         } catch (const rjson::error& e) {
             vslogger.error("Vector Store returned invalid JSON: {}", e.what());
             co_return std::unexpected{service_reply_format_error{}};
