@@ -807,7 +807,7 @@ async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: 
     await api.enable_injection(node_ip, injection, False, parameters)
     enabled = await api.get_enabled_injections(node_ip)
     logging.info(f"Error injections enabled on {node_ip}: {enabled}")
-    if not enabled:
+    if injection not in enabled:
         skip_env("Error injection not enabled in Scylla - try compiling in dev/debug/sanitize mode")
     try:
         yield InjectionHandler(api, injection, node_ip)
@@ -824,7 +824,7 @@ async def inject_error_one_shot(api: ScyllaRESTAPIClient, node_ip: IPAddress, in
     await api.enable_injection(node_ip, injection, True, parameters)
     enabled = await api.get_enabled_injections(node_ip)
     logging.info(f"Error injections enabled on {node_ip}: {enabled}")
-    if not enabled:
+    if injection not in enabled:
         skip_env("Error injection not enabled in Scylla - try compiling in dev/debug/sanitize mode")
     return InjectionHandler(api, injection, node_ip)
 
