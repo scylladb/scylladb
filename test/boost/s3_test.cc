@@ -846,6 +846,15 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
     BOOST_REQUIRE_EQUAL(creds.session_token, "");
 }
 
+SEASTAR_THREAD_TEST_CASE(test_sts_provider_unconditional_empty_role_arn) {
+    // client.cc always builds sts_assume_role_credentials_provider(region, role_arn)
+    // with no check that role_arn is configured; with both left at their
+    // defaults (empty strings) this yields host "sts..amazonaws.com" and a
+    // guaranteed-to-fail request.
+    aws::sts_assume_role_credentials_provider provider("", "");
+    BOOST_REQUIRE_THROW(provider.get_aws_credentials().get(), std::exception);
+}
+
 BOOST_AUTO_TEST_CASE(s3_fqn_manipulation) {
     std::string bucket_name, object_name;
     // Empty input
