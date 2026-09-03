@@ -181,6 +181,9 @@ class fragmenting_mutation_freezer {
     std::optional<static_row> _sr;
     utils::chunked_vector<clustering_row> _crs;
     range_tombstone_list _rts;
+    // Token range tombstones from the head of the stream. They apply to every
+    // partition which follows, so they are kept for the whole stream.
+    token_range_tombstone_list _token_range_tombstones;
 
     frozen_mutation_consumer_fn _consumer;
 
@@ -221,10 +224,13 @@ public:
         : _schema(s), _rts(s), _consumer(c), _fragment_size(fragment_size), _current_rtc(position_in_partition::before_all_clustered_rows(), {}) { }
 
     future<stop_iteration> consume(partition_start&& ps) {
-        _key = std::move(ps.key().key());
         _fragmented = false;
         _dirty_size += sizeof(tombstone);
         _partition_tombstone = ps.partition_tombstone();
+        // A token range tombstone covering this partition acts as a partition
+        // tombstone.
+        _partition_tombstone.apply(_token_range_tombstones.search(ps.key().token()));
+        _key = std::move(ps.key().key());
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
 
@@ -252,11 +258,13 @@ public:
         return ret;
     }
 
-    // FIXME: a frozen mutation describes a single partition, so it has no
-    // place for a tombstone which spans partitions. Freezing one has to wait
-    // until the write path can carry token range tombstones.
+    // A frozen mutation describes a single partition, so there is nowhere to
+    // put a tombstone which spans partitions. There is no need for one either:
+    // the output is per-partition, so the deletion is folded into the
+    // tombstone of every partition it covers, which is equivalent.
     future<stop_iteration> consume(token_range_tombstone&& trt) {
-        utils::on_internal_error(fmt::format("fragmenting_mutation_freezer: cannot freeze {}", trt));
+        _token_range_tombstones.apply(trt);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
     }
 
     future<stop_iteration> consume(partition_end&&) {

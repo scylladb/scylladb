@@ -127,6 +127,34 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_fragment) {
     });
 }
 
+// A token range tombstone is not part of any partition, so it does not show up
+// in the stream of a mutation. Check the round trip through the v2 fragment
+// serialization directly, including the infinite bounds of a whole-ring
+// tombstone, which are the ones truncating a table produces.
+SEASTAR_THREAD_TEST_CASE(test_frozen_token_range_tombstone) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    schema_ptr sp = new_table()
+        .with_column("pk_col", bytes_type, column_kind::partition_key)
+        .with_column("reg", bytes_type)
+        .build();
+    auto& s = *sp;
+    auto permit = semaphore.make_permit();
+    auto tomb = tombstone(1234, gc_clock::time_point(gc_clock::duration(5678)));
+
+    for (auto&& trt : {
+            token_range_tombstone::full_ring(tomb),
+            token_range_tombstone(dht::token(-42), dht::token(4242), tomb),
+            token_range_tombstone(dht::token::minimum(), dht::token(7), tomb),
+            token_range_tombstone(dht::token(7), dht::token::maximum(), tomb)}) {
+        auto mf = mutation_fragment_v2(s, permit, token_range_tombstone(trt));
+        auto refrozen = freeze(s, mf).unfreeze(s, permit);
+        BOOST_REQUIRE(refrozen.is_token_range_tombstone());
+        BOOST_REQUIRE_MESSAGE(refrozen.as_token_range_tombstone() == trt,
+                fmt::format("Expected {} got {}", trt, refrozen.as_token_range_tombstone()));
+        BOOST_REQUIRE(mf.equal(s, refrozen));
+    }
+}
+
 SEASTAR_TEST_CASE(test_deserialization_using_wrong_schema_throws) {
     return seastar::async([] {
         schema_ptr s1 = new_table()

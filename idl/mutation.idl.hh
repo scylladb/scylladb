@@ -14,6 +14,7 @@
 #include "idl/uuid.idl.hh"
 #include "idl/keys.idl.hh"
 #include "idl/position_in_partition.idl.hh"
+#include "idl/token.idl.hh"
 
 class counter_id final {
     utils::UUID uuid();
@@ -172,12 +173,23 @@ class partition_start stub [[writable]] {
 class partition_end {
 };
 
+// Deletes every partition whose token falls into (start_exclusive, end_inclusive].
+class token_range_tombstone stub [[writable]] {
+    dht::token start_exclusive;
+    dht::token end_inclusive;
+    tombstone tomb;
+};
+
 class mutation_fragment stub [[writable]] {
     std::variant<clustering_row, static_row, range_tombstone,
                    partition_start, partition_end> fragment;
 };
 
 class mutation_fragment_v2 stub [[writable]] {
+    // Note: new alternatives go at the end. An older node deserializing one it
+    // does not know reports ser::unknown_variant_type rather than misreading
+    // the fragment, but it still cannot make sense of it, so sending one has
+    // to be gated on a cluster feature.
     std::variant<clustering_row, static_row, range_tombstone_change,
-                   partition_start, partition_end> fragment;
+                   partition_start, partition_end, token_range_tombstone> fragment;
 };

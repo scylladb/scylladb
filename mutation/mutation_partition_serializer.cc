@@ -307,12 +307,11 @@ frozen_mutation_fragment_v2 freeze(const schema& s, const mutation_fragment_v2& 
                 .end_partition_start();
         },
         [&] (const token_range_tombstone& trt) {
-            // FIXME: the mutation_fragment_v2 IDL variant has no arm for a
-            // token range tombstone yet.
-            utils::on_internal_error(fmt::format("freeze(): cannot freeze {}", trt));
-            // Unreachable, present so that every visitor arm deduces the same
-            // return type.
-            return std::move(writer).write_fragment_partition_end(partition_end{});
+            return std::move(writer).start_fragment_token_range_tombstone()
+                .write_start_exclusive(trt.start_exclusive())
+                .write_end_inclusive(trt.end_inclusive())
+                .write_tomb(trt.tomb())
+                .end_token_range_tombstone();
         },
         [&] (const partition_end& pe) {
             return std::move(writer).write_fragment_partition_end(pe);
