@@ -17,8 +17,11 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/net/api.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/util/defer.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/units.hh>
 #include "test/lib/scylla_test_case.hh"
@@ -68,6 +71,137 @@ public:
 
 static std::unique_ptr<seastar::http::retry_strategy> make_test_retry_strategy() {
     return std::make_unique<test_retry_strategy>();
+}
+
+// Local TCP endpoint that answers every request with a fixed HTTP status
+// and closes the connection, so each attempt shows up as a fresh accept().
+// Used to observe the raw cadence of client::chunked_download_source's
+// internal retry loop against a sustained retryable failure.
+class fake_http_error_server {
+    seastar::server_socket _socket;
+    socket_address _address;
+    seastar::gate _gate;
+    bool _go_on = true;
+    unsigned _request_count = 0;
+    std::vector<std::chrono::steady_clock::time_point> _request_times;
+    unsigned _status_code;
+    sstring _status_line;
+    future<> _accept_loop;
+
+    future<> handle_one(connected_socket sock) {
+        auto in = sock.input();
+        auto out = output_stream<char>(sock.output().detach(), 1024);
+        try {
+            sstring received;
+            while (received.find("\r\n\r\n") == sstring::npos) {
+                auto buf = co_await in.read();
+                if (buf.empty()) {
+                    break;
+                }
+                received += sstring(buf.get(), buf.size());
+            }
+        } catch (...) {
+            // Ignore malformed/partial requests; still answer below.
+        }
+        _request_times.push_back(std::chrono::steady_clock::now());
+        _request_count++;
+        auto resp = seastar::format("HTTP/1.1 {} {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", _status_code, _status_line);
+        try {
+            co_await out.write(resp);
+            co_await out.flush();
+        } catch (...) {
+        }
+        co_await out.close();
+        co_await in.close();
+    }
+
+    future<> accept_loop() {
+        while (_go_on) {
+            try {
+                auto ar = co_await _socket.accept();
+                // Fire-and-forget, tracked by _gate so stop() can drain it.
+                (void)seastar::with_gate(_gate, [this, sock = std::move(ar.connection)]() mutable {
+                    return handle_one(std::move(sock));
+                }).handle_exception([](std::exception_ptr) {});
+            } catch (...) {
+                break;
+            }
+        }
+    }
+
+public:
+    fake_http_error_server(unsigned status_code, sstring status_line)
+        : _socket(seastar::listen(socket_address(0x7f000001, 0)))
+        , _address(_socket.local_address())
+        , _status_code(status_code)
+        , _status_line(std::move(status_line))
+        , _accept_loop(accept_loop())
+    {}
+
+    const socket_address& address() const { return _address; }
+    unsigned request_count() const { return _request_count; }
+    const std::vector<std::chrono::steady_clock::time_point>& request_times() const { return _request_times; }
+
+    future<> stop() {
+        if (std::exchange(_go_on, false)) {
+            _socket.abort_accept();
+            co_await std::move(_accept_loop);
+            co_await _gate.close();
+        }
+    }
+};
+
+// Reproduces: client::chunked_download_source::make_filling_fiber() (utils/s3/client.cc)
+// passes seastar::http::no_retry_strategy into client::make_request and re-implements
+// retries itself in its outer loop, with no sleep/jitter/attempt-cap between a retryable
+// failure and the next attempt. Point it at a server that always answers 503 (Service
+// Unavailable, classified retryable::yes by aws_error::from_http_code) and observe the
+// raw request cadence over a short, fixed wall-clock window.
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_retries_retryable_error_without_backoff) {
+    ::setenv("AWS_ACCESS_KEY_ID", "test", 1);
+    ::setenv("AWS_SECRET_ACCESS_KEY", "test", 1);
+
+    fake_http_error_server srv(503, "Slow Down");
+    auto stop_srv = seastar::defer([&] noexcept { srv.stop().get(); });
+
+    s3::endpoint_config cfg = {
+        .port = srv.address().port(),
+        .use_https = false,
+        .region = "local",
+    };
+    auto cln = s3::client::make("127.0.0.1", make_lw_shared<s3::endpoint_config>(std::move(cfg)));
+    auto close_client = seastar::defer([&] { cln->close().get(); });
+
+    auto in = input_stream<char>(cln->make_chunked_download_source("/test-bucket/test-object", s3::full_range));
+    auto close_in = seastar::deferred_close(in);
+
+    // Let the retry loop run freely for a short, fixed window.
+    seastar::sleep(1s).get();
+
+    auto count = srv.request_count();
+    testlog.info("test_chunked_download_retries_retryable_error_without_backoff: {} requests observed in 1s", count);
+
+    // A retry policy with any real backoff (even a modest fixed delay, let
+    // alone exponential) would issue no more than a handful of attempts in
+    // this window. A tight loop with no delay issues orders of magnitude
+    // more. This assertion encodes the expected, backed-off behavior and
+    // is expected to FAIL against the current unbounded tight-loop retry.
+    BOOST_REQUIRE_LE(count, 15u);
+
+    // No backoff/jitter: consecutive attempts land back-to-back. A real
+    // backoff strategy would show a growing (or at least non-trivial) gap
+    // between attempts instead of every gap being near-zero.
+    auto times = srv.request_times();
+    BOOST_REQUIRE_GE(times.size(), 2u);
+    unsigned near_zero_gaps = 0;
+    for (size_t i = 1; i < times.size(); i++) {
+        auto gap = std::chrono::duration_cast<std::chrono::milliseconds>(times[i] - times[i - 1]);
+        if (gap.count() < 5) {
+            near_zero_gaps++;
+        }
+    }
+    testlog.info("test_chunked_download_retries_retryable_error_without_backoff: {}/{} gaps < 5ms", near_zero_gaps, times.size() - 1);
+    BOOST_REQUIRE_LE(near_zero_gaps, times.size() / 2);
 }
 
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
