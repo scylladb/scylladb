@@ -1703,13 +1703,15 @@ static future<executor::request_return_type> query_vector(
     std::unordered_set<std::string> used_attribute_names;
     std::unordered_set<std::string> used_attribute_values;
     // Parse the Select parameter and determine which attributes to return.
-    // For a vector index, the default Select is ALL_ATTRIBUTES (full items).
+    // For a vector index, as for any other index, the default Select is
+    // ALL_PROJECTED_ATTRIBUTES - i.e., key attributes only (see below) - and
+    // *not* ALL_ATTRIBUTES.
     // ALL_PROJECTED_ATTRIBUTES is significantly more efficient because it
     // returns what the vector store returned without looking up additional
     // base-table data. Currently only the primary key attributes are projected
     // but in the future we'll implement projecting additional attributes into
     // the vector index - these additional attributes will also be usable for
-    // filtering). COUNT returns only the count without items.
+    // filtering. COUNT returns only the count without items.
     select_type select = parse_select(request, table_or_view_type::vector_index);
     if (return_scores && select == select_type::count) {
         co_return api_error::validation(
