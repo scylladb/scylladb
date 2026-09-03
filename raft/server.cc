@@ -1763,6 +1763,10 @@ future<> server_impl::abort(sstring reason) {
         _state_change_promise->set_exception(stopped_error(*_aborted));
     }
 
+    if (_stepdown_promise) {
+        _stepdown_promise->set_exception(stopped_error(*_aborted));
+    }
+
     abort_snapshot_transfers();
 
     auto append_futures = _append_request_status | boost::adaptors::map_values |  boost::adaptors::transformed([] (append_request_queue& a) -> future<>& { return a.f; });

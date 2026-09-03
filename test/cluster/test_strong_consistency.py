@@ -1760,3 +1760,71 @@ async def test_batch(manager: ScyllaClusterManager, batch_mode):
                 await run_counter_batch([
                     ("counter_add", (1, 1)),
                 ], kind="counter")
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_stepdown_on_graceful_shutdown(manager: ScyllaClusterManager):
+    """
+    Verify that a node which is being shut down gracefully hands the leadership
+    of the strongly consistent tablets it leads over to another replica, instead
+    of leaving the group leaderless until the remaining replicas expire their
+    election timeouts.
+
+    All nodes run with a stretched raft tick interval, so expiring an election
+    timeout (at least 10 ticks) takes much longer than the leader's shutdown plus
+    the time this test gives the group to show its new leader.
+    """
+    tick_interval = 4
+    config = DEFAULT_CONFIG | {'error_injections_at_startup': [{
+        'name': 'strongly-consistent-raft-group-tick-interval-in-ms',
+        'value': str(tick_interval * 1000)
+    }]}
+    cmdline = DEFAULT_CMDLINE + ['--smp=1']
+    servers = await manager.servers_add(3, config=config, cmdline=cmdline, auto_rack_dc='my_dc')
+    cql, _ = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            # Every node is a replica, so any of them can be asked for the leader.
+            leader_host_id = await wait_for_leader(manager, servers[0], group_id)
+            leader_server = next(s for s, host_id in zip(servers, host_ids) if host_id == leader_host_id)
+            others = [s for s, host_id in zip(servers, host_ids) if host_id != leader_host_id]
+            logger.info(f"Group {group_id} is led by {leader_host_id}")
+
+            # Replicate something, so that the followers' match index reaches the
+            # leader's last log index and the stepdown below has a successor to
+            # pick immediately.
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (1, 1)")
+
+            log = await manager.server_open_log(leader_server.server_id)
+            mark = await log.mark()
+
+            logger.info(f"Stopping the leader {leader_host_id} gracefully")
+            await manager.server_stop_gracefully(leader_server.server_id)
+
+            matches = await log.grep(r"stepdown_leaders\(\): transferred leadership for 1 raft group",
+                                     from_mark=mark)
+            assert matches, "The node being shut down did not transfer the leadership of its raft group"
+
+            # stepdown() only completes once the successor has started its election, which
+            # it wins long before the old leader's process exits, so a new leader should be
+            # there already. The other replicas cannot elect one on their own sooner than
+            # ELECTION_TIMEOUT (10 raft ticks) after losing the leader, so one that shows up
+            # this early can only be the stepdown's successor.
+            async def get_new_leader():
+                new_leader_host_id = await manager.api.get_raft_leader(others[0].ip_addr, group_id)
+                if uuid.UUID(new_leader_host_id).int == 0 or new_leader_host_id == leader_host_id:
+                    return None
+                return new_leader_host_id
+            new_leader_host_id = await wait_for(get_new_leader, time.time() + 2 * tick_interval)
+            logger.info(f"Group {group_id} is now led by {new_leader_host_id}")
+
+            # The new leader can serve writes right away.
+            cql, _ = await manager.get_ready_cql(others)
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (2, 2)")
