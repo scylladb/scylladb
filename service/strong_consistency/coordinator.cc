@@ -304,6 +304,12 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
             return std::make_exception_ptr(exceptions::server_exception(
                 "The outcome of this statement is unknown. It may or may not have been applied. "
                 "Retrying the statement may be necessary."));
+        } else if (auto* too_big = try_catch<raft::command_is_too_big_error>(ex)) {
+            logger.trace("mutate(): command of {} bytes exceeds the limit of {}, table {}.{}, token {}",
+                too_big->command_size, too_big->limit, schema->ks_name(), schema->cf_name(), token);
+            ++_stats.write_errors_other;
+            return std::make_exception_ptr(exceptions::invalid_request_exception(fmt::format(
+                "Strongly consistent write of {} bytes exceeds the limit of {} bytes", too_big->command_size, too_big->limit)));
         } else {
             ++_stats.write_errors_other;
             logger.trace("mutate(): unknown exception {}, table {}.{}, token {}",

@@ -11,6 +11,8 @@
 # these tests run against gets the strongly-consistent-tables feature.
 #############################################################################
 
+import re
+
 import pytest
 from cassandra.cluster import ConsistencyLevel
 from cassandra.protocol import ConfigurationException, InvalidRequest
@@ -483,3 +485,19 @@ def test_null_primary_key_on_sc_table(cql, sc_keyspace):
             cql.execute(batch)
 
         assert list(cql.execute(f"SELECT * FROM {table} WHERE pk = 1")) == []
+
+
+def test_oversized_write_on_sc_table(cql, sc_keyspace):
+    """
+    A write whose raft command exceeds the command size limit of the
+    group is rejected with a clear error, not the raft error surfacing as
+    a server error.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v blob") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)")
+        cql.execute(insert, [1, b'x' * 1024])
+        with pytest.raises(InvalidRequest, match="Strongly consistent write of .* bytes exceeds the limit of .* bytes") as e:
+            cql.execute(insert, [2, b'x' * (200 * 1024)])
+        m = re.search(r"write of (\d+) bytes exceeds the limit of (\d+) bytes", str(e.value))
+        size, limit = int(m.group(1)), int(m.group(2))
+        assert size >= 200 * 1024 > limit
