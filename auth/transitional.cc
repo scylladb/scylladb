@@ -108,13 +108,13 @@ const resource_set& transitional_authenticator::protected_resources() const {
             try {
                 return _sasl->evaluate_response(client_response);
             } catch (const exceptions::authentication_exception&) {
-                _complete = true;
+                _rejected = true;
                 return {};
             }
         }
 
         virtual bool is_complete() const override {
-            return _complete || _sasl->is_complete();
+            return _rejected || _sasl->is_complete();
         }
 
         virtual future<authenticated_user> get_authenticated_user() const override {
@@ -137,7 +137,7 @@ const resource_set& transitional_authenticator::protected_resources() const {
     private:
         ::shared_ptr<sasl_challenge> _sasl;
 
-        bool _complete = false;
+        bool _rejected = false;
     };
     return ::make_shared<sasl_wrapper>(_authenticator->new_sasl_challenge());
 }
