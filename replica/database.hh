@@ -1669,7 +1669,6 @@ public:
         void remove_table(database& db, table& cf) noexcept;
 
         table& get_table(table_id id) const;
-        table_id get_table_id(const std::pair<std::string_view, std::string_view>& kscf) const;
         lw_shared_ptr<table> get_table_if_exists(table_id id) const;
         table_id get_table_id_if_exists(const std::pair<std::string_view, std::string_view>& kscf) const;
         bool contains(table_id id) const;
