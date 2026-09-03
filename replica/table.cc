@@ -5054,6 +5054,17 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
 
 template void table::do_apply(compaction_group& cg, db::rp_handle&&, const frozen_mutation&, const schema_ptr&, const db::large_data_guardrail_base&, db::large_data_cache_tracker*&&, db::large_data_violation_type*&&);
 
+token_range_tombstone_list table::token_range_tombstones() {
+    token_range_tombstone_list res;
+    for_each_compaction_group([&res] (compaction_group& cg) {
+        for (const auto& mt : *cg.memtables()) {
+            res.apply(mt->token_range_tombstones());
+        }
+        res.apply(cg.main_sstables()->token_range_tombstones());
+    });
+    return res;
+}
+
 void table::apply(const token_range_tombstone& trt) {
     if (trt.empty()) {
         return;

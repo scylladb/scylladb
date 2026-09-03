@@ -45,10 +45,10 @@ class tombstone [[writable]] {
 };
 
 // Deletes every partition whose token falls into (start_exclusive, end_inclusive].
-class token_range_tombstone stub [[writable]] {
-    dht::token start_exclusive;
-    dht::token end_inclusive;
-    tombstone tomb;
+class token_range_tombstone {
+    dht::token start_exclusive();
+    dht::token end_inclusive();
+    tombstone tomb();
 };
 
 class live_cell stub [[writable]] {

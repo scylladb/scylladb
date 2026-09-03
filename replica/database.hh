@@ -1086,6 +1086,13 @@ public:
     // token range overlaps, because each of them holds part of the data it
     // deletes.
     void apply(const token_range_tombstone& trt);
+    // The token range tombstones this table holds, from its memtables and its
+    // sstables. The cache is not consulted: it only mirrors those two.
+    //
+    // A reader would report the same set, but only once it has produced its
+    // first fragment, so anything which needs them before reading starts -
+    // repair's per range handshake - has to ask here.
+    token_range_tombstone_list token_range_tombstones();
 
     // Returns at most "cmd.limit" rows
     // The saved_querier parameter is an input-output parameter which contains

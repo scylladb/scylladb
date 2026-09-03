@@ -153,11 +153,7 @@ frozen_mutation freeze_token_range_tombstones(const schema& s, const token_range
                   })
                   .start_token_range_tombstones();
     for (const auto& trt : trts) {
-        std::move(trt_writer.add())
-                .write_start_exclusive(trt.start_exclusive())
-                .write_end_inclusive(trt.end_inclusive())
-                .write_tomb(trt.tomb())
-                .end_token_range_tombstone();
+        trt_writer.add_token_range_tombstones(trt);
     }
     std::move(trt_writer).end_token_range_tombstones().end_mutation();
     return frozen_mutation(std::move(out), std::move(key));
@@ -170,7 +166,7 @@ bool frozen_mutation::is_token_range_tombstones_only() const {
 token_range_tombstone_list frozen_mutation::token_range_tombstones() const {
     token_range_tombstone_list res;
     for (auto&& trt : mutation_view().token_range_tombstones()) {
-        res.apply(token_range_tombstone(trt.start_exclusive(), trt.end_inclusive(), trt.tomb()));
+        res.apply(trt);
     }
     return res;
 }

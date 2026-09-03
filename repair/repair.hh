@@ -18,6 +18,7 @@
 #include <seastar/core/future.hh>
 
 #include "gms/inet_address.hh"
+#include "mutation/token_range_tombstone.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database_fwd.hh"
 #include "mutation/frozen_mutation.hh"
@@ -173,6 +174,9 @@ enum class repair_row_level_start_status: uint8_t {
 
 struct repair_row_level_start_response {
     repair_row_level_start_status status;
+    // The token range tombstones the follower holds for the range. See
+    // repair_row_level_start in idl/repair.idl.hh.
+    utils::chunked_vector<token_range_tombstone> token_range_tombstones;
 };
 
 // Return value of the REPAIR_GET_SYNC_BOUNDARY RPC verb

@@ -72,6 +72,9 @@ enum class repair_row_level_start_status: uint8_t {
 
 struct repair_row_level_start_response {
     repair_row_level_start_status status;
+    // The token range tombstones the follower holds for the range being
+    // repaired. See the verb below.
+    utils::chunked_vector<token_range_tombstone> token_range_tombstones [[version 2026.1]] = utils::chunked_vector<token_range_tombstone>();
 };
 
 namespace locator {
@@ -112,7 +115,13 @@ verb [[with_client_info]] repair_get_combined_row_hash (uint32_t repair_meta_id,
 verb [[with_client_info]] repair_get_sync_boundary (uint32_t repair_meta_id, std::optional<repair_sync_boundary> skipped_sync_boundary, shard_id dst_shard_id [[version 5.2]]) -> get_sync_boundary_response;
 verb [[with_client_info]] repair_get_row_diff (uint32_t repair_meta_id, repair_hash_set set_diff, bool needs_all_rows, shard_id dst_shard_id [[version 5.2]]) -> repair_rows_on_wire;
 verb [[with_client_info]] repair_put_row_diff (uint32_t repair_meta_id, repair_rows_on_wire row_diff, shard_id dst_shard_id [[version 5.2]]);
-verb [[with_client_info]] repair_row_level_start (uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size, uint64_t seed, unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name, table_schema_version schema_version, streaming::stream_reason reason [[version 4.1.0]], gc_clock::time_point compaction_time [[version 5.2]], shard_id dst_shard_id [[version 5.2]], service::frozen_topology_guard topo_guard [[version 2025.1]], std::optional<int64_t> repaired_at [[version 2025.4]], locator::tablet_repair_incremental_mode incremental_mode [[version 2025.4]]) -> repair_row_level_start_response [[version 4.2.0]];
+// The token range tombstones are exchanged here rather than reconciled as
+// rows. A row is keyed by partition key and position, and a token range
+// tombstone has neither, so it cannot take part in the row hash diff. It is
+// range scoped, which is what this handshake already is, so each side sends
+// what it has for the range and both apply the union. Applying is idempotent,
+// so exchanging the same tombstone repeatedly is harmless.
+verb [[with_client_info]] repair_row_level_start (uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size, uint64_t seed, unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name, table_schema_version schema_version, streaming::stream_reason reason [[version 4.1.0]], gc_clock::time_point compaction_time [[version 5.2]], shard_id dst_shard_id [[version 5.2]], service::frozen_topology_guard topo_guard [[version 2025.1]], std::optional<int64_t> repaired_at [[version 2025.4]], locator::tablet_repair_incremental_mode incremental_mode [[version 2025.4]], utils::chunked_vector<token_range_tombstone> token_range_tombstones [[version 2026.1]]) -> repair_row_level_start_response [[version 4.2.0]];
 verb [[with_client_info]] repair_row_level_stop (uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range, shard_id dst_shard_id [[version 5.2]], bool mark_as_repaired [[version 2025.4]]);
 verb [[with_client_info]] repair_get_estimated_partitions (uint32_t repair_meta_id, shard_id dst_shard_id [[version 5.2]]) -> uint64_t;
 verb [[with_client_info]] repair_set_estimated_partitions (uint32_t repair_meta_id, uint64_t estimated_partitions, shard_id dst_shard_id [[version 5.2]]);

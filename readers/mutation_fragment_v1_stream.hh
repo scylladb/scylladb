@@ -5,6 +5,7 @@
 #include "mutation/mutation_rebuilder.hh"
 #include "reader_permit.hh"
 #include "mutation/range_tombstone_assembler.hh"
+#include "mutation/token_range_tombstone.hh"
 #include "utils/on_internal_error.hh"
 #include <seastar/util/log.hh>
 
@@ -17,6 +18,7 @@ class mutation_fragment_v1_stream final {
 
     range_tombstone_assembler _rt_assembler;
     std::optional<clustering_row> _row;
+    token_range_tombstone_list _token_range_tombstones;
 
 public:     // consume() methods need to be visible to concepts like MutationFragmentConsumerV2
     mutation_fragment_opt consume(static_row mf) {
@@ -39,8 +41,15 @@ public:     // consume() methods need to be visible to concepts like MutationFra
     }
     mutation_fragment_opt consume(token_range_tombstone mf) {
         // The v1 fragment format has no representation for a token range
-        // tombstone. Dropping it would silently resurrect deleted data.
-        on_internal_error(mrlog, format("mutation_fragment_v1_stream: cannot represent {}", mf));
+        // tombstone, and inventing one is not needed: the consumers of a v1
+        // stream want these as a set rather than as stream elements. Collect
+        // them and let the consumer read them off token_range_tombstones().
+        //
+        // A consumer which ignores them drops deletions of whole partitions on
+        // the floor, so a new consumer of this class has to decide what to do
+        // with them.
+        _token_range_tombstones.apply(mf);
+        return std::nullopt;
     }
     mutation_fragment_opt consume(partition_start mf) {
         _rt_assembler.reset();
@@ -86,6 +95,14 @@ public:
         , _schema(_reader.schema())
         , _permit(_reader.permit())
     { }
+
+    // Token range tombstones seen so far. They delete whole partitions and are
+    // not v1 fragments, so they do not appear in the stream; a consumer which
+    // cares about deletions of whole partitions has to read them from here.
+    // Complete once the stream has produced its first fragment.
+    const token_range_tombstone_list& token_range_tombstones() const {
+        return _token_range_tombstones;
+    }
 
     mutation_fragment_v1_stream(const mutation_fragment_v1_stream&) = delete;
     mutation_fragment_v1_stream(mutation_fragment_v1_stream&&) = default;

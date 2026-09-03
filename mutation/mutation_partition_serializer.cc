@@ -307,11 +307,7 @@ frozen_mutation_fragment_v2 freeze(const schema& s, const mutation_fragment_v2& 
                 .end_partition_start();
         },
         [&] (const token_range_tombstone& trt) {
-            return std::move(writer).start_fragment_token_range_tombstone()
-                .write_start_exclusive(trt.start_exclusive())
-                .write_end_inclusive(trt.end_inclusive())
-                .write_tomb(trt.tomb())
-                .end_token_range_tombstone();
+            return std::move(writer).write_fragment_token_range_tombstone(trt);
         },
         [&] (const partition_end& pe) {
             return std::move(writer).write_fragment_partition_end(pe);
