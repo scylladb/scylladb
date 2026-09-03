@@ -9,6 +9,9 @@
 
 #include <seastar/core/thread.hh>
 
+#include <string_view>
+#include <variant>
+
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
@@ -20,6 +23,7 @@
 #include "schema/schema_builder.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "db/config.hh"
+#include "db/cluster_config_registry.hh"
 #include "db/schema_applier.hh"
 #include "db/schema_tables.hh"
 #include "types/list.hh"
@@ -85,6 +89,128 @@ SEASTAR_THREAD_TEST_CASE(test_load_with_cdc_schema) {
     }).get();
 
     BOOST_REQUIRE(s_loaded->cdc_schema()->version() == s_cdc->version());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_v0_feature_is_supported) {
+    dummy_init dummy;
+    auto features = dummy.fs.supported_feature_set();
+    BOOST_REQUIRE(features.contains("CLUSTER_CONFIG_REGISTRY_V0"));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_current_version_follows_feature_gate) {
+    dummy_init dummy;
+
+    dummy.fs.cluster_config_registry_v0.enable();
+
+    BOOST_REQUIRE(
+        db::cluster_config_registry::current_version(dummy.fs)
+        == std::optional<db::cluster_config_registry::version>(db::cluster_config_registry::version::v0));
+
+    gms::feature_config cfg;
+    cfg.disabled_features.emplace("CLUSTER_CONFIG_REGISTRY_V0");
+    gms::feature_service fs(cfg);
+
+    BOOST_REQUIRE(db::cluster_config_registry::current_version(fs) == std::nullopt);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_declares_option_scope_and_type_rules) {
+    const auto* auto_repair_enabled = db::cluster_config_registry::find("auto_repair_enabled");
+    BOOST_REQUIRE(auto_repair_enabled != nullptr);
+    BOOST_REQUIRE(auto_repair_enabled->type == db::cluster_config_registry::value_type::boolean);
+    BOOST_REQUIRE(db::cluster_config_registry::supports_scope(*auto_repair_enabled, db::cluster_config_registry::scope::cluster));
+    BOOST_REQUIRE(db::cluster_config_registry::supports_scope(*auto_repair_enabled, db::cluster_config_registry::scope::keyspace));
+    BOOST_REQUIRE(db::cluster_config_registry::supports_scope(*auto_repair_enabled, db::cluster_config_registry::scope::table));
+    BOOST_REQUIRE(!db::cluster_config_registry::supports_scope(*auto_repair_enabled, db::cluster_config_registry::scope::node));
+
+    BOOST_REQUIRE(!db::cluster_config_registry::validate_value(*auto_repair_enabled, "true"));
+    BOOST_REQUIRE(db::cluster_config_registry::validate_value(*auto_repair_enabled, "1"));
+
+    // Only auto_repair_enabled is part of this feature; other options must not be registered.
+    BOOST_REQUIRE(db::cluster_config_registry::find("gc_grace_seconds") == nullptr);
+    BOOST_REQUIRE(db::cluster_config_registry::find("compaction_static_shares") == nullptr);
+}
+
+// The to_* converters are the single place where a resolved value (or its absence) becomes a
+// value in the option's native type, so they are what decides that a missing override yields
+// the default declared on the registry entry.
+SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_converts_values_and_applies_declared_defaults) {
+    namespace ccr = db::cluster_config_registry;
+
+    const auto* auto_repair_enabled = ccr::find("auto_repair_enabled");
+    BOOST_REQUIRE(auto_repair_enabled != nullptr);
+    // The shipped default. Changing it should require changing this test.
+    BOOST_REQUIRE(std::get<bool>(auto_repair_enabled->default_value) == false);
+
+    BOOST_REQUIRE(ccr::to_boolean(*auto_repair_enabled, std::nullopt) == false);
+    BOOST_REQUIRE(ccr::to_boolean(*auto_repair_enabled, sstring("true")) == true);
+    BOOST_REQUIRE(ccr::to_boolean(*auto_repair_enabled, sstring("false")) == false);
+    // Text that validate_value() would have rejected can only come from a corrupt or
+    // out-of-band write; it degrades to the default rather than failing the read.
+    BOOST_REQUIRE(ccr::to_boolean(*auto_repair_enabled, sstring("yes")) == false);
+
+    // No shipped option uses the remaining types yet, so exercise them through locally
+    // constructed entries, shaped exactly as a future option's registration would be.
+    const auto uint32_option = ccr::option{
+        .name = "test_uint32_option",
+        .type = ccr::value_type::uint32,
+        .scope_mask = static_cast<uint32_t>(ccr::scope::cluster),
+        .min_version = ccr::version::v0,
+        .default_value = uint32_t(7),
+    };
+    BOOST_REQUIRE_EQUAL(ccr::to_uint32(uint32_option, std::nullopt), 7u);
+    BOOST_REQUIRE_EQUAL(ccr::to_uint32(uint32_option, sstring("42")), 42u);
+    BOOST_REQUIRE_EQUAL(ccr::to_uint32(uint32_option, sstring("42x")), 7u);
+
+    // validate_value() must agree with the converter: it accepts what to_uint32() parses
+    // and rejects what to_uint32() would degrade to the default.
+    BOOST_REQUIRE(!ccr::validate_value(uint32_option, "42"));
+    BOOST_REQUIRE(ccr::validate_value(uint32_option, "-1").has_value());
+    BOOST_REQUIRE(ccr::validate_value(uint32_option, "4.2").has_value());
+    BOOST_REQUIRE(ccr::validate_value(uint32_option, "42x").has_value());
+
+    const auto floating_point_option = ccr::option{
+        .name = "test_floating_point_option",
+        .type = ccr::value_type::floating_point,
+        .scope_mask = static_cast<uint32_t>(ccr::scope::cluster),
+        .min_version = ccr::version::v0,
+        .default_value = 0.25,
+    };
+    BOOST_REQUIRE_EQUAL(ccr::to_floating_point(floating_point_option, std::nullopt), 0.25);
+    BOOST_REQUIRE_EQUAL(ccr::to_floating_point(floating_point_option, sstring("1.5")), 1.5);
+    BOOST_REQUIRE_EQUAL(ccr::to_floating_point(floating_point_option, sstring("not-a-number")), 0.25);
+
+    // As above: validation delegates to the same CQL double parser the converter uses,
+    // so it accepts everything a CQL `double` accepts - including non-finite values.
+    BOOST_REQUIRE(!ccr::validate_value(floating_point_option, "1.5"));
+    BOOST_REQUIRE(!ccr::validate_value(floating_point_option, "inf"));
+    BOOST_REQUIRE(ccr::validate_value(floating_point_option, "not-a-number").has_value());
+
+    const auto text_option = ccr::option{
+        .name = "test_text_option",
+        .type = ccr::value_type::text,
+        .scope_mask = static_cast<uint32_t>(ccr::scope::cluster),
+        .min_version = ccr::version::v0,
+        .default_value = std::string_view("fallback"),
+    };
+    BOOST_REQUIRE_EQUAL(ccr::to_text(text_option, std::nullopt), sstring("fallback"));
+    BOOST_REQUIRE_EQUAL(ccr::to_text(text_option, sstring("stored")), sstring("stored"));
+
+    // Text has no invalid spellings: any value validates.
+    BOOST_REQUIRE(!ccr::validate_value(text_option, "anything at all"));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_only_exposes_options_visible_in_active_version) {
+    dummy_init dummy;
+    dummy.fs.cluster_config_registry_v0.enable();
+    const auto current_version = db::cluster_config_registry::current_version(dummy.fs);
+
+    BOOST_REQUIRE(db::cluster_config_registry::find("auto_repair_enabled", current_version) != nullptr);
+
+    gms::feature_config cfg;
+    cfg.disabled_features.emplace("CLUSTER_CONFIG_REGISTRY_V0");
+    gms::feature_service fs(cfg);
+
+    BOOST_REQUIRE(db::cluster_config_registry::find("auto_repair_enabled", db::cluster_config_registry::current_version(fs)) == nullptr);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_learn_schema_with_cdc) {

@@ -71,7 +71,7 @@ public:
     ///
     map_type flattened() const;
 
-    void validate();
+    void validate(const gms::feature_service&);
     locator::replication_strategy_config_options get_replication_options() const;
     std::optional<sstring> get_replication_strategy_class() const;
     void set_default_replication_strategy_class_option();
@@ -79,6 +79,9 @@ public:
     std::optional<data_dictionary::consistency_config_option> get_consistency_option() const;
     data_dictionary::storage_options get_storage_options() const;
     bool get_durable_writes() const;
+    bool has_keyspace_config_properties(const gms::feature_service&) const;
+    bool has_non_keyspace_config_properties(const gms::feature_service&) const;
+    std::vector<std::pair<sstring, std::optional<sstring>>> get_keyspace_config_updates(const gms::feature_service&) const;
     lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata(sstring ks_name, const locator::token_metadata&, const gms::feature_service&, const db::config&);
     lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata&, const gms::feature_service&, const db::config&);
 };

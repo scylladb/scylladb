@@ -20,11 +20,36 @@
 #include "exceptions/exceptions.hh"
 #include "gms/feature_service.hh"
 #include "db/config.hh"
+#include "db/cluster_config_registry.hh"
+#include "cql3/statements/cluster_config_props.hh"
 #include <random>
 
 namespace cql3 {
 
 namespace statements {
+
+namespace {
+
+constexpr auto keyspace_scope = db::cluster_config_registry::scope::keyspace;
+
+// Fold this statement's registry-backed keyspace properties into an existing
+// stored-config map: a present value sets/overwrites the key, `= NULL` (encoded as
+// nullopt by config_updates) removes it.
+std::map<sstring, sstring> apply_config_updates(
+        std::map<sstring, sstring> config_options,
+        const property_definitions& props,
+        const gms::feature_service& feat) {
+    for (auto& [name, value] : cluster_config_props::config_updates(keyspace_scope, props, feat)) {
+        if (value) {
+            config_options[name] = std::move(*value);
+        } else {
+            config_options.erase(name);
+        }
+    }
+    return config_options;
+}
+
+}
 
 static logging::logger logger("ks_prop_defs");
 
@@ -300,15 +325,24 @@ ks_prop_defs::ks_prop_defs(property_definitions::map_type options) {
     }
 }
 
-void ks_prop_defs::validate() {
+void ks_prop_defs::validate(const gms::feature_service& feat) {
     // Skip validation if the strategy class is already set as it means we've already
     // prepared (and redoing it would set strategyClass back to null, which we don't want)
     if (_strategy_class) {
         return;
     }
 
-    static std::set<sstring> keywords({ sstring(KW_DURABLE_WRITES), sstring(KW_REPLICATION), sstring(KW_STORAGE), sstring(KW_TABLETS), sstring(KW_CONSISTENCY) });
+    cluster_config_props::ensure_registry_supported(keyspace_scope, *this, feat);
+
+    auto keywords = cluster_config_props::supported_config_keywords(keyspace_scope, feat);
+    keywords.emplace(KW_DURABLE_WRITES);
+    keywords.emplace(KW_REPLICATION);
+    keywords.emplace(KW_STORAGE);
+    keywords.emplace(KW_TABLETS);
+    keywords.emplace(KW_CONSISTENCY);
     property_definitions::validate(keywords);
+
+    cluster_config_props::validate_config_values(keyspace_scope, *this, feat);
 
     auto replication_options = get_replication_options();
     if (replication_options.contains(REPLICATION_STRATEGY_CLASS_KEY)) {
@@ -409,6 +443,22 @@ bool ks_prop_defs::get_durable_writes() const {
     return get_boolean(KW_DURABLE_WRITES, true);
 }
 
+bool ks_prop_defs::has_keyspace_config_properties(const gms::feature_service& feat) const {
+    return std::ranges::any_of(_properties, [&feat] (const auto& entry) {
+        return cluster_config_props::is_config_property(keyspace_scope, entry.first, feat);
+    });
+}
+
+bool ks_prop_defs::has_non_keyspace_config_properties(const gms::feature_service& feat) const {
+    return std::ranges::any_of(_properties, [&feat] (const auto& entry) {
+        return !cluster_config_props::is_config_property(keyspace_scope, entry.first, feat);
+    });
+}
+
+std::vector<std::pair<sstring, std::optional<sstring>>> ks_prop_defs::get_keyspace_config_updates(const gms::feature_service& feat) const {
+    return cluster_config_props::config_updates(keyspace_scope, *this, feat);
+}
+
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm, const gms::feature_service& feat, const db::config& cfg) {
     auto sc = get_replication_strategy_class().value();
     // if tablets options have not been specified, but tablets are globally enabled, set the value to 0. The strategy will
@@ -419,8 +469,9 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(s
     bool uses_tablets = initial_tablets.has_value();
     bool rack_list_enabled = utils::get_local_injector().enter("create_with_numeric") ? false : feat.rack_list_rf;
     auto options = prepare_options(sc, tm, cfg.rf_rack_valid_keyspaces(), cfg.enforce_rack_list(), get_replication_options(), {}, rack_list_enabled, uses_tablets);
+    auto config_options = apply_config_updates({}, *this, feat);
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
-            std::move(options), initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options());
+            std::move(options), initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, std::nullopt, std::move(config_options));
 }
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm, const gms::feature_service& feat, const db::config& cfg) {
@@ -440,7 +491,8 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
         sc = old->strategy_name();
         options = old_options;
     }
-    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, old->next_strategy_options_opt());
+    auto config_options = apply_config_updates(old->config_options(), *this, feat);
+    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, old->next_strategy_options_opt(), std::move(config_options));
 }
 
 namespace {

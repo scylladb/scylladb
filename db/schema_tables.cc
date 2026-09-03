@@ -169,12 +169,42 @@ using namespace v3;
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
+namespace v3 {
+
+// The node-oriented cluster-config tables live in system_schema but, unlike every
+// other table there, they are not partition-keyed by keyspace_name (they are keyed
+// by cluster name / datacenter / rack / host_id). Keyspace-lifecycle code that
+// fabricates a keyspace_name-keyed mutation for "all" schema tables must therefore
+// skip them, or it would write a spurious (and, for scylla_nodes, type-invalid)
+// partition into them. Code that goes the other way and reads a keyspace name out of
+// a schema mutation's partition key must skip them for the same reason.
+bool is_node_oriented_config_table(std::string_view table_name) {
+    return table_name == SCYLLA_CLUSTERS
+            || table_name == SCYLLA_DATACENTERS
+            || table_name == SCYLLA_RACKS
+            || table_name == SCYLLA_NODES;
+}
+
+bool is_cluster_config_table(std::string_view ks_name, std::string_view table_name) {
+    if (ks_name != v3::NAME) {
+        return false;
+    }
+    return is_node_oriented_config_table(table_name)
+            || table_name == SCYLLA_KEYSPACES
+            || table_name == SCYLLA_TABLES;
+}
+
+}
+
 static future<> save_system_schema_to_keyspace(cql3::query_processor& qp, const sstring & ksname) {
     auto ks = qp.db().find_keyspace(ksname);
     auto ksm = ks.metadata();
 
     // delete old, possibly obsolete entries in schema tables
     co_await coroutine::parallel_for_each(all_table_infos(schema_features::full()), [&qp, ksm] (table_info ti) -> future<> {
+        if (is_node_oriented_config_table(ti.name)) {
+            co_return;
+        }
         auto deletion_timestamp = system_keyspace::schema_creation_timestamp() - 1;
         co_await qp.execute_internal(format("DELETE FROM {}.{} USING TIMESTAMP {} WHERE keyspace_name = ?", NAME, ti.name,
             deletion_timestamp), { ksm->name() }, cql3::query_processor::cache_internal::yes).discard_result();
@@ -232,6 +262,7 @@ schema_ptr scylla_keyspaces() {
             {"storage_options", map_type_impl::get_instance(utf8_type, utf8_type, false)},
             {"initial_tablets", int32_type},
             {"consistency", utf8_type},
+            {"configs", map_type_impl::get_instance(utf8_type, utf8_type, true)},
         },
         // static columns
         {},
@@ -240,6 +271,70 @@ schema_ptr scylla_keyspaces() {
         // comment
         "scylla-specific information for keyspaces"
         );
+        return builder.with_hash_version().build();
+    }();
+    return schema;
+}
+
+schema_ptr scylla_clusters() {
+    static thread_local auto schema = [] {
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, SCYLLA_CLUSTERS), NAME, SCYLLA_CLUSTERS,
+        {{"cluster_name", utf8_type}},
+        {},
+        {
+            {"configs", map_type_impl::get_instance(utf8_type, utf8_type, true)},
+        },
+        {},
+        utf8_type,
+        "cluster-scoped configuration");
+        return builder.with_hash_version().build();
+    }();
+    return schema;
+}
+
+schema_ptr scylla_datacenters() {
+    static thread_local auto schema = [] {
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, SCYLLA_DATACENTERS), NAME, SCYLLA_DATACENTERS,
+        {{"dc_name", utf8_type}},
+        {},
+        {
+            {"configs", map_type_impl::get_instance(utf8_type, utf8_type, true)},
+        },
+        {},
+        utf8_type,
+        "datacenter-scoped configuration");
+        return builder.with_hash_version().build();
+    }();
+    return schema;
+}
+
+schema_ptr scylla_racks() {
+    static thread_local auto schema = [] {
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, SCYLLA_RACKS), NAME, SCYLLA_RACKS,
+        {{"dc_name", utf8_type}},
+        {{"rack_name", utf8_type}},
+        {
+            {"configs", map_type_impl::get_instance(utf8_type, utf8_type, true)},
+        },
+        {},
+        utf8_type,
+        "rack-scoped configuration");
+        return builder.with_hash_version().build();
+    }();
+    return schema;
+}
+
+schema_ptr scylla_nodes() {
+    static thread_local auto schema = [] {
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, SCYLLA_NODES), NAME, SCYLLA_NODES,
+        {{"host_id", uuid_type}},
+        {},
+        {
+            {"configs", map_type_impl::get_instance(utf8_type, utf8_type, true)},
+        },
+        {},
+        utf8_type,
+        "node-scoped configuration");
         return builder.with_hash_version().build();
     }();
     return schema;
@@ -320,6 +415,7 @@ schema_ptr scylla_tables(schema_features features) {
         // It is safe to add the `tablets` column unconditionally,
         // since it is written to only after the cluster feature is enabled.
         sb.with_column("tablets", map_type_impl::get_instance(utf8_type, utf8_type, false));
+        sb.with_column("configs", map_type_impl::get_instance(utf8_type, utf8_type, true));
 
         sb.with_column("storage_engine", utf8_type);
         sb.with_column("large_data_guardrails_enabled", boolean_type);
@@ -751,11 +847,19 @@ future<utils::chunked_vector<canonical_mutation>> convert_schema_to_mutations(sh
         auto rs = co_await db::system_keyspace::query_mutations(db, s);
         utils::chunked_vector<canonical_mutation> results;
         results.reserve(rs->partitions().size());
+        // The node-oriented config tables are not partition-keyed by keyspace_name, so the
+        // "skip the system keyspaces" filter below neither applies to them nor can be
+        // evaluated for them: it would drop the config of a datacenter or rack that happens
+        // to be named like a system keyspace, and for scylla_nodes it would decode 16 raw
+        // host_id bytes as UTF-8. Every one of their partitions is transferred.
+        const bool keyed_by_keyspace_name = !is_node_oriented_config_table(table.name);
         for (auto&& p : rs->partitions()) {
-            auto pk = partition_key(p.mut().key());
-            auto partition_key = value_cast<sstring>(utf8_type->deserialize(pk.get_component(*s, 0)));
-            if (is_system_keyspace(partition_key)) {
-                continue;
+            if (keyed_by_keyspace_name) {
+                auto pk = partition_key(p.mut().key());
+                auto partition_key = value_cast<sstring>(utf8_type->deserialize(pk.get_component(*s, 0)));
+                if (is_system_keyspace(partition_key)) {
+                    continue;
+                }
             }
             auto mut = co_await unfreeze_gently(p.mut(), s);
             mut = redact_columns_for_missing_features(std::move(mut), features);
@@ -1140,6 +1244,27 @@ make_map_mutation(const Map& map,
     });
 }
 
+template<typename Map>
+static atomic_cell_or_collection
+make_replacing_map_mutation(const Map& map,
+                  const column_definition& column,
+                  api::timestamp_type timestamp) {
+    auto column_type = static_pointer_cast<const map_type_impl>(column.type);
+    if (!column_type->is_multi_cell()) {
+        return make_map_mutation(map, column, timestamp);
+    }
+
+    auto ktyp = column_type->get_keys_type();
+    auto vtyp = column_type->get_values_type();
+    collection_mutation_writer mut(tombstone{timestamp - 1, gc_clock::now()});
+    for (const auto& [key, value] : map) {
+        mut.push_back(
+                managed_bytes_view(ktyp->decompose(data_value(key))),
+                atomic_cell::make_live(*vtyp, timestamp, vtyp->decompose(data_value(value)), atomic_cell::collection_member::yes));
+    }
+    return std::move(mut).finish();
+}
+
 template<typename K, typename Map>
 static void store_map(mutation& m, const K& ckey, const bytes& name, api::timestamp_type timestamp, const Map& map) {
     auto s = m.schema();
@@ -1200,6 +1325,18 @@ utils::chunked_vector<mutation> make_create_keyspace_mutations(schema_features f
         if (consistency) {
             scylla_m.set_cell(ckey, "consistency", data_dictionary::consistency_config_option_to_string(*consistency), timestamp);
         }
+        // The out-of-band configs column is only meaningful once the cluster-config feature
+        // is enabled. Gating the write (rather than always emitting an empty collection
+        // tombstone) keeps keyspace mutations byte-for-byte identical to a pre-feature node
+        // during a rolling upgrade/downgrade, matching how next_replication is gated above.
+        if (features.contains<schema_feature::CLUSTER_CONFIG_TABLES>()) {
+            auto& configs_cdef = *scylla_keyspaces_s->get_column_definition("configs");
+            if (keyspace->config_options().empty()) {
+                scylla_m.set_cell(ckey, configs_cdef, collection_mutation_writer(tombstone{timestamp, gc_clock::now()}).finish());
+            } else {
+                scylla_m.set_cell(ckey, configs_cdef, make_replacing_map_mutation(keyspace->config_options(), configs_cdef, timestamp));
+            }
+        }
         mutations.emplace_back(std::move(scylla_m));
     }
 
@@ -1220,6 +1357,11 @@ utils::chunked_vector<mutation> make_drop_keyspace_mutations(schema_features fea
 {
     utils::chunked_vector<mutation> mutations;
     for (auto&& schema_table : all_tables(schema_features::full())) {
+        // The node-oriented config tables are not keyed by keyspace_name, so a
+        // keyspace drop must not fabricate a keyspace_name-keyed tombstone for them.
+        if (is_node_oriented_config_table(schema_table->cf_name())) {
+            continue;
+        }
         auto pkey = partition_key::from_exploded(*schema_table, {utf8_type->decompose(keyspace->name())});
         mutation m{schema_table, pkey};
         m.partition().apply(tombstone{timestamp, gc_clock::now()});
@@ -1279,6 +1421,7 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
     data_dictionary::storage_options storage_opts;
     std::optional<unsigned> initial_tablets;
     std::optional<data_dictionary::consistency_config_option> consistency;
+    std::map<sstring, sstring> config_options;
     // Scylla-specific row will only be present if SCYLLA_KEYSPACES schema feature is available in the cluster
     if (scylla_specific_rs) {
         if (!scylla_specific_rs->empty()) {
@@ -1297,9 +1440,14 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
             if (copt) {
                 consistency = data_dictionary::consistency_config_option_from_string(*copt);
             }
+            if (auto configs = row.get<map_type_impl::native_type>("configs")) {
+                for (const auto& entry : *configs) {
+                    config_options.emplace(value_cast<sstring>(entry.first), value_cast<sstring>(entry.second));
+                }
+            }
         }
     }
-    co_return keyspace_metadata::new_keyspace(keyspace_name, strategy_name, strategy_options, initial_tablets, consistency, durable_writes, storage_opts, {}, next_strategy_options);
+    co_return keyspace_metadata::new_keyspace(keyspace_name, strategy_name, strategy_options, initial_tablets, consistency, durable_writes, storage_opts, {}, next_strategy_options, std::move(config_options));
 }
 
 template<typename V>
@@ -1707,6 +1855,38 @@ mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type times
     // In-memory tables are deprecated since scylla-2024.1.0
     // FIXME: delete the column when there's no live version supporting it anymore.
     // Writing it here breaks upgrade rollback to versions that do not support the in_memory schema_feature
+    return m;
+}
+
+mutation make_scylla_table_configs_mutation(const sstring& keyspace_name, const sstring& table_name,
+        const std::map<sstring, std::optional<sstring>>& config_updates, api::timestamp_type timestamp) {
+    schema_ptr s = scylla_tables();
+    auto pkey = partition_key::from_singular(*s, keyspace_name);
+    auto ckey = clustering_key::from_singular(*s, table_name);
+    mutation m(s, pkey);
+    auto& cdef = *s->get_column_definition("configs");
+    auto column_type = static_pointer_cast<const map_type_impl>(cdef.type);
+    auto ktyp = column_type->get_keys_type();
+    auto vtyp = column_type->get_values_type();
+
+    // An incremental update of the stored map: a live cell per assigned key, a per-key
+    // tombstone per removed key, and no collection-level tombstone, so keys the statement
+    // does not name keep their stored value. This is what lets CREATE/ALTER TABLE write
+    // config changes without first reading the currently stored map.
+    //
+    // Collection cells must be ordered by their serialized key; iterating the std::map
+    // provides that (byte-wise sstring order matches utf8_type's).
+    collection_mutation_writer mut(tombstone{});
+    for (const auto& [name, value] : config_updates) {
+        if (value) {
+            mut.push_back(managed_bytes_view(ktyp->decompose(data_value(name))),
+                    atomic_cell::make_live(*vtyp, timestamp, vtyp->decompose(data_value(*value)), atomic_cell::collection_member::yes));
+        } else {
+            mut.push_back(managed_bytes_view(ktyp->decompose(data_value(name))),
+                    atomic_cell::make_dead(timestamp, gc_clock::now()));
+        }
+    }
+    m.set_clustered_cell(ckey, cdef, std::move(mut).finish());
     return m;
 }
 
@@ -2747,6 +2927,12 @@ std::vector<schema_ptr> all_tables(schema_features features) {
         views(), types(), functions(), aggregates(), indexes()
     };
     result.emplace_back(view_virtual_columns());
+    if (features.contains<schema_feature::CLUSTER_CONFIG_TABLES>()) {
+        result.emplace_back(scylla_clusters());
+        result.emplace_back(scylla_datacenters());
+        result.emplace_back(scylla_racks());
+        result.emplace_back(scylla_nodes());
+    }
     if (features.contains<schema_feature::COMPUTED_COLUMNS>()) {
         result.emplace_back(computed_columns());
     }
