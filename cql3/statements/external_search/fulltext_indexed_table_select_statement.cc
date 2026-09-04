@@ -7,6 +7,7 @@
  */
 
 #include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
+#include "cql3/statements/external_search/bm25_search.hh"
 #include "cql3/statements/external_search/external_function.hh"
 #include "cql3/statements/external_search/external_search_provider.hh"
 #include "cql3/statements/raw/select_statement.hh"
@@ -35,76 +36,6 @@ const column_definition& ranked_column(const schema& schema, const secondary_ind
     const auto* cdef = schema.get_column_definition(to_bytes(index.target_column()));
     throwing_assert(cdef);
     return *cdef;
-}
-
-std::optional<expr::expression> validate_bm25_where_restriction(const expr::binary_operator& binop,
-        const bm25_ordering_info& ordering_info) {
-    // "WHERE BM25(c, t) > 0" arrives as BM25_SCORE(c, t) > 0 (see prepare_external_search_relation_lhs()),
-    // and a full-text query takes no other search function here, e.g. ANN().
-    const auto& fc = expr::as<expr::function_call>(binop.lhs);
-    const auto* fun = functions::as_external_search_function(fc);
-    if (fun->family() != functions::search_family::bm25) {
-        throw exceptions::invalid_request_exception(seastar::format("{}() is not supported in the WHERE clause", fun->display_name()));
-    }
-    auto [col, where_term] = external_search::extract_call_arguments(fc, fun->display_name());
-    if (col->name_as_text() != ordering_info.index.target_column()) {
-        throw exceptions::invalid_request_exception("Full-text search queries must reference the same column in both WHERE and ORDER BY clauses");
-    }
-
-    if (binop.op != expr::oper_t::GT) {
-        throw exceptions::invalid_request_exception(
-                seastar::format("Unsupported \"{}\" relation for BM25 function restriction, only \">\" is supported", binop.op));
-    }
-    const auto* rhs_const = expr::as_if<expr::constant>(&binop.rhs);
-    if (!rhs_const || rhs_const->is_null() || rhs_const->view().deserialize<float>(*float_type) != 0.0f) {
-        throw exceptions::invalid_request_exception("BM25 function comparison value must be the literal 0");
-    }
-
-    const auto terms_equal = external_search::unevaluated_equality(where_term, ordering_info.search_term);
-    if (terms_equal != external_search::equality::always) {
-        if (terms_equal == external_search::equality::never) {
-            throw exceptions::invalid_request_exception(
-                    "Full-text search queries must use the same search term in both WHERE and ORDER BY clauses");
-        }
-        return std::move(where_term);
-    }
-    return std::nullopt;
-}
-
-/// Asks the full-text index for a highlighted fragment of every row's text, and returns the
-/// fragments as the values of the highlight temporary: one per row in `rows`, in the same order.
-///
-/// The text of each row is `row.columns[text_column]`. All the texts are sent in one request, and
-/// the reply is an array of the same length: reply[i] is the fragment of rows[i]. A row with no text
-/// is sent as an empty string, so that the positions still line up. A row the index found no
-/// fragment in gets a null value and is not dropped. If the request fails, the query fails.
-future<std::vector<cql3::raw_value>> highlights_of(vector_search::vector_store_client& client, const schema& schema,
-        const secondary_index::index& index, const sstring& search_term, std::span<const external_search::joined_row> rows, size_t text_column,
-        abort_source& as) {
-    const auto& type = *ranked_column(schema, index).type;
-    auto documents = std::vector<sstring>{};
-    documents.reserve(rows.size());
-    for (const auto& row : rows) {
-        const auto& text = row.columns.at(text_column);
-        documents.push_back(text ? value_cast<sstring>(type.deserialize(managed_bytes_view(*text))) : sstring());
-    }
-
-    if (documents.empty()) {
-        co_return std::vector<cql3::raw_value>{};
-    }
-
-    auto fragments = co_await client.highlight(schema.ks_name(), index.metadata().name(), search_term, std::move(documents), as);
-    if (!fragments.has_value()) {
-        co_await coroutine::return_exception(
-                exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::fts_error_visitor{}, fragments.error())));
-    }
-
-    auto values = std::vector<cql3::raw_value>{};
-    values.reserve(fragments->size());
-    for (const auto& fragment : *fragments) {
-        values.push_back(fragment ? cql3::raw_value::make_value(utf8_type->decompose(*fragment)) : cql3::raw_value::make_null());
-    }
-    co_return values;
 }
 
 } // anonymous namespace
@@ -142,7 +73,8 @@ future<std::vector<cql3::raw_value>> highlights_of(vector_search::vector_store_c
         throw exceptions::invalid_request_exception("Full-text search queries support only one WHERE BM25() restriction");
     }
 
-    ordering_info->deferred_where_term = validate_bm25_where_restriction(scoring_restrictions.front(), *ordering_info);
+    ordering_info->deferred_where_term = bm25_search::validate_restriction(
+            scoring_restrictions.front(), ordering_info->index, ordering_info->search_term);
 
     // Reject any WHERE restrictions beyond the single BM25 clause.
     // BM25 restrictions are excluded from `restrictions`.
@@ -222,18 +154,14 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
         }
     }
 
-    auto search_term_bytes = std::move(search_term_val).to_bytes();
-    sstring search_term_text = value_cast<sstring>(utf8_type->deserialize(search_term_bytes));
+    const auto search_term_text = bm25_search::query_term(search_term_val);
 
-    auto pkeys = co_await qp.vector_store_client().bm25(_schema->ks_name(), _index.metadata().name(), _schema, search_term_text, limit, aoe.abort_source());
-    if (!pkeys.has_value()) {
-        co_await coroutine::return_exception(
-                exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::fts_error_visitor{}, pkeys.error())));
-    }
+    auto pkeys = co_await bm25_search::ask(
+            qp.vector_store_client(), _schema->ks_name(), _index.metadata().name(), _schema, search_term_text, limit, aoe.abort_source());
 
-    throwing_assert(pkeys->size() <= limit);
+    throwing_assert(pkeys.size() <= limit);
 
-    auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys.value());
+    auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys);
 
     const auto& temporaries = _bm25_ordering_info.temporaries;
 
@@ -250,7 +178,7 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
         // and the key columns are read only when the score or the rank is selected.
         auto answers = std::vector<const vector_search::vector_store_client::primary_keys*>{};
         if (temporaries.score || temporaries.rank) {
-            answers.push_back(&pkeys.value());
+            answers.push_back(&pkeys);
         }
         const auto& read = table_results.value();
         auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, answers, columns);
@@ -258,16 +186,18 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
         auto filled = std::vector<external_search::external_values>{};
         external_search::drop_unscored_rows(rows, answers);
         if (temporaries.score) {
-            filled.push_back(external_search::external_values{.temporary_index = *temporaries.score,
-                    .values = external_search::similarities_of(rows, 0, pkeys.value())});
+            filled.push_back(external_search::external_values{
+                    .temporary_index = *temporaries.score, .values = external_search::similarities_of(rows, 0, pkeys)});
         }
         if (temporaries.rank) {
             filled.push_back(external_search::external_values{
-                    .temporary_index = *temporaries.rank, .values = external_search::ranks_of(rows, 0, pkeys.value())});
+                    .temporary_index = *temporaries.rank, .values = external_search::ranks_of(rows, 0, pkeys)});
         }
         if (temporaries.fragment) {
-            auto fragments = co_await highlights_of(qp.vector_store_client(), *_schema, _index, search_term_text, rows, *text_column, aoe.abort_source());
-            filled.push_back(external_search::external_values{.temporary_index = *temporaries.fragment, .values = std::move(fragments)});
+            auto fragments = co_await bm25_search::highlights_of(
+                    qp.vector_store_client(), *_schema, _index, search_term_text, rows, 0, aoe.abort_source());
+            filled.push_back(external_search::external_values{
+                    .temporary_index = *temporaries.fragment, .values = std::move(fragments)});
         }
         provider.emplace(std::move(filled), rows);
     }

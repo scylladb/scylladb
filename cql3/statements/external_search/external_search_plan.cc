@@ -7,6 +7,7 @@
  */
 
 #include "cql3/statements/external_search/external_search_plan.hh"
+#include "cql3/statements/external_search/ann_search.hh"
 
 #include "cql3/statements/external_search/external_function.hh"
 #include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
@@ -191,7 +192,7 @@ expr::expression external_search_plan::deliver(const external_search_function& f
         // similarity from the stored one. The expression reads the fetched column and the query
         // vector, so it needs no temporary. It formats as the similarity function, not as the call.
         unnamed = true;
-        return make_similarity_expression(source.index, std::make_pair(source.column, source.query_value), _db, _schema);
+        return ann_search::similarity_expression(source.index, source.column, source.query_value, _db, _schema);
     };
 
     auto rank = [&] (std::optional<expr::expression> replaced) -> expr::expression {
@@ -253,7 +254,7 @@ void external_search_plan::bind_ordering(const expr::expression& prepared_orderi
             auto& source = claim(*fc, *fun, search_clause::ordering);
             if (source.is_rescoring_enabled) {
                 // A rescoring index: the coordinator recomputes the similarity and sorts the rows by it.
-                _ordering_expr = make_similarity_expression(source.index, std::make_pair(source.column, source.query_value), _db, _schema);
+                _ordering_expr = ann_search::similarity_expression(source.index, source.column, source.query_value, _db, _schema);
             }
             return;
         }

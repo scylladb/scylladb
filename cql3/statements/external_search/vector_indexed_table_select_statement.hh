@@ -32,12 +32,6 @@ struct ann_ordering_info {
     std::vector<expr::expression> deferred_select_vectors;
 };
 
-/// The similarity the coordinator recomputes for each row when the index rescores. It reads the
-/// fetched vector column and the query vector, so it needs no temporary.
-expr::expression make_similarity_expression(const secondary_index::index& index,
-        const select_statement::prepared_ann_ordering_type& prepared_ann_ordering,
-        data_dictionary::database db, const schema_ptr& schema);
-
 class vector_indexed_table_select_statement : public external_index_select_statement {
     ann_ordering_info _ann_ordering_info;
     external_search::prepared_filter _prepared_filter;

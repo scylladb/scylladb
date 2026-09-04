@@ -1,3 +1,4 @@
+#include "ann_search.hh"
 /*
  * Copyright (C) 2025-present ScyllaDB
  */
@@ -31,39 +32,6 @@
 namespace cql3 {
 
 namespace statements {
-
-namespace {
-
-std::vector<float> to_query_vector(const column_definition& ann_column, const cql3::raw_value& value) {
-    throwing_assert(!value.is_null());
-
-    auto values = value_cast<vector_type_impl::native_type>(ann_column.type->deserialize(value.to_managed_bytes_view()));
-    return util::to_vector<float>(values);
-}
-
-} // anonymous namespace
-
-expr::expression make_similarity_expression(const secondary_index::index& index,
-        const select_statement::prepared_ann_ordering_type& prepared_ann_ordering,
-        data_dictionary::database db, const schema_ptr& schema) {
-    auto similarity_function_name = secondary_index::vector_index::get_cql_similarity_function_name(index.metadata().options());
-    auto func_name = functions::function_name::native_function(sstring(similarity_function_name));
-
-    std::vector<expr::expression> args;
-    args.push_back(expr::column_value(prepared_ann_ordering.first));
-    args.push_back(prepared_ann_ordering.second);
-
-    std::vector<shared_ptr<assignment_testable>> provided_args;
-    provided_args.push_back(expr::as_assignment_testable(args[0], expr::type_of(args[0])));
-    provided_args.push_back(expr::as_assignment_testable(args[1], expr::type_of(args[1])));
-
-    auto func = cql3::functions::instance().get(db, schema->ks_name(), func_name, provided_args, schema->ks_name(), schema->cf_name(), nullptr);
-
-    return expr::function_call{
-        .func = func,
-        .args = std::move(args),
-    };
-}
 
 ::shared_ptr<cql3::statements::select_statement> vector_indexed_table_select_statement::prepare(data_dictionary::database db, schema_ptr schema,
         uint32_t bound_terms, lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
@@ -141,25 +109,21 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     auto aoe = abort_on_expiry(timeout);
     auto filter_json = _prepared_filter.to_json(options);
-    uint64_t fetch = static_cast<uint64_t>(std::ceil(limit * secondary_index::vector_index::get_oversampling(_index.metadata().options())));
-    auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema,
-            to_query_vector(*prepared_ann_ordering.first, ordering_vector), fetch, filter_json, aoe.abort_source());
-    if (!pkeys.has_value()) {
-        co_await coroutine::return_exception(
-                exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
+    const auto fetch = ann_search::candidates_wanted(_index, limit);
+    auto pkeys = co_await ann_search::ask(qp.vector_store_client(), _schema->ks_name(), _index.metadata().name(), _schema,
+            ann_search::query_vector(*prepared_ann_ordering.first, ordering_vector), fetch, filter_json, aoe.abort_source());
+
+    if (pkeys.size() > limit && !_ann_ordering_info.is_rescoring_enabled) {
+        pkeys.erase(pkeys.begin() + limit, pkeys.end());
     }
 
-    if (pkeys->size() > limit && !_ann_ordering_info.is_rescoring_enabled) {
-        pkeys->erase(pkeys->begin() + limit, pkeys->end());
-    }
-
-    auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys.value());
+    auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys);
 
     auto provider = std::optional<external_search::external_search_provider>{};
     if (table_results && (_ann_ordering_info.temporaries.score || _ann_ordering_info.temporaries.rank)) {
         // A rescoring index allocates neither temporary: there the similarity is computed from the
         // row's own vector instead.
-        const auto* answers = &pkeys.value();
+        const auto* answers = &pkeys;
         const auto& read = table_results.value();
         auto rows = external_search::join_table_results(
                 *read.rows, read.command->slice, *_schema, *_selection, std::span(&answers, 1), {});
@@ -167,11 +131,11 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
         auto filled = std::vector<external_search::external_values>{};
         if (_ann_ordering_info.temporaries.score) {
             filled.push_back(external_search::external_values{
-                    .temporary_index = *_ann_ordering_info.temporaries.score, .values = external_search::similarities_of(rows, 0, pkeys.value())});
+                    .temporary_index = *_ann_ordering_info.temporaries.score, .values = external_search::similarities_of(rows, 0, pkeys)});
         }
         if (_ann_ordering_info.temporaries.rank) {
             filled.push_back(external_search::external_values{
-                    .temporary_index = *_ann_ordering_info.temporaries.rank, .values = external_search::ranks_of(rows, 0, pkeys.value())});
+                    .temporary_index = *_ann_ordering_info.temporaries.rank, .values = external_search::ranks_of(rows, 0, pkeys)});
         }
         provider.emplace(std::move(filled), rows);
     }
