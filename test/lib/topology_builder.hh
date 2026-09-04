@@ -364,7 +364,7 @@ public:
 
     void add_draining_request(locator::host_id id) {
         modify_group0([&](service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
-            auto& topo = _env.local_db().get_shared_token_metadata().get()->get_topology();
+            auto& topo = _env.shared_token_metadata().local().get()->get_topology();
             auto req = topo.get_node(id).is_excluded() ? service::topology_request::remove : service::topology_request::leave;
 
             service::topology_mutation_builder builder(guard.write_timestamp());

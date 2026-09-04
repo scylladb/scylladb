@@ -2015,7 +2015,7 @@ future<> apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
 static
 future<group0_guard> save_token_metadata(cql_test_env& e, group0_guard guard,
         locator::tablet_metadata_change_hint hint = {}) {
-    auto& stm = e.local_db().get_shared_token_metadata();
+    auto& stm = e.shared_token_metadata().local();
     auto tm = stm.get();
 
     e.get_topology_state_machine().local()._topology.version = tm->get_version();
@@ -2289,7 +2289,7 @@ void rebalance_tablets(cql_test_env& e,
 static
 void rebalance_tablets_as_in_progress(cql_test_env& env, shared_load_stats& stats,
                                       std::function<bool(const migration_plan&)> stop = nullptr) {
-    auto& stm = env.local_db().get_shared_token_metadata();
+    auto& stm = env.shared_token_metadata().local();
     auto& talloc = env.get_tablet_allocator().local();
     auto& topology = env.get_topology_state_machine().local()._topology;
     auto& sys_ks = env.get_system_keyspace().local();
