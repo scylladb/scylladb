@@ -3745,6 +3745,14 @@
                   "type":"string"
                },
                "description":"Reference object paths relative to the refs prefix"
+            },
+            "version":{
+               "type":"string",
+               "description":"SSTable version, from the TOC object attributes. Absent if the TOC object carries no version attribute"
+            },
+            "format":{
+               "type":"string",
+               "description":"SSTable format, from the TOC object attributes. Absent if the TOC object carries no format attribute"
             }
          }
       },

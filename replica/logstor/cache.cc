@@ -76,6 +76,21 @@ std::optional<mutation> cache_tracker::lookup(const primary_index_entry& pie, sc
     return cached_mut;
 }
 
+std::optional<mutation> cache_tracker::peek(const primary_index_entry& pie, schema_ptr target_schema) {
+    std::optional<mutation> cached_mut;
+    _read_section(region(), [&] {
+        if (pie._cached_entry) {
+            cached_mut = mutation(pie._cached_entry->schema(), dht::decorated_key(pie.key()), pie._cached_entry->partition());
+        }
+    });
+
+    if (cached_mut && cached_mut->schema() != target_schema) {
+        cached_mut->upgrade(target_schema);
+    }
+
+    return cached_mut;
+}
+
 void cache_tracker::populate(const primary_index_entry& pie, const mutation& m) {
     _populate_section(region(), [&] {
         with_allocator(allocator(), [&] {

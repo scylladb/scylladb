@@ -62,6 +62,7 @@ async def test_change_rpc_address(two_nodes_cluster: list[ServerNum],
 
         # Connect the Python driver back with updated IP address.
         await manager.driver_connect()
+        await manager.get_ready_cql(await manager.running_servers())
 
         await table.add_column()
         await random_tables.verify_schema()
@@ -81,6 +82,7 @@ async def test_change_rpc_address(two_nodes_cluster: list[ServerNum],
 
     # Connect the Python driver back with updated IP addresses.
     await manager.driver_connect()
+    await manager.get_ready_cql(await manager.running_servers())
 
     await table.add_column()
     await random_tables.verify_schema()

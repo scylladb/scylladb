@@ -338,6 +338,7 @@ def testpy_cluster_factory(request: pytest.FixtureRequest,
             config_options=suite_config.cfg.get("extra_scylla_config_options", {}),
             append_env=base_env,
             scylla_exe=scylla_binary,
+            save_log_on_success=options.save_log_on_success,
         )
 
         async def stop() -> None:
@@ -346,7 +347,9 @@ def testpy_cluster_factory(request: pytest.FixtureRequest,
         artifacts.add_exit_artifact(stop)
 
         if not options.save_log_on_success:
-            # If a test fails, we might want to keep the data dirs.
+            # recycle() already deletes a cluster's directories; this is the
+            # fallback for one that is never recycled, e.g. because the run
+            # was interrupted.
             async def uninstall() -> None:
                 await cluster.uninstall()
 
@@ -801,7 +804,7 @@ def modify_pytest_item(item: pytest.Item, run_ids: defaultdict[tuple[str, str], 
             and not any(mark.name == "tier2" for mark in item.iter_markers("tier2"))):
         item.add_marker(pytest.mark.tier2)
 
-    if (any(mark.name in ("perf", "manual", "unstable", "no_parallel") for mark in item.iter_markers())
+    if (any(mark.name in ("perf", "manual", "no_parallel") for mark in item.iter_markers())
             and not any(mark.name == "non_gating" for mark in item.iter_markers("non_gating"))):
         item.add_marker(pytest.mark.non_gating)
 

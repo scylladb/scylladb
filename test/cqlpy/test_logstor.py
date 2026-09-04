@@ -7,8 +7,11 @@
 # involving multiple nodes, reboots, etc., in test/cluster/test_logstor.py.
 #############################################################################
 
+import json
+
 import pytest
 from cassandra.protocol import ConfigurationException
+from cassandra.query import SimpleStatement
 from .util import new_test_table
 
 # All tests in this file are Scylla-only (logstor is not available on Cassandra).
@@ -212,6 +215,173 @@ def test_logstor_describe(cql, test_keyspace):
         result = cql.execute(f"DESCRIBE TABLE {table}")
         create_statement = result.one().create_statement
         assert "storage_engine = 'logstor'" not in create_statement
+
+# Test SELECT * FROM MUTATION_FRAGMENTS() on a logstor table. Freshly written
+# keys live only in the log, so each partition should consist of a partition
+# start, a single clustering row and a partition end, all coming from a single
+# "logstor-log:" mutation source naming the log file and segment holding the
+# record.
+def test_logstor_mutation_fragments(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int",
+                        " WITH storage_engine = 'logstor'") as table:
+        for i in range(3):
+            cql.execute(f"INSERT INTO {table} (pk, v) VALUES ({i}, {i*10})")
+
+        by_pk = {}
+        for row in cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table})"):
+            by_pk.setdefault(row.pk, []).append(row)
+        assert set(by_pk.keys()) == {0, 1, 2}
+
+        for pk, frags in by_pk.items():
+            kinds = [f.mutation_fragment_kind for f in frags]
+            assert kinds == ['partition start', 'clustering row', 'partition end']
+            # Nothing was read yet, so the data is not cached and all fragments
+            # come from a single log record.
+            assert len({f.mutation_source for f in frags}) == 1
+            assert frags[0].mutation_source.startswith('logstor-log:')
+            # A freshly written partition has no tombstone.
+            assert json.loads(frags[0].metadata)['tombstone'] == {}
+            assert json.loads(frags[1].value) == {'v': str(pk*10)}
+
+        # Single-partition query returns only that partition's fragments.
+        rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1"))
+        assert [r.pk for r in rows] == [1, 1, 1]
+        assert [r.mutation_fragment_kind for r in rows] == ['partition start', 'clustering row', 'partition end']
+
+# Test that after a key is read (and thus cached), MUTATION_FRAGMENTS() shows
+# it in both the logstor cache and the on-disk log, with the same value.
+def test_logstor_mutation_fragments_cache(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int",
+                        " WITH storage_engine = 'logstor'") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 100)")
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (2, 200)")
+
+        # Read pk=1 to populate the logstor cache with it.
+        assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 100
+
+        rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1"))
+        sources = {r.mutation_source for r in rows}
+        assert 'logstor-cache' in sources
+        log_sources = {s for s in sources if s.startswith('logstor-log:')}
+        assert len(log_sources) == 1
+        # Both sources hold the same row value.
+        for r in rows:
+            if r.mutation_fragment_kind == 'clustering row':
+                assert json.loads(r.value) == {'v': '100'}
+        assert len([r for r in rows if r.mutation_fragment_kind == 'clustering row']) == 2
+
+        # The unread pk=2 is not cached, so only the log source shows up.
+        rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 2"))
+        assert len(rows) == 3
+        assert all(r.mutation_source.startswith('logstor-log:') for r in rows)
+
+        # Restricting the mutation_source clustering column works.
+        rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1 AND mutation_source = 'logstor-cache'"))
+        assert len(rows) == 3
+        assert all(r.mutation_source == 'logstor-cache' for r in rows)
+
+# Test that a deleted key shows up in MUTATION_FRAGMENTS() as a partition
+# tombstone (with no rows), as logstor stores deletions as tombstone records.
+def test_logstor_mutation_fragments_tombstone(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int",
+                        " WITH storage_engine = 'logstor'"
+                        " AND tombstone_gc = {'mode': 'disabled'}") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 100) USING TIMESTAMP 1000")
+        cql.execute(f"DELETE FROM {table} USING TIMESTAMP 2000 WHERE pk = 1")
+
+        rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1"))
+        kinds = [r.mutation_fragment_kind for r in rows]
+        assert kinds == ['partition start', 'partition end']
+        assert rows[0].mutation_source.startswith('logstor-log:')
+        tombstone = json.loads(rows[0].metadata)['tombstone']
+        assert tombstone['timestamp'] == 2000
+
+# Test that overwriting a key leaves a single log record visible in
+# MUTATION_FRAGMENTS(), holding the latest value (logstor replaces the old
+# record on overwrite rather than accumulating versions).
+def test_logstor_mutation_fragments_overwrite(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int",
+                        " WITH storage_engine = 'logstor'") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 100)")
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 200)")
+
+        rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1"))
+        assert len({r.mutation_source for r in rows}) == 1
+        row_frags = [r for r in rows if r.mutation_fragment_kind == 'clustering row']
+        assert len(row_frags) == 1
+        assert json.loads(row_frags[0].value) == {'v': '200'}
+
+# Test that MUTATION_FRAGMENTS() reports nothing at all - not even an empty
+# partition - for a key which is not in the index, and likewise when the query
+# is restricted to a source the key does not have.
+def test_logstor_mutation_fragments_no_source(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int",
+                        " WITH storage_engine = 'logstor'") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 100)")
+
+        assert list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 2")) == []
+        # pk=1 was never read, so it is not in the logstor cache.
+        assert list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1 AND mutation_source = 'logstor-cache'")) == []
+
+# Test that dumping a key does not populate the logstor cache: the dump reads
+# the log record with the cache bypassed, so an uncached key stays uncached no
+# matter how often it is dumped.
+def test_logstor_mutation_fragments_do_not_populate_cache(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int",
+                        " WITH storage_engine = 'logstor'") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 100)")
+
+        for _ in range(2):
+            rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1"))
+            assert len(rows) == 3
+            assert all(r.mutation_source.startswith('logstor-log:') for r in rows)
+
+# Test that a logstor table with caching disabled never reports a cache source,
+# not even for a key which was read.
+def test_logstor_mutation_fragments_caching_disabled(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int",
+                        " WITH storage_engine = 'logstor'"
+                        " AND caching = {'enabled': 'false'}") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 100)")
+        assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 100
+
+        rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1"))
+        assert len(rows) == 3
+        assert all(r.mutation_source.startswith('logstor-log:') for r in rows)
+
+# Test that the log source name identifies the segment holding the record, and
+# is therefore shared by all the partitions stored in that segment - the way an
+# sstable source is shared by the partitions of one sstable. A dump can be
+# restricted to a single source, or to the log sources of all the partitions.
+def test_logstor_mutation_fragments_source_restriction(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v text",
+                        " WITH storage_engine = 'logstor'") as table:
+        # 50KB values, 8 of them: bigger than a whole 128KB segment (the
+        # default segment size), so they are spread across several segments,
+        # and therefore several log sources.
+        large_value = 'x' * (50 * 1024)
+        for i in range(8):
+            cql.execute(f"INSERT INTO {table} (pk, v) VALUES ({i}, '{i}-{large_value}')")
+
+        # Group the partitions by the log source holding them.
+        pks_by_source = {}
+        for row in cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table})"):
+            assert row.mutation_source.startswith('logstor-log:')
+            pks_by_source.setdefault(row.mutation_source, set()).add(row.pk)
+        assert set().union(*pks_by_source.values()) == set(range(8))
+        assert len(pks_by_source) > 1
+
+        # Restricting the query to one source returns exactly the partitions
+        # stored in it, with all their fragments.
+        for source, pks in pks_by_source.items():
+            rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE mutation_source = '{source}' ALLOW FILTERING"))
+            assert {r.pk for r in rows} == pks
+            assert len(rows) == 3 * len(pks)
+
+        # A range over the source kind returns all the log sources.
+        rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table})"
+                                f" WHERE mutation_source > 'logstor-log' AND mutation_source < 'logstor-log;' ALLOW FILTERING"))
+        assert len(rows) == 24
 
 # Test large text values to verify segment switching in logstor.
 def test_logstor_large_values(cql, test_keyspace):

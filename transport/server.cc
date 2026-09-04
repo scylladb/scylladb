@@ -1558,28 +1558,35 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_au
     auto sasl_challenge = client_state.get_auth_service()->underlying_authenticator().new_sasl_challenge();
     utils::result_with_exception_ptr<bytes_view> buf = in.read_raw_bytes_view(in.bytes_left());
     if (!buf) {
-        return make_exception_future<std::unique_ptr<cql_server::response>>(std::move(buf).assume_error());
+        co_return coroutine::exception(std::move(buf).assume_error());
     }
     auto challenge = sasl_challenge->evaluate_response(buf.assume_value());
-    if (sasl_challenge->is_complete()) {
-        return sasl_challenge->get_authenticated_user().then_wrapped([this, sasl_challenge, stream, &client_state, challenge = std::move(challenge), trace_state](future<auth::authenticated_user> f) mutable {
-            bool failed = f.failed();
-            return audit::inspect_login(sasl_challenge->get_username(), client_state.get_client_address().addr(), failed).then(
-                    [this, stream, challenge = std::move(challenge), &client_state, sasl_challenge, ff = std::move(f), trace_state = std::move(trace_state)] () mutable {
-                client_state.set_login(ff.get());
-                update_scheduling_group();
-                auto f = client_state.check_user_can_login();
-                return f.then([this, &client_state, stream, challenge = std::move(challenge), trace_state]() mutable {
-                    client_state.maybe_update_per_service_level_params();
-                    _authenticating = false;
-                    _ready = true;
-                    on_connection_ready();
-                    return make_ready_future<std::unique_ptr<cql_server::response>>(make_auth_success(stream, std::move(challenge), trace_state));
-                });
-            });
-        });
+    if (!sasl_challenge->is_complete()) {
+        co_return make_auth_challenge(stream, std::move(challenge), trace_state);
     }
-    return make_ready_future<std::unique_ptr<cql_server::response>>(make_auth_challenge(stream, std::move(challenge), trace_state));
+
+    // The authenticator does not consult the LOGIN flag, so both checks have to
+    // run before the audit record can state the outcome of the login.
+    std::exception_ptr ex;
+    try {
+        client_state.set_login(co_await sasl_challenge->get_authenticated_user());
+        update_scheduling_group();
+        co_await client_state.check_user_can_login();
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await audit::inspect_login(sasl_challenge->get_username(), client_state.get_client_address().addr(), bool(ex));
+
+    if (ex) {
+        co_return coroutine::exception(std::move(ex));
+    }
+
+    client_state.maybe_update_per_service_level_params();
+    _authenticating = false;
+    _ready = true;
+    on_connection_ready();
+    co_return make_auth_success(stream, std::move(challenge), trace_state);
 }
 
 future<std::unique_ptr<cql_server::response>> cql_server::connection::process_options(uint16_t stream, request_reader in, service::client_state& client_state,

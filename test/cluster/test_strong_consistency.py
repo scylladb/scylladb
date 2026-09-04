@@ -10,7 +10,7 @@ from typing import Tuple
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import gather_safely, wait_for, Host
-from test.cluster.util import new_test_keyspace, new_test_table, reconnect_driver
+from test.cluster.util import new_test_keyspace, new_test_table
 from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
@@ -480,8 +480,7 @@ async def test_sc_persistence_restart_with_smp_increase(manager: ScyllaClusterMa
 
             await manager.server_update_cmdline(server.server_id, ['--smp=4'])
             await manager.server_restart(server.server_id)
-            await reconnect_driver(manager)
-            cql = manager.get_cql()
+            (cql, hosts) = await manager.get_ready_cql([server])
 
             # We can't read the internal raft state directly, so we perform extra writes
             # which should cause raft table updates based on the loaded state after restart.
@@ -532,8 +531,7 @@ async def test_sc_persistence_with_compaction(manager: ScyllaClusterManager):
 
             # Restart to verify compacted SSTables are correctly readable by raft server
             await manager.server_restart(server.server_id)
-            await reconnect_driver(manager)
-            cql = manager.get_cql()
+            (cql, hosts) = await manager.get_ready_cql([server])
 
             # We can't read the internal raft state directly, so we perform extra writes
             # which should cause raft table updates based on the loaded state after restart.
@@ -569,8 +567,7 @@ async def test_sc_persistence_after_crash(manager: ScyllaClusterManager):
             await manager.server_stop(server.server_id, convict=False)
 
             await manager.server_start(server.server_id)
-            await reconnect_driver(manager)
-            cql = manager.get_cql()
+            (cql, hosts) = await manager.get_ready_cql([server])
 
             # We can't read the internal raft state directly, so we perform extra writes
             # which should cause raft table updates based on the loaded state after restart.

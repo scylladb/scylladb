@@ -69,7 +69,7 @@ public:
     }
 
     void remove_sst_from_reclaimed(sstable* sst) {
-        _reclaimed.erase(*sst);
+        sstables_manager::erase_from_reclaimed(sst);
     }
 
     auto& get_active_list() {

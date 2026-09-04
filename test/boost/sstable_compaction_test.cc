@@ -74,6 +74,8 @@
 #include "utils/pretty_printers.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/storage.hh"
+#include "sstables/object_storage_client.hh"
+#include "sstables/sstable_version.hh"
 
 BOOST_AUTO_TEST_SUITE(sstable_compaction_test)
 
@@ -4728,6 +4730,66 @@ SEASTAR_FIXTURE_TEST_CASE(basic_ics_controller_correctness_gcs_test, gcs_fixture
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
+// Backlog must be the same whether sstables are added one at a time or all at once.
+SEASTAR_TEST_CASE(size_tiered_backlog_deferred_matches_bulk) {
+    return test_env::do_with_async([](test_env& env) {
+        auto s = schema_builder(this_smp_shard_count(), "tests", "backlog_deferred_vs_bulk")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type)
+                .build();
+        auto keys = tests::generate_partition_keys(2, s, local_shard_only::yes);
+
+        constexpr int N = 50;
+        std::vector<sstables::shared_sstable> ssts;
+        for (int i = 0; i < N; i++) {
+            auto sst = sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key());
+            sstables::test(sst).set_data_file_size((i % 7 + 1) * 1024 * 1024);
+            ssts.push_back(sst);
+        }
+
+        compaction::size_tiered_compaction_strategy_options stcs_options;
+
+        compaction::size_tiered_backlog_tracker deferred(stcs_options);
+        for (auto& sst : ssts) {
+            deferred.replace_sstables({}, {sst});
+        }
+
+        compaction::size_tiered_backlog_tracker bulk(stcs_options);
+        bulk.replace_sstables({}, ssts);
+
+        BOOST_CHECK_CLOSE(deferred.backlog({}, {}), bulk.backlog({}, {}), 0.0001);
+    });
+}
+
+namespace {
+// Test double whose backlog() always throws.
+struct throwing_backlog_tracker_impl : public compaction::compaction_backlog_tracker::impl {
+    std::shared_ptr<int> calls;
+    explicit throwing_backlog_tracker_impl(std::shared_ptr<int> c) : calls(std::move(c)) {}
+    void replace_sstables(const std::vector<sstables::shared_sstable>&, const std::vector<sstables::shared_sstable>&) override {}
+    double backlog(const compaction::compaction_backlog_tracker::ongoing_writes&, const compaction::compaction_backlog_tracker::ongoing_compactions&) const override {
+        (*calls)++;
+        throw std::runtime_error("injected backlog computation failure");
+    }
+};
+}
+
+// A throwing impl must disable the tracker, not propagate to compaction_backlog_manager.
+BOOST_AUTO_TEST_CASE(compaction_backlog_tracker_isolates_backlog_exception) {
+    auto calls = std::make_shared<int>(0);
+    compaction::compaction_backlog_tracker tracker(std::make_unique<throwing_backlog_tracker_impl>(calls));
+
+    BOOST_REQUIRE_EQUAL(tracker.backlog(), compaction_controller::disable_backlog);
+    BOOST_REQUIRE_EQUAL(*calls, 1);
+
+    // Now disabled: a second call must not reach the (still-throwing) impl again.
+    BOOST_REQUIRE_EQUAL(tracker.backlog(), compaction_controller::disable_backlog);
+    BOOST_REQUIRE_EQUAL(*calls, 1);
+
+    // replace_sstables() on a disabled tracker must be a safe no-op.
+    tracker.replace_sstables({}, {});
+}
+
 void test_major_does_not_miss_data_in_memtable_fn(test_env& env) {
     auto builder = schema_builder(this_smp_shard_count(), "tests", "test_major_does_not_miss_data_in_memtable")
             .with_column("id", utf8_type, column_kind::partition_key)
@@ -6354,6 +6416,18 @@ static future<> test_perform_component_rewrite_single_sstable(sstables::update_s
     });
 }
 
+static void require_sstable_toc_object_attributes(test_env& env, const sstables::shared_sstable& sst) {
+    auto storage_map = env.get_storage_options().to_map();
+    auto client = env.manager().get_endpoint_client(env.db_config().object_storage_endpoints().front().key());
+    auto sid = sst->sstable_identifier();
+    BOOST_REQUIRE(sid);
+    auto prefix = storage_map.contains("prefix") ? storage_map["prefix"] : "sstables";
+    auto object = sstables::object_name(storage_map["bucket"], prefix, *sid, sstable_version_constants::TOC_SUFFIX);
+    auto attributes = client->get_object_metadata(object).get();
+    BOOST_REQUIRE_EQUAL(attributes.at(sstring(object_storage_sstable_version_attribute)), fmt::format("{}", sst->get_version()));
+    BOOST_REQUIRE_EQUAL(attributes.at(sstring(object_storage_sstable_format_attribute)), fmt::format("{}", sst->get_format()));
+}
+
 SEASTAR_TEST_CASE(test_perform_component_rewrite_single_sstable_with_backup) {
     return test_perform_component_rewrite_single_sstable(sstables::update_sstable_id::yes);
 }
@@ -6380,7 +6454,7 @@ static void object_storage_perform_component_rewrite_single_sstable_fn(test_env&
     auto mut1 = mutation(s, pk);
     mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
     auto original_sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)}).get();
-    BOOST_REQUIRE(original_sst->sstable_identifier());
+    require_sstable_toc_object_attributes(env, original_sst);
 
     uint32_t new_level = 5;
     auto modifier = [new_level] (sstable& sst) {
@@ -6431,6 +6505,7 @@ static void object_storage_perform_component_rewrite_single_sstable_fn(test_env&
     // The rewritten Statistics component, not the original one, is the one that
     // was persisted under the new identifier.
     BOOST_REQUIRE(reloaded_sst->get_sstable_level() == new_level);
+    require_sstable_toc_object_attributes(env, new_sst);
 }
 
 SEASTAR_TEST_CASE(test_object_storage_perform_component_rewrite_single_sstable_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {

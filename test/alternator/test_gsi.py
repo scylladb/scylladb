@@ -2223,7 +2223,7 @@ def test_gsi_range_key_only_rejected(dynamodb):
 # implement this GSI needs to add "p" as an extra clustering key, but it
 # doesn't mean that "p" should be allowed in a KeyConditions or
 # KeyConditionExpression - it shouldn't because it's not a real range key.
-@pytest.mark.xfail(reason="Issue #26103")
+# Reproduces #26103.
 def test_faux_range_key_in_keyconditions(test_table_gsi_2):
     p = random_string()
     x = random_string()
@@ -2235,20 +2235,20 @@ def test_faux_range_key_in_keyconditions(test_table_gsi_2):
         KeyConditions={ 'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
     # "p" is not a range key of this GSI, so it cannot be used in a
     # KeyConditions, and should be an error.
-    with pytest.raises(ClientError, match='ValidationException.*key condition'):
+    with pytest.raises(ClientError, match='ValidationException.*condition.*key'):
         assert_index_query(test_table_gsi_2, 'hello', [item],
             KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
                            'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
     # "z" is not a key of the GSI, so obviously the following command
     # must not work, but let's also check that the error message mentions
     # the write thing, not the irrelevant "p". The DynamoDB error message
-    # is just "Query key condition not supported".
-    with pytest.raises(ClientError, match='ValidationException.*key condition'):
+    # is "The number of query conditions (2) exceeds the number of key attributes defined in the schema (1)".
+    with pytest.raises(ClientError, match='ValidationException.*condition.*key'):
         assert_index_query(test_table_gsi_2, 'hello', [item],
             KeyConditions={'z': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
                            'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
 
-@pytest.mark.xfail(reason="Issue #26103")
+# Reproduces #26103.
 def test_faux_range_key_in_keyconditionexpression(test_table_gsi_2):
     p = random_string()
     x = random_string()
@@ -2261,15 +2261,15 @@ def test_faux_range_key_in_keyconditionexpression(test_table_gsi_2):
         ExpressionAttributeValues={':x': x})
     # "p" is not a range key of this GSI, so it cannot be used in a
     # KeyConditionExpression, and should be an error.
-    with pytest.raises(ClientError, match='ValidationException.*key condition'):
+    with pytest.raises(ClientError, match='ValidationException.*condition.*key'):
         assert_index_query(test_table_gsi_2, 'hello', [item],
             KeyConditionExpression='x=:x AND p=:p',
             ExpressionAttributeValues={':x': x, ':p': p})
     # "z" is not a key of the GSI, so obviously the following command
     # must not work, but let's also check that the error message mentions
     # the write thing, not the irrelevant "p". The DynamoDB error message
-    # is just "Query key condition not supported".
-    with pytest.raises(ClientError, match='ValidationException.*key condition'):
+    # is "The number of query conditions (2) exceeds the number of key attributes defined in the schema (1)".
+    with pytest.raises(ClientError, match='ValidationException.*condition.*key'):
         assert_index_query(test_table_gsi_2, 'hello', [item],
             KeyConditionExpression='x=:x AND z=:z',
             ExpressionAttributeValues={':x': x, ':z': p})

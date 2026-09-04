@@ -87,6 +87,8 @@ Where ``mutation_source_kind`` is one of:
 * ``memtable``
 * ``row-cache``
 * ``sstable``
+* ``logstor-cache``
+* ``logstor-log``
 
 
 And the ``mutation_source_id`` is used to distinguish individual mutation sources of the same kind, where applicable:
@@ -94,6 +96,8 @@ And the ``mutation_source_id`` is used to distinguish individual mutation source
 * ``memtable`` - a numeric id, starting from ``0``
 * ``row-cache`` - N/A, there is only a single cache per table
 * ``sstable`` - the path of the sstable
+* ``logstor-cache`` - N/A, there is only a single cache per table
+* ``logstor-log`` - the path of the log file, followed by the id of the segment holding the record
 
 
 partition_region

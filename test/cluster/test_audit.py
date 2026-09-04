@@ -173,6 +173,7 @@ class AuditTester:
                 await self.manager.server_update_config(srv.server_id, config_options=full_cfg)
                 await self.manager.server_start(srv.server_id)
                 await self.manager.driver_connect(auth_provider=auth_provider)
+                await self.manager.get_ready_cql([srv])
             else:
                 # Server stays up — only push live-updatable keys.
                 live_cfg = {k: v for k, v in target_config.items() if k in LIVE_AUDIT_KEYS}
@@ -283,7 +284,8 @@ class AuditTester:
 
         self._prev_config_keys = set(target_config.keys())
 
-        cql = self.manager.get_cql()
+        current_servers = await self.manager.running_servers()
+        cql, _ = await self.manager.get_ready_cql(current_servers)
         cql.get_execution_profile(EXEC_PROFILE_DEFAULT).consistency_level = ConsistencyLevel.ONE
         audit_mode = target_config.get("audit") or ""
         if "table" not in audit_mode:
@@ -1269,6 +1271,29 @@ class CQLAuditTester(AuditTester):
                 error = next(iter(errors))
                 assert isinstance(error, AuthenticationFailed)
 
+    async def _test_negative_audit_records_auth_no_login(self):
+        """
+        Test that a valid password on a role that is not permitted to log in is
+        audited as a failed AUTH attempt (SCYLLADB-3964).
+        """
+        session = await self.prepare(user="cassandra", password="cassandra", create_keyspace=False)
+        session.execute("CREATE ROLE no_login_role WITH PASSWORD = 'no_login_role' AND LOGIN = false")
+
+        expected_entry = AuditEntry(category="AUTH", statement="LOGIN", table="", ks="", user="no_login_role", cl="", error=True)
+        with self.assert_entries_were_added(session, [expected_entry], filter_out_cassandra_auth=True):
+            try:
+                servers = await self.manager.running_servers()
+                no_login_auth = PlainTextAuthProvider(username="no_login_role", password="no_login_role")
+                await self.manager.get_cql_exclusive(servers[0], auth_provider=no_login_auth)
+                pytest.fail()
+            except NoHostAvailable as e:
+                errors = e.errors.values()
+                assert len(errors) == 1
+                error = next(iter(errors))
+                assert isinstance(error, AuthenticationFailed)
+
+        session.execute("DROP ROLE IF EXISTS no_login_role")
+
     async def _test_negative_audit_records_admin(self):
         """
         Test that failed ADMIN statements are audited.
@@ -1962,7 +1987,7 @@ class CQLAuditTester(AuditTester):
     async def _test_config_no_liveupdate(self, helper_class, audit_config_changer):
         """
         Test audit config parameters that don't allow config changes.
-        Modification of "audit", "audit_unix_socket_path", and "audit_syslog_write_buffer_size" should be forbidden.
+        Modification of "audit" and "audit_unix_socket_path" should be forbidden.
         """
         with helper_class() as helper, audit_config_changer() as config_changer:
             session = await self.prepare(helper=helper)
@@ -1980,10 +2005,9 @@ class CQLAuditTester(AuditTester):
             auditted_query = SimpleStatement("INSERT INTO test_config_no_lifeupdate (userid, password, name) VALUES ('user2', 'password2', 'second user');", consistency_level=ConsistencyLevel.QUORUM)
             expected_new_entries = [AuditEntry(category="DML", statement=auditted_query.query_string, table="test_config_no_lifeupdate", ks="ks", user="anonymous", cl="QUORUM", error=False)]
 
-            # Modifications of "audit", "audit_unix_socket_path", "audit_syslog_write_buffer_size" are forbidden and will fail
+            # Modifications of "audit" and "audit_unix_socket_path" are forbidden and will fail
             await config_changer.change_config(self, {"audit": "none"}, expected_result=self.AuditConfigChanger.ExpectedResult.FAILURE_UNUPDATABLE_PARAM)
             await config_changer.change_config(self, {"audit_unix_socket_path": "/path/"}, expected_result=self.AuditConfigChanger.ExpectedResult.FAILURE_UNUPDATABLE_PARAM)
-            await config_changer.change_config(self, {"audit_syslog_write_buffer_size": "123123123"}, expected_result=self.AuditConfigChanger.ExpectedResult.FAILURE_UNUPDATABLE_PARAM)
 
             # Despite unsuccesful attempts to change config, audit works as expected
             with self.assert_entries_were_added(session, expected_new_entries, merge_duplicate_rows=False):
@@ -2542,6 +2566,7 @@ async def test_audit_table_auth(manager: ScyllaClusterManager, rules_mode: bool)
     t = CQLAuditTester(manager, rules_mode=rules_mode)
     await t._test_user_password_masking(AuditBackendTable)
     await t._test_negative_audit_records_auth()
+    await t._test_negative_audit_records_auth_no_login()
     await t._test_negative_audit_records_admin()
     await t._test_negative_audit_records_dml()
     await t._test_negative_audit_records_dcl()
@@ -2690,7 +2715,7 @@ _composite = functools.partial(AuditBackendComposite, socket_path=syslog_socket_
     pytest.param(_composite, CQLAuditTester.AuditCqlConfigChanger, id="composite-cql"),
 ])
 async def test_config_no_liveupdate(manager: ScyllaClusterManager, helper_class, config_changer):
-    """Non-live audit config params (audit, audit_unix_socket_path, audit_syslog_write_buffer_size) must be unmodifiable."""
+    """Non-live audit config params (audit, audit_unix_socket_path) must be unmodifiable."""
     await CQLAuditTester(manager)._test_config_no_liveupdate(helper_class, config_changer)
 
 

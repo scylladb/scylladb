@@ -987,6 +987,10 @@ public:
         return _cfg.segment_size;
     }
 
+    sstring get_segment_file_path(log_segment_id segment_id) const {
+        return sstring(_file_mgr.get_file_path(segment_id_to_file_location(segment_id).file_id).native());
+    }
+
     future<> discard_segments(logstor_group&);
 
     size_t get_memory_usage() const {
@@ -2738,6 +2742,10 @@ const compaction_manager& segment_manager::get_compaction_manager() const noexce
 
 uint64_t segment_manager::get_segment_size() const noexcept {
     return _impl->get_segment_size();
+}
+
+sstring segment_manager::get_segment_file_path(log_segment_id segment_id) const {
+    return _impl->get_segment_file_path(segment_id);
 }
 
 future<> segment_manager::discard_segments(logstor_group& cg) {

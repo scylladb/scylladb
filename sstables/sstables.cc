@@ -1707,8 +1707,14 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         // The rest of the sstable is hard-linked and its scylla_metadata is carried over.
         new_sst->mark_created_by_component_rewrite();
 
-        _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla}, *sid).get();
+        std::unordered_set<component_type> excluded_components = {component, component_type::Scylla};
+        _storage->link_with_excluded_components(*this, generation, excluded_components, *sid).get();
         new_sst->copy_components(*this).get();
+
+        new_sst->_metadata_size_on_disk = _metadata_size_on_disk;
+        parallel_for_each(excluded_components, coroutine::lambda([this, new_sst] (component_type type) -> future<> {
+            new_sst->_metadata_size_on_disk -= co_await component_filesize(type);
+        })).get();
 
         modifier(*new_sst);
 
@@ -1762,6 +1768,14 @@ void sstable::write_component_with_metadata(component_type type, scylla_metadata
     // mirroring read_scylla_metadata(). Otherwise a rewritten sstable would
     // report zeroed features (e.g. losing ShadowableTombstones).
     _features = _components->scylla_metadata->get_features();
+}
+
+future<uint64_t> sstable::component_filesize(component_type type) const noexcept {
+    // Open the file, in order to correctly read the size while taking into account
+    // the storage layer and possible encryption.
+    return open_file(type, open_flags::ro).then([] (file f) {
+        return with_closeable(std::move(f), std::mem_fn(&file::size));
+    });
 }
 
 future<> sstable::read_summary() noexcept {

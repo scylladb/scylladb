@@ -233,6 +233,8 @@ ar.reloc_add('licenses')
 ar.reloc_add('swagger-ui')
 ar.reloc_add('api')
 ar.reloc_add('tools/scyllatop')
+ar.reloc_add('scripts/tablets',
+             filter=lambda info: info if info.isdir() or info.name.endswith('.py') or info.name.endswith('.md') else None)
 ar.reloc_add('scylla-gdb.py')
 ar.reloc_add('bin/nodetool')
 ar.reloc_add(args.debian_dir, arcname='debian')

@@ -601,6 +601,27 @@ struct convert<db::object_storage_endpoint_param> {
 };
 
 template<>
+struct convert<std::vector<db::object_storage_endpoint_param>> {
+    // Decode each entry on its own, so a malformed entry costs its own
+    // endpoint rather than the whole option.
+    static bool decode(const Node& node, std::vector<db::object_storage_endpoint_param>& endpoints) {
+        if (!node.IsSequence()) {
+            return false;
+        }
+
+        endpoints.clear();
+        for (size_t i = 0; i < node.size(); ++i) {
+            try {
+                endpoints.push_back(db::object_storage_endpoint_param::decode(node[i]));
+            } catch (const std::exception& e) {
+                cfglogger.error("Ignoring object_storage_endpoints entry {}: {}", i, e.what());
+            }
+        }
+        return true;
+    }
+};
+
+template<>
 struct convert<audit::audit_rule> {
     static bool decode(const Node& node, audit::audit_rule& rule) {
         if (!node.IsMap()) {
@@ -1748,7 +1769,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , audit_tables(this, "audit_tables", liveness::LiveUpdate, value_status::Used, "", "Comma separated list of table names (<keyspace>.<table>) that will be audited.")
     , audit_keyspaces(this, "audit_keyspaces", liveness::LiveUpdate, value_status::Used, "", "Comma separated list of keyspaces that will be audited. All tables in those keyspaces will be audited")
     , audit_unix_socket_path(this, "audit_unix_socket_path", value_status::Used, "/dev/log", "The path to the unix socket used for writing to syslog. Only applicable when audit is set to syslog.")
-    , audit_syslog_write_buffer_size(this, "audit_syslog_write_buffer_size", value_status::Used, 1048576, "The size (in bytes) of a write buffer used when writing to syslog socket.")
+    , audit_syslog_write_buffer_size(this, "audit_syslog_write_buffer_size", value_status::Unused, 1048576, "The size (in bytes) of a write buffer used when writing to syslog socket.")
      , audit_rules(this, "audit_rules", liveness::LiveUpdate, value_status::Used, {},
         "List of granular audit rules. Each rule has: sinks, categories, qualified_table_names, roles. "
         "When non-empty, these rules extend audit_categories, audit_tables, and audit_keyspaces; "
