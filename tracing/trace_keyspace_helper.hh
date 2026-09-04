@@ -56,7 +56,7 @@ public:
     //
     // TODO: Create a stub_tracing_session object to discard the traces
     // requested during the initialization phase.
-    virtual future<> start(cql3::query_processor& qp, service::migration_manager& mm) override;
+    virtual future<> start(service::migration_manager& mm) override;
 
     virtual future<> shutdown() override {
         return _pending_writes.close();
