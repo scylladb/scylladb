@@ -1046,9 +1046,7 @@ static std::optional<sstring> sanitize_header_value(const sstring& v, std::strin
     return trimmed.empty() ? std::nullopt : std::optional<sstring>(trimmed);
 }
 
-future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port,
-        std::optional<uint16_t> port_proxy_protocol, std::optional<uint16_t> https_port_proxy_protocol,
-        std::optional<tls::credentials_builder> creds,
+future<> server::init(std::vector<listener> listeners, std::vector<tls::credentials_builder> credentials,
         utils::updateable_value<bool> enforce_authorization, utils::updateable_value<bool> warn_authorization, utils::updateable_value<uint64_t> max_users_query_size_in_trace_output,
         semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
     _memory_limiter = memory_limiter;
@@ -1056,11 +1054,11 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
     _warn_authorization = std::move(warn_authorization);
     _max_concurrent_requests = std::move(max_concurrent_requests);
     _max_users_query_size_in_trace_output = std::move(max_users_query_size_in_trace_output);
-    if (!port && !https_port && !port_proxy_protocol && !https_port_proxy_protocol) {
-        return make_exception_future<>(std::runtime_error("Either regular port or TLS port"
+    if (listeners.empty()) {
+        return make_exception_future<>(std::runtime_error("At least one listener"
                 " must be specified in order to init an alternator HTTP server instance"));
     }
-    return seastar::async([this, addr, port, https_port, port_proxy_protocol, https_port_proxy_protocol, creds] {
+    return seastar::async([this, listeners = std::move(listeners), credentials = std::move(credentials)] () mutable {
         _executor.start().get();
 
         // Apply current config values and register observers for live updates
@@ -1081,58 +1079,60 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
         _server_header_observer = cfg.alternator_http_response_server_header.observe(std::move(apply_server_header));
         _date_header_observer = cfg.alternator_http_response_disable_date_header.observe(std::move(apply_date_header));
 
-        if (port || port_proxy_protocol) {
+        auto has_listener = [&listeners] (bool encrypted) {
+            return std::ranges::any_of(listeners, [encrypted] (const listener& l) {
+                return l.credentials_idx.has_value() == encrypted;
+            });
+        };
+
+        if (has_listener(false)) {
             set_routes(_http_server._routes);
             _http_server.set_content_streaming(true);
-            if (port) {
-                _http_server.listen(socket_address{addr, *port}).get();
-            }
-            if (port_proxy_protocol) {
-                listen_options lo;
-                lo.reuse_address = true;
-                lo.proxy_protocol = true;
-                _http_server.listen(socket_address{addr, *port_proxy_protocol}, lo).get();
-            }
             _enabled_servers.push_back(std::ref(_http_server));
         }
-        if (https_port || https_port_proxy_protocol) {
+        if (has_listener(true)) {
             set_routes(_https_server._routes);
             _https_server.set_content_streaming(true);
-            auto https_accept_sg = _sl_controller.get_driver_scheduling_group().value_or(default_scheduling_group());
             // Run the HTTPS accept loop in sl:driver. This covers connection setup,
             // including TLS handshakes, but not HTTP request processing.
             // Request processing starts in the default scheduling group; Alternator
             // applies the authenticated user's service level after signature verification.
             _https_server.set_request_scheduling_group(default_scheduling_group());
 
-            if (this_shard_id() == 0) {
-                _credentials = creds->build_reloadable_server_credentials([this](const tls::credentials_builder& b, const std::unordered_set<sstring>& files, std::exception_ptr ep) -> future<> {
-                    if (ep) {
-                        slogger.warn("Exception loading {}: {}", files, ep);
-                    } else {
-                        co_await container().invoke_on_others([&b](server& s) {
-                            if (s._credentials) {
-                                b.rebuild(*s._credentials);
-                            }
-                        });
-                        slogger.info("Reloaded {}", files);
-                    }
+            _credentials.resize(credentials.size());
+            for (size_t i = 0; i != credentials.size(); ++i) {
+                if (this_shard_id() == 0) {
+                    _credentials[i] = credentials[i].build_reloadable_server_credentials([this, i](const tls::credentials_builder& b, const std::unordered_set<sstring>& files, std::exception_ptr ep) -> future<> {
+                        if (ep) {
+                            slogger.warn("Exception loading {}: {}", files, ep);
+                        } else {
+                            co_await container().invoke_on_others([&b, i](server& s) {
+                                if (i < s._credentials.size() && s._credentials[i]) {
+                                    b.rebuild(*s._credentials[i]);
+                                }
+                            });
+                            slogger.info("Reloaded {}", files);
+                        }
+                    }).get();
+                } else {
+                    _credentials[i] = credentials[i].build_server_credentials();
+                }
+            }
+            _enabled_servers.push_back(std::ref(_https_server));
+        }
+
+        auto https_accept_sg = _sl_controller.get_driver_scheduling_group().value_or(default_scheduling_group());
+        for (auto& l : listeners) {
+            listen_options lo;
+            lo.reuse_address = true;
+            lo.proxy_protocol = l.proxy_protocol;
+            if (l.credentials_idx) {
+                with_scheduling_group(https_accept_sg, [&] {
+                    _https_server.listen(l.addr, lo, _credentials[*l.credentials_idx]).get();
                 }).get();
             } else {
-                _credentials = creds->build_server_credentials();
+                _http_server.listen(l.addr, lo).get();
             }
-            with_scheduling_group(https_accept_sg, [this, addr, https_port, https_port_proxy_protocol] {
-                if (https_port) {
-                    _https_server.listen(socket_address{addr, *https_port}, _credentials).get();
-                }
-                if (https_port_proxy_protocol) {
-                    listen_options lo;
-                    lo.reuse_address = true;
-                    lo.proxy_protocol = true;
-                    _https_server.listen(socket_address{addr, *https_port_proxy_protocol}, lo, _credentials).get();
-                }
-            }).get();
-            _enabled_servers.push_back(std::ref(_https_server));
         }
     });
 }

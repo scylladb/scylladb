@@ -75,7 +75,9 @@ class server : public peering_sharded_service<server> {
     semaphore* _memory_limiter;
     utils::updateable_value<uint32_t> _max_concurrent_requests;
 
-    ::shared_ptr<seastar::tls::server_credentials> _credentials;
+    // Server credentials, one per distinct set of TLS options, as passed to
+    // init(). Indexed by listener::credentials_idx.
+    std::vector<::shared_ptr<seastar::tls::server_credentials>> _credentials;
 
     class json_parser {
         static constexpr size_t yieldable_parsing_threshold = 16*KB;
@@ -115,11 +117,18 @@ class server : public peering_sharded_service<server> {
     std::optional<utils::observer<bool>> _date_header_observer;
 
 public:
+    // A single resolved socket the server is to listen on.
+    struct listener {
+        socket_address addr;
+        bool proxy_protocol = false;
+        // Index into the credentials vector passed to init(), or nullopt for
+        // an unencrypted listener.
+        std::optional<size_t> credentials_idx;
+    };
+
     server(executor& executor, service::storage_proxy& proxy, gms::gossiper& gossiper, auth::service& service, qos::service_level_controller& sl_controller, updateable_timeout_config& timeout_config);
 
-    future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port,
-            std::optional<uint16_t> port_proxy_protocol, std::optional<uint16_t> https_port_proxy_protocol,
-            std::optional<tls::credentials_builder> creds,
+    future<> init(std::vector<listener> listeners, std::vector<tls::credentials_builder> credentials,
             utils::updateable_value<bool> enforce_authorization, utils::updateable_value<bool> warn_authorization, utils::updateable_value<uint64_t> max_users_query_size_in_trace_output,
             semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests);
     future<> stop();

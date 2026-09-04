@@ -22,6 +22,7 @@
 #include "utils/enum_option.hh"
 #include "gms/inet_address.hh"
 #include "db/hints/host_filter.hh"
+#include "db/listener_config.hh"
 #include "utils/error_injection.hh"
 #include "message/dict_trainer.hh"
 #include "message/advanced_rpc_compressor.hh"
@@ -352,6 +353,7 @@ public:
     named_value<uint64_t> rpc_dict_training_min_bytes;
     named_value<bool> inter_dc_tcp_nodelay;
     named_value<uint32_t> streaming_socket_timeout_in_ms;
+    named_value<listener_configs> listeners;
     named_value<bool> start_native_transport;
     named_value<uint16_t> native_transport_port;
     named_value<sstring> maintenance_socket;
@@ -734,6 +736,7 @@ inline bool is_true(sstring val) {
 
 future<> configure_tls_creds_builder(seastar::tls::credentials_builder& creds, db::config::string_map options);
 future<gms::inet_address> resolve(const config_file::named_value<sstring>&, gms::inet_address::opt_family family = {}, gms::inet_address::opt_family preferred = {});
+future<gms::inet_address> resolve(const sstring& address, std::string_view name, gms::inet_address::opt_family family = {}, gms::inet_address::opt_family preferred = {});
 
 /*!
  * \brief read the the relabel config from a file
@@ -787,4 +790,5 @@ extern template struct utils::config_file::named_value<std::vector<db::error_inj
 extern template struct utils::config_file::named_value<std::vector<std::unordered_map<sstring, sstring>>>;
 extern template struct utils::config_file::named_value<std::unordered_map<sstring, seastar::log_level>>;
 extern template struct utils::config_file::named_value<std::vector<db::object_storage_endpoint_param>>;
+extern template struct utils::config_file::named_value<db::listener_configs>;
 extern template struct utils::config_file::named_value<std::vector<audit::audit_rule>>;

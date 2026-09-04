@@ -11,6 +11,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/smp.hh>
 
+#include "db/listener_config.hh"
 #include "transport/protocol_server.hh"
 
 namespace service {
@@ -23,7 +24,6 @@ class memory_limiter;
 namespace db {
 class system_distributed_keyspace;
 class system_keyspace;
-class config;
 }
 
 namespace cdc {
@@ -76,11 +76,14 @@ class controller : public protocol_server {
     sharded<vector_search::vector_store_client>& _vsc;
     sharded<updateable_timeout_config>& _timeout_config;
     const db::config& _config;
+    db::listener_configs _listeners;
 
     std::vector<socket_address> _listen_addresses;
     sharded<executor> _executor;
     sharded<server> _server;
     std::optional<smp_service_group> _ssg;
+
+    std::unordered_map<sstring, sstring> listener_tls_options(const db::listener_config&) const;
 
 public:
     controller(
@@ -97,6 +100,7 @@ public:
         sharded<vector_search::vector_store_client>& vsc,
         sharded<updateable_timeout_config>& timeout_config,
         const db::config& config,
+        db::listener_configs listeners,
         seastar::scheduling_group sg);
 
     virtual sstring name() const override;
