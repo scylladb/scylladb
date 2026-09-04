@@ -176,7 +176,7 @@ static future<> test_basic_operations(app_template& app) {
 
         utils::chunked_vector<canonical_mutation> muts;
         auto time_to_read_muts = duration_in_seconds([&] {
-            replica::read_tablet_mutations(e.local_qp().proxy().get_db(), [&] (canonical_mutation m) {
+            replica::read_tablet_mutations(e.db(), [&] (canonical_mutation m) {
                 muts.emplace_back(m);
             }).get();
         });
