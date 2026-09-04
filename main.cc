@@ -1513,13 +1513,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 lifecycle_notifier.stop().get();
             });
 
-            checkpoint(stop_signal, "creating tracing");
-            sharded<tracing::tracing>& tracing = tracing::tracing::tracing_instance();
-            tracing.start(sstring("trace_keyspace_helper")).get();
-            auto destroy_tracing = defer_verbose_shutdown("tracing instance", [&tracing] {
-                tracing.stop().get();
-            });
-
             stop_signal.check();
             ctx.http_server.server().invoke_on_all([] (auto& server) { server.set_content_streaming(true); }).get();
             with_scheduling_group(dbcfg.streaming_scheduling_group, [&] {
@@ -1886,6 +1879,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             utils::get_local_injector().inject("stop_after_starting_migration_manager",
                 [] { std::raise(SIGSTOP); });
+
+            checkpoint(stop_signal, "creating tracing");
+            sharded<tracing::tracing>& tracing = tracing::tracing::tracing_instance();
+            tracing.start(sstring("trace_keyspace_helper")).get();
+            auto destroy_tracing = defer_verbose_shutdown("tracing instance", [&tracing] {
+                tracing.stop().get();
+            });
 
             checkpoint(stop_signal, "starting mapreduce service");
             mapreduce_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(stop_signal.as_sharded_abort_source())).get();
