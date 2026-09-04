@@ -781,7 +781,8 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     // If the Content-Length of the request is not available, we assume
     // the largest possible request (request_content_length_limit, i.e., 16 MB)
     // and after reading the request we return_units() the excess.
-    size_t mem_estimate = (req->content_length ? req->content_length : request_content_length_limit) * 2 + 8000;
+    const size_t memory_multiplier = audit::audit::audit_instance().local_is_initialized() ? 4 : 2;
+    const size_t mem_estimate = (req->content_length ? req->content_length : request_content_length_limit) * memory_multiplier + 8000;
     auto units_fut = get_units(*_memory_limiter, mem_estimate);
     if (_memory_limiter->waiters()) {
         ++_executor._stats.requests_blocked_memory;
@@ -796,7 +797,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         for (const auto& chunk : content) {
             content_length += chunk.size();
         }
-        size_t new_mem_estimate = content_length * 2 + 8000;
+        const size_t new_mem_estimate = content_length * memory_multiplier + 8000;
         units.return_units(mem_estimate - new_mem_estimate);
     }
     auto username = co_await verify_signature(*req, content);
@@ -856,6 +857,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
             co_return api_error::validation("Request content must be an object");
         }
         std::unique_ptr<audit::audit_info_alternator> audit_info;
+        auto request_permit = make_service_permit(std::move(units));
 
         // We need to futurize here as `callback` might be a normal function returning a future and
         // if that function throws `as_future` won't catch it - the exception will be propagated to the caller and
@@ -863,7 +865,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         auto ret_fut = co_await seastar::coroutine::as_future(
             seastar::futurize_invoke(
                 callback,
-                _executor, client_state, trace_state, make_service_permit(std::move(units)), std::move(json_request), std::move(req), audit_info
+                _executor, client_state, trace_state, request_permit, std::move(json_request), std::move(req), audit_info
             )
         );
         auto ret = ret_fut.failed() ? convert_exception_ptr_to_api_error(ret_fut.get_exception()) : ret_fut.get();

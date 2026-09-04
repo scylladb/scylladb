@@ -196,9 +196,7 @@ void executor::maybe_audit(
         if (alternator_batch_tables) {
             audit_info->set_alternator_batch_tables(std::move(*alternator_batch_tables));
         }
-        // FIXME: rjson::print(request) serializes the entire JSON request body, which
-        // can be up to 16 MB for BatchWriteItem.
-        audit_info->set_query_string(sstring(rjson::print(request)), sstring(operation_name));
+        audit_info->set_query_string(rjson::print(request), operation_name);
     }
 }
 

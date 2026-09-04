@@ -256,6 +256,20 @@ def test_audit_dml_operations(dynamodb, cql, alternator_audit_enabled):
         _assert_audit_entries(new_rows, expected, ks_name, table.name)
 
 
+# A large request must remain covered by its memory permit until the audit
+# write completes. This reproduces issue #31297.
+def test_audit_large_request(dynamodb, cql, alternator_audit_enabled):
+    with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table:
+        ks_name = f"alternator_{table.name}"
+        cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", (ks_name,))
+        before_rows = _get_audit_log_rows(cql)
+        marker = "audit-large-request-end"
+        table.put_item(Item={"p": "pk", "v": "x" * (256 * 1024) + marker})
+        new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
+        expected = [("DML", "LOCAL_QUORUM", False, ks_name, table.name, ["PutItem", marker])]
+        _assert_audit_entries(new_rows, expected, ks_name, table.name)
+
+
 # Test auditing of the DML batch operation: BatchWriteItem.
 # A single BatchWriteItem call produces one audit entry regardless of the number of items in the batch.
 # Batch operations leave keyspace_name empty because they can span multiple tables.
