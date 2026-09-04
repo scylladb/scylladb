@@ -748,6 +748,7 @@ async def test_registry_cleanup_on_all_nodes(manager: ScyllaClusterManager, obje
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_stream_sink_abort_on_object_storage(manager: ScyllaClusterManager, object_storage):
     """Verify that aborting a blob stream on object storage cleans up
     partial SSTable components instead of leaving orphaned S3 objects.

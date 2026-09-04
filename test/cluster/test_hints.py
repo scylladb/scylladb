@@ -88,6 +88,7 @@ async def test_write_cl_any_to_dead_node_generates_hints(manager: ScyllaClusterM
             # For dropping the keyspace
             await manager.server_start(servers[1].server_id)
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_limited_concurrency_of_writes(manager: ScyllaClusterManager):
     """
     We want to verify that Scylla correctly limits the concurrency of writing hints to disk.
@@ -256,6 +257,7 @@ async def test_hints_consistency_during_decommission(manager: ScyllaClusterManag
         for i in range(100):
             assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = {i}")) == [(i + 1,)]
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_hints_consistency_during_replace(manager: ScyllaClusterManager):
     """
     Reproducer for https://github.com/scylladb/scylladb/issues/24980

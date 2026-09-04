@@ -17,6 +17,7 @@ from test.pylib.util import wait_for_cql_and_get_hosts
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_error_while_becoming_voter(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     """
     Test that a node is starting successfully if while joining a cluster and becoming a voter, it

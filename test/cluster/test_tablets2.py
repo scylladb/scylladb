@@ -79,6 +79,7 @@ async def wait_for_valid_load_stats(cql, table_id, timeout=120):
 
         await asyncio.sleep(0.2)
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(manager: ScyllaClusterManager):
     """Test that you can create a table and insert and query data"""
 
@@ -171,6 +172,7 @@ async def test_scans(manager: ScyllaClusterManager):
             assert r.c == r.pk
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_table_drop_with_auto_snapshot(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cfg = { 'auto_snapshot': True }
@@ -190,6 +192,7 @@ async def test_table_drop_with_auto_snapshot(manager: ScyllaClusterManager):
     await cql.run_async("DROP KEYSPACE test;")
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_topology_changes(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     servers = await manager.servers_add(3)

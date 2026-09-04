@@ -18,6 +18,7 @@ from cassandra.cluster import ConsistencyLevel, SimpleStatement
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_broken_bootstrap(manager: ScyllaClusterManager):
     server_a = await manager.server_add()
     server_b = await manager.server_add(start=False)
