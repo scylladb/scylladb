@@ -492,9 +492,8 @@ data_value generate_date_value(std::mt19937& engine, size_t, size_t) {
     return data_value(date_type_native_type{pt(pt::duration(x))});
 }
 
-data_value generate_timeuuid_value(std::mt19937&, size_t, size_t) {
-    // FIXME: respect the passed engine.
-    auto b = tests::random::get_bytes(16);
+data_value generate_timeuuid_value(std::mt19937& engine, size_t, size_t) {
+    auto b = tests::random::get_bytes(16, engine);
     b[6] = (b[6] & 0x0F) | 0x10; // version 1
     return timeuuid_type->deserialize(b);
 }
@@ -1238,13 +1237,20 @@ future<utils::chunked_vector<mutation>> generate_random_mutations(
         expiry_generator exp_gen,
         std::uniform_int_distribution<size_t> partition_count_dist,
         std::uniform_int_distribution<size_t> clustering_row_count_dist,
-        std::uniform_int_distribution<size_t> range_tombstone_count_dist) {
+        std::uniform_int_distribution<size_t> range_tombstone_count_dist,
+        std::optional<shard_id> shard) {
     auto engine = std::mt19937(seed);
     const auto schema_has_clustering_columns = random_schema.schema()->clustering_key_size() > 0;
     const auto partition_count = partition_count_dist(engine);
     utils::chunked_vector<mutation> muts;
     muts.reserve(partition_count);
-    for (size_t pk = 0; pk != partition_count; ++pk) {
+    for (size_t pk = 0; muts.size() != partition_count; ++pk) {
+        if (shard) {
+            auto dk = dht::decorate_key(*random_schema.schema(), partition_key::from_exploded(*random_schema.schema(), random_schema.make_pkey(pk)));
+            if (random_schema.schema()->get_sharder().shard_of(dk.token()) != *shard) {
+                continue;
+            }
+        }
         auto mut = random_schema.new_mutation(pk);
         random_schema.set_partition_tombstone(engine, mut, ts_gen, exp_gen);
         random_schema.add_static_row(engine, mut, ts_gen, exp_gen);
@@ -1294,17 +1300,21 @@ future<utils::chunked_vector<mutation>> generate_random_mutations(
         expiry_generator exp_gen,
         std::uniform_int_distribution<size_t> partition_count_dist,
         std::uniform_int_distribution<size_t> clustering_row_count_dist,
-        std::uniform_int_distribution<size_t> range_tombstone_count_dist) {
+        std::uniform_int_distribution<size_t> range_tombstone_count_dist,
+        std::optional<shard_id> shard) {
     return generate_random_mutations(tests::random::get_int<uint32_t>(), random_schema, std::move(ts_gen), std::move(exp_gen), partition_count_dist,
-            clustering_row_count_dist, range_tombstone_count_dist);
+            clustering_row_count_dist, range_tombstone_count_dist, shard);
 }
 
-future<utils::chunked_vector<mutation>> generate_random_mutations(tests::random_schema& random_schema, size_t partition_count) {
+future<utils::chunked_vector<mutation>> generate_random_mutations(tests::random_schema& random_schema, size_t partition_count, std::optional<shard_id> shard) {
     return generate_random_mutations(
             random_schema,
             default_timestamp_generator(),
             no_expiry_expiry_generator(),
-            std::uniform_int_distribution<size_t>(partition_count, partition_count));
+            std::uniform_int_distribution<size_t>(partition_count, partition_count),
+            std::uniform_int_distribution<size_t>(16, 128),
+            std::uniform_int_distribution<size_t>(4, 16),
+            shard);
 }
 
 } // namespace tests
