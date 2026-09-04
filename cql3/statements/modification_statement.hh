@@ -126,6 +126,13 @@ public:
 
     bool is_view() const;
 
+    // True if this statement commits its mutation through Raft instead of
+    // storage_proxy. Lets callers which only see a modification_statement -
+    // notably the batch paths - tell the two apart without downcasting.
+    virtual bool is_strongly_consistent() const {
+        return false;
+    }
+
     int64_t get_timestamp(int64_t now, const query_options& options) const;
 
     bool is_timestamp_set() const;
@@ -224,9 +231,19 @@ public:
      */
     bool applies_to(const selection::selection* selection, const update_parameters::prefetch_data::row* row, const query_options& options) const;
 
-private:
-    future<::shared_ptr<cql_transport::messages::result_message>>
+protected:
+    // Performs the actual write. Overridden to execute the statement against a
+    // different storage backend, e.g. by the strongly consistent statements.
+    virtual future<::shared_ptr<cql_transport::messages::result_message>>
     do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const;
+
+    // The part of do_execute() which does not depend on the storage backend:
+    // schema and primary key validation, tracing, statistics and the write
+    // consistency guardrail. Every do_execute() implementation calls it first.
+    // Throws when the guardrail forbids the consistency level; returns the
+    // warning to attach to the result when the guardrail merely warns.
+    std::optional<sstring> begin_execution(query_processor& qp, service::query_state& qs, const query_options& options) const;
+private:
     friend class modification_statement_executor;
 public:
     // True if the statement has IF conditions. Pre-computed during prepare.

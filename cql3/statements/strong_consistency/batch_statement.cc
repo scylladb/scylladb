@@ -6,12 +6,12 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-#include "cql3/statements/modification_statement.hh"
 #include "batch_statement.hh"
 
 #include "db/timeout_clock.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/statements/modification_statement.hh"
 #include "service/strong_consistency/coordinator.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "exceptions/exceptions.hh"
@@ -20,39 +20,58 @@ namespace cql3::statements::strong_consistency {
 
 static logging::logger logger("sc_batch_statement");
 
-batch_statement::batch_statement(int bound_terms, type type_, std::vector<single_statement> statements, std::unique_ptr<attributes> attrs)
-    : cql_statement(&timeout_config::write_timeout)
-    , _bound_terms(bound_terms)
-    , _type(type_)
-    , _statements(std::move(statements))
-    , _attrs(std::move(attrs))
-{
-    validate();
-}
-
-batch_statement::batch_statement(type type_, std::vector<single_statement> statements, std::unique_ptr<attributes> attrs)
-    : batch_statement(-1, type_, std::move(statements), std::move(attrs))
-{
-}
-
 using result_message = cql_transport::messages::result_message;
 
-future<shared_ptr<result_message>> batch_statement::execute(query_processor& qp, service::query_state& qs,
-    const query_options& options, std::optional<service::group0_guard> guard) const
+batch_statement::batch_statement(int bound_terms, type type_, std::vector<single_statement> statements,
+        std::unique_ptr<attributes> attrs, cql_stats& stats)
+    : cql3::statements::batch_statement(bound_terms, type_, std::move(statements), std::move(attrs), stats)
 {
-    return execute_without_checking_exception_message(qp, qs, options, std::move(guard))
-            .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<result_message>>);
+    validate_strongly_consistent();
 }
 
-future<shared_ptr<result_message>> batch_statement::execute_without_checking_exception_message(
-        query_processor& qp, service::query_state& qs, const query_options& options,
-        std::optional<service::group0_guard> guard) const
+batch_statement::batch_statement(type type_, std::vector<single_statement> statements,
+        std::unique_ptr<attributes> attrs, cql_stats& stats)
+    : batch_statement(-1, type_, std::move(statements), std::move(attrs), stats)
 {
-    if (_statements.empty()) {
+}
+
+void batch_statement::validate_strongly_consistent() const {
+    if (_type == type::COUNTER) {
+        throw exceptions::invalid_request_exception("Counter batches are not supported with strongly consistent tables");
+    }
+    // The commit timestamp is assigned by the Raft coordinator, which also
+    // reassigns it on retry, so a user-provided one cannot be honoured. The
+    // same restriction is enforced on individual statements at prepare time.
+    if (_attrs->is_timestamp_set()) {
+        throw exceptions::invalid_request_exception("Strongly consistent batches don't support user-provided timestamps");
+    }
+
+    schema_ptr batch_schema;
+    for (const auto& s : get_statements()) {
+        if (!batch_schema) {
+            batch_schema = s.statement->s;
+        } else if (batch_schema != s.statement->s) {
+            throw exceptions::invalid_request_exception("All statements in a strongly consistent batch must target the same table");
+        }
+    }
+}
+
+future<shared_ptr<result_message>> batch_statement::do_execute(
+        query_processor& qp, service::query_state& qs, const query_options& options,
+        bool, api::timestamp_type) const
+{
+    // The local and timestamp arguments are unused: the batch is always
+    // committed through the Raft group which owns the partition, and that
+    // group assigns the timestamp.
+    auto warning = begin_execution(qp, options);
+    validate_write_consistency_level(options.get_consistency());
+
+    const auto& statements = get_statements();
+    if (statements.empty()) {
         co_return seastar::make_shared<result_message::void_message>();
     }
 
-    auto timeout = db::timeout_clock::now() + (_attrs->is_timeout_set() ? _attrs->get_timeout(options) : qs.get_client_state().get_timeout_config().write_timeout);
+    auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
 
     // Build partition keys for all statements and validate they all target the same partition
     std::optional<dht::decorated_key> batch_key;
@@ -63,10 +82,10 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
         std::vector<dht::partition_range> keys;
     };
     std::vector<statement_keys> all_keys;
-    all_keys.reserve(_statements.size());
+    all_keys.reserve(statements.size());
 
-    for (size_t i = 0; i < _statements.size(); ++i) {
-        const auto& stmt = _statements[i].statement->inner_statement();
+    for (size_t i = 0; i < statements.size(); ++i) {
+        const auto& stmt = *statements[i].statement;
         const auto& statement_options = options.for_statement(i);
         auto json_cache = stmt.maybe_prepare_json_cache(statement_options);
         auto keys = stmt.build_partition_keys(statement_options, json_cache);
@@ -88,13 +107,25 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
 
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
 
+    // The mutations are built inside the callback because the coordinator
+    // assigns the timestamp, and calls back again whenever it retries.
     auto mutate_result = co_await coordinator.get().mutate(batch_schema,
         batch_key->token(),
         [&](api::timestamp_type ts) {
             std::optional<mutation> merged;
-            for (size_t i = 0; i < _statements.size(); ++i) {
+            for (size_t i = 0; i < statements.size(); ++i) {
+                const auto& stmt = *statements[i].statement;
                 const auto& statement_options = options.for_statement(i);
-                auto m = _statements[i].statement->get_mutation(statement_options, ts, all_keys[i].json_cache, all_keys[i].keys);
+                const auto prefetch_data = update_parameters::prefetch_data(stmt.s);
+                const auto ttl = stmt.get_time_to_live(statement_options);
+                const auto params = update_parameters(stmt.s, statement_options, ts, ttl, prefetch_data);
+                const auto ranges = stmt.create_clustering_ranges(statement_options, all_keys[i].json_cache);
+                auto muts = stmt.apply_updates(all_keys[i].keys, ranges, params, all_keys[i].json_cache);
+                if (muts.size() != 1) {
+                    on_internal_error(logger, ::format("statement {} on {}.{} has unexpected number of mutations {}",
+                        i, stmt.keyspace(), stmt.column_family(), muts.size()));
+                }
+                auto& m = *muts.begin();
                 if (!merged) {
                     merged = std::move(m);
                 } else {
@@ -113,47 +144,11 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
         co_return co_await redirect_statement(qp, options, redirect->target, timeout, is_write, coordinator.get().get_stats(), std::move(redirect->on_forwarding_finished));
     }
 
-    co_return seastar::make_shared<result_message::void_message>();
-}
-
-future<> batch_statement::check_access(query_processor& qp, const service::client_state& state) const {
-    return parallel_for_each(_statements.begin(), _statements.end(), [&qp, &state] (auto&& s) {
-        if (s.needs_authorization) {
-            return s.statement->check_access(qp, state);
-        } else {
-            return make_ready_future<>();
-        }
-    });
-}
-
-uint32_t batch_statement::get_bound_terms() const {
-    return _bound_terms;
-}
-
-bool batch_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const {
-    return std::ranges::any_of(_statements, [&ks_name, &cf_name] (auto&& s) { return s.statement->depends_on(ks_name, cf_name); });
-}
-
-void batch_statement::validate() const {
-    if (_type == type::COUNTER) {
-        throw exceptions::invalid_request_exception("Counter batches are not supported with strongly consistent tables");
+    auto result = seastar::make_shared<result_message::void_message>();
+    if (warning) {
+        result->add_warning(std::move(*warning));
     }
-
-    schema_ptr batch_schema;
-    for (const auto& s: _statements) {
-        const auto& stmt = s.statement->inner_statement();
-        if (!batch_schema) {
-            batch_schema = stmt.s;
-        } else if (batch_schema != stmt.s) {
-            throw exceptions::invalid_request_exception("All statements in a strongly consistent batch must target the same table");
-        }
-    }
-}
-
-void batch_statement::validate(query_processor& qp, const service::client_state& state) const {
-    for (const auto& s: _statements) {
-        s.statement->validate(qp, state);
-    }
+    co_return result;
 }
 
 }

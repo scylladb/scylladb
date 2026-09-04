@@ -29,7 +29,6 @@
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
 #include "db/large_data_handler.hh"
-#include "cql3/statements/strong_consistency/modification_statement.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 
 #include <boost/lexical_cast.hpp>
@@ -266,12 +265,10 @@ modification_statement::execute_without_checking_exception_message(query_process
     return modify_stage(this, seastar::ref(qp), seastar::ref(qs), seastar::cref(options));
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
+std::optional<sstring>
+modification_statement::begin_execution(query_processor& qp, service::query_state& qs, const query_options& options) const {
     if (!qp.db().try_find_table(s->id())) {
-        co_return coroutine::exception(
-                std::make_exception_ptr(exceptions::invalid_request_exception(
-                        format("unconfigured table {}", column_family()))));
+        throw exceptions::invalid_request_exception(format("unconfigured table {}", column_family()));
     }
 
     tracing::add_table_name(qs.get_trace_state(), keyspace(), column_family());
@@ -281,21 +278,30 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     const auto cl = options.get_consistency();
     const query_processor::write_consistency_guardrail_state guardrail_state = qp.check_write_consistency_levels_guardrail(cl);
     if (guardrail_state == query_processor::write_consistency_guardrail_state::FAIL) {
-        co_return coroutine::exception(
-                std::make_exception_ptr(exceptions::invalid_request_exception(
-                        format("Write consistency level {} is forbidden by the current configuration "
-                               "setting of write_consistency_levels_disallowed. Please use a different "
-                               "consistency level, or remove {} from write_consistency_levels_disallowed "
-                               "set in the configuration.", cl, cl))));
+        throw exceptions::invalid_request_exception(
+                format("Write consistency level {} is forbidden by the current configuration "
+                       "setting of write_consistency_levels_disallowed. Please use a different "
+                       "consistency level, or remove {} from write_consistency_levels_disallowed "
+                       "set in the configuration.", cl, cl));
     }
 
     _restrictions->validate_primary_key(options);
 
+    if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
+        return format("Using write consistency level {} listed on the "
+                      "write_consistency_levels_warned is not recommended.", cl);
+    }
+    return std::nullopt;
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+modification_statement::do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
+    auto warning = begin_execution(qp, qs, options);
+
     if (has_conditions()) {
         auto result = co_await execute_with_condition(qp, qs, options);
-        if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
-            result->add_warning(format("Using write consistency level {} listed on the "
-                                       "write_consistency_levels_warned is not recommended.", cl));
+        if (warning) {
+            result->add_warning(std::move(*warning));
         }
         co_return result;
     }
@@ -317,9 +323,8 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     }
 
     auto result = seastar::make_shared<cql_transport::messages::result_message::void_message>();
-    if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
-        result->add_warning(format("Using write consistency level {} listed on the "
-                                   "write_consistency_levels_warned is not recommended.", cl));
+    if (warning) {
+        result->add_warning(std::move(*warning));
     }
     // Surface any coordinator-side large data guardrail soft limit violations
     // detected during the write to the client as a CQL warning.
@@ -332,17 +337,7 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     if (keys_size_one && _may_use_token_aware_routing && table.uses_tablets()) {
         auto erm = table.get_effective_replication_map();
         if (qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
-            if (!options.get_tablet_version_block().has_value()) {
-                // V2 is negotiated but no block was parsed. process_execute_internal()
-                // reads the block unconditionally whenever the V2 extension is set and
-                // rejects the request with a protocol_exception if the byte is missing,
-                // so the block is guaranteed present here. Reaching this point is a
-                // server-side invariant violation, not a client error, hence on_internal_error.
-                utils::on_internal_error(
-                    "The protocol extension tablets-routing-v2 requires that every EXECUTE request "
-                    "carry a tablet_version_block");
-            }
-            auto tablet_info_v2 = erm->check_tablet_version(token, *options.get_tablet_version_block());
+            auto tablet_info_v2 = erm->check_tablet_version(token, options.get_negotiated_tablet_version_block());
             if (tablet_info_v2) {
                 result->add_tablet_info_v2(std::move(*tablet_info_v2));
             }
@@ -617,15 +612,7 @@ modification_statement::prepare(data_dictionary::database db, cql_stats& stats, 
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto meta = get_prepare_context();
 
-    auto statement = std::invoke([&] -> shared_ptr<cql_statement> {
-        auto result = prepare(db, meta, stats);
-
-        if (strong_consistency::is_strongly_consistent(db, schema->ks_name())) {
-            return ::make_shared<strong_consistency::modification_statement>(std::move(result));
-        }
-
-        return result;
-    });
+    auto statement = prepare(db, meta, stats);
 
     auto partition_key_bind_indices = meta.get_partition_key_bind_indexes(*schema);
     return std::make_unique<prepared_statement>(audit_info(), std::move(statement), meta, 
@@ -640,13 +627,8 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
     prepared_attributes->fill_prepare_context(ctx);
 
     auto prepared_stmt = prepare_internal(db, schema, ctx, std::move(prepared_attributes), stats);
-    if (strong_consistency::is_strongly_consistent(db, schema->ks_name())) {
-        if (prepared_stmt->requires_read()) {
-            throw exceptions::invalid_request_exception("Strongly consistent updates don't support data prefetch");
-        }
-        if (prepared_stmt->is_timestamp_set()) {
-            throw exceptions::invalid_request_exception("Strongly consistent queries don't support user-provided timestamps");
-        }
+    if (prepared_stmt->is_strongly_consistent()) {
+        strong_consistency::validate_modification_support(*prepared_stmt);
     }
 
     // At this point the prepare context instance should have a list of
