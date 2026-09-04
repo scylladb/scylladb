@@ -1733,7 +1733,7 @@ static set_type_impl::native_type deserialize_set_column(const schema& s, const 
     auto blob = row.get_blob_unfragmented(name);
     auto cdef = s.get_column_definition(name);
     auto deserialized = cdef->type->deserialize(blob);
-    return value_cast<set_type_impl::native_type>(deserialized);
+    return value_cast<set_type_impl::native_type>(std::move(deserialized));
 }
 
 static set_type_impl::native_type prepare_tokens(const std::unordered_set<dht::token>& tokens) {
