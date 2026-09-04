@@ -4760,6 +4760,53 @@ future<> storage_service::snitch_reconfigured() {
     }
 }
 
+// Decides whether a topology barrier should evict (abort) user repairs
+// which pin stale token metadata versions and thus block the barrier.
+//
+// Evict only when the barrier is part of a node operation (bootstrap,
+// decommission, removenode, replace, cleanup, rollback) or another
+// coordinator-driven transition. The tablet load balancer runs the same
+// barrier continuously (every migration stage bumps the topology version
+// and drains stale versions), so evicting there would keep killing vnode
+// repairs whenever tablets are being balanced, e.g. for the whole duration
+// of a vnodes-to-tablets migration. A balancing-only barrier instead waits
+// for the repair to finish, as before.
+//
+// A pending per-node request counts as a node operation: with parallel
+// tablet draining, decommission and removenode drain tablets through
+// ordinary migration rounds (transition_state::tablet_migration) while the
+// request is still pending, and those drain barriers must evict the repair
+// for the operation to make progress.
+static bool should_abort_repair(const topology& topo) {
+    if (!topo.requests.empty() || !topo.transition_nodes.empty()) {
+        return true;
+    }
+    if (!topo.tstate) {
+        return false;
+    }
+    switch (*topo.tstate) {
+    // Tablet-balancing-only transitions: wait for the repair instead of
+    // aborting it.
+    case topology::transition_state::tablet_migration:
+    case topology::transition_state::tablet_resize_finalization:
+    case topology::transition_state::tablet_split_finalization:
+        return false;
+    // Coordinator-driven transitions: abort user repairs blocking the
+    // barrier.
+    case topology::transition_state::join_group0:
+    case topology::transition_state::commit_cdc_generation:
+    case topology::transition_state::tablet_draining:
+    case topology::transition_state::write_both_read_old:
+    case topology::transition_state::write_both_read_new:
+    case topology::transition_state::left_token_ring:
+    case topology::transition_state::rollback_to_normal:
+    case topology::transition_state::truncate_table:
+    case topology::transition_state::lock:
+    case topology::transition_state::snapshot_tables:
+        return true;
+    }
+}
+
 future<> storage_service::local_topology_barrier() {
     if (this_shard_id() != 0) {
         co_await container().invoke_on(0, [] (storage_service& ss) {
@@ -4787,7 +4834,11 @@ future<> storage_service::local_topology_barrier() {
         }
     }
 
-    co_await container().invoke_on_all([version] (storage_service& ss) -> future<> {
+    // The topology state used by should_abort_repair() is up to date because
+    // raft_topology_cmd_handler runs a group0 read barrier first.
+    const bool evict_blocking_repairs = should_abort_repair(_topology_state_machine._topology);
+
+    co_await container().invoke_on_all([version, evict_blocking_repairs] (storage_service& ss) -> future<> {
         const auto current_version = ss._shared_token_metadata.get()->get_version();
         rtlogger.info("Got raft_topology_cmd::barrier_and_drain, version {}, "
                       "current version {}, stale versions (version: use_count): {}",
@@ -4810,10 +4861,26 @@ future<> storage_service::local_topology_barrier() {
 
         rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: waiting for stale token metadata versions to be released", version);
         {
-            seastar::timer<lowres_clock> warn_timer([&ss, version] {
+            // A user-requested repair on a vnode keyspace holds its
+            // effective_replication_map, and thus pins a stale token metadata
+            // version, for the entire duration of the repair, which is
+            // unbounded. Abort such repairs instead of stalling the topology
+            // operation behind them; the operator can re-run the repair once
+            // the topology change completes. The abort is retried from the
+            // periodic timer to catch repairs which acquired their
+            // effective_replication_map before the barrier but registered
+            // their per-shard tasks only after the initial call.
+            auto abort_stale_repairs = [&ss, current_version, evict_blocking_repairs] {
+                if (evict_blocking_repairs && ss._repair.local_is_initialized()) {
+                    ss._repair.local().get_repair_module().abort_repairs_pinning_stale_versions(current_version);
+                }
+            };
+            abort_stale_repairs();
+            seastar::timer<lowres_clock> warn_timer([&ss, version, abort_stale_repairs] {
                 rtlogger.warn("raft_topology_cmd::barrier_and_drain version {}: still waiting for stale versions, "
                               "stale versions (version: use_count): {}",
                               version, ss._shared_token_metadata.describe_stale_versions());
+                abort_stale_repairs();
             });
             warn_timer.arm_periodic(std::chrono::minutes(5));
             co_await ss._shared_token_metadata.stale_versions_in_use();

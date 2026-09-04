@@ -235,10 +235,24 @@ public:
 
     locator::effective_replication_map_ptr get_erm();
 
+<<<<<<< HEAD
     size_t get_total_rf() {
         return get_erm()->get_replication_factor();
     }
 
+||||||| parent of 5f352afcf4 (repair: abort user repairs that block topology barriers)
+=======
+    // Returns the token metadata version pinned by this repair's
+    // effective_replication_map, or nullopt if it no longer holds one.
+    std::optional<locator::token_metadata::version_t> pinned_token_metadata_version() const noexcept {
+        return erm ? std::optional(erm->get_token_metadata().get_version()) : std::nullopt;
+    }
+
+    size_t get_total_rf() {
+        return get_erm()->get_replication_factor();
+    }
+
+>>>>>>> 5f352afcf4 (repair: abort user repairs that block topology barriers)
     future<> repair_range(const dht::token_range& range, table_info table);
 
     size_t ranges_size() const noexcept;
@@ -295,6 +309,11 @@ public:
     std::vector<int> get_active() const;
     size_t nr_running_repair_jobs();
     void abort_all_repairs();
+    // Aborts user-requested repair jobs whose effective_replication_map pins
+    // a token metadata version older than current_version. Such repairs block
+    // topology barriers (raft_topology_cmd::barrier_and_drain) for their whole
+    // duration, which is unbounded.
+    void abort_repairs_pinning_stale_versions(locator::token_metadata::version_t current_version);
     named_semaphore& range_parallelism_semaphore();
     future<> run(repair_uniq_id id, std::function<void ()> func);
     future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
