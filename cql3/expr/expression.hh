@@ -14,6 +14,8 @@
 #include <variant>
 #include <concepts>
 
+#include <seastar/util/optimized_optional.hh>
+
 #include "cql3/column_identifier.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/functions/function_name.hh"
@@ -146,12 +148,19 @@ class expression final {
     struct impl;                 
     std::unique_ptr<impl> _v;
 public:
+    expression() noexcept = default;
     expression(ExpressionElement auto e);
 
     expression(const expression&);
     expression(expression&&) noexcept = default;
     expression& operator=(const expression&);
     expression& operator=(expression&&) noexcept = default;
+
+    /// Returns true if this expression is engaged (non-empty).
+    /// Required by seastar::optimized_optional.
+    explicit operator bool() const noexcept { return bool(_v); }
+
+    friend class optimized_optional<expression>;
 
     template <invocable_on_expression Visitor>
     friend decltype(auto) visit(Visitor&& visitor, const expression& e);
