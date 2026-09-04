@@ -348,7 +348,7 @@ public:
     void on_cleanup_for_drop_table(const table_id& id);
 };
 
-class repair_info;
+class shard_repair_state;
 using repair_master = bool_class<class repair_master_tag>;
 class partition_key_and_mutation_fragments;
 using repair_rows_on_wire = std::list<partition_key_and_mutation_fragments>;
