@@ -386,13 +386,14 @@ public:
     static future<locator::tablet_map> build_tablet_map_for_migration(
             const locator::static_effective_replication_map_ptr& erm,
             size_t target_pow2 = 0);
-private:
+
     future<std::unordered_map<table_id, uint64_t>> collect_table_sizes_for_migration(
         const sstring& ks_name,
         const locator::static_effective_replication_map_ptr& erm,
         const locator::tablet_aware_replication_strategy* trs,
         const std::vector<std::pair<table_id, sstring>>& tables_to_estimate);
 
+private:
     future<mutable_token_metadata_ptr> get_mutable_token_metadata_ptr() noexcept {
         return _shared_token_metadata.get()->clone_async().then([this] (token_metadata tm) {
             // bump the token_metadata ring_version
