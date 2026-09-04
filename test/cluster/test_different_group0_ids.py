@@ -4,12 +4,12 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 import pytest
 
 
-async def test_different_group0_ids(manager: ManagerClient):
+async def test_different_group0_ids(manager: ScyllaClusterManager):
     """
     The test starts two single-node clusters (with different group0_ids). Node B (the
     node from the second cluster) is restarted with seeds containing node A (the node

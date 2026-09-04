@@ -7,6 +7,8 @@
  */
 
 #include <functional>
+#include <algorithm>
+#include <vector>
 #include <seastar/core/abort_source.hh>
 #include <signal.h>
 #include <seastar/core/future.hh>
@@ -41,6 +43,7 @@ struct test_config {
     unsigned operations_per_shard;
     unsigned concurrency;
     unsigned scan_total_segments;
+    unsigned batch_size;
     bool flush;
     std::string remote_host;
     bool continue_after_error;
@@ -53,6 +56,7 @@ std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
            << ", concurrency=" << cfg.concurrency
            << ", duration_in_seconds=" << cfg.duration_in_seconds
            << ", operations-per-shard=" << cfg.operations_per_shard
+           << ", batch_size=" << cfg.batch_size
            << ", flush=" << cfg.flush
            << "}";
 }
@@ -346,6 +350,42 @@ static future<> get_item(const test_config& _, http::client& cli, uint64_t seq) 
     co_await make_request(cli, "GetItem", std::move(body));
 }
 
+static future<> batch_get_item(const test_config& c, http::client& cli, uint64_t seq) {
+    // BatchGetItem rejects a request containing duplicate keys, so the keys are
+    // drawn without repetition. They are drawn from the whole key space so that
+    // a single request has to touch many partitions, which is the point of this
+    // workload.
+    // c.batch_size is small, so the linear scan for duplicates is cheaper than maintaining a set.
+    std::vector<uint64_t> keys{seq};
+    keys.reserve(c.batch_size);
+    while (keys.size() < c.batch_size) {
+        auto key = tests::random::get_int<uint64_t>(c.partitions - 1);
+        if (std::ranges::find(keys, key) == keys.end()) {
+            keys.push_back(key);
+        }
+    }
+
+    fmt::memory_buffer keys_json;
+    for (auto key : keys) {
+        fmt::format_to(std::back_inserter(keys_json),
+                R"({}{{"p": {{"S": "{}"}}, "c": {{"S": "{}"}}}})",
+                keys_json.size() ? ", " : "", key, key);
+    }
+
+    // We fetch all attributes to simulate a bit of work.
+    auto body = format(R"({{
+        "RequestItems": {{
+            "workloads_test": {{
+                "Keys": [{}],
+                "ProjectionExpression": "C0, C1, C2, C3, C4, C5, C6, C7, C8, C9",
+                "ConsistentRead": false
+            }}
+        }},
+        "ReturnConsumedCapacity": "TOTAL"
+    }})", fmt::to_string(keys_json));
+    co_await make_request(cli, "BatchGetItem", std::move(body));
+}
+
 static future<> scan(const test_config& c, http::client& cli, uint64_t seq) {
     // This uses "parallel scan" feature, see https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Scan.html#Scan.ParallelScan
     auto body = format(R"({{
@@ -407,6 +447,7 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
     using fun_t = std::function<future<>(const test_config&, http::client&, uint64_t)>;
     std::map<std::string, fun_t> workloads = {
         {"read",  get_item},
+        {"batch_read", batch_get_item},
         {"scan", scan},
         {"write", update_item},
         {"write_gsi", update_item_gsi},
@@ -415,7 +456,7 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
         {"write_rmw", update_item_rmw},
     };
 
-    if (c.prepopulate_partitions && (c.workload == "read" || c.workload == "scan")) {
+    if (c.prepopulate_partitions && (c.workload == "read" || c.workload == "batch_read" || c.workload == "scan")) {
         create_partitions(c, cli);
     }
 
@@ -460,6 +501,7 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
         params["remote_host"] = c.remote_host;
         params["flush"] = c.flush;
         params["scan_total_segments"] = c.scan_total_segments;
+        params["batch_size"] = c.batch_size;
         params["cpus"] = this_smp_shard_count();
 
         perf::write_json_result(c.json_result_file, agg, params, c.workload);
@@ -472,7 +514,7 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
 std::function<int(int, char**)> alternator(std::function<int(int, char**)> scylla_main, std::function<future<>(lw_shared_ptr<db::config> cfg, sharded<abort_source>& as)>* after_init_func) {
     return [=](int ac, char** av) -> int {
         test_config c;
-       
+
         bpo::options_description opts_desc;
         opts_desc.add_options()
             ("workload", bpo::value<std::string>()->default_value(""), "which workload type to run")
@@ -485,6 +527,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
             ("remote-host", bpo::value<std::string>()->default_value(""), "address of remote alternator service, use localhost by default")
             ("remote-port", bpo::value<unsigned>()->default_value(8000), "address of remote alternator port")
             ("scan-total-segments", bpo::value<unsigned>()->default_value(10), "single scan operation will retrieve 1/scan-total-segments portion of a table")
+            ("batch-size", bpo::value<unsigned>()->default_value(32), "number of keys read by a single request in the batch_read workload")
             ("continue-after-error", bpo::value<bool>()->default_value(false), "continue test after failed request")
             ("json-result", bpo::value<std::string>()->default_value(""), "file to write json results to")
         ;
@@ -500,11 +543,21 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
         c.flush = opts["flush"].as<bool>();
         c.remote_host = opts["remote-host"].as<std::string>();
         c.scan_total_segments = opts["scan-total-segments"].as<unsigned>();
+        c.batch_size = opts["batch-size"].as<unsigned>();
         c.continue_after_error = opts["continue-after-error"].as<bool>();
         c.json_result_file = opts["json-result"].as<std::string>();
 
         if (c.scan_total_segments < 1 || c.scan_total_segments > 1'000'000) {
             throw std::invalid_argument("scan-total-segments must be between 1 and 1'000'000");
+        }
+
+        // The keys of a batch must be distinct, so the batch cannot be larger than the key space.
+        if (c.workload == "batch_read") {
+            // maximum batch size allowed by BatchGetItem is 100
+            constexpr unsigned int max_batch_get_size = 100;
+            if (c.batch_size < 1 || c.batch_size > std::min(c.partitions, max_batch_get_size)) {
+                throw std::invalid_argument(std::format("batch-size must be between 1 and the number of partitions, it can't also exceed {} (maximum allowed by BatchGetItem)", max_batch_get_size));
+            }
         }
 
         // Remove test options to not disturb scylla main app
@@ -517,7 +570,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
             std::cerr << "Missing --workload command-line value!" << std::endl;
             return 1;
         }
-        
+
         if (!c.remote_host.empty()) {
             c.port = opts["remote-port"].as<unsigned>();
             app_template app;

@@ -87,10 +87,7 @@ public:
         _cm.deregister_compacting_sstables(sstables);
         for (const auto& sst : sstables) {
             _compacting.erase(sst);
-            _cs.sstables_requiring_cleanup.erase(sst);
-        }
-        if (_cs.sstables_requiring_cleanup.empty()) {
-            _cs.owned_ranges_ptr = nullptr;
+            _cs.erase_sstable_requiring_cleanup(sst);
         }
     }
 
@@ -372,11 +369,8 @@ future<> compaction_manager::on_compaction_completion(compaction_group_view& t, 
     auto new_sstables = desc.new_sstables | std::ranges::to<std::unordered_set>();
     for (const auto& sst : desc.old_sstables) {
         if (!new_sstables.contains(sst)) {
-            cs.sstables_requiring_cleanup.erase(sst);
+            cs.erase_sstable_requiring_cleanup(sst);
         }
-    }
-    if (cs.sstables_requiring_cleanup.empty()) {
-        cs.owned_ranges_ptr = nullptr;
     }
     return t.on_compaction_completion(std::move(desc), offstrategy);
 }
@@ -462,16 +456,17 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         std::vector<sstables::shared_sstable> sstables_requiring_cleanup;
         const auto& cs = _cm.get_compaction_state(_compacting_table);
         for (const auto& sst : descriptor.sstables) {
-            if (cs.sstables_requiring_cleanup.contains(sst)) {
+            if (cs.requires_cleanup(sst)) {
                 sstables_requiring_cleanup.emplace_back(sst);
             }
         }
         if (!sstables_requiring_cleanup.empty()) {
             cmlog.info("The following SSTables require cleanup in this compaction: {}", sstables_requiring_cleanup);
-            if (!cs.owned_ranges_ptr) {
+            auto owned_ranges = cs.cleanup_owned_ranges();
+            if (!owned_ranges) {
                 on_internal_error_noexcept(cmlog, "SSTables require cleanup but compaction state has null owned ranges");
             }
-            descriptor.owned_ranges = cs.owned_ranges_ptr;
+            descriptor.owned_ranges = std::move(owned_ranges);
         }
     }
 
@@ -907,6 +902,55 @@ compaction::compaction_state::~compaction_state() {
     compaction_done.broken();
 }
 
+const std::unordered_set<sstables::shared_sstable>& compaction::compaction_state::sstables_requiring_cleanup() const {
+    static const std::unordered_set<sstables::shared_sstable> empty;
+    return _cleanup_state ? _cleanup_state->sstables_requiring_cleanup : empty;
+}
+
+bool compaction::compaction_state::requires_cleanup(const sstables::shared_sstable& sst) const {
+    return _cleanup_state && _cleanup_state->sstables_requiring_cleanup.contains(sst);
+}
+
+compaction::owned_ranges_ptr compaction::compaction_state::cleanup_owned_ranges() const {
+    return _cleanup_state ? _cleanup_state->owned_ranges_ptr : compaction::owned_ranges_ptr{};
+}
+
+void compaction::compaction_state::insert_sstable_requiring_cleanup(const sstables::shared_sstable& sst) {
+    if (!_cleanup_state) {
+        _cleanup_state = std::make_unique<cleanup_state>();
+    }
+    _cleanup_state->sstables_requiring_cleanup.insert(sst);
+}
+
+bool compaction::compaction_state::erase_sstable_requiring_cleanup(const sstables::shared_sstable& sst) {
+    if (!_cleanup_state) {
+        return false;
+    }
+    bool erased = _cleanup_state->sstables_requiring_cleanup.erase(sst) != 0;
+    if (_cleanup_state->sstables_requiring_cleanup.empty()) {
+        // Releasing the cleanup state also drops the associated owned ranges,
+        // matching the previous behaviour of clearing owned_ranges_ptr once the
+        // cleanup set became empty.
+        _cleanup_state.reset();
+    }
+    return erased;
+}
+
+void compaction::compaction_state::set_cleanup_owned_ranges(compaction::owned_ranges_ptr ranges) {
+    // Owned ranges are only meaningful while there are sstables requiring
+    // cleanup: they are released together with the cleanup_state once the
+    // sstable set drains (see erase_sstable_requiring_cleanup). Storing ranges
+    // with no such sstables would create a cleanup_state that never drains,
+    // leaking the ranges and defeating the lazy-allocation memory saving. The
+    // sole caller already guards this with has_sstables_requiring_cleanup();
+    // report it so a future unguarded caller is caught rather than silently
+    // resurrecting that footgun.
+    if (!has_sstables_requiring_cleanup()) {
+        on_internal_error(cmlog, "set_cleanup_owned_ranges() called with no sstables requiring cleanup");
+    }
+    _cleanup_state->owned_ranges_ptr = std::move(ranges);
+}
+
 future<> sstables_task_executor::release_resources() noexcept {
     _cm._stats.pending_tasks -= _sstables.size() - (_state == state::pending);
     _sstables = {};
@@ -1247,7 +1291,11 @@ future<> compaction_manager::await_tasks(std::vector<shared_ptr<compaction_task_
 
 std::vector<shared_ptr<compaction_task_executor>>
 compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt) noexcept {
-    auto ongoing_compactions = get_compactions(filter).size();
+    // Avoid get_compactions(filter): it builds a vector<compaction_info>, copying ks_name/cf_name
+    // for every matching task, just to be discarded here for its count.
+    auto ongoing_compactions = std::ranges::count_if(_tasks, [&filter] (const compaction_task_executor& task) {
+        return filter(task.compacting_table());
+    });
     auto tasks = _tasks
             | std::views::filter([&filter, type_opt] (const auto& task) {
                 return filter(task.compacting_table()) && (!type_opt || task.compaction_type() == *type_opt);
@@ -1486,7 +1534,8 @@ protected:
                     descriptor.sstables, compacting_table()->get_sstables_repaired_at(),
                     compacting_table()->token_range(), uuid, _compaction_data.compaction_uuid);
 
-            auto old_sstables = ::format("{}", descriptor.sstables);
+            // descriptor is moved into compact_sstables() below; keep a cheap (shared_ptr) copy for the later debug log.
+            auto old_sstables = descriptor.sstables;
 
             if (descriptor.sstables.empty() || !can_proceed() || t.is_auto_compaction_disabled_by_user()) {
                 cmlog.debug("{}: sstables={} can_proceed={} auto_compaction={}", *this, descriptor.sstables.size(), can_proceed(), t.is_auto_compaction_disabled_by_user());
@@ -2284,27 +2333,27 @@ bool compaction_manager::update_sstable_cleanup_state(compaction_group_view& t, 
                                         sst->get_filename()));
     }
     if (needs_cleanup(sst, sorted_owned_ranges)) {
-        cs.sstables_requiring_cleanup.insert(sst);
+        cs.insert_sstable_requiring_cleanup(sst);
         return true;
     } else {
-        cs.sstables_requiring_cleanup.erase(sst);
+        cs.erase_sstable_requiring_cleanup(sst);
         return false;
     }
 }
 
 bool compaction_manager::erase_sstable_cleanup_state(compaction_group_view& t, const sstables::shared_sstable& sst) {
     auto& cs = get_compaction_state(&t);
-    return cs.sstables_requiring_cleanup.erase(sst);
+    return cs.erase_sstable_requiring_cleanup(sst);
 }
 
 bool compaction_manager::requires_cleanup(compaction_group_view& t, const sstables::shared_sstable& sst) const {
     const auto& cs = get_compaction_state(&t);
-    return cs.sstables_requiring_cleanup.contains(sst);
+    return cs.requires_cleanup(sst);
 }
 
 const std::unordered_set<sstables::shared_sstable>& compaction_manager::sstables_requiring_cleanup(compaction_group_view& t) const {
     const auto& cs = get_compaction_state(&t);
-    return cs.sstables_requiring_cleanup;
+    return cs.sstables_requiring_cleanup();
 }
 
 future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction_group_view& t, tasks::task_info info) {
@@ -2320,7 +2369,7 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
     co_await try_perform_cleanup(sorted_owned_ranges, t, info);
     auto last_idle = seastar::lowres_clock::now();
 
-    while (!cs.sstables_requiring_cleanup.empty()) {
+    while (cs.has_sstables_requiring_cleanup()) {
         auto idle = seastar::lowres_clock::now() - last_idle;
         if (idle >= max_idle_duration) {
             auto msg = ::format("Cleanup timed out after {} seconds of no progress", std::chrono::duration_cast<std::chrono::seconds>(idle).count());
@@ -2329,7 +2378,7 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
         }
 
         auto has_sstables_eligible_for_compaction = [&] {
-            for (auto& sst : cs.sstables_requiring_cleanup) {
+            for (auto& sst : cs.sstables_requiring_cleanup()) {
                 if (eligible_for_compaction(sst)) {
                     return true;
                 }
@@ -2378,12 +2427,12 @@ future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_r
         // Some sstables may remain in sstables_requiring_cleanup
         // for later processing if they can't be cleaned up right now.
         // They are erased from sstables_requiring_cleanup by compacting.release_compacting
-        if (!cs.sstables_requiring_cleanup.empty()) {
-            cs.owned_ranges_ptr = std::move(sorted_owned_ranges);
+        if (cs.has_sstables_requiring_cleanup()) {
+            cs.set_cleanup_owned_ranges(std::move(sorted_owned_ranges));
         }
     }, "cleanup");
 
-    if (cs.sstables_requiring_cleanup.empty()) {
+    if (!cs.has_sstables_requiring_cleanup()) {
         cmlog.debug("perform_cleanup for {} found no sstables requiring cleanup", t);
         co_return;
     }
@@ -2402,7 +2451,7 @@ future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_r
     // Called with compaction_disabled
     auto get_sstables = [this, &t] () -> future<std::vector<sstables::shared_sstable>> {
         auto& cs = get_compaction_state(&t);
-        co_return get_candidates(t, cs.sstables_requiring_cleanup);
+        co_return get_candidates(t, cs.sstables_requiring_cleanup());
     };
 
     co_await perform_task_on_all_files<cleanup_sstables_compaction_task_executor>("cleanup", info, t, compaction_type_options::make_cleanup(), std::move(sorted_owned_ranges),
@@ -2554,7 +2603,7 @@ compaction_reenabler compaction_manager::add_with_compaction_disabled(compaction
 future<> compaction_manager::remove(compaction_group_view& t, sstring reason) noexcept {
     auto& c_state = get_compaction_state(&t);
     auto erase_state = defer([&t, this] () noexcept {
-       t.get_backlog_tracker().disable();
+       t.get_backlog_tracker().retire();
        _compaction_state.erase(&t);
     });
 
@@ -2665,8 +2714,26 @@ future<> compaction_manager::unplug_system_keyspace() noexcept {
     co_await _sys_ks.unplug();
 }
 
-double compaction_backlog_tracker::backlog() const {
-    return disabled() ? compaction_controller::disable_backlog : _impl->backlog(_ongoing_writes, _ongoing_compactions);
+void compaction_backlog_tracker::retire() {
+    if (_manager) {
+        _manager->remove_backlog_tracker(this);
+        _manager = nullptr;
+    }
+    disable();
+}
+
+double compaction_backlog_tracker::backlog() {
+    if (disabled()) {
+        return compaction_controller::disable_backlog;
+    }
+    try {
+        return _impl->backlog(_ongoing_writes, _ongoing_compactions);
+    } catch (...) {
+        // Isolate the failure to this tracker instead of poisoning the whole shard's backlog poll.
+        cmlog.error("Disabling backlog tracker due to exception during backlog computation: {}", std::current_exception());
+        disable();
+        return compaction_controller::disable_backlog;
+    }
 }
 
 void compaction_backlog_tracker::replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) {

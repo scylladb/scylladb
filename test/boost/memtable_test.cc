@@ -1214,12 +1214,16 @@ SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
     // correctness tests, which do run in debug mode.
     return make_ready_future<>();
 #else
-    BOOST_ASSERT(this_smp_shard_count() == 2);
+    if (this_smp_shard_count() < 2) {
+        std::cerr << "Cannot run test flushing_rate_is_reduced_if_compaction_doesnt_keep_up with this_smp_shard_count() < 2" << std::endl;
+        return make_ready_future<>();
+    }
     // The test simulates a situation where 2 threads issue flushes to 2
     // tables. Both issue small flushes, but one has injected reactor stalls.
     // This can lead to a situation where lots of small sstables accumulate on
     // disk, and, if compaction never has a chance to keep up, resources can be
-    // exhausted.
+    // exhausted. Only shards 0 and 1 participate; any additional shards are
+    // simply idle bystanders.
     return do_with_cql_env([](cql_test_env& env) -> future<> {
         struct flusher {
             cql_test_env& env;

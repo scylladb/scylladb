@@ -40,6 +40,20 @@ namespace logstor {
 class primary_index;
 }
 
+class compaction_group_logstor_state final : public logstor::logstor_group {
+    compaction_group* _cg;
+public:
+    explicit compaction_group_logstor_state(compaction_group& cg) noexcept;
+
+    ::table_id table_id() const noexcept override;
+
+    logstor::primary_index& logstor_index() noexcept override;
+    const logstor::primary_index& logstor_index() const noexcept override;
+
+protected:
+    logstor::compaction_manager& logstor_compaction_manager() noexcept override;
+};
+
 using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
 
 enum class repair_sstable_classification {
@@ -101,10 +115,7 @@ class compaction_group {
 
     counter_id _counter_id;
 
-    lw_shared_ptr<logstor::segment_set> _logstor_segments;
-    std::optional<logstor::separator_buffer> _logstor_separator;
-    std::vector<future<>> _separator_flushes;
-    seastar::semaphore _separator_flush_sem{1};
+    std::unique_ptr<compaction_group_logstor_state> _logstor_state;
 
     db::replay_position _lowest_rp;
     friend class table;
@@ -128,6 +139,10 @@ private:
     // An input SSTable remains linked if it wasn't actually compacted, yet compaction manager wants
     // it to be moved from its original sstable set (e.g. maintenance) into a new one (e.g. main).
     std::vector<sstables::shared_sstable> unused_sstables_for_deletion(compaction::compaction_completion_desc desc) const;
+    // Does the actual work of update_sstable_sets_on_compaction_completion(). Sets `attached` to
+    // true once desc's output sstables are attached to the table, so the caller can tell whether
+    // it still needs to unlink them if this throws or if something later in the caller fails.
+    future<> do_update_sstable_sets_on_compaction_completion(compaction::compaction_completion_desc desc, bool& attached);
     // Tracks the maximum timestamp observed across all SSTables in this group.
     // This is used by the compacting reader to determine if a memtable contains entries
     // with timestamps that overlap with those in the SSTables of the compaction group.
@@ -143,6 +158,9 @@ public:
 
     // Create a group with same metadata of base like range, id, but with empty data (sstable & memtable).
     static lw_shared_ptr<compaction_group> make_empty_group(const compaction_group& base);
+    // Like make_empty_group(), but with a token range of its own, for a group which
+    // will only ever hold part of base's range.
+    static lw_shared_ptr<compaction_group> make_empty_group(const compaction_group& base, dht::token_range token_range);
 
     void update_id(size_t id) {
         _group_id = id;
@@ -173,6 +191,9 @@ public:
 
     // Clear sstable sets
     void clear_sstables();
+
+    // Unlink logstor segments from this group without freeing them, for shutdown.
+    void clear_logstor_segments();
 
     // Clear memtable(s) content
     future<> clear_memtables();
@@ -308,27 +329,25 @@ public:
 
     logstor::primary_index& get_logstor_index() noexcept;
 
+    logstor::logstor_group& as_logstor_group() noexcept;
+    const logstor::logstor_group& as_logstor_group() const noexcept;
+
     future<> split(compaction::compaction_type_options::split opt, tasks::task_info tablet_split_task_info);
 
     void set_repair_sstable_classifier(repair_classifier_func repair_sstable_classifier) {
         _repair_sstable_classifier = std::move(repair_sstable_classifier);
     }
 
-    void add_logstor_segment(logstor::segment_descriptor& desc) {
-        _logstor_segments->add_segment(desc);
-    }
-
     future<> discard_logstor_segments();
 
     future<> flush_separator(std::optional<logstor::segment_sequence> seq_num = std::nullopt);
-    logstor::separator_buffer& get_separator_buffer(size_t write_size);
 
     logstor::segment_set& logstor_segments() noexcept {
-        return *_logstor_segments;
+        return _logstor_state->logstor_segments();
     }
 
     const logstor::segment_set& logstor_segments() const noexcept {
-        return *_logstor_segments;
+        return _logstor_state->logstor_segments();
     }
 
     future<utils::chunked_vector<logstor::segment_snapshot>> take_logstor_snapshot();
@@ -338,6 +357,16 @@ public:
 
 using compaction_group_ptr = lw_shared_ptr<compaction_group>;
 using const_compaction_group_ptr = lw_shared_ptr<const compaction_group>;
+
+// The two ranges `range` will be split into, or nullopt if it cannot be split:
+// either an end of it is unbounded, so there is nothing to take a midpoint between,
+// or it holds fewer than two tokens, so one side would come out empty.
+//
+// The split point is derived from the range's own bounds the same way
+// locator::tablet_map::get_split_token() derives it, so that these sub-ranges agree
+// with the sides tablet_map::get_tablet_range_side() routes writes to, and with the
+// ranges handle_tablet_split_completion() installs once the split completes.
+std::optional<std::pair<dht::token_range, dht::token_range>> split_token_range(const dht::token_range& range);
 
 // Storage group is responsible for storage that belongs to a single tablet.
 // A storage group can manage 1 or more compaction groups, each of which can be compacted independently.
@@ -437,6 +466,7 @@ public:
 
     // Clear sstable sets
     void clear_sstables();
+    void clear_logstor_segments();
 };
 
 using storage_group_ptr = lw_shared_ptr<storage_group>;

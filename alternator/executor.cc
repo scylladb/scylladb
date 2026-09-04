@@ -19,6 +19,7 @@
 #include "auth/service.hh"
 #include "cql3/cql3_type.hh"
 #include "db/config.hh"
+#include "db/consistency_level_type.hh"
 #include "db/view/view_build_status.hh"
 #include "locator/tablets.hh"
 #include "mutation/tombstone.hh"
@@ -54,8 +55,10 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/loop.hh>
+#include <seastar/core/when_all.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <boost/range/algorithm/find_end.hpp>
+#include <string_view>
 #include <unordered_set>
 #include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
@@ -118,16 +121,29 @@ const sstring TABLE_CREATION_TIME_TAG_KEY("system:table_creation_time");
 // configured by UpdateTimeToLive to be the expiration-time attribute for
 // this table.
 extern const sstring TTL_TAG_KEY("system:ttl_attribute");
-// This will be set to 1 in a case, where user DID NOT specify a range key.
-// The way GSI / LSI is implemented by Alternator assumes user specified keys will come first
-// in materialized view's key list. Then, if needed missing keys are added (current implementation
-// of materialized views requires that all base hash / range keys were added to the view as well).
-// Alternator allows only a single range key attribute to be specified by the user. So if
-// the SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY is set the user didn't specify any key and
-// base table's keys were added as range keys. In all other cases either the first key is the user specified key,
-// following ones are base table's keys added as needed or range key list will be empty.
+// This tag is set for GSIs since scylla-2026.4.
+// GSI implementation in Alternator assumes that (currently up to 4)
+// user-specified RANGE keys come first in the underlying materialized view's
+// clustering columns list. Then if not specified by the user as RANGE keys base
+// table HASH and/or RANGE key/keys is/are appended to the materialized view as
+// additional trailing clustering columns. This is required by the materialized
+// view's implementation but should not be reported to the Alternator user.
+// This tag keeps track of the number of RANGE keys the user specified thus
+// allowing for reporting correct user-specified RANGE keys with only a column
+// prefix of the clustering columns of length written in the tag.
+extern const sstring NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY("system:number_of_user_specified_gsi_range_keys");
+// This is a legacy tag since scylla-2026.4, replaced by the tag above.
+// It was set to true when the user did not specify a RANGE key for a single
+// HASH key GSI. In that case base table key column/columns is/are appended to
+// the materialized view's clustering column list so Alternator should report
+// 0 - no user-specified RANGE columns. If this tag is *not* set then only the
+// first clustering key column should be reported as user-specified RANGE key.
+// New GSIs are tagged with NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY
+// instead, and it takes precedence over this tag where both are present. This
+// tag is only still *written* on single key GSIs when
+// ALTERNATOR_COMPOSITE_GSI_KEYS feature is disabled. It is still read to
+// describe tables created long time ago.
 extern const sstring SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY("system:spurious_range_key_added_to_gsi_and_user_didnt_specify_range_key");
-
 // The following tags also have the "system:" prefix but are NOT used
 // by Alternator to store table properties - only the user ever writes to
 // them, as a way to configure the table. As such, these tags are writable
@@ -382,7 +398,7 @@ static rjson::value generate_arn_for_index(const schema& schema, std::string_vie
 // In theory, there can be a period during upgrading an old cluster when this
 // table is not yet available. However, since the IndexStatus is a new feature
 // too, it is acceptable that it doesn't yet work in the middle of the update.
-static future<bool> is_view_built(
+static future<std::variant<bool, api_error>> is_view_built(
         view_ptr view,
         service::storage_proxy& proxy,
         service::client_state& client_state,
@@ -409,14 +425,18 @@ static future<bool> is_view_built(
         schema->id(), schema->version(), partition_slice,
         proxy.get_max_result_size(partition_slice),
         query::tombstone_limit(proxy.get_tombstone_limit()));
-    service::storage_proxy::coordinator_query_result qr =
-        co_await proxy.query(
-            schema, std::move(command), std::move(partition_ranges),
-            db::consistency_level::LOCAL_ONE,
-            service::storage_proxy::coordinator_query_options(
-                executor::default_timeout(), std::move(permit), client_state, trace_state));
+
+    service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
+            co_await proxy.query_result(
+                schema, std::move(command), std::move(partition_ranges),
+                db::consistency_level::LOCAL_ONE,
+                service::storage_proxy::coordinator_query_options(
+                    executor::default_timeout(), std::move(permit), client_state, trace_state));
+    if (!rqr) {
+        co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
+    }
     query::result_set rs = query::result_set::from_raw_result(
-        schema, partition_slice, *qr.query_result);
+        schema, partition_slice, *rqr.assume_value().query_result);
     std::unordered_map<locator::host_id, sstring> statuses;
     for (auto&& r : rs.rows()) {
         auto host_id = r.get<utils::UUID>("host_id");
@@ -447,7 +467,6 @@ static future<bool> is_view_built(
             }
         });
     co_return all_built;
-
 }
 
 future<> executor::cache_newly_calculated_size_on_all_shards(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl) {
@@ -481,7 +500,7 @@ future<> executor::fill_table_size(rjson::value &table_description, schema_ptr s
     rjson::add(table_description, "TableSizeBytes", total_size);
 }
 
-future<rjson::value> executor::fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit)
+future<std::variant<rjson::value, api_error>> executor::fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit)
 {
     rjson::value table_description = rjson::empty_object();
     auto tags_ptr = db::get_tags_of_table(schema);
@@ -568,7 +587,11 @@ future<rjson::value> executor::fill_table_description(schema_ptr schema, table_s
                 // (for a built view) or CREATING+Backfilling (if view building
                 // is in progress).
                 if (!is_lsi) {
-                    if (co_await is_view_built(vptr, _proxy, client_state, trace_state, permit)) {
+                    auto is_view_build_result = co_await is_view_built(vptr, _proxy, client_state, trace_state, permit);
+                    if (auto error = std::get_if<api_error>(&is_view_build_result)) {
+                        co_return std::move(*error);
+                    }
+                    if (std::get<bool>(is_view_build_result)) {
                         rjson::add(view_entry, "IndexStatus", "ACTIVE");
                     } else {
                         rjson::add(view_entry, "IndexStatus", "CREATING");
@@ -668,9 +691,12 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     get_stats_from_schema(_proxy, *schema)->api_operations.describe_table++;
     tracing::add_alternator_table_name(trace_state, schema->cf_name());
 
-    rjson::value table_description = co_await fill_table_description(schema, table_status::active, client_state, trace_state, permit);
+    std::variant<rjson::value, api_error> table_description_result = co_await fill_table_description(schema, table_status::active, client_state, trace_state, permit);
+    if (auto error = std::get_if<api_error>(&table_description_result)) {
+        co_return std::move(*error);
+    }
     rjson::value response = rjson::empty_object();
-    rjson::add(response, "Table", std::move(table_description));
+    rjson::add(response, "Table", std::move(std::get<rjson::value>(table_description_result)));
     elogger.trace("returning {}", response);
     co_return rjson::print(std::move(response));
 }
@@ -688,7 +714,10 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     auto& p = _proxy.container();
 
     schema_ptr schema = get_table(_proxy, request);
-    rjson::value table_description = co_await fill_table_description(schema, table_status::deleting, client_state, trace_state, permit);
+    std::variant<rjson::value, api_error> table_description_result = co_await fill_table_description(schema, table_status::deleting, client_state, trace_state, permit);
+    if (auto error = std::get_if<api_error>(&table_description_result)) {
+        co_return std::move(*error);
+    }
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, schema, auth::permission::DROP, _stats);
     co_await _mm.container().invoke_on(0, [&, cs = client_state.move_to_other_shard()] (service::migration_manager& mm) -> future<> {
         size_t retries = mm.get_concurrent_ddl_retries();
@@ -745,7 +774,7 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     });
 
     rjson::value response = rjson::empty_object();
-    rjson::add(response, "TableDescription", std::move(table_description));
+    rjson::add(response, "TableDescription", std::move(std::get<rjson::value>(table_description_result)));
     elogger.trace("returning {}", response);
     co_return rjson::print(std::move(response));
 }
@@ -837,6 +866,76 @@ static std::pair<std::string, std::string> parse_key_schema(const rjson::value& 
         range_key = v->GetString();
     }
     return {hash_key, range_key};
+}
+
+// parse_gsi_composite_key_schema() is like parse_key_schema() above, but for
+// GSIs, which (unlike base tables and LSIs) may have a "composite" (multi-
+// attribute) key: up to 4 HASH attributes forming the partition key, followed
+// by up to 4 RANGE attributes forming the sort key (up to 8 KeySchema entries
+// in total). All HASH entries must appear before all RANGE entries (i.e., the
+// KeySchema array must be a contiguous run of HASH entries followed by a
+// contiguous run of RANGE entries), at least one HASH entry is required, and
+// no attribute name may be used more than once (whether as two HASH entries,
+// two RANGE entries, or as both a HASH and a RANGE entry).
+// The function returns two vectors of column names - the HASH (partition)
+// key attributes in KeySchema order, and the RANGE (sort) key attributes in
+// KeySchema order (which may be empty).
+static std::pair<std::vector<std::string>, std::vector<std::string>> parse_gsi_composite_key_schema(const rjson::value& obj, std::string_view supplementary_context, bool composite_keys_supported) {
+    const size_t max_keys_of_each_type = composite_keys_supported ? 4 : 1;
+    const rjson::value *key_schema;
+    if (!obj.IsObject() || !(key_schema = rjson::find(obj, "KeySchema"))) {
+        throw api_error::validation("Missing KeySchema member");
+    }
+    if (!key_schema->IsArray() || key_schema->Size() < 1 || key_schema->Size() > 2 * max_keys_of_each_type) {
+        throw api_error::validation(fmt::format("KeySchema must list between one and {} key columns",
+                2 * max_keys_of_each_type));
+    }
+    std::vector<std::string> hash_keys;
+    std::vector<std::string> range_keys;
+    std::unordered_set<std::string_view> seen_names;
+    for (size_t i = 0; i < key_schema->Size(); ++i) {
+        if (!(*key_schema)[i].IsObject()) {
+            throw api_error::validation("KeySchema element " + std::to_string(i) + " must be an object");
+        }
+        const rjson::value *v = rjson::find((*key_schema)[i], "KeyType");
+        if (!v || !v->IsString()) {
+            throw api_error::validation("KeySchema element " + std::to_string(i) + " must have a string KeyType");
+        }
+        const std::string_view key_type = rjson::to_string_view(*v);
+        if (key_type != "HASH" && key_type != "RANGE") {
+            throw api_error::validation("KeySchema element " + std::to_string(i) + " KeyType must be HASH or RANGE");
+        }
+        v = rjson::find((*key_schema)[i], "AttributeName");
+        if (!v || !v->IsString()) {
+            throw api_error::validation("KeySchema element " + std::to_string(i) + " must have string AttributeName");
+        }
+        validate_attr_name_length(supplementary_context, v->GetStringLength(), true,
+                key_type == "HASH" ? "HASH key in KeySchema - " : "RANGE key in KeySchema - ");
+        std::string_view attr_name = rjson::to_string_view(*v);
+        if (!seen_names.insert(attr_name).second) {
+            throw api_error::validation("KeySchema cannot have two key elements with the same name ('" + std::string(attr_name) + "')");
+        }
+        if (key_type == "HASH") {
+            if (!range_keys.empty()) {
+                throw api_error::validation("All HASH keys in KeySchema must precede any RANGE key");
+            }
+            if (hash_keys.size() >= max_keys_of_each_type) {
+                throw api_error::validation(fmt::format("KeySchema can have at most {} HASH keys",
+                        max_keys_of_each_type));
+            }
+            hash_keys.emplace_back(attr_name);
+        } else {
+            if (range_keys.size() >= max_keys_of_each_type) {
+                throw api_error::validation(fmt::format("KeySchema can have at most {} RANGE keys",
+                        max_keys_of_each_type));
+            }
+            range_keys.emplace_back(attr_name);
+        }
+    }
+    if (hash_keys.empty()) {
+        throw api_error::validation("KeySchema must have at least one HASH key");
+    }
+    return {std::move(hash_keys), std::move(range_keys)};
 }
 
 arn_parts parse_arn(std::string_view arn, std::string_view arn_field_name, std::string_view type_name, std::string_view expected_postfix) {
@@ -1415,6 +1514,28 @@ static std::string get_similarity_function(const rjson::value& vector_index, std
     return sf;
 }
 
+// Record how many of the view's leading clustering columns are genuine,
+// user-specified RANGE key attributes (as opposed to the base table's own
+// key columns, appended as irrelevant to the user clustering columns
+// for materialized view correctness). DescribeTable relies on this tag-writing
+// code via genuine_range_key_count() to know where to stop reporting RANGE
+// keys - if this writer and that reader ever diverge, DescribeTable will report
+// a wrong/stale KeySchema for the GSI.
+static std::map<sstring, sstring> make_gsi_tags(
+    bool composite_gsi_keys_supported,
+    bool spurious_base_key_added_as_range_key,
+    const std::vector<std::string>& view_hash_keys,
+    const std::vector<std::string>& view_range_keys
+) {
+    std::map<sstring, sstring> tags;
+    if (composite_gsi_keys_supported) {
+        tags[NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY] = std::to_string(view_range_keys.size());
+    } else if (view_hash_keys.size() == 1 && view_range_keys.empty() && spurious_base_key_added_as_range_key) {
+        tags[SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY] = "true";
+    }
+    return tags;
+}
+
 future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization,
             const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     throwing_assert(this_shard_id() == 0);
@@ -1527,6 +1648,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         if (!gsi->IsArray()) {
             co_return api_error::validation("GlobalSecondaryIndexes must be an array.");
         }
+        const bool composite_gsi_keys_supported = _proxy.features().alternator_composite_gsi_keys;
         for (const rjson::value& g : gsi->GetArray()) {
             const rjson::value* index_name_v = rjson::find(g, "IndexName");
             if (!index_name_v || !index_name_v->IsString()) {
@@ -1542,23 +1664,22 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             // FIXME: read and handle "Projection" parameter. This will
             // require the MV code to copy just parts of the attrs map.
             schema_builder view_builder(this_smp_shard_count(), keyspace_name, vname);
-            auto [view_hash_key, view_range_key] = parse_key_schema(g, "GlobalSecondaryIndexes");
+            const auto [view_hash_keys, view_range_keys] = parse_gsi_composite_key_schema(g, "GlobalSecondaryIndexes",
+                    composite_gsi_keys_supported);
 
             // If an attribute is already a real column in the base table
             // (i.e., a key attribute), we can use it directly as a view key.
             // Otherwise, we need to add it as a "computed column", which
             // extracts and deserializes the attribute from the ":attrs" map.
-            bool view_hash_key_real_column = partial_schema->get_column_definition(to_bytes(view_hash_key));
-            add_column(view_builder, view_hash_key, *attribute_definitions, column_kind::partition_key, !view_hash_key_real_column);
-            unused_attribute_definitions.erase(view_hash_key);
-            if (!view_range_key.empty()) {
+            for (const auto& view_hash_key : view_hash_keys) {
+                bool view_hash_key_real_column = partial_schema->get_column_definition(to_bytes(view_hash_key));
+                add_column(view_builder, view_hash_key, *attribute_definitions, column_kind::partition_key, !view_hash_key_real_column);
+                unused_attribute_definitions.erase(view_hash_key);
+            }
+
+            for (const auto& view_range_key : view_range_keys) {
                 bool view_range_key_real_column = partial_schema->get_column_definition(to_bytes(view_range_key));
                 add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key, !view_range_key_real_column);
-                if (!partial_schema->get_column_definition(to_bytes(view_range_key)) &&
-                    !partial_schema->get_column_definition(to_bytes(view_hash_key))) {
-                    // FIXME: This warning should go away. See issue #6714
-                    elogger.warn("Only 1 regular column from the base table should be used in the GSI key in order to ensure correct liveness management without assumptions");
-                }
                 unused_attribute_definitions.erase(view_range_key);
             }
 
@@ -1567,18 +1688,16 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             // key(s).
             // NOTE: DescribeTable's implementation depends on those keys being added AFTER user specified keys.
             bool spurious_base_key_added_as_range_key = false;
-            if (hash_key != view_hash_key && hash_key != view_range_key) {
+            if (!std::ranges::contains(view_hash_keys, hash_key) && !std::ranges::contains(view_range_keys, hash_key)) {
                 add_column(view_builder, hash_key, *attribute_definitions, column_kind::clustering_key);
                 spurious_base_key_added_as_range_key = true;
             }
-            if (!range_key.empty() && range_key != view_hash_key && range_key != view_range_key) {
+            if (!range_key.empty() && !std::ranges::contains(view_hash_keys, range_key) && !std::ranges::contains(view_range_keys, range_key)) {
                 add_column(view_builder, range_key, *attribute_definitions, column_kind::clustering_key);
                 spurious_base_key_added_as_range_key = true;
             }
-            std::map<sstring, sstring> tags;
-            if (view_range_key.empty() && spurious_base_key_added_as_range_key) {
-                tags[SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY] = "true";
-            }
+
+            auto tags = make_gsi_tags(composite_gsi_keys_supported, spurious_base_key_added_as_range_key, view_hash_keys, view_range_keys);
             view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
             view_builders.emplace_back(std::move(view_builder));
         }
@@ -1920,6 +2039,9 @@ future<executor::request_return_type> executor::update_table(client_state& clien
     co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), enforce_authorization = bool(_enforce_authorization),
                 warn_authorization = bool(_warn_authorization), client_state_other_shard = client_state.move_to_other_shard(), empty_request, &e = this->container(), &audit_info]
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
+        // Materialize the shard-local copy once; every get() creates a whole
+        // new client_state.
+        const service::client_state local_client_state = client_state_other_shard.get();
         schema_ptr schema;
         size_t retries = mm.get_concurrent_ddl_retries();
         for (;;) {
@@ -2184,25 +2306,24 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         // FIXME: read and handle "Projection" parameter. This will
                         // require the MV code to copy just parts of the attrs map.
                         schema_builder view_builder(this_smp_shard_count(), keyspace_name, vname);
-                        auto [view_hash_key, view_range_key] = parse_key_schema(it->value, "GlobalSecondaryIndexUpdates");
+                        const bool composite_gsi_keys_supported = p.local().features().alternator_composite_gsi_keys;
+                        const auto [view_hash_keys, view_range_keys] = parse_gsi_composite_key_schema(it->value, "GlobalSecondaryIndexUpdates",
+                                composite_gsi_keys_supported);
                         // If an attribute is already a real column in the base
                         // table (i.e., a key attribute in the base table),
                         // we can use it directly as a view key. Otherwise, we
                         // need to add it as a "computed column", which extracts
                         // and deserializes the attribute from the ":attrs" map.
-                        bool view_hash_key_real_column =
-                            schema->get_column_definition(to_bytes(view_hash_key));
-                        add_column(view_builder, view_hash_key, *attribute_definitions, column_kind::partition_key, !view_hash_key_real_column);
-                        unused_attribute_definitions.erase(view_hash_key);
-                        if (!view_range_key.empty()) {
+                        for (const auto& view_hash_key : view_hash_keys) {
+                            bool view_hash_key_real_column =
+                                schema->get_column_definition(to_bytes(view_hash_key));
+                            add_column(view_builder, view_hash_key, *attribute_definitions, column_kind::partition_key, !view_hash_key_real_column);
+                            unused_attribute_definitions.erase(view_hash_key);
+                        }
+                        for (const auto& view_range_key : view_range_keys) {
                             bool view_range_key_real_column =
                                 schema->get_column_definition(to_bytes(view_range_key));
                             add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key, !view_range_key_real_column);
-                            if (!schema->get_column_definition(to_bytes(view_range_key)) &&
-                                !schema->get_column_definition(to_bytes(view_hash_key))) {
-                                // FIXME: This warning should go away. See issue #6714
-                                elogger.warn("Only 1 regular column from the base table should be used in the GSI key in order to ensure correct liveness management without assumptions");
-                            }
                             unused_attribute_definitions.erase(view_range_key);
                         }
                         // Surprisingly, although DynamoDB checks for unused
@@ -2216,13 +2337,17 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         // Base key columns which aren't part of the index's key need to
                         // be added to the view nonetheless, as (additional) clustering
                         // key(s).
+                        // NOTE: DescribeTable's implementation depends on those keys being added AFTER user specified keys.
+                        bool spurious_base_key_added_as_range_key = false;
                         for (auto& def : schema->primary_key_columns()) {
-                            if  (def.name_as_text() != view_hash_key && def.name_as_text() != view_range_key) {
+                            std::string_view target_view = def.name_as_text();
+                            if  (!std::ranges::contains(view_hash_keys, target_view) && !std::ranges::contains(view_range_keys, target_view)) {
                                 view_builder.with_column(def.name(), def.type, column_kind::clustering_key);
+                                spurious_base_key_added_as_range_key = true;
                             }
                         }
-                        // GSIs have no tags:
-                        view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>());
+                        auto tags = make_gsi_tags(composite_gsi_keys_supported, spurious_base_key_added_as_range_key, view_hash_keys, view_range_keys);
+                        view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
                         // Note below we don't need to add virtual columns, as all
                         // base columns were copied to view. TODO: reconsider the need
                         // for virtual columns when we support Projection.
@@ -2252,7 +2377,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                 co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, VectorIndexUpdates, StreamSpecification or BillingMode to be specified");
             }
 
-            co_await verify_permission(enforce_authorization, warn_authorization, client_state_other_shard.get(), schema, auth::permission::ALTER, e.local()._stats);
+            co_await verify_permission(enforce_authorization, warn_authorization, local_client_state, schema, auth::permission::ALTER, e.local()._stats);
             auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema, std::vector<view_ptr>(), group0_guard.write_timestamp());
             for (view_ptr view : new_views) {
                 auto m2 = co_await service::prepare_new_view_announcement(p.local(), view, group0_guard.write_timestamp());
@@ -2267,17 +2392,17 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             // Also, when we delete a GSI we should revoke any permissions set on
             // it - so if it's ever created again the old permissions wouldn't be
             // remembered for the new GSI. This is known as "auto-revoke"
-            if (client_state_other_shard.get().user() && (!new_views.empty() || !dropped_views.empty())) {
+            if (local_client_state.user() && (!new_views.empty() || !dropped_views.empty())) {
                 service::group0_batch mc(std::move(group0_guard));
                 mc.add_mutations(std::move(m));
                 for (view_ptr view : new_views) {
                     auto resource = auth::make_data_resource(view->ks_name(), view->cf_name());
                     co_await auth::grant_applicable_permissions(
-                        *client_state_other_shard.get().get_auth_service(), *client_state_other_shard.get().user(), resource, mc);
+                        *local_client_state.get_auth_service(), *local_client_state.user(), resource, mc);
                 }
                 for (const auto& view_name : dropped_views) {
                     auto resource = auth::make_data_resource(schema->ks_name(), view_name);
-                    co_await auth::revoke_all(*client_state_other_shard.get().get_auth_service(), resource, mc);
+                    co_await auth::revoke_all(*local_client_state.get_auth_service(), resource, mc);
                 }
                 std::tie(m, group0_guard) = co_await std::move(mc).extract();
             }
@@ -2888,7 +3013,7 @@ static executor::request_return_type rmw_operation_return(rjson::value&& attribu
     return rjson::print(std::move(ret));
 }
 
-static future<std::unique_ptr<rjson::value>> get_previous_item(
+static future<std::variant<std::unique_ptr<rjson::value>, api_error>> get_previous_item(
             service::storage_proxy& proxy,
             service::client_state& client_state,
             schema_ptr schema,
@@ -2901,20 +3026,22 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
         auto selection = cql3::selection::selection::wildcard(schema);
         auto command = previous_item_read_command(proxy, schema, ck, selection);
         command->allow_limit = db::allow_per_partition_rate_limit::yes;
-        return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
-            [schema, command, selection = std::move(selection), &item_length] (service::storage_proxy::coordinator_query_result qr) {
-        auto previous_item = describe_single_item(schema, command->slice, *selection, *qr.query_result, {}, &item_length);
-        if (previous_item) {
-            return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(*previous_item)));
-        } else {
-            return make_ready_future<std::unique_ptr<rjson::value>>();
+        service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr = 
+                co_await proxy.query_result(
+                    schema, command, to_partition_ranges(*schema, pk), cl,
+                    service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state));
+        if (!rqr) {
+            co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
         }
-    });
+        auto previous_item = describe_single_item(schema, command->slice, *selection, *rqr.assume_value().query_result, {}, &item_length);
+        if (previous_item) {
+            co_return std::make_unique<rjson::value>(std::move(*previous_item));
+        } else {
+            co_return std::unique_ptr<rjson::value>();
+        }
 }
 
-
-
-static future<uint64_t> get_previous_item_size(
+static future<std::variant<uint64_t, api_error>> get_previous_item_size(
             service::storage_proxy& proxy,
             service::client_state& client_state,
             schema_ptr schema,
@@ -2924,7 +3051,10 @@ static future<uint64_t> get_previous_item_size(
     uint64_t item_length = 0;
     // The use of get_previous_item here is for DynamoDB calculation compatibility mode,
     // and the actual value is ignored. For performance reasons, we use CL_LOCAL_ONE.
-    co_await  get_previous_item(proxy, client_state, schema, pk, ck, permit, db::consistency_level::LOCAL_ONE, item_length);
+    auto res = co_await get_previous_item(proxy, client_state, schema, pk, ck, permit, db::consistency_level::LOCAL_ONE, item_length);
+    if (auto error = std::get_if<api_error>(&res)) {
+        co_return std::move(*error);
+    }
     co_return item_length;
 }
 
@@ -2951,7 +3081,11 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
             return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, db::consistency_level::LOCAL_QUORUM, _consumed_capacity._total_bytes).then(
-                    [this, &proxy, &wcu_total, &global_stats, &per_table_stats, trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)] (std::unique_ptr<rjson::value> previous_item) mutable {
+                    [this, &proxy, &wcu_total, &global_stats, &per_table_stats, trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)] (std::variant<std::unique_ptr<rjson::value>, api_error> previous_item_result) mutable {
+                if (auto error = std::get_if<api_error>(&previous_item_result)) {
+                    return make_ready_future<executor::request_return_type>(std::move(*error));
+                }
+                auto previous_item = std::move(std::get<std::unique_ptr<rjson::value>>(previous_item_result));
                 std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp(), cdc_opts);
                 if (!m) {
                     global_stats.conditional_check_failed++;
@@ -3535,12 +3669,21 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     // If alternator_force_read_before_write is true we will first get the previous item size
     // and only then do send the mutation.
     if (_proxy.data_dictionary().get_config().alternator_force_read_before_write()) {
-        std::vector<future<uint64_t>> previous_items_sizes;
+        std::vector<future<std::variant<uint64_t, api_error>>> previous_items_sizes;
         previous_items_sizes.reserve(mutation_builders.size());
 
         // Parallel get all previous item sizes
+        // Note - after starting we need to wait for all the `get_previous_item_size` requests to
+        // complete first before processing the results.
+        // This needs to be done, because `get_previous_item_size` fiber contains reference to `client_state`, which
+        // is allocated on heap in `server::handle_api_request` and partition / clustering key from `mutation_builders`.
+        // If it throws an error and `co_await` returns early (either here or when `.get()` is called) without
+        // waiting for other fibers the function will conclude and those objects be deleted.
+        // Once remaining `get_previous_item_size` fibers resume, they will access deleted memory and crash.
+        // We use `futurize_invoke` to avoid early returning here and `when_all_succeed` below to wait for all fibers to finish
+        // before processing any results.
         for (const auto& b : mutation_builders) {
-            previous_items_sizes.emplace_back(get_previous_item_size(
+            previous_items_sizes.emplace_back(futurize_invoke(get_previous_item_size,
                 _proxy,
                 client_state,
                 b.first,
@@ -3548,10 +3691,19 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 b.second.ck(),
                 permit));
         }
+
+        // We are going to wait for all the requests.
+        // This will throw if any fiber throws an error, but other fibers will be waited for and their results collected
+        // or `ignore_ready_future()` will be called.
+        auto results = co_await when_all_succeed(std::move(previous_items_sizes));
+
         size_t pos = 0;
-        // We are going to wait for all the requests
-        for (auto&& pi : previous_items_sizes) {
-            auto res = co_await std::move(pi);
+        for (auto&& res_result : results) {
+            if (auto error = std::get_if<api_error>(&res_result)) {
+                co_return std::move(*error);
+            }
+            auto res = std::get<uint64_t>(res_result);
+
             if (mutation_builders[pos].second.length_in_bytes() < res) {
                 mutation_builders[pos].second.set_length_in_bytes(res);
             }

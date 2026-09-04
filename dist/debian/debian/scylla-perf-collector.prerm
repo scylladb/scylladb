@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+
+if [ -d /run/systemd/system ]; then
+    systemctl stop scylla-perf-collector.service || true
+    systemctl disable scylla-perf-collector.service || true
+fi
+
+#DEBHELPER#

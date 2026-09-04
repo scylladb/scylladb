@@ -42,6 +42,8 @@ Parameter                                                             Descriptio
 ``-q <quarantine_mode>`` / ``--quarantine-mode <quarantine_mode>``    How to handle quarantined SSTables (one of: INCLUDE|EXCLUDE|ONLY, default INCLUDE)
 --------------------------------------------------------------------  ------------------------------------------------------------------------------------------------------------------
 ``--drop-unfixable-sstables``                                         Drop unfixable SSTables instead of aborting the entire scrub (only valid with ``--mode=SEGREGATE``)
+--------------------------------------------------------------------  ------------------------------------------------------------------------------------------------------------------
+``--quarantine-invalid-sstables <true|false>``                        Should corrupt sstables be quarantined (default true, only valid with ``--mode=VALIDATE``)
 ====================================================================  ==================================================================================================================
 
 ``--`` This option can be used to separate command-line options from the list of argument, (useful when arguments might be mistaken for command-line options.
@@ -57,6 +59,7 @@ SCRUB MODES
 Scrub mode                                                            Description
 ====================================================================  ==================================================================================================================
 VALIDATE                                                              Read-only mode: report any corruptions found while scrubbing but do not fix them.
+                                                                      Additionally, validate component integrity by verifying the stored digests if available.
                                                                       By default, corrupt SSTables are moved into a "quarantine" subdirectory so they will not be subject to compaction.
                                                                       (default).
 --------------------------------------------------------------------  ------------------------------------------------------------------------------------------------------------------
@@ -130,6 +133,18 @@ Method 1: Quarantine and Drop
 
 This will move corrupted SSTables to a ``quarantine`` directory.
 The ``quarantine`` directory is a sub-directory of the table's respective data directory.
+Quarantined SSTables are handled distinctly:
+
+* They participate in reads.
+* They participate in streaming and data migration.
+* They participate in repairs.
+* They do not participate in compaction, but participate in overlap checks for
+  the purpose of tombstone-gc.
+
+The purpose of the quarantine is to keep corrupt SSTables out of compaction, which can spread the compaction or can get in a fail-retry loop. It also makes corrupt SSTables easy to find and retrieve for investigation.
+
+It is possible to opt-out from quarantining SSTables by passing ``--quarantine-invalid-sstables=false`` to nodetool.
+
 
 **Step 2** (Optional): Preserve quarantined SSTables for analysis:
 

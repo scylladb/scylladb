@@ -19,7 +19,7 @@ from typing import List, Dict, Callable, Optional, Tuple
 from cassandra import ConsistencyLevel
 from cassandra import WriteTimeout, ReadTimeout, OperationTimedOut
 from cassandra.query import SimpleStatement, PreparedStatement
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.tablets import get_tablet_count
 
 logger = logging.getLogger(__name__)
@@ -219,7 +219,7 @@ class BaseLWTTester:
     """
 
     def __init__(
-            self, manager: ManagerClient, ks: str, tbl: str,
+            self, manager: ScyllaClusterManager, ks: str, tbl: str,
             num_workers: int = DEFAULT_WORKERS, num_keys: int = DEFAULT_NUM_KEYS, *,
             scale_timeout: Callable[[int | float], int | float],
             use_counters: bool = False, counters_random_delta: bool = False,
@@ -420,13 +420,13 @@ async def get_token_for_pk(cql, ks: str, tbl: str, pk: int) -> int:
     return row.tk
 
 
-async def get_host_map(manager: ManagerClient, servers):
+async def get_host_map(manager: ScyllaClusterManager, servers):
     """Create a mapping from host IDs to server info"""
     ids = await asyncio.gather(*[manager.get_host_id(s.server_id) for s in servers])
     return {hid: srv for hid, srv in zip(ids, servers)}
 
 
-async def pick_non_replica_server(manager: ManagerClient, servers, replica_host_ids):
+async def pick_non_replica_server(manager: ScyllaClusterManager, servers, replica_host_ids):
     """Find a random server that is not a replica for the given tablet"""
     host_map = await get_host_map(manager, servers)
     non_replicas = [srv for hid, srv in host_map.items() if hid not in replica_host_ids]
@@ -434,7 +434,7 @@ async def pick_non_replica_server(manager: ManagerClient, servers, replica_host_
 
 
 async def wait_for_tablet_count(
-        manager: ManagerClient, server, ks: str, tbl: str,
+        manager: ScyllaClusterManager, server, ks: str, tbl: str,
         predicate, target: int, scale_timeout: Callable[[int | float], int | float], timeout_s: int = 180, poll_s: float = 1.0
     ):
     """

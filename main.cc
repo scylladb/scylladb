@@ -138,6 +138,7 @@
 #include "utils/labels.hh"
 #include "tools/utils.hh"
 #include "schema/compression_initializer.hh"
+#include "schema/speculative_retry_initializer.hh"
 
 
 namespace fs = std::filesystem;
@@ -926,6 +927,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return bool(feature_service.local().sstable_compression_dicts);
             });
 
+            // Register the default speculative_retry value for user tables.
+            // Registration parses the option value, so an invalid value fails
+            // startup.
+            register_speculative_retry_initializer(*cfg);
+
             cfg->setup_directories();
 
             // We're writing to a non-atomic variable here. But bool writes are atomic
@@ -1255,6 +1261,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             dbcfg.compaction_scheduling_group = create_scheduling_group("compaction", "comp", 1000).get();
             dbcfg.maintenance_compaction_scheduling_group = create_scheduling_group("maintenance_compaction", "manc", 200, maintenance_supergroup).get();
             dbcfg.memory_compaction_scheduling_group = create_scheduling_group("mem_compaction", "mcmp", 1000).get();
+            dbcfg.logstor_compaction_scheduling_group = create_scheduling_group("logstor_compaction", "lcmp", 1000).get();
             dbcfg.streaming_scheduling_group = create_scheduling_group("streaming", "strm", 200, maintenance_supergroup).get();
             debug::streaming_scheduling_group = dbcfg.streaming_scheduling_group;
             dbcfg.maintenance_scheduling_group = maintenance_scheduling_group;
@@ -1346,6 +1353,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sstm.start(std::ref(*cfg), stm_cfg).get();
             auto stop_sstm = defer_verbose_shutdown("sstables storage manager", [&sstm] {
                 sstm.stop().get();
+            });
+
+            api::set_server_storage_manager(ctx, sstm).get();
+            auto stop_storage_manager_api = defer_verbose_shutdown("storage manager API", [&ctx] {
+                api::unset_server_storage_manager(ctx).get();
             });
 
             static sharded<auth::service> auth_service;

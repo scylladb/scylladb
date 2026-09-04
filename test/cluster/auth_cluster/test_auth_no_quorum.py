@@ -6,7 +6,7 @@
 
 import asyncio
 import time
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 import pytest
 from cassandra.auth import PlainTextAuthProvider
 from test.pylib.rest_client import read_barrier
@@ -19,7 +19,7 @@ from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 Tests how cluster behaves when lost quorum. Ideally for operations with CL=1 live part of the
 cluster should still work but that's guaranteed only if auth data is replicated everywhere.
 """
-async def test_auth_no_quorum(manager: ManagerClient) -> None:
+async def test_auth_no_quorum(manager: ScyllaClusterManager) -> None:
     config = {
         **auth_config,
         # disable auth cache
@@ -59,7 +59,7 @@ async def test_auth_no_quorum(manager: ManagerClient) -> None:
 """
 Tests raft snapshot transfer of auth data.
 """
-async def test_auth_raft_snapshot_transfer(manager: ManagerClient) -> None:
+async def test_auth_raft_snapshot_transfer(manager: ScyllaClusterManager) -> None:
     servers = await manager.servers_add(1, config=auth_config)
 
     cql = manager.get_cql()

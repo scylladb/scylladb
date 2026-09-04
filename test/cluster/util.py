@@ -13,11 +13,15 @@ import operator
 import time
 import re
 from contextlib import asynccontextmanager, contextmanager, suppress
+from copy import deepcopy
+from dataclasses import dataclass, field
+from enum import Enum
 
+import pytest
 from cassandra.cluster import ConnectionException, ConsistencyLevel, NoHostAvailable, Session, SimpleStatement  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
 from test.pylib.internal_types import ServerInfo, HostID
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError, get_host_api_address, read_barrier
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, get_available_host, unique_name
 from typing import Optional, List, Union
@@ -26,8 +30,152 @@ logger = logging.getLogger(__name__)
 
 UUID_REGEX = re.compile(r"([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})")
 
+# A node that is rolled back out of a join may terminate on the ban notification instead of
+# on its own failed request, so tests that expect a join to fail must accept either message.
+BANNED_NOTIFICATION = "received notification of being banned from the cluster from"
 
-async def reconnect_driver(manager: ManagerClient) -> Session:
+
+@dataclass(frozen=True)
+class FeatureConfig:
+    """Describes how a test's keyspace, table and cluster config should be
+    adjusted to run under a particular storage/consistency configuration.
+
+    - ``ks_opts``: appended to the keyspace ``WITH ...`` clause.
+    - ``table_opts``: appended to the ``CREATE TABLE ...`` statement.
+    - ``cluster_cfg``: merged into the per-server config dict passed to
+      ``manager.server_add``.
+    """
+    ks_opts: str = ""
+    table_opts: str = ""
+    cluster_cfg: dict = field(default_factory=dict)
+
+    @property
+    def strongly_consistent(self) -> bool:
+        """True if this configuration creates a strongly-consistent keyspace.
+        NOTE: it checks only global, since local strong consistency is not yet implemented.
+        """
+        return "consistency = 'global'" in ' '.join(self.ks_opts.split())
+
+
+    def get_cluster_cfg(self, base: dict) -> dict:
+        """Merge a FeatureConfig's cluster_cfg into a test's base config dict.
+
+        List-valued keys (e.g. 'experimental_features', 'error_injections_at_startup')
+        are unioned so a configuration can add features without clobbering the ones
+        the test already relies on. Other keys overwrite the base value. The base
+        dict is not modified; a new merged dict is returned.
+        """
+        merged = deepcopy(base)
+        for key, value in self.cluster_cfg.items():
+            if isinstance(value, list) and isinstance(merged.get(key), list):
+                merged[key] = merged[key] + [v for v in value if v not in merged[key]]
+            else:
+                merged[key] = deepcopy(value)
+        return merged
+
+    @staticmethod
+    def _merge_with_clause(stmt: str, opts: str) -> str:
+        """Merge a WITH clause into a CQL statement, preserving validity.
+
+        If the statement already contains a WITH clause, the option is folded in with AND.
+        A trailing ';' is preserved.
+        """
+        if not opts:
+            return stmt
+
+        stmt = stmt.rstrip()
+        has_semicolon = stmt.endswith(";")
+        if has_semicolon:
+            stmt = stmt[:-1].rstrip()
+
+        # A statement can only have one WITH clause, so fold ours in with AND.
+        if "with " in stmt.lower():
+            opts = opts.replace(" WITH ", " AND ", 1)
+
+        return f"{stmt}{opts}{';' if has_semicolon else ''}"
+
+    def get_table_opts(self, create_stmt: str) -> str:
+        """Append a FeatureConfig's table_opts to a CREATE TABLE statement."""
+        return self._merge_with_clause(create_stmt, self.table_opts)
+
+    def get_keyspace_opts(self, create_stmt: str) -> str:
+        """Append a FeatureConfig's ks_opts to a CREATE KEYSPACE statement."""
+        return self._merge_with_clause(create_stmt, self.ks_opts)
+
+
+class FeatureConfigurations(Enum):
+    EVENTUAL_CONSISTENCY = FeatureConfig()
+    STRONG_CONSISTENCY = FeatureConfig(
+        ks_opts=" WITH consistency = 'global'",
+        cluster_cfg={"experimental_features": ["strongly-consistent-tables"]},
+    )
+    LOGSTOR_EVENTUAL_CONSISTENCY = FeatureConfig(
+        table_opts=" WITH storage_engine = 'logstor'",
+        cluster_cfg={"experimental_features": ["logstor"], "logstor_disk_size_in_mb":20, "logstor_file_size_in_mb":1},
+    )
+    LOGSTOR_STRONG_CONSISTENCY = FeatureConfig(
+        ks_opts=" WITH consistency = 'global'",
+        table_opts=" WITH storage_engine = 'logstor'",
+        cluster_cfg={"experimental_features": ["logstor", "strongly-consistent-tables"],  "logstor_disk_size_in_mb":20, "logstor_file_size_in_mb":1},
+    )
+
+
+def feature_configs(*configs: FeatureConfigurations):
+    """Build pytest.mark.parametrize arguments for the named configurations.
+    The enum name becomes the test id. Logstor configurations are skipped until
+    the logstor compaction controller (https://github.com/scylladb/scylladb/pull/30058) lands.
+    """
+    logstor_skip = pytest.mark.skip_bug(
+        link="https://scylladb.atlassian.net/browse/SCYLLADB-3093",
+        reason="logstor storage engine is not yet stable; blocked on the logstor compaction "
+               "controller (https://github.com/scylladb/scylladb/pull/30058)",
+    )
+    return [
+        pytest.param(config.value, id=config.name.lower(),
+                     marks=[logstor_skip] if config.name.startswith("LOGSTOR_") else [])
+        for config in configs
+    ]
+
+
+async def count_rows(cql, feature_config: FeatureConfig, query_template: str, ks: str, table: str, keys, partition_key: str):
+    """Count rows in a table, honoring the feature config's consistency model.
+
+    ``query_template`` must be a ``SELECT COUNT(*)`` aggregate that references
+    the table as ``{ks}.{table}`` (this token is used as the insertion anchor).
+    Post-FROM clauses (e.g. ``BYPASS CACHE``, ``LIMIT``) are allowed.
+
+    Eventual-consistency keyspaces run ``query_template`` once at CL=ALL and
+    return the count.
+
+    Strongly-consistent keyspaces reject that query on two counts: CL=ALL is not
+    allowed ("must use QUORUM/LOCAL_QUORUM or ONE/LOCAL_ONE"), and scans are
+    rejected ("strongly consistent queries can only target a single partition").
+    For those we run the same template scoped to a single partition by inserting
+    ``WHERE {partition_key} = <key>`` after the table token (so clause order
+    stays valid) for each key at LOCAL_QUORUM, and sum the per-partition counts.
+    """
+
+    async def run_query_with_semaphore(sem, head, sep, tail, key):
+        async with sem:
+            return await cql.run_async(SimpleStatement(
+                    f"{head}{sep} WHERE {partition_key} = {key}{tail}",
+                    consistency_level=ConsistencyLevel.LOCAL_QUORUM))
+
+    query = query_template.format(ks=ks, table=table)
+    if feature_config.strongly_consistent:
+        semaphore = asyncio.Semaphore(100)
+        anchor = f"{ks}.{table}"
+        head, sep, tail = query.partition(anchor)
+        rows = await asyncio.gather(*[run_query_with_semaphore(semaphore, head, sep, tail, key) for key in keys])
+        return sum(r[0].count for r in rows)
+    else:
+        row = await cql.run_async(SimpleStatement(
+            query,
+            consistency_level=ConsistencyLevel.ALL))
+        return row[0].count
+
+
+async def reconnect_driver(manager: ScyllaClusterManager) -> Session:
     """Can be used as a workaround for scylladb/python-driver#295.
 
        When restarting a node, a pre-existing session connected to the cluster
@@ -50,7 +198,7 @@ async def reconnect_driver(manager: ManagerClient) -> Session:
     return cql
 
 
-async def get_token_ring_host_ids(manager: ManagerClient, srv: ServerInfo) -> set[str]:
+async def get_token_ring_host_ids(manager: ScyllaClusterManager, srv: ServerInfo) -> set[str]:
     """Get the host IDs of normal token owners known by `srv`."""
     token_endpoint_map = await manager.api.client.get_json("/storage_service/tokens_endpoint", srv.ip_addr)
     normal_endpoints = {e["value"] for e in token_endpoint_map}
@@ -63,7 +211,7 @@ async def get_token_ring_host_ids(manager: ManagerClient, srv: ServerInfo) -> se
     return normal_host_ids
 
 
-async def get_current_group0_config(manager: ManagerClient, srv: ServerInfo) -> set[tuple[str, bool]]:
+async def get_current_group0_config(manager: ScyllaClusterManager, srv: ServerInfo) -> set[tuple[str, bool]]:
     """Get the current Raft group 0 configuration known by `srv`.
        The first element of each tuple is the Raft ID of the node (which is equal to the Host ID),
        the second element indicates whether the node is a voter.
@@ -82,7 +230,7 @@ async def get_current_group0_config(manager: ManagerClient, srv: ServerInfo) -> 
     return result
 
 
-async def get_topology_coordinator(manager: ManagerClient) -> HostID:
+async def get_topology_coordinator(manager: ScyllaClusterManager) -> HostID:
     """Get the host ID of the topology coordinator."""
     host = await get_available_host(manager.cql, time.time() + 60)
     host_address = get_host_api_address(host)
@@ -98,7 +246,7 @@ async def get_topology_version(cql: Session, host: Host) -> int:
 
 
 
-async def check_token_ring_and_group0_consistency(manager: ManagerClient) -> None:
+async def check_token_ring_and_group0_consistency(manager: ScyllaClusterManager) -> None:
     """Ensure that the normal token owners and group 0 members match
        according to each currently running server.
 
@@ -113,7 +261,7 @@ async def check_token_ring_and_group0_consistency(manager: ManagerClient) -> Non
         assert token_ring_ids == group0_ids
 
 
-async def wait_for_no_pending_topology_transition(manager: ManagerClient, deadline: float) -> None:
+async def wait_for_no_pending_topology_transition(manager: ScyllaClusterManager, deadline: float) -> None:
     """Wait until there is no pending topology transition.
     Polls system.topology until the transition_state column is null,
     indicating that the topology coordinator has finished processing the
@@ -149,7 +297,7 @@ async def wait_for_no_pending_topology_transition(manager: ManagerClient, deadli
     await wait_for(no_transition, deadline, period=.5)
 
 
-async def wait_for_no_running_compactions(manager: ManagerClient,
+async def wait_for_no_running_compactions(manager: ScyllaClusterManager,
                                           servers: List[ServerInfo],
                                           deadline: float) -> None:
     """Wait until there are no running compactions on any of the given nodes.
@@ -167,7 +315,7 @@ async def wait_for_no_running_compactions(manager: ManagerClient,
     await wait_for(no_compactions, deadline)
 
 
-async def wait_for_token_ring_and_group0_consistency(manager: ManagerClient, deadline: float) -> None:
+async def wait_for_token_ring_and_group0_consistency(manager: ScyllaClusterManager, deadline: float) -> None:
     """
     Weaker version of the above check.
 
@@ -216,7 +364,7 @@ async def wait_for_cdc_generations_publishing(cql: Session, hosts: list[Host], d
         await wait_for(all_generations_published, deadline=deadline)
 
 
-async def check_system_topology_and_cdc_generations_v3_consistency(manager: ManagerClient, live_hosts: list[Host], cqls: Optional[list[Session]] = None, ignored_hosts: list[Host] = []):
+async def check_system_topology_and_cdc_generations_v3_consistency(manager: ScyllaClusterManager, live_hosts: list[Host], cqls: Optional[list[Session]] = None, ignored_hosts: list[Host] = []):
     # The cqls parameter is a temporary workaround for testing the recovery mode in the presence of live zero-token
     # nodes. A zero-token node requires a different cql session not to be ignored by the driver because of empty tokens
     # in the system.peers table.
@@ -285,7 +433,7 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
         # at a different time on different nodes).
         assert [row for row in topo_results[0] if row.host_id in live_host_ids] == live_topo_res
 
-async def check_node_log_for_failed_mutations(manager: ManagerClient, server: ServerInfo):
+async def check_node_log_for_failed_mutations(manager: ScyllaClusterManager, server: ServerInfo):
     logging.info(f"Checking that node {server} had no failed mutations")
     log = await manager.server_open_log(server.server_id)
     occurrences = await log.grep(expr="Failed to apply mutation from", filter_expr="(TRACE|DEBUG|INFO)")
@@ -354,7 +502,7 @@ async def trigger_stepdown(manager, server: ServerInfo) -> None:
 
 
 
-async def get_coordinator_host_ids(manager: ManagerClient) -> list[str]:
+async def get_coordinator_host_ids(manager: ScyllaClusterManager) -> list[HostID]:
     """ Get coordinator host id from history
 
     Select all records with elected coordinator
@@ -367,16 +515,16 @@ async def get_coordinator_host_ids(manager: ManagerClient) -> list[str]:
 
     cql = manager.get_cql()
     result = await cql.run_async(stm)
-    coordinators_ids = []
+    coordinators_ids: list[HostID] = []
     for row in result:
         coordinator_host_id = get_uuid_from_str(row.description)
         if coordinator_host_id:
-            coordinators_ids.append(coordinator_host_id)
+            coordinators_ids.append(HostID(coordinator_host_id))
     assert len(coordinators_ids) > 0, f"No coordinator ids {coordinators_ids} were found"
     return coordinators_ids
 
 
-async def get_coordinator_host(manager: ManagerClient) -> ServerInfo:
+async def get_coordinator_host(manager: ScyllaClusterManager) -> ServerInfo:
     """Get topology coordinator ServerInfo
 
     Queries system.group0_history to find the current topology coordinator
@@ -400,7 +548,7 @@ async def get_coordinator_host(manager: ManagerClient) -> ServerInfo:
     return await wait_for(_find_coordinator, deadline=time.time() + 60)
 
 
-async def ensure_group0_leader_on(manager: ManagerClient, server: ServerInfo, timeout_seconds = 60):
+async def ensure_group0_leader_on(manager: ScyllaClusterManager, server: ServerInfo, timeout_seconds = 60):
     """
     Ensure that raft group0 leader runs on a given server, triggering stepdowns if necessary.
     Assumes that servers are not added concurrently.
@@ -428,7 +576,7 @@ async def ensure_group0_leader_on(manager: ManagerClient, server: ServerInfo, ti
         logger.info(f"triggering stepdown of {coord}/{coord_host.ip_addr}")
         await manager.api.client.post("/raft/trigger_stepdown", host=coord_host.ip_addr)
 
-async def get_non_coordinator_host(manager: ManagerClient) -> ServerInfo | None:
+async def get_non_coordinator_host(manager: ScyllaClusterManager) -> ServerInfo | None:
     """Get first non-coordinator ServerInfo."""
 
     coordinator_id = (await get_coordinator_host(manager=manager)).server_id
@@ -443,20 +591,19 @@ def get_uuid_from_str(string: str) -> str:
     return uuid
 
 
-async def wait_new_coordinator_elected(manager: ManagerClient, expected_num_of_elections: int, deadline: float) -> None:
-    """Wait new coordinator to be elected
+async def wait_new_coordinator_elected(manager: ScyllaClusterManager, previous_coordinator_id: HostID, deadline: float) -> None:
+    """Wait for a node other than previous_coordinator_id to become topology coordinator
 
-    Wait while the table 'system.group0_history' will have at least
-    expected_num_of_elections lines with 'new topology coordinator',
-    and the latest host_id coordinator differs from the previous one.
+    previous_coordinator_id is the host id of the node which held the coordinator
+    role and then stopped or crashed, taken from that node itself.
     """
     async def new_coordinator_elected():
         coordinators_ids = await get_coordinator_host_ids(manager)
         logger.debug(f"Coordinators ids in history: {coordinators_ids}")
-        if len(coordinators_ids) >= expected_num_of_elections \
-            and coordinators_ids[0] != coordinators_ids[1]:
+        if coordinators_ids[0] != previous_coordinator_id:
             return True
-        logger.warning("New coordinator was not elected %s", coordinators_ids)
+        logger.warning("New coordinator was not elected, still %s, history %s",
+                       previous_coordinator_id, coordinators_ids)
 
     await wait_for(new_coordinator_elected, deadline=deadline)
 
@@ -482,11 +629,11 @@ async def create_new_test_keyspace(cql: Session, opts, host=None):
     return keyspace
 
 @asynccontextmanager
-async def new_test_keyspace(manager: ManagerClient, opts, host=None):
+async def new_test_keyspace(manager: ScyllaClusterManager, opts, host=None):
     """
     A utility function for creating a new temporary keyspace with given
     options. It can be used in a "async with", as:
-        async with new_test_keyspace(ManagerClient, '...') as keyspace:
+        async with new_test_keyspace(ScyllaClusterManager, '...') as keyspace:
     """
     keyspace = await create_new_test_keyspace(manager.get_cql(), opts, host)
     try:
@@ -501,7 +648,7 @@ async def new_test_keyspace(manager: ManagerClient, opts, host=None):
 
 previously_used_table_names = []
 @asynccontextmanager
-async def new_test_table(manager: ManagerClient, keyspace, schema, extra="", host=None, reuse_tables=True):
+async def new_test_table(manager: ScyllaClusterManager, keyspace, schema, extra="", host=None, reuse_tables=True):
     """
     A utility function for creating a new temporary table with a given schema.
     Because Scylla becomes slower when a huge number of uniquely-named tables
@@ -528,7 +675,7 @@ async def new_test_table(manager: ManagerClient, keyspace, schema, extra="", hos
             previously_used_table_names.append(table_name)
 
 @asynccontextmanager
-async def new_materialized_view(manager: ManagerClient, table, select, pk, where, extra=""):
+async def new_materialized_view(manager: ScyllaClusterManager, table, select, pk, where, extra=""):
     """
     A utility function for creating a new temporary materialized view in
     an existing table.
@@ -542,7 +689,7 @@ async def new_materialized_view(manager: ManagerClient, table, select, pk, where
         await manager.get_cql().run_async(f"DROP MATERIALIZED VIEW {mv}")
 
 
-async def keyspace_has_tablets(manager: ManagerClient, keyspace: str) -> bool:
+async def keyspace_has_tablets(manager: ScyllaClusterManager, keyspace: str) -> bool:
     """
     Checks whether the given keyspace uses tablets.
     Adapted from its counterpart in the cqlpy test: cqlpy/util.py::keyspace_has_tablets.

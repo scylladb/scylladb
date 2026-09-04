@@ -37,7 +37,8 @@ static const std::unordered_map<sstring, auth::permission> permission_names({
         {"AUTHORIZE", auth::permission::AUTHORIZE},
         {"DESCRIBE", auth::permission::DESCRIBE},
         {"EXECUTE", auth::permission::EXECUTE},
-        {"VECTOR_SEARCH_INDEXING", auth::permission::VECTOR_SEARCH_INDEXING}});
+        {"VECTOR_SEARCH_INDEXING", auth::permission::VECTOR_SEARCH_INDEXING},
+        {"TEXT_SEARCH_INDEXING", auth::permission::TEXT_SEARCH_INDEXING}});
 
 const sstring& auth::permissions::to_string(permission p) {
     for (auto& v : permission_names) {

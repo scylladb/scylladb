@@ -17,7 +17,7 @@ from cassandra.pool import Host  # type: ignore
 
 from test.pylib.util import wait_for_cql_and_get_hosts, execute_with_tracing
 from test.pylib.internal_types import ServerInfo
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace
 
 
@@ -183,7 +183,7 @@ incremental_repair_test_data = [pytest.param(row_tombstone_data, id="row-tombsto
 
 
 @pytest.mark.parametrize("data_class", incremental_repair_test_data)
-async def test_incremental_read_repair(data_class: DataClass, manager: ManagerClient):
+async def test_incremental_read_repair(data_class: DataClass, manager: ScyllaClusterManager):
     """Stress the incremental read repair logic
 
     Write a long stream of row tombstones, with a live row before and after.
@@ -221,8 +221,9 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ManagerCl
                 await manager.server_stop_gracefully(other_node.server_id)
 
             await manager.driver_connect(node)
+            cql, _ = await manager.get_ready_cql([node])
 
-            await data_class.write_data(manager.get_cql(), ks, total_rows, node_live_rows, all_live_rows)
+            await data_class.write_data(cql, ks, total_rows, node_live_rows, all_live_rows)
 
             for other_node in other_nodes:
                 await manager.server_start(other_node.server_id)
@@ -266,6 +267,18 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ManagerCl
         check_rows(cql, host1, node1_rows)
         check_rows(cql, host2, node2_rows)
 
+        async def read_repair_metrics() -> tuple[int, int]:
+            digest_mismatches = 0
+            diff_found = 0
+            for node in nodes:
+                metrics = await manager.metrics.query(node.ip_addr)
+                digest_mismatches += metrics.get("scylla_storage_proxy_coordinator_foreground_read_repairs") or 0
+                digest_mismatches += metrics.get("scylla_storage_proxy_coordinator_background_read_repairs") or 0
+                diff_found += metrics.get("scylla_storage_proxy_coordinator_read_repairs_diff_found_total") or 0
+            return int(digest_mismatches), int(diff_found)
+
+        digest_mismatches_before, diff_found_before = await read_repair_metrics()
+
         logger.info("Run read-repair")
         res = cql.execute(SimpleStatement(data_class.get_select_query(ks), consistency_level=ConsistencyLevel.ALL), trace=True)
         res_rows = []
@@ -297,6 +310,15 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ManagerCl
             assert row_id in all_rows
             data_class.check_result_row(row_id, res_row)
         assert actual_row_ids == all_rows
+
+        # The replicas diverged, so the CL=ALL read must have hit a digest
+        # mismatch, and the reconciliation must have found actual differences.
+        digest_mismatches_after, diff_found_after = await read_repair_metrics()
+        assert digest_mismatches_after > digest_mismatches_before
+        assert diff_found_after > diff_found_before
+        # Reconciliations are triggered by digest mismatches, so no more
+        # diff-found events than digest mismatches.
+        assert diff_found_after - diff_found_before <= digest_mismatches_after - digest_mismatches_before
 
         for node in (node1, node2):
             await manager.api.keyspace_flush(node.ip_addr, ks)

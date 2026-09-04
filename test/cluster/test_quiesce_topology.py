@@ -14,7 +14,7 @@ The enhanced API ensures that after quiesce_topology returns:
 - The topology is in a stable state with no pending transitions.
 """
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.tablets import get_replica_count_by_host
 from test.cluster.util import new_test_keyspace, get_topology_coordinator
 import pytest
@@ -31,7 +31,7 @@ QUIESCE_DEBUG_CMDLINE = [
 
 
 @pytest.mark.asyncio
-async def test_quiesce_waits_for_balancer(manager: ManagerClient):
+async def test_quiesce_waits_for_balancer(manager: ScyllaClusterManager):
     """
     Verify that quiesce_topology waits for the balancer to refresh stats
     and complete migrations.
@@ -71,7 +71,7 @@ async def test_quiesce_waits_for_balancer(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_quiesce_blocks_until_refresh_completes(manager: ManagerClient):
+async def test_quiesce_blocks_until_refresh_completes(manager: ScyllaClusterManager):
     """
     Verify that quiesce blocks while the load stats refresh is stalled.
     Uses the refresh_tablet_load_stats_pause injection to pause the refresh,
@@ -124,7 +124,7 @@ async def test_quiesce_blocks_until_refresh_completes(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_quiesce_retries_until_balance_plan_is_empty(manager: ManagerClient):
+async def test_quiesce_retries_until_balance_plan_is_empty(manager: ScyllaClusterManager):
     """
     Verify that quiesce retries after the balancer reports work. If the first
     request observes a non-empty plan, the API retries and only returns after a

@@ -21,9 +21,13 @@
 #include "test/lib/exception_utils.hh"
 #include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
+#include <set>
+
 #include "ldap_common.hh"
 #include "service/migration_manager.hh"
 #include "test/lib/cql_test_env.hh"
+#include "transport/messages/result_message.hh"
+#include "types/types.hh"
 
 auto make_manager(cql_test_env& env) {
     auto stop_role_manager = [] (auth::standard_role_manager* m) {
@@ -585,21 +589,41 @@ SEASTAR_TEST_CASE(ldap_delegates_config) {
 
 SEASTAR_TEST_CASE(ldap_delegates_attributes) {
     return do_with_cql_env_thread([](cql_test_env& env) {
+        auto fetch_all_attributes = [&env] {
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(
+                    env.execute_cql("SELECT role, name, value FROM system.role_attributes").get());
+            BOOST_REQUIRE(rows);
+            std::set<sstring> attributes;
+            for (const auto& row : rows->rs().result_set().rows()) {
+                auto text = [] (const managed_bytes_opt& cell) {
+                    return cell ? value_cast<sstring>(utf8_type->deserialize(managed_bytes_view(*cell))) : sstring("<null>");
+                };
+                attributes.insert(seastar::format("({}, {}, {})", text(row[0]), text(row[1]), text(row[2])));
+            }
+            return attributes;
+        };
         auto m = make_ldap_manager(env);
         m->start().get();
         do_with_mc(env, [&] (service::group0_batch& b) {
             m->create("r", auth::role_config{}, b).get();
         });
         BOOST_REQUIRE(!m->get_attribute("r", "a", auth::internal_distributed_query_state()).get());
+        // set_attribute then remove_attribute must restore this exact table
+        // content. A row stored under a wrong name or role is invisible to
+        // get_attribute, so only comparing the whole table can prove it.
+        const auto baseline = fetch_all_attributes();
         do_with_mc(env, [&] (service::group0_batch& b) {
             m->set_attribute("r", "a", "3", b).get();
         });
-        // TODO: uncomment when failure is fixed.
-        //BOOST_REQUIRE_EQUAL("3", *m->get_attribute("r", "a").get());
+        BOOST_CHECK_EQUAL("3", m->get_attribute("r", "a", auth::internal_distributed_query_state()).get().value_or("<no attribute>"));
+        auto with_attribute = baseline;
+        with_attribute.insert("(r, a, 3)");
+        BOOST_CHECK_EQUAL(fetch_all_attributes(), with_attribute);
         do_with_mc(env, [&] (service::group0_batch& b) {
             m->remove_attribute("r", "a", b).get();
         });
         BOOST_REQUIRE(!m->get_attribute("r", "a", auth::internal_distributed_query_state()).get());
+        BOOST_CHECK_EQUAL(fetch_all_attributes(), baseline);
     });
 }
 

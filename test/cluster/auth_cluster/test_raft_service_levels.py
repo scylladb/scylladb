@@ -9,7 +9,7 @@ import asyncio
 import logging
 from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.cluster.util import trigger_snapshot, reconnect_driver, \
         wait_for_token_ring_and_group0_consistency, get_topology_coordinator
@@ -24,7 +24,7 @@ from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 logger = logging.getLogger(__name__)
 DRIVER_SL_NAME = "driver"
 
-async def test_service_levels_snapshot(manager: ManagerClient):
+async def test_service_levels_snapshot(manager: ScyllaClusterManager):
     """
         Cluster with 3 nodes.
         Add 10 service levels. Start new server and it should get a snapshot on bootstrap.
@@ -88,7 +88,7 @@ def grant_roles_stmts():
         "GRANT r3 TO r2",
     ]
 
-async def get_roles_connections(manager: ManagerClient, servers):
+async def get_roles_connections(manager: ScyllaClusterManager, servers):
     roles = ["r1", "r2", "r3"]
     cluster_connections = []
     sessions = []
@@ -102,7 +102,7 @@ async def get_roles_connections(manager: ManagerClient, servers):
     
     return cluster_connections, sessions
 
-async def assert_connections_params(manager: ManagerClient, hosts, expect):
+async def assert_connections_params(manager: ScyllaClusterManager, hosts, expect):
     for host in hosts:
         params = await manager.api.client.get_json("/cql_server_test/connections_params", host=host.address)
         for param in params:
@@ -114,7 +114,7 @@ async def assert_connections_params(manager: ManagerClient, hosts, expect):
             assert param["scheduling_group"]
 
 @pytest.mark.skip_mode(mode='release', reason='cql server testing REST API is not supported in release mode')
-async def test_connections_parameters_auto_update(manager: ManagerClient, build_mode):
+async def test_connections_parameters_auto_update(manager: ScyllaClusterManager, build_mode):
     servers = await manager.servers_add(3, config=auth_config, auto_rack_dc="dc1")
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
@@ -197,7 +197,7 @@ async def test_connections_parameters_auto_update(manager: ManagerClient, build_
     for cluster_conn in cluster_connections:
         safe_driver_shutdown(cluster_conn)
 
-async def test_service_level_cache_after_restart(manager: ManagerClient):
+async def test_service_level_cache_after_restart(manager: ScyllaClusterManager):
     servers = await manager.servers_add(1, config=auth_config, auto_rack_dc="dc1")
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
@@ -224,7 +224,7 @@ async def test_service_level_cache_after_restart(manager: ManagerClient):
     assert len(result) == 2 and result[0].workload_type == 'batch' and result[1].workload_type == 'batch'
 
 @pytest.mark.skip_mode(mode='release', reason='error injection is disabled in release mode')
-async def test_shares_check(manager: ManagerClient):
+async def test_shares_check(manager: ScyllaClusterManager):
     srv = await manager.server_add(config={
         "error_injections_at_startup": [
             { "name": "suppress_features", "value": "WORKLOAD_PRIORITIZATION"}
@@ -252,7 +252,7 @@ async def test_shares_check(manager: ManagerClient):
     await cql.run_async(f"ALTER SERVICE LEVEL {sl1} WITH shares=100")
 
 @pytest.mark.skip_mode(mode='release', reason='error injection is disabled in release mode')
-async def test_service_levels_over_limit(manager: ManagerClient):
+async def test_service_levels_over_limit(manager: ScyllaClusterManager):
     srv = await manager.server_add(config={**auth_config,
         "error_injections_at_startup": ['allow_service_level_over_limit']
     })
@@ -278,7 +278,7 @@ async def test_service_levels_over_limit(manager: ManagerClient):
     await log.wait_for(f"service level \"{sls[-2]}\" will be effectively dropped to make scheduling group available to \"{sl_name}\", please consider removing a service level.", timeout=10, from_mark=mark)
 
 # Reproduces issue scylla-enterprise#4912
-async def test_service_level_metric_name_change(manager: ManagerClient) -> None:
+async def test_service_level_metric_name_change(manager: ScyllaClusterManager) -> None:
     servers = await manager.servers_add(2, config=auth_config, auto_rack_dc="dc1")
     s = servers[0]
     cql = manager.get_cql()
@@ -315,13 +315,13 @@ async def test_service_level_metric_name_change(manager: ManagerClient) -> None:
 
 # Reproduces scylladb/scylladb#24792.
 @pytest.mark.skip_mode(mode='release', reason='error injection is disabled in release mode')
-async def test_reload_service_levels_after_auth_service_is_stopped(manager: ManagerClient):
+async def test_reload_service_levels_after_auth_service_is_stopped(manager: ScyllaClusterManager):
     config = {**auth_config, "error_injections_at_startup": ["reload_service_level_cache_after_auth_service_is_stopped"]}
     s1 = await manager.server_add(config=config)
     await manager.server_stop_gracefully(s1.server_id)
 
 # Reproduces scylladb/scylladb#26190
-async def test_service_level_reuse_name(manager: ManagerClient):
+async def test_service_level_reuse_name(manager: ScyllaClusterManager):
     servers = await manager.servers_add(1, config=auth_config, auto_rack_dc="dc1")
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
@@ -345,7 +345,7 @@ async def test_service_level_reuse_name(manager: ManagerClient):
     cql = await create_sl_and_use(cql, sl2)
     cql = await create_sl_and_use(cql, sl1)
 
-async def test_driver_service_level(manager: ManagerClient) -> None:
+async def test_driver_service_level(manager: ScyllaClusterManager) -> None:
     servers = await manager.servers_add(2, config=auth_config, auto_rack_dc="dc1")
 
     cql = manager.get_cql()
@@ -376,7 +376,7 @@ async def test_driver_service_level(manager: ManagerClient) -> None:
     for host in hosts:
         assert len(await cql.run_async("LIST ALL SERVICE LEVELS", host=host)) == 0
 
-async def test_driver_service_creation_failure(manager: ManagerClient) -> None:
+async def test_driver_service_creation_failure(manager: ScyllaClusterManager) -> None:
     servers = await manager.servers_add(2, config=auth_config, auto_rack_dc="dc1")
 
     cql = manager.get_cql()
@@ -449,7 +449,7 @@ async def _verify_requests_count_metrics(manager, server, used_group, unused_gro
     assert requests_processed_by_used_group - initial_requests_processed_by_used_group >= expected_number_of_requests
     assert requests_processed_by_unused_group - initial_requests_processed_by_unused_group < expected_number_of_requests
 
-async def test_driver_service_level_not_used_for_user_queries(manager: ManagerClient) -> None:
+async def test_driver_service_level_not_used_for_user_queries(manager: ScyllaClusterManager) -> None:
     server = await manager.server_add(config=auth_config)
 
     cql = manager.get_cql()
@@ -471,7 +471,7 @@ async def test_driver_service_level_not_used_for_user_queries(manager: ManagerCl
     func = lambda: cql.execute("SELECT * from demo.events")
     await _verify_requests_count_metrics(manager, server, 'sl:test', 'sl:driver', func)
 
-async def test_driver_service_level_used_for_driver_queries(manager: ManagerClient) -> None:
+async def test_driver_service_level_used_for_driver_queries(manager: ScyllaClusterManager) -> None:
     server = await manager.server_add(config=auth_config)
 
     cql = manager.get_cql()
@@ -504,7 +504,7 @@ async def test_driver_service_level_used_for_driver_queries(manager: ManagerClie
 # connection permanently reclassifies it as a regular user connection, regardless
 # of whether the statement arrives as a read or write QUERY, an EXECUTE or a BATCH.
 # Reproduces SCYLLADB-2458.
-async def test_control_connection_reclassified_by_user_load(manager: ManagerClient) -> None:
+async def test_control_connection_reclassified_by_user_load(manager: ScyllaClusterManager) -> None:
     server = await manager.server_add(config=auth_config)
 
     cql = manager.get_cql()
@@ -553,7 +553,7 @@ async def test_control_connection_reclassified_by_user_load(manager: ManagerClie
 # Run the queries that the ScyllaDB-supported drivers send on theirs (see
 # https://docs.scylladb.com/stable/versioning/driver-support.html) and verify the
 # connection keeps running in sl:driver - none of them must trigger a reclassification.
-async def test_control_connection_not_reclassified_by_driver_queries(manager: ManagerClient) -> None:
+async def test_control_connection_not_reclassified_by_driver_queries(manager: ScyllaClusterManager) -> None:
     server = await manager.server_add(config=auth_config)
 
     cql = manager.get_cql()
@@ -608,7 +608,7 @@ async def test_control_connection_not_reclassified_by_driver_queries(manager: Ma
     await _verify_requests_count_metrics(manager, server, 'sl:driver', 'sl:default', system_func)
 
 # Reproduces scylladb/scylladb#26040
-async def test_anonymous_user(manager: ManagerClient) -> None:
+async def test_anonymous_user(manager: ScyllaClusterManager) -> None:
     allow_all_config = {'authenticator':'AllowAllAuthenticator', 'authorizer':'AllowAllAuthorizer'}
     server = await manager.server_add(config=allow_all_config)
     cql = manager.get_cql()
@@ -643,7 +643,7 @@ async def test_anonymous_user(manager: ManagerClient) -> None:
     await wait_for(anonymous_connection_uses_sl_default, time.time() + 60)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_per_service_level_cql_requests_serving(manager: ManagerClient) -> None:
+async def test_per_service_level_cql_requests_serving(manager: ScyllaClusterManager) -> None:
     """Test that the per-service-level cql_requests_serving metric correctly
     reflects the number of in-flight CQL requests for each service level.
 
@@ -761,7 +761,7 @@ async def test_per_service_level_cql_requests_serving(manager: ManagerClient) ->
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_per_service_level_cql_request_latency_histogram(manager: ManagerClient) -> None:
+async def test_per_service_level_cql_request_latency_histogram(manager: ScyllaClusterManager) -> None:
     """Test that the per-service-level cql_request_latency_histogram metric
     records transport-level request latencies for each service level.
 
@@ -852,7 +852,7 @@ async def test_per_service_level_cql_request_latency_histogram(manager: ManagerC
         safe_driver_shutdown(cluster_a)
 
 
-async def test_service_level_metrics(manager: ManagerClient) -> None:
+async def test_service_level_metrics(manager: ScyllaClusterManager) -> None:
     """
     Verify service level workload type metrics
     """

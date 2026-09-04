@@ -5,7 +5,7 @@
 #
 import pytest
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error
 from test.cluster.util import wait_for_cdc_generations_publishing
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-async def test_group0_recovers_after_partial_command_application(manager: ManagerClient):
+async def test_group0_recovers_after_partial_command_application(manager: ScyllaClusterManager):
     """
     Reproducer for scylladb/scylladb#26945.
 

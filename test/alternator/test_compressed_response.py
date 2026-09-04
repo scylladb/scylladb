@@ -27,6 +27,8 @@
 
 import gzip
 import zlib
+import random
+import string
 import pytest
 from contextlib import contextmanager
 
@@ -134,6 +136,41 @@ def test_compressed_response_large(dynamodb, test_table_s, encoding):
                 assert response["WasCompressed"] == encoding
                 # Not very precise, but check that some compression actually happened
                 assert response["DecompressedLength"] > 1.2 * response["HTTPContentLength"]
+
+# Reproducer for CUSTOMER-623, a buffer overflow bug that used to exist in
+# compression of responses. That bug was fixed in pull request #29718, and
+# this test can be used to reproduce the failure prior to that fix.
+#
+# Note that bug is a memory overflow, which can overwrite unrelated memory
+# and often crash Scylla; However, this crash is not guaranteed and when it
+# does happen, it's often after the test already passed and Scylla is shutting
+# down. So it is recommended to run this test with ASAN (i.e., debug or
+# sanitize build) and have it detect the memory overflow when it happens
+# and fail the test deterministically and immediately.
+def test_compressed_response_overflow(dynamodb, test_table_s):
+    p = random_string()
+    with client_response_decompression(dynamodb):
+        with server_response_compression(dynamodb):
+            with request_custom_headers(dynamodb, {'Accept-Encoding': 'gzip'}):
+                # The response length must be over 4096 to trigger compression.
+                # We want to use relatively poorly compressible data, so the
+                # output will need multiple buffers.
+                # We test two response sizes - one that was shown to trigger
+                # an overflow with PR #29718 reverted, and a second random.
+                # If this test begins to fail randomly, we'll know the bug
+                # reappeared for other sizes.
+                for size in [17000, random.randint(5000, 40000)]:
+                    # Use a random number generator with a fixed seed to
+                    # generate the poorly-compressible data, to make the test
+                    # deterministic and reproducible.
+                    chars = (string.ascii_uppercase + string.digits).encode()
+                    table = bytes(chars[i % len(chars)] for i in range(256))
+                    rng = random.Random(67)
+                    data = rng.randbytes(size).translate(table).decode()
+                    test_table_s.put_item(Item={'p': p, 'x': data})
+                    response = test_table_s.get_item(Key={'p': p})
+                    assert response['Item']['x'] == data
+                    assert response['WasCompressed'] == 'gzip'
 
 # Test with a very small compressed response (which we can force only on
 # Alternator, so this is a scylla_only test). Our implementation has special
@@ -283,7 +320,7 @@ def test_accept_encoding_header(dynamodb, test_table_s):
 # It turns out that in DynamoDB headers are correctly combined for signature verification,
 # but then it only uses the first Accept-Encoding header, which may be considered a bug.
 # In Alternator, having multiple Accept-Encoding works well.
-def test_multiple_accept_encoding_headers(dynamodb, test_table_s):
+def test_multiple_accept_encoding_headers(request, dynamodb, test_table_s):
     p = random_string()
     compressible_data = 'x' * DDB_RESPONSE_COMPRESSION_THRESHOLD
     test_table_s.put_item(Item={'p': p, 'x': compressible_data})
@@ -335,9 +372,14 @@ def test_multiple_accept_encoding_headers(dynamodb, test_table_s):
 
             # Now lets make it a part of signature
             # Replacing signed header causes signature errors in both DynamoDB and Alternator.
-            with request_custom_headers(dynamodb, {"Accept-Encoding": "identity"}):
-                with pytest.raises(ClientError, match="signature"): # InvalidSignatureException
-                    check_replaced_accept_encoding_headers([("Accept-Encoding", b'gzip')], expected_compression=None)
+            # This doesn't apply under mTLS, though: the connection is
+            # authenticated by the client certificate, and any SigV4
+            # signature (mismatched or not) is silently ignored, so no
+            # signature error is raised - skip this part of the test.
+            if not request.config.getoption('mtls'):
+                with request_custom_headers(dynamodb, {"Accept-Encoding": "identity"}):
+                    with pytest.raises(ClientError, match="signature"): # InvalidSignatureException
+                        check_replaced_accept_encoding_headers([("Accept-Encoding", b'gzip')], expected_compression=None)
 
             # We can split the header into multiple ones and it works with signing
             with request_custom_headers(dynamodb, {"Accept-Encoding": "gzip,identity"}):

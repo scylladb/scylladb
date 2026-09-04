@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_first_completed
 from collections.abc import Coroutine
 import pytest
@@ -15,7 +15,7 @@ pytestmark = pytest.mark.prepare_3_nodes_cluster
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_coordinator_queue_management(manager: ManagerClient):
+async def test_coordinator_queue_management(manager: ScyllaClusterManager):
     """This test creates a 5 node cluster with 2 down nodes (A and B). After that it
        creates a queue of 3 topology operation: bootstrap, removenode A and removenode B
        with ignore_nodes=A. Check that all operation manage to complete.

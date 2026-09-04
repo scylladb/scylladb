@@ -13,6 +13,7 @@ Security
    enable-authorization
    authorization
    certificate-authentication
+   certificate-or-password-authentication
    rbac-usecase
    auditing
    client-node-encryption
@@ -45,6 +46,7 @@ Security
   * :doc:`Grant Authorization CQL Reference </operating-scylla/security/authorization/>`
   * :doc:`Reset Authenticator Password </troubleshooting/password-reset/>`
   * :doc:`Certificate Based Authentication </operating-scylla/security/certificate-authentication/>`
+  * :doc:`Certificate or Password Authentication </operating-scylla/security/certificate-or-password-authentication/>`
 
 .. panel-box::
   :title: Encryption

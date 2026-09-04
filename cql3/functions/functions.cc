@@ -419,9 +419,11 @@ functions::try_get(data_dictionary::database db,
     });
 
     const auto func_name = name.has_keyspace() ? name : name.as_native_function();
-    if (SIMILARITY_FUNCTIONS.contains(func_name)) {
+    if (SIMILARITY_FUNCTIONS.contains(func_name) || func_name == ANN_FUNCTION_NAME) {
         auto arg_types = retrieve_vector_arg_types(func_name, provided_args);
-        auto fun = ::make_shared<vector_similarity_fct>(func_name.name, arg_types);
+        shared_ptr<function> fun = func_name == ANN_FUNCTION_NAME
+                ? make_ann_function(arg_types)
+                : ::make_shared<vector_similarity_fct>(func_name.name, arg_types);
         if (auto err = check_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf)) {
             return resolution_failed(std::move(*err));
         }

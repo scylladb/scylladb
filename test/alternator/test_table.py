@@ -186,6 +186,23 @@ def test_create_table_invalid_schema(dynamodb):
             ],
         )
 
+# A table's KeySchema must list the HASH key before the RANGE key. Listing
+# them the other way around is an error.
+def test_create_table_key_schema_wrong_order(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*[Ff]irst.*HASH'):
+        dynamodb.create_table(
+            TableName='name_doesnt_matter',
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[
+                { 'AttributeName': 'c', 'KeyType': 'RANGE' },
+                { 'AttributeName': 'p', 'KeyType': 'HASH' }
+            ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'c', 'AttributeType': 'S' },
+            ],
+        )
+
 # Another case of an invalid schema is repeating the same AttributeName
 # twice in AttributeDefinitions. DynamoDB has no way of knowing which of
 # the two definitions was intended.

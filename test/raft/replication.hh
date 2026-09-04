@@ -916,24 +916,38 @@ future<> raft_cluster<Clock>::reset_server(size_t id, initial_state state) {
 
 template <typename Clock>
 future<> raft_cluster<Clock>::start_all() {
-    // Start the leader (node 0) last. With fast bootstrap the smallest-id
-    // node becomes a candidate during start(), sending a vote_request to all
-    // peers. All peers must be started and published by that point, otherwise
-    // the request is dropped and node 0 loses its advantage: it is already a
-    // candidate so wait_until_candidate() won't tick it, and all nodes race
-    // equally once tickers start — the winner is non-deterministic.
+    // Start the leader (node 0) last, and publish its RPC endpoint before
+    // starting it. With fast bootstrap the smallest-id node becomes a
+    // candidate during start() and sends vote requests to all peers, and
+    // the peers reply at once. The test RPC net silently discards messages
+    // whose destination is not published, so every party of that exchange
+    // must be published before it begins: the followers to receive the
+    // requests, and node 0 to receive the replies, which may arrive while
+    // its start() is still running. Publishing node 0 before starting it is
+    // safe: no follower contacts it on its own before it sends the first
+    // vote request (follower tickers are not armed yet), and the RPC
+    // object is wired to the server at construction time.
     BOOST_REQUIRE(_leader == 0);
     co_await coroutine::parallel_for_each(std::views::iota(size_t{1}, _servers.size()), [this] (size_t i) -> future<> {
         co_await _servers[i].server->start();
         _servers[i].rpc->publish();
     });
-    co_await _servers[0].server->start();
     _servers[0].rpc->publish();
-    co_await init_raft_tickers();
+    co_await _servers[0].server->start();
+
     BOOST_TEST_MESSAGE("Electing first leader " << _leader);
+    // Elect node 0 with no tickers armed. Followers answer vote requests
+    // over RPC without ticking, so no node can reach its election timeout
+    // and compete with node 0, which therefore wins regardless of the
+    // order in which the reactor runs tasks (debug builds shuffle the
+    // task queue). No retry mechanism is needed: the test transport never
+    // drops vote RPCs (only append_entries and read_quorum sends honor
+    // rpc_config::drops), and every node is published before node 0
+    // starts, so the initial vote exchange cannot be lost.
     _servers[_leader].server->wait_until_candidate();
     co_await _servers[_leader].server->wait_election_done();
     BOOST_REQUIRE(_servers[_leader].server->is_leader());
+    co_await init_raft_tickers();
 }
 
 template <typename Clock>

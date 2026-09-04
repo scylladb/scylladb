@@ -34,8 +34,8 @@ const prepare_context& parsed_statement::get_prepare_context() const {
 }
 
 // Used by the parser and preparable statement
-void parsed_statement::set_bound_variables(const std::vector<::shared_ptr<column_identifier>>& bound_names) {
-    _prepare_ctx.set_bound_variables(bound_names);
+void parsed_statement::set_bound_variables(const std::vector<::shared_ptr<column_identifier>>& bound_names, dialect d) {
+    _prepare_ctx.set_bound_variables(bound_names, d);
 }
 
 }

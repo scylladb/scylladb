@@ -40,10 +40,15 @@ void rest::request_wrapper::method(method_type type) {
 }
 
 void rest::request_wrapper::content(std::string_view content_type, std::string_view content) {
-    _req.write_body(sstring(content_type), sstring(content));
+    _content = make_lw_shared<sstring>(sstring(content));
+    auto body = _content;
+    _req.write_body(sstring(content_type), body->size(), [body] (output_stream<char>& out) -> future<> {
+        return out.write(*body);
+    });
 }
 
 void rest::request_wrapper::content(std::string_view content_type, body_writer w, size_t len) {
+    _content = {};
     _req.write_body(sstring(content_type), len, std::move(w));
 }
 
@@ -255,12 +260,13 @@ fmt::formatter<rest::httpclient::result_type>::format(const rest::httpclient::re
 
 auto
 fmt::formatter<rest::redacted_request_type>::format(const rest::redacted_request_type& rr, fmt::format_context& ctx) const -> decltype(ctx.out()) {
-    const auto& r = rr.original;
+    const auto& r = rr.original.request();
     auto os = fmt::format_to(ctx.out(), "{} {} HTTP/{}{}", r._method, r._url, r._version, linesep);
     for (auto& [k, v] : r._headers) {
         os = fmt::format_to(os, "{}: {}{}", k, rr.filter_header(k, v).value_or(v), linesep);
     }
-    os = fmt::format_to(os, "{}{}", linesep, rr.filter_body(r.content).value_or(r.content));
+    auto content = rr.original.content();
+    os = fmt::format_to(os, "{}{}", linesep, rr.filter_body(content).value_or(std::string(content)));
     return os;
 }
 

@@ -8,7 +8,8 @@ import subprocess
 
 import pytest
 
-from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster
+from test.pylib.scylla_cluster import ScyllaCluster
+from test.pylib.scylla_server import ScyllaServer
 
 
 @pytest.fixture(scope="module")

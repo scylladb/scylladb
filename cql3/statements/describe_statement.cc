@@ -149,7 +149,7 @@ future<std::vector<user_type>> get_sorted_types(const lw_shared_ptr<keyspace_met
         }
     }
 
-    co_return co_await utils::topological_sort(all_udts, adjacency);
+    co_return co_await utils::topological_sort(all_udts, adjacency, "user defined types for DESCRIBE");
 }
 
 future<utils::chunked_vector<description>> types(replica::database& db, const lw_shared_ptr<keyspace_metadata>& ks, with_create_statement with_stmt) {

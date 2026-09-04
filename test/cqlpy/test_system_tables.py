@@ -75,7 +75,7 @@ def test_partitions_estimate_simple_small(cql, test_keyspace):
 # This is a relatively long test (takes around 2 seconds), and isn't
 # needed to reproduce #9083 (the previous shorter test does it too),
 # so we skip this test.
-@pytest.mark.nightly
+@pytest.mark.tier2
 def test_partitions_estimate_simple_large(cql, test_keyspace):
     N = 10000
     count = write_table_and_estimate_partitions(cql, test_keyspace, N)

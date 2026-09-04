@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.tablets import get_tablet_replica
 import pytest
 import logging
@@ -21,7 +21,7 @@ def disable_auto_compaction(ip_addr, ks_name, cf_name):
         raise RuntimeError(f'failed to disable autocompaction using {api_path}: {ret.text}')
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_resurrection_while_file_streaming(manager: ManagerClient):
+async def test_resurrection_while_file_streaming(manager: ScyllaClusterManager):
     '''
     When tablets are migrated with file-based streaming, we can have a situation where a tombstone is garbage
     collected before the data it shadows lands. For instance, if we have a tablet replica with 3 sstables:

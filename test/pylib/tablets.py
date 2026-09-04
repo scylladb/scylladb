@@ -5,7 +5,7 @@
 #
 from collections import defaultdict
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.rest_client import read_barrier
 from typing import NamedTuple
@@ -14,13 +14,13 @@ class TabletReplicas(NamedTuple):
     last_token: int
     replicas: list[tuple[HostID, int]]
 
-async def get_base_table(manager: ManagerClient, table_id):
+async def get_base_table(manager: ScyllaClusterManager, table_id):
     rows = await manager.get_cql().run_async(f"SELECT base_table FROM system.tablets where table_id = {table_id}")
     if len(rows) > 0 and rows[0].base_table:
         return rows[0].base_table
     return table_id
 
-async def get_all_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, is_view: bool = False) -> list[TabletReplicas]:
+async def get_all_tablet_replicas(manager: ScyllaClusterManager, server: ServerInfo, keyspace_name: str, table_name: str, is_view: bool = False) -> list[TabletReplicas]:
     """
     Retrieves the tablet distribution for a given table.
     This call is guaranteed to see all prior changes applied to group0 tables.
@@ -43,7 +43,7 @@ async def get_all_tablet_replicas(manager: ManagerClient, server: ServerInfo, ke
         replicas=[(HostID(str(host)), shard) for (host, shard) in x.replicas]
     ) for x in rows]
 
-async def get_replica_count_by_host(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, is_view: bool = False) -> dict[HostID, int]:
+async def get_replica_count_by_host(manager: ScyllaClusterManager, server: ServerInfo, keyspace_name: str, table_name: str, is_view: bool = False) -> dict[HostID, int]:
     """
     Retrieves the count of tablet replicas per host for a given table.
 
@@ -55,7 +55,7 @@ async def get_replica_count_by_host(manager: ManagerClient, server: ServerInfo, 
             result[host] += 1
     return result
 
-async def get_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, token: int) -> list[tuple[HostID, int]]:
+async def get_tablet_replicas(manager: ScyllaClusterManager, server: ServerInfo, keyspace_name: str, table_name: str, token: int) -> list[tuple[HostID, int]]:
     """
     Gets tablet replicas of the tablet which owns a given token of a given table.
     This call is guaranteed to see all prior changes applied to group0 tables.
@@ -69,7 +69,7 @@ async def get_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspa
     return []
 
 
-async def get_tablet_replica(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, token: int) -> tuple[HostID, int]:
+async def get_tablet_replica(manager: ScyllaClusterManager, server: ServerInfo, keyspace_name: str, table_name: str, token: int) -> tuple[HostID, int]:
     """
     Get the first replica of the tablet which owns a given token of a given table.
     This call is guaranteed to see all prior changes applied to group0 tables.
@@ -79,7 +79,7 @@ async def get_tablet_replica(manager: ManagerClient, server: ServerInfo, keyspac
     replicas = await get_tablet_replicas(manager, server, keyspace_name, table_name, token)
     return replicas[0]
 
-async def get_tablet_info(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, token: int) -> list[tuple[HostID, int]]:
+async def get_tablet_info(manager: ScyllaClusterManager, server: ServerInfo, keyspace_name: str, table_name: str, token: int) -> list[tuple[HostID, int]]:
     """
     Gets the tablet information of the tablet which owns a given token of a given table.
     This call is guaranteed to see all prior changes applied to group0 tables.
@@ -102,7 +102,7 @@ async def get_tablet_info(manager: ManagerClient, server: ServerInfo, keyspace_n
             return row
     return None
 
-async def get_tablet_count(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str):
+async def get_tablet_count(manager: ScyllaClusterManager, server: ServerInfo, keyspace_name: str, table_name: str):
     host = manager.cql.cluster.metadata.get_host(server.ip_addr)
 
     # read_barrier is needed to ensure that local tablet metadata on the queried node

@@ -21,11 +21,11 @@ from cassandra.query import SimpleStatement
 from cassandra.protocol import InvalidRequest
 from cassandra.auth import PlainTextAuthProvider
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
 from test.cluster.util import new_test_keyspace, new_test_table
 
-async def get_cpu_metrics(manager: ManagerClient):
+async def get_cpu_metrics(manager: ScyllaClusterManager):
     """Utility function for getting the current amount of work (in CPU ms)
        done across all nodes and shards in different scheduling groups.
        We expect this to increase considerably for the streaming group while
@@ -49,7 +49,7 @@ async def get_cpu_metrics(manager: ManagerClient):
     return (ms_streaming, ms_statement, items_deleted)
 
 
-async def test_row_ttl_scheduling_group(manager: ManagerClient):
+async def test_row_ttl_scheduling_group(manager: ScyllaClusterManager):
     """Verify that the expiration scans and deletion operations done by the
        per-row TTL feature are done entirely in the "streaming" scheduling
        group, not in the user's statement scheduling group.
@@ -150,7 +150,7 @@ async def test_row_ttl_scheduling_group(manager: ManagerClient):
     assert ms_statement < ms_streaming * 0.1, f'expected negligible statement-group work, got {ms_statement} ms (streaming: {ms_streaming} ms)'
 
 @pytest.mark.parametrize("with_down_node", [False, True], ids=["all_nodes_up", "one_node_down"])
-async def test_row_ttl_multinode_expiration(manager: ManagerClient, with_down_node):
+async def test_row_ttl_multinode_expiration(manager: ScyllaClusterManager, with_down_node):
     """When the cluster has multiple nodes, different nodes are responsible
        for checking expiration in different token ranges (each responsible
        for its "primary ranges"). Let's check that this expiration really
@@ -206,7 +206,7 @@ async def test_row_ttl_multinode_expiration(manager: ManagerClient, with_down_no
             assert 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.QUORUM))))
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_row_ttl_upgrade(manager: ManagerClient):
+async def test_row_ttl_upgrade(manager: ScyllaClusterManager):
     """This test verifies that a rolling upgrade works as designed for the
        the CQL per-row TTL feature:
        1. When some of the nodes are not yet upgraded and do not yet support
@@ -289,7 +289,7 @@ async def test_row_ttl_upgrade(manager: ManagerClient):
     assert 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM ks.tbl2', consistency_level=ConsistencyLevel.QUORUM))))
 
 
-async def test_row_ttl_multi_dc(manager: ManagerClient):
+async def test_row_ttl_multi_dc(manager: ScyllaClusterManager):
     """Check that the TTL feature works correctly on a setup with multiple
        data centers. Rows added in one DC will, of course, get copied to all
        DCs, and when they expire, should expire from all DCs.

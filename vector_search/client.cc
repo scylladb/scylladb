@@ -8,7 +8,7 @@
 
 #include "client.hh"
 #include "utils.hh"
-#include "utils/composite_abort_source.hh"
+#include "utils/chain_abort_source.hh"
 #include "utils/exceptions.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/rjson.hh"
@@ -90,14 +90,14 @@ public:
 
 private:
     future<connected_socket> connect(std::chrono::milliseconds timeout, abort_source* as) {
+        abort_source operation_as;
+
         abort_on_expiry timeout_as(seastar::lowres_clock::now() + timeout);
-        utils::composite_abort_source composite_as;
-        composite_as.add(timeout_as.abort_source());
-        if (as) {
-            composite_as.add(*as);
-        }
+        const auto timeout_sub = utils::chain_abort_source(operation_as, timeout_as.abort_source());
+        const auto as_sub = utils::chain_abort_source(operation_as, as);
+
         auto f = co_await coroutine::as_future(
-                connect_with_as(socket_address(_endpoint.ip, _endpoint.port), _creds, _endpoint.host, composite_as.abort_source()));
+                connect_with_as(socket_address(_endpoint.ip, _endpoint.port), _creds, _endpoint.host, operation_as));
         if (f.failed()) {
             auto err = f.get_exception();
             // When the connection abort was triggered by our own deadline rethrow as timed_out_error.
@@ -213,7 +213,14 @@ seastar::future<client::response> client::request_impl(seastar::httpd::operation
 }
 
 seastar::future<bool> client::check_status() {
-    auto f = co_await coroutine::as_future(request_impl(httpd::operation_type::GET, "/api/v1/status", std::nullopt, http::reply::status_type::ok, _as));
+    auto timeout = std::chrono::milliseconds(_unreachable_node_detection_time_in_ms.get());
+    abort_source operation_as;
+    abort_on_expiry timeout_as(seastar::lowres_clock::now() + timeout);
+    const auto timeout_sub = utils::chain_abort_source(operation_as, timeout_as.abort_source());
+    const auto as_sub = utils::chain_abort_source(operation_as, _as);
+
+    auto f =
+            co_await coroutine::as_future(request_impl(httpd::operation_type::GET, "/api/v1/status", std::nullopt, http::reply::status_type::ok, operation_as));
     if (f.failed()) {
         f.ignore_ready_future();
         co_return false;

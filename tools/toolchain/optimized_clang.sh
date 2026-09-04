@@ -24,6 +24,8 @@ case "${CLANG_BUILD}" in
         ;;
 esac
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 ARCH="$(arch)"
 
 # deserialize CLANG_ARCHIVES from string
@@ -65,7 +67,7 @@ SCYLLA_BUILD_DIR_FULLPATH="${SCYLLA_DIR}"/"${SCYLLA_BUILD_DIR}"
 SCYLLA_NINJA_FILE_FULLPATH="${SCYLLA_DIR}"/"${SCYLLA_NINJA_FILE}"
 
 # Which LLVM release to build in order to compile Scylla
-LLVM_CLANG_TAG=22.1.7
+LLVM_CLANG_TAG=22.1.8
 
 CLANG_ARCHIVE=$(cd "${SCYLLA_DIR}" && realpath -m "${CLANG_ARCHIVE}")
 
@@ -131,6 +133,20 @@ if [[ "${CLANG_BUILD}" = "INSTALL" ]]; then
     rm -rf "${CLANG_BUILD_DIR}"
     rm -rf "${CLANG_SYSROOT_DIR}"
     git clone https://github.com/llvm/llvm-project --branch llvmorg-"${LLVM_CLANG_TAG}" --depth=1 "${CLANG_BUILD_DIR}"
+
+    # Backport codegen miscompilation fixes carried by Fedora's llvm package
+    # (fedora-44, llvm 22.1.8). Only the fixes that affect the code clang
+    # generates on x86_64/aarch64 are applied here; Fedora's distro-integration,
+    # linker (lld is not built here), and other-target (s390x/ppc64le) patches
+    # are intentionally omitted.
+    #  - SDAG select-of-load fold (#208683): target-independent, affects x86_64 and aarch64
+    #  - X86 EVEX compression for VPMOV*2M + KMOV (#198220): x86_64
+    for patch in \
+        0001-SDAG-Freeze-condition-in-select-of-load-fold-208683.patch \
+        0001-X86-Fix-EVEX-compression-for-VPMOV-2M-KMOV-with-tied.patch
+    do
+        git -C "${CLANG_BUILD_DIR}" apply "${SCRIPT_DIR}/clang-patches/${patch}"
+    done
 
     echo "[clang-stage1] build the compiler for collecting PGO profile"
     cd "${CLANG_BUILD_DIR}"

@@ -5,12 +5,12 @@
 #
 import asyncio
 import pytest
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace, reconnect_driver
 
 
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
-async def test_create_table_notification_deadlock_with_shutdown(manager: ManagerClient):
+async def test_create_table_notification_deadlock_with_shutdown(manager: ScyllaClusterManager):
     """
     Execute a CREATE TABLE query during node shutdown and reproduce a deadlock between
     the create table notification and unregistering listeners.

@@ -2474,7 +2474,7 @@ static future<stop_iteration> repair_get_full_row_hashes_with_rpc_stream_process
             auto rm = local_repair.get_repair_meta(from, repair_meta_id);
             rm->set_repair_state_for_local_node(repair_state::get_full_row_hashes_started);
             repair_hash_set hashes = co_await rm->get_full_row_hashes_handler();
-            rm->set_repair_state_for_local_node(repair_state::get_full_row_hashes_started);
+            rm->set_repair_state_for_local_node(repair_state::get_full_row_hashes_finished);
             _metrics.tx_hashes_nr += hashes.size();
             co_return hashes;
         });
@@ -2672,7 +2672,7 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
             return rs.repair_flush_hints_batchlog_handler(from, std::move(req));
         });
     }
-    rlogger.info("repair[{}]: Started to process repair_flush_hints_batchlog_request from node={} hints_timeout={}s batchlog_timeout={}s",
+    rlogger.debug("repair[{}]: Started to process repair_flush_hints_batchlog_request from node={} hints_timeout={}s batchlog_timeout={}s",
             req.repair_uuid, from, req.hints_timeout.count(), req.batchlog_timeout.count());
     auto permit = co_await seastar::get_units(_flush_hints_batchlog_sem, 1);
     bool updated = false;
@@ -2742,7 +2742,11 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
         updated = true;
     }
     auto duration = std::chrono::duration<float>(gc_clock::now() - now);
-    rlogger.info("repair[{}]: Finished to process repair_flush_hints_batchlog_request from node={} updated={} flush_hints_batchlog_time={} flush_cache_time={} flush_duration={}",
+    // Log at info level only when a flush was actually performed, which is
+    // bounded by the flush cache time. The cache hit path is logged at debug
+    // level since it is performed for each tablet repair and can flood the log.
+    auto level = updated ? seastar::log_level::info : seastar::log_level::debug;
+    rlogger.log(level, "repair[{}]: Finished to process repair_flush_hints_batchlog_request from node={} updated={} flush_hints_batchlog_time={} flush_cache_time={} flush_duration={}",
             req.repair_uuid, from, updated, _flush_hints_batchlog_time, cache_time, duration);
     repair_flush_hints_batchlog_response resp{ .flush_time = _flush_hints_batchlog_time };
     co_return resp;
@@ -2954,7 +2958,7 @@ future<> repair_service::init_ms_handlers() {
             auto range = tmap.get_token_range(gid.tablet);
             co_await table.clear_being_repaired_for_range(range);
             auto removed = local_repair._repair_compaction_locks.erase(gid);
-            rlogger.info("Got repair_update_compaction_ctrl gid={} session_id={} removed={}", gid, topo_guard, removed);
+            rlogger.debug("Got repair_update_compaction_ctrl gid={} session_id={} removed={}", gid, topo_guard, removed);
         });
     });
 
@@ -3005,6 +3009,55 @@ static void add_to_repair_meta_for_masters(repair_meta& rm) {
 }
 static void add_to_repair_meta_for_followers(repair_meta& rm) {
     debug::repair_meta_for_followers.add(rm);
+}
+
+// Ring tokens split the token ring into vnode ranges (t1, t2], each with its
+// own replica set. A token range therefore lies within a single vnode range,
+// and thus has a single replica set, iff no ring token splits it. A ring
+// token t splits a range iff the range covers tokens on both sides of the
+// boundary, i.e. some token <= t and some token > t.
+//
+// Returns the first ring token that splits the given non-wrapping range, or
+// std::nullopt if the range lies within a single vnode range.
+//
+// Example: with sorted ring tokens {10, 20, 30} the vnode ranges are
+// (10, 20], (20, 30] and the wrap-around one owning tokens above 30 and up
+// to 10. Then:
+//
+//   (10, 20] -> nullopt: exactly one vnode range. The first ring token the
+//              range covers is 20 and the range does not extend past it.
+//   (12, 18] -> nullopt: sub-range of (10, 20], ends before ring token 20.
+//   (10, 25] -> 20: covers tokens on both sides of 20 (e.g. 15 and 25), so
+//              the boundary splits it into (10, 20] and (20, 25], whose
+//              replica sets may differ.
+//   (5, 30]  -> 10: crosses 10 and 20; the first splitting token is
+//              returned.
+//   (30, max] -> nullopt: no ring token above 30, the whole range belongs
+//              to the wrap-around vnode range.
+//   [20, 25] -> 20: with an inclusive start the range covers token 20
+//              itself, which belongs to (10, 20], while the tokens after it
+//              belong to (20, 30].
+static std::optional<dht::token> ring_token_splitting_range(const dht::token_range& range, const utils::chunked_vector<dht::token>& sorted_tokens) {
+    // Find the first ring token t such that the range covers some token <= t:
+    // with an inclusive start s that is the first ring token >= s, with an
+    // exclusive start the first ring token > s, and with no start bound any
+    // ring token qualifies.
+    auto t = sorted_tokens.begin();
+    if (const auto& start = range.start()) {
+        t = start->is_inclusive()
+                ? std::lower_bound(sorted_tokens.begin(), sorted_tokens.end(), start->value())
+                : std::upper_bound(sorted_tokens.begin(), sorted_tokens.end(), start->value());
+    }
+    if (t == sorted_tokens.end()) {
+        return std::nullopt;
+    }
+    // The range covers tokens > *t iff it extends past *t. A range ending
+    // exactly on *t is the tail of the vnode range (previous_token, *t].
+    auto last_token = range.end() ? range.end()->value() : dht::maximum_token();
+    if (*t < last_token) {
+        return *t;
+    }
+    return std::nullopt;
 }
 
 class row_level_repair {
@@ -3390,12 +3443,48 @@ private:
         if (_shard_task.reason() != streaming::stream_reason::repair) {
             co_return;
         }
-        auto my_address = get_erm()->get_topology().my_host_id();
-        // Update repair_history table only if all replicas have been repaired
-        size_t repaired_replicas = _all_live_peer_nodes.size() + 1;
-        if (_shard_task.get_total_rf() != repaired_replicas){
-            rlogger.debug("repair[{}]: Skipped to update system.repair_history total_rf={}, repaired_replicas={}, local={}, peers={}",
-                    _shard_task.global_repair_id.uuid(), _shard_task.get_total_rf(), repaired_replicas, my_address, _all_live_peer_nodes);
+        auto erm = get_erm();
+        auto my_address = erm->get_topology().my_host_id();
+        // Update repair_history table only if all replicas of the range have
+        // been repaired. Compare the participants against the range's
+        // replicas, not just their count: recording the range as repaired
+        // unlocks tombstone GC on it on the participants, so a wrong
+        // participant set of the right size could let them purge tombstones
+        // while a replica that did not participate still holds data the
+        // tombstones cover, resurrecting it.
+        auto end_token = _range.end() ? _range.end()->value() : dht::maximum_token();
+        std::unordered_set<locator::host_id> replicas;
+        if (_small_table_optimization) {
+            // With the small table optimization the repaired range is the
+            // whole ring and the required participants are all normal token
+            // owners, see get_neighbors().
+            replicas = erm->get_token_metadata().get_normal_token_owners();
+        } else {
+            // The replicas are resolved from the range's end token, which is
+            // correct only if the whole range has a single replica set. All
+            // callers uphold this: user-requested repair splits the requested
+            // ranges on the local replica-set boundaries, and tablet repair
+            // ranges never span tablets. Check this precondition, it is what
+            // makes the comparison below exact.
+            if (_is_tablet) {
+                const auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(_table_id);
+                auto tablet_range = tmap.get_token_range(tmap.get_tablet_id(end_token));
+                if (!tablet_range.contains(_range, dht::token_comparator())) {
+                    on_internal_error(rlogger, format("update_system_repair_table(): repair range {} spans multiple tablets, the end token's tablet range is {}",
+                            _range, tablet_range));
+                }
+            } else if (auto boundary = ring_token_splitting_range(_range, erm->get_token_metadata().sorted_tokens())) {
+                on_internal_error(rlogger, format("update_system_repair_table(): repair range {} spans multiple vnode ranges, it crosses the ring token {}",
+                        _range, *boundary));
+            }
+            auto natural_replicas = erm->get_natural_replicas(end_token);
+            replicas = std::unordered_set<locator::host_id>(natural_replicas.begin(), natural_replicas.end());
+        }
+        auto repaired_nodes = std::unordered_set<locator::host_id>(_all_live_peer_nodes.begin(), _all_live_peer_nodes.end());
+        repaired_nodes.insert(my_address);
+        if (replicas != repaired_nodes) {
+            rlogger.debug("repair[{}]: Skipped to update system.repair_history replicas={}, local={}, peers={}",
+                    _shard_task.global_repair_id.uuid(), replicas, my_address, _all_live_peer_nodes);
             co_return;
         }
         // Update repair_history table only if both hints and batchlog have been flushed.
@@ -3406,8 +3495,8 @@ private:
         // The tablet repair time for tombstone gc will be updated when the
         // system.tablet.repair_time is updated.
         if (_is_tablet && _shard_task.sched_info.sched_by_scheduler) {
-            rlogger.debug("repair[{}]: Skipped to update system.repair_history for tablet repair scheduled by scheduler total_rf={} repaired_replicas={} local={} peers={}",
-                    _shard_task.global_repair_id.uuid(), _shard_task.get_total_rf(), repaired_replicas, my_address, _all_live_peer_nodes);
+            rlogger.debug("repair[{}]: Skipped to update system.repair_history for tablet repair scheduled by scheduler replicas={} local={} peers={}",
+                    _shard_task.global_repair_id.uuid(), replicas, my_address, _all_live_peer_nodes);
             co_return;
         }
 

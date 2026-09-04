@@ -486,7 +486,7 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
                 auto new_where = util::rename_columns_in_where_clause(
                         view->view_info()->where_clause(),
                         view_renames,
-                        cql3::dialect{});
+                        cql3::internal_dialect());
                 builder.with_view_info(new_base_schema, view->view_info()->include_all_columns(), std::move(new_where));
                 view_updates.push_back(view_ptr(builder.build()));
             }
@@ -600,7 +600,7 @@ alter_table_statement::raw_statement::prepare(data_dictionary::database db, cql_
         mylogger.warn("{}", *warning);
     }
 
-    auto ctx = get_prepare_context();
+    prepare_context& ctx = get_prepare_context();
     auto prepared_attrs = _attrs->prepare(db, keyspace(), column_family());
     prepared_attrs->fill_prepare_context(ctx);
 
@@ -615,7 +615,7 @@ alter_table_statement::raw_statement::prepare(data_dictionary::database db, cql_
                 _ttl_change
             ),
             ctx,
-            // since alter table is `cql_statement_no_metadata` (it doesn't return any metadata when preparing)
+            // since alter table doesn't return any metadata when preparing
             // and bind markers cannot be a part of partition key,
             // we can pass empty vector as partition_key_bind_indices
             std::vector<uint16_t>()); 

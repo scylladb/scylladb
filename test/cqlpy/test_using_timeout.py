@@ -173,3 +173,25 @@ def test_truncate_using_timeout(scylla_only, cql, table1):
         cql.execute(f"TRUNCATE TABLE {table} USING TIMESTAMP 123456789")
     with pytest.raises(SyntaxException):
         cql.execute(f"TRUNCATE TABLE {table} USING TIMEOUT 1h AND TTL 42")
+
+# Regression test for SCYLLADB-3645: the timeout of a TRUNCATE can be a marker,
+# like the timeout of any other statement that takes a USING TIMEOUT clause.
+def test_truncate_using_timeout_prepared(scylla_only, cql, table1):
+    table = table1
+    key = unique_key_int()
+    cql.execute(f"INSERT INTO {table} (p,c,v) VALUES ({key},1,1)")
+    prep = cql.prepare(f"TRUNCATE TABLE {table} USING TIMEOUT ?")
+    cql.execute(prep, (Duration(nanoseconds=10**15),))
+    assert list(cql.execute(f"SELECT * FROM {table} WHERE p = {key} and c = 1")) == []
+    prep_named = cql.prepare(f"TRUNCATE TABLE {table} USING TIMEOUT :timeout")
+    # Timeout cannot be left unbound
+    with pytest.raises(InvalidRequest):
+        cql.execute(prep_named, {})
+    cql.execute(f"INSERT INTO {table} (p,c,v) VALUES ({key},1,1)")
+    cql.execute(prep_named, {'timeout': Duration(nanoseconds=10**15)})
+    assert list(cql.execute(f"SELECT * FROM {table} WHERE p = {key} and c = 1")) == []
+    # An unprepared statement carries no value the marker could be bound to
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"TRUNCATE TABLE {table} USING TIMEOUT ?")
+    with pytest.raises(NoHostAvailable):
+        cql.execute(prep, (Duration(nanoseconds=0),))

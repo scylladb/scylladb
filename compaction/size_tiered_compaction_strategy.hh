@@ -11,6 +11,8 @@
 #include "compaction_strategy_impl.hh"
 #include "sstables/shared_sstable.hh"
 
+#include <chrono>
+
 namespace compaction {
 
 class size_tiered_backlog_tracker;
@@ -18,15 +20,18 @@ class size_tiered_backlog_tracker;
 class size_tiered_compaction_strategy_options {
 public:
     static constexpr uint64_t DEFAULT_MIN_SSTABLE_SIZE = 50L * 1024L * 1024L;
+    static constexpr std::chrono::seconds DEFAULT_MIN_SSTABLE_AGE = std::chrono::hours(1);
     static constexpr double DEFAULT_BUCKET_LOW = 0.5;
     static constexpr double DEFAULT_BUCKET_HIGH = 1.5;
     static constexpr double DEFAULT_COLD_READS_TO_OMIT = 0.05;
     static constexpr auto MIN_SSTABLE_SIZE_KEY = "min_sstable_size";
+    static constexpr auto MIN_SSTABLE_AGE_KEY = "min_sstable_age";
     static constexpr auto BUCKET_LOW_KEY = "bucket_low";
     static constexpr auto BUCKET_HIGH_KEY = "bucket_high";
     static constexpr auto COLD_READS_TO_OMIT_KEY = "cold_reads_to_omit";
 private:
     uint64_t min_sstable_size = DEFAULT_MIN_SSTABLE_SIZE;
+    std::chrono::seconds min_sstable_age = DEFAULT_MIN_SSTABLE_AGE;
     double bucket_low = DEFAULT_BUCKET_LOW;
     double bucket_high = DEFAULT_BUCKET_HIGH;
     double cold_reads_to_omit =  DEFAULT_COLD_READS_TO_OMIT;
@@ -50,9 +55,6 @@ class size_tiered_compaction_strategy : public compaction_strategy_impl {
     // Return a list of pair of shared_sstable and its respective size.
     static std::vector<std::pair<sstables::shared_sstable, uint64_t>> create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables);
 
-    // Group files of similar size into buckets.
-    static std::vector<std::vector<sstables::shared_sstable>> get_buckets(const std::vector<sstables::shared_sstable>& sstables, size_tiered_compaction_strategy_options options);
-
     std::vector<std::vector<sstables::shared_sstable>> get_buckets(const std::vector<sstables::shared_sstable>& sstables) const;
 
     // Maybe return a bucket of sstables to compact
@@ -74,6 +76,9 @@ public:
     size_tiered_compaction_strategy(const std::map<sstring, sstring>& options);
     explicit size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options);
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
+
+    // Group files of similar size into buckets.
+    static std::vector<std::vector<sstables::shared_sstable>> get_buckets(const std::vector<sstables::shared_sstable>& sstables, size_tiered_compaction_strategy_options options);
 
     virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override;
 

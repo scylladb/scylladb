@@ -49,6 +49,7 @@ target_sources(cql3
     functions/error_injection_fcts.cc
     statements/strong_consistency/select_statement.cc
     statements/strong_consistency/modification_statement.cc
+    statements/strong_consistency/batch_statement.cc
     statements/strong_consistency/statement_helpers.cc
     functions/vector_similarity_fcts.cc
     functions/scoring_fcts.cc
@@ -83,6 +84,7 @@ target_sources(cql3
     statements/external_search/external_index_select_statement.cc
     statements/external_search/fulltext_indexed_table_select_statement.cc
     statements/external_search/vector_indexed_table_select_statement.cc
+    statements/external_search/external_score_provider.cc
     statements/external_search/filter.cc
     statements/use_statement.cc
     statements/index_prop_defs.cc

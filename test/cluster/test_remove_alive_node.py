@@ -4,13 +4,13 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 import asyncio
 import logging
 import pytest
 
 
-async def test_removing_alive_node_fails(manager: ManagerClient) -> None:
+async def test_removing_alive_node_fails(manager: ScyllaClusterManager) -> None:
     """
     Test verifying that an attempt to remove an alive node fails as expected.
     It uses a 3-node cluster:

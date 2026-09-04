@@ -1814,6 +1814,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 .build());
     }
 
+    // Drops the request paused for rack_list colocation without queueing it again
+    // and reports the error to the client.
+    // The keyspace metadata is not touched, as it is not modified before the colocation is done.
+    void generate_rack_list_colocation_failure_update(group0_update_collector& out, const group0_guard& guard, const rack_list_colocation_failure& failure) {
+        rtlogger.warn("Failing request {} paused for rack_list colocation: {}", failure.request_id, failure.error);
+        out.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                .resume_rf_change_request(_topo_sm._topology.paused_rf_change_requests, failure.request_id)
+                .build());
+        out.emplace_back(topology_request_tracking_mutation_builder(failure.request_id)
+                .done(failure.error)
+                .build());
+    }
+
     // Updates keyspace properties; removes system_schema.keyspaces::next_replication;
     // finishes RF change request; Removes request from system.topology::ongoing_rf_changes.
     void generate_rf_change_completion_update(group0_update_collector& out, const group0_guard& guard, const rf_change_completion_info& completion) {
@@ -1914,6 +1927,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
             if (auto request_to_resume = plan.rack_list_colocation_plan().request_to_resume(); request_to_resume) {
                 generate_rf_change_resume_update(out, guard, request_to_resume);
+            }
+
+            if (const auto& request_to_fail = plan.rack_list_colocation_plan().request_to_fail(); request_to_fail) {
+                generate_rack_list_colocation_failure_update(out, guard, *request_to_fail);
             }
 
             co_await generate_rf_change_updates(out, guard, plan.rf_change_plan());
@@ -2866,6 +2883,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         // We should perform TRUNCATE only if the session is still valid. It could be cleared if a previous truncate
         // handler performed the truncate and cleared the session, but crashed before finalizing the request
         if (_topo_sm._topology.session) {
+            // Read the session under the guard. Once it's released below, a new coordinator
+            // may install a session of its own, and sending the RPC with someone else's
+            // session would execute this operation outside of the scope its guard bounds.
+            const session_id session = _topo_sm._topology.session;
             const auto topology_requests_entry = co_await _sys_ks.get_topology_request_entry(global_request_id);
             std::unordered_set<table_id> tables;
             try {
@@ -2900,8 +2921,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
                 }
 
+                // The guard was released above, so we may have been deposed since. Don't
+                // touch the replicas if this operation is no longer the current one.
+                if (_term != _raft.get_current_term() || _topo_sm._topology.session != session) {
+                    rtlogger.info("{} is no longer the current operation, not sending the RPCs", desc());
+                    throw term_changed_error{};
+                }
+
                 // Send the RPC to all replicas
-                const service::frozen_topology_guard frozen_guard { _topo_sm._topology.session };
+                const service::frozen_topology_guard frozen_guard { session };
                 co_await coroutine::parallel_for_each(replica_hosts, [&] (const locator::host_id& host_id) -> future<> {
                     co_await send_rpc(host_id, frozen_guard);
                 });
@@ -2962,7 +2990,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 .build());
 
             try {
-                co_await update_topology_state(std::move(guard), std::move(updates), fmt::format("{}{} has completed", ::toupper(what[0]), what.substr(1)));
+                co_await update_topology_state(std::move(guard), std::move(updates), fmt::format("{}{} has completed", static_cast<char>(::toupper(what[0])), what.substr(1)));
                 break;
             } catch (group0_concurrent_modification&) {
             }

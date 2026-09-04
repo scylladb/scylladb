@@ -41,8 +41,8 @@ static const std::unordered_map<resource_kind, std::size_t> max_parts{
         {resource_kind::functions, 2}};
 
 static permission_set applicable_permissions(const data_resource_view& dv) {
-    
-    // We only support VECTOR_SEARCH_INDEXING permission for ALL KEYSPACES.
+
+    // We only support VECTOR_SEARCH_INDEXING and TEXT_SEARCH_INDEXING permissions for ALL KEYSPACES.
 
     auto set = permission_set::of<
                 permission::ALTER,
@@ -56,11 +56,11 @@ static permission_set applicable_permissions(const data_resource_view& dv) {
     }
 
     if (!dv.table() && !dv.keyspace()) {
-        set.add(permission_set::of<permission::VECTOR_SEARCH_INDEXING>());
+        set.add(permission_set::of<permission::VECTOR_SEARCH_INDEXING, permission::TEXT_SEARCH_INDEXING>());
     }
 
     return set;
-        
+
 }
 
 static permission_set applicable_permissions(const role_resource_view& rv) {

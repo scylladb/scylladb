@@ -5,11 +5,11 @@
 #
 
 import pytest
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_stop_before_starting_compaction_manager(manager: ManagerClient) -> None:
+async def test_stop_before_starting_compaction_manager(manager: ScyllaClusterManager) -> None:
     """Test that Scylla doesn't crash when stopped during boot after constructing compaction manager (and thus
     registering its task_manager module), but before enabling it (calling compaction_manager::enable()).
 

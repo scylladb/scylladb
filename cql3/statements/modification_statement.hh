@@ -40,7 +40,7 @@ namespace raw { class modification_statement; }
 /*
  * Abstract parent class of individual modifications, i.e. INSERT, UPDATE and DELETE.
  */
-class modification_statement : public cql_statement_opt_metadata {
+class modification_statement : public cql_statement {
 public:
     const statement_type type;
     bool _may_use_token_aware_routing;

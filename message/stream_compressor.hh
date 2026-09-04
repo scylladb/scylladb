@@ -97,6 +97,7 @@ uint32_t crc_impl(const seastar::rpc::rcv_buf& data) noexcept;
 
 // Size of the history buffer maintained by both sides of the compressed connection.
 // Governs the memory usage and effectiveness of streaming LZ4 compression.
+// (Note that the decompressor's history buffer is twice this size. See lz4_dstream::_buf).
 //
 // There is no value in making it greater than 64 kiB, because LZ4 doesn't support
 // greater history sizes, at least in the official releases of LZ4.
@@ -125,12 +126,11 @@ class lz4_cstream final : public stream_compressor {
     // of most recent views passed to LZ4_compress_fast_continue for that same block.
     // 
     // Thus there are some rules/schemes which have to be obeyed when maintaining the history buffer.
-    // 
-    // We use a scheme which LZ4 calls "synchronized".
-    // The two history ringbuffers on both sides of the stream are in "lockstep",
-    // meaning that every compression call with compressor's _buf as source,
-    // has a matching decompression call with decompressor's _buf as target,
-    // with the same length and offset in _buf.
+    //
+    // The legal schemes are listed in the comment of LZ4_decompress_safe_continue() in lz4.h.
+    // We use the third one: the decompressor's ring buffer is bigger than this one by at least
+    // the maximum block size, which frees the two sides from having to be synchronized.
+    // (See the comment on lz4_dstream::_buf for why we don't use the "synchronized" scheme).
     std::vector<char> _buf;
     // The current position in the ringbuffer _buf. New input will be appended at this position.
     size_t _buf_pos = 0;
@@ -159,10 +159,34 @@ public:
 
 // Implements a streaming compression interface similar to ZSTD_DStream.
 class lz4_dstream final : public stream_decompressor {
-    // See the _buf comment in lz4_cstream.
+    // The decompression-side counterpart of lz4_cstream::_buf. See its comment for the basics.
+    //
+    // Note that this is *not* a mirror image of the compressor's ring buffer:
+    // it's twice as big and block boundaries fall at different offsets within it.
+    //
+    // The alternative would LZ4's "synchronized" scheme, where the two ring buffers have
+    // exactly the same size and are updated in lockstep. But that scheme additionally requires
+    // that LZ4_decompress_safe_continue() is told the *exact* decompressed size of each block,
+    // and our protocol doesn't carry it. (It only carries compressed sizes).
+    //
+    // It was a painful lesson that an upper bound isn't good enough.
+    // If the bound isn't exact, LZ4 might internally overwrite some bytes which
+    // are backreferenced by the next sequence in the stream, which causes corrupt results.
+    //
+    // So we use the third scheme from the LZ4_decompress_safe_continue() comment instead:
+    // this buffer is at least `max block size` bytes bigger than the compressor's,
+    // which allows the two sides to be unsynchronized,
+    // and makes an upper bound on the block size good enough.
+    // The price is a doubled history buffer on the decompressor's side.
+    // (Which doesn't matter because we only have one decompressor per shard.
+    // It would matter if we e.g. had a decompressor per RPC connection, which we probably
+    // aren't going to do).
     std::vector<char> _buf;
+    // An upper bound on the decompressed size of a single block, which is what the third scheme
+    // above is parameterized by. The compressor never emits a block bigger than its own ring
+    // buffer, so its window size is a valid bound.
+    size_t _max_block_size;
     // The write position in `_buf`. New input will be decompressed to this offset.
-    // It's updated in lockstep with `_buf_pos` of the compressor.
     size_t _buf_end = 0;
     // The read position in `_buf`. The chunk between `_buf_beg` and `_buf_end` is the data
     // that was decompressed, but hasn't been copied to caller's `out` yet.

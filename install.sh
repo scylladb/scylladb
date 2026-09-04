@@ -157,6 +157,7 @@ adjust_bin() {
 export GNUTLS_SYSTEM_PRIORITY_FILE="\${GNUTLS_SYSTEM_PRIORITY_FILE-$prefix/libreloc/gnutls.config}"
 export LD_LIBRARY_PATH="$prefix/libreloc"
 export UBSAN_OPTIONS="${UBSAN_OPTIONS:+$UBSAN_OPTIONS:}suppressions=$prefix/libexec/ubsan-suppressions.supp"
+export LSAN_OPTIONS="${LSAN_OPTIONS:+$LSAN_OPTIONS:}suppressions=$prefix/libexec/lsan-suppressions.supp"
 ${p11_trust_paths:+export SCYLLA_P11_TRUST_PATHS="$p11_trust_paths"}
 exec -a "\$0" "$prefix/libexec/$bin" "\$@"
 EOF
@@ -356,6 +357,10 @@ installconfig 644 conf/cassandra-rackdc.properties "$retc"/scylla
 if $housekeeping; then
     installconfig 644 conf/housekeeping.cfg "$retc"/scylla.d
 fi
+# scylla-perf-collector
+if ! $nonroot; then
+    install -d -m755 "$root"/var/log/scylla-perf
+fi
 # scylla-kernel-conf
 if ! $nonroot; then
     install -m755 -d "$rusr/lib/sysctl.d"
@@ -395,6 +400,7 @@ if ! $without_systemd; then
     install -m644 dist/common/systemd/scylla-housekeeping-daily.service -Dt "$rsystemd"
     install -m644 dist/common/systemd/scylla-housekeeping-restart.service -Dt "$rsystemd"
     install -m644 dist/common/systemd/scylla-server.service -Dt "$rsystemd"
+    install -m644 dist/common/perf-collector/scylla-perf-collector.service -Dt "$rsystemd"
     install -m644 dist/common/systemd/*.slice -Dt "$rsystemd"
     install -m644 dist/common/systemd/*.timer -Dt "$rsystemd"
 fi
@@ -441,6 +447,7 @@ for bin in libexec/*; do
     adjust_bin "${bin#libexec/}"
 done
 install -m644 ubsan-suppressions.supp -Dt "$rprefix/libexec"
+install -m644 lsan-suppressions.supp -Dt "$rprefix/libexec"
 
 install -d -m755 "$rdoc"/scylla
 install -m644 README.md -Dt "$rdoc"/scylla/
@@ -460,9 +467,12 @@ install -d -m755 -d "$rprefix"/api
 cp -pr api/api-doc "$rprefix"/api
 install -d -m755 -d "$rprefix"/scyllatop
 cp -pr tools/scyllatop/* "$rprefix"/scyllatop
+install -d -m755 -d "$rprefix"/lib-python/tablets
+cp -pr scripts/tablets/*.py "$rprefix"/lib-python/tablets
 install -d -m755 -d "$rprefix"/scripts
 cp -pr dist/common/scripts/* "$rprefix"/scripts
 ln -srf "$rprefix/scyllatop/scyllatop.py" "$rprefix/bin/scyllatop"
+ln -srf "$rprefix/lib-python/scylla-tablets.py" "$rprefix/bin/scylla-tablets"
 if $supervisor; then
     install -d -m755 "$rprefix"/supervisor
     install -m755 dist/common/supervisor/* -Dt "$rprefix"/supervisor
@@ -547,6 +557,7 @@ EOS
     ln -srf "$rprefix/bin/scylla" "$rusr/bin/scylla"
     ln -srf "$rprefix/bin/iotune" "$rusr/bin/iotune"
     ln -srf "$rprefix/bin/scyllatop" "$rusr/bin/scyllatop"
+    ln -srf "$rprefix/bin/scylla-tablets" "$rusr/bin/scylla-tablets"
     ln -srf "$rprefix/bin/nodetool" "$rusr/bin/nodetool"
     install -d -m755 "$rusr"/sbin
     for i in $SBINFILES; do
@@ -590,6 +601,7 @@ for i in seastar/scripts/{perftune.py,addr2line.py,seastar-addr2line}; do
     relocate_python3 "$rprefix"/scripts "$i"
 done
 relocate_python3 "$rprefix"/scyllatop tools/scyllatop/scyllatop.py
+relocate_python3 "$rprefix"/lib-python scripts/tablets/scylla-tablets.py
 relocate_python3 "$rprefix"/scripts fix_system_distributed_tables.py
 
 if $supervisor; then

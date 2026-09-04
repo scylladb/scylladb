@@ -8,7 +8,6 @@
 from __future__ import annotations                           # Type hints as strings
 
 import logging
-import os.path
 import time
 from urllib.parse import quote
 from abc import ABCMeta
@@ -17,7 +16,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional, AsyncIterator
 
 import universalasync
-from aiohttp import request, BaseConnector, UnixConnector, ClientTimeout
+from aiohttp import request, BaseConnector, ClientTimeout
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
 
 from test.pylib.skip_types import skip_env
@@ -128,20 +127,6 @@ class RESTClient(metaclass=ABCMeta):
                      json: Optional[Mapping] = None, timeout: Optional[float] = None) -> None:
         await self._fetch("DELETE", resource_uri, host = host, port = port, params = params,
                           json = json, timeout = timeout)
-
-
-class UnixRESTClient(RESTClient):
-    """An async helper for REST API operations using AF_UNIX socket"""
-
-    def __init__(self, sock_path: str):
-        # NOTE: using Python requests style URI for Unix domain sockets to avoid using "localhost"
-        #       host parameter is ignored but set to socket name as convention
-        self.uri_scheme: str = "http"
-        self.default_host: str = f"{os.path.basename(sock_path)}"
-        self.connector = UnixConnector(path=sock_path)
-
-    async def shutdown(self):
-        await self.connector.close()
 
 
 class TCPRESTClient(RESTClient):
@@ -288,22 +273,24 @@ class ScyllaRESTAPIClient:
     async def quiesce_topology(self, node_ip: str) -> None:
         await self.client.post(f"/storage_service/quiesce_topology", host=node_ip)
 
-    async def add_tablet_replica(self, node_ip: str, ks: str, table: str, dst_host: HostID, dst_shard: int, token: int) -> None:
+    async def add_tablet_replica(self, node_ip: str, ks: str, table: str, dst_host: HostID, dst_shard: int, token: int, force: bool = False) -> None:
         await self.client.post(f"/storage_service/tablets/add_replica", host=node_ip, params={
             "ks": ks,
             "table": table,
             "dst_host": str(dst_host),
             "dst_shard": str(dst_shard),
-            "token": str(token)
+            "token": str(token),
+            "force": str(force).lower()
         })
 
-    async def del_tablet_replica(self, node_ip: str, ks: str, table: str, host: HostID, shard: int, token: int) -> None:
+    async def del_tablet_replica(self, node_ip: str, ks: str, table: str, host: HostID, shard: int, token: int, force: bool = False) -> None:
         await self.client.post(f"/storage_service/tablets/del_replica", host=node_ip, params={
             "ks": ks,
             "table": table,
             "host": str(host),
             "shard": str(shard),
-            "token": str(token)
+            "token": str(token),
+            "force": str(force).lower()
         })
 
     async def tablet_repair(self, node_ip: str, ks: str, table: str, token : int | str, hosts_filter: Optional[str] = None, dcs_filter: Optional[str] = None, timeout: Optional[float] = None, await_completion: bool = True, incremental_mode: Optional[str] = None) -> None:
@@ -444,7 +431,7 @@ class ScyllaRESTAPIClient:
             params['scope'] = scope
         return await self.client.post_json(f"/storage_service/restore", host=node_ip, params=params, json=sstables)
 
-    async def restore_tablets(self, node_ip: str, ks: str, cf: str, snap: str, datacenter: str, endpoint: str, bucket: str, manifests) -> str:
+    async def restore_tablets(self, node_ip: str, ks: str, cf: str, snap: str, datacenter: str, endpoint: str, bucket: str, manifests, prefix: str = '') -> str:
         """Restore tablets from a backup location"""
         params = {
             "keyspace": ks,
@@ -456,6 +443,7 @@ class ScyllaRESTAPIClient:
                 "datacenter": datacenter,
                 "endpoint": endpoint,
                 "bucket": bucket,
+                "prefix": prefix,
                 "manifests": manifests
             }
         ]

@@ -497,7 +497,7 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
                 co_return std::make_tuple(needs_flush_before_repair, hints_batchlog_flushed, flush_time);
             }
             co_await parallel_for_each(waiting_nodes, [this, uuid, start_time, &times, &req] (locator::host_id node) -> future<> {
-                rlogger.info("repair[{}]: Sending repair_flush_hints_batchlog to node={}, started",
+                rlogger.debug("repair[{}]: Sending repair_flush_hints_batchlog to node={}, started",
                         uuid, node);
                 try {
                     auto& ms = get_messaging();
@@ -521,12 +521,12 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
             }
             hints_batchlog_flushed = true;
             auto duration = std::chrono::duration<float>(gc_clock::now() - start_time);
-            rlogger.info("repair[{}]: Finished repair_flush_hints_batchlog flush_times={} flush_time={} flush_duration={}", uuid, times, flush_time, duration);
+            rlogger.debug("repair[{}]: Finished repair_flush_hints_batchlog flush_times={} flush_time={} flush_duration={}", uuid, times, flush_time, duration);
         } catch (...) {
             rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog failed, continue to run repair", uuid);
         }
     } else {
-        rlogger.info("repair[{}]: Skipped sending repair_flush_hints_batchlog", uuid);
+        rlogger.debug("repair[{}]: Skipped sending repair_flush_hints_batchlog", uuid);
     }
     co_return std::make_tuple(needs_flush_before_repair, hints_batchlog_flushed, flush_time);
 }
@@ -658,6 +658,31 @@ void repair::task_manager_module::abort_all_repairs() {
         }
     }
     rlogger.info0("Started to abort repair jobs={}, nr_jobs={}", _pending_repairs, _pending_repairs.size());
+}
+
+void repair::task_manager_module::abort_repairs_pinning_stale_versions(locator::token_metadata::version_t current_version) {
+    for (auto& [id, task_id] : _repairs) {
+        auto it = get_local_tasks().find(task_id);
+        if (it == get_local_tasks().end()) {
+            continue;
+        }
+        auto* impl = dynamic_cast<repair::shard_repair_task_impl*>(it->second->_impl.get());
+        if (!impl) {
+            // Cannot happen: _repairs is populated only by shard_repair_task_impl::run().
+            // This runs from a timer callback, so log instead of throwing.
+            on_internal_error_noexcept(rlogger, format("repair task {} in _repairs is not a shard_repair_task_impl", task_id));
+            continue;
+        }
+        if (impl->reason() != streaming::stream_reason::repair) {
+            continue;
+        }
+        auto pinned_version = impl->pinned_token_metadata_version();
+        if (pinned_version && *pinned_version < current_version) {
+            rlogger.warn("repair[{}]: Aborting repair job because it pins stale token metadata version {} which blocks a topology barrier for version {}, keyspace={}, tables={}",
+                    impl->global_repair_id.uuid(), *pinned_version, current_version, impl->get_keyspace(), impl->table_names());
+            it->second->abort();
+        }
+    }
 }
 
 float repair::task_manager_module::report_progress() {
@@ -1331,7 +1356,46 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
     // repair of each range is performed separately with repair_range().
     dht::token_range_vector ranges;
     if (options.ranges.size()) {
-        ranges = options.ranges;
+        // A requested range may span several vnode ranges with different
+        // replica sets, while repair_range() assumes each range has a single
+        // replica set (get_neighbors() resolves the replicas from the range's
+        // end token alone). Intersect the requested ranges with the local
+        // ranges, splitting them on vnode boundaries, so that each repaired
+        // range has a uniform replica set. Portions of the requested ranges
+        // this node is not a replica of are dropped, as the start_token and
+        // end_token options below already do.
+        auto local_ranges = co_await erm.get_ranges(my_host_id);
+        dht::token_range_vector dropped_ranges;
+        for (const auto& given_range : options.ranges) {
+            // The parts of given_range not replicated by this node are
+            // dropped; collect them to report the lost coverage below.
+            dht::token_range_vector remaining = {given_range};
+            for (const auto& local_range : local_ranges) {
+                if (auto intersection_opt = given_range.intersection(local_range, dht::token_comparator())) {
+                    dht::token_range_vector new_remaining;
+                    for (const auto& r : remaining) {
+                        auto subtracted = r.subtract(*intersection_opt, dht::token_comparator());
+                        new_remaining.insert(new_remaining.end(), subtracted.begin(), subtracted.end());
+                    }
+                    remaining = std::move(new_remaining);
+                    ranges.push_back(std::move(*intersection_opt));
+                }
+            }
+            dropped_ranges.insert(dropped_ranges.end(), remaining.begin(), remaining.end());
+            co_await coroutine::maybe_yield();
+        }
+        if (!dropped_ranges.empty()) {
+            constexpr size_t max_ranges_to_log = 100;
+            auto to_log = std::min(dropped_ranges.size(), max_ranges_to_log);
+            rlogger.warn("repair[{}]: {} sub-range(s) of the requested ranges are not replicated by this node and will not be repaired: {}{}",
+                    id.uuid(), dropped_ranges.size(),
+                    dht::token_range_vector(dropped_ranges.begin(), dropped_ranges.begin() + to_log),
+                    dropped_ranges.size() > max_ranges_to_log ? " and more" : "");
+        }
+        if (ranges.size() != options.ranges.size()) {
+            rlogger.info("repair[{}]: split the requested ranges on the local replica-set boundaries: {} requested ranges resulted in {} ranges to repair",
+                    id.uuid(), options.ranges.size(), ranges.size());
+        }
     } else if (options.primary_range) {
         rlogger.info("primary-range repair");
         // when "primary_range" option is on, neither data_centers nor hosts

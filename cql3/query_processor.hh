@@ -37,6 +37,7 @@
 #include "db/config.hh"
 #include "utils/enum_option.hh"
 #include "service/storage_proxy_fwd.hh"
+#include "service/pager/query_plan.hh"
 
 namespace utils {
 class chunked_string;
@@ -48,6 +49,10 @@ class migration_manager;
 class query_state;
 class mapreduce_service;
 class raft_group0_client;
+
+namespace pager {
+class paging_state;
+}
 
 namespace strong_consistency {
 class coordinator;
@@ -476,28 +481,21 @@ public:
 
     future<> stop();
 
-    inline
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_batch(
             ::shared_ptr<statements::batch_statement> stmt,
             service::query_state& query_state,
             query_options& options,
-            std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
-        return execute_batch_without_checking_exception_message(
-                std::move(stmt),
-                query_state,
-                options,
-                std::move(pending_authorization_entries))
-                .then(cql_transport::messages::propagate_exception_as_future<::shared_ptr<cql_transport::messages::result_message>>);
-    }
+            std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries);
 
     // Like execute_batch, but is allowed to return exceptions as result_message::exception.
     // The result_message::exception must be explicitly handled.
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_batch_without_checking_exception_message(
-            ::shared_ptr<statements::batch_statement>,
+            ::shared_ptr<cql_statement>,
             service::query_state& query_state,
             query_options& options,
+            size_t batch_size,
             std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries);
 
     // Splits given `mapreduce_request` and distributes execution of resulting subrequests across a cluster.
@@ -515,10 +513,17 @@ public:
     // For the local node, waits directly without an RPC.
     future<> wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout);
 
+    // pinned_plan and forced_keyspace re-derive a statement continuing a
+    // paged query: same plan, same keyspace it was prepared against.
     std::unique_ptr<statements::prepared_statement> get_statement(
             utils::chunked_string_view query,
             const service::client_state& client_state,
-            dialect d);
+            dialect d,
+            std::optional<service::pager::query_plan> pinned_plan = std::nullopt,
+            std::optional<std::string_view> forced_keyspace = std::nullopt);
+
+    static std::optional<service::pager::query_plan> pinned_plan_from_paging_state(
+            const lw_shared_ptr<const service::pager::paging_state>& paging_state);
 
     friend class migration_subscriber;
 

@@ -15,6 +15,10 @@ incremental_backlog_tracker::inflight_component incremental_backlog_tracker::com
         if (!_sstable_runs_contributing_backlog.contains(crp.first->run_identifier())) {
             continue;
         }
+        // Ci is left untaxed on purpose: the fixed cost belongs to the sstable existing,
+        // not to the compaction reading it, so it's only retired once the sstable leaves
+        // the set. Taxing Ci would cancel the tax added to Si for every sstable being
+        // compacted, and prorating it would only decay it earlier.
         auto compacted = crp.second->compacted();
         in.total_bytes += compacted;
         in.contribution += compacted * log4((crp.first->data_size()));
@@ -38,8 +42,11 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const std::
             auto& run = *run_ptr;
             auto data_size = run.data_size();
             if (data_size > 0) {
-                total_backlog_bytes += data_size;
-                sstables_backlog_contribution += data_size * log4(data_size);
+                // Si is taxed with the fixed cost of every sstable in the run, where it
+                // weighs the work, but not inside the log. See sstable_backlog_fixed_cost.
+                auto size = effective_backlog_size(data_size, run.all().size());
+                total_backlog_bytes += size;
+                sstables_backlog_contribution += size * log4(data_size);
                 sstable_runs_contributing_backlog.insert((*run.all().begin())->run_identifier());
             }
         }

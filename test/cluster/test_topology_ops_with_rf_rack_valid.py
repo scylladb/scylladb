@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
 import asyncio
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @pytest.mark.parametrize("enforce", [True, False])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_add_node_in_new_rack_violating_rf_rack(manager: ManagerClient, enforce: bool):
+async def test_add_node_in_new_rack_violating_rf_rack(manager: ScyllaClusterManager, enforce: bool):
     """
     Test adding a node to a new rack when it would violate RF-rack constraints.
 
@@ -61,7 +61,7 @@ async def test_add_node_in_new_rack_violating_rf_rack(manager: ManagerClient, en
 @pytest.mark.parametrize("enforce", [True, False])
 @pytest.mark.parametrize("op", ["remove", "decommission"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_remove_node_violating_rf_rack(manager: ManagerClient, enforce: bool, op: str):
+async def test_remove_node_violating_rf_rack(manager: ScyllaClusterManager, enforce: bool, op: str):
     """
     Test removing a node when it would violate RF-rack constraints.
 
@@ -121,7 +121,7 @@ async def test_remove_node_violating_rf_rack(manager: ManagerClient, enforce: bo
 
 @pytest.mark.parametrize("injection", ["before_bootstrap", "after_bootstrap"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_keyspace_creation_during_node_join(manager: ManagerClient, injection: str):
+async def test_keyspace_creation_during_node_join(manager: ScyllaClusterManager, injection: str):
     """
     Test keyspace creation behavior during node join at different stages.
 
@@ -226,7 +226,7 @@ async def test_keyspace_creation_during_node_join(manager: ManagerClient, inject
 
 @pytest.mark.parametrize("op", ["remove", "decommission"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_keyspace_creation_during_node_remove(manager: ManagerClient, op: str):
+async def test_keyspace_creation_during_node_remove(manager: ScyllaClusterManager, op: str):
     """
     Test keyspace creation behavior during node removal or decommission.
 
@@ -290,7 +290,7 @@ async def test_keyspace_creation_during_node_remove(manager: ManagerClient, op: 
 
 
 @pytest.mark.parametrize("op", ["remove", "decommission"])
-async def test_remove_node_violating_rf_rack_with_rack_list(manager: ManagerClient, op: str):
+async def test_remove_node_violating_rf_rack_with_rack_list(manager: ScyllaClusterManager, op: str):
     """
     Test removing a node when it would violate RF-rack constraints with explicit rack list.
 
@@ -339,7 +339,7 @@ async def test_remove_node_violating_rf_rack_with_rack_list(manager: ManagerClie
 
 @pytest.mark.parametrize("op", ["remove", "decommission"])
 @pytest.mark.parametrize("scenario", ["last_in_dc", "last_in_rack"])
-async def test_remove_last_node_in_dc_violating_rf_rack(manager: ManagerClient, op: str, scenario: str):
+async def test_remove_last_node_in_dc_violating_rf_rack(manager: ScyllaClusterManager, op: str, scenario: str):
     """
     Test that removing the last node in a DC or rack is rejected when a
     tablet-based keyspace replicates to that DC/rack, and that the removal

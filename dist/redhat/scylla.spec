@@ -11,6 +11,7 @@ Requires:       %{product}-server = %{version}-%{release}
 Requires:       %{product}-conf = %{version}-%{release}
 Requires:       %{product}-python3 = %{version}-%{release}
 Requires:       %{product}-kernel-conf = %{version}-%{release}
+Recommends:     %{product}-perf-collector = %{version}-%{release}
 Requires:       scylla-node-exporter
 Requires:       %{product}-cqlsh = %{version}-%{release}
 Provides:       scylla-enterprise = %{version}-%{release}
@@ -131,6 +132,7 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 %{_bindir}/scylla
 %{_bindir}/iotune
 %{_bindir}/scyllatop
+%{_bindir}/scylla-tablets
 %{_bindir}/nodetool
 %{_sbindir}/scylla*
 %{_sbindir}/node_health_check
@@ -139,6 +141,7 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 /opt/scylladb/swagger-ui/dist/*
 /opt/scylladb/api/api-doc/*
 /opt/scylladb/scyllatop/*
+/opt/scylladb/lib-python/*
 /opt/scylladb/bin/*
 /opt/scylladb/libreloc/*
 /opt/scylladb/libreloc/.*.hmac
@@ -226,6 +229,32 @@ fi
 /opt/scylladb/kernel_conf/*
 %ghost /etc/sysctl.d/99-scylla-perfevent.conf
 %ghost /etc/sysctl.d/99-scylla-tcp.conf
+
+
+%package perf-collector
+Group:          Applications/Databases
+Summary:        Scylla system-wide perf data collector
+Requires:       perf
+%description perf-collector
+This package contains the system-wide perf data collector for ScyllaDB.
+It collects low-overhead CPU profiling samples and rotates them automatically.
+
+%post perf-collector
+/usr/bin/systemctl daemon-reload ||:
+
+%preun perf-collector
+if [ $1 -eq 0 ] ; then
+    /usr/bin/systemctl --no-reload disable scylla-perf-collector.service ||:
+    /usr/bin/systemctl stop scylla-perf-collector.service ||:
+fi
+
+%postun perf-collector
+/usr/bin/systemctl daemon-reload ||:
+
+%files perf-collector
+%defattr(-,root,root)
+%attr(0644,root,root) %{_unitdir}/scylla-perf-collector.service
+%attr(0755,root,root) %dir /var/log/scylla-perf
 
 
 %changelog

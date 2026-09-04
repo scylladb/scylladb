@@ -47,6 +47,9 @@
 #include "db/commitlog/commitlog_replayer.hh"
 #include "init.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
+#include "compaction/compaction_manager.hh"
+#include "tasks/types.hh"
 #include "cql3/untyped_result_set.hh"
 #include "utils/rjson.hh"
 #include "utils/http.hh"
@@ -473,6 +476,107 @@ SEASTAR_TEST_CASE(test_local_file_provider) {
     tmpdir tmp;
     auto keyfile = tmp.path() / "secret_key";
     co_await test_provider(fmt::format("'key_provider': 'LocalFileSystemKeyProviderFactory', 'secret_key_file': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", keyfile.string()), tmp);
+}
+
+static std::string local_key_options(const fs::path& keyfile) {
+    return fmt::format("'key_provider': 'LocalFileSystemKeyProviderFactory', 'secret_key_file': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", keyfile.string());
+}
+
+// Reproduces a bug where rewriting a single sstable component (as done when
+// updating repaired_at, which rewrites Statistics via a special compaction)
+// re-encodes the component according to the *current* encryption settings,
+// which might be incompatible with the encryption settings used by all other
+// components. When that happens, Statistics.db becomes effectively corrupted.
+//
+// The sstable is first written under `initial_options`, then the table is
+// ALTERed to `altered_options`, then the Statistics component is rewritten and
+// the sstable is reloaded from disk (forcing a fresh parse of Statistics).
+// Before the fix, that would crash or throw an exception.
+static future<> test_statistics_rewrite_encryption_mismatch(const tmpdir& tmp,
+        const std::string& initial_options, const std::string& altered_options) {
+    auto ext = std::make_shared<db::extensions>();
+    auto cfg = seastar::make_shared<db::config>(ext);
+    cfg->data_file_directories({tmp.path().string()});
+    {
+        boost::program_options::options_description desc;
+        boost::program_options::options_description_easy_init init(&desc);
+        configurable::append_all(*cfg, init);
+    }
+
+    co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+        auto with_clause = initial_options.empty()
+            ? std::string()
+            : fmt::format(" WITH scylla_encryption_options={{{}}}", initial_options);
+        env.execute_cql(fmt::format("create table ks.t (pk text primary key, v text){}", with_clause)).get();
+        env.execute_cql("insert into ks.t (pk, v) values ('pk0', 'v0')").get();
+
+        // Produce an sstable, written under the initial encryption settings.
+        env.db().invoke_on_all([] (replica::database& db) {
+            return db.find_column_family("ks", "t").flush();
+        }).get();
+
+        // Diverge the schema's encryption from what the sstable was written with.
+        // The on-disk sstables keep their original encryption, as recorded in
+        // their scylla_metadata.
+        env.execute_cql(fmt::format("alter table ks.t WITH scylla_encryption_options={{{}}}", altered_options)).get();
+
+        env.db().invoke_on_all([] (replica::database& db) -> future<> {
+            auto& cf = db.find_column_family("ks", "t");
+            co_await cf.disable_auto_compaction();
+            auto sstables = cf.get_sstables();
+            for (auto sst : *sstables) {
+                // Rewrite the Statistics component, as a repaired_at update does.
+                auto modifier = [] (sstables::sstable& s) {
+                    s.update_repaired_at(s.get_stats_metadata().repaired_at + 1);
+                };
+                auto filter = [&sst] (const sstables::shared_sstable& candidate) {
+                    return candidate == sst;
+                };
+                auto rewritten = co_await cf.get_compaction_manager().perform_component_rewrite(
+                        cf.compaction_group_view_for_sstable(sst), tasks::task_info{},
+                        filter, sstables::component_type::Statistics, modifier,
+                        sstables::update_sstable_id::no);
+                BOOST_REQUIRE_EQUAL(rewritten.size(), 1);
+                auto new_sst = rewritten.at(sst);
+
+                // Reload the rewritten sstable from disk. This re-parses
+                // Statistics.db, which must be decoded consistently with the
+                // sstable's scylla_metadata. Before the fix this throws.
+                auto reloaded = cf.get_sstables_manager().make_sstable(
+                        cf.schema(), cf.get_storage_options(), new_sst->generation(),
+                        new_sst->state(), new_sst->get_version(), new_sst->get_format());
+                co_await reloaded->load(cf.schema()->get_sharder());
+                BOOST_REQUIRE_EQUAL(reloaded->get_stats_metadata().repaired_at,
+                        new_sst->get_stats_metadata().repaired_at);
+            }
+        }).get();
+
+        // Sanity check.
+        require_rows(env, "select * from ks.t",
+                {{utf8_type->decompose(sstring("pk0")), utf8_type->decompose(sstring("v0"))}});
+    }, cfg, {}, cql_test_init_configurables{ *ext });
+}
+
+// sstable written in the clear, encryption enabled afterwards.
+SEASTAR_TEST_CASE(test_statistics_rewrite_after_enabling_encryption) {
+    tmpdir tmp;
+    auto keyfile = tmp.path() / "secret_key";
+    co_await test_statistics_rewrite_encryption_mismatch(tmp, {}, local_key_options(keyfile));
+}
+
+// sstable written encrypted, encryption disabled afterwards.
+SEASTAR_TEST_CASE(test_statistics_rewrite_after_disabling_encryption) {
+    tmpdir tmp;
+    auto keyfile = tmp.path() / "secret_key";
+    co_await test_statistics_rewrite_encryption_mismatch(tmp, local_key_options(keyfile), "'key_provider': 'none'");
+}
+
+// sstable written encrypted, encryption key changed afterwards.
+SEASTAR_TEST_CASE(test_statistics_rewrite_after_changing_encryption_key) {
+    tmpdir tmp;
+    auto keyfile1 = tmp.path() / "secret_key1";
+    auto keyfile2 = tmp.path() / "secret_key2";
+    co_await test_statistics_rewrite_encryption_mismatch(tmp, local_key_options(keyfile1), local_key_options(keyfile2));
 }
 
 static future<> create_key_file(const fs::path& path, const std::vector<key_info>& key_types) {

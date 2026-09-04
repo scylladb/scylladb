@@ -71,12 +71,22 @@ void log::truncate_uncommitted(index_t idx) {
     _memory_usage -= released_memory;
     stable_to(std::min(_stable_idx, last_idx()));
     if (_last_conf_idx > last_idx()) {
-        // If _prev_conf_idx is 0, this log does not contain any
-        // other configuration changes, since no two uncommitted
-        // configuration changes can be in progress.
-        SCYLLA_ASSERT(_prev_conf_idx < _last_conf_idx);
-        _last_conf_idx = _prev_conf_idx;
-        _prev_conf_idx = index_t{0};
+        // The last configuration entry was truncated. In a legal raft
+        // history it is the only one that can be: a leader appends a new
+        // configuration entry only after the previous one is committed, and
+        // a committed entry can never conflict with any leader's log, so
+        // the entry at _prev_conf_idx must have survived the truncation.
+        // If this assert fires, some node went through a history raft does
+        // not allow, e.g. lost persisted state while keeping its identity.
+        SCYLLA_ASSERT(_prev_conf_idx <= last_idx());
+        // Re-derive the tracked configuration indices from the entries that
+        // remain in the log, as the constructor does. Rolling _last_conf_idx
+        // back to _prev_conf_idx and zeroing _prev_conf_idx would lose track
+        // of an older configuration entry that may still be in the log:
+        // get_prev_configuration() and last_conf_for() would then wrongly
+        // fall back to the snapshot configuration.
+        _last_conf_idx = _prev_conf_idx = index_t{0};
+        init_last_conf_idx();
     }
 }
 

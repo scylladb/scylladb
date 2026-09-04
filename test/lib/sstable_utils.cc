@@ -187,3 +187,102 @@ future<sstables::shared_sstable> verify_mutation(test_env& env, shared_sstable s
     co_await rd.close();
     co_return sstp;
 }
+
+class corrupted_data_source_impl : public data_source_impl {
+    input_stream<char> _wrapped;
+    size_t _corrupted_byte;
+    size_t _read_bytes;
+
+    void maybe_corrupt(temporary_buffer<char>& buf) {
+        if (_read_bytes <= _corrupted_byte && _corrupted_byte < _read_bytes + buf.size()) {
+            buf.get_write()[_corrupted_byte - _read_bytes] ^= 1u;
+        }
+    }
+public:
+    corrupted_data_source_impl(input_stream<char> wrapped, size_t corrupted_byte)
+        : _wrapped(std::move(wrapped))
+        , _corrupted_byte(corrupted_byte)
+        , _read_bytes(0)
+    {}
+
+    future<seastar::temporary_buffer<char>> get() override {
+        auto inner = co_await _wrapped.read();
+        maybe_corrupt(inner);
+        _read_bytes += inner.size();
+
+        co_return inner;
+    }
+
+    virtual future<temporary_buffer<char>> skip(uint64_t n) override {
+        co_await _wrapped.skip(n);
+        _read_bytes += n;
+
+        co_return temporary_buffer<char>();
+    }
+
+    future<> close() override {
+        return _wrapped.close();
+    }
+};
+
+class corrupted_data_source : public data_source {
+public:
+    corrupted_data_source(input_stream<char> wrapped, size_t corrupted_byte)
+        : data_source(std::make_unique<corrupted_data_source_impl>(std::move(wrapped), corrupted_byte))
+    {}
+};
+
+class corrupted_sstable_stream_source_impl : public sstable_stream_source {
+    std::unique_ptr<sstable_stream_source> _wrapped;
+    size_t _corrupted_byte;
+public:
+    corrupted_sstable_stream_source_impl(std::unique_ptr<sstable_stream_source> wrapped, sstables::shared_sstable sst, component_type type, size_t corrupted_byte)
+        : sstable_stream_source(std::move(sst), type)
+        , _wrapped(std::move(wrapped))
+        , _corrupted_byte(corrupted_byte)
+    {}
+
+    future<input_stream<char>> input(const file_input_stream_options& opts) const {
+        auto inner = co_await _wrapped->input(opts);
+        co_return input_stream<char>(corrupted_data_source(std::move(inner), _corrupted_byte));
+    }
+};
+
+std::unique_ptr<sstable_stream_source> make_corrupted_sstable_stream_source(std::unique_ptr<sstable_stream_source> wrapped, sstables::shared_sstable sst, component_type type, size_t corrupted_byte) {
+    return std::make_unique<corrupted_sstable_stream_source_impl>(std::move(wrapped), std::move(sst), type, corrupted_byte);
+}
+
+void slightly_corrupt_sstable(sstables::shared_sstable sst, component_type component) {
+    auto path = sstables::test(sst).filename(component).native();
+    auto size = seastar::file_size(path).get();
+    auto f = open_file_dma(path, open_flags::rw).get();
+    auto close_f = deferred_close(f);
+    const auto mem_align = f.memory_dma_alignment();
+    const auto dma_align = f.disk_write_dma_alignment();
+    auto block_offset = align_down(size - 1, dma_align);
+    auto buf = seastar::temporary_buffer<char>::aligned(mem_align, dma_align);
+    f.dma_read(block_offset, buf.get_write(), dma_align).get();
+    if (component == component_type::Scylla && sst->get_component_digest(component_type::Scylla)) {
+        // Modify the last bit of the data itself, not the digest.
+        buf.get_write()[size - 1 - sizeof(uint32_t) - block_offset] ^= 1u;
+    } else {
+        // Flip one bit in the last byte of the file to corrupt it minimally.
+        // Using a single-bit flip avoids creating values that overflow
+        // during parsing.
+        buf.get_write()[size - 1 - block_offset] += 1;
+    }
+    f.dma_write(block_offset, buf.get(), dma_align).get();
+    f.truncate(size).get();
+}
+
+void corrupt_sstable(sstables::shared_sstable sst, component_type type) {
+    auto f = sstables::test(sst).open_file(type, {}, {}).get();
+    auto close_f = deferred_close(f);
+    const auto wbuf_align = f.memory_dma_alignment();
+    const auto wbuf_len = f.size().get();
+    auto wbuf = seastar::temporary_buffer<char>::aligned(wbuf_align, wbuf_len);
+    std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
+    auto os = output_stream<char>(sstables::test(sst).get_storage().make_component_sink(*sst, type, open_flags::wo, {}).get());
+    auto close_os = deferred_close(os);
+    os.write(std::move(wbuf)).get();
+}

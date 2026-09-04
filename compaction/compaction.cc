@@ -722,9 +722,10 @@ protected:
     }
 
     compaction_completion_desc
-    get_compaction_completion_desc(std::vector<sstables::shared_sstable> input_sstables, std::vector<sstables::shared_sstable> output_sstables) {
+    get_compaction_completion_desc(std::vector<sstables::shared_sstable> input_sstables, std::vector<sstables::shared_sstable> output_sstables,
+                                   std::vector<sstables::shared_sstable> output_gc_sstables = {}) {
         auto ranges = get_ranges_for_invalidation(input_sstables);
-        return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables), std::move(ranges)};
+        return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables), std::move(output_gc_sstables), std::move(ranges)};
     }
 
     // Tombstone expiration is enabled based on the presence of sstable set.
@@ -1082,10 +1083,27 @@ private:
         // Delete either partially or fully written sstables of a compaction that
         // was either stopped abruptly (e.g. out of disk space) or deliberately
         // (e.g. nodetool stop COMPACTION).
-        for (auto& sst : boost::range::join(_new_partial_sstables, _new_unused_sstables)) {
-            log_debug("Deleting sstable {} of interrupted compaction for {}.{}", sst->get_filename(), _schema->ks_name(), _schema->cf_name());
-            sst->mark_for_deletion();
-        }
+        //
+        // _unused_garbage_collected_sstables is included because a sealed GC
+        // sstable that was never consumed is not tracked anywhere else: it is not
+        // in _new_unused_sstables (it only lands there once
+        // consume_unused_garbage_collected_sstables() runs) and sealing cleared
+        // its implicit deletion mark, so ~sstable() would leave its files behind.
+        //
+        // _used_garbage_collected_sstables is deliberately NOT included: those were
+        // already added to the table's sstable set and are still live there after an
+        // interrupted compaction. Marking them would delete files still referenced
+        // by the sstable set.
+        auto mark_for_deletion = [this] (const auto& sstables) {
+            for (auto& sst : sstables) {
+                log_debug("Deleting sstable {} of interrupted compaction for {}.{}", sst->get_filename(), _schema->ks_name(), _schema->cf_name());
+                sst->mark_for_deletion();
+            }
+        };
+        mark_for_deletion(_new_partial_sstables);
+        mark_for_deletion(_new_unused_sstables);
+        mark_for_deletion(_unused_garbage_collected_sstables);
+        _unused_garbage_collected_sstables.clear();
     }
 protected:
     template <typename... Args>
@@ -1345,13 +1363,13 @@ private:
             // to SSTable set. GC SSTables should be added before compaction completes because
             // a failure could result in data resurrection if data is not made available.
             auto unused_gc_sstables = consume_unused_garbage_collected_sstables();
-            _new_unused_sstables.insert(_new_unused_sstables.end(), unused_gc_sstables.begin(), unused_gc_sstables.end());
 
             auto exhausted_ssts = std::vector<sstables::shared_sstable>(exhausted, _sstables.end());
-            log_debug("Replacing earlier exhausted sstable(s) [{}] by new sstable(s) [{}]",
+            log_debug("Replacing earlier exhausted sstable(s) [{}] by new sstable(s) [{}] and new gc sstable(s) [{}]",
                 fmt::join(exhausted_ssts | std::views::transform([] (auto sst) { return to_string(sst, false); }), ","),
-                fmt::join(_new_unused_sstables | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
-            _replacer(get_compaction_completion_desc(exhausted_ssts, std::move(_new_unused_sstables)));
+                fmt::join(_new_unused_sstables | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","),
+                fmt::join(unused_gc_sstables | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
+            _replacer(get_compaction_completion_desc(exhausted_ssts, std::move(_new_unused_sstables), std::move(unused_gc_sstables)));
             _sstables.erase(exhausted, _sstables.end());
             dynamic_cast<compaction_read_monitor_generator&>(unwrap_monitor_generator()).remove_exhausted_sstables(exhausted_ssts);
         }
@@ -1397,6 +1415,30 @@ private:
 
             _replacer(get_compaction_completion_desc(std::move(old_sstables), std::move(_new_unused_sstables)));
          }
+
+        // A GC sstable can still be unused at this point: mutation_compactor seals
+        // the GC writer *before* the regular one at end of stream, so if the
+        // regular writer had already rotated shut (e.g. the tail of the stream is
+        // entirely purgeable), its consume_end_of_stream() is a no-op and
+        // maybe_replace_exhausted_sstables_by_sst() -- the only place that calls
+        // consume_unused_garbage_collected_sstables() -- never runs again.
+        //
+        // Such an sstable was never added to the table, so it cannot be handed to
+        // the replacer as an old_sstable (that would fail to be removed from the
+        // sstable set).  It is sealed, so seal_sstable() already cleared
+        // mark_for_deletion::implicit and ~sstable() will not unlink it.  Mark it
+        // explicitly, or its files stay on disk forever -- neither attached nor
+        // deleted, and invisible until the next restart rescans the data
+        // directory.
+        //
+        // Done after the replacement above so the GC sstable, which guards against
+        // data resurrection, outlives the atomic swap of inputs for outputs.
+        for (auto& sst : _unused_garbage_collected_sstables) {
+            log_debug("Deleting unused garbage collected sstable {} for {}.{}",
+                      sst->get_filename(), _schema->ks_name(), _schema->cf_name());
+            sst->mark_for_deletion();
+        }
+        _unused_garbage_collected_sstables.clear();
     }
 
     void update_pending_ranges() {
@@ -2161,7 +2203,7 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
 
         validation_errors += co_await sst->validate(permit, cdata.abort, [&schema] (sstring what) {
             scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, what);
-        }, monitor_generator(sst), true);
+        }, monitor_generator(sst));
         // Did validation actually finish because aborted?
         if (cdata.is_stop_requested()) {
             // Compaction manager will catch this exception and re-schedule the compaction.

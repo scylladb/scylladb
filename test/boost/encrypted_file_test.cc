@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <random>
 
+#include <seastar/core/align.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shared_ptr.hh>

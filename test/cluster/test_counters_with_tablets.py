@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.rest_client import read_barrier
@@ -18,7 +18,7 @@ import pytest
 logger = logging.getLogger(__name__)
 
 @pytest.mark.parametrize("migration_type", ["internode", "intranode"])
-async def test_counter_updates_during_tablet_migration(manager: ManagerClient, migration_type: str):
+async def test_counter_updates_during_tablet_migration(manager: ScyllaClusterManager, migration_type: str):
     """
     Test that counter updates remain consistent during tablet migrations.
 
@@ -93,7 +93,7 @@ async def test_counter_updates_during_tablet_migration(manager: ManagerClient, m
 
         assert actual_count == total_updates, f"Counter value mismatch: expected {total_updates}, got {actual_count}"
 
-async def test_counter_ids_reuse_in_single_rack(manager: ManagerClient):
+async def test_counter_ids_reuse_in_single_rack(manager: ScyllaClusterManager):
     """
     Migrate a single counter tablet between 3 nodes in a single rack, performing counter updates on each node,
     and verify the updates use at most 2 different counter IDs.
@@ -166,7 +166,7 @@ async def test_counter_ids_reuse_in_single_rack(manager: ManagerClient):
         assert len(counter_ids) >= 1, f"Expected at least 1 counter ID, but found none"
         assert len(counter_ids) <= 2, f"Expected at most 2 counter IDs, but found {len(counter_ids)}: {counter_ids}"
 
-async def test_counter_ids_multi_rack(manager: ManagerClient):
+async def test_counter_ids_multi_rack(manager: ScyllaClusterManager):
     """
     Test counter IDs with 3 nodes in 3 different racks with RF=3.
     Each rack should use a different counter ID.

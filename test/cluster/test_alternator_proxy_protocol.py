@@ -23,7 +23,7 @@ from typing import Optional
 import aiohttp
 import pytest
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error
 
 logger = logging.getLogger(__name__)
@@ -196,7 +196,7 @@ ALTERNATOR_PROXY_SERVER_CONFIG = {
 
 
 @pytest.fixture(scope="function")
-async def alternator_proxy_server(manager: ManagerClient):
+async def alternator_proxy_server(manager: ScyllaClusterManager):
     """Fixture that creates a server with Alternator proxy protocol ports enabled."""
     server = await manager.server_add(
         config=ALTERNATOR_PROXY_SERVER_CONFIG,

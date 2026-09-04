@@ -10,14 +10,14 @@ from collections import defaultdict
 from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.protocol import ConfigurationException
 
-from test.pylib.manager_client import ManagerClient, ServerUpState
-from test.cluster.conftest import cluster_con
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.internal_types import ServerUpState
 from test.cluster.util import create_new_test_keyspace, get_replication, get_replica_count
 
 
 @pytest.mark.parametrize("tablets_enabled", [True, False])
 @pytest.mark.parametrize("rf_rack_valid_keyspaces", [False, True])
-async def test_create_keyspace_with_default_replication_factor(manager: ManagerClient, tablets_enabled: bool, rf_rack_valid_keyspaces: bool, build_mode):
+async def test_create_keyspace_with_default_replication_factor(manager: ScyllaClusterManager, tablets_enabled: bool, rf_rack_valid_keyspaces: bool, build_mode):
     def get_pf(dc: str, rack: str) -> dict:
         return {'dc': dc, 'rack': rack}
 
@@ -92,7 +92,7 @@ async def test_create_keyspace_with_default_replication_factor(manager: ManagerC
         verify_dc_rf('dc1')
         verify_dc_rf('dc2')
 
-    cql = cluster_con([server.ip_addr], 9042, False,
+    cql = manager.con_gen([server.ip_addr], 9042, False,
                         load_balancing_policy=WhiteListRoundRobinPolicy([server.ip_addr])).connect()
 
     logging.info("Create NetworkTopologyStrategy keyspace with default replication factor")

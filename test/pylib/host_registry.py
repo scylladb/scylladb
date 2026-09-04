@@ -3,21 +3,20 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
+import asyncio
 import errno
 import fcntl
 import os
 import random
+from collections.abc import Iterator
 from pathlib import Path
-
-from test.pylib.pool import Pool
 from typing import NewType, Optional
+
 
 Host = NewType('Host', str)
 
 
 class HostRegistry:
-    _instance = None
-    _initialized = False
     """A Scylla servers needs a unique IP address and working directory
     which we need to manage and share across many running tests. Store
     all shared external resources within this class to make sure
@@ -28,6 +27,8 @@ class HostRegistry:
     X.Y.Z is unique for each test.py invocation, and W is unique
     across all hosts in a single run.
     """
+    _instance = None
+    _initialized = False
 
     def __new__(cls):
         if cls._instance is None:
@@ -68,14 +69,14 @@ class HostRegistry:
             # Avoid 127.0.*.* since CCM (a different test framework)
             # assumes it will be available for it to run Scylla
             # instances. 127.255.255.255 is also illegal.
-            self.subnet = f"127.{second_octet}.{random.randrange(0, 255)}"
-            self.lock_filename: Optional[Path] = Path('/tmp') / f"scylla-{self.subnet}"
-            self.lock_file = self.lock_filename.open('w')
+            subnet = f"127.{second_octet}.{random.randrange(0, 255)}"
+            self._lock_filename: Optional[Path] = Path("/tmp") / f"scylla-{subnet}"
+            self._lock_file = self._lock_filename.open("w")
             try:
-                fcntl.lockf(self.lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.lockf(self._lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except OSError as e:
-                self.lock_file.close()
+                self._lock_file.close()
                 if e.errno not in (errno.EACCES, errno.EAGAIN):
                     raise
         else:
@@ -83,28 +84,26 @@ class HostRegistry:
                 f"Failed to acquire a subnet lock after {max_attempts} attempts"
             )
 
-        self.subnet += ".{}"
-        self.next_host_id = 0
+        # Never-yet-leased hosts, minted on demand: one for each of the 254 usable 4th-octet values.
+        self._new_hosts: Iterator[Host] = (Host(f"{subnet}.{host_id}") for host_id in range(1, 255))
 
-        async def create_host() -> Host:
-            self.next_host_id += 1
-            return Host(self.subnet.format(self.next_host_id))
+        # Hosts released by their previous user, available for reuse.
+        self._released_hosts: list[Host] = []
 
-        async def destroy_host(h: Host) -> None:
-            # Doesn't matter, we never return hosts to the pool as 'dirty'.
-            pass
+        # Limits the number of leased hosts to the number of usable 4th-octet values: lease #255 waits for a release.
+        self._semaphore = asyncio.Semaphore(254)
 
-        self.pool = Pool[Host](254, create_host, destroy_host)
-
-        async def cleanup() -> None:
-            if self.lock_filename:
-                self.lock_filename.unlink()
-                self.lock_filename = None
-
-        self.cleanup = cleanup
+    async def cleanup(self) -> None:
+        if self._lock_filename:
+            self._lock_filename.unlink()
+            self._lock_filename = None
 
     async def lease_host(self) -> Host:
-        return await self.pool.get()
+        await self._semaphore.acquire()
+        if self._released_hosts:
+            return self._released_hosts.pop(0)  # use the list as a FIFO queue
+        return next(self._new_hosts)
 
     async def release_host(self, host: Host) -> None:
-        return await self.pool.put(host, is_dirty=False)
+        self._released_hosts.append(host)
+        self._semaphore.release()

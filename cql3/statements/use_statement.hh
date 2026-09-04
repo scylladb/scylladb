@@ -19,7 +19,7 @@ class query_processor;
 
 namespace statements {
 
-class use_statement : public cql_statement_no_metadata {
+class use_statement : public cql_statement {
 private:
     const seastar::sstring _keyspace;
 

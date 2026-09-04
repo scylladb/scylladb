@@ -24,6 +24,7 @@ extern thread_local disk_error_signal_type commit_error;
 extern thread_local disk_error_signal_type sstable_read_error;
 extern thread_local disk_error_signal_type sstable_write_error;
 extern thread_local disk_error_signal_type general_disk_error;
+extern thread_local disk_error_signal_type logstor_error;
 
 bool should_stop_on_system_error(const std::system_error& e);
 
@@ -38,6 +39,7 @@ io_error_handler_gen default_io_error_handler_gen();
 extern thread_local io_error_handler commit_error_handler;
 extern thread_local io_error_handler sstable_write_error_handler;
 extern thread_local io_error_handler general_disk_error_handler;
+extern thread_local io_error_handler logstor_error_handler;
 
 template<typename Func, typename... Args>
 requires std::invocable<Func, Args&&...>

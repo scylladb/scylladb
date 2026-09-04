@@ -11,7 +11,20 @@ import re
 import random
 from botocore.exceptions import ClientError
 
+from test.pylib.skip_types import skip_env
 from .util import get_signed_request
+
+# All the tests in this file are about SigV4 signature-based authentication
+# (wrong keys, expired/futuristic signatures, missing headers, header
+# canonicalization affecting the signature, etc.). Under mTLS, once a client
+# certificate is presented, the connection is authenticated by that
+# certificate and SigV4 signatures are not checked at all (and are silently
+# ignored if present) - so these tests don't apply and are skipped, instead
+# of spuriously passing (or failing) for the wrong reason.
+@pytest.fixture(autouse=True)
+def skip_if_mtls(request):
+    if request.config.getoption('mtls'):
+        skip_env("test_authorization.py tests SigV4 signatures, which are not checked under mTLS")
 
 
 # Test that trying to perform an operation signed with a wrong key

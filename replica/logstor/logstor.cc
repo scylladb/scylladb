@@ -9,6 +9,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/log.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/metrics.hh>
 #include "query/query-request.hh"
 #include "readers/from_mutations.hh"
 #include "keys/keys.hh"
@@ -43,12 +44,30 @@ static api::timestamp_type extract_logstor_record_timestamp(const mutation& m) {
 
 logstor::logstor(logstor_config config, ::cache_tracker& shared_cache_tracker)
     : _segment_manager(config.segment_manager_cfg)
-    , _write_buffer(_segment_manager, config.flush_sg)
+    , _write_buffer(buffered_writer_config{
+            .buffer_size = _segment_manager.get_segment_size(),
+            .ring_size = config.write_buffer_ring_size,
+            .flush_sg = config.flush_sg,
+            .max_queued_write_bytes = config.max_queued_write_bytes,
+        }, [&sm = _segment_manager] (write_buffer& buf) { return sm.write(buf); })
     , _cache_tracker(shared_cache_tracker) {
+
+    namespace sm = seastar::metrics;
+
+    _metrics.add_group("logstor", {
+        sm::make_gauge("queued_write_count", [this] { return _write_buffer.queued_write_count(); },
+                       sm::description("Number of writes currently queued in the write buffer.")),
+        sm::make_counter("write_failures", [this] { return _stats.write_failures; },
+                       sm::description("Number of writes that failed to be persisted.")),
+    });
 }
 
 future<> logstor::do_recovery(replica::database& db) {
     co_await _segment_manager.do_recovery(db);
+}
+
+future<> logstor::do_recovery_for_test() {
+    co_await _segment_manager.do_recovery_for_test();
 }
 
 future<> logstor::start() {
@@ -61,8 +80,12 @@ future<> logstor::start() {
 }
 
 future<> logstor::stop() {
+    if (_async_gate.is_closed()) {
+        co_return;
+    }
     logstor_logger.info("Stopping logstor");
 
+    co_await _async_gate.close();
     co_await _write_buffer.stop();
     co_await _segment_manager.stop();
 
@@ -97,10 +120,13 @@ std::unique_ptr<primary_index> logstor::make_primary_index(schema_ptr schema, bo
     return index;
 }
 
-future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout) {
+future<> logstor::write(const mutation& m, write_target target, db::timeout_clock::time_point timeout) {
+    auto gate_holder = _async_gate.hold();
+
+    auto& cg = *target.cg;
     primary_index_key key(m.decorated_key());
     table_id table = m.schema()->id();
-    auto& index = cg.get_logstor_index();
+    auto& index = cg.logstor_index();
 
     const auto ts = extract_logstor_record_timestamp(m);
 
@@ -113,20 +139,24 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
         .mut = canonical_mutation(m)
     };
 
-    return _write_buffer.write(std::move(record), timeout, &cg, std::move(cg_holder)).then_unpack([index_ptr = &index, ts, key = std::move(key)]
-            (log_location location, seastar::gate::holder op) {
-        index_entry new_entry {
-            .location = location,
-            .timestamp = ts,
-        };
-        index_ptr->insert(key, std::move(new_entry));
-    }).handle_exception([] (std::exception_ptr ep) {
-        logstor_logger.error("Error writing mutation: {}", ep);
-        return make_exception_future<>(ep);
-    });
+    auto writer = log_record_writer(std::move(record));
+
+    auto result_f = co_await coroutine::as_future(_write_buffer.write(std::move(writer), timeout, std::move(target)));
+    if (result_f.failed()){
+        _stats.write_failures++;
+        co_await coroutine::return_exception_ptr(result_f.get_exception());
+    }
+    auto [location, op] = result_f.get();
+    index_entry new_entry {
+        .location = location,
+        .timestamp = ts,
+    };
+    index.insert(key, std::move(new_entry));
 }
 
 future<std::optional<mutation>> logstor::read(const schema& s, const primary_index& index, const dht::decorated_key& dk, const query::partition_slice& slice) {
+    auto gate_holder = _async_gate.hold();
+
     auto op = index.start_read();
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
@@ -168,6 +198,69 @@ future<std::optional<mutation>> logstor::read(const schema& s, const primary_ind
     }
 
     co_return std::move(m);
+}
+
+std::map<sstring, mutation_source> logstor::make_mutation_sources_for_dump(schema_ptr s, const primary_index& index,
+        const dht::decorated_key& dk, reader_permit permit) {
+    // The snapshot of the cached mutation, held until the dump is done with its source.
+    // The source is copyable, so the snapshot and the memory it is accounted with are
+    // shared between its copies.
+    struct cache_snapshot {
+        mutation mut;
+        reader_permit::resource_units memory;
+    };
+
+    std::map<sstring, mutation_source> sources;
+
+    auto lookup = index.lookup_for_dump(dk, s);
+    if (!lookup) {
+        return sources;
+    }
+
+    // The cached mutation is snapshotted by the lookup above; the cache entry may be
+    // evicted by the time the source is read from.
+    if (lookup->cached_mutation) {
+        auto memory = permit.consume_memory(lookup->cached_mutation->memory_usage(*s));
+        auto snapshot = make_lw_shared<cache_snapshot>(cache_snapshot{std::move(*lookup->cached_mutation), std::move(memory)});
+        sources.emplace("logstor-cache", mutation_source([snapshot = std::move(snapshot)] (
+                schema_ptr s,
+                reader_permit permit,
+                const dht::partition_range&,
+                const query::partition_slice& slice,
+                tracing::trace_state_ptr,
+                streamed_mutation::forwarding fwd,
+                mutation_reader::forwarding) {
+            return make_mutation_reader_from_mutations(std::move(s), std::move(permit), mutation(snapshot->mut), slice, fwd);
+        }));
+    }
+
+    // The name identifies the segment holding the record, the way an sstable source is
+    // named after the sstable holding the row, and not the record's position inside it.
+    // All the records of a segment therefore share one source name, so that a dump can be
+    // restricted to the contents of a single segment. The name changes when compaction or
+    // an overwrite moves the record to another segment.
+    const auto location = lookup->entry.location;
+    auto name = format("logstor-log:{}:{}", _segment_manager.get_segment_file_path(location.segment), location.segment.value);
+
+    // The record is read through the regular read path, with the cache bypassed so that
+    // inspecting a table neither reads from nor populates it. The read happens on the
+    // first fill_buffer() call and resolves the record location from the index again, so
+    // a compaction which moved the record in the meantime is followed (in which case the
+    // source name, computed above, names the record's old location).
+    sources.emplace(std::move(name), mutation_source([this, &index] (
+            schema_ptr s,
+            reader_permit permit,
+            const dht::partition_range& pr,
+            const query::partition_slice& slice,
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding,   // The dump consumes whole partitions and never
+            mutation_reader::forwarding) {   // forwards the readers it creates.
+        auto dump_slice = slice;
+        dump_slice.options.set<query::partition_slice::option::bypass_cache>();
+        return make_reader(std::move(s), index, std::move(permit), pr, dump_slice, std::move(trace_state));
+    }));
+
+    return sources;
 }
 
 mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& index, reader_permit permit, const dht::partition_range& pr,
@@ -309,12 +402,10 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
     );
 }
 
-void logstor::set_trigger_compaction_hook(std::function<void()> fn) {
-    _segment_manager.set_trigger_compaction_hook(std::move(fn));
-}
-
-void logstor::set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn) {
-    _segment_manager.set_trigger_separator_flush_hook(std::move(fn));
+future<> logstor::flush_to_separator() {
+    auto gate_holder = _async_gate.hold();
+    co_await _write_buffer.flush();
+    co_await _segment_manager.await_pending_writes();
 }
 
 }

@@ -8,13 +8,13 @@ import asyncio
 
 import pytest
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 CQL_PORT = 9042
 SHARD_AWARE_PORT = 19042
 
 
-async def test_uninitialized_conns_sempahore_one(manager: ManagerClient):
+async def test_uninitialized_conns_sempahore_one(manager: ScyllaClusterManager):
     """Verify that CQL queries work when uninitialized_connections_semaphore_cpu_concurrency is set to 1."""
     config = {
         "uninitialized_connections_semaphore_cpu_concurrency": 1,

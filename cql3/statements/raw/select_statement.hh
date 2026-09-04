@@ -43,17 +43,17 @@ public:
         ascending,
         descending
     };
-    // Vector of floats with dimension the same as the vector indexed column.
-    // This vector is the target for the nearest neighbors in ANN queries.
-    using ann_vector = expr::expression;
     // Scoring function ordering stores the complete function call expression
-    // (e.g., BM25(column, query_term)).
+    // (e.g., BM25(column, query_term) or ANN(column, query_vector)).
     struct scoring_function_ordering {
         expr::expression func_expr;
     };
-    using ordering_type = std::variant<ordering, ann_vector, scoring_function_ordering>;
+    using ordering_type = std::variant<ordering, scoring_function_ordering>;
     class parameters final {
     public:
+        // The first element is the ordered column, or nullptr for a scoring_function_ordering,
+        // whose column (if any) lives inside the function-call expression instead. A scoring
+        // ordering is always the only element of the vector (enforced by the grammar).
         using orderings_type = std::vector<std::pair<shared_ptr<column_identifier::raw>, ordering_type>>;
         enum class statement_subtype { REGULAR, JSON, PRUNE_MATERIALIZED_VIEW, MUTATION_FRAGMENTS };
     private:
@@ -103,6 +103,7 @@ private:
     // captured in prepare_keyspace().
     bool _no_from = false;
     sstring _session_keyspace;
+    restrictions::pinned_plan_opt _pinned_plan;
 public:
     select_statement(std::optional<cf_name> cf_name,
             lw_shared_ptr<const parameters> parameters,
@@ -114,12 +115,16 @@ public:
             std::unique_ptr<cql3::attributes::raw> attrs);
 
     virtual void prepare_keyspace(const service::client_state& state) override;
-    using cf_statement::prepare_keyspace;
+    virtual void prepare_keyspace(std::string_view keyspace) override;
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override {
         return prepare(db, stats, cfg, false);
     }
     std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg, bool for_view);
+
+    virtual void set_pinned_plan(restrictions::pinned_plan_opt pinned_plan) override {
+        _pinned_plan = std::move(pinned_plan);
+    }
 private:
     std::vector<selection::prepared_selector> maybe_jsonize_select_clause(std::vector<selection::prepared_selector> select, data_dictionary::database db, schema_ptr schema);
     ::shared_ptr<const restrictions::statement_restrictions> prepare_restrictions(
@@ -129,7 +134,8 @@ private:
         ::shared_ptr<selection::selection> selection,
         bool for_view = false,
         bool allow_filtering = false,
-        restrictions::check_indexes do_check_indexes = restrictions::check_indexes::yes);
+        restrictions::check_indexes do_check_indexes = restrictions::check_indexes::yes,
+        restrictions::pinned_plan_opt pinned_plan = std::nullopt);
 
     /** Returns an expression for the limit or nullopt if no limit is set */
     std::optional<expr::expression> prepare_limit(data_dictionary::database db, prepare_context& ctx, const std::optional<expr::expression>& limit);

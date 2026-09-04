@@ -11,7 +11,7 @@ import time
 
 from cassandra import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import check_token_ring_and_group0_consistency, new_test_keyspace
@@ -24,7 +24,7 @@ from cassandra.cluster import ConnectionException, NoHostAvailable  # type: igno
 logger = logging.getLogger(__name__)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     """ Test a simultaneous topology change and write query during shutdown,
     which may cause the node to get stuck.
 

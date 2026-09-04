@@ -28,6 +28,7 @@
 #include <fmt/ranges.h>
 #include <seastar/util/defer.hh>
 #include "sstables/generation_type.hh"
+#include "sstables/storage.hh"
 
 static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
@@ -156,7 +157,7 @@ table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, c
 {
     cfg.cf_stats = &_data->cf_stats;
     _data->s = s ? s : make_default_schema();
-    _data->cf = make_lw_shared<replica::column_family>(_data->s, std::move(cfg), make_lw_shared<replica::storage_options>(storage), cm, sstables_manager, _data->cl_stats, sstables_manager.get_cache_tracker(), nullptr);
+    _data->cf = make_lw_shared<replica::column_family>(_data->s, std::move(cfg), make_lw_shared<replica::storage_options>(storage), cm, nullptr, sstables_manager, _data->cl_stats, sstables_manager.get_cache_tracker(), nullptr);
     _data->cf->mark_ready_for_writes(nullptr);
     _data->table_s = std::make_unique<compaction_group_view>(*_data, sstables_manager);
     cm.add(*_data->table_s);
@@ -523,6 +524,19 @@ test_env::tempdir() noexcept {
 data_dictionary::storage_options
 test_env::get_storage_options() const noexcept {
     return _impl->storage;
+}
+
+std::unique_ptr<sstables::storage>
+test_env::make_storage(schema_ptr s, sstring dir, sstables::sstable_state state) {
+    auto storage_opts = _impl->storage;
+    if (dir.empty()) {
+        dir = _impl->dir.path().native();
+    }
+    std::visit(overloaded_functor{
+        [&dir] (data_dictionary::storage_options::local& loc) { loc.dir = dir; },
+        [] (data_dictionary::storage_options::object_storage& os) { os.location = std::nullopt; },
+    }, storage_opts.value);
+    return sstables::make_storage(_impl->mgr, s, storage_opts, state);
 }
 
 reader_permit

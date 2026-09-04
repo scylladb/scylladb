@@ -29,7 +29,6 @@ private:
     static thread_local struct stats {
         uint64_t memory_size = 0;
     } _shard_stats;
-    stats& _stats = _shard_stats;
 
 public:
     int num_hashes() { return _hash_count; }
@@ -44,10 +43,6 @@ public:
     virtual bool is_present(const bytes_view& key) override;
 
     virtual bool is_present(hashed_key key) override;
-
-    virtual void clear() override {
-        _bitset.clear();
-    }
 
     virtual void close() override { }
 
@@ -79,8 +74,6 @@ struct always_present_filter: public i_filter {
 
     virtual void add(const bytes_view& key) override { }
     virtual void add(const hashed_key& key) override { }
-
-    virtual void clear() override { }
 
     virtual void close() override { }
 

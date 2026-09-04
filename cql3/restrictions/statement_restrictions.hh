@@ -18,6 +18,7 @@
 #include "cql3/prepare_context.hh"
 #include "cql3/statements/statement_type.hh"
 #include "query/query-request.hh"
+#include "service/pager/query_plan.hh"
 
 namespace cql3 {
 
@@ -94,6 +95,11 @@ struct predicate {
 ///impossible, because e.g. the query runs on a pseudo-table, which does not
 ///have an index-manager, or even a table object.
 using check_indexes = bool_class<class check_indexes_tag>;
+
+/// The plan a continued paged query must keep scanning - the base table, or an
+/// index view. The query fails if that plan is gone or cannot serve the query;
+/// std::nullopt plans normally. See #18992.
+using pinned_plan_opt = std::optional<service::pager::query_plan>;
 
 // A function that returns the partition key ranges for a query. It is the solver of
 // WHERE clause fragments such as WHERE token(pk) > 1 or WHERE pk1 IN :list1 AND pk2 IN :list2.
@@ -262,7 +268,8 @@ public:
         bool selects_only_static_columns,
         bool for_view,
         bool allow_filtering,
-        check_indexes do_check_indexes);
+        check_indexes do_check_indexes,
+        pinned_plan_opt pinned_plan);
     friend shared_ptr<const statement_restrictions> make_trivial_statement_restrictions(
         schema_ptr schema,
         bool allow_filtering);
@@ -279,7 +286,8 @@ public:
         bool selects_only_static_columns,
         bool for_view,
         bool allow_filtering,
-        check_indexes do_check_indexes);
+        check_indexes do_check_indexes,
+        pinned_plan_opt pinned_plan);
 public:
 
     const std::vector<expr::expression>& index_restrictions() const;
@@ -543,7 +551,8 @@ shared_ptr<const statement_restrictions> analyze_statement_restrictions(
         bool selects_only_static_columns,
         bool for_view,
         bool allow_filtering,
-        check_indexes do_check_indexes);
+        check_indexes do_check_indexes,
+        pinned_plan_opt pinned_plan = std::nullopt);
 
 shared_ptr<const statement_restrictions> make_trivial_statement_restrictions(
         schema_ptr schema,

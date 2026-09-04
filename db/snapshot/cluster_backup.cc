@@ -356,7 +356,7 @@ future<> cluster_backup_task::do_backup() {
 
             auto client = manager.get_endpoint_client(dst.endpoint);
             auto prefix = db::snapshot::snapshot_meta_location(dst.prefix, t, _snapshot);
-            output_stream<char> out(client->make_upload_sink(sstables::object_name(dst.bucket, prefix, "manifest.json"), &_as));
+            output_stream<char> out(client->make_upload_sink(sstables::object_name(dst.bucket, prefix, "manifest.json"), sstables::object_storage_attributes{}, &_as));
             auto streamer = json::stream_object(std::move(manifest));
             co_await streamer(std::move(out));
             _total_progress.completed += 1;
@@ -497,7 +497,7 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
 
             auto gen = (*gen_info).generation;
             auto ref_name = sstables::object_name(bucket, table_prefix, fmt::format("refs/snapshot-{}/{}", tag, gen));
-            co_await client->put_object(ref_name, memory_data_sink_buffers{}); // any exception here can just propagate
+            co_await client->put_object(ref_name, memory_data_sink_buffers{}, sstables::object_storage_attributes{}); // any exception here can just propagate
 
             bool any_failed = false;
             co_await coroutine::parallel_for_each(info.filenames, [&](std::string_view name) -> future<> {

@@ -6,7 +6,7 @@
 
 from cassandra.query import SimpleStatement, ConsistencyLevel # type: ignore
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 import pytest
 import asyncio
@@ -29,7 +29,7 @@ async def run_async_cl_all(cql, query: str):
     return await cql.run_async(stmt)
 
 
-async def test_removenode_with_coordinator_restart(manager: ManagerClient):
+async def test_removenode_with_coordinator_restart(manager: ScyllaClusterManager):
     """
     Verifies that removenode can proceed when the coordinator is restarted
     with some normal nodes down, so cannot obtain table stats for them.
@@ -60,7 +60,7 @@ async def test_removenode_with_coordinator_restart(manager: ManagerClient):
     await manager.remove_node(servers[1].server_id, servers[2].server_id)
 
 
-async def test_replace(manager: ManagerClient):
+async def test_replace(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=trace',
@@ -140,7 +140,7 @@ async def test_replace(manager: ManagerClient):
     await check_ks(ks3)
 
 
-async def test_removenode(manager: ManagerClient):
+async def test_removenode(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = ['--logger-log-level', 'storage_service=trace']
 
@@ -202,7 +202,7 @@ async def test_removenode(manager: ManagerClient):
     await check()
 
 
-async def test_removenode_with_ignored_node(manager: ManagerClient):
+async def test_removenode_with_ignored_node(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=trace',

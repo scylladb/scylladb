@@ -5,7 +5,7 @@
 #
 from cassandra.cluster import Session, ConsistencyLevel
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts, start_writes
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.cluster.util import new_test_keyspace
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_intranode_migration(manager: ManagerClient):
+async def test_intranode_migration(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=trace',
@@ -59,7 +59,7 @@ async def test_intranode_migration(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_crash_during_intranode_migration(manager: ManagerClient):
+async def test_crash_during_intranode_migration(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'tablets=trace',
         '--logger-log-level', 'database=trace',
@@ -110,7 +110,7 @@ async def test_crash_during_intranode_migration(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cross_shard_migration(manager: ManagerClient):
+async def test_cross_shard_migration(manager: ScyllaClusterManager):
     """
     Test scenario where writes are concurrently made with migration, where
     some of them are coordinated by the owning host and some by the non-owning host.
