@@ -6742,7 +6742,8 @@ class scylla_prepared_statements(gdb.Command):
                 e = seastar_lw_shared_ptr(x["_ts_val_ptr"]["_e"]).get().dereference()
                 val = std_optional(e['_val'])
                 if val:
-                    value = std_unique_ptr(val.get()['_value']).get().dereference()
+                    entry = val.get()['_value']
+                    value = std_unique_ptr(entry['_stmt']).get().dereference()
                     stmt = seastar_shared_ptr(value['statement']).get().dereference()
                     if stmt['raw_cql_statement'].type == chunked_string_type:
                         stmt_str = try_decode(managed_bytes(stmt['raw_cql_statement']['_data']).get())

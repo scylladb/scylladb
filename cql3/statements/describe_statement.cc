@@ -519,8 +519,6 @@ describe_statement::describe_statement() : cql_statement(&timeout_config::other_
 
 uint32_t describe_statement::get_bound_terms() const { return 0; }
 
-bool describe_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const { return false; }
-
 future<> describe_statement::check_access(query_processor& qp, const service::client_state& state) const {
     state.validate_login();
     co_return;

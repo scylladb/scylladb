@@ -780,8 +780,8 @@ modification_statement::validate(query_processor&, const service::client_state& 
     }
 }
 
-bool modification_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const {
-    return keyspace() == ks_name && (!cf_name || column_family() == *cf_name);
+std::vector<dependent_table> modification_statement::dependent_tables() const {
+    return {dependent_table{s->id(), s->ks_name(), s->cf_name()}};
 }
 
 void modification_statement::add_operation(std::unique_ptr<operation> op) {

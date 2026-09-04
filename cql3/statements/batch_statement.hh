@@ -91,7 +91,7 @@ public:
                     std::unique_ptr<attributes> attrs,
                     cql_stats& stats);
 
-    virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
+    virtual std::vector<dependent_table> dependent_tables() const override;
 
     // A control connection never has a legitimate reason to run a batch, so any
     // batch arriving on one means it is being used for user load.
