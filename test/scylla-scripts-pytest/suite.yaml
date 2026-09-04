@@ -1,0 +1,7 @@
+type: Run
+
+skip_in_debug:
+  - run
+
+skip_in_dev:
+  - run
