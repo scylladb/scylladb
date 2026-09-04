@@ -423,7 +423,7 @@ private:
             if (uint32_t(level) >= last_compacted_keys.size()) {
                 throw std::runtime_error(format("Invalid level {:d} out of {:d}", level, (last_compacted_keys.size() - 1)));
             }
-            auto& sstable_first = sstable->get_first_decorated_key();
+            auto sstable_first = sstable->get_first_ring_position();
             if (!last_compacted_keys[level] || sstable_first.tri_compare(s, *last_compacted_keys[level]) > 0) {
                 start = idx;
                 break;

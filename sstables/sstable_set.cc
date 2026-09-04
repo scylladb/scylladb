@@ -41,11 +41,12 @@ sstable_first_key_less_comparator::operator()(const shared_sstable& s1, const sh
 bool sstable_run::will_introduce_overlapping(const shared_sstable& sst) const {
     // checks if s1 is *all* before s2, meaning their bounds don't overlap.
     auto completely_ordered_before = [] (const shared_sstable& s1, const shared_sstable& s2) {
-        auto pkey_tri_cmp = [s = s1->get_schema()] (const dht::decorated_key& k1, const dht::decorated_key& k2) {
-            return k1.tri_compare(*s, k2);
-        };
-        auto r = pkey_tri_cmp(s1->get_last_decorated_key(), s2->get_first_decorated_key());
-        if (r == 0) {
+        auto schema = s1->get_schema();
+        dht::ring_position_comparator rp_cmp(*schema);
+        auto r = rp_cmp(s1->get_last_ring_position(), s2->get_first_ring_position());
+        // The refinement below reads positions within the bounding partitions,
+        // which an sstable storing no partitions does not have.
+        if (r == 0 && s1->has_partitions() && s2->has_partitions()) {
             position_in_partition::tri_compare ckey_tri_cmp(*s1->get_schema());
             const auto& s1_last_position = s1->last_partition_last_position();
             const auto& s2_first_position = s2->first_partition_first_position();
@@ -256,8 +257,8 @@ partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(co
 
 partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(const schema_ptr& s, const sstable& sst) {
     return interval_type::closed(
-            dht::compatible_ring_position_or_view(s, dht::ring_position(sst.get_first_decorated_key())),
-            dht::compatible_ring_position_or_view(s, dht::ring_position(sst.get_last_decorated_key())));
+            dht::compatible_ring_position_or_view(s, sst.get_first_ring_position()),
+            dht::compatible_ring_position_or_view(s, sst.get_last_ring_position()));
 }
 
 partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(const sstable& sst) {
@@ -311,9 +312,13 @@ bool partitioned_sstable_set::store_as_unleveled(const shared_sstable& sst) cons
 }
 
 dht::ring_position partitioned_sstable_set::to_ring_position(const dht::compatible_ring_position_or_view& crp) {
-    // Ring position views, representing bounds of sstable intervals are
-    // guaranteed to have key() != nullptr;
     const auto& pos = crp.position();
+    // An sstable which stores no partitions has no key at either bound: its
+    // extent is the token ranges its tombstones delete. Every other sstable's
+    // bounds are its first and last key.
+    if (!pos.key()) {
+        return dht::ring_position(pos.token(), pos.get_token_bound());
+    }
     return dht::ring_position(pos.token(), *pos.key());
 }
 
@@ -915,8 +920,8 @@ public:
 static std::predicate<const sstable&> auto
 make_pk_filter(const dht::ring_position& pos, const utils::hashed_key& hash, const schema& schema) {
     return [&pos, hash, cmp = dht::ring_position_comparator(schema)] (const sstable& sst) {
-        return cmp(pos, sst.get_first_decorated_key()) >= 0 &&
-               cmp(pos, sst.get_last_decorated_key()) <= 0 &&
+        return cmp(pos, sst.get_first_ring_position()) >= 0 &&
+               cmp(pos, sst.get_last_ring_position()) <= 0 &&
                (sst.filter_has_key(hash) || sst.token_range_tombstones().search(pos.token()));
     };
 }
@@ -1366,7 +1371,8 @@ private:
         }
 
         auto pos = dht::ring_position_view::for_range_start(pr);
-        auto last_pos_in_reader = dht::ring_position_view(_sst->get_last_decorated_key());
+        auto last = _sst->get_last_ring_position();
+        auto last_pos_in_reader = dht::ring_position_view(last);
 
         // If we're fast forwarding past the underlying reader, let's close it
         // and replace it by an empty reader.
@@ -1502,10 +1508,10 @@ unsigned sstable_set_overlapping_count(const schema_ptr& schema, const std::vect
     unsigned overlapping_sstables = 0;
     auto prev_last = dht::ring_position::min();
     for (auto& sst : sstables) {
-        if (dht::ring_position(sst->get_first_decorated_key()).tri_compare(*schema, prev_last) <= 0) {
+        if (sst->get_first_ring_position().tri_compare(*schema, prev_last) <= 0) {
             overlapping_sstables++;
         }
-        prev_last = dht::ring_position(sst->get_last_decorated_key());
+        prev_last = sst->get_last_ring_position();
     }
     return overlapping_sstables;
 }

@@ -130,10 +130,9 @@ size_tiered_compaction_strategy::create_sstable_and_length_pairs(const std::vect
     sstable_length_pairs.reserve(sstables.size());
 
     for(auto& sstable : sstables) {
-        auto sstable_size = sstable->data_size();
-        SCYLLA_ASSERT(sstable_size != 0);
-
-        sstable_length_pairs.emplace_back(sstable, sstable_size);
+        // An sstable can legitimately hold no data: one which only deletes a
+        // token range stores no partitions. It sorts into the smallest bucket.
+        sstable_length_pairs.emplace_back(sstable, sstable->data_size());
     }
 
     return sstable_length_pairs;

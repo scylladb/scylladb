@@ -180,7 +180,8 @@ incremental_compaction_strategy::create_run_and_length_pairs(const std::vector<s
 
     for(auto& r_ptr : runs) {
         auto& r = *r_ptr;
-        assert(r.data_size() != 0);
+        // A run can legitimately hold no data: an sstable which only deletes a
+        // token range stores no partitions. It sorts into the smallest bucket.
         run_length_pairs.emplace_back(r_ptr, r.data_size());
     }
 

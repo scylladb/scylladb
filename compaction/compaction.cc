@@ -626,8 +626,8 @@ private:
         auto non_owned_ranges = sstables
                 | std::views::transform([] (const sstables::shared_sstable& sst) {
             seastar::thread::maybe_yield();
-            return dht::partition_range::make({sst->get_first_decorated_key(), true},
-                                              {sst->get_last_decorated_key(), true});
+            return dht::partition_range::make({sst->get_first_ring_position(), true},
+                                              {sst->get_last_ring_position(), true});
         })      | std::ranges::to<utils::chunked_vector<dht::partition_range>>();
 
         return dht::subtract_ranges(*_schema, std::move(non_owned_ranges), std::move(owned_ranges)).get();
@@ -1348,8 +1348,8 @@ private:
         }
         auto permit = seastar::get_units(_replacer_lock, 1).get();
         // Replace exhausted sstable(s), if any, by new one(s) in the column family.
-        auto not_exhausted = [s = _schema, &dk = sst->get_last_decorated_key()] (sstables::shared_sstable& sst) {
-            return dht::ring_position_tri_compare(*s, sst->get_last_ring_position(), dht::ring_position(dk)) > 0;
+        auto not_exhausted = [s = _schema, last = sst->get_last_ring_position()] (sstables::shared_sstable& sst) {
+            return dht::ring_position_tri_compare(*s, sst->get_last_ring_position(), last) > 0;
         };
         auto exhausted = std::partition(_sstables.begin(), _sstables.end(), not_exhausted);
 

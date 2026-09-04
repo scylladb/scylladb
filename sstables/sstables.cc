@@ -1555,6 +1555,10 @@ future<> sstable::load_first_and_last_position_in_partition() {
     if (!_schema->clustering_key_size()) {
         co_return;
     }
+    if (!_first || !_last) {
+        // No partitions, so no first or last position in one.
+        co_return;
+    }
 
     auto& sem = _manager.sstable_metadata_concurrency_sem();
     reader_permit permit = co_await sem.obtain_permit(_schema, "sstable::load_first_and_last_position_range", sstable_buffer_size, db::no_timeout, {});
@@ -1592,7 +1596,16 @@ future<> sstable::read_partitions_db_footer() {
     if (has_component(component_type::Partitions) && !_partitions_db_footer) {
         if (!_partitions_file) {
             _partitions_file = co_await open_file(component_type::Partitions, open_flags::ro);
+        }
+        if (!_partitions_file_size) {
+            // The file may have been handed to us already open, without its
+            // size (see load(foreign_sstable_open_info)).
             _partitions_file_size = co_await _partitions_file.size();
+        }
+        if (!_partitions_file_size) {
+            // An sstable which stores no partitions has an empty Partitions.db
+            // with no footer to read.
+            co_return;
         }
         _partitions_db_footer = co_await trie::read_bti_partitions_db_footer(*_schema, _version, _partitions_file, _partitions_file_size);
     }
@@ -1820,7 +1833,9 @@ future<> sstable::open_or_create_data(open_flags oflags, file_open_options optio
 future<> sstable::open_data(sstable_open_config cfg) noexcept {
     co_await open_or_create_data(open_flags::ro);
     co_await update_info_for_opened_data(cfg);
-    parse_assert(!_shards.empty(), get_filename());
+    // An sstable which covers no part of the ring (no partitions and no token
+    // range tombstones) is owned by no shard.
+    parse_assert(!_shards.empty() || !has_ring_extent(), get_filename());
     auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();
     if (sm && !cfg.keep_sharding_metadata) {
         // Sharding information uses a lot of memory and once we're doing with this computation we will no longer use it.
@@ -2426,7 +2441,6 @@ create_sharding_metadata(schema_ptr schema, const dht::partition_range& prange, 
 // map each metadata type to its correspondent position in the file.
 void seal_statistics(sstable_version_types v, statistics& s, metadata_collector& collector,
         const sstring partitioner, double bloom_filter_fp_chance, schema_ptr schema,
-        const dht::decorated_key& first_key, const dht::decorated_key& last_key,
         const encoding_stats& enc_stats, const std::set<int>& compaction_ancestors) {
     validation_metadata validation;
     compaction_metadata compaction;
@@ -2951,11 +2965,15 @@ file_size_stats sstable::get_file_size_stats() const {
     if (!_metadata_size_on_disk) {
         on_internal_error(sstlog, "On-disk size of sstable metadata was not set");
     }
-    if (!_data_file_size) {
-        on_internal_error(sstlog, "On-disk size of sstable data was not set");
-    }
-    if (!_index_file_size && !_partitions_file_size) {
-        on_internal_error(sstlog, "On-disk size of sstable index was not set");
+    // An sstable which stores no partitions has an empty Data.db and an empty
+    // index, so a zero size is only suspicious when there are partitions.
+    if (_first) {
+        if (!_data_file_size) {
+            on_internal_error(sstlog, "On-disk size of sstable data was not set");
+        }
+        if (!_index_file_size && !_partitions_file_size) {
+            on_internal_error(sstlog, "On-disk size of sstable index was not set");
+        }
     }
     uint64_t size_without_data = _metadata_size_on_disk + _index_file_size + _partitions_file_size + _rows_file_size;
 
@@ -3662,6 +3680,11 @@ void sstable::set_first_and_last_keys() {
     } else if (_partitions_db_footer) {
         first = decorate_key("first", _partitions_db_footer->first_key.get_bytes());
         last = decorate_key("last", _partitions_db_footer->last_key.get_bytes());
+    } else if (get_estimated_key_count() == 0) {
+        // An sstable which stores no partitions has no first or last key. It
+        // may still cover part of the ring through its token range tombstones;
+        // see get_first_ring_position().
+        return;
     } else {
         throw_malformed_sstable_exception(format("{}: neither Summary.db nor Partitions.db component is present, can't determine first and last partition key", get_filename()));
     }
@@ -3694,6 +3717,11 @@ const dht::decorated_key& sstable::get_last_decorated_key() const {
     return *_last;
 }
 
+// The extent of an sstable is what it stores and what it deletes: the
+// partitions written to it, together with the ranges its token range
+// tombstones cover. The latter is not a fallback for the former, they are
+// unioned: a tombstone may well delete partitions on either side of the ones
+// this sstable happens to hold.
 dht::ring_position sstable::get_first_ring_position() const {
     std::optional<dht::ring_position> pos;
     if (_first) {
@@ -3746,7 +3774,8 @@ bool sstable::has_ring_extent() const {
 }
 
 std::strong_ordering sstable::compare_by_first_key(const sstable& other) const {
-    return get_first_decorated_key().tri_compare(*_schema, other.get_first_decorated_key());
+    dht::ring_position_comparator cmp(*_schema);
+    return cmp(get_first_ring_position(), other.get_first_ring_position()) <=> 0;
 }
 
 double sstable::get_compression_ratio() const {
@@ -3941,7 +3970,7 @@ std::optional<std::pair<uint64_t, uint64_t>> sstable::get_index_pages_for_range(
         // There is no summary entry for the last key, so in order to determine
         // if pos overlaps with the sstable or not we have to compare with the
         // last key.
-        if (rp_cmp(pos, get_last_decorated_key()) > 0) {
+        if (rp_cmp(pos, get_last_ring_position()) > 0) {
             // left is past the end of the sampling.
             return std::nullopt;
         }
@@ -4029,6 +4058,10 @@ future<uint64_t> sstable::estimated_keys_for_range(const dht::token_range& range
     } else {
         co_return result;
     }
+  } else if (!_first) {
+    // An sstable which stores no partitions has none in any range, and no
+    // index to estimate from.
+    co_return 0;
   } else {
     co_return coroutine::exception(std::make_exception_ptr(malformed_sstable_exception(
         format("{}: neither Summary.db nor Partitions.db component is present, can't estimate number of partitions in range", get_filename()))));
@@ -4043,6 +4076,11 @@ sstable::compute_shards_for_this_sstable(const dht::sharder& sharder_) const {
             ? _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>()
             : nullptr;
     if (!sm || sm->token_ranges.elements.empty()) {
+        if (!has_ring_extent()) {
+            // Covers no part of the ring (no partitions, no token range
+            // tombstones), so no shard owns it.
+            return {};
+        }
         token_ranges.push_back(dht::partition_range::make(
                 dht::ring_position::starting_at(get_first_ring_position().token()),
                 dht::ring_position::ending_at(get_last_ring_position().token())));
@@ -4408,6 +4446,11 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
     bool single_partition_read
 ) {
     if (!_index_file) {
+        if (!_partitions_db_footer && !_first) {
+            // An sstable which stores no partitions has an empty Partitions.db,
+            // hence no footer and nothing to index.
+            return std::make_unique<empty_index_reader>();
+        }
         if (!_partitions_db_footer) [[unlikely]] {
             on_internal_error(sstlog, fmt::format("_partitions_db_footer is empty for sstable {}", get_filename()));
         }

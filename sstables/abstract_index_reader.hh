@@ -11,12 +11,15 @@
 #include "mutation/tombstone.hh"
 #include "mutation/position_in_partition.hh"
 #include "sstables/types.hh"
+#include "utils/log.hh"
 
 namespace utils {
     struct hashed_key;
 }
 
 namespace sstables {
+
+extern logging::logger sstlog;
 
 struct data_file_positions_range {
     uint64_t start;
@@ -189,6 +192,38 @@ public:
     // Returns info about the range tombstone (if any) which covers upper bound.
     // Precondition: !eof()
     virtual std::optional<open_rt_marker> reverse_end_open_marker() const = 0;
+};
+
+// An index reader over an sstable which stores no partitions. It is always at
+// EOF, so most of the interface is unreachable: every method with an `!eof()`
+// precondition cannot be called.
+class empty_index_reader final : public abstract_index_reader {
+    [[noreturn]] static void unreachable() {
+        on_internal_error(sstlog, "empty_index_reader: index reader for an sstable with no partitions is always at EOF");
+    }
+public:
+    future<> close() noexcept override { return make_ready_future<>(); }
+    bool eof() const override { return true; }
+    future<bool> advance_lower_and_check_if_present(dht::ring_position_view) override { return make_ready_future<bool>(false); }
+    future<bool> advance_lower_and_check_if_present(dht::ring_position_view, const utils::hashed_key&) override { return make_ready_future<bool>(false); }
+    future<> advance_past_definitely_present_partition(const dht::decorated_key&) override { unreachable(); }
+    future<> advance_to_definitely_present_partition(const dht::decorated_key&) override { unreachable(); }
+    future<> advance_to(const dht::partition_range&) override { return make_ready_future<>(); }
+    future<> advance_to_next_partition() override { unreachable(); }
+    future<> advance_reverse_to_next_partition() override { return make_ready_future<>(); }
+    future<> prefetch_lower_bound(position_in_partition_view) override { unreachable(); }
+    future<> advance_to(position_in_partition_view) override { unreachable(); }
+    future<> advance_upper_past(position_in_partition_view) override { unreachable(); }
+    future<> advance_reverse(position_in_partition_view) override { unreachable(); }
+    bool partition_data_ready() const override { return false; }
+    future<> read_partition_data() override { unreachable(); }
+    std::optional<sstables::deletion_time> partition_tombstone() override { unreachable(); }
+    std::optional<partition_key> get_partition_key() override { unreachable(); }
+    data_file_positions_range data_file_positions() const override { return {0, 0}; }
+    future<std::optional<uint64_t>> last_block_offset() override { unreachable(); }
+    indexable_element element_kind() const override { return indexable_element::partition; }
+    std::optional<open_rt_marker> end_open_marker() const override { unreachable(); }
+    std::optional<open_rt_marker> reverse_end_open_marker() const override { unreachable(); }
 };
 
 } // namespace sstables

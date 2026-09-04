@@ -448,6 +448,9 @@ public:
     // Whether the accessors above have anything to return: an sstable which
     // stores no partitions and deletes no token range covers nothing.
     bool has_ring_extent() const;
+    // Whether the sstable stores any partition at all. One which only deletes a
+    // token range does not, and then it has no first or last key.
+    bool has_partitions() const noexcept { return _first.has_value(); }
 
     // SSTable comparator using the first key (decorated key).
     std::strong_ordering compare_by_first_key(const sstable& other) const;

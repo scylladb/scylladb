@@ -1749,7 +1749,7 @@ table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_ss
         }
         // Resetting sstable ptr to inform the caller the sstable has been loaded successfully.
         sst = nullptr;
-    }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}), [sst, schema = _schema] (const dht::decorated_key& key) {
+    }), dht::partition_range::make({sst->get_first_ring_position(), true}, {sst->get_last_ring_position(), true}), [sst, schema = _schema] (const dht::decorated_key& key) {
         return sst->filter_has_key(sstables::key::from_partition_key(*schema, key.key()));
     });
 }

@@ -25,6 +25,7 @@
 #include "test/lib/exception_utils.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/sstable_utils.hh"
+#include "test/lib/simple_schema.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/scylla_test_case.hh"
@@ -1078,6 +1079,56 @@ SEASTAR_TEST_CASE(test_digest_validation_compression) {
 
 SEASTAR_TEST_CASE(test_digest_validation_toc) {
     return test_component_digest_validation(component_type::TOC, sstable::version_types::me, "TOC digest mismatch");
+}
+
+// An sstable with no partitions at all. It covers no part of the ring, so no
+// shard owns it, and writing it must not try to derive sharding metadata from
+// a first and last key it does not have.
+SEASTAR_TEST_CASE(test_empty_sstable) {
+    return sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto mt = make_lw_shared<replica::memtable>(s);
+        auto sst = make_sstable_containing(env.make_sstable(s), mt).get();
+        sst = env.reusable_sst(sst).get();
+
+        BOOST_REQUIRE_EQUAL(sst->get_estimated_key_count(), 0u);
+        BOOST_REQUIRE(sst->get_shards_for_this_sstable().empty());
+
+        // And it reads back as an empty stream.
+        auto permit = env.make_reader_permit();
+        auto rd = sst->make_reader(s, permit, query::full_partition_range, s->full_slice());
+        auto close_rd = deferred_close(rd);
+        BOOST_REQUIRE(!rd().get());
+    });
+}
+
+// A token range tombstone is not stored with the partitions but in the
+// Scylla.db component, so flushing a memtable which holds one has to carry it
+// there, and reading the sstable back has to find it. Compaction relies on
+// both, since it reads the tombstone out of the input sstables and writes it
+// into the outputs.
+SEASTAR_TEST_CASE(test_token_range_tombstone_survives_flush) {
+    return sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto tomb = tombstone(api::new_timestamp(), gc_clock::now());
+
+        auto mt = make_lw_shared<replica::memtable>(s);
+        auto m = mutation(s, tests::generate_partition_key(s));
+        ss.add_row(m, ss.make_ckey(0), "v");
+        mt->apply(m);
+        mt->apply(token_range_tombstone::full_ring(tomb));
+        BOOST_REQUIRE(!mt->token_range_tombstones().empty());
+
+        auto sst = make_sstable_containing(env.make_sstable(s), mt).get();
+        sst = env.reusable_sst(sst).get();
+
+        auto trts = sst->token_range_tombstones();
+        BOOST_REQUIRE_MESSAGE(!trts.empty(), "flushing lost the token range tombstone");
+        BOOST_REQUIRE_EQUAL(trts.search(m.token()), tomb);
+    });
 }
 
 SEASTAR_TEST_CASE(test_digest_validation_scylla) {
