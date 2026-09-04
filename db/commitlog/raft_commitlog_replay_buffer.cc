@@ -241,6 +241,10 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
     logger.info("processing {} raft groups with {} total entries from commitlog replay",
             _groups.size(), _total_entries);
 
+    // The rewrite below writes batches, so the write path's size rule applies.
+    // It runs before groups_manager::start() checks that rule, so check here.
+    service::strong_consistency::check_commitlog_can_hold_a_raft_entry(*new_commitlog_ptr);
+
     for (auto& [group_id, group] : _groups) {
         if (!group.known) {
             continue;

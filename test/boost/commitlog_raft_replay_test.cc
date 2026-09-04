@@ -756,6 +756,38 @@ SEASTAR_TEST_CASE(test_raft_batch_records_across_segments) {
     });
 }
 
+// Test: max_single_entry_batch_size() tightly bounds what write_raft_batch()
+// measures for one entry. The check it feeds at startup is worthless once the
+// number stops tracking the format.
+SEASTAR_TEST_CASE(test_max_single_entry_batch_size_bounds_the_writer) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+
+        for (const size_t payload : {size_t(0), size_t(4096), size_t(100 * 1024)}) {
+            auto plain = make_command_entry_sized(raft::term_t(1), raft::index_t(1), payload);
+            const auto command_size = std::get<raft::command>(plain->data).size();
+            const auto bound = service::strong_consistency::max_single_entry_batch_size(command_size);
+
+            const std::vector<raft::log_entry_ptr> plain_batch{plain};
+            commitlog_raft_batch_writer plain_writer(gid, raft::index_t{0}, plain_batch);
+            BOOST_REQUIRE_LE(plain_writer.size(), bound);
+
+            // The bound is derived from the lease-stamped form, so here it must
+            // be exact. A loose bound like SIZE_MAX would pass the check above.
+            auto stamped = make_lw_shared<const raft::log_entry>(raft::log_entry{
+                    .term = raft::term_t(1), .idx = raft::index_t(1),
+                    .data = std::get<raft::command>(plain->data),
+                    .lease_time = raft::time_bounds{
+                            raft::lease_clock::time_point(std::chrono::nanoseconds(lease_earliest_ns)),
+                            raft::lease_clock::time_point(std::chrono::nanoseconds(lease_latest_ns))}});
+            const std::vector<raft::log_entry_ptr> stamped_batch{stamped};
+            commitlog_raft_batch_writer stamped_writer(gid, raft::index_t{0}, stamped_batch);
+            BOOST_REQUIRE_EQUAL(stamped_writer.size(), bound);
+        }
+        co_return;
+    });
+}
+
 // Test: a batch too large for one commitlog entry raises an internal error.
 // Fragmenting it would put one copy of an entry in two segments; the records and
 // the truncation records need a copy to live in exactly one segment (see

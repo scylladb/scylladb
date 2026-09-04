@@ -34,27 +34,6 @@ using namespace locator;
 
 static logging::logger logger("sc_groups_manager");
 
-// Bounds on a group's log, which together bound one batch. max_command_size is
-// enforced per entry: add_entry() rejects a larger command outright. max_log_size
-// is enforced per log: fsm's log_limiter_semaphore holds a leader's accounted log
-// at it, and a batch is a subset of that log. Their sum is the batch bound, the
-// smaller term being headroom for what the accounting leaves out — the
-// serialized envelope, and configurations and dummies, which it counts as zero.
-//
-// That bound is what lets write_raft_batch() assert a batch fits in one
-// commitlog entry: an oversized entry would be fragmented across segments,
-// breaking the rule that a copy of an entry lives in exactly one segment, which
-// the records and the truncation records are built on.
-//
-// The sum clears a default 64MB segment's 32MB max_record_size() comfortably. It
-// does not clear a smaller configured segment, which is why the assert is an
-// internal error rather than a startup check: refusing to boot on
-// commitlog_segment_size_in_mb being small would reject a supported
-// configuration. See write_raft_batch() for the other ways the assert is
-// reachable and what fixing it properly needs.
-static constexpr size_t raft_max_log_size = 20 * 1024 * 1024;
-static constexpr size_t raft_max_command_size = 100 * 1024;
-
 static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
 };
@@ -589,9 +568,16 @@ void groups_manager::start() {
     // start() running again, so a handler registered behind the feature could be
     // missing. The flag also decides whether system.raft_groups has a schema at
     // all: asking for its id without it aborts.
-    if (auto* commitlog = _db.commitlog();
-            commitlog && _db.get_config().check_experimental(
-                    db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+    if (_db.get_config().check_experimental(
+                db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+        auto* commitlog = _db.commitlog();
+        if (!commitlog) {
+            // Fail at startup; the first group would otherwise trip an assert.
+            throw std::runtime_error(
+                    "strongly consistent tables require the commitlog, which is disabled");
+        }
+        check_commitlog_can_hold_a_raft_entry(*commitlog);
+
         // Only system.raft_groups positions say which of this group's segments
         // are closed: a segment holding a live segment record is dirty under
         // that id (see segment_record::pin_raft_groups). Another table's position does not.

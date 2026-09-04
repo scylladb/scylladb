@@ -87,29 +87,27 @@ struct replayed_data_per_group {
     raft::log_entries entries;
 };
 
-// Write `entries` to `cl` under `table` as one raft batch carrying `commit_idx`
-// in its header, and return the reference that write produced.
-//
-// Raises an internal error if the batch does not fit one commitlog entry. The
-// commitlog would otherwise fragment it across segments, and the segment records
-// and the truncation records need a copy of an entry to live in exactly one
-// segment.
-//
-// The batch size is effectively bounded by max_log_size: raft admits no command
-// over max_command_size, and fsm's log_limiter_semaphore holds a leader's
-// accounted log at max_log_size, of which a batch is a subset (see
-// groups_manager's raft::server configuration). Their sum clears a default 64MB
-// segment's 32MB max_record_size(), but not a much smaller configured segment,
-// so the error is reachable.
-//
-// Fixing an oversized batch means splitting it into several whole batches.
-// Fragmenting one entry instead needs the commitlog to release an oversized
-// entry's tail segments per position, which is SCYLLADB-3986.
-//
-// Static so that commitlog replay can write the same format when it rewrites a
-// group's uncommitted entries.
+// Write `entries` to `cl` under `table` as one raft batch carrying `commit_idx`,
+// and return the reference that write produced. Internal error if it does not fit
+// one commitlog entry: every copy of an entry must live in a single segment.
 future<db::rp_handle> write_raft_batch(db::commitlog& cl, table_id table,
         raft::group_id group_id, raft::index_t commit_idx, const raft::log_entry_ptr_list& entries);
+
+// Bounds on a group's log, which together bound one raft batch. Only a single
+// entry is required to fit a commitlog entry; a whole batch is warned about at
+// boot, since requiring the sum would reject segment sizes that work.
+inline constexpr size_t raft_max_log_size = 20 * 1024 * 1024;
+inline constexpr size_t raft_max_command_size = 100 * 1024;
+
+// Check the configured commitlog can hold one raft entry carrying a
+// raft_max_command_size command, and warn if it could not hold a whole batch.
+// Throws if it cannot, refusing startup rather than aborting the node on the
+// first large write.
+void check_commitlog_can_hold_a_raft_entry(const db::commitlog& cl);
+
+// Upper bound on what write_raft_batch() measures for a one-entry batch with a
+// `command_size`-byte command.
+size_t max_single_entry_batch_size(size_t command_size);
 
 // Fold a written batch into `segment_queue`, extending the newest record or
 // starting a new one when the batch landed in a segment new to the group.
