@@ -9,6 +9,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/aligned_buffer.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/util/closeable.hh>
 
 #include "test/lib/scylla_test_case.hh"
@@ -26,8 +27,10 @@
 #include "compaction/compaction.hh"
 #include "compaction/compaction_manager.hh"
 #include "replica/compaction_group.hh"
+#include "utils/error_injection.hh"
 
 using namespace sstables;
+using namespace std::chrono_literals;
 
 static sstables::shared_sstable generate_sstable(schema_ptr s, std::function<shared_sstable()> sst_gen, noncopyable_function<bool(dht::token)> token_filter) {
     auto make_insert = [&] (const dht::decorated_key& key) {
@@ -202,6 +205,63 @@ SEASTAR_TEST_CASE(basic_compaction_group_splitting_test) {
                 found_input2 |= sst->generation() == input2->generation();
             });
             BOOST_REQUIRE(found_input2);
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(regular_compaction_submission_backlog_is_bounded_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        static constexpr std::string_view pause_injection = "compaction_regular_compaction_task_executor_do_run";
+
+        auto builder = schema_builder(this_smp_shard_count(), "tests", "regular_compaction_submission_backlog")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("cl", int32_type, column_kind::clustering_key)
+                .with_column("value", int32_type);
+        auto s = builder.build();
+
+        auto t = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(t);
+        t->start();
+
+        auto& cm = t->get_compaction_manager();
+        auto sst_factory = env.make_sst_factory(s);
+        std::vector<std::unique_ptr<single_compaction_group>> groups;
+        const auto limit = compaction::compaction_manager::max_regular_compaction_task_backlog_for_tests();
+        groups.reserve(limit + 64);
+
+        utils::get_local_injector().enable(pause_injection);
+        auto disable_injection = defer([] {
+            utils::get_local_injector().disable(pause_injection);
+        });
+
+        for (size_t i = 0; i < limit + 64; ++i) {
+            groups.push_back(std::make_unique<single_compaction_group>(t, env.manager(), sst_factory));
+            cm.submit(*groups.back());
+        }
+
+        auto deadline = lowres_clock::now() + 5s;
+        while (cm.live_compaction_tasks_for_tests() < limit && lowres_clock::now() < deadline) {
+            sleep(10ms).get();
+        }
+
+        BOOST_REQUIRE_EQUAL(cm.live_compaction_tasks_for_tests(), limit);
+        BOOST_REQUIRE_GE(cm.postponed_compactions_for_tests(), 64);
+
+        BOOST_REQUIRE(cm.startup_regular_compaction_backlog_limit_enabled_for_tests());
+        cm.disable_startup_regular_compaction_backlog_limit();
+        deadline = lowres_clock::now() + 5s;
+        while (cm.live_compaction_tasks_for_tests() <= limit && lowres_clock::now() < deadline) {
+            sleep(10ms).get();
+        }
+
+        BOOST_REQUIRE(!cm.startup_regular_compaction_backlog_limit_enabled_for_tests());
+        BOOST_REQUIRE_GT(cm.live_compaction_tasks_for_tests(), limit);
+
+        disable_injection.cancel();
+        utils::get_local_injector().disable(pause_injection);
+
+        for (auto& group : groups) {
+            group->stop(t).get();
         }
     });
 }

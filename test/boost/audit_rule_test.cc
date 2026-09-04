@@ -306,6 +306,10 @@ SEASTAR_THREAD_TEST_CASE(test_preprocessed_rules_match_fast_and_slow_paths) {
     });
     rules.replace_known_entities({"admin_read", "viewer"}, {{"ks", "t1"}, {"ks", "t2"}}).get();
 
+    BOOST_CHECK(rules.table_cache_enabled_for_tests());
+    BOOST_CHECK_EQUAL(rules.known_tables_size_for_tests(), 2u);
+    BOOST_CHECK_EQUAL(rules.cached_tables_size_for_tests(), 2u);
+
     BOOST_CHECK(rules.matching_sinks(audit::statement_category::DML, "ks", "t1", "admin_read").contains(audit::audit_sink::table));
     BOOST_CHECK(!rules.matching_sinks(audit::statement_category::DML, "ks", "t1", "viewer"));
     BOOST_CHECK(rules.matching_sinks(audit::statement_category::DML, "ks", "unknown", "admin_new").contains(audit::audit_sink::table));
@@ -351,15 +355,44 @@ SEASTAR_THREAD_TEST_CASE(test_preprocessed_rules_update_known_entities) {
 SEASTAR_THREAD_TEST_CASE(test_preprocessed_empty_rules_skip_cache) {
     audit::preprocessed_audit_rules rules;
     rules.replace_known_entities({"alice", "bob"}, {{"ks", "t1"}, {"ks", "t2"}}).get();
+    BOOST_CHECK(!rules.table_cache_enabled_for_tests());
+    BOOST_CHECK_EQUAL(rules.known_tables_size_for_tests(), 0u);
+    BOOST_CHECK_EQUAL(rules.cached_tables_size_for_tests(), 0u);
     BOOST_CHECK(!rules.matching_sinks(audit::statement_category::DML, "ks", "t1", "alice"));
 
     rules.add_known_role("charlie");
     rules.add_known_table("ks", "t3");
+    BOOST_CHECK_EQUAL(rules.known_tables_size_for_tests(), 0u);
+    BOOST_CHECK_EQUAL(rules.cached_tables_size_for_tests(), 0u);
     BOOST_CHECK(!rules.matching_sinks(audit::statement_category::DML, "ks", "t3", "charlie"));
 
     rules.refresh_rules({make_rule({"table"}, {"DML"}, {"ks.*"}, {"*"})}).get();
     BOOST_CHECK(rules.matching_sinks(audit::statement_category::DML, "ks", "t1", "alice"));
     BOOST_CHECK(rules.matching_sinks(audit::statement_category::DML, "ks", "t3", "charlie"));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_preprocessed_large_known_table_set_uses_bounded_lazy_path) {
+    audit::preprocessed_audit_rules rules({make_rule({"table"}, {"DML"}, {"ks.*"}, {"*"})});
+
+    audit::preprocessed_audit_rules::known_table_set known_tables;
+    const auto table_count = audit::preprocessed_audit_rules::max_preprocessed_known_tables_for_tests() + 1;
+    known_tables.reserve(table_count);
+    for (size_t i = 0; i < table_count; ++i) {
+        known_tables.emplace("ks", sstring("t") + to_sstring(i));
+    }
+
+    BOOST_CHECK(!rules.wants_eager_known_tables(table_count));
+    rules.replace_known_entities({"alice"}, std::move(known_tables)).get();
+
+    BOOST_CHECK(!rules.table_cache_enabled_for_tests());
+    BOOST_CHECK_EQUAL(rules.known_tables_size_for_tests(), 0u);
+    BOOST_CHECK_EQUAL(rules.cached_tables_size_for_tests(), 0u);
+    BOOST_CHECK(rules.matching_sinks(audit::statement_category::DML, "ks", "t42", "alice").contains(audit::audit_sink::table));
+
+    rules.add_known_table("ks", "new_table");
+    BOOST_CHECK_EQUAL(rules.known_tables_size_for_tests(), 0u);
+    BOOST_CHECK_EQUAL(rules.cached_tables_size_for_tests(), 0u);
+    BOOST_CHECK(rules.matching_sinks(audit::statement_category::DML, "ks", "new_table", "alice").contains(audit::audit_sink::table));
 }
 
 BOOST_AUTO_TEST_CASE(test_alternator_batch_sink_tables_aggregate_per_sink) {
