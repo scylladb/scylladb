@@ -1877,6 +1877,16 @@ future<> gossiper::apply_new_states(endpoint_state local_state, const endpoint_s
 
             const versioned_value* local_val = local_state.get_application_state_ptr(remote_key);
             if (!local_val || remote_value.version() > local_val->version()) {
+                // Both copies below allocate, so the loop can fail here and
+                // leave local_state partially built. Reproduce that shape,
+                // for SCHEMA only: it changes just on DDL, so a test can stop
+                // issuing DDL and observe that a dropped value is never
+                // re-delivered. States the peers bump every round (LOAD,
+                // CACHE_HITRATES) would be masked by the next update.
+                if (remote_key == application_state::SCHEMA) {
+                    utils::get_local_injector().inject("apply_new_states_fail",
+                            [] { throw std::runtime_error("injected apply failure"); });
+                }
                 changed.emplace(remote_key, remote_value);
                 local_state.add_application_state(remote_key, remote_value);
             }
@@ -1884,6 +1894,20 @@ future<> gossiper::apply_new_states(endpoint_state local_state, const endpoint_s
     } catch (...) {
         ep = std::current_exception();
     }
+
+    // Do not store a state the loop above failed to build. The heartbeat was
+    // raised before the loop, so a partially copied state advertises a max
+    // version above application states we never stored, and a digest carries
+    // a single max version per endpoint: no peer would ever re-send a value
+    // below it, so those states would be lost for good. Rethrowing before
+    // replicate() leaves our state, and therefore our digest, untouched, so
+    // the next gossip exchange re-delivers the whole delta.
+    //
+    // This discards the keys the loop did copy successfully. That is the
+    // point: a delta applied in full or not at all keeps our state
+    // downward-closed in version, which is what makes re-delivery able to
+    // heal anything we drop.
+    maybe_rethrow_exception(std::move(ep));
 
     auto addr = local_state.get_ip();
     // We must replicate endpoint states before listeners run.
@@ -1910,8 +1934,6 @@ future<> gossiper::apply_new_states(endpoint_state local_state, const endpoint_s
             on_fatal_internal_error(logger, msg);
         }
     }
-
-    maybe_rethrow_exception(std::move(ep));
 }
 
 future<> gossiper::do_on_change_notifications(inet_address addr, locator::host_id id, const gms::application_state_map& states, permit_id pid) const {
