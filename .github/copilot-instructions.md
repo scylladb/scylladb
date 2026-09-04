@@ -5,24 +5,26 @@ High-performance distributed NoSQL database. Core values: performance, correctne
 
 ## Build System
 
-### Using native OS environment
+### Using frozen toolchain (Docker/Podman) — always prefer this
+Prefix every build command with `./tools/toolchain/dbuild`:
 ```bash
-# Configure (run once)
-./configure.py
-
-# Build everything
-ninja <mode>-build  # modes: dev, debug, release, sanitize
-                    # dev is recommended for development (fastest compilation)
-
-# Build Scylla binary only (sufficient for Python integration tests)
-ninja build/<mode>/scylla
-
-# Build specific test
-ninja build/<mode>/test/boost/<test_name>
+./tools/toolchain/dbuild ./configure.py --disable-dpdk
+./tools/toolchain/dbuild ninja <mode>-build          # modes: dev, debug, release, sanitize
+./tools/toolchain/dbuild ninja build/<mode>/scylla   # binary only (sufficient for Python tests)
 ```
+For native builds, use the same commands without the `dbuild` prefix.
 
-### Using frozen toolchain (Docker)
-Prefix any build command with `./tools/toolchain/dbuild`.
+### Building Tests
+- `test.py` does NOT rebuild C++ test binaries — rebuild with `ninja` first
+- Most boost tests are in composite binaries (e.g., `combined_tests`)
+- Check `configure.py` or `test/<suite>/CMakeLists.txt` for the binary name
+```bash
+ninja build/<mode>/test/<suite>/<binary_name>
+
+# Examples:
+ninja build/dev/test/boost/combined_tests    # composite (many boost tests)
+ninja build/dev/test/raft/replication_test   # standalone
+```
 
 ## Running Tests
 
@@ -31,7 +33,7 @@ Prefix any build command with `./tools/toolchain/dbuild`.
 # Run all tests in a file
 ./test.py --mode=<mode> test/<suite>/<test_name>.cc
 
-# Run a single test case from a file
+# Run a single test case
 ./test.py --mode=<mode> test/<suite>/<test_name>.cc::<test_case_name>
 
 # Examples
@@ -39,46 +41,39 @@ Prefix any build command with `./tools/toolchain/dbuild`.
 ./test.py --mode=dev test/raft/raft_server_test.cc::test_check_abort_on_client_api
 ```
 
-**Important:** 
-- Use full path with `.cc` extension (e.g., `test/boost/memtable_test.cc`)
-- To run a single test case, append `::<test_case_name>` to the file path
-- If you encounter permission issues with cgroup metrics, add `--no-gather-metrics` to the `./test.py` command
-
-**Rebuilding Tests:**
-- test.py does NOT automatically rebuild when test source files are modified
-- Many tests are part of composite binaries (e.g., `combined_tests` in test/boost contains multiple test files)
-- To find which binary contains a test, check `configure.py` in the repository root (primary source) or `test/<suite>/CMakeLists.txt`
-- To rebuild a specific test binary: `ninja build/<mode>/test/<suite>/<binary_name>`
-- Examples: 
-  - `ninja build/dev/test/boost/combined_tests` (contains group0_voter_calculator_test.cc and others)
-  - `ninja build/dev/test/raft/replication_test` (standalone Raft test)
+**Important:** Use full path with `.cc` extension. Add `--no-gather-metrics` if cgroup errors occur.
 
 ### Python Integration Tests
 ```bash
-# Only requires Scylla binary (full build usually not needed)
+# Only requires Scylla binary (not full build)
 ninja build/<mode>/scylla
 
-# Run all tests in a file
 ./test.py --mode=<mode> test/<suite>/<test_name>.py
-
-# Run a single test case from a file
 ./test.py --mode=<mode> test/<suite>/<test_name>.py::<test_function_name>
 
-# Examples
+# Examples (directory / file / single-test granularity)
 ./test.py --mode=dev test/alternator/
 ./test.py --mode=dev test/cqlpy/test_json.py
 ./test.py --mode=dev test/cluster/test_raft_voters.py::test_raft_limited_voters_retain_coordinator
 
-# Optional flags
+# Optional flags: -v (verbose), --repeat <n>, --max-failures <n>
 ./test.py --mode=dev test/cluster/test_raft_no_quorum.py -v --repeat 5
 ```
 
-**Important:**
-- Use full path with `.py` extension
-- To run a single test case, append `::<test_function_name>` to the file path
-- Add `-v` for verbose output
-- Add `--repeat <num>` to repeat a test multiple times
-- After modifying C++ source files, only rebuild the Scylla binary for Python tests
+**Important:** Use full path with `.py` extension. After C++ changes, rebuild the scylla binary.
+
+### Test Suites
+| Suite | Type | Purpose |
+|-------|------|---------|
+| `test/boost/` | C++ | Core unit tests (Boost.Test) |
+| `test/raft/` | C++ | Raft consensus tests |
+| `test/unit/` | C++ | Stress, LSA, row cache tests |
+| `test/alternator/` | Python | DynamoDB-compatible API |
+| `test/cqlpy/` | Python | CQL functional tests |
+| `test/cluster/` | Python | Topology tests (multi-node) |
+| `test/rest_api/` | Python | REST API tests |
+| `test/nodetool/` | Python | Nodetool tests |
+| `test/perf/` | C++ | Performance benchmarks |
 
 ## Code Philosophy
 - Performance matters in hot paths (data read/write, inner loops)
@@ -86,19 +81,28 @@ ninja build/<mode>/scylla
 - Comments explain "why", not "what"
 - Prefer standard library over custom implementations
 - Strive for simplicity and clarity, add complexity only when clearly justified
-- Question requests: don't blindly implement requests - evaluate trade-offs, identify issues, and suggest better alternatives when appropriate
-- Consider different approaches, weigh pros and cons, and recommend the best fit for the specific context
+- Question requests: don't blindly implement - evaluate trade-offs, suggest better alternatives
+- Consider different approaches and recommend the best fit for context
 
 ## Test Philosophy
-- Performance matters. Tests should run as quickly as possible. Sleeps in the code are highly discouraged and should be avoided, to reduce run time and flakiness.
-- Stability matters. Tests should be stable. New tests should be executed 100 times at least to ensure they pass 100 out of 100 times. (use --repeat 100 --max-failures 1 when running it)
-- Unit tests should ideally test one thing only.
-- Tests for bug fixes should run before the fix - and show the failure and after the fix - and show they now pass.
-- Tests for bug fixes should have in their comments which bug fixes (GitHub or JIRA issue) they test.
-- Tests in debug are always slower, so if needed, reduce number of iterations, rows, data used, cycles, etc. in debug mode.
-- Tests should strive to be repeatable, and not use random input that will make their results unpredictable.
-- Tests should consume as little resources as possible. Prefer running tests on a single node if it is sufficient, for example.
+- Performance matters. Tests should run as quickly as possible. Sleeps are highly discouraged.
+- Stability matters. Tests should be stable. New tests should pass 100/100 times (`--repeat 100 --max-failures 1`).
+- Unit tests should test one thing only.
+- Bug fix tests: run before fix (shows failure) and after fix (shows pass).
+- Bug fix tests should reference the issue (GitHub or JIRA) in comments.
+- Debug mode is slower — reduce iterations, rows, data, cycles as needed.
+- Tests should be repeatable, avoiding unpredictable random input.
+- Tests should consume minimal resources. Prefer single-node when sufficient.
+
+## Development Notes
+- `.clang-format` at repo root (160-char, 4-space indent); CI lint: `clang-tidy`, `clang-include-cleaner`, `codespell`; header check: `ninja dev-headers`
+- Commit subject: `"module: short description"`; `Fixes: #nnnn` for bug fixes (see `docs/dev/backport.md`); bisectability per commit
+- Branch naming from `HACKING.md`: `initials/feature/v1` (e.g., `ts/cql_create_table_error/v1`)
+- Full conventions at `docs/dev/review-checklist.md`; debugging at `docs/dev/debugging.md`
+- Run Scylla: `--smp 1 --memory 1G --overprovisioned --developer-mode=yes`; debug info: `_g` suffix on test binaries
+- GDB: source `gdbinit` (repo root) in `~/.gdbinit`; extension: `scylla-gdb.py`
+- Related: `.github/instructions/cpp.instructions.md`, `.github/instructions/python.instructions.md`
 
 ## New Files
-- Include `LicenseRef-ScyllaDB-Source-Available-1.1` in the SPDX header
-- Use the current year for new files; for existing code keep the year as is
+- SPDX header: `LicenseRef-ScyllaDB-Source-Available-1.1`
+- Use current year for new files; keep existing years as-is
