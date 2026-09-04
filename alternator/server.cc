@@ -1107,6 +1107,16 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
 
             if (this_shard_id() == 0) {
                 _credentials = creds->build_reloadable_server_credentials([this](const tls::credentials_builder& b, const std::unordered_set<sstring>& files, std::exception_ptr ep) -> future<> {
+                    // A reload can fire while the server is being shut down, and
+                    // there is nothing left to reload into then. Holding the gate
+                    // keeps this server and its peers on the other shards alive
+                    // for the duration of the reload - sharded<> destroys the
+                    // instances only once stop() completed on all of them, and
+                    // stop() waits for the gate.
+                    if (_pending_requests.is_closed()) {
+                        co_return;
+                    }
+                    seastar::gate::holder holder(_pending_requests);
                     if (ep) {
                         slogger.warn("Exception loading {}: {}", files, ep);
                     } else {
