@@ -40,6 +40,11 @@ public:
 
 const authenticated_user& anonymous_user() noexcept;
 
+///
+/// The name reported for the anonymous user, which has none of its own.
+///
+inline const sstring anonymous_username = "anonymous";
+
 inline bool is_anonymous(const authenticated_user& u) noexcept {
     return u == anonymous_user();
 }
@@ -56,7 +61,7 @@ struct fmt::formatter<auth::authenticated_user> : fmt::formatter<string_view> {
         if (u.name) {
             return fmt::format_to(ctx.out(), "{}", *u.name);
         } else {
-            return fmt::format_to(ctx.out(), "{}", "anonymous");
+            return fmt::format_to(ctx.out(), "{}", auth::anonymous_username);
         }
     }
 };

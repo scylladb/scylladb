@@ -108,16 +108,21 @@ const resource_set& transitional_authenticator::protected_resources() const {
             try {
                 return _sasl->evaluate_response(client_response);
             } catch (const exceptions::authentication_exception&) {
-                _complete = true;
+                // Transitional mode: a login that cannot be authenticated
+                // degrades to the anonymous user.
+                _rejected = true;
                 return {};
             }
         }
 
         virtual bool is_complete() const override {
-            return _complete || _sasl->is_complete();
+            return _rejected || _sasl->is_complete();
         }
 
         virtual future<authenticated_user> get_authenticated_user() const override {
+            if (_rejected) {
+                return make_ready_future<authenticated_user>(anonymous_user());
+            }
             return futurize_invoke([this] {
                 return _sasl->get_authenticated_user().handle_exception([](auto ep) {
                     try {
@@ -131,13 +136,16 @@ const resource_set& transitional_authenticator::protected_resources() const {
         }
 
         const sstring& get_username() const override {
+            if (_rejected) {
+                return anonymous_username;
+            }
             return _sasl->get_username();
         }
 
     private:
         ::shared_ptr<sasl_challenge> _sasl;
 
-        bool _complete = false;
+        bool _rejected = false;
     };
     return ::make_shared<sasl_wrapper>(_authenticator->new_sasl_challenge());
 }

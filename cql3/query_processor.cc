@@ -17,6 +17,7 @@
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/try_future.hh>
 
+#include "auth/authenticated_user.hh"
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
 #include "service/mapreduce_service.hh"
@@ -668,7 +669,7 @@ query_processor::execute_direct_statement_without_checking_exception_message(std
             metrics.regularStatementsExecuted.inc();
 #endif
     auto user = query_state.get_client_state().user();
-    tracing::trace(query_state.get_trace_state(), "Processing a statement for authenticated user: {}", user ? (user->name ? *user->name : "anonymous") : "no user authenticated");
+    tracing::trace(query_state.get_trace_state(), "Processing a statement for authenticated user: {}", user ? (user->name ? *user->name : auth::anonymous_username) : "no user authenticated");
     return execute_maybe_with_guard(query_state, std::move(statement), options, &query_processor::do_execute_direct, std::move(p->warnings));
 }
 
