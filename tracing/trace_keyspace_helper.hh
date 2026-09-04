@@ -34,7 +34,6 @@ private:
     int64_t _slow_query_last_nanos = 0;
     service::query_state _dummy_query_state;
 
-    cql3::query_processor* _qp_anchor;
     service::migration_manager* _mm_anchor;
 
     table_helper _sessions;
@@ -63,7 +62,6 @@ public:
 
     virtual future<> shutdown() override {
         return _pending_writes.close().then([this] {
-            _qp_anchor = nullptr;
             _mm_anchor = nullptr;
         });
     };
@@ -72,7 +70,6 @@ public:
     virtual std::unique_ptr<backend_session_state_base> allocate_session_state() const override;
 
 private:
-    // Valid only after start() sets _qp_anchor
     gms::inet_address my_address() const noexcept;
 
     /**
