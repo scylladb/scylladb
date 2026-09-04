@@ -15,13 +15,33 @@
 
 namespace cql3::statements {
 
+/// Which of the two values a full-text search reports a SELECT occurrence asks for: BM25() the
+/// relevance the index scored the row with, BM25_HIGHLIGHT() a fragment of the row's own text.
+enum class bm25_value { score, highlight };
+
+/// A SELECT occurrence's search term that prepare could not tell apart from the ORDER BY term,
+/// together with the value it was asking for, so that execution can name the function it was
+/// written in when the two turn out to differ.
+struct deferred_select_term {
+    expr::expression term;
+    bm25_value value;
+};
+
 struct bm25_ordering_info {
     secondary_index::index index;
     expr::expression search_term;
-    // Temporary slot the score is delivered in, allocated on the first bm25()
-    // occurrence in SELECT and filled per row by external_score_provider.
-    std::optional<size_t> temporary_index;
-    std::vector<expr::expression> selected_bm25_terms;
+    // Temporary the score is delivered in, allocated on the first bm25()
+    // occurrence in SELECT and filled per row by external_search_provider.
+    std::optional<size_t> score_temporary_index;
+    // Temporary the fragment is delivered in, allocated on the first bm25_highlight()
+    // occurrence in SELECT and filled per row from the second request's answer.
+    std::optional<size_t> highlight_temporary_index;
+    // The SELECT occurrences' search terms that only execution can compare, a bind marker standing
+    // where at least one of the two values will be, each with the value it asked for so that
+    // execution can name the function.
+    std::vector<deferred_select_term> deferred_select_terms;
+    // The WHERE clause's term, likewise.
+    std::optional<expr::expression> deferred_where_term;
 };
 
 /// Resolves BM25 ordering metadata from the query's prepared ORDER BY call.
@@ -31,15 +51,13 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
         schema_ptr schema,
         const expr::function_call& fc);
 
-/// Processes bm25() calls in prepared_selectors:
-/// - When ordering_info is absent, throws on the first bm25() occurrence at any nesting level.
-/// - When present, validates each against ordering_info (column name at prepare time,
-///   constant terms eagerly), replaces with temporary{index, float_type},
-///   and stores non-literal search terms for runtime validation.
-/// Stores index into ordering_info->temporary_index on first bm25() occurrence.
-/// Returns true if any bm25() call was found and processed.
-bool prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_selectors, std::optional<bm25_ordering_info>& ordering_info,
-        expr::temporary_allocator& temporaries_allocator);
+/// Lowers every call to a full-text search's values in the SELECT clause - bm25() and
+/// bm25_highlight(), nested occurrences included - to the temporary that value is delivered in,
+/// allocating it on the first occurrence of each. Rejects an occurrence with no BM25 ordering and
+/// WHERE clause to agree with, or one that disagrees with them on the column or the search term; a
+/// disagreement only execution can settle is recorded in ordering_info for it to check.
+void prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_selectors, std::optional<bm25_ordering_info>& ordering_info,
+        expr::temporary_allocator& temporaries_allocator, prepare_context& ctx);
 
 class fulltext_indexed_table_select_statement : public external_index_select_statement {
     bm25_ordering_info _bm25_ordering_info;

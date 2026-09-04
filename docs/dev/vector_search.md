@@ -52,7 +52,7 @@ LIMIT 10;
    ANN requests for a non-serving index return `503 Service Unavailable` with scan progress when available. Only `SERVING` indexes are eligible for ANN routing.
    If rescoring is disabled, the response is trimmed to the CQL limit immediately. If rescoring is enabled, all oversampled candidates proceed to the base-table fetch (see step 5).
 
-4. **Receive candidate keys.** The Vector Store responds with `primary_keys` and `similarity_scores`. ScyllaDB deserializes the keys into decorated partition keys plus clustering keys. The Vector Store's similarity scores are not exposed to the client. When rescoring is disabled, ScyllaDB preserves the Vector Store's ordering. When rescoring is enabled, ScyllaDB recomputes exact similarity from base-table vectors and reorders based on its own scores.
+4. **Receive candidate keys.** The Vector Store responds with `primary_keys` and `similarity_scores`. ScyllaDB deserializes the keys into decorated partition keys plus clustering keys. The Vector Store's similarity scores reach the client only where the query selects `ANN()` and rescoring is disabled: each occurrence is then lowered to a temporary slot that a provider fills per row from the response. When rescoring is disabled, ScyllaDB preserves the Vector Store's ordering. When rescoring is enabled, ScyllaDB recomputes exact similarity from base-table vectors and reorders based on its own scores.
 
 5. **Fetch from the base table.** The coordinator reads candidate rows at the user's read CL.
    - *Without clustering columns:* a single multi-range read over partition ranges.
@@ -60,7 +60,7 @@ LIMIT 10;
 
 6. **Exclude stale candidates.** Because the Vector Store is eventually consistent, a returned key may reference a deleted or not-yet-visible row. The base-table read is authoritative: rows not found are simply absent from the result.
 
-7. **Rescore (optional).** Rescoring is enabled when `quantization != f32` **and** `rescoring = "true"`. During prepare, ScyllaDB injects a hidden similarity selector (`cosine`, `euclidean`, or `dot_product`). After fetching oversampled rows, it computes exact similarity from the stored full-precision vectors, sorts by score, trims to the CQL limit, and hides the score column from the client.
+7. **Rescore (optional).** Rescoring is enabled when `quantization != f32` **and** `rescoring = "true"`. During prepare, ScyllaDB injects a hidden similarity selector (`cosine`, `euclidean`, or `dot_product`). After fetching oversampled rows, it computes exact similarity from the stored full-precision vectors, sorts by score, trims to the CQL limit, and hides the score column from the client. A query that selects `ANN()` gets that same computation once more per occurrence, in the position it asked for; sharing the hidden selector instead is left for later.
 
 8. **Return results.** Paging is unsupported. If the requested page size is smaller than the limit, the coordinator returns the full result set and emits a warning.
 

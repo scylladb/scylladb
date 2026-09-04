@@ -45,6 +45,16 @@ extern bool is_satisfied_by(
 
 extern bool recurse_until(const expression& e, const noncopyable_function<bool (const expression&)>& predicate_fun);
 
+/// Whether two expressions evaluate to the same value on every binding (`always`), on none of them
+/// (`never`), or neither of the two can be proved (`unknown`).
+enum class equality { always, never, unknown };
+
+/// Decides which of the three holds without evaluating either expression. Answers `always` or
+/// `never` only where it can prove them, so everything it does not look into is `unknown`.
+/// Expressions that read a row are compared within one row, and two nulls are `always` equal -
+/// value identity, not the CQL comparison that would answer null.
+equality unevaluated_equality(const expression& a, const expression& b);
+
 // Looks into the expression and finds the given expression variant
 // for which the predicate function returns true.
 // If nothing is found returns nullptr.
@@ -146,6 +156,12 @@ inline bool is_native_function_call(const expression& e, const functions::functi
     const function_call* fc = as_if<function_call>(&e);
     return fc && is_native_function_call(*fc, name);
 }
+
+// Check whether the given function_call resolved to a function that declared itself external,
+// i.e. one whose value comes from an external search system (see functions::function::is_external).
+// Only meaningful after resolution: an unresolved call still holds a name rather than a function,
+// and is reported as not external.
+bool is_external_function_call(const function_call&);
 
 inline bool is_clustering_order(const binary_operator& op) {
     return op.order == comparison_order::clustering;

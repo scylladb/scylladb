@@ -118,6 +118,8 @@ add_scylla_test(exceptions_optimized_test
 add_scylla_test(expr_test
   KIND BOOST
   LIBRARIES cql3)
+add_scylla_test(external_search_provider_test
+  KIND SEASTAR)
 add_scylla_test(flush_queue_test
   KIND SEASTAR)
 add_scylla_test(fragmented_temporary_buffer_test
