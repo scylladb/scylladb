@@ -319,6 +319,12 @@ public:
     // used more than once in the filter.
     void for_filters_on(const noncopyable_function<void(std::string_view)>& func) const;
     operator bool() const { return bool(_imp); }
+    // Tells whether this filter came from the legacy QueryFilter/ScanFilter
+    // parameter rather than from FilterExpression. Used only to name the
+    // right parameter in error messages.
+    bool is_legacy_conditions() const {
+        return _imp && std::holds_alternative<conditions_filter>(*_imp);
+    }
 };
 
 filter::filter(parsed::expression_cache& parsed_expression_cache, const rjson::value& request, request_type rt,
@@ -580,10 +586,12 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
     }
     auto pos = paging_state.get_position_in_partition();
     if (pos.has_key()) {
-        // Base tables and LSIs have at most one clustering key column, but
-        // composite GSI range keys, as well as Alternator's
-        // internal access to system tables, may have multiple clustering key
-        // columns. So we need to handle that case here.
+        // A base table has at most one clustering key column, but the views
+        // backing GSIs and LSIs carry the base table's key columns as extra
+        // clustering key columns, composite GSI range keys have up to four,
+        // and Alternator's internal access to system tables may also see
+        // multiple clustering key columns. So we need to handle that case
+        // here.
         auto cdef_it = schema.clustering_key_columns().begin();
         for(const auto &exploded_ck : pos.key().explode()) {
             rjson::add_with_string_name(last_evaluated_key, std::string_view(cdef_it->name_as_text()), rjson::empty_object());
@@ -925,9 +933,8 @@ static query::clustering_range calculate_ck_bound(schema_ptr schema, const colum
         return query::clustering_range::make(query::clustering_range::bound(ck), query::clustering_range::bound(upper_limit));
     }
     case comparison_operator_type::BEGINS_WITH: {
-        if (raw_value.empty()) {
-            return query::clustering_range::make_open_ended_both_sides();
-        }
+        // raw_value cannot be empty here - get_key_from_typed_value() above
+        // rejects empty key values.
         // NOTICE(sarna): A range starting with given prefix and ending (non-inclusively) with a string "incremented" by a single
         // character at the end. Throws for NUMBER instances.
         if (!ck_cdef.type->is_compatible_with(*utf8_type)) {
@@ -1316,14 +1323,20 @@ calculate_bounds_condition_expression(schema_ptr schema,
 
     std::optional<uint8_t> max_sk_index_set;
     std::optional<uint8_t> first_unset_idx;
+    // pk_size is at least 1 (every table has a partition key; a composite
+    // GSI HASH key has up to 4 columns), and restrictions.size() is pk_size
+    // plus up to 4 genuine RANGE key columns - so the backwards unsigned
+    // loop counter cannot wrap.
     for (uint8_t i = static_cast<uint8_t>(restrictions.size()) - 1; i >= pk_size; --i) {
         const key_restriction& r = restrictions[i];
         if (!r.eq_value && !r.range) {
             first_unset_idx = i;
         }
         if (r.range && max_sk_index_set) {
+            // FIXME: verify against real DynamoDB the message it emits for
+            // this case, and align ours with it.
             throw api_error::validation(
-                    "KeyConditionExpression: only the last constrained RANGE key may skip the equality (=) condition");
+                    "KeyConditionExpression: only the last constrained RANGE key may use a non-equality condition");
         }
         if ((r.eq_value || r.range) && !max_sk_index_set) {
             max_sk_index_set = i;
@@ -1377,11 +1390,19 @@ calculate_bounds_condition_expression(schema_ptr schema,
             clustering_key prefix_bound_key = clustering_key::from_exploded(*schema, prefix_values);
             prefix_values.push_back(std::move(sk_range.value1));
             clustering_key ck = clustering_key::from_exploded(*schema, prefix_values);
-            // The bound from prefix_bound_key when prefix_values are empty is treated the same as unbounded.
-            // When there are prefix_values the range becomes:
-            // depends on flag in bounds constructor - "[" or "(" ck, (prefix_values, +inf, ..., +inf)]
-            // or
-            // [(prefix_values, -inf, ..., -inf), ck "]" or ")" - depends on flag in bounds constructor.
+            // One end of the range is ck = (prefix_values, value), inclusive
+            // or exclusive depending on the operator. The other end is
+            // prefix_bound_key = (prefix_values) alone: a clustering prefix
+            // used as an inclusive start bound means
+            // (prefix_values, -inf, ..., -inf) and as an inclusive end bound
+            // (prefix_values, +inf, ..., +inf), so it spans exactly the rows
+            // sharing prefix_values. The resulting ranges are:
+            //   col <  v: [(prefix_values, -inf, ..., -inf), ck)
+            //   col <= v: [(prefix_values, -inf, ..., -inf), ck]
+            //   col >  v: (ck, (prefix_values, +inf, ..., +inf)]
+            //   col >= v: [ck, (prefix_values, +inf, ..., +inf)]
+            // With empty prefix_values those prefix bounds are simply
+            // unbounded.
             if ((sk_range.op == parsed::primitive_condition::type::LT && sk_range.toplevel_ind == 0) ||
                 (sk_range.op == parsed::primitive_condition::type::GT && sk_range.toplevel_ind == 1)) {
                 ck_bounds.push_back(query::clustering_range::make(query::clustering_range::bound(std::move(prefix_bound_key)), query::clustering_range::bound(std::move(ck), false)));
@@ -2177,12 +2198,14 @@ future<executor::request_return_type> executor::query(client_state& client_state
 
     // How many of the schema's leading clustering columns are the RANGE key
     // the user actually asked for. This is computed for every table we query,
-    // not just for GSIs: for a base table or an LSI it is simply that table's
-    // own sort key, so 0 or 1 columns and every clustering column is the
-    // user's. A GSI is where the two can differ - Scylla appends the base
-    // table's key columns to every view's key, because a view's key must
-    // contain the whole base key, so the view backing a GSI carries trailing
-    // clustering columns the user never asked for. Those exist solely for
+    // not just for GSIs: for a base table it is simply that table's own
+    // sort key, so 0 or 1 columns and every clustering column is the user's.
+    // Views are where the two can differ - Scylla appends the base table's
+    // key columns to every view's key, because a view's key must contain the
+    // whole base key, so the views backing GSIs and LSIs carry trailing
+    // clustering columns the user never asked for (for an LSI, which has no
+    // tag, genuine_range_key_count()'s fallback of at most one genuine range
+    // key is exactly right). Those exist solely for
     // materialized-view correctness and must stay invisible through the API.
     // The schema alone cannot tell the two apart - the count comes from a tag
     // written when the GSI was created (see genuine_range_key_count()).
@@ -2222,17 +2245,21 @@ future<executor::request_return_type> executor::query(client_state& client_state
     // A query is not allowed to filter on the partition key or the sort key.
     // The partition key may have up to 4 columns (composite GSI hash key);
     // the sort key may also have up to 4 genuine columns (composite GSI
-    // range key).
+    // range key). Like DynamoDB, name the offending parameter - the legacy
+    // QueryFilter or the newer FilterExpression - in the error message.
+    // FIXME: verify against real DynamoDB the exact wording it emits for
+    // each of the two parameters.
+    std::string_view filter_param = filter.is_legacy_conditions() ? "QueryFilter" : "Filter expression";
     for (const column_definition& cdef : schema->partition_key_columns()) {
         if (filter.filters_on(cdef.name_as_text())) {
             return make_ready_future<request_return_type>(api_error::validation(
-                    format("Filter expression can only contain non-primary key attributes: Partition key attribute: {}", cdef.name_as_text())));
+                    format("{} can only contain non-primary key attributes: Partition key attribute: {}", filter_param, cdef.name_as_text())));
         }
     }
     for (const column_definition& cdef : schema->clustering_key_columns() | std::views::take(number_of_user_specified_range_keys)) {
         if (filter.filters_on(cdef.name_as_text())) {
             return make_ready_future<request_return_type>(api_error::validation(
-                    format("Filter expression can only contain non-primary key attributes: Sort key attribute: {}", cdef.name_as_text())));
+                    format("{} can only contain non-primary key attributes: Sort key attribute: {}", filter_param, cdef.name_as_text())));
         }
     }
 
