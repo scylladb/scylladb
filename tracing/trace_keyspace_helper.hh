@@ -34,8 +34,6 @@ private:
     int64_t _slow_query_last_nanos = 0;
     service::query_state _dummy_query_state;
 
-    service::migration_manager* _mm_anchor;
-
     table_helper _sessions;
     table_helper _sessions_time_idx;
     table_helper _events;
@@ -61,9 +59,7 @@ public:
     virtual future<> start(cql3::query_processor& qp, service::migration_manager& mm) override;
 
     virtual future<> shutdown() override {
-        return _pending_writes.close().then([this] {
-            _mm_anchor = nullptr;
-        });
+        return _pending_writes.close();
     };
 
     virtual void write_records_bulk(records_bulk& bulk) override;

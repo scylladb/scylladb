@@ -211,7 +211,6 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
 }
 
 future<> trace_keyspace_helper::start(cql3::query_processor& qp, service::migration_manager& mm) {
-    _mm_anchor = &mm;
     return table_helper::setup_keyspace(qp, mm, KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", "2", _dummy_query_state, { &_sessions, &_sessions_time_idx, &_events, &_slow_query_log, &_slow_query_log_time_idx });
 }
 
@@ -435,11 +434,8 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
         auto backend_state_ptr = static_cast<trace_keyspace_backend_sesssion_state*>(records->backend_state_ptr.get());
         semaphore& write_sem = backend_state_ptr->write_sem;
         return with_semaphore(write_sem, 1, [this, records, session_record_is_ready, &events_records] {
-            // This code is inside the _pending_writes gate and the mm pointer
-            // is cleared on ::stop() after the gate is closed.
-            SCYLLA_ASSERT(_mm_anchor != nullptr);
             cql3::query_processor& qp = i_tracing_backend_helper::qp();
-            service::migration_manager& mm = *_mm_anchor;
+            service::migration_manager& mm = i_tracing_backend_helper::mm();
             return apply_events_mutation(qp, mm, records, events_records).then([this, &qp, &mm, session_record_is_ready, records] {
                 if (session_record_is_ready) {
 
