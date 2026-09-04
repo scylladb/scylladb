@@ -8,6 +8,7 @@
 
 #include "replica/memtable.hh"
 #include "readers/from_fragments.hh"
+#include "bytes_ostream.hh"
 #include "repair/hash.hh"
 #include "repair/row.hh"
 #include "repair/writer.hh"
@@ -406,6 +407,272 @@ SEASTAR_TEST_CASE(test_tablet_token_range_count) {
         BOOST_REQUIRE(co_await count_finished_tablets(r1, r2_empty) == 0);
         BOOST_REQUIRE(co_await count_finished_tablets(r1_empty, r2) == 0);
     }
+}
+
+// --- send_full_set_rpc_stream_batched wire-batching coverage ---
+//
+// batch_hashes_for_wire/batch_rows_for_wire are pure grouping functions (no rpc::sink,
+// no I/O) extracted specifically so these boundary conditions can be pinned down exactly,
+// which a full-cluster functional test cannot easily force (e.g. "exactly hash_batch_max_count
+// hashes", "a row big enough to trip the byte cap before the count cap").
+
+static repair_hash_set make_sequential_hashes(size_t n) {
+    repair_hash_set hashes;
+    for (size_t i = 0; i < n; i++) {
+        hashes.insert(repair_hash(i));
+    }
+    return hashes;
+}
+
+static std::vector<repair_hash> flatten(const std::vector<std::vector<repair_hash>>& batches) {
+    std::vector<repair_hash> flat;
+    for (auto& b : batches) {
+        flat.insert(flat.end(), b.begin(), b.end());
+    }
+    return flat;
+}
+
+SEASTAR_TEST_CASE(test_batch_hashes_for_wire_empty) {
+    return seastar::async([&] {
+        repair_hash_set hashes;
+        auto batches = batch_hashes_for_wire(hashes).get();
+        BOOST_REQUIRE(batches.empty());
+    });
+}
+
+SEASTAR_TEST_CASE(test_batch_hashes_for_wire_single) {
+    return seastar::async([&] {
+        auto hashes = make_sequential_hashes(1);
+        auto batches = batch_hashes_for_wire(hashes).get();
+        BOOST_REQUIRE_EQUAL(batches.size(), 1u);
+        BOOST_REQUIRE_EQUAL(batches[0].size(), 1u);
+    });
+}
+
+SEASTAR_TEST_CASE(test_batch_hashes_for_wire_exact_boundary) {
+    return seastar::async([&] {
+        // Exactly hash_batch_max_count hashes must produce ONE full batch, not a full
+        // batch plus an empty trailing one.
+        auto hashes = make_sequential_hashes(hash_batch_max_count);
+        auto batches = batch_hashes_for_wire(hashes).get();
+        BOOST_REQUIRE_EQUAL(batches.size(), 1u);
+        BOOST_REQUIRE_EQUAL(batches[0].size(), hash_batch_max_count);
+    });
+}
+
+SEASTAR_TEST_CASE(test_batch_hashes_for_wire_one_over_boundary) {
+    return seastar::async([&] {
+        auto hashes = make_sequential_hashes(hash_batch_max_count + 1);
+        auto batches = batch_hashes_for_wire(hashes).get();
+        BOOST_REQUIRE_EQUAL(batches.size(), 2u);
+        BOOST_REQUIRE_EQUAL(batches[0].size(), hash_batch_max_count);
+        BOOST_REQUIRE_EQUAL(batches[1].size(), 1u);
+    });
+}
+
+SEASTAR_TEST_CASE(test_batch_hashes_for_wire_one_under_boundary) {
+    return seastar::async([&] {
+        auto hashes = make_sequential_hashes(hash_batch_max_count - 1);
+        auto batches = batch_hashes_for_wire(hashes).get();
+        BOOST_REQUIRE_EQUAL(batches.size(), 1u);
+        BOOST_REQUIRE_EQUAL(batches[0].size(), hash_batch_max_count - 1);
+    });
+}
+
+SEASTAR_TEST_CASE(test_batch_hashes_for_wire_multiple_batches_plus_remainder) {
+    return seastar::async([&] {
+        const size_t n = 2 * hash_batch_max_count + 5;
+        auto hashes = make_sequential_hashes(n);
+        auto batches = batch_hashes_for_wire(hashes).get();
+        BOOST_REQUIRE_EQUAL(batches.size(), 3u);
+        BOOST_REQUIRE_EQUAL(batches[0].size(), hash_batch_max_count);
+        BOOST_REQUIRE_EQUAL(batches[1].size(), hash_batch_max_count);
+        BOOST_REQUIRE_EQUAL(batches[2].size(), 5u);
+
+        // Order is preserved end-to-end, matching the set's own ascending iteration order.
+        std::vector<repair_hash> expected(hashes.begin(), hashes.end());
+        BOOST_REQUIRE(flatten(batches) == expected);
+    });
+}
+
+static frozen_mutation_fragment make_dummy_frozen_mutation_fragment(size_t size) {
+    bytes_ostream bo;
+    std::string data(size, 'x');
+    bo.write(data.data(), data.size());
+    return frozen_mutation_fragment(std::move(bo));
+}
+
+// A minimal, schema-less wire row carrying one mutation fragment of a controlled byte
+// size, for pinning down batch_rows_for_wire's count/byte-cap boundaries precisely.
+// Not a valid row for anything that would try to unfreeze() it.
+static repair_row_on_wire make_dummy_wire_row(size_t fragment_size) {
+    utils::chunked_vector<frozen_mutation_fragment> mfs;
+    mfs.push_back(make_dummy_frozen_mutation_fragment(fragment_size));
+    return repair_row_on_wire(std::move(mfs));
+}
+
+static repair_rows_on_wire make_dummy_wire_rows(size_t n, size_t fragment_size) {
+    repair_rows_on_wire rows;
+    for (size_t i = 0; i < n; i++) {
+        rows.push_back(make_dummy_wire_row(fragment_size));
+    }
+    return rows;
+}
+
+SEASTAR_TEST_CASE(test_batch_rows_for_wire_empty) {
+    return seastar::async([&] {
+        repair_rows_on_wire rows;
+        auto batches = batch_rows_for_wire(rows).get();
+        BOOST_REQUIRE(batches.empty());
+    });
+}
+
+SEASTAR_TEST_CASE(test_batch_rows_for_wire_count_cap_boundaries) {
+    return seastar::async([&] {
+        // Tiny rows, far under the byte cap: only the count cap should be in play.
+        {
+            auto rows = make_dummy_wire_rows(row_batch_max_count, 4);
+            auto batches = batch_rows_for_wire(rows).get();
+            BOOST_REQUIRE_EQUAL(batches.size(), 1u);
+            BOOST_REQUIRE_EQUAL(batches[0].size(), row_batch_max_count);
+        }
+        {
+            auto rows = make_dummy_wire_rows(row_batch_max_count + 1, 4);
+            auto batches = batch_rows_for_wire(rows).get();
+            BOOST_REQUIRE_EQUAL(batches.size(), 2u);
+            BOOST_REQUIRE_EQUAL(batches[0].size(), row_batch_max_count);
+            BOOST_REQUIRE_EQUAL(batches[1].size(), 1u);
+        }
+        {
+            auto rows = make_dummy_wire_rows(row_batch_max_count - 1, 4);
+            auto batches = batch_rows_for_wire(rows).get();
+            BOOST_REQUIRE_EQUAL(batches.size(), 1u);
+            BOOST_REQUIRE_EQUAL(batches[0].size(), row_batch_max_count - 1);
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_batch_rows_for_wire_byte_cap_triggers_before_count_cap) {
+    return seastar::async([&] {
+        // Each row is a quarter of row_batch_max_bytes, so the byte cap should split
+        // into batches of exactly 4 rows -- nowhere near row_batch_max_count (32).
+        const size_t fragment_size = row_batch_max_bytes / 4;
+        auto rows = make_dummy_wire_rows(3 * 4, fragment_size);
+        auto batches = batch_rows_for_wire(rows).get();
+        BOOST_REQUIRE_EQUAL(batches.size(), 3u);
+        for (auto& b : batches) {
+            BOOST_REQUIRE_EQUAL(b.size(), 4u);
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_batch_rows_for_wire_byte_cap_never_overshoots) {
+    return seastar::async([&] {
+        // Each row is just over half the cap, so two of them would overshoot it - the
+        // batch must flush BEFORE adding the second row, not after.
+        auto rows = make_dummy_wire_rows(5, row_batch_max_bytes / 2 + 1);
+        auto batches = batch_rows_for_wire(rows).get();
+        BOOST_REQUIRE_EQUAL(batches.size(), 5u);
+        for (auto& b : batches) {
+            BOOST_REQUIRE_EQUAL(b.size(), 1u);
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_batch_rows_for_wire_single_oversized_row) {
+    return seastar::async([&] {
+        // A single row bigger than row_batch_max_bytes on its own must still be sent --
+        // it gets its own batch rather than being dropped or looping forever.
+        auto rows = make_dummy_wire_rows(1, row_batch_max_bytes * 2);
+        auto batches = batch_rows_for_wire(rows).get();
+        BOOST_REQUIRE_EQUAL(batches.size(), 1u);
+        BOOST_REQUIRE_EQUAL(batches[0].size(), 1u);
+    });
+}
+
+SEASTAR_TEST_CASE(test_batch_rows_for_wire_total_row_count_preserved) {
+    return seastar::async([&] {
+        // Mix of small and large rows: every input row must show up exactly once,
+        // regardless of which cap ends up governing each batch.
+        repair_rows_on_wire rows;
+        for (size_t i = 0; i < 50; i++) {
+            rows.push_back(make_dummy_wire_row(i % 3 == 0 ? row_batch_max_bytes / 2 : 8));
+        }
+        auto batches = batch_rows_for_wire(rows).get();
+        size_t total = 0;
+        for (auto& b : batches) {
+            total += b.size();
+        }
+        BOOST_REQUIRE_EQUAL(total, 50u);
+    });
+}
+
+// --- diff-detect algorithm selection coverage ---
+//
+// select_diff_detect_algorithm is the pure negotiation logic behind
+// get_common_diff_detect_algorithm, exposed so the vnode/tablet gating (the one
+// invariant that must never regress: [[vnode-repair-legacy-dont-touch]]) can be
+// pinned down without a full cluster.
+
+SEASTAR_TEST_CASE(test_select_diff_detect_algorithm_vnode_never_selects_batched) {
+    return seastar::async([&] {
+        using algo = row_level_diff_detect_algorithm;
+        std::vector<std::vector<algo>> nodes_algorithms = {
+            {algo::send_full_set, algo::send_full_set_rpc_stream, algo::send_full_set_rpc_stream_batched},
+            {algo::send_full_set, algo::send_full_set_rpc_stream, algo::send_full_set_rpc_stream_batched},
+        };
+        // Even though every peer advertises batched support, a vnode (non-tablet) table
+        // must never select it -- this is allow_batched=false, the caller's contract for
+        // !cf.uses_tablets().
+        auto selected = select_diff_detect_algorithm(nodes_algorithms, false);
+        BOOST_REQUIRE(selected == algo::send_full_set_rpc_stream);
+    });
+}
+
+SEASTAR_TEST_CASE(test_select_diff_detect_algorithm_tablet_picks_batched_when_supported) {
+    return seastar::async([&] {
+        using algo = row_level_diff_detect_algorithm;
+        std::vector<std::vector<algo>> nodes_algorithms = {
+            {algo::send_full_set, algo::send_full_set_rpc_stream, algo::send_full_set_rpc_stream_batched},
+            {algo::send_full_set, algo::send_full_set_rpc_stream, algo::send_full_set_rpc_stream_batched},
+        };
+        auto selected = select_diff_detect_algorithm(nodes_algorithms, true);
+        BOOST_REQUIRE(selected == algo::send_full_set_rpc_stream_batched);
+    });
+}
+
+SEASTAR_TEST_CASE(test_select_diff_detect_algorithm_mixed_version_peer_excludes_batched) {
+    return seastar::async([&] {
+        using algo = row_level_diff_detect_algorithm;
+        // One peer is an older binary that never advertises the batched algorithm at all
+        // (the rolling-upgrade scenario) -- it must be excluded from the common set
+        // regardless of allow_batched, since the peer genuinely doesn't support it.
+        std::vector<std::vector<algo>> nodes_algorithms = {
+            {algo::send_full_set, algo::send_full_set_rpc_stream, algo::send_full_set_rpc_stream_batched},
+            {algo::send_full_set, algo::send_full_set_rpc_stream},
+        };
+        auto selected = select_diff_detect_algorithm(nodes_algorithms, true);
+        BOOST_REQUIRE(selected == algo::send_full_set_rpc_stream);
+    });
+}
+
+SEASTAR_TEST_CASE(test_select_diff_detect_algorithm_no_peers_falls_back_to_local_best) {
+    return seastar::async([&] {
+        using algo = row_level_diff_detect_algorithm;
+        std::vector<std::vector<algo>> nodes_algorithms = {};
+        BOOST_REQUIRE(select_diff_detect_algorithm(nodes_algorithms, true) == algo::send_full_set_rpc_stream_batched);
+        BOOST_REQUIRE(select_diff_detect_algorithm(nodes_algorithms, false) == algo::send_full_set_rpc_stream);
+    });
+}
+
+SEASTAR_TEST_CASE(test_select_diff_detect_algorithm_no_common_algorithm_throws) {
+    return seastar::async([&] {
+        using algo = row_level_diff_detect_algorithm;
+        std::vector<std::vector<algo>> nodes_algorithms = {
+            {},
+        };
+        BOOST_REQUIRE_THROW(select_diff_detect_algorithm(nodes_algorithms, true), std::runtime_error);
+    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()
