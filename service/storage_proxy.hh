@@ -586,6 +586,12 @@ public:
 
     // Start/stop the remote part of `storage_proxy` that is required for performing distributed queries.
     void start_remote(netw::messaging_service&, gms::gossiper&, migration_manager&, sharded<db::system_keyspace>& sys_ks, sharded<paxos::paxos_store>& paxos_store, raft_group0_client&, topology_state_machine&, const db::view::view_building_state_machine&);
+    // Unregisters the storage proxy RPC verbs and waits for the in-flight
+    // handlers to complete, so that their replies can still be delivered.
+    // Called before messaging is shut down. The wait is bounded by `timeout`;
+    // on expiry the drain continues in the background and is joined by
+    // stop_remote().
+    future<> drain_remote_verbs(lowres_clock::duration timeout);
     future<> stop_remote();
 
     gms::inet_address my_address() const noexcept;
