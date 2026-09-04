@@ -50,7 +50,7 @@ Cell-level TTL, set with the standard ``USING TTL`` syntax on ``INSERT`` or
 ``UPDATE``, makes the value unreadable at its expiration deadline but does
 not generate a CDC event, so the fulltext index is not updated and keeps a
 stale entry for that value. If the index must reflect expiration, use the
-:ref:`Per-row TTL <cql-per-row-ttl>` feature instead: it deletes expired rows
+:ref:`Per-Row TTL <per-row-ttl>` feature instead: it deletes expired rows
 explicitly and does generate a CDC event.
 
 Querying with BM25
