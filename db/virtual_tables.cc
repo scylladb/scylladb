@@ -809,8 +809,10 @@ class clients_table : public streaming_virtual_table {
     }
 
     future<> execute(reader_permit permit, result_collector& result, const query_restrictions& qr) override {
-        // Collect
-        using client_data_vec = utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>;
+        // Collect. One foreign_ptr per shard wraps a whole chunked_vector<client_data>,
+        // instead of one foreign_ptr per connection, to avoid hundreds of thousands of
+        // tiny cross-shard allocations at high connection counts (SCYLLADB-4230).
+        using client_data_vec = utils::chunked_vector<client_data>;
         using shard_client_data = std::vector<client_data_vec>;
         std::vector<foreign_ptr<std::unique_ptr<shard_client_data>>> cd_vec;
         cd_vec.resize(this_smp_shard_count());
@@ -846,17 +848,17 @@ class clients_table : public streaming_virtual_table {
 
         decorated_ip::compare cmp(*_s);
         std::set<decorated_ip, decorated_ip::compare> ips(cmp);
-        std::unordered_map<net::inet_address, client_data_vec> cd_map;
+        std::unordered_map<net::inet_address, std::vector<const client_data*>> cd_map;
         for (unsigned i = 0; i < this_smp_shard_count(); i++) {
-            for (auto&& ps_cdc : *cd_vec[i]) {
-                for (auto&& cd : ps_cdc) {
-                    if (cd_map.contains(cd->ip)) {
-                        cd_map[cd->ip].emplace_back(std::move(cd));
+            for (const auto& ps_cdc : *cd_vec[i]) {
+                for (const auto& cd : ps_cdc) {
+                    if (cd_map.contains(cd.ip)) {
+                        cd_map[cd.ip].push_back(&cd);
                     } else {
-                        dht::decorated_key key = make_partition_key(cd->ip);
+                        dht::decorated_key key = make_partition_key(cd.ip);
                         if (this_shard_owns(key) && contains_key(qr.partition_range(), key)) {
-                            ips.insert(decorated_ip{std::move(key), cd->ip});
-                            cd_map[cd->ip].emplace_back(std::move(cd));
+                            ips.insert(decorated_ip{std::move(key), cd.ip});
+                            cd_map[cd.ip].push_back(&cd);
                         }
                     }
                     co_await coroutine::maybe_yield();
@@ -869,14 +871,14 @@ class clients_table : public streaming_virtual_table {
             co_await result.emit_partition_start(dip.key);
             auto& clients = cd_map[dip.ip];
 
-            std::ranges::sort(clients, [] (const foreign_ptr<std::unique_ptr<client_data>>& a, const foreign_ptr<std::unique_ptr<client_data>>& b) {
+            std::ranges::sort(clients, [] (const client_data* a, const client_data* b) {
                 if (a->port != b->port) {
                     return a->port < b->port;
                 }
                 return a->client_type_str() < b->client_type_str();
             });
 
-            for (const auto& cd : clients) {
+            for (const auto* cd : clients) {
                 clustering_row cr(make_clustering_key(cd->port, cd->client_type_str()));
                 set_cell(cr.cells(), "shard_id", cd->shard_id);
                 set_cell(cr.cells(), "connection_stage", cd->stage_str());
