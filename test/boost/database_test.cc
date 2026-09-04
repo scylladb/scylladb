@@ -243,7 +243,10 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
                 auto shard = table.shard_for_reads(m.token());
                 pranges_per_shard[shard].emplace_back(dht::partition_range::make_singular(dht::decorate_key(*s, std::move(pkey))));
             }
-            for (uint32_t i = 3 * this_smp_shard_count(); i <= 8 * this_smp_shard_count(); ++i) {
+            // Start past the tombstone loop's last key: the two ranges must not overlap,
+            // or the shared key's row ends up covered by its own tombstone (same timestamp)
+            // while still being counted live in keys_per_shard.
+            for (uint32_t i = 3 * this_smp_shard_count() + 1; i <= 8 * this_smp_shard_count(); ++i) {
                 auto pkey = partition_key::from_single_value(*s, to_bytes(format("key{:d}", i)));
                 mutation m(s, pkey);
                 m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", int32_t(42), 1);
