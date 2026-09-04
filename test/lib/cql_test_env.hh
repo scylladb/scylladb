@@ -213,8 +213,6 @@ public:
 
     virtual sharded<tasks::task_manager>& get_task_manager() = 0;
 
-    virtual sharded<locator::shared_token_metadata>& get_shared_token_metadata() = 0;
-
     virtual sharded<service::topology_state_machine>& get_topology_state_machine() = 0;
 
     data_dictionary::database data_dictionary();
