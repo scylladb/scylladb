@@ -743,3 +743,129 @@ SEASTAR_TEST_CASE(gc_sstable_no_premature_release_with_overlapping_inputs_test) 
         BOOST_CHECK_MESSAGE(!premature_gc_release, "GC sstable was released while overlapping input sstables were still alive");
     });
 }
+
+// Regression test for counting distinct runs in ICS reshaping without allocating a set.
+// Exercises get_reshaping_job() with sstables that share run identifiers as well as
+// sstables with distinct run identifiers, and asserts the distinct-run-count logic
+// (which no longer materializes an unordered_set) behaves as before.
+SEASTAR_THREAD_TEST_CASE(ics_reshaping_distinct_run_count_test) {
+    auto builder = schema_builder(this_smp_shard_count(), "tests", "ics_reshaping_distinct_run_count_test")
+        .with_column("id", utf8_type, column_kind::partition_key)
+        .with_column("value", int32_type);
+    builder.set_compaction_strategy(compaction::compaction_strategy_type::incremental);
+    auto s = builder.build();
+
+    std::map<sstring, sstring> opts;
+    auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::incremental, opts);
+
+    test_env::do_with_async([&] (test_env& env) {
+        table_for_tests cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+
+        auto make_sstable_with_size = [&] (size_t sstable_data_size) {
+            auto sst = env.make_sstable(cf->schema(), "/nowhere/in/particular", env.new_generation(), sstable_version_types::md, big);
+            auto keys = tests::generate_partition_keys(2, cf->schema(), local_shard_only::yes);
+            sstables::test(sst).set_values(keys[0].key(), keys[1].key(), stats_metadata{}, sstable_data_size);
+            return sst;
+        };
+
+        // Scenario 0: no sstables at all, so no runs.
+        {
+            std::vector<sstables::shared_sstable> sstables;
+            auto ret = cs.get_reshaping_job(sstables, s, compaction::reshape_config{.mode = compaction::reshape_mode::strict});
+            BOOST_REQUIRE(ret.sstables.empty());
+        }
+
+        // Scenario 1: every sstable belongs to the same run.
+        // There is a single distinct run, so reshaping must report nothing to do.
+        {
+            run_id single_run_id = run_id::create_random_id();
+            std::vector<sstables::shared_sstable> sstables;
+            sstables.reserve(8);
+            for (unsigned i = 0; i < 8; i++) {
+                auto sst = make_sstable_with_size(1024);
+                sstables::test(sst).set_run_identifier(single_run_id);
+                sstables.push_back(std::move(sst));
+            }
+            auto ret = cs.get_reshaping_job(sstables, s, compaction::reshape_config{.mode = compaction::reshape_mode::strict});
+            BOOST_REQUIRE(ret.sstables.empty());
+        }
+
+        // Scenario 2: sstables span several runs, some sharing a run id and some distinct.
+        // Distinct run id layout (8 sstables): A A B B C D E F -> 6 distinct runs.
+        // With 6 distinct runs >= off-strategy threshold, reshape must produce a non-empty job.
+        {
+            run_id a = run_id::create_random_id();
+            run_id b = run_id::create_random_id();
+            std::vector<run_id> ids = {a, a, b, b,
+                                       run_id::create_random_id(),
+                                       run_id::create_random_id(),
+                                       run_id::create_random_id(),
+                                       run_id::create_random_id()};
+            std::vector<sstables::shared_sstable> sstables;
+            sstables.reserve(ids.size());
+            for (auto& id : ids) {
+                auto sst = make_sstable_with_size(1024);
+                sstables::test(sst).set_run_identifier(id);
+                sstables.push_back(std::move(sst));
+            }
+            auto ret = cs.get_reshaping_job(sstables, s, compaction::reshape_config{.mode = compaction::reshape_mode::strict});
+            BOOST_REQUIRE(!ret.sstables.empty());
+            // All 8 input sstables are expected to be reshaped together, since the
+            // overlapping count stays within the max threshold.
+            BOOST_REQUIRE(ret.sstables.size() == ids.size());
+        }
+    }).get();
+}
+
+// Benchmark: the distinct-run counting inside get_reshaping_job(). The optimized
+// path copies the run-id vector, sorts it and erases duplicates in place
+// (O(K log K), a single cache-friendly allocation) instead of materializing an
+// std::unordered_set *per call* (hashing + a heap allocation per element and
+// repeated rehashing as it grows). The win is at scale, so this benchmark works
+// on a large run-id vector directly (no sstables needed) and compares the two
+// counting approaches on identical input.
+// Timings are informational only (BOOST_TEST_MESSAGE) - not asserted on, since
+// wall-clock comparisons are flaky under ASAN/debug builds and loaded CI hosts.
+SEASTAR_THREAD_TEST_CASE(incremental_compaction_reshaping_run_count_benchmark_test) {
+    static constexpr unsigned num = 200000;
+    std::vector<run_id> run_ids;
+    run_ids.reserve(num);
+    for (unsigned i = 0; i < num; ++i) {
+        run_ids.push_back(run_id::create_random_id());
+    }
+
+    // Timing is informational only now (not asserted), so a single pass over
+    // `num` ids is enough for both the message and the correctness check.
+    static constexpr int iters = 1;
+
+    // Optimized path: copy, sort, erase duplicates (mirrors get_reshaping_job).
+    const auto t0 = std::chrono::steady_clock::now();
+    size_t opt_runs = 0;
+    for (int i = 0; i < iters; ++i) {
+        std::vector<run_id> ids = run_ids;
+        std::ranges::sort(ids);
+        ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+        opt_runs += ids.size();
+    }
+    const auto t1 = std::chrono::steady_clock::now();
+
+    // Naive path: std::unordered_set without reserve (the code the optimization removed).
+    const auto t2 = std::chrono::steady_clock::now();
+    size_t naive_runs = 0;
+    for (int i = 0; i < iters; ++i) {
+        std::unordered_set<run_id> ids;
+        for (auto& r : run_ids) {
+            ids.insert(r);
+        }
+        naive_runs += ids.size();
+    }
+    const auto t3 = std::chrono::steady_clock::now();
+
+    const double opt_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    const double naive_ms = std::chrono::duration<double, std::milli>(t3 - t2).count();
+    BOOST_TEST_MESSAGE(fmt::format("ICS distinct-run count: opt(sort+unique)={:.3f} ms naive(unordered_set)={:.3f} ms ({} ids x{} iters, opt_runs={} naive_runs={})",
+        opt_ms, naive_ms, run_ids.size(), iters, opt_runs, naive_runs));
+    // Correctness check only; relative timing is not asserted (see comment above).
+    BOOST_REQUIRE(opt_runs == naive_runs);
+}
