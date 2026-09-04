@@ -26,6 +26,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
 #include "test/lib/eventually.hh"
+#include "utils/error_injection.hh"
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sleep.hh>
@@ -6242,9 +6243,24 @@ SEASTAR_TEST_CASE(test_tablet_routing_info_after_cas_shard_bounce) {
         const auto lwt_id = e.prepare(format("update ks_tablet.{} set v = ? where pk = ? if v = ?;", schema->cf_name())).get();
 
         // Execute LWT on this shard (the foreign shard). Expect a bounce.
+        // Call query_processor directly instead of e.execute_prepared(), which
+        // now transparently follows shard bounces and would hide the very
+        // bounce message this test needs to observe.
         {
-            auto raw_val = [] (int32_t v) { return cql3::raw_value::make_value(int32_type->decompose(v)); };
-            const auto result = e.execute_prepared(lwt_id, {raw_val(2), raw_val(1), raw_val(1)}).get();
+            auto qs = ::make_shared<service::query_state>(e.local_client_state(), empty_service_permit());
+            const auto prepared = e.local_qp().get_prepared(lwt_id);
+            BOOST_REQUIRE(prepared);
+
+            const auto options = e.local_qp().make_internal_options(prepared,
+                {data_value(2), data_value(1), data_value(1)},
+                db::consistency_level::ONE);
+
+            auto result = e.local_qp().execute_prepared_without_checking_exception_message(
+                *qs, prepared->statement, options,
+                std::move(prepared), lwt_id, false).get();
+            result = cql_transport::messages::propagate_exception_as_future(
+                std::move(result)).get();
+
             BOOST_REQUIRE(result->as_bounce());
             BOOST_REQUIRE_EQUAL(result->as_bounce()->target_shard(), tablet_shard);
         }
@@ -7230,6 +7246,40 @@ SEASTAR_THREAD_TEST_CASE(test_twcs_reversed_restricted_query_optimized) {
 
 SEASTAR_THREAD_TEST_CASE(test_twcs_reversed_restricted_query_regular) {
     test_twcs_reversed_restricted_query(false);
+}
+
+// Regression test: an LWT statement whose CAS shard isn't the executing
+// shard gets a `bounce` result from query_processor (bounce_to_shard); a real
+// CQL server re-executes on the target shard (transport/server.cc), but
+// cql_test_env used to return the bounce message as if it were a successful
+// result, so the write silently never happened. Force exactly one bounce via
+// error injection so the test is deterministic regardless of --smp / which
+// shard the fixed key happens to hash to.
+SEASTAR_TEST_CASE(test_lwt_insert_survives_forced_shard_bounce) {
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    // LWT/CAS execution needs storage_proxy's RPC verbs (paxos prepare/accept
+    // are dispatched through storage_proxy::remote() even for a single-node,
+    // single-round-trip CAS), which cql_test_env only sets up when asked.
+    cql_test_config cql_cfg;
+    cql_cfg.need_remote_proxy = true;
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (pk int PRIMARY KEY, v int)").get();
+
+        utils::error_injection_parameters params;
+        params["value"] = "1";
+        utils::get_local_injector().enable("forced_bounce_to_shard_counter", false, std::move(params));
+
+        e.execute_cql("INSERT INTO t (pk, v) VALUES (1, 1) IF NOT EXISTS").get();
+
+        auto msg = e.execute_cql("SELECT v FROM t WHERE pk = 1").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_row({int32_type->decompose(1)});
+    }, cql_cfg);
+#else
+    return make_ready_future<>();
+#endif
 }
 
 BOOST_AUTO_TEST_SUITE_END()
