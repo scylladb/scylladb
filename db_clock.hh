@@ -60,6 +60,6 @@ struct fmt::formatter<db_clock::time_point> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const db_clock::time_point& tp, FormatContext& ctx) const {
         auto t = db_clock::to_time_t(tp);
-        return fmt::format_to(ctx.out(), "{:%Y/%m/%d %T}", fmt::gmtime(t));
+        return fmt::format_to(ctx.out(), "{:%Y/%m/%d %T}z", fmt::gmtime(t));
     }
 };
