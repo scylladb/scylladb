@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <map>
+
 #include "server.hh"
 
 namespace cql_transport {
@@ -89,6 +91,11 @@ public:
     void write(const cql3::prepared_metadata& m, uint8_t version);
 
     future<> write_message(output_stream<char>& out, uint8_t version, cql_compression compression, seastar::deleter);
+    // Like write_message(), but for a response shared read-only across
+    // several writers (event fan-out): never compresses (compression would
+    // mutate _body, which the sharing contract forbids), and keeps `self`
+    // alive for as long as the write needs the shared body's bytes.
+    future<> write_message_shared(output_stream<char>& out, uint8_t version, seastar::shared_ptr<response> self);
 
     cql_binary_opcode opcode() const {
         return _opcode;
@@ -142,5 +149,26 @@ public:
         std::copy_n(s, sizeof(u), _pointer);
     }
 };
+
+// The exact logic connection::make_schema_change_event() delegates to.
+seastar::shared_ptr<response> make_schema_change_event_response(const event::schema_change& event, uint8_t version);
+
+// Per-fan-out-pass cache, keyed by whatever distinguishes one listener's event
+// body from another's (typically just the protocol version; topology/status
+// events also embed the server port). Builds the body at most once per
+// distinct key instead of once per listener -- the body is identical for
+// every listener sharing that key.
+template <typename Key>
+using shared_event_cache = std::map<Key, seastar::shared_ptr<response>>;
+
+template <typename Key, typename MakeEvent>
+seastar::shared_ptr<response> get_or_make_shared_event(
+        shared_event_cache<Key>& cache, const Key& key, MakeEvent&& make_event) {
+    auto [it, inserted] = cache.try_emplace(key);
+    if (inserted) {
+        it->second = make_event();
+    }
+    return it->second;
+}
 
 }
