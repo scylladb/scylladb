@@ -13,6 +13,7 @@
 #include "locator/tablet_sharder.hh"
 #include "locator/token_range_splitter.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "locator/topology.hh"
 #include "replica/database.hh"
 #include "utils/stall_free.hh"
@@ -2004,6 +2005,14 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
         }
     );
 }
+
+// tablets_fwd.hh and topology.hh both declare locator::rack_list (kept
+// duplicated so tablets_fwd.hh stays lightweight and avoids topology.hh) -
+// same name/namespace, so C++ requires them to already be identical
+// wherever both are visible (as here); pin the concrete type so a future
+// edit to either gets a clear error here instead of relying on that rule
+// implicitly.
+static_assert(std::is_same_v<rack_list, std::vector<sstring>>);
 
 rack_list get_allowed_racks(const locator::token_metadata& tm, const sstring& dc) {
     auto& topo = tm.get_topology();

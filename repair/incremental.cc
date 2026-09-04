@@ -7,6 +7,7 @@
  */
 
 #include "repair/incremental.hh"
+#include "sstables/metadata.hh"
 #include "utils/log.hh"
 #include <algorithm>
 #include <ranges>

@@ -13,6 +13,7 @@
 #include <seastar/net/socket_defs.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/thread.hh>
 
 #include "db/config.hh"

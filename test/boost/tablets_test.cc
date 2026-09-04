@@ -49,6 +49,7 @@
 #include "service/topology_coordinator.hh"
 #include "service/topology_state_machine.hh"
 #include "service/migration_manager.hh"
+#include "gms/gossiper.hh"
 
 #include <boost/regex.hpp>
 #include <atomic>

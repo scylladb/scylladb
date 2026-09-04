@@ -27,3 +27,10 @@ struct task_info {
 };
 
 }
+
+// task_id::to_sstring() is the only non-trivial (non-constexpr) member of
+// tagged_uuid<Tag>; called from several task-manager API translation units,
+// so suppress its per-TU re-instantiation. Matching explicit instantiation
+// lives in tasks/task_manager.cc. Must be named fully-qualified outside
+// namespace tasks (see locator/host_id.hh).
+extern template struct utils::tagged_uuid<tasks::task_id_tag>;

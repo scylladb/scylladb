@@ -20,6 +20,7 @@
 #include "cql3/cql3_type.hh"
 #include "db/config.hh"
 #include "db/consistency_level_type.hh"
+#include "db/view/view.hh"
 #include "db/view/view_build_status.hh"
 #include "locator/tablets.hh"
 #include "mutation/tombstone.hh"

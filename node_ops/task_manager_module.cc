@@ -7,6 +7,7 @@
  */
 
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "node_ops/task_manager_module.hh"
 #include "service/storage_service.hh"
 #include "service/topology_coordinator.hh"

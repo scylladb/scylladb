@@ -14,7 +14,7 @@
 #include "utils/chunked_string.hh"
 #include <boost/algorithm/string.hpp>
 
-logging::logger klog("keys");
+static logging::logger klog("keys");
 
 const legacy_compound_view<partition_key_view::c_type>
 partition_key_view::legacy_form(const schema& s) const {

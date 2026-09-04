@@ -12,7 +12,7 @@
 #include "mutation/frozen_mutation.hh"
 #include <functional>
 #include <unordered_map>
-#include "locator/tablets.hh"
+#include "locator/tablets_fwd.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
 #include "utils/loading_cache.hh"
 

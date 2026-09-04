@@ -14,7 +14,9 @@
 #include "cql3/description.hh"
 #include "scalar_function.hh"
 #include "lang/lua.hh"
+#ifdef SCYLLA_BUILD_WASMTIME
 #include "lang/wasm.hh"
+#endif
 
 namespace cql3 {
 namespace functions {
@@ -34,7 +36,11 @@ public:
         lua::runtime_config cfg;
     };
 
+#ifdef SCYLLA_BUILD_WASMTIME
     using context = std::variant<lua_context, wasm::context>;
+#else
+    using context = std::variant<lua_context>;
+#endif
 
 private:
     std::vector<sstring> _arg_names;
