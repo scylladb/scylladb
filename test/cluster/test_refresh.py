@@ -23,7 +23,7 @@ from test.pylib.minio_server import MinioServer
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.object_storage import format_tuples
 from test.cluster.object_store.test_backup import topo, take_snapshot, do_test_streaming_scopes
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, table_dir_name
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name, wait_for, wait_for_view
 
@@ -130,10 +130,10 @@ async def test_refresh_deletes_uploaded_sstables(manager: ScyllaClusterManager):
 
         logger.info(f'Move sstables to tmp dir')
         tmpdir = f'tmpbackup-{str(uuid.uuid4())}'
+        cf_dir_name = await table_dir_name(cql, ks, cf)
         for s in servers:
             workdir = await manager.server_get_workdir(s.server_id)
-            cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-            cf_dir = os.path.join(f'{workdir}/data/{ks}', cf_dir)
+            cf_dir = os.path.join(f'{workdir}/data/{ks}', cf_dir_name)
             tmpbackup = os.path.join(workdir, f'../{tmpdir}')
             dirs[s.server_id]["workdir"] = workdir
             dirs[s.server_id]["cf_dir"] = cf_dir
@@ -150,8 +150,16 @@ async def test_refresh_deletes_uploaded_sstables(manager: ScyllaClusterManager):
                 if item not in exclude_list:
                     shutil.copy2(src_path, dst_path)
 
-        logger.info(f'Clear data by truncating')
-        cql.execute(f'TRUNCATE TABLE {ks}.{cf};')
+        # Not by truncating: a truncate deletes everything written before it,
+        # including the rows in the sstables copied aside above, so refreshing
+        # them back in would bring back nothing. This test is about the upload
+        # directory, so give the refresh a table with no history instead.
+        logger.info(f'Clear data by recreating the table')
+        await cql.run_async(f'DROP TABLE {ks}.{cf};')
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk text primary key, value int)")
+        cf_dir_name = await table_dir_name(cql, ks, cf)
+        for s in servers:
+            dirs[s.server_id]["cf_dir"] = os.path.join(f'{dirs[s.server_id]["workdir"]}/data/{ks}', cf_dir_name)
 
         logger.info(f'Copy sstables to upload dir (with shuffling)')
         shuffled = list(range(len(servers)))
