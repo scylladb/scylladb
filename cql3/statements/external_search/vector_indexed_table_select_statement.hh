@@ -32,32 +32,11 @@ struct ann_ordering_info {
     std::vector<expr::expression> deferred_select_vectors;
 };
 
-/// Resolves ANN ordering metadata from the query's prepared ORDER BY call.
-/// Returns std::nullopt if the call is not a native ann() call, i.e. this is not an ANN query.
-std::optional<ann_ordering_info> get_ann_ordering_info(
-        data_dictionary::database db,
-        schema_ptr schema,
-        const expr::function_call& fc);
-
-/// Replaces every ANN(), ANN_SCORE() and ANN_RANK() call in the SELECT clause, nested occurrences
-/// included, with a read of the temporary holding the Vector Store's score or rank. When the index
-/// rescores, the score is instead the similarity the coordinator recomputes, and there is no rank:
-/// ANN_RANK() and ANN() are rejected. Also rejects an occurrence with no ANN ordering to agree
-/// with, or one that disagrees with it on the column or the query vector; a disagreement only
-/// execution can settle is recorded in ordering_info for it to check.
-void prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_selectors,
-        std::optional<ann_ordering_info>& ordering_info, expr::temporary_allocator& temporaries_allocator,
-        data_dictionary::database db, const schema_ptr& schema, prepare_context& ctx);
-
-/// The order the rows come back in when the index rescores: the Vector Store ordered them by the
-/// score it reported, which is not the requested order then. Sorting reads a column of the result
-/// row, so this appends a trailing selector holding the recomputed similarity - the column the
-/// returned comparator sorts by, and the one the caller has to hide from the client.
-select_statement::ordering_comparator_type rescored_similarity_ordering(
-        std::vector<selection::prepared_selector>& prepared_selectors,
-        const ann_ordering_info& ann_ordering_info,
-        data_dictionary::database db,
-        schema_ptr schema);
+/// The similarity the coordinator recomputes for each row when the index rescores. It reads the
+/// fetched vector column and the query vector, so it needs no temporary.
+expr::expression make_similarity_expression(const secondary_index::index& index,
+        const select_statement::prepared_ann_ordering_type& prepared_ann_ordering,
+        data_dictionary::database db, const schema_ptr& schema);
 
 class vector_indexed_table_select_statement : public external_index_select_statement {
     ann_ordering_info _ann_ordering_info;
