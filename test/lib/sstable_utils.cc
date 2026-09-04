@@ -15,6 +15,7 @@
 #include "sstables/version.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "test/lib/key_utils.hh"
 #include "test/boost/sstable_test.hh"
 #include <seastar/core/reactor.hh>
 #include <seastar/core/seastar.hh>
@@ -105,6 +106,18 @@ shared_sstable make_sstable_easy(test_env& env, mutation_reader rd, sstable_writ
 shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::memtable> mt, sstable_writer_config cfg,
         sstables::generation_type gen, const sstable::version_types v, int estimated_partitions, db_clock::time_point query_time) {
     return make_sstable_easy(env, mt->make_mutation_reader(mt->schema(), env.make_reader_permit()), std::move(cfg), gen, v, estimated_partitions, query_time);
+}
+
+shared_sstable make_sstable_with_fake_data_size(test_env& env, schema_ptr schema, uint64_t data_size,
+        std::optional<std::pair<partition_key, partition_key>> key_range, sstables::run_id run) {
+    auto sst = env.make_sstable(schema, "/nowhere/in/particular", env.new_generation(), sstable_version_types::md, big);
+    if (!key_range) {
+        auto keys = tests::generate_partition_keys(2, schema, local_shard_only::yes);
+        key_range = {keys[0].key(), keys[1].key()};
+    }
+    sstables::test(sst).set_values(key_range->first, key_range->second, stats_metadata{}, data_size);
+    sstables::test(sst).set_run_identifier(run);
+    return sst;
 }
 
 future<compaction::compaction_result> compact_sstables(test_env& env, compaction::compaction_descriptor descriptor, table_for_tests t,

@@ -81,8 +81,8 @@ bool sstable_run::insert(shared_sstable sst) {
     return true;
 }
 
-void sstable_run::erase(shared_sstable sst) {
-    _all.erase(sst);
+bool sstable_run::erase(shared_sstable sst) {
+    return _all.erase(sst) != 0;
 }
 
 uint64_t sstable_run::data_size() const {
@@ -410,7 +410,7 @@ bool partitioned_sstable_set::insert(shared_sstable sst) {
                     sst->get_filename(), sst->run_identifier());
         sst->generate_new_run_identifier();
     }
-    auto undo_all_runs_insert = defer([&] noexcept { _all_runs[sst->run_identifier()]->erase(sst); });
+    auto undo_all_runs_insert = defer([&] noexcept { (void)_all_runs[sst->run_identifier()]->erase(sst); });
 
     if (store_as_unleveled(sst)) {
         _unleveled_sstables.push_back(sst);
@@ -425,7 +425,7 @@ bool partitioned_sstable_set::insert(shared_sstable sst) {
 
 bool partitioned_sstable_set::erase(shared_sstable sst) {
     if (auto it = _all_runs.find(sst->run_identifier()); it != _all_runs.end()) {
-        it->second->erase(sst);
+        (void)it->second->erase(sst);
         if (it->second->empty()) {
             _all_runs.erase(it);
         }
