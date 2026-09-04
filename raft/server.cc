@@ -268,6 +268,7 @@ public:
     void elapse_election() override;
     bool is_leader() override;
     raft::server_id current_leader() const override;
+    std::optional<raft::server_id> preferred_handover_target() const override;
     void tick() override;
     raft::server_id id() const override;
     future<> stepdown(logical_clock::duration timeout, server_id target) override;
@@ -2381,6 +2382,10 @@ bool server_impl::is_leader() {
 
 raft::server_id server_impl::current_leader() const {
     return _fsm->current_leader();
+}
+
+std::optional<raft::server_id> server_impl::preferred_handover_target() const {
+    return _fsm->preferred_handover_target();
 }
 
 void server_impl::elapse_election() {

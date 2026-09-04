@@ -115,6 +115,10 @@ public:
         auto it = this->progress::find(dst);
         return  it == this->progress::end() ? nullptr : &it->second;
     }
+    const follower_progress* find(server_id dst) const {
+        auto it = this->progress::find(dst);
+        return  it == this->progress::end() ? nullptr : &it->second;
+    }
     void set_configuration(const configuration& configuration, index_t next_idx);
     // Calculate the current commit index based on the current
     // simple or joint quorum.

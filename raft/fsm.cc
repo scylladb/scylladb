@@ -269,6 +269,26 @@ std::optional<server_id> fsm::preferred_leader() const {
     return std::nullopt;
 }
 
+std::optional<server_id> fsm::preferred_handover_target() const {
+    // A transfer in flight, e.g. one started on clock loss, already holds the log
+    // limiter; a second one would consume it again and never give it back.
+    if (!is_leader() || !_config.get_priority_members || leader_state().stepdown) {
+        return std::nullopt;
+    }
+    const auto& tracker = leader_state().tracker;
+    for (const auto& id : _config.get_priority_members()) {
+        if (id == _my_id) {
+            return std::nullopt;
+        }
+        const auto* progress = tracker.find(id);
+        if (progress && progress->can_vote && _failure_detector.is_alive(id)
+                && (!leaseguard_enabled() || progress->clock_ok)) {
+            return id;
+        }
+    }
+    return std::nullopt;
+}
+
 void fsm::reset_election_timeout() {
     static thread_local std::default_random_engine re{std::random_device{}()};
     static thread_local std::uniform_int_distribution<logical_clock::rep> dist;
