@@ -1877,6 +1877,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 tablet_allocator.stop().get();
             });
 
+            checkpoint(stop_signal, "starting migration manager");
+            debug::the_migration_manager = &mm;
+            mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
+            auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
+                mm.stop().get();
+            });
+
+            utils::get_local_injector().inject("stop_after_starting_migration_manager",
+                [] { std::raise(SIGSTOP); });
+
             checkpoint(stop_signal, "starting mapreduce service");
             mapreduce_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(stop_signal.as_sharded_abort_source())).get();
             auto stop_mapreduce_service_handlers = defer_verbose_shutdown("mapreduce service", [&mapreduce_service] {
@@ -1900,16 +1910,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 }
             };
             auto the_sstable_dict_deleter = sstable_dict_deleter(mm_notifier.local(), feature_service.local());
-
-            checkpoint(stop_signal, "starting migration manager");
-            debug::the_migration_manager = &mm;
-            mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
-            auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
-                mm.stop().get();
-            });
-
-            utils::get_local_injector().inject("stop_after_starting_migration_manager",
-                [] { std::raise(SIGSTOP); });
 
             // Audit must be constructed before the maintenance socket so
             // that on shutdown (reverse destruction order) the audit service
