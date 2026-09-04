@@ -133,18 +133,55 @@ struct replayed_data_per_group {
 // truncation records are built on — so a batch that does not fit is an internal
 // error, not something to split.
 //
-// What bounds a batch: raft admits no command over max_command_size, and fsm's
-// log_limiter_semaphore holds a leader's accounted log at max_log_size, of which
-// a batch is a subset (see groups_manager's raft::server configuration). Their sum clears
-// a default 64MB segment's 32MB max_record_size(), but not a much smaller
-// configured segment, so the assert is reachable. Splitting such a batch into
-// several whole batches would be a legal fix; fragmenting one entry would not
-// (SCYLLADB-3986).
+// It cannot be a single oversized entry: groups_manager checks
+// max_single_entry_batch_size() against max_record_size() before any group
+// starts. A batch of many entries still can — see raft_max_log_size below for
+// the bound and the ways it stays reachable. Splitting such a batch into several
+// whole batches would be a legal fix. Fragmenting a single entry would not be,
+// as things stand: the commitlog keys an oversized entry's tail segments by a
+// position it never hands out, so nothing releases them per position
+// (SCYLLADB-3986). Repairing that keying is what would make fragmentation — and
+// with it a larger max_command_size — available.
 //
 // Static so that commitlog replay can write the same format when it rewrites a
 // group's uncommitted entries.
 future<db::rp_handle> write_raft_batch(db::commitlog& cl, table_id table,
         raft::group_id group_id, raft::index_t commit_idx, const raft::log_entry_ptr_list& entries);
+
+// Bounds on a group's log, which together bound one raft batch — which
+// write_raft_batch() asserts fits in one commitlog entry. max_command_size is
+// enforced per entry, by raft's add_entry(); max_log_size per log, by fsm's
+// log_limiter_semaphore on a leader's accounted log, of which a batch is a
+// subset. The accounting counts command bytes plus sizeof(log_entry) and counts
+// configurations and dummies as zero, so max_command_size is the headroom for
+// what it leaves out.
+//
+// The sum clears a default 64MB segment's 32MB max_record_size(), but the assert
+// stays reachable: commitlog_segment_size_in_mb has no floor, a follower's
+// unpersisted log is not held at max_log_size until SCYLLADB-3890, and
+// finish_replay() rewrites a whole recovered tail as one batch. So one entry is
+// required to fit and a whole batch is only warned about
+// (check_commitlog_can_hold_a_raft_entry): refusing to boot on the sum would
+// reject segment sizes that work.
+inline constexpr size_t raft_max_log_size = 20 * 1024 * 1024;
+inline constexpr size_t raft_max_command_size = 100 * 1024;
+
+// Throw if one raft entry with a command of raft_max_command_size cannot fit in
+// one commitlog entry, so that raising that constant past what a commitlog entry
+// holds stops the node at startup rather than aborting it on the first large
+// write. Called before any group starts and again before replay rewrites a
+// recovered tail, which also writes batches.
+//
+// Cannot fire with the constants above — 100KB fits even a 1MB segment's
+// max_record_size() many times over — which is the point of having it.
+// Configuration entries are not covered by raft_max_command_size at all, but
+// their size is a handful of bytes per replica.
+void check_commitlog_can_hold_a_raft_entry(const db::commitlog& cl);
+
+// What write_raft_batch() will measure for a batch of one entry whose command is
+// `command_size` bytes. An upper bound rather than an exact size: it counts the
+// LeaseGuard interval, which an entry may or may not carry.
+size_t max_single_entry_batch_size(size_t command_size);
 
 // Fold a written batch into `queue`, creating a record when it landed in a
 // segment the group has not written to yet and extending the last record

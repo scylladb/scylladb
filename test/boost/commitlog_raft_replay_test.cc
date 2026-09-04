@@ -710,6 +710,40 @@ SEASTAR_TEST_CASE(test_raft_batch_records_across_segments) {
     });
 }
 
+// Test: max_single_entry_batch_size() bounds what write_raft_batch() actually
+// measures for a single entry, and bounds it tightly. The startup check it
+// feeds is only worth anything if the number tracks the format, so this pins
+// the two together — a bound for any entry, exact for the lease-stamped one it
+// is derived from. Without the exact half, a bound of SIZE_MAX would pass.
+SEASTAR_TEST_CASE(test_max_single_entry_batch_size_bounds_the_writer) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+
+        for (const size_t payload : {size_t(0), size_t(4096), size_t(100 * 1024)}) {
+            auto plain = make_command_entry_sized(raft::term_t(1), raft::index_t(1), payload);
+            const auto command_size = std::get<raft::command>(plain->data).size();
+            const auto bound = service::strong_consistency::max_single_entry_batch_size(command_size);
+
+            commitlog_raft_batch_writer plain_writer(raft_commitlog_batch{
+                    .group_id = gid, .commit_idx = raft::index_t{0}, .entries = {plain}});
+            BOOST_REQUIRE_LE(plain_writer.size(), bound);
+
+            // The lease-stamped form is the larger of the two and is what the
+            // bound is measured from, so here it must be exact.
+            auto stamped = make_lw_shared<const raft::log_entry>(raft::log_entry{
+                    .term = raft::term_t(1), .idx = raft::index_t(1),
+                    .data = std::get<raft::command>(plain->data),
+                    .lease_time = raft::time_bounds{
+                            raft::lease_clock::time_point(std::chrono::nanoseconds(lease_earliest_ns)),
+                            raft::lease_clock::time_point(std::chrono::nanoseconds(lease_latest_ns))}});
+            commitlog_raft_batch_writer stamped_writer(raft_commitlog_batch{
+                    .group_id = gid, .commit_idx = raft::index_t{0}, .entries = {stamped}});
+            BOOST_REQUIRE_EQUAL(stamped_writer.size(), bound);
+        }
+        co_return;
+    });
+}
+
 // Test: a batch that does not fit in one commitlog entry is an internal error,
 // not something to split or fragment.
 //

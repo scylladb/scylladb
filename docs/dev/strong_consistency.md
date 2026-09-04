@@ -147,6 +147,12 @@ Key points:
   envelope are written once per batch instead of once per entry, and the batch has a
   single position. A batch that does not fit one commitlog entry is an internal error,
   not something to fragment — a copy of an entry has to live in exactly one segment.
+  A single *command* entry always fits: `check_commitlog_can_hold_a_raft_entry()`
+  compares `max_single_entry_batch_size(max_command_size)` against
+  `commitlog::max_record_size()` before any group starts, and again before replay
+  rewrites a recovered tail, and the node refuses to start if it would not fit.
+  A whole batch is only warned about, since requiring the batch bound to fit
+  would reject segment sizes that work.
 - The batch header carries the group's `commit_idx` at write time. Replay uses it as a
   floor to decide which of the entries it reads are already committed.
 - The group does not keep a handle per index. It keeps a queue of `segment_record`s,
