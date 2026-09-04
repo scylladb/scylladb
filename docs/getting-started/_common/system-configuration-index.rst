@@ -80,8 +80,6 @@ The following scripts are available for you to run for configuring ScyllaDB. Som
      - Runs ``fstrim``, which cleans up unused blocks of data from your SSD storage device. It runs automatically if you run scylla_fstrim_set up (see below).
    * - scylla_fstrim_setup
      - Configures a job so that ``fstrim`` runs automatically.
-   * - scylla-housekeeping
-     - Checks if there are new versions of ScyllaDB available, and also shares some telemetry information for us to keep track of what versions are installed on the field.
    * - scylla_rsyslog_setup
      - Configures the "rsyslog" service, which is used to send logs to a remote server.
    * - scylla_selinux_setup

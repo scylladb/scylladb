@@ -4,23 +4,17 @@ trap 'echo "error $? in $0 line $LINENO"' ERR
 
 . /etc/os-release
 print_usage() {
-    echo "build_deb.sh -target <codename> --dist --rebuild-dep --reloc-pkg build/release/scylla-package.tar.gz"
-    echo "  --dist  create a public distribution package"
+    echo "build_deb.sh -target <codename> --rebuild-dep --reloc-pkg build/release/scylla-package.tar.gz"
     echo "  --reloc-pkg specify relocatable package path"
     echo "  --builddir specify Debian package build path"
     exit 1
 }
 
-DIST="false"
 RELOC_PKG=build/release/scylla-package.tar.gz
 BUILDDIR=build/debian
 OPTS=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        "--dist")
-            DIST="true"
-            shift 1
-            ;;
         "--reloc-pkg")
             RELOC_PKG=$2
             shift 2
@@ -44,10 +38,6 @@ rm -rf "$BUILDDIR"/scylla-package "$BUILDDIR"/scylla-package.orig "$BUILDDIR"/de
 mkdir -p $BUILDDIR/scylla-package
 tar -C $BUILDDIR/scylla-package -xpf $RELOC_PKG
 cd $BUILDDIR/scylla-package
-
-if $DIST; then
-    export DEB_BUILD_OPTIONS="housekeeping"
-fi
 
 mv scylla/debian debian
 
