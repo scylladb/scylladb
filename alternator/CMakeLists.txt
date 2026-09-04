@@ -9,6 +9,7 @@ target_sources(alternator
     controller.cc
     server.cc
     executor.cc
+    executor_export.cc
     executor_read.cc
     executor_util.cc
     stats.cc
