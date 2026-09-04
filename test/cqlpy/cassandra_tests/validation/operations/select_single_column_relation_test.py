@@ -10,6 +10,7 @@
 
 from ...porting import *
 from cassandra.query import UNSET_VALUE
+from ....util import is_scylla
 
 def testInvalidCollectionEqualityRelation(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int PRIMARY KEY, b set<int>, c list<int>, d map<int, int>)") as table:
@@ -602,7 +603,14 @@ def testInvalidNonFrozenUDTRelation(cql, test_keyspace):
             assert_invalid_message(cql, table, "Unsupported \"!=\" relation",
                              "SELECT * FROM %s WHERE b != {a: 0}", udt)
             # Reproduces #10632:
-            assert_invalid_message(cql, table, "b IS NOT",
-                             "SELECT * FROM %s WHERE b IS NOT NULL", udt)
+            # Scylla now supports IS NOT NULL on non-frozen UDT columns in
+            # regular SELECT queries (with ALLOW FILTERING), so the restriction
+            # itself is no longer rejected with "b IS NOT NULL is only supported
+            # in materialized view creation".
+            if is_scylla(cql):
+                assert_empty(execute(cql, table, "SELECT * FROM %s WHERE b IS NOT NULL ALLOW FILTERING"))
+            else:
+                assert_invalid_message(cql, table, "b IS NOT",
+                                 "SELECT * FROM %s WHERE b IS NOT NULL", udt)
             assert_invalid_message(cql, table, "Cannot use CONTAINS on non-collection column",
                              "SELECT * FROM %s WHERE b CONTAINS ?", udt)
