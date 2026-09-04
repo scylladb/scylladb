@@ -60,12 +60,22 @@ public:
         sstables_manager::increment_total_reclaimable_memory(sst);
     }
 
+    future<> maybe_reclaim_components() {
+        return sstables_manager::maybe_reclaim_components();
+    }
+
     size_t get_total_memory_reclaimed() {
         return _total_memory_reclaimed;
     }
 
     size_t get_total_reclaimable_memory() {
         return _total_reclaimable_memory;
+    }
+
+    // Overrides the tracked reclaimable-memory count, e.g. to simulate it
+    // being out of sync with what _active sstables actually hold.
+    void set_total_reclaimable_memory(size_t value) {
+        _total_reclaimable_memory = value;
     }
 
     void remove_sst_from_reclaimed(sstable* sst) {
