@@ -67,8 +67,9 @@ struct fsm_config {
     // ascending server_id order. Callers that manage many groups (e.g. one per
     // tablet) can derive the seed from the group id so that leadership is spread
     // across nodes instead of always landing on the smallest-id one; a seed of 0
-    // selects the smallest-id voter. When unset (the default), fast bootstrap is
-    // disabled and a bare fsm starts as a follower; raft::server sets it.
+    // selects the smallest-id voter, and a priority member which can vote takes
+    // precedence over the seed. When unset (the default), fast bootstrap is disabled and
+    // a bare fsm starts as a follower; raft::server sets it.
     std::optional<uint64_t> fast_bootstrap_seed;
     // LeaseGuard leader-lease parameters. Absent unless leases are enabled for
     // this server. When present, the leader records `clock.interval_now()` in
@@ -84,6 +85,20 @@ struct fsm_config {
         lease_clock::duration delta;
     };
     std::optional<leaseguard_config> leaseguard;
+    // Servers to prefer as leader, in priority order: element 0 is the strongest
+    // candidate, element k the (k+1)-th. Each listed server gets a unique,
+    // deterministic election-timeout slot ahead of every other server, so while a
+    // listed server is alive it wins leadership. Servers not listed randomize
+    // within the remaining slots and can never undercut a listed one. Listed servers
+    // which cannot vote are skipped, they cannot win an election anyway. A leader which
+    // finds itself outranked hands the leadership over, so the preference also holds for a
+    // group which has already elected somebody else.
+    //
+    // The callback is invoked when (re)arming the election timer and, on a leader, every
+    // now and then, so it always reflects the current topology. It runs in the fsm's
+    // synchronous context and must neither block nor throw.
+    // Empty vector / unset => ordinary Raft.
+    std::function<std::vector<server_id>()> get_priority_members;
 };
 
 class fsm;
@@ -123,6 +138,11 @@ struct leader {
     // If timeout_now was already sent to one of the followers contains the id of the follower
     // it was sent to
     std::optional<server_id> timeout_now_sent;
+    // If set, leadership transfer must select this voting follower once it has
+    // caught up with the leader's log.
+    std::optional<server_id> leadership_transfer_target;
+    // When to reconsider whether a preferred server should be leading instead of us.
+    logical_clock::time_point placement_check_at;
     // A source of read ids - a monotonically growing (in single term) identifiers of
     // reads issued by the state machine. Using monotonic ids allows the leader to
     // resolve all preceding read requests when a quorum of acks from followers arrive
@@ -345,6 +365,9 @@ private:
     // has been unusable long enough and such a replica exists. A no-op unless
     // leases are enabled. Precondition: is_leader(), not already stepping down.
     void maybe_transfer_leadership_on_clock_loss();
+    // Hands the leadership to the first server which outranks us and is alive, if
+    // there is one. A leader calls this every placement_check_interval.
+    void maybe_transfer_leadership_to_preferred();
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
         return election_elapsed() >= _randomized_election_timeout;
@@ -584,7 +607,12 @@ public:
     // sends timeout_now rpc to it and makes it initiate new election.
     // Can be used for leader stepdown if new configuration does not contain
     // current leader.
-    void transfer_leadership(logical_clock::duration timeout = logical_clock::duration(0));
+    // If a target is selected, the leadership transfer will be attempted to that target only.
+    // The target must be a voting member of the current configuration other than the leader
+    // itself. Nobody but the target is ever sent timeout_now, so any other target leaves the
+    // transfer with no one to hand leadership to. It then waits out `timeout` with the log limiter
+    // consumed - the group takes no writes for that whole time - before tick_leader() cancels it.
+    void transfer_leadership(logical_clock::duration timeout = logical_clock::duration(0), server_id target = {});
 
     void stop();
 

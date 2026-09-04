@@ -238,3 +238,90 @@ survive on disk, so uncommitted entries are still available for replay on the ne
 
 This is important: if we decremented the dirty count on shutdown, the commitlog might
 delete segments containing uncommitted Raft entries that we still need.
+
+# Leader placement
+
+Reads and writes for a strongly consistent tablet go through the leader of its Raft
+group, so which replica leads decides how many hops a request takes. A caller can name
+the replicas it would rather see leading: the sections below bias elections towards them
+and bootstrap a fresh group on one of them.
+
+## Preferred replicas
+
+`fsm_config::get_priority_members` names the servers which should win an election, best
+first. `fsm::reset_election_timeout()` gives each of them a reserved slot - the first
+named server times out one tick after `ELECTION_TIMEOUT`, the second two ticks after, and
+so on - while the servers which are not named randomize over the slots that are left. A
+named server therefore starts campaigning before an unnamed one, and, alone in its slot,
+cannot split the vote with it. It is a bias rather than a guarantee: election timers run
+independently on each node, so a slow node can still be beaten to it.
+
+`raft::reserved_election_slots()` turns the list into that slot order, dropping the
+servers which cannot vote in the current configuration - they cannot win an election, so
+a slot for them would only delay the ones which can.
+
+Two things to keep in mind when building such a list:
+
+- leaving a server out is how it is deprioritized, and it is a stronger demotion than
+  naming it last, because the free slots sit behind all the reserved ones and are spread
+  over the rest of the range;
+- the list has to be a property of the group, identical on all its replicas. If two
+  replicas disagree they can reserve the same slot and split a vote, which costs an
+  election round.
+
+The callback is invoked whenever the election timer is armed, so its answer may follow
+state which changes while the group runs. In exchange it runs in the fsm's synchronous
+context and must neither block nor throw.
+
+## The dedicated rack
+
+`groups_manager::dedicated_rack_replicas()` is the callback for tablet groups: if the
+keyspace sets `dedicated_rack` (see the `consistency` option in the CQL documentation),
+it names the tablet's replica in that rack, which is the cheapest one to serve a strongly
+consistent read from. There is at most one, because a rack list places one replica per
+rack. It is rebuilt on every arming, so a migrated tablet or a changed topology is picked
+up without restarting the group. Keyspaces without a dedicated rack name nobody and keep
+ordinary Raft, which spreads leadership over all the replicas.
+
+## Bootstrapping a fresh group
+
+A fresh group has no leader and no log, and waiting out an election timeout to get one is
+pure delay, so `raft::server` starts a single member as a candidate right away
+(`fsm_config::fast_bootstrap_seed`). That member is the holder of the first slot when the
+group has a preference - bootstrapping the leadership anywhere else would only make the
+group hand it over afterwards. Without a preference it is the voter at rank
+`seed % voters` in ascending `server_id` order, and `groups_manager` derives the seed from
+the group id, so that a table starting with many tablets spreads their initial leadership
+over its replicas instead of electing the smallest-id node everywhere.
+
+Note that a group is only bootstrapped this way while its log is empty, which a replica
+whose entries have all been applied also is - so a restarting replica may call an
+election and take the leadership from a healthy leader.
+
+## Handing the leadership over
+
+The slots steer elections, and a group holds an election only while it has no leader. Once
+it has one, nothing moves the leadership on its own: a follower which can see a live leader
+keeps resetting its election timer (`has_stable_leader()` in `fsm::tick()`) and never times
+out. A group which elected a leader outside the dedicated rack - because the replica there
+was down, behind, or just slower to campaign - would keep it for as long as it lives, since
+a healthy leader is never re-elected.
+
+So the leader settles it itself. Every `placement_check_interval` ticks
+`fsm::tick_leader()` looks for the first server which outranks it - one holding an earlier
+slot - and which the failure detector considers alive, and transfers the leadership there
+(`fsm::transfer_leadership_to()`). Passing over the ones which are gone matters once a
+caller names more than one server: the second choice should lead while the first is down.
+
+The transfer is aimed at that one server, which is what keeps it from making things worse:
+
+- nobody else is sent a `timeout_now`, so a group whose preferred server cannot take over
+  keeps its current leader instead of passing it to a third one - which would notice the
+  same thing and pass it on again, leaving the group churning;
+- a server which doesn't catch up before the timeout is given up on, as in any other
+  stepdown, and the next check tries again.
+
+Like any stepdown it holds the group's writes back while it waits for the target to catch
+up - which is also what lets the target catch up while the group is busy. That is why both
+the interval and the timeout are coarse: a group led from the wrong place is a latency
+problem, not a correctness one.

@@ -119,7 +119,7 @@ public:
     void tick() override;
     raft::server_id id() const override;
     void set_applier_queue_max_size(size_t queue_max_size) override;
-    future<> stepdown(logical_clock::duration timeout) override;
+    future<> stepdown(logical_clock::duration timeout, server_id target) override;
     future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) override;
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as);
     void register_metrics() override;
@@ -428,6 +428,7 @@ future<> server_impl::start() {
                                      .enable_prevoting = _config.enable_prevoting,
                                      .fast_bootstrap_seed = _config.fast_bootstrap_seed,
                                      .leaseguard = fsm_leaseguard,
+                                     .get_priority_members = _config.get_priority_members
                                  },
                                  _events);
 
@@ -1994,12 +1995,12 @@ void server_impl::remove_from_rpc_config(const server_address& srv) {
     _current_rpc_config.erase(srv);
 }
 
-future<> server_impl::stepdown(logical_clock::duration timeout) {
+future<> server_impl::stepdown(logical_clock::duration timeout, server_id target) {
     if (_stepdown_promise) {
         return make_exception_future<>(std::logic_error("Stepdown is already in progress"));
     }
     try {
-        _fsm->transfer_leadership(timeout);
+        _fsm->transfer_leadership(timeout, target);
     } catch (...) {
         return make_exception_future<>(std::current_exception());
     }

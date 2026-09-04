@@ -14,6 +14,16 @@
 
 namespace raft {
 
+// How often a leader reconsiders whether a server it prefers should be leading instead of
+// it. Coarse on purpose: it costs a get_priority_members() call per leader, and a group
+// which is led from the wrong place is a latency problem, not a correctness one.
+static constexpr logical_clock::duration placement_check_interval = 5 * ELECTION_TIMEOUT;
+
+// How long such a handover holds writes back while it waits for the preferred server to
+// catch up. Short, because a server which doesn't make it costs the group these writes for
+// nothing - it is asked again at the next check.
+static constexpr logical_clock::duration placement_transfer_timeout = ELECTION_TIMEOUT;
+
 leader::~leader() {
     if (log_limiter_semaphore) {
         log_limiter_semaphore->broken(not_a_leader(fsm.current_leader()));
@@ -43,10 +53,11 @@ fsm::fsm(server_id id, sstring tag, term_t current_term, server_id voted_for, lo
     // enabled (fast_bootstrap_seed is set), for one deterministically chosen voter
     // of a fresh multi-node group (empty log, last_idx() == 0). Choosing a single
     // node avoids all nodes racing to call an election at once (wasting a term,
-    // risking split votes). The chosen one is the voter at rank (seed % num_voters)
-    // in ascending server_id order; every node derives the same rank without
-    // coordination. A caller managing many groups can vary the seed per group to
-    // rotate leadership across nodes; seed 0 picks the smallest-id voter. A bare
+    // risking split votes). The chosen one is the holder of the first election timeout
+    // slot if there is one, otherwise the voter at rank (seed % num_voters) in ascending
+    // server_id order; every node derives the same choice without coordination. A caller
+    // managing many groups can vary the seed per group to rotate leadership across nodes;
+    // seed 0 picks the smallest-id voter. A bare
     // fsm (e.g. in unit tests) leaves the seed unset and starts as a follower;
     // raft::server sets it. A multi-node node with a non-empty log has already
     // participated and takes the normal timeout path.
@@ -60,6 +71,14 @@ fsm::fsm(server_id id, sstring tag, term_t current_term, server_id voted_for, lo
         }
         if (!_config.fast_bootstrap_seed.has_value() || _log.last_idx() != index_t{0}) {
             return false;
+        }
+        // Bootstrap the leadership where it would end up anyway - on the holder of the
+        // first election timeout slot - instead of making the group hand it over later.
+        if (_config.get_priority_members) {
+            const auto slots = reserved_election_slots(cfg, _config.get_priority_members());
+            if (!slots.empty()) {
+                return slots.front() == _my_id;
+            }
         }
         unsigned voters = 0;
         unsigned rank = 0;
@@ -193,18 +212,39 @@ void fsm::update_current_term(term_t current_term)
 
 void fsm::reset_election_timeout() {
     static thread_local std::default_random_engine re{std::random_device{}()};
-    static thread_local std::uniform_int_distribution<> dist;
-    // Timeout within range of [1, conf size]
-    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re,
-            std::uniform_int_distribution<int>::param_type{1,
-                    std::max((size_t) ELECTION_TIMEOUT.count(),
-                            _log.get_configuration().current.size())})};
+    static thread_local std::uniform_int_distribution<logical_clock::rep> dist;
+
+    const configuration& cfg = _log.get_configuration();
+    const auto num_slots = std::max(ELECTION_TIMEOUT.count(),
+            static_cast<logical_clock::rep>(configuration::voter_count(cfg.current)));
+
+    // The position in the slot list is the slot, so slots are unique by construction.
+    std::vector<server_id> slots;
+    if (_config.get_priority_members) {
+        slots = reserved_election_slots(cfg, _config.get_priority_members());
+    }
+
+    logical_clock::rep offset;
+    const auto me = std::ranges::find(slots, _my_id);
+    if (me != slots.end()) {
+        // Our own reserved slot: deterministic, no randomness.
+        // First in the list -> ELECTION_TIMEOUT + 1, second -> +2, ...
+        offset = (me - slots.begin()) + 1;
+    } else {
+        // Ordinary member: randomize strictly after every reserved slot, so we
+        // can neither precede nor tie a priority member.
+        const auto first_free = static_cast<logical_clock::rep>(slots.size()) + 1;
+        const auto last_free = std::max(first_free, num_slots);
+        offset = dist(re, std::uniform_int_distribution<logical_clock::rep>::param_type{first_free, last_free});
+    }
+    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{offset};
 }
 
 void fsm::become_leader() {
     SCYLLA_ASSERT(!std::holds_alternative<leader>(_state));
     _output.state_changed = true;
     _state.emplace<leader>(_config.max_log_size, *this);
+    leader_state().placement_check_at = _clock.now() + placement_check_interval;
 
     // The semaphore is not used on the follower, so the limit could
     // be temporarily exceeded here, and the value of
@@ -745,6 +785,26 @@ void fsm::maybe_transfer_leadership_on_clock_loss() {
     transfer_leadership(ELECTION_TIMEOUT);
 }
 
+void fsm::maybe_transfer_leadership_to_preferred() {
+    if (!_config.get_priority_members) {
+        return;
+    }
+    const auto slots = reserved_election_slots(_log.get_configuration(), _config.get_priority_members());
+    // Consider only the more preferred servers.
+    const auto me = std::ranges::find(slots, _my_id);
+    const auto target = std::find_if(slots.begin(), me, [this] (server_id id) {
+        const auto* progress = leader_state().tracker.find(id);
+        return progress != nullptr && progress->can_vote && _failure_detector.is_alive(id)
+                && (!leaseguard_enabled() || progress->clock_ok);
+    });
+    if (target == me) {
+        // Nobody outranks us here, or none of those who do is alive.
+        return;
+    }
+    logger.trace("maybe_transfer_leadership_to_preferred[{}]: handing over to {}", _tag, *target);
+    transfer_leadership(placement_transfer_timeout, *target);
+}
+
 void fsm::tick_leader() {
     if (election_elapsed() >= ELECTION_TIMEOUT) {
         // 6.2 Routing requests to the leader
@@ -810,6 +870,7 @@ void fsm::tick_leader() {
             leader_state().log_limiter_semaphore->signal(_config.max_log_size);
             state.stepdown.reset();
             state.timeout_now_sent.reset();
+            state.leadership_transfer_target.reset();
             _abort_leadership_transfer = true;
             _sm_events.signal(); // signal to handle aborting of leadership transfer
         } else if (state.timeout_now_sent) {
@@ -817,6 +878,9 @@ void fsm::tick_leader() {
             // resend timeout now in case it was lost
             send_to(*state.timeout_now_sent, timeout_now{_current_term});
         }
+    } else if (_clock.now() >= state.placement_check_at) {
+        state.placement_check_at = _clock.now() + placement_check_interval;
+        maybe_transfer_leadership_to_preferred();
     }
 
     // LeaseGuard: while a deposed leader's lease may still be valid we defer
@@ -1037,9 +1101,11 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         progress.become_pipeline();
 
         // If a leader is stepping down, transfer the leadership
-        // to a first voting node that has fully replicated log.
+        // to a first voting node that has fully replicated log,
+        // If a transfer target was selected, only accept that node.
         if (leader_state().stepdown && !leader_state().timeout_now_sent &&
-                         progress.can_vote && progress.match_idx == _log.last_idx()) {
+                progress.can_vote && progress.match_idx == _log.last_idx() &&
+                (!leader_state().leadership_transfer_target || *leader_state().leadership_transfer_target == progress.id)) {
             send_timeout_now(progress.id);
             // We may have resigned leadership if a stepdown process completed
             // while the leader is no longer part of the configuration.
@@ -1357,7 +1423,7 @@ bool fsm::apply_snapshot(snapshot_descriptor snp, size_t max_trailing_entries, s
     return true;
 }
 
-void fsm::transfer_leadership(logical_clock::duration timeout) {
+void fsm::transfer_leadership(logical_clock::duration timeout, server_id target) {
     check_is_leader();
     auto leader = leader_state().tracker.find(_my_id);
     if (configuration::voter_count(get_configuration().current) == 1 && leader && leader->can_vote) {
@@ -1366,10 +1432,16 @@ void fsm::transfer_leadership(logical_clock::duration timeout) {
         throw raft::no_other_voting_member();
     }
 
+    if (target) {
+        leader_state().leadership_transfer_target = target;
+    } else {
+        leader_state().leadership_transfer_target.reset();
+    }
+
     leader_state().stepdown = _clock.now() + timeout;
     // Stop new requests from coming in
     leader_state().log_limiter_semaphore->consume(_config.max_log_size);
-    // If there is a fully up-to-date voting replica make it start an election.
+    // If there is a fully up-to-date eligible replica make it start an election.
     //
     // Prefer one whose clock still works: the reason we transfer automatically
     // is that ours does not, and moving to another clockless node would not
@@ -1379,7 +1451,8 @@ void fsm::transfer_leadership(logical_clock::duration timeout) {
     for (const bool require_clock_ok : {true, false}) {
         for (auto&& [_, p] : leader_state().tracker) {
             if (p.id != _my_id && p.can_vote && p.match_idx == _log.last_idx()
-                    && (!require_clock_ok || p.clock_ok)) {
+                    && (!require_clock_ok || p.clock_ok)
+                    && (!leader_state().leadership_transfer_target || *leader_state().leadership_transfer_target == p.id)) {
                 send_timeout_now(p.id);
                 return;
             }

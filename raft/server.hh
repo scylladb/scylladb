@@ -76,7 +76,8 @@ public:
         // is spread across nodes instead of always landing on the smallest-id
         // one. The default of 0 selects the smallest-id voter. raft::server
         // always enables fast bootstrap (unlike a bare fsm, which disables it
-        // when no seed is provided).
+        // when no seed is provided). A priority member which can vote takes precedence
+        // over the seed.
         uint64_t fast_bootstrap_seed = 0;
 
         // LeaseGuard leader leases. When set, the leader serves linearizable
@@ -94,6 +95,15 @@ public:
             std::reference_wrapper<bounded_clock> clock;
         };
         std::optional<leaseguard_configuration> leaseguard;
+        // Servers to prefer as leader, in priority order: element 0 is the strongest
+        // candidate, element k the (k+1)-th. Each listed server gets a unique,
+        // deterministic election-timeout slot ahead of every other server, so while a
+        // listed server is alive it wins leadership. Servers not listed randomize
+        // within the remaining slots and can never undercut a listed one. Listed servers
+        // which cannot vote are skipped, they cannot win an election anyway. The callback
+        // is invoked only when (re)arming the election timer, so it always reflects the
+        // current topology. Empty vector / unset => ordinary Raft.
+        std::function<std::vector<server_id>()> get_priority_members;
     };
 
     virtual ~server() {}
@@ -247,6 +257,10 @@ public:
     virtual future<> read_barrier(seastar::abort_source* as) = 0;
 
     // Initiate leader stepdown process.
+    // If target is specified, the leadership transfer will be attempted to that target only.
+    // The target must be a voting member of the current configuration other than the leader
+    // itself. With any other target the transfer has no one to hand leadership to: it blocks the
+    // group's writes until the timeout expires, then throws raft::timeout_error.
     //
     // Exceptions:
     // raft::timeout_error
@@ -257,7 +271,7 @@ public:
     //     Thrown if there is no other voting member.
     // std::logic_error
     //     Thrown if the stepdown process is already in progress.
-    virtual future<> stepdown(logical_clock::duration timeout) = 0;
+    virtual future<> stepdown(logical_clock::duration timeout, server_id target = {}) = 0;
 
     // Register metrics for this server. Metric are global but their names
     // depend on the server's ID, so it is possible to register metrics
