@@ -595,6 +595,53 @@ SEASTAR_THREAD_TEST_CASE(test_client_list_objects_proxy) {
     client_list_objects(make_proxy_client);
 }
 
+// Reproducer for the bucket_lister round-trip-count candidate: lists the same
+// population once via bucket_lister's real production default (no
+// objects_per_page override, i.e. max-keys=256, as every in-tree caller uses
+// it) and once with max-keys pinned to S3's actual ListObjectsV2 ceiling
+// (1000).
+void client_list_objects_round_trip_scale(const client_maker_function& client_maker, int nr_objects) {
+    s3_test_fixture guard(client_maker);
+    auto client = guard.client();
+    const sstring& bucket = guard.bucket();
+    const sstring default_prefix("default/");
+    const sstring pinned_prefix("pinned/");
+
+    auto default_names = populate_bucket(client, bucket, default_prefix, nr_objects);
+    auto pinned_names = populate_bucket(client, bucket, pinned_prefix, nr_objects);
+
+    {
+        // production default: no objects_per_page argument
+        s3::client::bucket_lister lister(client, bucket, default_prefix);
+        auto close_lister = deferred_close(lister);
+        while (auto de = lister.get().get()) {
+            auto it = default_names.find(de->name);
+            BOOST_REQUIRE(it != default_names.end());
+            default_names.erase(it);
+        }
+        BOOST_REQUIRE(default_names.empty());
+    }
+    {
+        // objects_per_page pinned to the S3 ListObjectsV2 max-keys ceiling
+        s3::client::bucket_lister lister(client, bucket, pinned_prefix, 1000);
+        auto close_lister = deferred_close(lister);
+        while (auto de = lister.get().get()) {
+            auto it = pinned_names.find(de->name);
+            BOOST_REQUIRE(it != pinned_names.end());
+            pinned_names.erase(it);
+        }
+        BOOST_REQUIRE(pinned_names.empty());
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_list_objects_round_trip_scale_small_minio) {
+    client_list_objects_round_trip_scale(make_minio_client, 100);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_list_objects_round_trip_scale_large_minio) {
+    client_list_objects_round_trip_scale(make_minio_client, 5000);
+}
+
 void client_list_objects_incomplete(const client_maker_function& client_maker) {
     s3_test_fixture guard(client_maker);
     auto client = guard.client();
