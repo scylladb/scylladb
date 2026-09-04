@@ -152,6 +152,10 @@ Key points:
   batches by `split_raft_batch()`, the same way replay rewrites a recovered tail,
   because the commitlog would otherwise fragment it and a copy of an entry has to
   live in exactly one segment.
+  A single *command* entry always fits: `check_commitlog_can_hold_a_raft_entry()`
+  compares `max_single_entry_batch_size(max_command_size)` against
+  `commitlog::max_record_size()` before any group starts, and again before replay
+  rewrites a recovered tail, and the node refuses to start if it would not fit.
 - The batch header carries the group's `commit_idx` at write time. Replay uses it as a
   floor to decide which of the entries it reads are already committed.
 - The group does not keep a handle per index. It keeps a queue of `segment_record`s,
