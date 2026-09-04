@@ -442,6 +442,10 @@ tasks::is_user_task major_keyspace_compaction_task_impl::is_user_task() const no
 
 future<> major_keyspace_compaction_task_impl::run() {
     co_await utils::get_local_injector().inject("compaction_major_keyspace_compaction_task_impl_run", utils::wait_for_message(10s));
+    co_await utils::get_local_injector().inject("compaction_major_keyspace_compaction_task_impl_run_fail", [] (auto& handler) -> future<> {
+        co_await handler.wait_for_message(std::chrono::steady_clock::now() + 60s);
+        throw utils::injected_error("compaction_major_keyspace_compaction_task_impl_run_fail");
+    });
 
     if (_cv) {
         co_await wait_for_your_turn(*_cv, *_current_task, _status.id);

@@ -149,7 +149,7 @@ tasks::is_user_task task_manager::task::impl::is_user_task() const noexcept {
 }
 
 static future<> abort_children(task_manager::module_ptr module, task_id parent_id) noexcept {
-    co_await utils::get_local_injector().inject("tasks_abort_children", utils::wait_for_message(10s));
+    co_await utils::get_local_injector().inject("tasks_abort_children", utils::wait_for_message(60s));
 
     auto entered = module->async_gate().try_enter();
     if (!entered) {
