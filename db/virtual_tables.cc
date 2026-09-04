@@ -44,6 +44,7 @@
 #include "types/types.hh"
 #include "utils/build_id.hh"
 #include "utils/log.hh"
+#include "utils/sequential_producer.hh"
 #include "replica/exceptions.hh"
 #include "service/paxos/paxos_state.hh"
 #include "idl/storage_proxy.dist.hh"
@@ -775,6 +776,62 @@ public:
 class clients_table : public streaming_virtual_table {
     service::storage_service& _ss;
 
+    using client_data_vec = utils::chunked_vector<client_data>;
+    using shard_client_data = std::vector<client_data_vec>;
+
+    // execute() runs once per shard for the same coordinator-side query, and again on
+    // querier-cache-expiry retries; independently re-running the O(shards) fan-out below
+    // for each of those calls is the reported cause of a multi-hour topology hold at high
+    // connection counts (SCYLLADB-4230). Route the collection through shard 0 and coalesce
+    // callers there with sequential_producer, so at most one fan-out is in flight node-wide
+    // at a time, not one per calling shard; a short TTL additionally lets calls that arrive
+    // just after a fan-out completed reuse it instead of starting a new one.
+    struct client_data_cache {
+        std::vector<foreign_ptr<std::unique_ptr<shard_client_data>>> cd_vec;
+        lowres_clock::time_point expiry;
+    };
+
+    static future<lw_shared_ptr<client_data_cache>> collect_client_data(service::storage_service& ss) {
+        auto cache = make_lw_shared<client_data_cache>();
+        cache->cd_vec.resize(this_smp_shard_count());
+
+        auto servers = ss.protocol_servers();
+        co_await smp::invoke_on_all([&cd_vec_ = cache->cd_vec, &servers_ = servers] () -> future<> {
+            auto& cd_vec = cd_vec_;
+            auto& servers = servers_;
+
+            auto scd = std::make_unique<shard_client_data>();
+            for (const auto& ps : servers) {
+                client_data_vec cds = co_await ps->get_client_data();
+                if (cds.size() != 0) {
+                    scd->emplace_back(std::move(cds));
+                }
+            }
+            cd_vec[this_shard_id()] = make_foreign(std::move(scd));
+        });
+
+        cache->expiry = lowres_clock::now() + client_data_cache_ttl;
+        co_return cache;
+    }
+
+    static constexpr std::chrono::milliseconds client_data_cache_ttl{500};
+
+    // Only ever called on shard 0 (via the invoke_on(0, ...) in execute() below), so the
+    // statics below are touched by a single shard's thread and need no locking of their own.
+    // producer's factory captures ss from the first call only; every later call's ss argument
+    // is ignored, which is fine only because invoke_on(0, ...) always resolves to the same
+    // shard-0 storage_service instance for the process lifetime.
+    static future<lw_shared_ptr<client_data_cache>> get_client_data_on_shard0(service::storage_service& ss) {
+        static lw_shared_ptr<client_data_cache> cache;
+        static sequential_producer<lw_shared_ptr<client_data_cache>> producer([&ss] { return collect_client_data(ss); });
+
+        if (cache && lowres_clock::now() < cache->expiry) {
+            co_return cache;
+        }
+        cache = co_await producer();
+        co_return cache;
+    }
+
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, "clients");
         return schema_builder(this_smp_shard_count(), system_keyspace::NAME, "clients", std::make_optional(id))
@@ -809,28 +866,14 @@ class clients_table : public streaming_virtual_table {
     }
 
     future<> execute(reader_permit permit, result_collector& result, const query_restrictions& qr) override {
-        // Collect. One foreign_ptr per shard wraps a whole chunked_vector<client_data>,
-        // instead of one foreign_ptr per connection, to avoid hundreds of thousands of
-        // tiny cross-shard allocations at high connection counts (SCYLLADB-4230).
-        using client_data_vec = utils::chunked_vector<client_data>;
-        using shard_client_data = std::vector<client_data_vec>;
-        std::vector<foreign_ptr<std::unique_ptr<shard_client_data>>> cd_vec;
-        cd_vec.resize(this_smp_shard_count());
-
-        auto servers = co_await _ss.container().invoke_on(0, [] (auto& ss) { return ss.protocol_servers(); });
-        co_await smp::invoke_on_all([&cd_vec_ = cd_vec, &servers_ = servers] () -> future<> {
-            auto& cd_vec = cd_vec_;
-            auto& servers = servers_;
-
-            auto scd = std::make_unique<shard_client_data>();
-            for (const auto& ps : servers) {
-                client_data_vec cds = co_await ps->get_client_data();
-                if (cds.size() != 0) {
-                    scd->emplace_back(std::move(cds));
-                }
-            }
-            cd_vec[this_shard_id()] = make_foreign(std::move(scd));
+        // Collect, coalesced on shard 0 (see get_client_data_on_shard0()). foreign_ptr keeps
+        // this shard's copy destroying safely on shard 0 regardless of which shard reads it;
+        // read-only access only below, never move out of it.
+        foreign_ptr<lw_shared_ptr<client_data_cache>> cache = co_await _ss.container().invoke_on(0,
+                [] (service::storage_service& ss) -> future<foreign_ptr<lw_shared_ptr<client_data_cache>>> {
+            co_return make_foreign(co_await get_client_data_on_shard0(ss));
         });
+        const std::vector<foreign_ptr<std::unique_ptr<shard_client_data>>>& cd_vec = cache->cd_vec;
 
         // Partition
         struct decorated_ip {
