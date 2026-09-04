@@ -19,6 +19,10 @@ namespace replica {
 class database;
 }
 
+namespace cql3 {
+class query_processor;
+}
+
 namespace db {
 
 class commitlog;
@@ -30,15 +34,19 @@ public:
     commitlog_replayer(commitlog_replayer&&) noexcept;
     ~commitlog_replayer();
 
+    // `qp` is needed only for raft replay, which reads and writes each group's
+    // row as it goes; it must be given whenever `raft_buffer` is.
     static future<commitlog_replayer> create_replayer(seastar::sharded<replica::database>&, seastar::sharded<db::system_keyspace>&,
-            seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer = nullptr);
+            seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer = nullptr,
+            seastar::sharded<cql3::query_processor>* qp = nullptr);
 
     future<> recover(std::vector<sstring> files, sstring fname_prefix);
     future<> recover(sstring file, sstring fname_prefix);
 
 private:
     commitlog_replayer(seastar::sharded<replica::database>&, seastar::sharded<db::system_keyspace>&,
-            seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer);
+            seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer,
+            seastar::sharded<cql3::query_processor>* qp);
 
     class impl;
     std::unique_ptr<impl> _impl;

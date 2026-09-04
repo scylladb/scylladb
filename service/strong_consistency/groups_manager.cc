@@ -154,7 +154,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
 
     auto* commitlog = _db.commitlog();
     SCYLLA_ASSERT(commitlog);
-    auto storage = std::make_unique<raft_groups_storage>(_qp, group_id, my_id, this_shard_id(),
+    auto storage = std::make_unique<raft_groups_storage>(_qp, _db, group_id, my_id, this_shard_id(),
         *commitlog, tablet.table, _raft_replay_buffer.take_replayed_group_entries(group_id));
 
     auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage);
@@ -187,8 +187,9 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // TODO: Revert after snapshots are implemented
         .snapshot_threshold = std::numeric_limits<size_t>::max(),
         .snapshot_threshold_log_size = 10 * 1024 * 1024, // 10MB
-        .max_log_size = 20 * 1024 * 1024, // 20MB
+        .max_log_size = raft_max_log_size,
         .enable_forwarding = false,
+        .max_command_size = raft_max_command_size,
         .on_background_error = [tablet, group_id](std::exception_ptr e) {
             on_internal_error(logger, 
                 ::format("table {}, tablet {} raft group {} background error {}", 
@@ -223,9 +224,23 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         .persistence = persistence_ref,
         .state_machine = state_machine_ref
     }, tick_interval);
+
+    // Only now may the commitlog's flush handler reach this group's
+    // persistence. Publishing the pointer earlier would leave it dangling if
+    // anything above threw: the raft::server owns the persistence, so it is
+    // destroyed on the way out, while the handler would still be holding the
+    // pointer.
+    if (auto it = _raft_groups.find(group_id); it != _raft_groups.end()) {
+        it->second.storage = &persistence_ref;
+        // The commitlog may already have closed segments this group will write
+        // to; without this the group would wait for the next flush round before
+        // it could release its first record.
+        persistence_ref.mark_segment_closed(_closed_up_to);
+    }
 }
 
-void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state) {
+void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state,
+        log_disposition disposition) {
     if (state.gate->is_closed()) {
         return;
     }
@@ -245,12 +260,30 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
     auto gate_fut = state.gate->close();
     logger.debug("schedule_raft_group_deletion(): group id {}: gate close initiated", id);
 
-    state.server_control_op = futurize_invoke([this, &state, id, g = state.gate, gate_fut = std::move(gate_fut)](this auto) -> future<> {
+    state.server_control_op = futurize_invoke([this, &state, id, disposition, g = state.gate, gate_fut = std::move(gate_fut)](this auto) -> future<> {
         co_await state.server_control_op.get_future();
         logger.debug("schedule_raft_group_deletion(): group id {}: starting", id);
 
         co_await _raft_gr.abort_server(id);
         logger.debug("schedule_raft_group_deletion(): group id {}: server aborted", id);
+
+        // The server is aborted, so nothing can append to this group any more.
+        // A group going away deliberately gives up its commitlog segment
+        // references rather than detaching them at destruction: nothing will
+        // ever replay its log, so detaching would keep those segments until the
+        // node restarts. At shutdown the opposite holds — the segments have to
+        // survive for replay — so the references are left to the destructor,
+        // which detaches them.
+        //
+        // Clearing the pointer stops the flush handler reaching into the
+        // persistence before the server that owns it is destroyed below, and is
+        // needed either way.
+        if (state.storage) {
+            if (disposition == log_disposition::release) {
+                state.storage->release_all();
+            }
+            state.storage = nullptr;
+        }
 
         co_await std::move(gate_fut);
         logger.debug("schedule_raft_group_deletion(): group id {}: gate closed", id);
@@ -269,12 +302,12 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
     });
 }
 
-void groups_manager::schedule_raft_groups_deletion(bool all) {
+void groups_manager::schedule_raft_groups_deletion(bool all, log_disposition disposition) {
     for (auto it = _raft_groups.begin(); it != _raft_groups.end(); ) {
         const auto next = std::next(it);
         auto& [group_id, group_state] = *it;
         if (all || !group_state.has_tablet) {
-            schedule_raft_group_deletion(group_id, group_state);
+            schedule_raft_group_deletion(group_id, group_state, disposition);
         }
         it = next;
     }
@@ -488,7 +521,8 @@ void groups_manager::update(token_metadata_ptr new_tm) {
         }
     }
 
-    schedule_raft_groups_deletion(false);
+    // These groups no longer have a tablet here, so nothing will replay them.
+    schedule_raft_groups_deletion(false, log_disposition::release);
     _leader_cache.end_sweep();
 }
 
@@ -537,8 +571,49 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
 void groups_manager::start() {
     _started = true;
 
-    if (!_features.strongly_consistent_tables) {
-        return;
+    // Releasing a group's newest record needs to know that its segment is
+    // closed, and the commitlog says so by asking the dirty tables of a closed
+    // segment to flush. Every segment a group wrote to is dirty under
+    // system.raft_groups (see segment_record::pin_rg), so this shard is told
+    // about all of them.
+    //
+    // Gated on the *configuration* flag rather than on the cluster feature: the
+    // cluster feature can enable while the node runs, and update() would then
+    // start groups without start() running again, so a handler registered only
+    // behind it could be missing. The configuration flag cannot change without a
+    // restart, and it is also what decides whether system.raft_groups has a
+    // schema at all — asking for its id without it aborts.
+    if (_db.get_config().check_experimental(
+                db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+        auto* commitlog = _db.commitlog();
+        if (!commitlog) {
+            // The raft log has nowhere to go. Say so here rather than leaving
+            // the first group to trip an assert in start_raft_group().
+            throw std::runtime_error(
+                    "strongly consistent tables require the commitlog, which is disabled");
+        }
+        check_commitlog_can_hold_a_raft_entry(*commitlog);
+
+        // Only system.raft_groups requests carry a closure frontier for us. Every
+        // segment holding a live segment handle is raft_groups-dirty from
+        // allocation until the release's row mutation is flushed, so every round
+        // that walks such a segment reports it under this id; another table's
+        // position says nothing about which of *our* segments are closed.
+        const auto raft_groups_id = db::system_keyspace::raft_groups()->id();
+        _flush_handler.emplace(commitlog->add_flush_handler(
+                [this, raft_groups_id](db::cf_id_type id, db::replay_position pos) {
+            if (id != raft_groups_id) {
+                return;
+            }
+            if (_closed_up_to < pos) {
+                _closed_up_to = pos;
+            }
+            for (auto& [group_id, state] : _raft_groups) {
+                if (state.storage) {
+                    state.storage->mark_segment_closed(_closed_up_to);
+                }
+            }
+        }));
     }
 
     if (_pending_tm) {
@@ -555,7 +630,10 @@ future<> groups_manager::stop() {
 
     logger.info("stop() enter");
 
-    schedule_raft_groups_deletion(true);
+    // The node is going down, not giving up these groups: their segments have to
+    // survive so replay can recover the log, so the references are detached
+    // rather than released.
+    schedule_raft_groups_deletion(true, log_disposition::keep);
 
     while (!_raft_groups.empty()) {
         co_await _raft_groups.begin()->second.server_control_op.get_future();

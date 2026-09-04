@@ -9,66 +9,289 @@
 #pragma once
 #include "raft/raft.hh"
 #include "db/commitlog/commitlog.hh"
+#include "utils/chunked_vector.hh"
 #include <deque>
+#include <optional>
 
 namespace service::strong_consistency {
-struct index_and_replay_position {
-    raft::index_t index;
-    db::rp_handle replay_position_handle;
+
+// A raft log position: an entry's index and the term it was appended in.
+struct raft_term_and_index {
+    raft::index_t idx{0};
+    raft::term_t term{0};
 };
 
-// Raft indexes only increase, so entries are naturally sorted by index.
-// A deque allows efficient access from both ends: front removal for
-// truncate_log_tail() and back removal for truncate_log().
-using replay_position_list = std::deque<index_and_replay_position>;
+// One truncation, as it is persisted in system.raft_groups.truncations:
+// "in this segment, the then-current copies of indexes [from, to] were
+// truncated". truncate_log() removes entries from the raft log but not from
+// disk, so an index can have several copies on disk and only the last one
+// written is current; replay uses these records to drop the superseded ones
+// without having to reason about terms.
+struct truncation_record {
+    db::segment_id_type segment{0};
+    raft::index_t from{0};
+    raft::index_t to{0};
 
+    bool operator==(const truncation_record&) const = default;
+};
+
+// What one group remembers about its own entries in one commitlog segment.
+//
+// One record per segment rather than per batch: batches keep landing in the
+// same still-allocating segment, and retention is accounted per segment, so a
+// later batch in the same segment only advances `max`.
+//
+// The record is the unit of release: once every index it covers is committed
+// and (for commands) applied, its (max, term) pair becomes the group's
+// persisted snapshot descriptor and the segment may go.
+struct segment_record {
+    // The group's own reference to the segment. It must outlive every entry
+    // here that is not yet both committed and applied, and it is the source of
+    // the per-command references handed to the target table's memtable.
+    db::rp_handle pin_table;
+    // The same segment, referenced under system.raft_groups. Taken when the
+    // record is created rather than when it is released, and that order is what
+    // keeps a quiescent group from deadlocking: releasing the newest record
+    // needs the closed signal (see _closed_up_to), the signal comes only from
+    // flush requests carrying the raft_groups id, and a round names a table only
+    // for segments dirty under it. A segment holding nothing but raft entries is
+    // raft_groups-dirty solely because of this reference — take it at release
+    // instead and the release would be waiting for a signal that only the
+    // release could produce.
+    //
+    // At release it moves into the mutation that persists the descriptor, so the
+    // segment then lives exactly until the raft_groups memtable flush that makes
+    // that value durable.
+    db::rp_handle pin_rg;
+    // Index range of this group's entries in the segment. Both ends are
+    // inclusive; `max` advances as later batches land in the same segment.
+    raft::index_t first{0};
+    raft::index_t max{0};
+    // (index, term) runs, ascending: the term of the entry at any index in
+    // [first, max] is the term of the last run whose index is at or below it.
+    // One element per term change, so one per leader change rather than per
+    // entry.
+    utils::chunked_vector<raft_term_and_index> terms;
+    // Configurations this record's entries carried, in index order.
+    utils::chunked_vector<std::pair<raft::index_t, raft::configuration>> configs;
+    // Indexes of the dummy and configuration entries. state_machine::apply()
+    // never sees those, so the applied index never reaches them, and the
+    // release gate must wait for the last *command* rather than for `max`
+    // (SCYLLADB-2375).
+    utils::chunked_vector<raft::index_t> noncmd;
+
+    db::segment_id_type segment() const {
+        return pin_table.rp().id;
+    }
+
+    // Term of the entry at `max` — the term that goes with the index this
+    // record would persist.
+    raft::term_t max_term() const {
+        return terms.empty() ? raft::term_t{0} : terms.back().term;
+    }
+
+    // Highest index in [first, max] that is a command, if any. Disengaged for a
+    // record holding nothing but dummies and configurations, which nothing will
+    // ever apply.
+    std::optional<raft::index_t> last_cmd() const;
+
+    // The newest configuration this record carried, if any.
+    std::optional<std::pair<raft::index_t, raft::configuration>> last_conf() const {
+        if (configs.empty()) {
+            return std::nullopt;
+        }
+        return configs.back();
+    }
+
+    // Drop everything at or above `idx` after a truncation, and clamp `max`.
+    void trim_from(raft::index_t idx);
+
+    // Give up both references without decrementing, so the segments survive
+    // this record. For teardown paths only: the entries are still needed, and
+    // replay is what recovers them. Destroying a record instead decrements,
+    // which is what the release path wants — see release_all().
+    void detach() {
+        pin_table.release();
+        pin_rg.release();
+    }
+};
+
+// What commitlog replay hands to a group when it starts: the rewritten
+// uncommitted entries, and the records for the batch they were rewritten as —
+// the queue the group starts with.
 struct replayed_data_per_group {
-    replay_position_list replay_positions;
+    std::deque<segment_record> records;
     raft::log_entries entries;
 };
 
-// This class implements the persistence for raft log using database commit log.
-// It is used by tablet raft groups to persist their log entries.
+// Write `entries` to `cl` under `table` as one raft batch carrying `commit_idx`
+// in its header, and return the reference that write produced.
+//
+// The batch must fit in one commitlog entry. An entry over max_record_size()
+// would be fragmented across segments, breaking the rule that a copy of an
+// entry lives in exactly one segment — the rule the segment records and the
+// truncation records are built on — so a batch that does not fit is an internal
+// error, not something to split.
+//
+// It cannot be a single oversized entry: groups_manager checks
+// max_single_entry_batch_size() against max_record_size() before any group
+// starts. A batch of many entries still can — see raft_max_log_size below for
+// the bound and the ways it stays reachable. Splitting such a batch into several
+// whole batches would be a legal fix. Fragmenting a single entry would not be,
+// as things stand: the commitlog keys an oversized entry's tail segments by a
+// position it never hands out, so nothing releases them per position
+// (SCYLLADB-3986). Repairing that keying is what would make fragmentation — and
+// with it a larger max_command_size — available.
+//
+// Static so that commitlog replay can write the same format when it rewrites a
+// group's uncommitted entries.
+future<db::rp_handle> write_raft_batch(db::commitlog& cl, table_id table,
+        raft::group_id group_id, raft::index_t commit_idx, const raft::log_entry_ptr_list& entries);
+
+// Bounds on a group's log, which together bound one raft batch — which
+// write_raft_batch() asserts fits in one commitlog entry. max_command_size is
+// enforced per entry, by raft's add_entry(); max_log_size per log, by fsm's
+// log_limiter_semaphore on a leader's accounted log, of which a batch is a
+// subset. The accounting counts command bytes plus sizeof(log_entry) and counts
+// configurations and dummies as zero, so max_command_size is the headroom for
+// what it leaves out.
+//
+// The sum clears a default 64MB segment's 32MB max_record_size(), but the assert
+// stays reachable: commitlog_segment_size_in_mb has no floor, a follower's
+// unpersisted log is not held at max_log_size until SCYLLADB-3890, and
+// finish_replay() rewrites a whole recovered tail as one batch. So one entry is
+// required to fit and a whole batch is only warned about
+// (check_commitlog_can_hold_a_raft_entry): refusing to boot on the sum would
+// reject segment sizes that work.
+inline constexpr size_t raft_max_log_size = 20 * 1024 * 1024;
+inline constexpr size_t raft_max_command_size = 100 * 1024;
+
+// Throw if one raft entry with a command of raft_max_command_size cannot fit in
+// one commitlog entry, so that raising that constant past what a commitlog entry
+// holds stops the node at startup rather than aborting it on the first large
+// write. Called before any group starts and again before replay rewrites a
+// recovered tail, which also writes batches.
+//
+// Cannot fire with the constants above — 100KB fits even a 1MB segment's
+// max_record_size() many times over — which is the point of having it.
+// Configuration entries are not covered by raft_max_command_size at all, but
+// their size is a handful of bytes per replica.
+void check_commitlog_can_hold_a_raft_entry(const db::commitlog& cl);
+
+// What write_raft_batch() will measure for a batch of one entry whose command is
+// `command_size` bytes. An upper bound rather than an exact size: it counts the
+// LeaseGuard interval, which an entry may or may not carry.
+size_t max_single_entry_batch_size(size_t command_size);
+
+// Fold a written batch into `queue`, creating a record when it landed in a
+// segment the group has not written to yet and extending the last record
+// otherwise.
+void account_batch(std::deque<segment_record>& queue, const db::cf_id_type& raft_groups_table_id,
+        db::rp_handle&& handle, std::span<const raft::log_entry_ptr> entries);
+
+// One group's raft log in the commitlog, and everything the group knows about
+// the segments holding it.
+//
+// This is the only place that knows a group's entries live in commitlog
+// segments: which segments they are, what index range each holds, which
+// references keep them, and which indexes a truncation superseded.
+// raft_groups_storage owns the group's row and the raft::persistence interface,
+// and asks this class what may be released; it does not itself reason about
+// segments.
 class raft_commitlog {
-private:
     const raft::group_id _group_id;
+    // The tablet's own table: batches are written under it, and the per-command
+    // references handed to apply() are accounted to it.
     const db::cf_id_type _table_id;
-    // Common commit log.
+    // system.raft_groups, under which each segment's second reference is held.
+    const db::cf_id_type _raft_groups_table_id;
     db::commitlog& _commit_log;
-    // Replay positions in the commit log for each raft log entry.
-    // Contains entries that have been added but not yet removed by either:
-    //  - truncate_log() (leader change discarding uncommitted tail)
-    //  - truncate_log_tail() (snapshot allowing old entries to be reclaimed)
-    // After a snapshot, some entries with index below the snapshot index may
-    // still be present, in accordance with raft trailing log settings.
-    replay_position_list _replay_positions;
-    // The log entries that were loaded from database commit log on startup.
+
+    // One record per segment this group has entries in, oldest first.
+    std::deque<segment_record> _commitlog_segment_queue;
+    // Truncation history as it is persisted in the row. Not globally ordered by
+    // segment: one truncate_log() call pops the queue from the back, so it
+    // appends the newest segment's record first. Order within one segment is
+    // still the order the truncations happened, which is all replay's per-segment
+    // cursors need. Records naming segments the commitlog no longer has are
+    // dropped.
+    std::vector<truncation_record> _truncations;
+    // How far the commitlog has closed segments on this shard.
+    //
+    // This is what lets the *newest* record be released. Every other record
+    // learns its segment closed from a later record existing in the queue, but
+    // the newest one has no successor: a group that stops writing would hold its
+    // last segment indefinitely. groups_manager feeds this from the commitlog's
+    // flush rounds, which name only closed segments, so a position at or above a
+    // record's own says that record's segment is closed.
+    db::replay_position _closed_up_to;
+    // The log entries commitlog replay recovered for this group.
     raft::log_entries _replayed_entries;
 
 public:
-    raft_commitlog(raft::group_id group_id, db::commitlog& commit_log, table_id target_table_id, replayed_data_per_group replayed_data);
-
+    raft_commitlog(raft::group_id group_id, db::commitlog& commit_log, table_id target_table_id,
+        db::cf_id_type raft_groups_table_id, replayed_data_per_group replayed_data);
     ~raft_commitlog();
 
-    // Persist the given log entries in the commit log and get the replay position handles for them.
-    future<> store_log_entries(const raft::log_entry_ptr_list& entries);
+    // Write the entries as one batch (see write_raft_batch) carrying
+    // `commit_idx` in the header, and account the result to the segment records.
+    future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries, raft::index_t commit_idx);
 
-    // Get the log items that were loaded from database commit log on startup.
-    raft::log_entries load_log();
-
-    // Remove all the items with index >= idx, as they are considered truncated in Raft semantics.
+    // Discard the entries at or above `idx`: the records they were the whole of
+    // go away, the one the point lands inside is clamped, and in both cases a
+    // truncation_record remembers what was superseded.
     void truncate_log(raft::index_t idx);
 
-    // Remove replay position handles for entries that have been snapshotted
-    // and are no longer needed in the raft log. This allows the commitlog
-    // segments holding those entries to be reclaimed.
-    // Called from store_snapshot_descriptor after the snapshot is persisted.
-    void truncate_log_tail(raft::index_t index);
+    // Take a reference for the command at `idx` from the record that holds it.
+    db::rp_handle pin_for_apply(raft::index_t idx);
 
-    // Move replay position handles out of the map for the specified indices.
-    // The handles are handed to memtables in the raft state machine apply(),
-    // and removed from the map since the memtable now owns segment lifetime.
-    // Triggers on_internal_error if an entry is missing from the map.
-    std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
+    // Report the commitlog's flush position: everything at or below it is in a
+    // closed segment. Backstop only — see _closed_up_to.
+    void mark_segment_closed(db::replay_position pos);
+
+    // The oldest record that may now be released, or nullptr. A record is
+    // releasable once no more of this group's entries can land in its segment,
+    // every index it holds is committed, and every command in it applied.
+    // Ownership stays here: the caller persists the descriptor and then calls
+    // pop_released(), so a failed write leaves the record in place.
+    segment_record* front_releasable(raft::index_t commit_idx, raft::index_t apply_idx);
+    void pop_released();
+
+    // Seed the truncation history from the group's row, once, before it starts.
+    // A release re-writes the whole list, so what was persisted by a previous
+    // run has to be here or it would be dropped.
+    void seed_truncations(std::vector<truncation_record> truncations) {
+        _truncations = std::move(truncations);
+    }
+
+    // Drop the truncation records whose segment the commitlog no longer has:
+    // once it cannot hand out a position that low, no replay can see those
+    // copies again.
+    void purge_stale_truncations();
+    const std::vector<truncation_record>& truncations() const {
+        return _truncations;
+    }
+
+    // Give up every reference this group holds, for good.
+    //
+    // The destructor detaches instead, because at shutdown the segments must
+    // survive so that the entries they hold can be replayed. That is wrong for a
+    // group being destroyed deliberately — a tablet migrating away, or its table
+    // dropped — because nothing will ever replay its log, so detaching leaks
+    // those segments until the node restarts (SCYLLADB-3827). The data the group
+    // applied is unaffected: each command's reference belongs to the target
+    // table's memtable and is released by its flush.
+    //
+    // Must be called only once no more entries can be appended, i.e. after the
+    // raft server has been aborted.
+    void release_all();
+
+    // The entries commitlog replay recovered, handed over once.
+    raft::log_entries load_log();
+
+    size_t segment_count() const {
+        return _commitlog_segment_queue.size();
+    }
 };
+
 } // namespace service::strong_consistency

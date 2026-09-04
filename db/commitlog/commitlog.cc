@@ -92,6 +92,9 @@ class db::cf_holder {
 public:
     virtual ~cf_holder() {};
     virtual void release_cf_count(const cf_id_type&, const replay_position&) = 0;
+    // Take an additional reference at an already-referenced position, for the given
+    // column family. Symmetric with release_cf_count: the two must balance.
+    virtual rp_handle acquire_cf_count(const cf_id_type&, const replay_position&) = 0;
 };
 
 const db::replay_position db::replay_position::max = db::replay_position(std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max());
@@ -775,7 +778,22 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     size_t _buffer_ostream_size = 0;
     std::unordered_map<cf_id_type, uint64_t> _cf_dirty;
     std::unordered_map<cf_id_type, gc_clock::time_point> _cf_min_time;
-    std::unordered_multimap<replay_position, rp_handle> _extended_segments;
+    // Tail segments of an entry that did not fit in this (head) segment, keyed
+    // by the position the write reported, with a count of the references
+    // outstanding there. Several references can share one position — each entry
+    // of a strongly consistent raft batch takes one
+    // (commitlog::acquire_cf_count) — and without the count the first release
+    // would free the tails while the head is still dirty, leaving a head
+    // fragment whose continuation is gone: unreadable on replay.
+    //
+    // The erase in release_cf_count() never fires today: the store site keys
+    // these by a default-constructed position (SCYLLADB-3986), so tails are
+    // freed only when the whole head segment goes clean.
+    struct extended_entry {
+        uint32_t owners = 1;
+        std::vector<rp_handle> tail_pins;
+    };
+    std::unordered_map<replay_position, extended_entry> _extended_segments;
     time_point _sync_time;
     utils::flush_queue<replay_position, std::less<replay_position>, clock_type> _pending_ops;
 
@@ -866,8 +884,10 @@ public:
             mode = dispose_mode::Delete;
         } else if (_segment_manager->cfg.warn_about_segments_left_on_disk_after_shutdown) {
             clogger.warn("Segment {} is dirty and is left on disk.", *this);
-            for (auto& [rp, h] : _extended_segments) {
-                h.release(); // do not clear out sequential seqments either.
+            for (auto& [rp, e] : _extended_segments) {
+                for (auto& h : e.tail_pins) {
+                    h.release(); // do not clear out sequential seqments either.
+                }
             }
         }
 
@@ -906,8 +926,21 @@ public:
         }
     }
     void release_cf_count(const cf_id_type& cf, const replay_position& rp) override {
-        _extended_segments.erase(rp);
+        // Last owner out frees the tails (see extended_entry).
+        if (auto it = _extended_segments.find(rp); it != _extended_segments.end() && --it->second.owners == 0) {
+            _extended_segments.erase(it);
+        }
         release_cf_count(cf);
+    }
+
+    rp_handle acquire_cf_count(const cf_id_type& cf, const replay_position& rp) override {
+        SCYLLA_ASSERT(contains(rp));
+        _cf_dirty[cf]++; // increase use count for cf.
+        _cf_min_time.emplace(cf, gc_clock::now()); // if value already exists this does nothing.
+        if (auto it = _extended_segments.find(rp); it != _extended_segments.end()) {
+            ++it->second.owners; // a fragmented entry's tails must outlive this reference too
+        }
+        return rp_handle(static_pointer_cast<cf_holder>(shared_from_this()), cf, rp);
     }
 
     bool must_sync() {
@@ -1886,7 +1919,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                         // be replayed, in which case we want to be able to
                         // reconstruct a fragmented entry, if for no other
                         // reason to be able to clear its state (see replay_state).
-                        seg_ptr->_extended_segments.emplace(pw._rp, std::move(pw._h));
+                        seg_ptr->_extended_segments[pw._rp].tail_pins.push_back(std::move(pw._h));
                     }
                 }
             }
@@ -2234,27 +2267,39 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
         }
 
         auto rp = replay_position(s->_desc.id, db::position_type(s->size_on_disk()));
-        if (rp <= _flush_position) {
-            // already requested.
-            continue;
-        }
 
-        auto size = s->size_on_disk();
-        auto waste = s->_waste;
-
-        flushing += size - waste;
-
-        for (auto& id : s->_cf_dirty |  std::views::keys) {
+        // Collect the dirty tables of every closed segment, including ones
+        // already named in a previous request round: a flush request only
+        // releases commitlog references whose data already sits in a memtable,
+        // and a reference obtained from add() can reach a memtable long after
+        // the segment's first request round (e.g. a raft log entry is applied
+        // to the memtable only once its raft group commits it; until then the
+        // reference is held by the raft layer). Repeating a request is cheap:
+        // the table skips it unless its memtable holds data at or below the
+        // requested position.
+        for (auto& id : s->_cf_dirty | std::views::keys) {
             auto& target_high = ids[id];
             target_high = std::max(target_high, rp);
         }
+
+        if (rp <= _flush_position) {
+            // Already counted toward a previous round's size_to_remove target,
+            // so it must not contribute to the byte accounting or the
+            // watermark again.
+            continue;
+        }
+
+        const auto size = s->size_on_disk();
+        const auto waste = s->_waste;
+
+        flushing += size - waste;
 
         if (size_to_remove != 0) {
             if (n <= size) {
                 high = rp;
                 break;
             }
-            n -= s->size_on_disk();
+            n -= size;
         }
     }
 
@@ -2288,10 +2333,12 @@ void db::commitlog::segment_manager::check_no_data_older_than_allowed() {
 
     for (auto& s : _segments) {
         auto rp = replay_position(s->_desc.id, db::position_type(s->size_on_disk()));
-        if (rp <= _flush_position) {
-            // already requested.
-            continue;
-        }
+        // Deliberately no _flush_position cut-off here: a segment named in an
+        // earlier request round can still be dirty, because commitlog references
+        // may reach the memtables only after that round has passed (see
+        // flush_segments above). Without a repeated request, such a segment
+        // would stay on disk until some later write of the same table lands
+        // above the watermark - for a quiescent table, indefinitely.
 
         bool any_found = false;
 
@@ -2342,7 +2389,11 @@ void db::commitlog::segment_manager::check_no_data_older_than_allowed() {
                 }
             }
         }
-        _flush_position = *high;
+        // high can now point below _flush_position, since old, still-dirty
+        // segments are re-examined. The watermark must never move backwards,
+        // or flush_segments would count those segments' sizes toward
+        // size_to_remove a second time.
+        _flush_position = std::max(_flush_position, *high);
     }
 }
 
@@ -3226,56 +3277,10 @@ db::commitlog::add_entries(utils::chunked_vector<commitlog_mutation_entry_writer
     force_sync sync(std::any_of(entry_writers.begin(), entry_writers.end(), [](auto& w) { return bool(w.sync()); }));
     return _segment_manager->allocate_when_possible(cl_entries_writer(sync, std::move(entry_writers)), timeout);
 }
-future<utils::chunked_vector<db::rp_handle>> db::commitlog::add_raft_entries(
-        const cf_id_type& id, utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers) {
-    class cl_raft_entries_writer final : public entry_writer {
-        utils::chunked_vector<commitlog_raft_log_entry_writer> _writers;
-        cf_id_type _id;
-
-    public:
-        utils::chunked_vector<rp_handle> res;
-
-        cl_raft_entries_writer(utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers, cf_id_type id)
-            : entry_writer(force_sync::yes, entry_writers.size())
-            , _writers(std::move(entry_writers))
-            , _id(id) {
-            res.reserve(_writers.size());
-        }
-        const cf_id_type& id(size_t) const override {
-            return _id;
-        }
-        size_t size(segment&) override {
-            size_t res = 0;
-            for (auto& w : _writers) {
-                res += w.size();
-            }
-            return res;
-        }
-        size_t size(segment&, size_t i) override {
-            return _writers.at(i).size();
-        }
-        size_t size() const override {
-            size_t res = 0;
-            for (auto& w : _writers) {
-                res += w.size();
-            }
-            return res;
-        }
-        void write(segment&, output& out, size_t i) const override {
-            _writers.at(i).write(out);
-        }
-        void result(size_t i, rp_handle h) override {
-            SCYLLA_ASSERT(i == res.size());
-            res.emplace_back(std::move(h));
-        }
-
-        using result_type = utils::chunked_vector<db::rp_handle>;
-
-        result_type result() {
-            return std::move(res);
-        }
-    };
-    return _segment_manager->allocate_when_possible(cl_raft_entries_writer(std::move(entry_writers), id), db::no_timeout);
+db::rp_handle db::rp_handle::clone(const cf_id_type& id) const {
+    // This handle names the segment and the position, so there is no lookup
+    // and no way to ask for a segment that is already gone.
+    return _h->acquire_cf_count(id, _rp);
 }
 
 db::commitlog::commitlog(config cfg)

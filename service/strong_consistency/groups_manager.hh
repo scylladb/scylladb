@@ -30,6 +30,8 @@ class migration_manager;
 
 namespace service::strong_consistency {
 
+class raft_groups_storage;
+
 class raft_server;
 
 /// A cache of leader locations for raft groups where this node is not a replica.
@@ -115,6 +117,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         bool has_tablet = false;
         lw_shared_ptr<gate> gate = nullptr;
         raft::server* server = nullptr;
+        // The group's persistence, so that the commitlog's flush handler can
+        // tell it how far segments are closed. Owned by the raft::server;
+        // cleared before that server is destroyed.
+        raft_groups_storage* storage = nullptr;
 
         // Serialized chain of raft::server control operations (start/stop).
         // This serialization handles (rare) cases where a tablet is migrated out
@@ -145,14 +151,29 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     tablet_group_leader_cache _leader_cache;
 
+    // How far the commitlog has closed segments on this shard, as reported by
+    // its flush handler, and the anchor keeping that handler registered. A
+    // record whose segment is still open may yet be extended, so this is what
+    // lets a group release its newest record.
+    db::replay_position _closed_up_to;
+    std::optional<db::commitlog::flush_handler_anchor> _flush_handler;
+
     // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,
         raft::group_id group_id,
         locator::token_metadata_ptr tm);
 
-    void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
+    // What becomes of a group's commitlog segment references when its server
+    // goes away. At shutdown they must be detached, so the segments outlive the
+    // group and replay can recover its log; a group destroyed deliberately —
+    // its tablet migrated away, or its table dropped — will never be replayed,
+    // so its references are given up instead (SCYLLADB-3827).
+    enum class log_disposition { keep, release };
 
-    void schedule_raft_groups_deletion(bool all);
+    void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state,
+        log_disposition disposition);
+
+    void schedule_raft_groups_deletion(bool all, log_disposition disposition);
 
     future<> leader_info_updater(raft_group_state& state, locator::global_tablet_id tablet, raft::group_id gid);
 

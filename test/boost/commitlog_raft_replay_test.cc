@@ -7,6 +7,7 @@
  */
 
 #include <algorithm>
+#include <unordered_set>
 #include <boost/test/unit_test.hpp>
 
 #undef SEASTAR_TESTING_MAIN
@@ -33,6 +34,18 @@
 #include "idl/raft_storage.dist.hh"
 #include "idl/raft_storage.dist.impl.hh"
 
+// A seam into raft_commitlog_replay_buffer's parked records. Reaching them
+// through finish_replay() would mean standing up a database, a query processor
+// and tablet metadata; what is under test is the shutdown behaviour, not how the
+// records got there.
+class raft_replay_buffer_tester {
+public:
+    static void seed(db::raft_commitlog_replay_buffer& buffer, raft::group_id gid,
+            service::strong_consistency::replayed_data_per_group data) {
+        buffer._per_group_data[gid] = std::move(data);
+    }
+};
+
 BOOST_AUTO_TEST_SUITE(commitlog_raft_replay_test)
 
 using namespace db;
@@ -41,6 +54,12 @@ namespace {
 
 raft::log_entry_ptr make_dummy_entry(raft::term_t term, raft::index_t idx) {
     return make_lw_shared<raft::log_entry>(raft::log_entry{.term = term, .idx = idx, .data = raft::log_entry::dummy{}});
+}
+
+raft::log_entry_ptr make_command_entry_sized(raft::term_t term, raft::index_t idx, size_t payload_size) {
+    raft::command cmd;
+    ser::serialize(cmd, bytes(payload_size, 'x'));
+    return make_lw_shared<raft::log_entry>(raft::log_entry{.term = term, .idx = idx, .data = std::move(cmd)});
 }
 
 raft::log_entry_ptr make_command_entry(raft::term_t term, raft::index_t idx) {
@@ -78,8 +97,7 @@ table_id make_table_id() {
     return table_id(utils::UUID_gen::get_time_UUID());
 }
 
-future<> cl_test(noncopyable_function<future<>(commitlog&)> f) {
-    commitlog::config cfg;
+future<> cl_test(commitlog::config cfg, noncopyable_function<future<>(commitlog&)> f) {
     cfg.metrics_category_name = "commitlog";
     cfg.descriptor_tag = "variant";
     tmpdir tmp;
@@ -97,19 +115,23 @@ future<> cl_test(noncopyable_function<future<>(commitlog&)> f) {
             .finally([tmp = std::move(tmp)] {});
 }
 
+future<> cl_test(noncopyable_function<future<>(commitlog&)> f) {
+    return cl_test(commitlog::config{}, std::move(f));
+}
+
 // Write a raft log entry to the commitlog and return the rp_handle.
 future<rp_handle> write_raft_entry_to_commitlog(commitlog& cl, table_id tid, raft::group_id gid, raft::log_entry_ptr entry) {
-    commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = gid, .entry = entry});
+    commitlog_raft_batch_writer writer(raft_commitlog_batch{.group_id = gid, .commit_idx = raft::index_t{0}, .entries = {entry}});
     const auto target_size = writer.size();
     co_return co_await cl.add(tid, target_size, db::no_timeout, db::commitlog_force_sync::yes, [entry, gid](auto& out) {
-        commitlog_raft_log_entry_writer w(raft_commitlog_entry{.group_id = gid, .entry = entry});
+        commitlog_raft_batch_writer w(raft_commitlog_batch{.group_id = gid, .commit_idx = raft::index_t{0}, .entries = {entry}});
         w.write(out);
     });
 }
 
 } // anonymous namespace
 
-// Test commitlog_raft_log_entry_writer: size computation is consistent with
+// Test commitlog_raft_batch_writer: size computation is consistent with
 // the serialized output, and a write/read roundtrip preserves all fields
 // for every entry type (command, configuration, dummy, LeaseGuard-stamped).
 //
@@ -121,7 +143,7 @@ future<rp_handle> write_raft_entry_to_commitlog(commitlog& cl, table_id tid, raf
 // field surviving ser::serialize says nothing about it surviving here, and
 // log_entry::lease_time has to be asserted on this path too. The last entry
 // below carries an interval and the others do not, covering both cases.
-SEASTAR_TEST_CASE(test_commitlog_raft_log_entry_writer) {
+SEASTAR_TEST_CASE(test_commitlog_raft_batch_writer) {
     return cl_test([](commitlog& log) -> future<> {
         auto gid = make_group_id();
         auto tid = make_table_id();
@@ -136,13 +158,13 @@ SEASTAR_TEST_CASE(test_commitlog_raft_log_entry_writer) {
         // Verify size() and accessor for each entry type, then write to commitlog.
         std::vector<replay_position> rps;
         for (const auto& entry : entries) {
-            commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = gid, .entry = entry});
+            commitlog_raft_batch_writer writer(raft_commitlog_batch{.group_id = gid, .commit_idx = raft::index_t{0}, .entries = {entry}});
             // size() must exceed the bare raft::log_entry serialization because
-            // the writer wraps it in a commitlog_entry + raft_commitlog_entry envelope.
+            // the writer wraps it in a commitlog_entry + raft_commitlog_batch envelope.
             BOOST_REQUIRE_GT(writer.size(), 0u);
             BOOST_REQUIRE_GT(writer.size(), ser::get_sizeof(*entry));
-            BOOST_REQUIRE_EQUAL(writer.get_log_entry().group_id, gid);
-            BOOST_REQUIRE_EQUAL(writer.get_log_entry().entry->idx, entry->idx);
+            BOOST_REQUIRE_EQUAL(writer.get_batch().group_id, gid);
+            BOOST_REQUIRE_EQUAL(writer.get_batch().entries.at(0)->idx, entry->idx);
 
             auto handle = co_await write_raft_entry_to_commitlog(log, tid, gid, entry);
             rps.push_back(handle.rp());
@@ -168,23 +190,23 @@ SEASTAR_TEST_CASE(test_commitlog_raft_log_entry_writer) {
 
                         commitlog_entry_reader reader(buf, detail::commitlog_entry_serialization_format::variant);
                         auto& entry_var = reader.entry().item;
-                        BOOST_REQUIRE(std::holds_alternative<raft_commitlog_entry>(entry_var));
+                        BOOST_REQUIRE(std::holds_alternative<raft_commitlog_batch>(entry_var));
 
-                        auto& rle = std::get<raft_commitlog_entry>(entry_var);
+                        auto& rle = std::get<raft_commitlog_batch>(entry_var);
                         BOOST_REQUIRE_EQUAL(rle.group_id, gid);
-                        BOOST_REQUIRE_EQUAL(rle.entry->term, expected->term);
-                        BOOST_REQUIRE_EQUAL(rle.entry->idx, expected->idx);
-                        BOOST_REQUIRE_EQUAL(rle.entry->data.index(), expected->data.index());
+                        BOOST_REQUIRE_EQUAL(rle.entries.at(0)->term, expected->term);
+                        BOOST_REQUIRE_EQUAL(rle.entries.at(0)->idx, expected->idx);
+                        BOOST_REQUIRE_EQUAL(rle.entries.at(0)->data.index(), expected->data.index());
                         // A LeaseGuard interval must survive the envelope intact,
                         // and an entry written without one must not gain one.
-                        BOOST_REQUIRE_EQUAL(rle.entry->lease_time.has_value(),
+                        BOOST_REQUIRE_EQUAL(rle.entries.at(0)->lease_time.has_value(),
                                 expected->lease_time.has_value());
                         if (expected->lease_time) {
                             BOOST_REQUIRE_EQUAL(
-                                    rle.entry->lease_time->earliest.time_since_epoch().count(),
+                                    rle.entries.at(0)->lease_time->earliest.time_since_epoch().count(),
                                     lease_earliest_ns);
                             BOOST_REQUIRE_EQUAL(
-                                    rle.entry->lease_time->latest.time_since_epoch().count(),
+                                    rle.entries.at(0)->lease_time->latest.time_since_epoch().count(),
                                     lease_latest_ns);
                         }
                         ++found;
@@ -231,15 +253,15 @@ SEASTAR_TEST_CASE(test_commitlog_raft_entry_roundtrip) {
 
                         commitlog_entry_reader reader(buf, detail::commitlog_entry_serialization_format::variant);
                         auto& entry_var = reader.entry().item;
-                        BOOST_REQUIRE(std::holds_alternative<raft_commitlog_entry>(entry_var));
+                        BOOST_REQUIRE(std::holds_alternative<raft_commitlog_batch>(entry_var));
 
-                        auto& rle = std::get<raft_commitlog_entry>(entry_var);
+                        auto& rle = std::get<raft_commitlog_batch>(entry_var);
                         BOOST_REQUIRE_EQUAL(rle.group_id, gid);
 
                         auto idx = std::distance(rps.begin(), it);
-                        BOOST_REQUIRE_EQUAL(rle.entry->idx, entries[idx]->idx);
-                        BOOST_REQUIRE_EQUAL(rle.entry->term, entries[idx]->term);
-                        BOOST_REQUIRE(std::holds_alternative<raft::log_entry::dummy>(rle.entry->data));
+                        BOOST_REQUIRE_EQUAL(rle.entries.at(0)->idx, entries[idx]->idx);
+                        BOOST_REQUIRE_EQUAL(rle.entries.at(0)->term, entries[idx]->term);
+                        BOOST_REQUIRE(std::holds_alternative<raft::log_entry::dummy>(rle.entries.at(0)->data));
 
                         ++raft_entries_found;
                         co_return;
@@ -305,16 +327,16 @@ SEASTAR_TEST_CASE(test_commitlog_mixed_raft_and_mutation_entries) {
                         auto& entry_var = reader.entry().item;
 
                         if (is_raft_entry) {
-                            BOOST_REQUIRE(std::holds_alternative<raft_commitlog_entry>(entry_var));
+                            BOOST_REQUIRE(std::holds_alternative<raft_commitlog_batch>(entry_var));
                             auto it = std::ranges::find(raft_rps, rp);
                             auto idx = std::distance(raft_rps.begin(), it);
                             const auto& expected = raft_entries[idx];
 
-                            auto& rle = std::get<raft_commitlog_entry>(entry_var);
+                            auto& rle = std::get<raft_commitlog_batch>(entry_var);
                             BOOST_REQUIRE_EQUAL(rle.group_id, gid);
-                            BOOST_REQUIRE_EQUAL(rle.entry->term, expected->term);
-                            BOOST_REQUIRE_EQUAL(rle.entry->idx, expected->idx);
-                            BOOST_REQUIRE_EQUAL(rle.entry->data.index(), expected->data.index());
+                            BOOST_REQUIRE_EQUAL(rle.entries.at(0)->term, expected->term);
+                            BOOST_REQUIRE_EQUAL(rle.entries.at(0)->idx, expected->idx);
+                            BOOST_REQUIRE_EQUAL(rle.entries.at(0)->data.index(), expected->data.index());
                             ++raft_found;
                         } else {
                             BOOST_REQUIRE(std::holds_alternative<mutation_entry>(entry_var));
@@ -331,1165 +353,6 @@ SEASTAR_TEST_CASE(test_commitlog_mixed_raft_and_mutation_entries) {
         BOOST_REQUIRE_EQUAL(mutation_found, mutation_rps.size());
     });
 }
-
-// Test that raft_commitlog_replay_buffer correctly adds, counts, and returns entries.
-SEASTAR_TEST_CASE(test_raft_replay_buffer_add_take) {
-    db::raft_commitlog_replay_buffer buffer;
-
-    auto gid1 = make_group_id();
-    auto gid2 = make_group_id();
-
-    BOOST_CHECK_EQUAL(buffer.total_entries(), 0);
-    BOOST_CHECK_EQUAL(buffer.remaining_groups(), 0);
-
-    buffer.add(gid1, make_dummy_entry(raft::term_t(1), raft::index_t(1)));
-    buffer.add(gid1, make_command_entry(raft::term_t(1), raft::index_t(2)));
-    buffer.add(gid2, make_config_entry(raft::term_t(1), raft::index_t(1)));
-
-    BOOST_CHECK_EQUAL(buffer.total_entries(), 3);
-    BOOST_CHECK_EQUAL(buffer.remaining_groups(), 2);
-
-    // take_replayed_group_entries returns empty before processing
-    // (processing moves entries from _replayed_commitlog_entries_by_group to _per_group_data)
-    auto data = buffer.take_replayed_group_entries(gid1);
-    BOOST_CHECK(data.entries.empty());
-    BOOST_CHECK(data.replay_positions.empty());
-
-    return make_ready_future<>();
-}
-
-// Test that process_raft_replayed_items discards entries for groups
-// that are not found in the tablet metadata (e.g., tablet was moved away).
-SEASTAR_TEST_CASE(test_raft_replay_buffer_process_discards_unknown_groups) {
-    auto db_cfg_ptr = make_shared<db::config>();
-    db_cfg_ptr->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
-    return do_with_cql_env(
-            [](cql_test_env& env) -> future<> {
-                db::raft_commitlog_replay_buffer buffer;
-
-                auto gid = make_group_id();
-                buffer.add(gid, make_dummy_entry(raft::term_t(1), raft::index_t(1)));
-                buffer.add(gid, make_command_entry(raft::term_t(1), raft::index_t(2)));
-
-                BOOST_CHECK_EQUAL(buffer.remaining_groups(), 1);
-                BOOST_CHECK_EQUAL(buffer.total_entries(), 2);
-
-                // Process — group_id has no matching tablet metadata, so entries should be discarded.
-                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local());
-
-                // After processing, old entries are cleared.
-                BOOST_CHECK_EQUAL(buffer.remaining_groups(), 0);
-
-                // take should return empty since the group was discarded.
-                auto data = buffer.take_replayed_group_entries(gid);
-                BOOST_CHECK(data.entries.empty());
-                BOOST_CHECK(data.replay_positions.empty());
-            },
-            std::move(db_cfg_ptr));
-}
-
-// Comprehensive test for check_entry_ordering helper function covering all cases:
-// - in_order: normal sequential entries, first entry, index jumps
-// - leader_change: smaller/equal index with strictly higher term
-// - out_of_order: smaller or equal index with same or lower term (duplicate or duplicate tail)
-BOOST_AUTO_TEST_CASE(test_check_entry_ordering) {
-    using db::raft_buffer_detail::entry_ordering_check_result;
-    using db::raft_buffer_detail::check_entry_ordering;
-
-    // === in_order cases ===
-    // First entry (last_idx=0) is always in order
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(1), .idx = raft::index_t(1)}, {.term = raft::term_t(0), .idx = raft::index_t(0)}) ==
-                entry_ordering_check_result::in_order);
-    // First entry with high term/index
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(50), .idx = raft::index_t(100)}, {.term = raft::term_t(0), .idx = raft::index_t(0)}) ==
-                entry_ordering_check_result::in_order);
-    // Normal increasing index
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(1), .idx = raft::index_t(2)}, {.term = raft::term_t(1), .idx = raft::index_t(1)}) ==
-                entry_ordering_check_result::in_order);
-    // Large index jump (entries may be sparse)
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(1), .idx = raft::index_t(1000)}, {.term = raft::term_t(1), .idx = raft::index_t(1)}) ==
-                entry_ordering_check_result::in_order);
-    // Term increase with index increase
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(2), .idx = raft::index_t(5)}, {.term = raft::term_t(1), .idx = raft::index_t(4)}) ==
-                entry_ordering_check_result::in_order);
-
-    // === leader_change cases (idx <= last_idx, term strictly higher) ===
-    // Smaller index with higher term
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(2), .idx = raft::index_t(2)}, {.term = raft::term_t(1), .idx = raft::index_t(3)}) ==
-                entry_ordering_check_result::leader_change);
-    // Index goes back to 1 with new term (complete log rewrite)
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(2), .idx = raft::index_t(1)}, {.term = raft::term_t(1), .idx = raft::index_t(10)}) ==
-                entry_ordering_check_result::leader_change);
-    // Equal index with higher term (overwrite at same position)
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(5), .idx = raft::index_t(5)}, {.term = raft::term_t(1), .idx = raft::index_t(5)}) ==
-                entry_ordering_check_result::leader_change);
-
-    // === out_of_order cases (idx <= last_idx, term same or lower) ===
-    // Same index and same term - duplicate entry from crash recovery
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(1), .idx = raft::index_t(5)}, {.term = raft::term_t(1), .idx = raft::index_t(5)}) ==
-                entry_ordering_check_result::out_of_order);
-    // Smaller index with same term (duplicate tail from older segment)
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(1), .idx = raft::index_t(2)}, {.term = raft::term_t(1), .idx = raft::index_t(3)}) ==
-                entry_ordering_check_result::out_of_order);
-}
-
-// Simulates the full processing loop for multiple groups with multiple leader changes.
-// This tests the exact logic used in process_raft_replayed_items() without needing
-// database/QP setup, verifying that entries are correctly discarded on leader change.
-BOOST_AUTO_TEST_CASE(test_replay_buffer_multi_group_multi_leader_change_simulation) {
-    using db::raft_buffer_detail::entry_ordering_check_result;
-    using db::raft_buffer_detail::check_entry_ordering;
-
-    struct simulated_entry {
-        raft::term_t term;
-        raft::index_t idx;
-
-        bool operator==(const simulated_entry& other) const {
-            return term == other.term && idx == other.idx;
-        }
-    };
-
-    // Helper to simulate processing a group's entries (same logic as process_raft_replayed_items)
-    auto process_group = [](const std::vector<simulated_entry>& entries) {
-        std::vector<simulated_entry> kept;
-        raft::index_t last_idx{0};
-        raft::term_t last_term{0};
-        int leader_changes = 0;
-
-        for (const auto& entry : entries) {
-            auto ordering = check_entry_ordering({.term = entry.term, .idx = entry.idx}, {.term = last_term, .idx = last_idx});
-
-            if (ordering == entry_ordering_check_result::out_of_order) {
-                break; // Duplicate tail — stop processing
-            }
-            if (ordering == entry_ordering_check_result::leader_change) {
-                // Use binary search since entries are sorted by idx
-                auto it = std::ranges::lower_bound(kept, entry.idx, {}, [](const simulated_entry& e) {
-                    return e.idx;
-                });
-                kept.erase(it, kept.end());
-                ++leader_changes;
-            }
-
-            last_idx = entry.idx;
-            last_term = entry.term;
-            kept.push_back(entry);
-        }
-        return std::make_pair(kept, leader_changes);
-    };
-
-    // Group 1: No leader changes - simple sequential entries
-    {
-        std::vector<simulated_entry> entries = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(1), raft::index_t(3)},
-        };
-        auto [kept, changes] = process_group(entries);
-        BOOST_CHECK_EQUAL(changes, 0);
-        BOOST_CHECK_EQUAL(kept.size(), 3);
-    }
-
-    // Group 2: Single leader change
-    // Leader 1 (term 1): idx 1, 2, 3
-    // Leader 2 (term 2): overwrites at idx 2
-    {
-        std::vector<simulated_entry> entries = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(1), raft::index_t(3)},
-                {raft::term_t(2), raft::index_t(2)}, // Leader change
-                {raft::term_t(2), raft::index_t(3)},
-                {raft::term_t(2), raft::index_t(4)},
-        };
-        auto [kept, changes] = process_group(entries);
-        BOOST_CHECK_EQUAL(changes, 1);
-        BOOST_CHECK_EQUAL(kept.size(), 4);
-
-        // Verify: idx 1 from term 1, idx 2-4 from term 2
-        std::vector<simulated_entry> expected = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(2), raft::index_t(2)},
-                {raft::term_t(2), raft::index_t(3)},
-                {raft::term_t(2), raft::index_t(4)},
-        };
-        BOOST_CHECK(kept == expected);
-    }
-
-    // Group 3: Multiple leader changes (3 leaders)
-    // Leader 1 (term 1): idx 1-5
-    // Leader 2 (term 2): overwrites at idx 4
-    // Leader 3 (term 3): overwrites at idx 3
-    {
-        std::vector<simulated_entry> entries = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(1), raft::index_t(3)},
-                {raft::term_t(1), raft::index_t(4)},
-                {raft::term_t(1), raft::index_t(5)},
-                {raft::term_t(2), raft::index_t(4)}, // Leader change #1
-                {raft::term_t(2), raft::index_t(5)},
-                {raft::term_t(2), raft::index_t(6)},
-                {raft::term_t(3), raft::index_t(3)}, // Leader change #2
-                {raft::term_t(3), raft::index_t(4)},
-        };
-        auto [kept, changes] = process_group(entries);
-        BOOST_CHECK_EQUAL(changes, 2);
-        BOOST_CHECK_EQUAL(kept.size(), 4);
-
-        // Verify: idx 1-2 from term 1, idx 3-4 from term 3
-        std::vector<simulated_entry> expected = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(3), raft::index_t(3)},
-                {raft::term_t(3), raft::index_t(4)},
-        };
-        BOOST_CHECK(kept == expected);
-    }
-
-    // Group 4: Leader change at index 1 (complete log replacement)
-    {
-        std::vector<simulated_entry> entries = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(2), raft::index_t(1)}, // Complete replacement
-                {raft::term_t(2), raft::index_t(2)},
-        };
-        auto [kept, changes] = process_group(entries);
-        BOOST_CHECK_EQUAL(changes, 1);
-        BOOST_CHECK_EQUAL(kept.size(), 2);
-
-        std::vector<simulated_entry> expected = {
-                {raft::term_t(2), raft::index_t(1)},
-                {raft::term_t(2), raft::index_t(2)},
-        };
-        BOOST_CHECK(kept == expected);
-    }
-
-    // Group 5: Leader change at same index (overwrite without going back)
-    {
-        std::vector<simulated_entry> entries = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(2), raft::index_t(2)}, // Same index, different term
-                {raft::term_t(2), raft::index_t(3)},
-        };
-        auto [kept, changes] = process_group(entries);
-        BOOST_CHECK_EQUAL(changes, 1);
-        BOOST_CHECK_EQUAL(kept.size(), 3);
-
-        std::vector<simulated_entry> expected = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(2), raft::index_t(2)},
-                {raft::term_t(2), raft::index_t(3)},
-        };
-        BOOST_CHECK(kept == expected);
-    }
-}
-
-// Test basic buffer operations: add, total_entries, remaining_groups, take_replayed_group_entries
-SEASTAR_TEST_CASE(test_raft_replay_buffer_basic_operations) {
-    db::raft_commitlog_replay_buffer buffer;
-
-    auto gid1 = make_group_id();
-    auto gid2 = make_group_id();
-
-    BOOST_CHECK_EQUAL(buffer.total_entries(), 0);
-    BOOST_CHECK_EQUAL(buffer.remaining_groups(), 0);
-
-    // Add entries to multiple groups with different entry types
-    buffer.add(gid1, make_dummy_entry(raft::term_t(1), raft::index_t(1)));
-    buffer.add(gid1, make_command_entry(raft::term_t(1), raft::index_t(2)));
-    buffer.add(gid2, make_config_entry(raft::term_t(1), raft::index_t(1)));
-
-    BOOST_CHECK_EQUAL(buffer.total_entries(), 3);
-    BOOST_CHECK_EQUAL(buffer.remaining_groups(), 2);
-
-    // Before processing, take_replayed_group_entries returns empty
-    // (entries are in _replayed_commitlog_entries_by_group, not _per_group_data)
-    auto data1 = buffer.take_replayed_group_entries(gid1);
-    BOOST_CHECK(data1.entries.empty());
-    BOOST_CHECK(data1.replay_positions.empty());
-
-    // Non-existent group returns empty
-    auto data_nonexistent = buffer.take_replayed_group_entries(make_group_id());
-    BOOST_CHECK(data_nonexistent.entries.empty());
-
-    return make_ready_future<>();
-}
-
-// Test that out-of-order entries within the same term (duplicate tail from
-// an older segment) are handled gracefully — processing stops at that point.
-SEASTAR_TEST_CASE(test_raft_replay_buffer_out_of_order_same_term_stops_processing) {
-    auto db_cfg_ptr = make_shared<db::config>();
-    db_cfg_ptr->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
-    return do_with_cql_env(
-            [](cql_test_env& env) -> future<> {
-                db::raft_commitlog_replay_buffer buffer;
-
-                auto gid = make_group_id();
-
-                // Simulate crash recovery: new segment entries first (idx 1-3),
-                // then old segment duplicate tail restarts at idx 1.
-                buffer.add(gid, make_dummy_entry(raft::term_t(1), raft::index_t(1)));
-                buffer.add(gid, make_dummy_entry(raft::term_t(1), raft::index_t(2)));
-                buffer.add(gid, make_dummy_entry(raft::term_t(1), raft::index_t(3)));
-                buffer.add(gid, make_dummy_entry(raft::term_t(1), raft::index_t(1))); // Duplicate tail start
-                buffer.add(gid, make_dummy_entry(raft::term_t(1), raft::index_t(2))); // Should be skipped
-
-                BOOST_CHECK_EQUAL(buffer.remaining_groups(), 1);
-                BOOST_CHECK_EQUAL(buffer.total_entries(), 5);
-
-                // Process — group_id has no matching tablet metadata, so entries are discarded
-                // before the ordering check. The filter_entries logic is tested directly
-                // in the simulation tests below.
-                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local());
-
-                BOOST_CHECK_EQUAL(buffer.remaining_groups(), 0);
-            },
-            std::move(db_cfg_ptr));
-}
-
-// Test the simulation of out-of-order same-term detection (duplicate tail scenario).
-// This directly tests the detection logic without needing database setup.
-BOOST_AUTO_TEST_CASE(test_out_of_order_same_term_detection_simulation) {
-    using db::raft_buffer_detail::entry_ordering_check_result;
-    using db::raft_buffer_detail::check_entry_ordering;
-
-    // Simulate processing entries and verify we detect the duplicate tail
-    struct simulated_entry {
-        raft::term_t term;
-        raft::index_t idx;
-    };
-
-    std::vector<simulated_entry> entries = {
-            {raft::term_t(1), raft::index_t(1)},
-            {raft::term_t(1), raft::index_t(3)},
-            {raft::term_t(1), raft::index_t(2)}, // Out of order within same term!
-    };
-
-    raft::index_t last_idx{0};
-    raft::term_t last_term{0};
-    bool detected_duplicate_tail = false;
-
-    for (const auto& entry : entries) {
-        auto ordering = check_entry_ordering({.term = entry.term, .idx = entry.idx}, {.term = last_term, .idx = last_idx});
-
-        if (ordering == entry_ordering_check_result::out_of_order) {
-            detected_duplicate_tail = true;
-            // In real code, filter_entries stops processing here
-            // Verify we detected the right entry
-            BOOST_CHECK_EQUAL(entry.idx, raft::index_t(2));
-            BOOST_CHECK_EQUAL(entry.term, raft::term_t(1));
-            BOOST_CHECK_EQUAL(last_idx, raft::index_t(3));
-            BOOST_CHECK_EQUAL(last_term, raft::term_t(1));
-            break; // Stop processing — all remaining entries are duplicates
-        }
-
-        last_idx = entry.idx;
-        last_term = entry.term;
-    }
-
-    BOOST_CHECK(detected_duplicate_tail);
-}
-
-// Additional edge cases for out-of-order detection
-BOOST_AUTO_TEST_CASE(test_out_of_order_same_term_edge_cases) {
-    using db::raft_buffer_detail::entry_ordering_check_result;
-    using db::raft_buffer_detail::check_entry_ordering;
-
-    // Case 1: Equal index with same term is out_of_order (duplicate entry)
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(1), .idx = raft::index_t(5)}, {.term = raft::term_t(1), .idx = raft::index_t(5)}) ==
-                entry_ordering_check_result::out_of_order);
-
-    // Case 2: Index goes from 10 to 1 within same term (duplicate tail)
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(1), .idx = raft::index_t(1)}, {.term = raft::term_t(1), .idx = raft::index_t(10)}) ==
-                entry_ordering_check_result::out_of_order);
-
-    // Case 3: Index decreases by 1 within same term
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(2), .idx = raft::index_t(4)}, {.term = raft::term_t(2), .idx = raft::index_t(5)}) ==
-                entry_ordering_check_result::out_of_order);
-
-    // Contrast with leader_change: same scenarios but with strictly higher term
-    // Case 1 contrast: Equal index with higher term is leader_change
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(2), .idx = raft::index_t(5)}, {.term = raft::term_t(1), .idx = raft::index_t(5)}) ==
-                entry_ordering_check_result::leader_change);
-
-    // Case 2 contrast: Index goes from 10 to 1 with higher term is leader_change
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(2), .idx = raft::index_t(1)}, {.term = raft::term_t(1), .idx = raft::index_t(10)}) ==
-                entry_ordering_check_result::leader_change);
-
-    // Case 3 contrast: Index decreases by 1 with higher term is leader_change
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(3), .idx = raft::index_t(4)}, {.term = raft::term_t(2), .idx = raft::index_t(5)}) ==
-                entry_ordering_check_result::leader_change);
-}
-
-// Test out_of_order detection: both duplicate entries (same idx+term) and
-// smaller-index same/lower-term entries are detected as out_of_order,
-// and same index with strictly higher term is leader_change.
-BOOST_AUTO_TEST_CASE(test_duplicate_entry_detection) {
-    using db::raft_buffer_detail::entry_ordering_check_result;
-    using db::raft_buffer_detail::check_entry_ordering;
-
-    // === out_of_order: same index and same term (former "duplicate") ===
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(1), .idx = raft::index_t(1)}, {.term = raft::term_t(1), .idx = raft::index_t(1)}) ==
-                entry_ordering_check_result::out_of_order);
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(5), .idx = raft::index_t(100)}, {.term = raft::term_t(5), .idx = raft::index_t(100)}) ==
-                entry_ordering_check_result::out_of_order);
-
-    // === leader_change: same index but strictly higher term ===
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(2), .idx = raft::index_t(5)}, {.term = raft::term_t(1), .idx = raft::index_t(5)}) ==
-                entry_ordering_check_result::leader_change);
-
-    // === out_of_order: same index with lower term (not a leader change) ===
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(1), .idx = raft::index_t(5)}, {.term = raft::term_t(2), .idx = raft::index_t(5)}) ==
-                entry_ordering_check_result::out_of_order);
-
-    // === out_of_order: smaller index with same term (duplicate tail) ===
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(1), .idx = raft::index_t(4)}, {.term = raft::term_t(1), .idx = raft::index_t(5)}) ==
-                entry_ordering_check_result::out_of_order);
-}
-
-// Simulates crash recovery scenarios involving out-of-order entries.
-// Any entry with idx <= last_idx and term <= last_term (including what were
-// formerly "consecutive duplicates") is classified as out_of_order and causes
-// filter_entries to stop processing immediately.
-BOOST_AUTO_TEST_CASE(test_replay_buffer_duplicate_entries_simulation) {
-    using db::raft_buffer_detail::entry_ordering_check_result;
-    using db::raft_buffer_detail::check_entry_ordering;
-
-    struct simulated_entry {
-        raft::term_t term;
-        raft::index_t idx;
-
-        bool operator==(const simulated_entry& other) const {
-            return term == other.term && idx == other.idx;
-        }
-    };
-
-    // Helper simulating filter_entries: stops on out_of_order, discards tail on leader_change.
-    auto process_group = [](const std::vector<simulated_entry>& entries) {
-        std::vector<simulated_entry> kept;
-        raft::index_t last_idx{0};
-        raft::term_t last_term{0};
-        int leader_changes = 0;
-
-        for (const auto& entry : entries) {
-            auto ordering = check_entry_ordering({.term = entry.term, .idx = entry.idx}, {.term = last_term, .idx = last_idx});
-
-            switch (ordering) {
-            case entry_ordering_check_result::leader_change: {
-                // Use binary search since entries are sorted by idx
-                auto it = std::ranges::lower_bound(kept, entry.idx, {}, [](const simulated_entry& e) {
-                    return e.idx;
-                });
-                kept.erase(it, kept.end());
-                ++leader_changes;
-                break;
-            }
-            case entry_ordering_check_result::out_of_order:
-                // Duplicate or duplicate tail — stop processing entirely.
-                return std::make_pair(kept, leader_changes);
-            case entry_ordering_check_result::in_order:
-                break;
-            }
-
-            last_idx = entry.idx;
-            last_term = entry.term;
-            kept.push_back(entry);
-        }
-        return std::make_pair(kept, leader_changes);
-    };
-
-    // Scenario 1: Entry with same idx+term stops processing immediately (out_of_order).
-    // Only entries before the duplicate are kept.
-    {
-        std::vector<simulated_entry> entries = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(1), raft::index_t(2)}, // out_of_order: same idx+term → stop
-                {raft::term_t(1), raft::index_t(3)},
-        };
-        auto [kept, changes] = process_group(entries);
-        BOOST_CHECK_EQUAL(changes, 0);
-        BOOST_CHECK_EQUAL(kept.size(), 2);
-
-        std::vector<simulated_entry> expected = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-        };
-        BOOST_CHECK(kept == expected);
-    }
-
-    // Scenario 2: Leader change followed by out_of_order entry stops processing.
-    // Tail discarded by leader change, then processing stops at out_of_order.
-    {
-        std::vector<simulated_entry> entries = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(2), raft::index_t(2)}, // leader change: discard term-1 idx>=2
-                {raft::term_t(2), raft::index_t(3)},
-                {raft::term_t(2), raft::index_t(3)}, // out_of_order: stop
-                {raft::term_t(2), raft::index_t(4)},
-        };
-        auto [kept, changes] = process_group(entries);
-        BOOST_CHECK_EQUAL(changes, 1);
-        BOOST_CHECK_EQUAL(kept.size(), 3);
-
-        std::vector<simulated_entry> expected = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(2), raft::index_t(2)},
-                {raft::term_t(2), raft::index_t(3)},
-        };
-        BOOST_CHECK(kept == expected);
-    }
-
-    // Scenario 3: Entry with lower term and same index is out_of_order (not leader_change).
-    // This differs from the old behavior where only "different term" caused leader_change
-    // regardless of direction. Now only strictly higher term triggers leader_change.
-    {
-        std::vector<simulated_entry> entries = {
-                {raft::term_t(2), raft::index_t(1)},
-                {raft::term_t(2), raft::index_t(2)},
-                {raft::term_t(1), raft::index_t(2)}, // out_of_order: lower term, same idx → stop
-                {raft::term_t(2), raft::index_t(3)},
-        };
-        auto [kept, changes] = process_group(entries);
-        BOOST_CHECK_EQUAL(changes, 0);
-        BOOST_CHECK_EQUAL(kept.size(), 2);
-
-        std::vector<simulated_entry> expected = {
-                {raft::term_t(2), raft::index_t(1)},
-                {raft::term_t(2), raft::index_t(2)},
-        };
-        BOOST_CHECK(kept == expected);
-    }
-}
-
-// Test crash recovery scenarios where old segment entries appear after new ones.
-// There is no explicit max_term skipping. Instead, old-term entries that appear
-// after higher-indexed entries are caught by the out_of_order check
-// (idx <= last_idx with same or lower term), which stops processing. This
-// correctly handles the case where an old segment is replayed after a new one.
-BOOST_AUTO_TEST_CASE(test_replay_buffer_old_term_skipping_simulation) {
-    using db::raft_buffer_detail::entry_ordering_check_result;
-    using db::raft_buffer_detail::check_entry_ordering;
-
-    struct simulated_entry {
-        raft::term_t term;
-        raft::index_t idx;
-
-        bool operator==(const simulated_entry& other) const {
-            return term == other.term && idx == other.idx;
-        }
-    };
-
-    // Helper simulating filter_entries: leader_change discards tail, out_of_order stops.
-    auto process_group = [](const std::vector<simulated_entry>& entries) {
-        std::vector<simulated_entry> kept;
-        raft::index_t last_idx{0};
-        raft::term_t last_term{0};
-        int leader_changes = 0;
-
-        for (const auto& entry : entries) {
-            auto ordering = check_entry_ordering({.term = entry.term, .idx = entry.idx}, {.term = last_term, .idx = last_idx});
-
-            switch (ordering) {
-            case entry_ordering_check_result::leader_change: {
-                auto it = std::ranges::lower_bound(kept, entry.idx, {}, [](const simulated_entry& e) {
-                    return e.idx;
-                });
-                kept.erase(it, kept.end());
-                ++leader_changes;
-                break;
-            }
-            case entry_ordering_check_result::out_of_order:
-                // Old-term or duplicate entry — stop processing.
-                return std::make_pair(kept, leader_changes);
-            case entry_ordering_check_result::in_order:
-                break;
-            }
-
-            last_idx = entry.idx;
-            last_term = entry.term;
-            kept.push_back(entry);
-        }
-        return std::make_pair(kept, leader_changes);
-    };
-
-    // Scenario 1: Old segment entries replayed after leader change.
-    // Segment 1: term 1 entries 1-5, then term 2 entries 3-7 (leader change).
-    // Segment 2 (replayed): term 1 entries 1-5 — all have lower idx than last_idx=7,
-    // so the first one triggers out_of_order and stops processing.
-    {
-        std::vector<simulated_entry> entries = {
-                // From segment 1
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(1), raft::index_t(3)},
-                {raft::term_t(1), raft::index_t(4)},
-                {raft::term_t(1), raft::index_t(5)},
-                // Leader change to term 2
-                {raft::term_t(2), raft::index_t(3)},
-                {raft::term_t(2), raft::index_t(4)},
-                {raft::term_t(2), raft::index_t(5)},
-                {raft::term_t(2), raft::index_t(6)},
-                {raft::term_t(2), raft::index_t(7)},
-                // From segment 2 (replayed old data): idx 1 < last_idx 7 → out_of_order → stop
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(1), raft::index_t(3)},
-                {raft::term_t(1), raft::index_t(4)},
-                {raft::term_t(1), raft::index_t(5)},
-        };
-        auto [kept, changes] = process_group(entries);
-        BOOST_CHECK_EQUAL(changes, 1);
-        BOOST_CHECK_EQUAL(kept.size(), 7); // idx 1-2 from term 1, idx 3-7 from term 2
-
-        std::vector<simulated_entry> expected = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(2), raft::index_t(3)},
-                {raft::term_t(2), raft::index_t(4)},
-                {raft::term_t(2), raft::index_t(5)},
-                {raft::term_t(2), raft::index_t(6)},
-                {raft::term_t(2), raft::index_t(7)},
-        };
-        BOOST_CHECK(kept == expected);
-    }
-
-    // Scenario 2: Multiple leader changes, then old entries replayed.
-    // term 1 -> term 2 -> term 3, then term 1 entries appear — stopped by out_of_order.
-    {
-        std::vector<simulated_entry> entries = {
-                // Initial entries
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                // Leader change to term 2
-                {raft::term_t(2), raft::index_t(2)},
-                {raft::term_t(2), raft::index_t(3)},
-                // Leader change to term 3
-                {raft::term_t(3), raft::index_t(3)},
-                {raft::term_t(3), raft::index_t(4)},
-                // Replayed old entries: idx 1 < last_idx 4 → out_of_order → stop
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(2), raft::index_t(2)},
-                {raft::term_t(2), raft::index_t(3)},
-        };
-        auto [kept, changes] = process_group(entries);
-        BOOST_CHECK_EQUAL(changes, 2); // term 1->2 and term 2->3
-        BOOST_CHECK_EQUAL(kept.size(), 4);
-
-        std::vector<simulated_entry> expected = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(2), raft::index_t(2)},
-                {raft::term_t(3), raft::index_t(3)},
-                {raft::term_t(3), raft::index_t(4)},
-        };
-        BOOST_CHECK(kept == expected);
-    }
-
-    // Scenario 3: out_of_order entry (same idx+term) stops processing before more entries.
-    // After a leader change, a duplicate entry causes processing to stop.
-    {
-        std::vector<simulated_entry> entries = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(2), raft::index_t(1)}, // leader change
-                {raft::term_t(2), raft::index_t(2)},
-                {raft::term_t(2), raft::index_t(2)}, // out_of_order: same idx+term → stop
-                {raft::term_t(2), raft::index_t(3)}, // not reached
-        };
-        auto [kept, changes] = process_group(entries);
-        BOOST_CHECK_EQUAL(changes, 1);
-        BOOST_CHECK_EQUAL(kept.size(), 2);
-
-        std::vector<simulated_entry> expected = {
-                {raft::term_t(2), raft::index_t(1)},
-                {raft::term_t(2), raft::index_t(2)},
-        };
-        BOOST_CHECK(kept == expected);
-    }
-
-    // Scenario 4: Same-term entries after leader change proceed normally until out_of_order.
-    {
-        std::vector<simulated_entry> entries = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(2), raft::index_t(2)}, // leader change
-                {raft::term_t(2), raft::index_t(3)},
-                {raft::term_t(2), raft::index_t(4)},
-                {raft::term_t(2), raft::index_t(4)}, // out_of_order → stop
-        };
-        auto [kept, changes] = process_group(entries);
-        BOOST_CHECK_EQUAL(changes, 1);
-        BOOST_CHECK_EQUAL(kept.size(), 4);
-    }
-}
-
-// Test empty entries list handling - should not crash or produce errors
-BOOST_AUTO_TEST_CASE(test_empty_entries_handling_simulation) {
-    using db::raft_buffer_detail::entry_ordering_check_result;
-    using db::raft_buffer_detail::check_entry_ordering;
-
-    struct simulated_entry {
-        raft::term_t term;
-        raft::index_t idx;
-    };
-
-    auto process_empty = [](const std::vector<simulated_entry>& entries) {
-        std::vector<simulated_entry> kept;
-        raft::index_t last_idx{0};
-        raft::term_t last_term{0};
-
-        for (const auto& entry : entries) {
-            auto ordering = check_entry_ordering({.term = entry.term, .idx = entry.idx}, {.term = last_term, .idx = last_idx});
-            if (ordering == entry_ordering_check_result::in_order) {
-                last_idx = entry.idx;
-                last_term = entry.term;
-                kept.push_back(entry);
-            }
-        }
-        return kept;
-    };
-
-    // Empty input should produce empty output without errors
-    std::vector<simulated_entry> empty_entries;
-    auto result = process_empty(empty_entries);
-    BOOST_CHECK(result.empty());
-}
-
-// Test crash recovery where old-term entries appear after new-term entries.
-// Non-consecutive "duplicates" (entries from an old term that appear after
-// entries from a higher-indexed new term) are caught by the out_of_order
-// check: their idx <= last_idx, so processing stops immediately.
-BOOST_AUTO_TEST_CASE(test_non_consecutive_duplicates_via_old_term) {
-    using db::raft_buffer_detail::entry_ordering_check_result;
-    using db::raft_buffer_detail::check_entry_ordering;
-
-    struct simulated_entry {
-        raft::term_t term;
-        raft::index_t idx;
-
-        bool operator==(const simulated_entry& other) const {
-            return term == other.term && idx == other.idx;
-        }
-    };
-
-    // Simulates filter_entries: stops on out_of_order, discards tail on leader_change.
-    auto process_group = [](const std::vector<simulated_entry>& entries) {
-        std::vector<simulated_entry> kept;
-        raft::index_t last_idx{0};
-        raft::term_t last_term{0};
-
-        for (const auto& entry : entries) {
-            auto ordering = check_entry_ordering({.term = entry.term, .idx = entry.idx}, {.term = last_term, .idx = last_idx});
-
-            switch (ordering) {
-            case entry_ordering_check_result::leader_change: {
-                auto it = std::ranges::lower_bound(kept, entry.idx, {}, [](const simulated_entry& e) {
-                    return e.idx;
-                });
-                kept.erase(it, kept.end());
-                break;
-            }
-            case entry_ordering_check_result::out_of_order:
-                return kept; // Stop processing
-            case entry_ordering_check_result::in_order:
-                break;
-            }
-
-            last_idx = entry.idx;
-            last_term = entry.term;
-            kept.push_back(entry);
-        }
-        return kept;
-    };
-
-    // Scenario: Old segment (term 1) replayed after new segment (term 2).
-    // After processing all term-2 entries (last_idx=3), the first term-1 entry
-    // has idx=1 <= last_idx=3, so out_of_order triggers and stops processing.
-    {
-        std::vector<simulated_entry> entries = {
-                // New segment first (term 2)
-                {raft::term_t(2), raft::index_t(1)},
-                {raft::term_t(2), raft::index_t(2)},
-                {raft::term_t(2), raft::index_t(3)},
-                // Old segment (term 1): idx 1 <= last_idx 3 → out_of_order → stop
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(1), raft::index_t(3)},
-        };
-        auto kept = process_group(entries);
-
-        BOOST_CHECK_EQUAL(kept.size(), 3);
-
-        std::vector<simulated_entry> expected = {
-                {raft::term_t(2), raft::index_t(1)},
-                {raft::term_t(2), raft::index_t(2)},
-                {raft::term_t(2), raft::index_t(3)},
-        };
-        BOOST_CHECK(kept == expected);
-    }
-
-    // Scenario: Interleaved old/new term entries.
-    // After the first term-2 entry (last_idx=1), the next term-1 entry
-    // has idx=1 <= last_idx=1, so out_of_order triggers immediately.
-    {
-        std::vector<simulated_entry> entries = {
-                {raft::term_t(2), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(1)}, // idx 1 <= last_idx 1 → out_of_order → stop
-                {raft::term_t(2), raft::index_t(2)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(2), raft::index_t(3)},
-        };
-        auto kept = process_group(entries);
-
-        // Only the first term-2 entry is kept; processing stops at term-1 idx=1.
-        BOOST_CHECK_EQUAL(kept.size(), 1);
-        std::vector<simulated_entry> expected = {
-                {raft::term_t(2), raft::index_t(1)},
-        };
-        BOOST_CHECK(kept == expected);
-    }
-}
-
-// Test that entries with decreasing terms but increasing indices are handled correctly.
-// If idx increases, check_entry_ordering returns in_order regardless of term direction.
-// Note: filter_entries may encounter such entries when commitlog segments are replayed
-// in a non-standard order, but the out_of_order detection will catch them if they
-// subsequently appear with idx <= last_idx.
-BOOST_AUTO_TEST_CASE(test_term_decreasing_index_increasing) {
-    using db::raft_buffer_detail::entry_ordering_check_result;
-    using db::raft_buffer_detail::check_entry_ordering;
-
-    // term 3, idx 5 -> term 2, idx 6: idx increased → in_order
-    auto result = check_entry_ordering({.term = raft::term_t(2), .idx = raft::index_t(6)}, {.term = raft::term_t(3), .idx = raft::index_t(5)});
-    BOOST_CHECK(result == entry_ordering_check_result::in_order);
-
-    // This is correct because check_entry_ordering only requires idx > last_idx for in_order.
-    // Term direction is irrelevant when the index advances.
-}
-
-// Test boundary conditions for index and term values
-BOOST_AUTO_TEST_CASE(test_boundary_values) {
-    using db::raft_buffer_detail::entry_ordering_check_result;
-    using db::raft_buffer_detail::check_entry_ordering;
-
-    // Maximum index values
-    auto max_idx = raft::index_t(std::numeric_limits<uint64_t>::max());
-    auto large_idx = raft::index_t(std::numeric_limits<uint64_t>::max() - 1);
-
-    // First entry with max index
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(1), .idx = max_idx}, {.term = raft::term_t(0), .idx = raft::index_t(0)}) ==
-                entry_ordering_check_result::in_order);
-
-    // Sequential entries at high index values
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(1), .idx = max_idx}, {.term = raft::term_t(1), .idx = large_idx}) ==
-                entry_ordering_check_result::in_order);
-
-    // Same index and same term at max index — out_of_order (former "duplicate")
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(1), .idx = max_idx}, {.term = raft::term_t(1), .idx = max_idx}) ==
-                entry_ordering_check_result::out_of_order);
-
-    // Leader change at max index (higher term)
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(2), .idx = max_idx}, {.term = raft::term_t(1), .idx = max_idx}) ==
-                entry_ordering_check_result::leader_change);
-
-    // Term 0 handling (edge case - term 0 is typically not used in Raft but let's verify)
-    BOOST_CHECK(check_entry_ordering({.term = raft::term_t(0), .idx = raft::index_t(1)}, {.term = raft::term_t(0), .idx = raft::index_t(0)}) ==
-                entry_ordering_check_result::in_order);
-}
-
-// Test that the committed/uncommitted split works correctly in simulation.
-// Committed entries (idx <= commit_idx) should be "applied" (in real code: to memtable)
-// Uncommitted entries (idx > commit_idx) should be "rewritten" (in real code: to new commitlog)
-BOOST_AUTO_TEST_CASE(test_committed_uncommitted_split_simulation) {
-    struct simulated_entry {
-        raft::term_t term;
-        raft::index_t idx;
-        bool is_command; // true for command entries, false for config/dummy
-    };
-
-    // Simulate the second pass of process_raft_replayed_items
-    auto process_second_pass = [](const std::vector<simulated_entry>& entries, raft::index_t commit_idx) {
-        int applied = 0;
-        int rewritten = 0;
-        int kept_non_command = 0;
-
-        for (const auto& entry : entries) {
-            if (entry.idx <= commit_idx && entry.is_command) {
-                ++applied;
-            }
-            if (entry.idx > commit_idx) {
-                ++rewritten;
-            }
-            if (entry.idx <= commit_idx && !entry.is_command) {
-                ++kept_non_command;
-            }
-        }
-        return std::make_tuple(applied, rewritten, kept_non_command);
-    };
-
-    // Scenario 1: All entries committed
-    {
-        std::vector<simulated_entry> entries = {
-                {raft::term_t(1), raft::index_t(1), true},
-                {raft::term_t(1), raft::index_t(2), true},
-                {raft::term_t(1), raft::index_t(3), true},
-        };
-        auto [applied, rewritten, non_cmd] = process_second_pass(entries, raft::index_t(5));
-        BOOST_CHECK_EQUAL(applied, 3);
-        BOOST_CHECK_EQUAL(rewritten, 0);
-    }
-
-    // Scenario 2: All entries uncommitted
-    {
-        std::vector<simulated_entry> entries = {
-                {raft::term_t(1), raft::index_t(5), true},
-                {raft::term_t(1), raft::index_t(6), true},
-                {raft::term_t(1), raft::index_t(7), true},
-        };
-        auto [applied, rewritten, non_cmd] = process_second_pass(entries, raft::index_t(3));
-        BOOST_CHECK_EQUAL(applied, 0);
-        BOOST_CHECK_EQUAL(rewritten, 3);
-    }
-
-    // Scenario 3: Mixed committed and uncommitted
-    {
-        std::vector<simulated_entry> entries = {
-                {raft::term_t(1), raft::index_t(1), true},
-                {raft::term_t(1), raft::index_t(2), true},
-                {raft::term_t(1), raft::index_t(3), true}, // committed
-                {raft::term_t(1), raft::index_t(4), true}, // uncommitted
-                {raft::term_t(1), raft::index_t(5), true}, // uncommitted
-        };
-        auto [applied, rewritten, non_cmd] = process_second_pass(entries, raft::index_t(3));
-        BOOST_CHECK_EQUAL(applied, 3);
-        BOOST_CHECK_EQUAL(rewritten, 2);
-    }
-
-    // Scenario 4: Non-command entries are not applied but are kept
-    {
-        std::vector<simulated_entry> entries = {
-                {raft::term_t(1), raft::index_t(1), true},  // command
-                {raft::term_t(1), raft::index_t(2), false}, // config/dummy
-                {raft::term_t(1), raft::index_t(3), true},  // command
-                {raft::term_t(1), raft::index_t(4), false}, // config/dummy, uncommitted
-        };
-        auto [applied, rewritten, non_cmd] = process_second_pass(entries, raft::index_t(3));
-        BOOST_CHECK_EQUAL(applied, 2);   // only commands at idx 1 and 3
-        BOOST_CHECK_EQUAL(rewritten, 1); // only idx 4 (uncommitted)
-        BOOST_CHECK_EQUAL(non_cmd, 1);   // config/dummy at idx 2
-    }
-
-    // Scenario 5: Entry at exactly commit_idx boundary
-    {
-        std::vector<simulated_entry> entries = {
-                {raft::term_t(1), raft::index_t(5), true}, // at commit_idx - committed
-                {raft::term_t(1), raft::index_t(6), true}, // after commit_idx - uncommitted
-        };
-        auto [applied, rewritten, non_cmd] = process_second_pass(entries, raft::index_t(5));
-        BOOST_CHECK_EQUAL(applied, 1);
-        BOOST_CHECK_EQUAL(rewritten, 1);
-    }
-}
-
-// Test the full filtering pipeline simulation combining all aspects:
-// max_term tracking, leader changes, and duplicates.
-// Note: snapshot filtering is no longer part of filter_entries — it is handled
-// by the caller (process_raft_replayed_items) when deciding what goes into the
-// raft log vs what gets applied to memtables.
-BOOST_AUTO_TEST_CASE(test_full_filtering_pipeline_simulation) {
-    using db::raft_buffer_detail::entry_ordering_check_result;
-    using db::raft_buffer_detail::check_entry_ordering;
-
-    struct simulated_entry {
-        raft::term_t term;
-        raft::index_t idx;
-
-        bool operator==(const simulated_entry& other) const {
-            return term == other.term && idx == other.idx;
-        }
-    };
-
-    struct filter_result {
-        std::vector<simulated_entry> entries;
-        uint64_t discarded_leader_change = 0;
-    };
-
-    // Full simulation of filter_entries: leader_change discards tail, out_of_order stops.
-    auto filter_entries_sim = [](const std::vector<simulated_entry>& input) {
-        filter_result result;
-        raft::index_t last_idx{0};
-        raft::term_t last_term{0};
-
-        for (const auto& entry : input) {
-            auto ordering = check_entry_ordering({.term = entry.term, .idx = entry.idx}, {.term = last_term, .idx = last_idx});
-
-            switch (ordering) {
-            case entry_ordering_check_result::leader_change: {
-                auto it = std::ranges::lower_bound(result.entries, entry.idx, {}, [](const simulated_entry& e) {
-                    return e.idx;
-                });
-                result.discarded_leader_change += std::distance(it, result.entries.end());
-                result.entries.erase(it, result.entries.end());
-                break;
-            }
-            case entry_ordering_check_result::out_of_order:
-                return result; // Duplicate or duplicate tail — stop processing
-            case entry_ordering_check_result::in_order:
-                break;
-            }
-
-            last_idx = entry.idx;
-            last_term = entry.term;
-
-            result.entries.push_back(entry);
-        }
-        return result;
-    };
-
-    // Complex scenario: term 1 entries 1-5, leader change to term 2 at idx 3,
-    // then a duplicate entry (out_of_order) stops processing.
-    // Old segment replayed entries are never reached.
-    {
-        std::vector<simulated_entry> entries = {
-                // Initial entries (term 1)
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(1), raft::index_t(3)},
-                {raft::term_t(1), raft::index_t(4)},
-                {raft::term_t(1), raft::index_t(5)},
-                // Leader change (term 2): discards term-1 idx>=3
-                {raft::term_t(2), raft::index_t(3)},
-                {raft::term_t(2), raft::index_t(4)},
-                {raft::term_t(2), raft::index_t(4)}, // out_of_order: same idx+term → stop
-                {raft::term_t(2), raft::index_t(5)}, // not reached
-                // Old segment replayed (term 1) - also not reached
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(1), raft::index_t(3)},
-        };
-
-        auto result = filter_entries_sim(entries);
-
-        // - Term 1 idx 1,2: kept
-        // - Term 1 idx 3,4,5: kept then discarded by leader change (3 discarded)
-        // - Term 2 idx 3: added
-        // - Term 2 idx 4: added
-        // - Term 2 idx 4: out_of_order → stop (term 2 idx 5 and old-term entries not reached)
-        BOOST_CHECK_EQUAL(result.discarded_leader_change, 3);
-        BOOST_CHECK_EQUAL(result.entries.size(), 4);
-
-        std::vector<simulated_entry> expected = {
-                {raft::term_t(1), raft::index_t(1)},
-                {raft::term_t(1), raft::index_t(2)},
-                {raft::term_t(2), raft::index_t(3)},
-                {raft::term_t(2), raft::index_t(4)},
-        };
-        BOOST_CHECK(result.entries == expected);
-    }
-}
-
-// Test multiple groups processing - each group should be independent
-BOOST_AUTO_TEST_CASE(test_multiple_groups_independence) {
-    using db::raft_buffer_detail::entry_ordering_check_result;
-    using db::raft_buffer_detail::check_entry_ordering;
-
-    struct simulated_entry {
-        raft::term_t term;
-        raft::index_t idx;
-
-        bool operator==(const simulated_entry& other) const {
-            return term == other.term && idx == other.idx;
-        }
-    };
-
-    // Process a single group
-    auto process_group = [](const std::vector<simulated_entry>& entries) {
-        using db::raft_buffer_detail::raft_term_and_idx;
-        std::vector<simulated_entry> kept;
-        raft_term_and_idx last{};
-
-        for (const auto& entry : entries) {
-            auto ordering = check_entry_ordering({.term = entry.term, .idx = entry.idx}, last);
-
-            if (ordering == entry_ordering_check_result::out_of_order) {
-                break;
-            }
-            if (ordering == entry_ordering_check_result::leader_change) {
-                auto it = std::ranges::lower_bound(kept, entry.idx, {}, [](const simulated_entry& e) {
-                    return e.idx;
-                });
-                kept.erase(it, kept.end());
-            }
-
-            last = {.term = entry.term, .idx = entry.idx};
-            kept.push_back(entry);
-        }
-        return kept;
-    };
-
-    // Group 1: Has a leader change
-    std::vector<simulated_entry> group1_entries = {
-            {raft::term_t(1), raft::index_t(1)},
-            {raft::term_t(1), raft::index_t(2)},
-            {raft::term_t(2), raft::index_t(2)}, // leader change
-            {raft::term_t(2), raft::index_t(3)},
-    };
-
-    // Group 2: No leader change, different starting index
-    std::vector<simulated_entry> group2_entries = {
-            {raft::term_t(5), raft::index_t(100)},
-            {raft::term_t(5), raft::index_t(101)},
-            {raft::term_t(5), raft::index_t(102)},
-    };
-
-    // Group 3: Multiple leader changes
-    std::vector<simulated_entry> group3_entries = {
-            {raft::term_t(1), raft::index_t(1)},
-            {raft::term_t(2), raft::index_t(1)},
-            {raft::term_t(3), raft::index_t(1)},
-    };
-
-    auto result1 = process_group(group1_entries);
-    auto result2 = process_group(group2_entries);
-    auto result3 = process_group(group3_entries);
-
-    // Verify each group processed independently
-    BOOST_CHECK_EQUAL(result1.size(), 3);
-    BOOST_CHECK_EQUAL(result2.size(), 3);
-    BOOST_CHECK_EQUAL(result3.size(), 1); // only term 3 idx 1 remains
-
-    // Group 1: idx 1 from term 1, idx 2-3 from term 2
-    std::vector<simulated_entry> expected1 = {
-            {raft::term_t(1), raft::index_t(1)},
-            {raft::term_t(2), raft::index_t(2)},
-            {raft::term_t(2), raft::index_t(3)},
-    };
-    BOOST_CHECK(result1 == expected1);
-
-    // Group 2: all entries kept (no changes)
-    BOOST_CHECK(result2 == group2_entries);
-
-    // Group 3: only final term 3 entry
-    std::vector<simulated_entry> expected3 = {
-            {raft::term_t(3), raft::index_t(1)},
-    };
-    BOOST_CHECK(result3 == expected3);
-}
-
-// Test that uncommitted raft entries survive destruction of raft_commitlog.
-// When raft_commitlog is destroyed, release() is called on remaining handles
-// to prevent segment dirty count from being decremented. This keeps commitlog
-// segments alive so entries can be replayed after restart.
-//
-// Without release(), the destructors would decrement dirty counts to zero,
-// making segments eligible for deletion on the next discard_completed_segments call.
-// =============================================================================
-// New tests: end-to-end, replay buffer integration, persistence, multi-segment
-// =============================================================================
 
 // End-to-end commitlog persistence roundtrip with full field verification.
 // Writes raft entries from two groups (with command, config, and dummy types)
@@ -1558,13 +421,13 @@ SEASTAR_TEST_CASE(test_end_to_end_commitlog_replay_full_verification) {
 
                         commitlog_entry_reader reader(buf, detail::commitlog_entry_serialization_format::variant);
                         auto& entry_var = reader.entry().item;
-                        BOOST_REQUIRE(std::holds_alternative<raft_commitlog_entry>(entry_var));
+                        BOOST_REQUIRE(std::holds_alternative<raft_commitlog_batch>(entry_var));
 
-                        auto& rle = std::get<raft_commitlog_entry>(entry_var);
+                        auto& rle = std::get<raft_commitlog_batch>(entry_var);
                         BOOST_REQUIRE_EQUAL(rle.group_id, expected.gid);
-                        BOOST_REQUIRE_EQUAL(rle.entry->term, expected.term);
-                        BOOST_REQUIRE_EQUAL(rle.entry->idx, expected.idx);
-                        BOOST_REQUIRE_EQUAL(rle.entry->data.index(), expected.variant_idx);
+                        BOOST_REQUIRE_EQUAL(rle.entries.at(0)->term, expected.term);
+                        BOOST_REQUIRE_EQUAL(rle.entries.at(0)->idx, expected.idx);
+                        BOOST_REQUIRE_EQUAL(rle.entries.at(0)->data.index(), expected.variant_idx);
                         ++found;
                         co_return;
                     });
@@ -1574,88 +437,91 @@ SEASTAR_TEST_CASE(test_end_to_end_commitlog_replay_full_verification) {
 }
 
 // Test: raft_commitlog store, then truncate_log, verify handles.
-// Store 10 entries, truncate at idx 6, verify handles for 1-5 succeed
-// and entries 6-10 are gone.
-SEASTAR_TEST_CASE(test_raft_commitlog_store_and_truncate_log) {
+// Test: one batch becomes one record, and truncate_log() clamps that record
+// while writing a truncation record for what it discarded. The entries stay on
+// disk — the commitlog is append-only — so the truncation record is what tells
+// replay that those copies were superseded.
+SEASTAR_TEST_CASE(test_raft_batch_record_and_truncation) {
     return cl_test([](commitlog& log) -> future<> {
         auto gid = make_group_id();
         auto tid = make_table_id();
+        auto rg_tid = make_table_id();
 
-        service::strong_consistency::replayed_data_per_group replayed_data;
-        service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
-
-        // Store 10 entries.
         raft::log_entry_ptr_list all_entries;
         for (int i = 1; i <= 10; ++i) {
             all_entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
         }
-        co_await persistence.store_log_entries(all_entries);
 
-        // Truncate at idx 6 — entries 6-10 should be removed.
-        persistence.truncate_log(raft::index_t(6));
+        std::deque<service::strong_consistency::segment_record> queue;
+        // The whole batch is one commitlog entry, so one record.
+        auto handle = co_await service::strong_consistency::write_raft_batch(
+                log, tid, gid, raft::index_t(0), all_entries);
+        service::strong_consistency::account_batch(queue, rg_tid, std::move(handle), all_entries);
+        BOOST_REQUIRE_EQUAL(queue.size(), 1);
+        BOOST_REQUIRE_EQUAL(queue.front().first, raft::index_t(1));
+        BOOST_REQUIRE_EQUAL(queue.front().max, raft::index_t(10));
+        BOOST_REQUIRE_EQUAL(queue.front().max_term(), raft::term_t(1));
+        // All commands, so the release gate is the last of them.
+        BOOST_REQUIRE(queue.front().last_cmd().has_value());
+        BOOST_REQUIRE_EQUAL(*queue.front().last_cmd(), raft::index_t(10));
+        // Two references at the batch's position: the group's own and the one
+        // under system.raft_groups.
+        BOOST_REQUIRE(bool(queue.front().pin_table));
+        BOOST_REQUIRE(bool(queue.front().pin_rg));
+        BOOST_REQUIRE(queue.front().pin_table.rp() == queue.front().pin_rg.rp());
 
-        // Verify: entries 1-5 should have valid handles.
-        raft::log_entry_ptr_list first_five(all_entries.begin(), all_entries.begin() + 5);
-        auto handles = persistence.acquire_replay_position_handles_for(first_five);
-        BOOST_REQUIRE_EQUAL(handles.size(), 5);
-        for (int i = 0; i < 5; ++i) {
-            BOOST_REQUIRE_EQUAL(handles[i].index, raft::index_t(i + 1));
-        }
-
-        // Verify: requesting handles for entry 6 should trigger on_internal_error.
-        // Use scoped_no_abort_on_internal_error to catch it.
-        {
-            seastar::testing::scoped_no_abort_on_internal_error no_abort;
-            raft::log_entry_ptr_list entry_six = {all_entries[5]};
-            try {
-                persistence.acquire_replay_position_handles_for(entry_six);
-                BOOST_FAIL("Expected on_internal_error for truncated entry");
-            } catch (...) {
-                // Expected — entry 6 was truncated.
-            }
-        }
+        // A leader change discards 6..10: the record keeps its reference (it
+        // still holds live entries 1..5) with max clamped.
+        queue.back().trim_from(raft::index_t(6));
+        BOOST_REQUIRE_EQUAL(queue.front().max, raft::index_t(5));
+        BOOST_REQUIRE_EQUAL(*queue.front().last_cmd(), raft::index_t(5));
+        BOOST_REQUIRE(bool(queue.front().pin_table));
     });
 }
 
-// Test: truncate_log_tail releases handles for old entries.
-// Store 10 entries, truncate tail at idx 5, verify entries 1-5 are gone
-// but entries 6-10 are still accessible.
-SEASTAR_TEST_CASE(test_raft_commitlog_truncate_log_tail_releases_handles) {
+// Test: the release gate is the record's last *command*. Dummy and
+// configuration entries never reach apply(), so a record whose tail is one of
+// those must not wait for its own max index, and a record holding nothing but
+// those has no gate at all.
+SEASTAR_TEST_CASE(test_raft_batch_record_release_gate) {
     return cl_test([](commitlog& log) -> future<> {
         auto gid = make_group_id();
         auto tid = make_table_id();
+        auto rg_tid = make_table_id();
 
-        service::strong_consistency::replayed_data_per_group replayed_data;
-        service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
+        raft::log_entry_ptr_list mixed = {
+            make_command_entry(raft::term_t(1), raft::index_t(1)),
+            make_command_entry(raft::term_t(1), raft::index_t(2)),
+            make_config_entry(raft::term_t(1), raft::index_t(3)),
+            make_dummy_entry(raft::term_t(1), raft::index_t(4)),
+        };
+        std::deque<service::strong_consistency::segment_record> queue;
+        service::strong_consistency::account_batch(queue, rg_tid,
+                co_await service::strong_consistency::write_raft_batch(
+                        log, tid, gid, raft::index_t(0), mixed), mixed);
+        BOOST_REQUIRE_EQUAL(queue.size(), 1);
+        auto& rec = queue.front();
+        BOOST_REQUIRE_EQUAL(rec.max, raft::index_t(4));
+        // The gate is command 2, not the dummy at 4.
+        BOOST_REQUIRE_EQUAL(*rec.last_cmd(), raft::index_t(2));
+        BOOST_REQUIRE_EQUAL(rec.noncmd.size(), 2);
+        // The configuration is remembered so that releasing the record can
+        // persist it.
+        BOOST_REQUIRE(rec.last_conf().has_value());
+        BOOST_REQUIRE_EQUAL(rec.last_conf()->first, raft::index_t(3));
 
-        raft::log_entry_ptr_list all_entries;
-        for (int i = 1; i <= 10; ++i) {
-            all_entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
-        }
-        co_await persistence.store_log_entries(all_entries);
-
-        // Truncate tail at idx 5 — entries 1-5 handles should be released.
-        persistence.truncate_log_tail(raft::index_t(5));
-
-        // Verify: entries 6-10 should have valid handles.
-        raft::log_entry_ptr_list last_five(all_entries.begin() + 5, all_entries.end());
-        auto handles = persistence.acquire_replay_position_handles_for(last_five);
-        BOOST_REQUIRE_EQUAL(handles.size(), 5);
-        for (int i = 0; i < 5; ++i) {
-            BOOST_REQUIRE_EQUAL(handles[i].index, raft::index_t(i + 6));
-        }
-
-        // Verify: requesting handles for entry 5 should trigger on_internal_error.
-        {
-            seastar::testing::scoped_no_abort_on_internal_error no_abort;
-            raft::log_entry_ptr_list entry_five = {all_entries[4]};
-            try {
-                persistence.acquire_replay_position_handles_for(entry_five);
-                BOOST_FAIL("Expected on_internal_error for tail-truncated entry");
-            } catch (...) {
-                // Expected — entry 5 was tail-truncated.
-            }
-        }
+        // A record of non-commands only has no gate: nothing will ever apply.
+        raft::log_entry_ptr_list only_noncmd = {
+            make_dummy_entry(raft::term_t(2), raft::index_t(5)),
+            make_config_entry(raft::term_t(2), raft::index_t(6)),
+        };
+        std::deque<service::strong_consistency::segment_record> queue2;
+        service::strong_consistency::account_batch(queue2, rg_tid,
+                co_await service::strong_consistency::write_raft_batch(
+                        log, tid, gid, raft::index_t(4), only_noncmd), only_noncmd);
+        BOOST_REQUIRE_EQUAL(queue2.size(), 1);
+        BOOST_REQUIRE(!queue2.front().last_cmd().has_value());
+        BOOST_REQUIRE_EQUAL(queue2.front().max_term(), raft::term_t(2));
     });
 }
 
@@ -1690,9 +556,9 @@ SEASTAR_TEST_CASE(test_replay_with_multiple_segments) {
                         auto&& [buf, rp] = buf_rp;
                         commitlog_entry_reader reader(buf, detail::commitlog_entry_serialization_format::variant);
                         auto& entry_var = reader.entry().item;
-                        if (std::holds_alternative<raft_commitlog_entry>(entry_var)) {
-                            auto& rle = std::get<raft_commitlog_entry>(entry_var);
-                            replayed_entries.emplace_back(rle.entry->idx, rle.entry->term);
+                        if (std::holds_alternative<raft_commitlog_batch>(entry_var)) {
+                            auto& rle = std::get<raft_commitlog_batch>(entry_var);
+                            replayed_entries.emplace_back(rle.entries.at(0)->idx, rle.entries.at(0)->term);
                         }
                         co_return;
                     });
@@ -1743,7 +609,11 @@ SEASTAR_TEST_CASE(test_mixed_raft_and_mutation_entries_replay_separation) {
         auto segments = log.get_active_segment_names();
         BOOST_REQUIRE(!segments.empty());
 
-        db::raft_commitlog_replay_buffer buffer;
+        // The separation is a property of the on-disk format, so count the
+        // alternatives directly rather than driving a replay buffer.
+        size_t raft_batch_count = 0;
+        size_t raft_entry_count = 0;
+        std::unordered_set<raft::group_id> raft_groups;
         size_t mutation_count = 0;
 
         for (auto& seg : segments) {
@@ -1753,9 +623,11 @@ SEASTAR_TEST_CASE(test_mixed_raft_and_mutation_entries_replay_separation) {
                         commitlog_entry_reader reader(buf, detail::commitlog_entry_serialization_format::variant);
                         auto& entry_var = reader.entry().item;
 
-                        if (std::holds_alternative<raft_commitlog_entry>(entry_var)) {
-                            auto& rle = std::get<raft_commitlog_entry>(entry_var);
-                            buffer.add(rle.group_id, rle.entry);
+                        if (std::holds_alternative<raft_commitlog_batch>(entry_var)) {
+                            auto& rle = std::get<raft_commitlog_batch>(entry_var);
+                            ++raft_batch_count;
+                            raft_entry_count += rle.entries.size();
+                            raft_groups.insert(rle.group_id);
                         } else {
                             BOOST_REQUIRE(std::holds_alternative<mutation_entry>(entry_var));
                             ++mutation_count;
@@ -1764,86 +636,321 @@ SEASTAR_TEST_CASE(test_mixed_raft_and_mutation_entries_replay_separation) {
                     });
         }
 
-        // Verify separation: raft entries in buffer, mutations counted separately.
-        BOOST_REQUIRE_EQUAL(buffer.total_entries(), count);
-        BOOST_REQUIRE_EQUAL(buffer.remaining_groups(), 1);
+        // Verify separation: the raft batches carry only raft entries, for one
+        // group, and the mutation entries are untouched by them.
+        BOOST_REQUIRE_EQUAL(raft_batch_count, count);
+        BOOST_REQUIRE_EQUAL(raft_entry_count, count);
+        BOOST_REQUIRE_EQUAL(raft_groups.size(), 1);
         BOOST_REQUIRE_EQUAL(mutation_count, count);
     });
 }
 
-// Test: raft_commitlog with combined truncate_log + truncate_log_tail.
-// Verifies that truncating both head and tail leaves only the middle entries.
-SEASTAR_TEST_CASE(test_raft_commitlog_combined_truncation) {
-    return cl_test([](commitlog& log) -> future<> {
+// Test: a group that writes into several segments gets one record per segment,
+// and a truncation that spans them pops the records it invalidates whole while
+// clamping the one it lands inside. Records are the unit of retention, so each
+// segment must end up with its own pair of references.
+SEASTAR_TEST_CASE(test_raft_batch_records_across_segments) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
         auto gid = make_group_id();
         auto tid = make_table_id();
+        auto rg_tid = make_table_id();
 
-        service::strong_consistency::replayed_data_per_group replayed_data;
-        service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
-
-        raft::log_entry_ptr_list all_entries;
-        for (int i = 1; i <= 10; ++i) {
-            all_entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
-        }
-        co_await persistence.store_log_entries(all_entries);
-
-        // Truncate tail (entries <= 3) and head (entries >= 8).
-        persistence.truncate_log_tail(raft::index_t(3));
-        persistence.truncate_log(raft::index_t(8));
-
-        // Only entries 4-7 should remain.
-        raft::log_entry_ptr_list middle(all_entries.begin() + 3, all_entries.begin() + 7);
-        auto handles = persistence.acquire_replay_position_handles_for(middle);
-        BOOST_REQUIRE_EQUAL(handles.size(), 4);
-        for (int i = 0; i < 4; ++i) {
-            BOOST_REQUIRE_EQUAL(handles[i].index, raft::index_t(i + 4));
+        std::deque<service::strong_consistency::segment_record> queue;
+        raft::index_t next{1};
+        // Keep writing batches until the group has entries in three segments.
+        // Each batch is one commitlog entry, so a 1MB segment takes a handful
+        // of 4x64KB batches.
+        while (queue.size() < 3) {
+            raft::log_entry_ptr_list batch;
+            for (int i = 0; i < 4; ++i) {
+                batch.push_back(make_command_entry_sized(raft::term_t(1), next, 64 * 1024));
+                next = next + raft::index_t{1};
+            }
+            service::strong_consistency::account_batch(queue, rg_tid,
+                co_await service::strong_consistency::write_raft_batch(
+                        log, tid, gid, raft::index_t(0), batch), batch);
         }
 
-        // Verify boundary entries are gone.
-        {
-            seastar::testing::scoped_no_abort_on_internal_error no_abort;
-            try {
-                raft::log_entry_ptr_list e3 = {all_entries[2]};
-                persistence.acquire_replay_position_handles_for(e3);
-                BOOST_FAIL("Expected error for tail-truncated entry 3");
-            } catch (...) {
-            }
+        // One record per segment, in segment order, with disjoint ascending
+        // index ranges and a reference pair each.
+        for (size_t i = 0; i + 1 < queue.size(); ++i) {
+            BOOST_REQUIRE_LT(queue[i].segment(), queue[i + 1].segment());
+            BOOST_REQUIRE_LT(queue[i].max, queue[i + 1].first);
+            BOOST_REQUIRE(bool(queue[i].pin_table));
+            BOOST_REQUIRE(bool(queue[i].pin_rg));
+        }
 
-            try {
-                raft::log_entry_ptr_list e8 = {all_entries[7]};
-                persistence.acquire_replay_position_handles_for(e8);
-                BOOST_FAIL("Expected error for head-truncated entry 8");
-            } catch (...) {
-            }
+        // Truncate inside the middle record: the newest records are entirely at
+        // or above the truncation point and go away whole; the one the point
+        // lands in is clamped and keeps its references, because it still holds
+        // live entries.
+        const auto cut = queue[1].first + raft::index_t{1};
+        std::deque<service::strong_consistency::truncation_record> truncations;
+        while (!queue.empty() && queue.back().first >= cut) {
+            truncations.push_back(service::strong_consistency::truncation_record{
+                    .segment = queue.back().segment(), .from = queue.back().first, .to = queue.back().max});
+            queue.pop_back();
+        }
+        BOOST_REQUIRE(!queue.empty());
+        if (queue.back().max >= cut) {
+            truncations.push_back(service::strong_consistency::truncation_record{
+                    .segment = queue.back().segment(), .from = cut, .to = queue.back().max});
+            queue.back().trim_from(cut);
+        }
+        BOOST_REQUIRE(!truncations.empty());
+        BOOST_REQUIRE_LT(queue.back().max, cut);
+        BOOST_REQUIRE(bool(queue.back().pin_table));
+        // Every truncation names a real segment and a non-empty range.
+        for (const auto& t : truncations) {
+            BOOST_REQUIRE_GT(t.segment, 0u);
+            BOOST_REQUIRE_LE(t.from, t.to);
         }
     });
 }
 
-// Test: raft_commitlog load_log returns replayed entries exactly once.
-SEASTAR_TEST_CASE(test_raft_commitlog_load_log_one_shot) {
+// Test: max_single_entry_batch_size() bounds what write_raft_batch() actually
+// measures for a single entry, and bounds it tightly. The startup check it
+// feeds is only worth anything if the number tracks the format, so this pins
+// the two together — a bound for any entry, exact for the lease-stamped one it
+// is derived from. Without the exact half, a bound of SIZE_MAX would pass.
+SEASTAR_TEST_CASE(test_max_single_entry_batch_size_bounds_the_writer) {
     return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+
+        for (const size_t payload : {size_t(0), size_t(4096), size_t(100 * 1024)}) {
+            auto plain = make_command_entry_sized(raft::term_t(1), raft::index_t(1), payload);
+            const auto command_size = std::get<raft::command>(plain->data).size();
+            const auto bound = service::strong_consistency::max_single_entry_batch_size(command_size);
+
+            commitlog_raft_batch_writer plain_writer(raft_commitlog_batch{
+                    .group_id = gid, .commit_idx = raft::index_t{0}, .entries = {plain}});
+            BOOST_REQUIRE_LE(plain_writer.size(), bound);
+
+            // The lease-stamped form is the larger of the two and is what the
+            // bound is measured from, so here it must be exact.
+            auto stamped = make_lw_shared<const raft::log_entry>(raft::log_entry{
+                    .term = raft::term_t(1), .idx = raft::index_t(1),
+                    .data = std::get<raft::command>(plain->data),
+                    .lease_time = raft::time_bounds{
+                            raft::lease_clock::time_point(std::chrono::nanoseconds(lease_earliest_ns)),
+                            raft::lease_clock::time_point(std::chrono::nanoseconds(lease_latest_ns))}});
+            commitlog_raft_batch_writer stamped_writer(raft_commitlog_batch{
+                    .group_id = gid, .commit_idx = raft::index_t{0}, .entries = {stamped}});
+            BOOST_REQUIRE_EQUAL(stamped_writer.size(), bound);
+        }
+        co_return;
+    });
+}
+
+// Test: a batch that does not fit in one commitlog entry is an internal error,
+// not something to split or fragment.
+//
+// Fragmenting it across segments — which is what the commitlog would do with an
+// oversized entry — breaks the rule that a copy of an entry lives in exactly one
+// segment, and that rule is what the records and the truncation records are
+// built on.
+//
+// write_raft_batch() owns the rule and the reachability argument.
+//
+// allow_fragmented_entries is on, as in production once the cluster feature is
+// up, and that is the configuration the check exists for: with it off,
+// commitlog::add() rejects the oversized entry by itself; with it on, removing
+// the check raises nothing — the commitlog quietly fragments the entry, the one
+// outcome the design forbids. Hence the flag, and an assertion on our own error
+// rather than on any exception.
+SEASTAR_TEST_CASE(test_raft_batch_too_large_is_an_internal_error) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.allow_fragmented_entries = true;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
         auto gid = make_group_id();
         auto tid = make_table_id();
 
-        // Construct with pre-populated replayed entries.
-        service::strong_consistency::replayed_data_per_group replayed_data;
-        replayed_data.entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(1)));
-        replayed_data.entries.push_back(make_dummy_entry(raft::term_t(1), raft::index_t(2)));
-        replayed_data.entries.push_back(make_config_entry(raft::term_t(2), raft::index_t(3)));
+        // Half a segment is the largest a single commitlog entry can be, so
+        // 16 x 64KB is comfortably over it.
+        raft::log_entry_ptr_list big;
+        for (int i = 1; i <= 16; ++i) {
+            big.push_back(make_command_entry_sized(raft::term_t(1), raft::index_t(i), 64 * 1024));
+        }
+        BOOST_REQUIRE_GT(big.size() * 64 * 1024, log.max_record_size());
 
-        service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
+        seastar::testing::scoped_no_abort_on_internal_error no_abort;
+        try {
+            co_await service::strong_consistency::write_raft_batch(
+                    log, tid, gid, raft::index_t(0), big);
+            BOOST_FAIL("expected an oversized batch to be rejected");
+        } catch (const std::runtime_error& e) {
+            // on_internal_error's own exception, not the commitlog's
+            // invalid_argument: that one would not be raised at all here.
+            BOOST_REQUIRE(sstring(e.what()).find("does not fit in one commitlog entry")
+                    != sstring::npos);
+        }
+    });
+}
 
-        // First call should return the entries.
-        auto entries = persistence.load_log();
-        BOOST_REQUIRE_EQUAL(entries.size(), 3);
-        BOOST_REQUIRE_EQUAL(entries[0]->idx, raft::index_t(1));
-        BOOST_REQUIRE_EQUAL(entries[1]->idx, raft::index_t(2));
-        BOOST_REQUIRE_EQUAL(entries[2]->idx, raft::index_t(3));
+// Test: records that no group claimed are detached at stop(), not released —
+// raft_commitlog_replay_buffer::stop() says why. Direction matters: the
+// segments must stay dirty here, while a deliberately destroyed group gives
+// its up (test_raft_commitlog_release_all_frees_the_segments below).
+SEASTAR_TEST_CASE(test_replay_buffer_stop_detaches_unclaimed_records) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
 
-        // Second call should return empty (one-shot).
-        auto entries2 = persistence.load_log();
-        BOOST_REQUIRE(entries2.empty());
-        co_return;
+        // Build the records exactly as finish_replay() does: write the tail as a
+        // batch and account it. Fill past one segment, since only sealed ones
+        // count as dirty.
+        service::strong_consistency::replayed_data_per_group data;
+        raft::index_t next{1};
+        while (log.get_num_dirty_segments() == 0) {
+            raft::log_entry_ptr_list batch;
+            for (int i = 0; i < 4; ++i) {
+                batch.push_back(make_command_entry_sized(raft::term_t(1), next, 64 * 1024));
+                next = next + raft::index_t{1};
+            }
+            auto handle = co_await service::strong_consistency::write_raft_batch(
+                    log, tid, gid, raft::index_t(0), batch);
+            service::strong_consistency::account_batch(data.records, rg_tid, std::move(handle), batch);
+        }
+        const auto dirty = log.get_num_dirty_segments();
+        BOOST_REQUIRE_GT(dirty, 0);
+        BOOST_REQUIRE(!data.records.empty());
+
+        {
+            db::raft_commitlog_replay_buffer buffer;
+            raft_replay_buffer_tester::seed(buffer, gid, std::move(data));
+            co_await buffer.stop();
+        }
+        // Asserted after the buffer is gone: a stop() that merely cleared the map
+        // would leave the destructor to decrement, and the segments would go
+        // clean here.
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), dirty);
+    });
+}
+
+// Test: the same holds when stop() never runs at all.
+//
+// The buffer's implicit destructor would decrement, so skipping stop() — an
+// exception between start() and its shutdown hook — would delete the segments
+// holding a rewritten tail while the process is still live. This is the
+// structural half of the rule: stop() being correct is not enough if the
+// destructor beside it does the opposite.
+SEASTAR_TEST_CASE(test_replay_buffer_destructor_detaches_unclaimed_records) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        service::strong_consistency::replayed_data_per_group data;
+        raft::index_t next{1};
+        while (log.get_num_dirty_segments() == 0) {
+            raft::log_entry_ptr_list batch;
+            for (int i = 0; i < 4; ++i) {
+                batch.push_back(make_command_entry_sized(raft::term_t(1), next, 64 * 1024));
+                next = next + raft::index_t{1};
+            }
+            auto handle = co_await service::strong_consistency::write_raft_batch(
+                    log, tid, gid, raft::index_t(0), batch);
+            service::strong_consistency::account_batch(data.records, rg_tid, std::move(handle), batch);
+        }
+        const auto dirty = log.get_num_dirty_segments();
+        BOOST_REQUIRE_GT(dirty, 0);
+        BOOST_REQUIRE(!data.records.empty());
+
+        {
+            db::raft_commitlog_replay_buffer buffer;
+            raft_replay_buffer_tester::seed(buffer, gid, std::move(data));
+            // Deliberately no stop().
+        }
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), dirty);
+    });
+}
+
+// Test: a group destroyed deliberately gives up its segment references instead
+// of detaching them — see raft_commitlog::release_all() (SCYLLADB-3827).
+SEASTAR_TEST_CASE(test_raft_commitlog_release_all_frees_the_segments) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        {
+            service::strong_consistency::raft_commitlog rc(gid, log, tid, rg_tid, {});
+
+            // Fill past one segment, so the group holds a sealed one: only those
+            // count as dirty, and only they can be reclaimed.
+            raft::index_t next{1};
+            while (log.get_num_dirty_segments() == 0) {
+                raft::log_entry_ptr_list batch;
+                for (int i = 0; i < 4; ++i) {
+                    batch.push_back(make_command_entry_sized(raft::term_t(1), next, 64 * 1024));
+                    next = next + raft::index_t{1};
+                }
+                co_await rc.store_log_entries(batch, raft::index_t(0));
+            }
+            BOOST_REQUIRE_GT(log.get_num_dirty_segments(), 0);
+            BOOST_REQUIRE(bool(rc.pin_for_apply(raft::index_t(1))));
+
+            rc.release_all();
+
+            // No record holds anything any more...
+            {
+                seastar::testing::scoped_no_abort_on_internal_error no_abort;
+                try {
+                    rc.pin_for_apply(raft::index_t(1));
+                    BOOST_FAIL("Expected the records to have been released");
+                } catch (...) {
+                    // Expected.
+                }
+            }
+            // ...and the segments it was keeping dirty are clean, which is
+            // exactly what detaching them would not have done.
+            BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+        }
+    });
+}
+
+// Test: the other direction — destroying a group without release_all() detaches
+// its references, so the segments stay dirty. This is the shutdown path
+// (log_disposition::keep). The pair has to be tested together: either test
+// alone passes with the destructor and release_all() doing the same thing.
+SEASTAR_TEST_CASE(test_raft_commitlog_destructor_detaches_the_segments) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        uint64_t dirty = 0;
+        {
+            service::strong_consistency::raft_commitlog rc(gid, log, tid, rg_tid, {});
+
+            raft::index_t next{1};
+            while (log.get_num_dirty_segments() == 0) {
+                raft::log_entry_ptr_list batch;
+                for (int i = 0; i < 4; ++i) {
+                    batch.push_back(make_command_entry_sized(raft::term_t(1), next, 64 * 1024));
+                    next = next + raft::index_t{1};
+                }
+                co_await rc.store_log_entries(batch, raft::index_t(0));
+            }
+            dirty = log.get_num_dirty_segments();
+            BOOST_REQUIRE_GT(dirty, 0);
+        }
+        // Asserted after the group is gone, so the destructor has run: a
+        // destructor that dropped the handles rather than detaching them would
+        // have brought this to zero.
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), dirty);
     });
 }
 
@@ -1852,7 +959,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_load_log_one_shot) {
 // the replication path, and for LeaseGuard it is the primary one -- "the log is
 // the lease" reaches a new leader over append_entries, not off disk. The
 // persisted encoding is a different byte format and is covered by
-// test_commitlog_raft_log_entry_writer above; neither test substitutes for the
+// test_commitlog_raft_batch_writer above; neither test substitutes for the
 // other.
 //
 // A misread here is silent and unsafe: a lease decoded as younger than it is
@@ -1887,6 +994,204 @@ BOOST_AUTO_TEST_CASE(test_log_entry_lease_time_round_trip) {
     auto bv2 = buf2.linearize();
     auto in2 = ser::as_input_stream(bv2);
     BOOST_REQUIRE(!ser::deserialize(in2, std::type_identity<raft::log_entry_ptr>())->lease_time);
+}
+
+// Test: rp_handle::clone() takes an extra reference at a live handle's
+// position, under the same or a different column family, any number of times.
+//
+// Asserted through the segment rather than through the handles: a clone that
+// took no reference would satisfy every rp() and bool() check here, and
+// mark_clean() no-ops silently once a cf's count is gone, so an under-counted
+// release raises nothing either. Only the segment's dirty state tells them
+// apart.
+SEASTAR_TEST_CASE(test_rp_handle_clone) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto other_tid = make_table_id();
+
+        auto entry = make_command_entry(raft::term_t(1), raft::index_t(1));
+        std::optional handle = co_await write_raft_entry_to_commitlog(log, tid, gid, entry);
+        BOOST_REQUIRE(bool(*handle));
+
+        // A second reference under the entry's own cf, at the same position.
+        std::optional dup = handle->clone(tid);
+        BOOST_REQUIRE(bool(*dup));
+        BOOST_REQUIRE(dup->rp() == handle->rp());
+
+        // References under a cf the segment was never written for, as
+        // account_batch() takes them for system.raft_groups; repeats are legal.
+        std::optional pin1 = handle->clone(other_tid);
+        std::optional pin2 = handle->clone(other_tid);
+        BOOST_REQUIRE(bool(*pin1));
+        BOOST_REQUIRE(pin1->rp() == handle->rp());
+        BOOST_REQUIRE(bool(*pin2));
+
+        // A reference taken from a reference is just as good a source as the original.
+        std::optional chained = pin1->clone(other_tid);
+        BOOST_REQUIRE(chained->rp() == handle->rp());
+
+        // Seal the segment the references are in: only a sealed segment reports
+        // as dirty, and only then does the count become observable.
+        co_await log.force_new_active_segment();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        // Now drop them one at a time. Every step but the last must leave the
+        // segment dirty — which is what fails if clone() did not count.
+        handle.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        dup.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        pin1.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        pin2.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        chained.reset();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
+    });
+}
+
+// Test: the copies a truncation superseded are dropped, and only those.
+//
+// A truncation removes a suffix of the raft log, so the copies it discarded are
+// the batch's tail and the survivors its prefix. The record says which indexes
+// of which segment went, and the cursor walks it as the copies are read.
+BOOST_AUTO_TEST_CASE(test_replay_drop_stale_copies) {
+    using db::raft_buffer_detail::drop_stale_copies;
+    using db::raft_buffer_detail::segment_cursors;
+    using db::raft_buffer_detail::truncation_cursor;
+
+    const auto batch = [] {
+        std::vector<raft::log_entry_ptr> v;
+        for (int i = 1; i <= 5; ++i) {
+            v.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+        }
+        return v;
+    };
+
+    // "indexes 3..5 of this segment were truncated": 1 and 2 survive.
+    {
+        segment_cursors cursors{truncation_cursor{
+                .from = raft::index_t(3), .to = raft::index_t(5), .next = raft::index_t(3)}};
+        auto rest = drop_stale_copies(cursors, batch());
+        BOOST_REQUIRE_EQUAL(rest.size(), 2);
+        BOOST_REQUIRE_EQUAL(rest[0]->idx, raft::index_t(1));
+        BOOST_REQUIRE_EQUAL(rest[1]->idx, raft::index_t(2));
+        BOOST_REQUIRE(cursors.front().exhausted());
+    }
+
+    // A record for a range this batch does not reach leaves it untouched.
+    {
+        segment_cursors cursors{truncation_cursor{
+                .from = raft::index_t(9), .to = raft::index_t(12), .next = raft::index_t(9)}};
+        auto rest = drop_stale_copies(cursors, batch());
+        BOOST_REQUIRE_EQUAL(rest.size(), 5);
+        BOOST_REQUIRE(!cursors.front().exhausted());
+    }
+
+    // No records at all: nothing is stale.
+    {
+        segment_cursors cursors;
+        BOOST_REQUIRE_EQUAL(drop_stale_copies(cursors, batch()).size(), 5);
+    }
+}
+
+// Test: several truncations of one segment are matched oldest-first, so a
+// segment that was truncated twice drops the right copy each time.
+BOOST_AUTO_TEST_CASE(test_replay_drop_stale_copies_multiple_truncations) {
+    using db::raft_buffer_detail::drop_stale_copies;
+    using db::raft_buffer_detail::segment_cursors;
+    using db::raft_buffer_detail::truncation_cursor;
+
+    // The group wrote 4, 5 into this segment, was truncated from 4, wrote 4, 5
+    // again, and was truncated from 4 once more. Two records, same range.
+    segment_cursors cursors{
+        truncation_cursor{.from = raft::index_t(4), .to = raft::index_t(5), .next = raft::index_t(4)},
+        truncation_cursor{.from = raft::index_t(4), .to = raft::index_t(5), .next = raft::index_t(4)},
+    };
+
+    const auto pair = [] {
+        std::vector<raft::log_entry_ptr> v;
+        v.push_back(make_command_entry(raft::term_t(1), raft::index_t(4)));
+        v.push_back(make_command_entry(raft::term_t(1), raft::index_t(5)));
+        return v;
+    };
+
+    // First copy of 4,5: consumed by the first record.
+    BOOST_REQUIRE(drop_stale_copies(cursors, pair()).empty());
+    BOOST_REQUIRE(cursors.front().exhausted());
+    // Second copy: consumed by the second record.
+    BOOST_REQUIRE(drop_stale_copies(cursors, pair()).empty());
+    BOOST_REQUIRE(cursors.back().exhausted());
+    // Third copy: no record left, so this one is the current copy and survives.
+    auto rest = drop_stale_copies(cursors, pair());
+    BOOST_REQUIRE_EQUAL(rest.size(), 2);
+    BOOST_REQUIRE_EQUAL(rest[0]->idx, raft::index_t(4));
+}
+
+// Test: truncations of one segment that reach back past each other. A
+// truncation that clamps a record leaves a cursor for the tail it discarded, and
+// a later truncation that pops the same record covers a range starting *below*
+// that — so at a given index several cursors can be live with only a later one
+// waiting for it. Matching against the oldest live cursor alone would keep a
+// copy that was truncated, and replay would then apply an entry no leader ever
+// committed.
+BOOST_AUTO_TEST_CASE(test_replay_drop_stale_copies_overlapping_truncations) {
+    using db::raft_buffer_detail::drop_stale_copies;
+    using db::raft_buffer_detail::segment_cursors;
+    using db::raft_buffer_detail::truncation_cursor;
+
+    // One segment. A leader wrote 5..9; the next truncated from 7 (clamping the
+    // record to 5..6 and recording 7..9) and wrote 7',8' into the same segment;
+    // a third truncated from 5, popping the record whole and recording 5..8.
+    segment_cursors cursors{
+        truncation_cursor{.from = raft::index_t(7), .to = raft::index_t(9), .next = raft::index_t(7)},
+        truncation_cursor{.from = raft::index_t(5), .to = raft::index_t(8), .next = raft::index_t(5)},
+    };
+
+    const auto batch = [](int from, int to, raft::term_t term) {
+        std::vector<raft::log_entry_ptr> v;
+        for (int i = from; i <= to; ++i) {
+            v.push_back(make_command_entry(term, raft::index_t(i)));
+        }
+        return v;
+    };
+
+    // The first leader's whole batch is stale: 5 and 6 belong to the second
+    // record, 7..9 to the first.
+    BOOST_REQUIRE(drop_stale_copies(cursors, batch(5, 9, raft::term_t(1))).empty());
+    // The second leader's 7',8' are stale too, against what is left of the
+    // second record.
+    BOOST_REQUIRE(drop_stale_copies(cursors, batch(7, 8, raft::term_t(2))).empty());
+    // Every cursor is now used up, so the third leader's copies stand — these are
+    // the ones that actually committed.
+    auto current = drop_stale_copies(cursors, batch(5, 8, raft::term_t(3)));
+    BOOST_REQUIRE_EQUAL(current.size(), 4);
+    BOOST_REQUIRE_EQUAL(current.front()->idx, raft::index_t(5));
+    BOOST_REQUIRE_EQUAL(current.front()->term, raft::term_t(3));
+}
+
+// Test: a later write at index N supersedes what is buffered at or above N.
+// This is what makes a leader change that reuses indexes come out right without
+// comparing terms: the copy written later is by definition the current one.
+BOOST_AUTO_TEST_CASE(test_replay_superseded_by) {
+    using db::raft_buffer_detail::superseded_by;
+
+    std::deque<db::raft_buffer_detail::buffered_entry> buf;
+    for (int i = 3; i <= 7; ++i) {
+        buf.push_back(db::raft_buffer_detail::buffered_entry{
+                .entry = make_command_entry(raft::term_t(1), raft::index_t(i)), .segment = 1});
+    }
+
+    // A batch starting above the buffer supersedes nothing.
+    BOOST_REQUIRE_EQUAL(superseded_by(buf, raft::index_t(8)), 0);
+    // ...starting inside it, exactly the tail from there.
+    BOOST_REQUIRE_EQUAL(superseded_by(buf, raft::index_t(6)), 2);
+    BOOST_REQUIRE_EQUAL(superseded_by(buf, raft::index_t(3)), 5);
+    // ...starting below it, all of it.
+    BOOST_REQUIRE_EQUAL(superseded_by(buf, raft::index_t(1)), 5);
+    // An empty buffer has nothing to supersede.
+    BOOST_REQUIRE_EQUAL(superseded_by({}, raft::index_t(1)), 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
