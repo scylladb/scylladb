@@ -14,6 +14,16 @@
 
 namespace raft {
 
+// How often a leader reconsiders whether a server it prefers should be leading instead of
+// it. Coarse on purpose: it costs a get_priority_members() call per leader, and a group
+// which is led from the wrong place is a latency problem, not a correctness one.
+static constexpr logical_clock::duration placement_check_interval = 5 * ELECTION_TIMEOUT;
+
+// How long such a handover holds writes back while it waits for the preferred server to
+// catch up. Short, because a server which doesn't make it costs the group these writes for
+// nothing - it is asked again at the next check.
+static constexpr logical_clock::duration placement_transfer_timeout = ELECTION_TIMEOUT;
+
 leader::~leader() {
     if (log_limiter_semaphore) {
         log_limiter_semaphore->broken(not_a_leader(fsm.current_leader()));
@@ -234,6 +244,7 @@ void fsm::become_leader() {
     SCYLLA_ASSERT(!std::holds_alternative<leader>(_state));
     _output.state_changed = true;
     _state.emplace<leader>(_config.max_log_size, *this);
+    leader_state().placement_check_at = _clock.now() + placement_check_interval;
 
     // The semaphore is not used on the follower, so the limit could
     // be temporarily exceeded here, and the value of
@@ -774,6 +785,26 @@ void fsm::maybe_transfer_leadership_on_clock_loss() {
     transfer_leadership(ELECTION_TIMEOUT);
 }
 
+void fsm::maybe_transfer_leadership_to_preferred() {
+    if (!_config.get_priority_members) {
+        return;
+    }
+    const auto slots = reserved_election_slots(_log.get_configuration(), _config.get_priority_members());
+    // Consider only the more preferred servers.
+    const auto me = std::ranges::find(slots, _my_id);
+    const auto target = std::find_if(slots.begin(), me, [this] (server_id id) {
+        const auto* progress = leader_state().tracker.find(id);
+        return progress != nullptr && progress->can_vote && _failure_detector.is_alive(id)
+                && (!leaseguard_enabled() || progress->clock_ok);
+    });
+    if (target == me) {
+        // Nobody outranks us here, or none of those who do is alive.
+        return;
+    }
+    logger.trace("maybe_transfer_leadership_to_preferred[{}]: handing over to {}", _tag, *target);
+    transfer_leadership(placement_transfer_timeout, *target);
+}
+
 void fsm::tick_leader() {
     if (election_elapsed() >= ELECTION_TIMEOUT) {
         // 6.2 Routing requests to the leader
@@ -847,6 +878,9 @@ void fsm::tick_leader() {
             // resend timeout now in case it was lost
             send_to(*state.timeout_now_sent, timeout_now{_current_term});
         }
+    } else if (_clock.now() >= state.placement_check_at) {
+        state.placement_check_at = _clock.now() + placement_check_interval;
+        maybe_transfer_leadership_to_preferred();
     }
 
     // LeaseGuard: while a deposed leader's lease may still be valid we defer
