@@ -18,6 +18,14 @@ please manually install all Python modules it lists with `pip`.
 Additionally, `toolchain/dbuild` could be used to run `test.py`. In this
 case you don't need to run `./install-dependencies.sh`
 
+`test.py`'s own Python dependencies (scylla-driver and other test-only
+packages) are listed in `test/requirements.txt`, independent of the
+frozen toolchain image. On startup, `test.py` installs them into an
+isolated, per-requirements-file cache directory under `XDG_CACHE_HOME`
+(reused across runs once populated) and prepends it to `sys.path`, so
+bumping a version in `test/requirements.txt` takes effect immediately
+without having to rebuild the toolchain.
+
 By default `test.py` has `--gather-metrics` parameter, that is used to gather
 CPU/RAM usage during tests from the cgroup.
 This means that before execute `test.py` current terminal process should be located in

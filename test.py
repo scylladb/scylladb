@@ -9,6 +9,73 @@
 
 from __future__ import annotations
 
+import pathlib
+import subprocess
+import sys
+
+
+def _ensure_test_requirements() -> None:
+    """Install test.py's own Python dependencies (scylla-driver and others) from
+    test/requirements.txt into an isolated, per-requirements-file cache
+    directory, and prepend it to sys.path, so test.py doesn't depend on
+    whatever happens to be frozen into the toolchain image.
+
+    Installing into an isolated --target dir (rather than the live
+    environment), keyed by a hash of the requirements file plus the
+    interpreter ABI, lets a populated cache from a previous run be reused (no
+    re-invoking pip on every run) while avoiding two concurrent test.py runs
+    -- e.g. different modes' stages landing on the same builder node at once
+    -- racing to install into a shared site-packages. A marker file is
+    written only after a full, successful install, and its presence (rather
+    than merely the target dir's) gates whether a run can skip straight to
+    reuse; a per-target-dir file lock serializes concurrent installs into the
+    same directory.
+    """
+    import fcntl
+    import hashlib
+    import importlib
+    import os
+    import shutil
+    import sysconfig
+
+    requirements_file = pathlib.Path(__file__).resolve().parent / "test" / "requirements.txt"
+    digest = hashlib.sha256(requirements_file.read_bytes()).hexdigest()[:16]
+
+    cache_home = pathlib.Path(os.environ.get("XDG_CACHE_HOME", pathlib.Path.home() / ".cache"))
+    cache_root = cache_home / "scylla-test-pip-packages"
+    target_dir = cache_root / f"{sysconfig.get_config_var('SOABI')}-{digest}"
+    marker = target_dir / ".install-complete"
+
+    sys.path.insert(0, str(target_dir))
+    if marker.exists():
+        return
+
+    cache_root.mkdir(parents=True, exist_ok=True)
+    with open(cache_root / f"{target_dir.name}.lock", "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            if marker.exists():  # another process installed while we were waiting for the lock
+                return
+            # A directory left behind by a crashed install is missing the marker, so it
+            # would reach this point again -- but pip's --target only reliably behaves
+            # against an empty directory, so a stale partial install must be cleared first.
+            shutil.rmtree(target_dir, ignore_errors=True)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", "--quiet",
+                 "--target", str(target_dir), "-r", str(requirements_file)])
+            # target_dir didn't exist yet when it was inserted into sys.path above; if anything
+            # probed an import through it before now, Python's import system would have cached
+            # its absence in sys.path_importer_cache, and the just-installed packages would stay
+            # unimportable without invalidating that cache.
+            importlib.invalidate_caches()
+            marker.touch()
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
+_ensure_test_requirements()
+
 import argparse
 import asyncio
 import dataclasses
@@ -25,10 +92,7 @@ import itertools
 import logging
 import multiprocessing
 import os
-import pathlib
 import resource
-import subprocess
-import sys
 import time
 
 import humanfriendly

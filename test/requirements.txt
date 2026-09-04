@@ -1,0 +1,15 @@
+# Python dependencies required to run test.py.
+#
+# scylla-driver's pin here is intentionally independent of both
+# tools/cqlsh/requirements.txt and install-dependencies.sh: test.py installs
+# from this file on its own (see _ensure_test_requirements() in test.py), so
+# bumping the version here takes effect immediately and does not require
+# rebuilding the frozen toolchain image.
+scylla-driver==3.29.11
+treelib
+allure-pytest
+pytest-xdist
+pykmip
+universalasync
+boto3-stubs[dynamodb]
+setuptools_scm
