@@ -195,8 +195,18 @@ class LcovRecord(metaclass = MakeLcovRouter):
 
     def add_end_of_record(self, fields: List[str]) -> bool:
         self.sealed = True
-        self.validate_integrity()
+        # llvm-cov can emit FN/BRDA entries for lines that have no DA record
+        # (e.g. branches inside macro expansions). Drop them so the record
+        # satisfies the line-based invariant validate_integrity() checks.
+        lines = set(self.line_hits.keys())
+        self.function_hits = {
+            key: hits for key, hits in self.function_hits.items() if key[0] in lines
+        }
+        self.branch_hits = {
+            key: hits for key, hits in self.branch_hits.items() if key[0] in lines
+        }
         self._refresh_functions_to_lines()
+        self.validate_integrity()
         return True
 
     def remove_lines(self, line_numbers: List[int]):

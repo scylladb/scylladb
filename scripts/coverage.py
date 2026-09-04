@@ -67,32 +67,35 @@ def run(args, executable=None, distinct_id=None):
         pass # allow process to be shut down with ^C
 
 
-def generate_coverage_report(path="build/coverage/test", name="tests", input_files=None, verbose=0):
+def generate_coverage_report(path="testlog/coverage/coverage", build_path="build/coverage/test", name="tests", input_files=None, verbose=0):
     """Generate a html coverage report from the given profiling data
 
     Arguments:
-    * PATH - path to the directory where the raw profiling output as well as
-      the test executables producing them can be found. Raw profiling output will
-      be automatically picked up and merged to provide the combined output.
-      Profiling output files are expected to have names that matches that of the
-      test executable that generated them, plus the compiler specific extension.
-      E.g. for clang and a test executable named 'querier_cache_test', the
-      matching profiling output should be 'querier_cache_test.profraw'.
-      For clang, this can be achieved by setting the LLVM_PROFILE_FILE env
-      variable to the appropriate value when running the test. This is
-      automatically done by test.py.
-      The PATH is typically 'build/coverage/test' when the script is ran from
-      the scylla repository root.
+    * PATH - path to the directory where test.py collects raw profiling
+      output for a test run, and where the merged output (profdata, lcov and
+      html report) will be written. This mirrors the layout test.py already
+      uses for a Scylla cluster's own coverage
+      (`<tmpdir>/<mode>/coverage/<suite>/`): raw profiles for the unit-test
+      suites under BUILD_PATH are expected at PATH/<suite>/*.profraw.
+    * BUILD_PATH - path to the directory containing the test executables, one
+      subdirectory per suite (e.g. 'boost', 'raft', 'ldap', 'unit'). Used only
+      by the automatic search (see INPUT_FILES below) to enumerate suites and
+      map a raw profile back to the executable that produced it.
+      The BUILD_PATH is typically 'build/coverage/test' when the script is
+      ran from the scylla repository root.
     * NAME - the name of the generated report. This will be the name of the
       directory containing the generated html report, as well as the name of any
       intermediate files generated in the process (with the appropriate
       extensions).
     * INPUT_FILES (optional) - the list of raw profiling data to generate the
       report from. When provided, this overrides the automatic search for
-      profiling data found in PATH and the profiling report will only include
-      the files provided herein.
+      profiling data found under PATH/BUILD_PATH and the profiling report
+      will only include the files provided herein. Each input file's
+      executable is inferred from its own name, matching the raw profiling
+      data's name minus its extension (e.g. 'querier_cache_test.profraw' next
+      to executable 'querier_cache_test').
       If not provided, the input files are located with the automatic search
-      described in PATH instead.
+      described above instead.
       Note that even if provided, PATH is still used to store intermediate
       files, as well as the final result.
     * VERBOSE (optional) - set verbosity level:
@@ -123,19 +126,54 @@ def generate_coverage_report(path="build/coverage/test", name="tests", input_fil
 
             test_executables.append(os.path.join(dirname, match.group(1)))
     else:
-        maybe_print(f"Scanning {path} for input files matching {input_file_re_str}")
+        maybe_print(f"Scanning {path} for input files matching {input_file_re_str}, using executables from {build_path}")
         profraw_files = []
-        for root, dirs, files in os.walk(path):
-            for file in files:
-                match = re.fullmatch(input_file_re, file)
-                if match is not None:
+        # Cluster-based suites (topology, cql, alternator, ...) exercise the
+        # scylla server binary itself rather than a per-suite binary under
+        # build_path, and name their raw profiles after the LLVM %m pool
+        # token (see runner.py:create_cluster_factory), not a test name.
+        scylla_exe = os.path.join(os.path.dirname(os.path.normpath(build_path)), "scylla")
+        # Walk the raw-profile tree itself (one subdirectory per suite that
+        # actually ran), not build_path: a suite with no dedicated binary
+        # directory there (e.g. cql, cqlpy, alternator, cluster, rest_api)
+        # would otherwise be skipped entirely, silently dropping most of the
+        # project's coverage.
+        suite_dirs = sorted(os.scandir(path), key=lambda e: e.name) if os.path.isdir(path) else []
+        for suite_dir in suite_dirs:
+            if not suite_dir.is_dir():
+                continue
+            build_suite_dir = os.path.join(build_path, suite_dir.name)
+            for root, dirs, files in os.walk(suite_dir.path):
+                for file in files:
+                    match = re.fullmatch(input_file_re, file)
+                    if match is None:
+                        continue
                     profraw_files.append(os.path.join(root, file))
-                    test_executables.append(os.path.join(root, match.group(1)))
+                    if os.path.isdir(build_suite_dir):
+                        # unit-test raw profiles are named
+                        # `<test_name>.<case>.<run_id>.profraw` (see
+                        # test/pylib/cpp/base.py); the executable lives under
+                        # build_path, not next to the profile itself. Some
+                        # boost tests have no binary of their own and are
+                        # built into a suite-wide `combined_tests` executable
+                        # instead (see COMBINED_TESTS in
+                        # test/pylib/cpp/boost.py), so fall back to that when
+                        # <test_name> doesn't exist as its own executable.
+                        test_name = match.group(1).split(".")[0]
+                        exe_path = os.path.join(build_suite_dir, test_name)
+                        if not os.path.isfile(exe_path):
+                            exe_path = os.path.join(build_suite_dir, "combined_tests")
+                    else:
+                        exe_path = scylla_exe
+                    test_executables.append(exe_path)
         maybe_print(f"Found {len(profraw_files)} input files")
 
     if not profraw_files:
         sys.exit("Error: couldn't find any raw profiling data files, can't generate coverage report")
 
+    test_executables = list(dict.fromkeys(test_executables))  # de-dup, preserve order
+
+    os.makedirs(path, exist_ok=True)
     profdata_path = os.path.join(path, f"{name}.profdata")
 
     maybe_print(f"Merging raw profiling data {profraw_files}")
@@ -159,7 +197,11 @@ def generate_coverage_report(path="build/coverage/test", name="tests", input_fil
         genhtml_cmd = ["genhtml"]
     else:
         genhtml_cmd = ["genhtml", "-q"]
-    subprocess.check_call(genhtml_cmd + ["-o", html_report_path, info_path])
+    # Coverage data merged across independently-built subprojects (e.g. abseil,
+    # built as its own CMake subproject) can reference source paths genhtml
+    # can't resolve from this checkout; skip annotating those instead of
+    # failing the whole report.
+    subprocess.check_call(genhtml_cmd + ["--ignore-errors", "source", "--synthesize-missing", "-o", html_report_path, info_path])
 
     print(f"Coverage report written to {html_report_path}, url: file://{html_report_url}")
 
@@ -201,7 +243,8 @@ def main(argv):
     arg_parser = argparse.ArgumentParser(description=inspect.getdoc(generate_coverage_report), formatter_class=argparse.RawDescriptionHelpFormatter,
             epilog=inspect.getdoc(main))
 
-    arg_parser.add_argument("--path", dest="path", action="store", type=str, required=False, default="build/coverage/test", help="defaults to 'build/coverage/test'")
+    arg_parser.add_argument("--path", dest="path", action="store", type=str, required=False, default="testlog/coverage/coverage", help="defaults to 'testlog/coverage/coverage'")
+    arg_parser.add_argument("--build-path", dest="build_path", action="store", type=str, required=False, default="build/coverage/test", help="defaults to 'build/coverage/test'; only used for the automatic search (no --run/--input-files)")
     arg_parser.add_argument("--name", dest="name", action="store", type=Value, required=False, default=Value("tests", is_default=True), help="defaults to 'tests', with --run it defaults to the name of the provided executable")
     arg_parser.add_argument("--input-files", dest="input_files", nargs='+', action="extend", type=str, required=False)
     arg_parser.add_argument("--verbose", "-v", dest="verbose", action="count", required=False, default=0, help="defaults to not verbose")
@@ -224,8 +267,8 @@ def main(argv):
 
     args = arg_parser.parse_args(argv_head)
 
-    if not os.path.isdir(args.path):
-        arg_parser.exit(2, f"Error: invalid value for `--path`: path '{args.path}' doesn't exists or is not a directory\n")
+    if os.path.exists(args.path) and not os.path.isdir(args.path):
+        arg_parser.exit(2, f"Error: invalid value for `--path`: '{args.path}' exists and is not a directory\n")
 
     if args.run:
         run(argv_tail, args.executable, args.distinct_id)
@@ -244,7 +287,7 @@ def main(argv):
         else:
             print("Ignoring --no-coverage-report as --run was not provided")
 
-    generate_coverage_report(args.path, args.name.val, input_files, args.verbose)
+    generate_coverage_report(args.path, args.build_path, args.name.val, input_files, args.verbose)
 
 
 if __name__ == "__main__":

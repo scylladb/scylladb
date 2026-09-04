@@ -398,6 +398,182 @@ This will open the default system browser with an interactive allure report.
 For more information please refer to `allure -h` or [official documentation](https://allurereport.org/docs/)
 
 
+## Coverage mode and coverage reports
+
+`coverage` is a dedicated build mode that compiles Scylla with LLVM
+source-based instrumentation (`-fprofile-instr-generate -fcoverage-mapping`)
+instead of optimizations. It exists solely to measure how much of the code
+a test run actually exercises; never use it to judge performance, and never
+run it alongside a normal test.py invocation in the same checkout (both
+share and reset `./testlog`).
+
+Coverage mode shares `SEASTAR_DEFAULT_ALLOCATOR` and
+`SEASTAR_SHUFFLE_TASK_QUEUE` with `debug`/`sanitize` (see
+`seastar/CMakeLists.txt`), so `test.py` treats it as a debug mode too:
+memory-heavy stress tests are skipped and C++ test timeouts are extended
+(`DEBUG_MODES` in `test/__init__.py`), and GDB-based tests
+(`test/scylla_gdb/`) are skipped, since `SEASTAR_DEFAULT_ALLOCATOR` strips
+the memory-introspection symbols they rely on.
+
+### Building in coverage mode
+
+    $ ./configure.py --mode=coverage
+    $ ninja -j$(nproc) coverage-build
+
+This produces `build/coverage/scylla` and, if you also build
+`ninja coverage-test`, the instrumented unit-test binaries under
+`build/coverage/test/{ldap,raft,unit,boost}`.
+
+### Running tests and collecting coverage profiles
+
+Run `test.py` against the `coverage` mode with `--coverage` so that raw
+LLVM profiles (`*.profraw`) are collected for every test/worker under
+`testlog/coverage/`, in addition to the profiles each instrumented unit
+test binary dumps next to itself under `build/coverage/test/...`:
+
+    $ ./test.py --mode=coverage --coverage test/
+
+You can restrict this to a subdirectory, file, or single test case as
+usual (see [Usage](#usage)); the report step below works with whatever
+subset of profiles exists.
+
+`test.py --coverage` also tries to post-process these profiles into lcov
+files itself. At the time of writing this step is unreliable and may print
+
+    Error: couldn't find any raw profiling data files, can't generate coverage report
+
+even after a fully successful run — ignore it and use
+`scripts/sonar-coverage.sh` (below) to build the report directly from the
+raw `.profraw` files instead.
+
+### Generating the coverage report
+
+`scripts/sonar-coverage.sh` turns the collected `.profraw` files into a
+single Cobertura XML report: it merges profiles with `llvm-profdata`,
+exports lcov with `llvm-cov` (via `test/pylib/coverage_utils.py`), unions
+per-suite lcov files with `scripts/lcov_merge.py`, and converts the result
+with `lcov_cobertura`. It doesn't run any tests itself — it's a pure
+offline conversion of profiles already on disk, needed because sonar-cxx
+can't ingest raw `.profraw` (or even plain lcov) directly and only accepts
+Cobertura XML for LLVM-based coverage.
+
+The script combines coverage from two independent sources, both collected
+under the same root, `testlog/coverage/coverage/<suite>/` — unified with
+the same convention `test/pylib/runner.py` already used for integration
+coverage (see [Running tests and collecting coverage
+profiles](#running-tests-and-collecting-coverage-profiles) above):
+
+- The small, standalone **C++ unit-test binaries** built by
+  `ninja coverage-test` (suite names hardcoded in the script as
+  `ldap raft unit boost`, matching this repo's layout — small-to-large, so
+  a broken run fails fast before reaching the largest suite).
+- **Every** suite that runs a real `scylla` server under `test.py`,
+  including `test/cluster`, `cqlpy`, `alternator`, `topology`, etc. — any
+  suite that doesn't set `coverage: false` in its `test_config.yaml`
+  (`cluster` and `cqlpy` don't). The script's `process_integration()` step
+  scans the same root recursively but skips the unit-test suite
+  subdirectories, since those are already handled by the per-suite loop
+  above — otherwise the same profiles would be double-counted.
+
+As long as you ran `./test.py --mode=coverage --coverage test/` over the
+whole tree (not a subdirectory), both sources are already populated with
+no further setup.
+
+One-time setup — the script expects `lcov_cobertura` in a venv at
+`testlog/coverage/sonar/venv`:
+
+    $ python3 -m venv testlog/coverage/sonar/venv
+    $ testlog/coverage/sonar/venv/bin/pip install lcov_cobertura
+
+The pipeline is memory-heavy: `llvm-cov export` has to load a whole
+instrumented binary per invocation, and `--conc` (default 3) caps how many
+of those run concurrently — it bounds *memory*, not CPU; the cores just
+need to be `>= --conc` for that many to actually run in parallel. This
+distinction matters because the pipeline exists precisely because the
+repo's original default ran `llvm-cov export` at `0.75 * ncpu = 12`
+concurrent processes, each of which can balloon to multi-GB RSS while
+loading a boost-test binary, and OOM-killed the desktop. The tested-safe
+setting is `--conc=4` under a 15G memory cap (the *integration* pass
+against the single big `scylla` binary separately measured at ~564MB RSS;
+the unit-binary peak was never pinned to an exact number, only observed as
+the multi-GB spike above). `--integ-chunk` (default 64) is a related, less
+critical knob: how many profraw files are held in flight per
+`llvm-profdata merge` pass while merging integration coverage.
+
+You can run the script directly:
+
+    $ scripts/sonar-coverage.sh --conc=4
+
+or, if you'd rather have OOM kills confined to a cgroup instead of risking
+the desktop, wrap it in a memory-capped `systemd-run` unit — this also
+means a crash or OOM kill only costs you the step that was in flight, not
+the whole run (the pipeline is resumable regardless of how you invoke it):
+
+    $ mkdir -p testlog/coverage/sonar
+    $ systemd-run --user --unit=sonar-cov \
+        -p MemoryMax=15G -p MemorySwapMax=4G -p WorkingDirectory="$PWD" \
+        bash -c 'exec scripts/sonar-coverage.sh --conc=4 >> testlog/coverage/sonar/run.log 2>&1'
+
+    $ tail -f testlog/coverage/sonar/run.log
+
+If you want to push `--conc` higher, scale `MemoryMax` up with it and
+increase gradually while watching for OOM kills, rather than jumping
+straight to a high value — don't assume 1GB of cap per unit of
+concurrency, and don't assume free RAM equals total RAM:
+
+    $ journalctl --user -u sonar-cov | grep -i "killed process\|oom"
+
+The final report lands at:
+
+    testlog/coverage/sonar/coverage.cobertura.xml
+
+Optionally, `scripts/sonar-cxx-analyze.sh` (run the same way) additionally
+produces `testlog/coverage/sonar/clang-tidy.txt` and
+`testlog/coverage/sonar/cppcheck.xml`, which SonarQube imports as native C++
+issues alongside the coverage report.
+
+### Starting SonarQube locally
+
+This POC pushes the coverage report to a local SonarQube instance running
+the **sonar-cxx** community plugin
+([SonarOpenCommunity/sonar-cxx](https://github.com/SonarOpenCommunity/sonar-cxx)),
+since C/C++ analysis is not built into SonarQube core.
+`docker/sonarqube/sonarqube.sh` handles the whole lifecycle:
+
+    $ docker/sonarqube/sonarqube.sh up          # start the server + sonar-cxx plugin
+    $ docker/sonarqube/sonarqube.sh provision   # admin password, project, API token, rule toggles
+    $ docker/sonarqube/sonarqube.sh scan        # run the scanner against this checkout
+
+`provision` saves an API token to `docker/sonarqube/.env` (gitignored) which
+`scan` picks up automatically — no need to open the UI or pass `SONAR_TOKEN`
+by hand for a normal cycle. `scan` also works correctly if this checkout is
+a git worktree, which a plain scanner invocation can't (JGit doesn't
+understand the linked-worktree layout, and the scanner refuses to follow
+symlinks pointing outside its project dir); see the comment above
+`cmd_scan()` in the script for why.
+
+See `docker/sonarqube/README.md` for the full command reference (`status`,
+`logs`, `restart`, `down`, `destroy`, and all the `SONAR_*` env var knobs).
+Browse results at <http://localhost:9000/dashboard?id=scylladb>.
+
+### TL;DR
+
+    # 1. Build coverage mode
+    ./configure.py --mode=coverage
+    ninja -j$(nproc) coverage-build
+
+    # 2. Run tests, collecting coverage profiles
+    ./test.py --mode=coverage --coverage test/
+
+    # 3. Generate the Cobertura coverage report (resumable)
+    scripts/sonar-coverage.sh --conc=4
+
+    # 4. Push it to your local SonarQube (must already be up + provisioned, see above)
+    docker/sonarqube/sonarqube.sh scan
+
+    # 5. Check the results
+    xdg-open http://localhost:9000/dashboard?id=scylladb
+
 ## See also
 
 For command line help and available options, please see also:
