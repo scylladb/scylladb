@@ -886,10 +886,9 @@ def test_sai_vector_index_with_source_model(cql, test_keyspace, scylla_only, ski
 #   * Preimage options can be freely toggled.
 #   * Disabling CDC is not allowed when a vector index already exists.
 #
-# We also verify that creating a vector index is forbidden
-# if CDC is enabled but uses invalid options or CDC is explicitly disabled
-# (set to false by the user), and allowed only when CDC is either undeclared
-# or configured to satisfy the minimal Vector Search requirements.
+# We also verify that creating a vector index is forbidden if CDC is enabled
+# but uses invalid options, and allowed when CDC is either not enabled or
+# configured to satisfy the minimal Vector Search requirements.
 ###############################################################################
 
 
@@ -995,17 +994,23 @@ def test_try_enable_vector_search_with_cdc_enabled(scylla_only, cql, test_keyspa
         assert create_index(cql, test_keyspace, table, "v")
 
 
-def test_try_enable_vector_search_with_cdc_disabled(scylla_only, cql, test_keyspace, skip_without_tablets):
+# Verify that if CDC was first enabled and then disabled, creating a vector
+# index is still allowed. A disabled CDC is treated the same as a table that
+# never had CDC enabled: the vector index auto-enables CDC in both cases.
+# Reproduces SCYLLADB-2005.
+def test_vector_search_after_enable_then_disable_cdc(scylla_only, cql, test_keyspace, skip_without_tablets):
     schema = "pk int primary key, v vector<float, 3>"
     with new_test_table(cql, test_keyspace, schema) as table:
-        # Disallow creating the vector index when CDC is explicitly disabled.
-        assert alter_cdc(cql, table, {'enabled': False, 'ttl': 172800, 'postimage' : True})
-        with pytest.raises(InvalidRequest, match="Cannot create the vector index when CDC is explicitly disabled."):
-            cql.execute(f"CREATE INDEX v_idx ON {table} (v) USING 'vector_index'")
-
-        # Allow creating the vector index when CDC is enabled again.
-        assert alter_cdc(cql, table, {'enabled': True})
-        assert create_index(cql, test_keyspace, table, "v")
+        # Enable CDC, then disable it again.
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': True}}")
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': False}}")
+        # Sanity check: check that it is allowed to enable CDC again after
+        # disabling it. And then disable it back again ;-)
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': True}}")
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': False}}")
+        # CDC is now off. Creating a vector index should succeed - it will
+        # auto-enable CDC just as it would on a table that never had CDC set.
+        cql.execute(f"CREATE INDEX v_idx ON {table} (v) USING 'vector_index'")
 
 # When a vector index is created on a table, writes to it should appear in the
 # CDC log, even though CDC was never explicitly enabled. This should be true
