@@ -377,13 +377,13 @@ future<> set_server_service_levels(http_context &ctx, cql_transport::controller&
     });
 }
 
-future<> set_server_tasks_compaction_module(http_context& ctx, sharded<replica::database>& db, sharded<db::snapshot_ctl>& snap_ctl) {
+future<> set_server_tasks_compaction_module(http_context& ctx, sharded<replica::database>& db, sharded<db::snapshot_ctl>& snap_ctl, sharded<service::storage_service>& ss) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
-    return ctx.http_server.set_routes([rb, &ctx, &db, &snap_ctl](routes& r) {
+    return ctx.http_server.set_routes([rb, &ctx, &db, &snap_ctl, &ss](routes& r) {
         rb->register_function(r, "tasks",
                 "The tasks API");
-        set_tasks_compaction_module(ctx, r, db, snap_ctl);
+        set_tasks_compaction_module(ctx, r, db, snap_ctl, ss);
     });
 }
 
