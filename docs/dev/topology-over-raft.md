@@ -674,8 +674,8 @@ Consequences:
 
 Raft lets a server campaign as a non-voter of its newest configuration if, as far as it knows, that
 configuration is uncommitted and it was a voter in the previous one. After L's demotion this happens if L's
-commit index is below the demotion entry - L restarted within a commitlog sync period of the commit, since
-the commit index is stored after the log, or the leader died within a tick of it - and L then reaches no
+commit index is below the demotion entry - L restarted before a later raft batch or a record release persisted
+the commit, since store_commit_idx() does no IO, or the leader died within a tick of it - and L then reaches no
 leader for an election timeout. L can win; on its first commit it sees it can't vote and hands leadership
 over. For that one commit, requests with view use_new see a leader outside their serving set. The
 coordinator forgets that leader and waits for the next one. The same holds for P after sc_rollback.
