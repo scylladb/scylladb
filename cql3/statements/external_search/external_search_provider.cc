@@ -8,8 +8,6 @@
 
 #include "external_search_provider.hh"
 
-#include <cmath>
-
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/result_set.hh"
 #include "keys/keys.hh"
@@ -36,19 +34,15 @@ size_t column_index_in(const selection::selection& selection, const column_defin
     return std::distance(columns.begin(), it);
 }
 
-/// A row's primary key, as a value that can be looked up. An external result's key and a row's key
-/// are built the same way, so they compare equal exactly when they name the same row; a table with
-/// no clustering columns leaves the second half empty.
-using row_key = std::pair<bytes, bytes>;
+using vector_search::serialized_primary_key;
+using vector_search::serialize_primary_key;
 
-/// Where each of one search's results sits, by the key it names. A later result naming a key
-/// already seen is left out: the first is the one that search ranked best, and the one its rank
-/// means.
-std::map<row_key, size_t> index_by_key(const vector_search::vector_store_client::primary_keys& results, const schema& schema) {
-    auto by_key = std::map<row_key, size_t>{};
-    for (size_t i = 0; i < results.size(); ++i) {
-        auto clustering = schema.clustering_key_size() > 0 ? to_bytes(results[i].clustering.representation()) : bytes{};
-        by_key.emplace(row_key{to_bytes(results[i].partition.key().representation()), std::move(clustering)}, i);
+/// Where each candidate sits, by the key it names. The candidates name distinct keys, the join
+/// having merged the searches' answers.
+std::map<serialized_primary_key, size_t> index_by_key(const std::vector<vector_search::hybrid_candidate>& candidates, const schema& schema) {
+    auto by_key = std::map<serialized_primary_key, size_t>{};
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        by_key.emplace(serialize_primary_key(schema, candidates[i].partition.key(), candidates[i].clustering), i);
     }
     return by_key;
 }
@@ -60,8 +54,8 @@ class joining_filter {
     const schema& _schema;
     const selection::selection& _selection;
 
-    // One lookup per search. Empty when the rows are not matched.
-    std::vector<std::map<row_key, size_t>> _results_by_key;
+    // Nothing when the rows are not matched.
+    std::optional<std::map<serialized_primary_key, size_t>> _candidates_by_key;
 
     // The columns to read out of every row. `_column_indexes` gives each one's index in the vector
     // get_non_pk_values() returns; unused for a key column, which is read from the key instead.
@@ -72,17 +66,13 @@ class joining_filter {
     std::vector<joined_row>& _rows;
 
 
-    std::vector<std::optional<size_t>> match(const std::vector<bytes>& pk, const std::vector<bytes>& ck) const {
-        const auto key = row_key{to_bytes(partition_key::from_range(pk).representation()),
-                _schema.clustering_key_size() > 0 ? to_bytes(clustering_key_prefix::from_range(ck).representation()) : bytes{}};
-
-        auto matched = std::vector<std::optional<size_t>>{};
-        matched.reserve(_results_by_key.size());
-        for (const auto& by_key : _results_by_key) {
-            auto it = by_key.find(key);
-            matched.push_back(it != by_key.end() ? std::optional<size_t>(it->second) : std::nullopt);
+    std::optional<size_t> match(const std::vector<bytes>& pk, const std::vector<bytes>& ck) const {
+        if (!_candidates_by_key) {
+            return std::nullopt;
         }
-        return matched;
+        const auto key = serialize_primary_key(_schema, partition_key::from_range(pk), clustering_key_prefix::from_range(ck));
+        auto it = _candidates_by_key->find(key);
+        return it != _candidates_by_key->end() ? std::optional<size_t>(it->second) : std::nullopt;
     }
 
     std::vector<managed_bytes_opt> read_columns(const std::vector<bytes>& pk, const std::vector<bytes>& ck,
@@ -119,13 +109,11 @@ class joining_filter {
 
 public:
     joining_filter(const schema& schema, const selection::selection& selection,
-            std::span<const vector_search::vector_store_client::primary_keys* const> external_results,
-            std::span<const column_definition* const> columns, std::vector<joined_row>& rows)
+            const std::vector<vector_search::hybrid_candidate>* candidates, std::span<const column_definition* const> columns,
+            std::vector<joined_row>& rows)
         : _schema(schema)
         , _selection(selection)
-        , _results_by_key(external_results | std::views::transform([&schema] (const auto* results) {
-              return index_by_key(*results, schema);
-          }) | std::ranges::to<std::vector>())
+        , _candidates_by_key(candidates ? std::optional(index_by_key(*candidates, schema)) : std::nullopt)
         , _columns(columns)
         , _rows(rows) {
         _column_indexes.reserve(columns.size());
@@ -137,12 +125,10 @@ public:
     }
 
     // The result_set_builder::visitor filter interface. `row` is null for the row emitted for a
-    // partition holding only a static row; no external result can name such a row, so the cursor
-    // stays put.
+    // partition holding only a static row; no candidate can name such a row.
     bool operator()(const selection::selection&, const std::vector<bytes>& pk, const std::vector<bytes>& ck,
             const query::result_row_view& static_row, const query::result_row_view* row) const {
-        auto external_results = row ? match(pk, ck) : std::vector<std::optional<size_t>>(_results_by_key.size(), std::nullopt);
-        _rows.push_back(joined_row{.external_results = std::move(external_results), .columns = read_columns(pk, ck, static_row, row)});
+        _rows.push_back(joined_row{.candidate = row ? match(pk, ck) : std::nullopt, .columns = read_columns(pk, ck, static_row, row)});
         return false;
     }
 
@@ -157,67 +143,62 @@ public:
 } // anonymous namespace
 
 std::vector<joined_row> join_table_results(const query::result& table_results, const query::partition_slice& slice, const schema& schema,
-        const selection::selection& selection,
-        std::span<const vector_search::vector_store_client::primary_keys* const> external_results,
+        const selection::selection& selection, const std::vector<vector_search::hybrid_candidate>* candidates,
         std::span<const column_definition* const> columns) {
     auto rows = std::vector<joined_row>{};
     // The filter rejects every row, so the builder builds nothing and is discarded.
     auto builder = selection::result_set_builder(selection, gc_clock::now());
     query::result_view::consume(table_results, slice, selection::result_set_builder::visitor<joining_filter>(
-            builder, schema, selection, joining_filter(schema, selection, external_results, columns, rows)));
+            builder, schema, selection, joining_filter(schema, selection, candidates, columns, rows)));
     return rows;
 }
 
 namespace {
 
-// The score of the external result that names `row`, or nothing if `row` has no usable score.
-// That is the case in two situations: no external result names the row (its key was not in the
-// search's reply), or the result's score is NaN or infinite. Vector Store cannot send Inf over
-// JSON and should not send NaN, so the second case is a malformed reply.
-std::optional<float> similarity_of(
-        const joined_row& row, size_t search, const vector_search::vector_store_client::primary_keys& external_results) {
-    if (!row.external_results[search]) {
+// What `search` said about `row`, or nothing: no candidate names the row (it is the pseudo-row of a
+// partition holding only a static row), or that search did not hit its candidate.
+std::optional<vector_search::search_hit> hit_of(
+        const joined_row& row, size_t search, const std::vector<vector_search::hybrid_candidate>& candidates) {
+    if (!row.candidate) {
         return std::nullopt;
     }
-    const auto similarity = external_results[*row.external_results[search]].similarity;
-    return std::isfinite(similarity) ? std::optional(similarity) : std::nullopt;
+    return candidates[*row.candidate].hits[search];
 }
 
 } // anonymous namespace
 
-void drop_unscored_rows(
-        std::span<joined_row> rows, std::span<const vector_search::vector_store_client::primary_keys* const> external_results) {
+void drop_unscored_rows(std::span<joined_row> rows, const std::vector<vector_search::hybrid_candidate>* candidates) {
+    if (!candidates) {
+        return;
+    }
     for (auto& row : rows) {
-        auto scored = external_results.empty();
-        for (size_t search = 0; search < external_results.size(); ++search) {
-            scored = scored || similarity_of(row, search, *external_results[search]).has_value();
-        }
+        const auto scored = row.candidate && std::ranges::any_of((*candidates)[*row.candidate].hits, [] (const auto& hit) {
+            return hit.has_value();
+        });
         if (!scored) {
             row.dropped = true;
         }
     }
 }
 
-std::vector<cql3::raw_value> similarities_of(
-        std::span<const joined_row> rows, size_t search, const vector_search::vector_store_client::primary_keys& external_results) {
+std::vector<cql3::raw_value> scores_of(
+        std::span<const joined_row> rows, size_t search, const std::vector<vector_search::hybrid_candidate>& candidates) {
     auto values = std::vector<cql3::raw_value>{};
     values.reserve(rows.size());
     for (const auto& row : rows) {
-        const auto similarity = similarity_of(row, search, external_results);
-        values.push_back(similarity ? cql3::raw_value::make_value(float_type->decompose(*similarity)) : cql3::raw_value::make_null());
+        const auto hit = hit_of(row, search, candidates);
+        values.push_back(hit ? cql3::raw_value::make_value(float_type->decompose(hit->score)) : cql3::raw_value::make_null());
     }
     return values;
 }
 
 std::vector<cql3::raw_value> ranks_of(
-        std::span<const joined_row> rows, size_t search, const vector_search::vector_store_client::primary_keys& external_results) {
+        std::span<const joined_row> rows, size_t search, const std::vector<vector_search::hybrid_candidate>& candidates) {
     auto values = std::vector<cql3::raw_value>{};
     values.reserve(rows.size());
     for (const auto& row : rows) {
-        // Same rows as similarities_of(): a row without a usable similarity has no rank either.
-        values.push_back(similarity_of(row, search, external_results)
-                        ? cql3::raw_value::make_value(int32_type->decompose(static_cast<int32_t>(*row.external_results[search] + 1)))
-                        : cql3::raw_value::make_null());
+        const auto hit = hit_of(row, search, candidates);
+        values.push_back(hit ? cql3::raw_value::make_value(int32_type->decompose(static_cast<int32_t>(hit->rank))) : cql3::raw_value::make_null());
     }
     return values;
 }

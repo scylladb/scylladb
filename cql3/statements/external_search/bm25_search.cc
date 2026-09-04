@@ -25,17 +25,6 @@ sstring query_term(const cql3::raw_value& value) {
     return value_cast<sstring>(utf8_type->deserialize(cql3::raw_value(value).to_bytes()));
 }
 
-seastar::future<vector_search::vector_store_client::primary_keys> ask(vector_search::vector_store_client& client,
-        const sstring& keyspace, const sstring& index_name, schema_ptr schema, const sstring& term, uint64_t wanted,
-        seastar::abort_source& as) {
-    auto answer = co_await client.bm25(keyspace, index_name, schema, term, wanted, as);
-    if (!answer.has_value()) {
-        co_await coroutine::return_exception(exceptions::invalid_request_exception(
-                std::visit(vector_search::vector_store_client::fts_error_visitor{}, answer.error())));
-    }
-    co_return std::move(answer.value());
-}
-
 std::optional<expr::expression> validate_restriction(const expr::binary_operator& binop, const secondary_index::index& index,
         const expr::expression& search_term) {
     const auto& fc = expr::as<expr::function_call>(binop.lhs);

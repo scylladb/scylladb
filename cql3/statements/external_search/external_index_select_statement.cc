@@ -98,33 +98,33 @@ future<::shared_ptr<cql_transport::messages::result_message>> external_index_sel
 
 future<coordinator_result<external_index_select_statement::base_table_read>> external_index_select_statement::query_base_table(query_processor& qp,
         service::query_state& state, const query_options& options, lowres_clock::time_point timeout,
-        const std::vector<vector_search::primary_key>& pkeys) const {
+        std::span<const vector_search::hybrid_candidate> candidates) const {
 
     // Read one row for every key the index returned. process_results() later applies the
     // user's LIMIT, and the provider may drop some rows, so fewer rows than this may reach the
     // client.
-    auto command = prepare_command_for_base_query(qp, state, options, pkeys.size());
+    auto command = prepare_command_for_base_query(qp, state, options, candidates.size());
 
     // For tables without clustering columns, we can optimize by querying
     // partition ranges instead of individual primary keys, since the
     // partition key alone uniquely identifies each row.
     if (_schema->clustering_key_size() == 0) {
-        auto to_partition_ranges = [](const std::vector<vector_search::primary_key>& pkeys) -> std::vector<dht::partition_range> {
+        auto to_partition_ranges = [](std::span<const vector_search::hybrid_candidate> candidates) -> std::vector<dht::partition_range> {
             std::vector<dht::partition_range> partition_ranges;
-            std::ranges::transform(pkeys, std::back_inserter(partition_ranges), [](const auto& pkey) {
-                return dht::partition_range::make_singular(pkey.partition);
+            std::ranges::transform(candidates, std::back_inserter(partition_ranges), [](const auto& candidate) {
+                return dht::partition_range::make_singular(candidate.partition);
             });
 
             return partition_ranges;
         };
-        auto rows = co_await query_partition_ranges(qp, state, options, command, timeout, to_partition_ranges(pkeys));
+        auto rows = co_await query_partition_ranges(qp, state, options, command, timeout, to_partition_ranges(candidates));
         if (!rows) {
             co_return std::move(rows).as_failure();
         }
         co_return base_table_read{std::move(rows).value(), std::move(command)};
     }
     auto rows = co_await utils::result_map_reduce(
-            pkeys.begin(), pkeys.end(),
+            candidates.begin(), candidates.end(),
             [&](this auto, auto& key) -> future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> {
                 auto cmd = ::make_lw_shared<query::read_command>(*command);
                 cmd->slice._row_ranges = query::clustering_row_ranges{query::clustering_range::make_singular(key.clustering)};

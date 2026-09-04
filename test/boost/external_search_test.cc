@@ -18,8 +18,9 @@
 //
 // join_table_results() is tested here because a CQL test can only observe the outcome of a
 // mismatch, a score or a fragment on the wrong row, and not which step of the matching went wrong.
-// drop_unscored_rows() and similarities_of() are tested beside it: they decide which joined rows
-// have a score to report, and read it.
+// drop_unscored_rows() and scores_of() are tested beside it: they decide which joined rows have a
+// score to report, and read it. Joining the searches' answers themselves is vector_search's, tested
+// in test/vector_search/hybrid_search_test.cc.
 
 #include <boost/test/unit_test.hpp>
 
@@ -57,9 +58,11 @@ using cql3::statements::external_search::external_search_provider;
 using cql3::statements::external_search::external_values;
 using cql3::statements::external_search::join_table_results;
 using cql3::statements::external_search::joined_row;
-using cql3::statements::external_search::similarities_of;
+using cql3::statements::external_search::scores_of;
 using cql3::statements::external_search::unevaluated_equality;
 
+using vector_search::hybrid_candidate;
+using vector_search::search_hit;
 using primary_keys = vector_search::vector_store_client::primary_keys;
 
 BOOST_AUTO_TEST_SUITE(external_search_test)
@@ -206,10 +209,13 @@ float score_of(std::span<const cql3::raw_value> values, size_t row) {
     return value.view().deserialize<float>(*float_type);
 }
 
-/// The joined rows of `table_results`, matched to `external_results` and with no columns read out of them.
+/// The joined rows of `table_results`, matched to the candidates built from one search's
+/// `external_results`, and with no columns read out of them. One answer alone gives its own keys in
+/// its own order, so the candidate a row is matched to has the index of the external result naming it.
 std::vector<joined_row> join(schema_ptr s, const query::partition_slice& slice, const query::result& table_results,
         const primary_keys& external_results) {
-    return join_table_results(table_results, slice, *s, *cql3::selection::selection::wildcard(s), &external_results, {});
+    auto candidates = vector_search::join_answers(*s, std::span(&external_results, 1));
+    return join_table_results(table_results, slice, *s, *cql3::selection::selection::wildcard(s), &candidates, {});
 }
 
 int32_t int_of(const managed_bytes_opt& value) {
@@ -217,18 +223,18 @@ int32_t int_of(const managed_bytes_opt& value) {
     return value_cast<int32_t>(int32_type->deserialize(managed_bytes_view(*value)));
 }
 
-/// An external result as similarities_of() sees it: it reads only the score, the join having settled
-/// which result belongs to which row, so the keys need not be real.
-vector_search::primary_key scored(float similarity) {
-    return {dht::decorated_key{dht::token(), partition_key::make_empty()}, clustering_key_prefix::make_empty(), similarity};
+/// A candidate as scores_of() sees it: it reads only the hits, the join having settled which
+/// candidate belongs to which row, so the key need not be real.
+hybrid_candidate candidate(std::optional<search_hit> hit) {
+    return {dht::decorated_key{dht::token(), partition_key::make_empty()}, clustering_key_prefix::make_empty(), {hit}};
 }
 
-/// The external result each joined row was matched to, in the order the rows are emitted.
-std::vector<std::optional<size_t>> external_results_of(const std::vector<joined_row>& rows) {
+/// The candidate each joined row was matched to, in the order the rows are emitted.
+std::vector<std::optional<size_t>> candidates_of(const std::vector<joined_row>& rows) {
     auto matched = std::vector<std::optional<size_t>>{};
     matched.reserve(rows.size());
     for (const auto& row : rows) {
-        matched.push_back(row.external_result);
+        matched.push_back(row.candidate);
     }
     return matched;
 }
@@ -275,7 +281,7 @@ SEASTAR_THREAD_TEST_CASE(test_external_results_stay_aligned_with_the_rows) {
 
     auto joined = join(s, slice, rows, results);
     BOOST_REQUIRE_EQUAL(joined.size(), 4u);
-    BOOST_REQUIRE(external_results_of(joined) == expected);
+    BOOST_REQUIRE(candidates_of(joined) == expected);
 }
 
 // The index may still know a key whose row has since been deleted. Its result is stepped over, and
@@ -296,7 +302,7 @@ SEASTAR_THREAD_TEST_CASE(test_stale_key_is_stepped_over) {
             {m.decorated_key(), ckey(*s, 20), 0.75f},
     };
     auto expected = std::vector<std::optional<size_t>>{0, 2};
-    BOOST_REQUIRE(external_results_of(join(s, slice, rows, results)) == expected);
+    BOOST_REQUIRE(candidates_of(join(s, slice, rows, results)) == expected);
 }
 
 // A row no external result names is matched to none.
@@ -311,7 +317,7 @@ SEASTAR_THREAD_TEST_CASE(test_row_without_an_external_result_gets_none) {
     auto rows = read_rows(s, semaphore.make_permit(), {m}, slice);
 
     auto expected = std::vector<std::optional<size_t>>{0, std::nullopt};
-    BOOST_REQUIRE(external_results_of(join(s, slice, rows, primary_keys{{m.decorated_key(), ckey(*s, 10), 0.5f}})) == expected);
+    BOOST_REQUIRE(candidates_of(join(s, slice, rows, primary_keys{{m.decorated_key(), ckey(*s, 10), 0.5f}})) == expected);
 }
 
 // A table with no clustering columns is matched on the partition key alone.
@@ -336,39 +342,44 @@ SEASTAR_THREAD_TEST_CASE(test_matching_without_a_clustering_key) {
             {ordered[1].decorated_key(), clustering_key_prefix::make_empty(), 0.75f},
     };
     auto expected = std::vector<std::optional<size_t>>{0, 1};
-    BOOST_REQUIRE(external_results_of(join(s, slice, rows, results)) == expected);
+    BOOST_REQUIRE(candidates_of(join(s, slice, rows, results)) == expected);
 }
 
-// What the index said about a row becomes that row's value, or drops it: a row it no longer names has
-// no relevance to report, and neither does one it scored with something that is not a number.
-BOOST_AUTO_TEST_CASE(test_similarities_are_read_off_the_joined_rows) {
-    auto results = primary_keys{scored(0.5f), scored(std::numeric_limits<float>::quiet_NaN()), scored(0.75f)};
+// What the index said about a row becomes that row's value, or drops it: a row no candidate names
+// has no relevance to report, and neither does one whose candidate the search did not hit.
+BOOST_AUTO_TEST_CASE(test_scores_are_read_off_the_joined_rows) {
+    auto candidates = std::vector<hybrid_candidate>{
+            candidate(search_hit{0.5f, 1}), candidate(std::nullopt), candidate(search_hit{0.75f, 3})};
     auto rows = std::vector<joined_row>{{0}, {1}, {std::nullopt}, {2}};
 
-    drop_unscored_rows(rows, results);
-    auto similarities = similarities_of(rows, results);
+    drop_unscored_rows(rows, &candidates);
+    auto scores = scores_of(rows, 0, candidates);
 
-    BOOST_REQUIRE_EQUAL(similarities.size(), 4u);
+    BOOST_REQUIRE_EQUAL(scores.size(), 4u);
     BOOST_REQUIRE(!rows[0].dropped);
-    BOOST_REQUIRE(rows[1].dropped); // not a number
-    BOOST_REQUIRE(rows[2].dropped); // no external result
+    BOOST_REQUIRE(rows[1].dropped); // not hit
+    BOOST_REQUIRE(rows[2].dropped); // no candidate
     BOOST_REQUIRE(!rows[3].dropped);
-    BOOST_REQUIRE_EQUAL(score_of(similarities, 0), 0.5f);
-    BOOST_REQUIRE_EQUAL(score_of(similarities, 3), 0.75f);
-    BOOST_REQUIRE(similarities[1].is_null());
-    BOOST_REQUIRE(similarities[2].is_null());
+    BOOST_REQUIRE_EQUAL(score_of(scores, 0), 0.5f);
+    BOOST_REQUIRE_EQUAL(score_of(scores, 3), 0.75f);
+    BOOST_REQUIRE(scores[1].is_null());
+    BOOST_REQUIRE(scores[2].is_null());
 }
 
-// drop_unscored_rows() only sets the flag: a row dropped before it is called stays dropped, and one
-// with a score is left alone. Whether a dropped row's value is read is the provider's business.
+// Drops accumulate: a row already dropped stays dropped. scores_of() still computes its value; it is
+// the provider that passes the row over, so several searches can fill their temporaries against the
+// same rows.
 BOOST_AUTO_TEST_CASE(test_a_row_already_dropped_stays_dropped) {
-    auto results = primary_keys{scored(0.5f), scored(0.75f)};
-    auto rows = std::vector<joined_row>{{.external_result = 0, .dropped = true}, {.external_result = 1}};
+    auto candidates = std::vector<hybrid_candidate>{candidate(search_hit{0.5f, 1}), candidate(search_hit{0.75f, 2})};
+    auto rows = std::vector<joined_row>{{.candidate = 0, .dropped = true}, {.candidate = 1}};
 
-    drop_unscored_rows(rows, results);
+    drop_unscored_rows(rows, &candidates);
+    auto scores = scores_of(rows, 0, candidates);
 
     BOOST_REQUIRE(rows[0].dropped);
     BOOST_REQUIRE(!rows[1].dropped);
+    BOOST_REQUIRE(!scores[0].is_null());
+    BOOST_REQUIRE_EQUAL(score_of(scores, 1), 0.75f);
 }
 
 // A column of any kind can be read out of every row, for a follow-up request that needs what the
@@ -422,7 +433,7 @@ BOOST_AUTO_TEST_CASE(test_provider_advances_past_a_dropped_row) {
             cql3::raw_value::make_null(),
             cql3::raw_value::make_value(float_type->decompose(0.75f)),
     };
-    auto rows = std::vector<joined_row>{{.external_result = std::nullopt, .dropped = true}, {.external_result = 1}};
+    auto rows = std::vector<joined_row>{{.candidate = std::nullopt, .dropped = true}, {.candidate = 1}};
     auto provider = external_search_provider({external_values{.temporary_index = 1, .values = std::move(values)}}, rows);
 
     auto temporaries = std::vector<cql3::raw_value>{cql3::raw_value::make_null(), cql3::raw_value::make_null()};

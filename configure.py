@@ -740,6 +740,7 @@ vector_search_tests = set([
     'test/vector_search/load_balancer_test',
     'test/vector_search/client_test',
     'test/vector_search/filter_test',
+    'test/vector_search/hybrid_search_test',
 ])
 
 wasms = set([
@@ -1077,8 +1078,8 @@ scylla_core = (['message/messaging_service.cc',
                 'cql3/statements/external_search/external_search_plan.cc',
                 'cql3/statements/external_search/external_search_select_statement.cc',
                 'cql3/statements/external_search/ann_search.cc',
-    'cql3/statements/external_search/bm25_search.cc',
-    'cql3/statements/external_search/external_search_provider.cc',
+                'cql3/statements/external_search/bm25_search.cc',
+                'cql3/statements/external_search/external_search_provider.cc',
                 'cql3/statements/external_search/filter.cc',
                 'cql3/statements/external_search/external_function.cc',
                 'cql3/statements/use_statement.cc',
@@ -1414,6 +1415,7 @@ scylla_core = (['message/messaging_service.cc',
                 'reader_concurrency_semaphore_group.cc',
                 'utils/disk_space_monitor.cc',
                 'vector_search/vector_store_client.cc',
+                'vector_search/hybrid_search.cc',
                 'vector_search/dns.cc',
                 'vector_search/client.cc',
                 'vector_search/clients.cc',
@@ -1865,6 +1867,7 @@ deps['test/vector_search/vector_store_client_test'] =  ['test/vector_search/vect
 deps['test/vector_search/load_balancer_test'] = ['test/vector_search/load_balancer_test.cc'] + scylla_tests_dependencies
 deps['test/vector_search/client_test'] = ['test/vector_search/client_test.cc'] + scylla_tests_dependencies
 deps['test/vector_search/filter_test'] = ['test/vector_search/filter_test.cc'] + scylla_tests_dependencies
+deps['test/vector_search/hybrid_search_test'] = ['test/vector_search/hybrid_search_test.cc'] + scylla_tests_dependencies
 
 boost_tests_prefixes = ["test/boost/", "test/vector_search/", "test/raft/", "test/manual/", "test/ldap/"]
 

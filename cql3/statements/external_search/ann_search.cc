@@ -8,7 +8,6 @@
 
 #include "ann_search.hh"
 
-#include "cql3/expr/evaluate.hh"
 #include "cql3/functions/functions.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
@@ -19,8 +18,6 @@
 #include "utils/assert.hh"
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/util.hh"
-
-#include <seastar/coroutine/exception.hh>
 
 #include <cmath>
 
@@ -36,17 +33,6 @@ std::vector<float> query_vector(const column_definition& column, const cql3::raw
 uint64_t candidates_wanted(const secondary_index::index& index, uint64_t wanted) {
     return static_cast<uint64_t>(std::ceil(
             static_cast<double>(wanted) * secondary_index::vector_index::get_oversampling(index.metadata().options())));
-}
-
-seastar::future<vector_search::vector_store_client::primary_keys> ask(vector_search::vector_store_client& client,
-        const sstring& keyspace, const sstring& index_name, schema_ptr schema, std::vector<float> query_vector, uint64_t wanted,
-        const rjson::value& filter, seastar::abort_source& as) {
-    auto answer = co_await client.ann(keyspace, index_name, schema, std::move(query_vector), wanted, filter, as);
-    if (!answer.has_value()) {
-        co_await coroutine::return_exception(exceptions::invalid_request_exception(
-                std::visit(vector_search::vector_store_client::ann_error_visitor{}, answer.error())));
-    }
-    co_return std::move(answer.value());
 }
 
 expr::expression similarity_expression(const secondary_index::index& index, const column_definition* column,

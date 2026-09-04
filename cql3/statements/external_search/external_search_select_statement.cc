@@ -21,14 +21,14 @@
 #include "index/vector_index.hh"
 #include "types/vector.hh"
 #include "utils/assert.hh"
+#include "vector_search/hybrid_search.hh"
 
 #include <seastar/core/future.hh>
-#include <seastar/coroutine/all.hh>
 #include <seastar/coroutine/exception.hh>
 
 #include <algorithm>
-#include <map>
 #include <ranges>
+#include <variant>
 
 namespace cql3::statements {
 
@@ -36,24 +36,25 @@ namespace {
 
 using functions::search_family;
 
-using primary_keys = vector_search::vector_store_client::primary_keys;
+bool is_hybrid(const std::vector<search_source>& sources) {
+    return sources.size() > 1;
+}
 
-bool is_ann(const std::vector<search_source>& sources) {
-    return sources.front().family == search_family::ann;
+bool is_ann_only(const std::vector<search_source>& sources) {
+    return !is_hybrid(sources) && sources.front().family == search_family::ann;
 }
 
 /// The name of the query family in error messages.
 std::string_view query_kind_name(const std::vector<search_source>& sources) {
-    return is_ann(sources) ? "Vector ANN" : "Full-text search";
+    if (is_hybrid(sources)) {
+        return "Hybrid search";
+    }
+    return sources.front().family == search_family::ann ? "Vector ANN" : "Full-text search";
 }
 
-/// The evaluated query value of one search, in the form its index takes.
-struct query_value {
-    /// ANN: the query vector.
-    std::vector<float> vector;
-    /// BM25: the search term, kept as text because the highlight request needs it too.
-    sstring term;
-};
+/// The evaluated query value of one search, in the form its index takes: a query vector for ANN, a
+/// search term for BM25.
+using query_value = std::variant<std::vector<float>, sstring>;
 
 query_value evaluate_query_value(const search_source& source, const query_options& options) {
     auto value = expr::evaluate(source.query_value, options);
@@ -71,13 +72,13 @@ query_value evaluate_query_value(const search_source& source, const query_option
     }
 
     if (source.family == search_family::bm25) {
-        return query_value{.term = bm25_search::query_term(value)};
+        return bm25_search::query_term(value);
     }
-    return query_value{.vector = ann_search::query_vector(*source.column, value)};
+    return ann_search::query_vector(*source.column, value);
 }
 
-/// How many candidates one search of this statement is asked for.
-uint64_t candidates_wanted(const search_source& source, uint64_t limit) {
+/// The limit one search of this statement is asked with.
+uint64_t request_limit(const search_source& source, uint64_t limit) {
     auto wanted = limit;
     if (source.family == search_family::ann) {
         wanted = ann_search::candidates_wanted(source.index, wanted);
@@ -85,9 +86,20 @@ uint64_t candidates_wanted(const search_source& source, uint64_t limit) {
     return std::min(wanted, external_search_select_statement::max_query_limit);
 }
 
-/// Checks the WHERE clause the way each family of search requires.
+/// Checks the WHERE clause the way each family of search requires. A query running several searches
+/// takes no WHERE clause: a vector index prefilters and a full-text index does not, and how to
+/// combine them is not decided.
 void validate_restrictions(std::vector<search_source>& sources, const restrictions::statement_restrictions& restrictions) {
     const auto& scoring = restrictions.get_scoring_function_restrictions();
+
+    if (is_hybrid(sources)) {
+        if (!scoring.empty() || !restrictions.partition_key_restrictions_is_empty()
+                || !restrictions::is_empty_restriction(restrictions.get_clustering_columns_restrictions())
+                || !restrictions::is_empty_restriction(restrictions.get_nonprimary_key_restrictions())) {
+            throw exceptions::invalid_request_exception("A query running several searches does not support a WHERE clause");
+        }
+        return;
+    }
 
     auto& source = sources.front();
     if (source.family == search_family::ann) {
@@ -125,7 +137,7 @@ void validate_restrictions(std::vector<search_source>& sources, const restrictio
         data_dictionary::database db, std::vector<search_source> sources, external_statement_args args) {
 
     if (!args.limit.has_value()) {
-        throw exceptions::invalid_request_exception(is_ann(sources)
+        throw exceptions::invalid_request_exception(is_ann_only(sources)
                         ? sstring("Vector ANN queries must have a limit specified")
                         : seastar::format("{} queries require a LIMIT", query_kind_name(sources)));
     }
@@ -141,7 +153,6 @@ void validate_restrictions(std::vector<search_source>& sources, const restrictio
 
     validate_restrictions(sources, *args.restrictions);
 
-    // A score or rank is selected, and it is matched to a row by primary key.
     if (std::ranges::any_of(sources, &search_source::needs_primary_key)) {
         external_search::fetch_primary_key_columns(*args.selection, *args.schema);
     }
@@ -153,7 +164,7 @@ void validate_restrictions(std::vector<search_source>& sources, const restrictio
         }
     }
 
-    auto prepared_filter = is_ann(sources)
+    auto prepared_filter = is_ann_only(sources)
             ? external_search::prepare_filter(*args.restrictions, args.parameters->allow_filtering())
             : external_search::prepared_filter{{}, args.parameters->allow_filtering()};
 
@@ -170,14 +181,17 @@ external_search_select_statement::external_search_select_statement(std::vector<s
 }
 
 std::string_view external_search_select_statement::index_search_type_name() const {
-    return is_ann(_sources) ? "Vector Search" : "Full-Text Search";
+    if (is_hybrid(_sources)) {
+        return "Hybrid Search";
+    }
+    return _sources.front().family == search_family::ann ? "Vector Search" : "Full-Text Search";
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>> external_search_select_statement::execute_search(
         query_processor& qp, service::query_state& state, const query_options& options, uint64_t limit) const {
 
     if (limit > max_query_limit) {
-        co_await coroutine::return_exception(exceptions::invalid_request_exception(is_ann(_sources)
+        co_await coroutine::return_exception(exceptions::invalid_request_exception(is_ann_only(_sources)
                         ? seastar::format("Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than {}. LIMIT was {}",
                                   max_query_limit, limit)
                         : seastar::format("{} queries require a LIMIT that is not greater than {}. LIMIT was {}",
@@ -196,23 +210,33 @@ future<::shared_ptr<cql_transport::messages::result_message>> external_search_se
     }
 
     auto& client = qp.vector_store_client();
-    auto filter_json = _prepared_filter.to_json(options);
-
-    // One result list per search.
-    auto answers = std::vector<primary_keys>(_sources.size());
-    {
-        const auto& source = _sources.front();
-        const auto wanted = candidates_wanted(source, limit);
+    auto requests = std::vector<vector_search::search_request>{};
+    requests.reserve(_sources.size());
+    for (size_t i = 0; i < _sources.size(); ++i) {
+        const auto& source = _sources[i];
+        const auto wanted = request_limit(source, limit);
         const auto& index_name = source.index.metadata().name();
-
-        answers.front() = source.family == search_family::ann
-                ? co_await ann_search::ask(client, _schema->ks_name(), index_name, _schema, query_values.front().vector, wanted,
-                          filter_json, aoe.abort_source())
-                : co_await bm25_search::ask(
-                          client, _schema->ks_name(), index_name, _schema, query_values.front().term, wanted, aoe.abort_source());
+        if (source.family == search_family::ann) {
+            requests.push_back(vector_search::ann_request{.keyspace = _schema->ks_name(),
+                    .index = index_name,
+                    .vector = std::get<std::vector<float>>(std::move(query_values[i])),
+                    .limit = wanted,
+                    .filter = _prepared_filter.to_json(options)});
+        } else {
+            requests.push_back(vector_search::bm25_request{
+                    .keyspace = _schema->ks_name(), .index = index_name, .term = std::get<sstring>(query_values[i]), .limit = wanted});
+        }
     }
 
-    auto candidates = answers.front();
+    // The searches are asked at once and their answers joined by primary key: a row is worth reading
+    // if any search returned it, and what each search said about it is read off its candidate. A
+    // failed request fails the query.
+    auto searched = co_await vector_search::search_all(client, _schema, std::move(requests), aoe.abort_source());
+    if (!searched) {
+        co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                std::visit(vector_search::vector_store_client::ann_error_visitor{}, searched.error())));
+    }
+    auto candidates = std::move(*searched);
     if (!needs_post_query_ordering() && candidates.size() > limit) {
         // The rows are returned in the index's order, so anything past the limit is not needed. A
         // query that sorts the rows itself keeps every candidate; the limit is applied after sorting.
@@ -223,18 +247,14 @@ future<::shared_ptr<cql_transport::messages::result_message>> external_search_se
 
     auto provider = std::optional<external_search::external_search_provider>{};
     if (read && std::ranges::any_of(_sources, &search_source::is_selected)) {
-        // Only a search whose score or rank is selected is matched to the rows: matching is by
-        // primary key, and the key is only fetched for such a query. A search asked only for
-        // excerpts neither adds nor drops rows.
-        auto reported = std::vector<const vector_search::vector_store_client::primary_keys*>{};
-        auto reported_of = std::vector<std::optional<size_t>>(_sources.size(), std::nullopt);
+        // The rows are matched to the candidates only when a score or rank is selected: matching is
+        // by primary key, and the key is only fetched for such a query. A query asking only for
+        // excerpts reads no key and drops no row.
+        const auto* matched = std::ranges::any_of(_sources, &search_source::needs_primary_key) ? &candidates : nullptr;
+
         auto columns = std::vector<const column_definition*>{};
         auto fragment_column_of = std::vector<std::optional<size_t>>(_sources.size(), std::nullopt);
         for (size_t i = 0; i < _sources.size(); ++i) {
-            if (_sources[i].needs_primary_key()) {
-                reported_of[i] = reported.size();
-                reported.push_back(&answers[i]);
-            }
             if (_sources[i].fragment_slot) {
                 fragment_column_of[i] = columns.size();
                 columns.push_back(_sources[i].column);
@@ -243,23 +263,22 @@ future<::shared_ptr<cql_transport::messages::result_message>> external_search_se
 
         // The excerpts are fetched now, from the text of the rows just read.
         const auto& table_read = read.value();
-        auto rows = external_search::join_table_results(
-                *table_read.rows, table_read.command->slice, *_schema, *_selection, reported, columns);
-        external_search::drop_unscored_rows(rows, reported);
+        auto rows = external_search::join_table_results(*table_read.rows, table_read.command->slice, *_schema, *_selection, matched, columns);
+        external_search::drop_unscored_rows(rows, matched);
 
         auto filled = std::vector<external_search::external_values>{};
         for (size_t i = 0; i < _sources.size(); ++i) {
             const auto& source = _sources[i];
             if (source.score_slot) {
-                filled.push_back(external_search::external_values{.temporary_index = *source.score_slot,
-                        .values = external_search::similarities_of(rows, *reported_of[i], answers[i])});
+                filled.push_back(external_search::external_values{
+                        .temporary_index = *source.score_slot, .values = external_search::scores_of(rows, i, candidates)});
             }
             if (source.rank_slot) {
                 filled.push_back(external_search::external_values{
-                        .temporary_index = *source.rank_slot, .values = external_search::ranks_of(rows, *reported_of[i], answers[i])});
+                        .temporary_index = *source.rank_slot, .values = external_search::ranks_of(rows, i, candidates)});
             }
             if (source.fragment_slot) {
-                auto excerpts = co_await bm25_search::highlights_of(client, *_schema, source.index, query_values[i].term, rows,
+                auto excerpts = co_await bm25_search::highlights_of(client, *_schema, source.index, std::get<sstring>(query_values[i]), rows,
                         *fragment_column_of[i], aoe.abort_source());
                 filled.push_back(external_search::external_values{
                         .temporary_index = *source.fragment_slot, .values = std::move(excerpts)});

@@ -9,7 +9,7 @@
 #pragma once
 
 #include "cql3/statements/select_statement.hh"
-#include "vector_search/vector_store_client.hh"
+#include "vector_search/hybrid_search.hh"
 
 namespace cql3::statements {
 
@@ -49,7 +49,7 @@ protected:
     /// Reads a row for every candidate `pkeys` names, preserving their order.
     future<coordinator_result<base_table_read>> query_base_table(query_processor& qp, service::query_state& state,
             const query_options& options, lowres_clock::time_point timeout,
-            const std::vector<vector_search::primary_key>& pkeys) const;
+            std::span<const vector_search::hybrid_candidate> candidates) const;
 
     /// Turns rows already read into the result set the client is sent, injecting the values
     /// `provider` supplies per row. Separate from the read so that a search can look at its rows first.
