@@ -111,6 +111,16 @@ stats::stats() : api_operations{} {
             seastar::metrics::make_counter("batch_item_count", seastar::metrics::description("The total number of items processed across all batches"),{op("BatchGetItem")},
                     api_operations.batch_get_item_batch_total).set_skip_when_empty(),
     });
+
+    // Only register the following metrics for the global metrics, not per-table
+    if (!has_table) {
+        metrics.add_group("alternator", {
+            seastar::metrics::make_counter("authentication_failures", stats.authentication_failures,
+                seastar::metrics::description("total number of authentication failures"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_counter("authorization_failures", stats.authorization_failures,
+                seastar::metrics::description("total number of authorization failures"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+        });
+    }
 }
 
 
