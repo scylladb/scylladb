@@ -25,6 +25,7 @@
 #include "partition_range_compat.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
+#include "utils/from_chars_exactly.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -1027,14 +1028,10 @@ struct repair_options {
         if (incremental) {
             throw std::runtime_error("unsupported incremental repair");
         }
-        // We do not currently support the distinction between "parallel" and
-        // "sequential" repair, and operate the same for both.
-        // We don't currently support "dc parallel" parallelism.
-        int parallelism = PARALLEL;
-        int_opt(parallelism, options, PARALLELISM_KEY);
-        if (parallelism != PARALLEL && parallelism != SEQUENTIAL) {
-            throw std::runtime_error(format("unsupported repair parallelism: {}", parallelism));
-        }
+        // We do not currently support the distinction between "parallel",
+        // "sequential" and "dc parallel" repair, and operate the same for all
+        // of them. Still, reject a value we do not recognize at all.
+        parallelism_opt(options, PARALLELISM_KEY);
         string_opt(start_token, options, START_TOKEN);
         string_opt(end_token, options, END_TOKEN);
 
@@ -1108,6 +1105,34 @@ private:
             }
             options.erase(it);
         }
+    }
+
+    // Nodetool sends the "parallelism" option as the name of Cassandra's
+    // RepairParallelism enum, e.g. "parallel", while other callers send the
+    // ordinal of that enum, e.g. "1". Accept both spellings. The value itself
+    // is unused, all we do is reject a value we do not recognize.
+    static void parallelism_opt(std::unordered_map<sstring, sstring>& options,
+            const sstring& key) {
+        auto it = options.find(key);
+        if (it == options.end()) {
+            return;
+        }
+        static const std::unordered_map<sstring, repair_parallelism> names = {
+            {"sequential", SEQUENTIAL},
+            {"parallel", PARALLEL},
+            {"dc_parallel", DATACENTER_AWARE},
+        };
+        const auto& value = it->second;
+        auto unsupported = [] (std::string_view value) {
+            return std::invalid_argument(format("unsupported repair parallelism: '{}'", value));
+        };
+        if (!names.contains(value)) {
+            auto parallelism = utils::from_chars_exactly<int>(std::string_view(value), unsupported);
+            if (parallelism != SEQUENTIAL && parallelism != PARALLEL && parallelism != DATACENTER_AWARE) {
+                throw unsupported(std::string_view(value));
+            }
+        }
+        options.erase(it);
     }
 
     static void string_opt(sstring& var,
