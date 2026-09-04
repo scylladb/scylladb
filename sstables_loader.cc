@@ -1347,7 +1347,9 @@ protected:
 
         try {
             llog.info("Restoring table with tid {} to the original schema", _tid);
-            co_await loader._ss.local().alter_table_with_tablet_hints(_tid, min_tablet_count, max_tablet_count, false);
+            // remove_unset: the table saved nullopt because it had no hint of its own, and
+            // passing nullopt back would leave it pinned at min == max forever.
+            co_await loader._ss.local().alter_table_with_tablet_hints(_tid, min_tablet_count, max_tablet_count, false, true);
         } catch (...) {
             llog.error("Failed to restore original schema for table_id {}. Error: {}", _tid, std::current_exception());
         }

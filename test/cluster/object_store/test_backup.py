@@ -17,7 +17,7 @@ from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name, wait_all
-from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
+from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count
 from cassandra.cluster import ConsistencyLevel
 from collections import defaultdict
 from test.pylib.util import wait_for
@@ -1185,6 +1185,68 @@ async def test_restore_tablets_with_different_tablet_hints(build_mode: str, mana
         desc = (await cql.run_async(f"DESC TABLE {ks}.test"))[0].create_statement
         assert f"'min_tablet_count': '{min_tablet_count_before_restore}'" in desc, f"Expected min_tablet_count={min_tablet_count_before_restore} in: {desc}"
         assert f"'max_tablet_count': '{max_tablet_count_before_restore}'" in desc, f"Expected max_tablet_count={max_tablet_count_before_restore} in: {desc}"
+
+# A restore pins the table's tablet count with min_tablet_count == max_tablet_count while it runs,
+# and puts the table's own hints back when it is done. A table which had no hint of its own saves
+# nullopt for both, and nullopt used to mean "leave this hint alone" - so the pin stayed and the
+# table came out of a successful restore with min == max, which stops the balancer resizing it at
+# all until someone removes the hints by hand.
+#
+# The resize is asserted before the schema: the leftover hints are only how the damage is spelled,
+# being unable to resize is what it costs.
+async def test_restore_tablets_leaves_a_hintless_table_resizable(build_mode: str, manager: ManagerClient,
+                                                                 object_storage):
+    # Three nodes because a tablet-aware restore writes system_distributed.snapshot_sstables at
+    # EACH_QUORUM, which a single node cannot satisfy.
+    topology = topo(rf = 1, nodes = 3, racks = 1, dcs = 1)
+    servers, _ = await create_cluster(topology, manager, logger, object_storage)
+
+    # make_resize_plan() skips a table it has no size info for, and the default refresh is a
+    # minute, which is most of the budget the wait below allows. The option is live-updatable.
+    await asyncio.gather(*(manager.server_update_config(
+        s.server_id, 'tablet_load_stats_refresh_interval_in_seconds', 1) for s in servers))
+
+    cql = manager.get_cql()
+    replication = f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}"
+    num_keys = 1000
+
+    async with new_test_keyspace(manager, replication) as src_ks:
+        # Back the table up at one tablet, which is the count the restore pins the destination to,
+        # and which is well below the count the balancer wants for a table of its own.
+        await cql.run_async(f"CREATE TABLE {src_ks}.test ( pk text primary key, value int ) "
+                            "WITH tablets = {'min_tablet_count': 1, 'max_tablet_count': 1};")
+        insert_stmt = cql.prepare(f"INSERT INTO {src_ks}.test (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
+        snap_name, _ = await take_snapshot(src_ks, servers, manager, logger)
+        await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}', src_ks, 'test',
+                                         object_storage, manager, logger) for s in servers))
+        manifests = [f'{s.server_id}/{snap_name}/manifest.json' for s in servers]
+
+    async with new_test_keyspace(manager, replication) as ks:
+        # The destination declares no tablet hints of its own - the ordinary case for a user table.
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int );")
+
+        logger.info(f'Restore cluster via {servers[0].ip_addr}')
+        tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, 'test', snap_name, servers[0].datacenter,
+                                                object_storage.address, object_storage.bucket_name, manifests)
+        status = await manager.api.wait_task(servers[0].ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'done')
+
+        restored_count = await get_tablet_count(manager, servers[0], ks, 'test')
+        assert restored_count == 1, f"Expected the restore to leave 1 tablet, got {restored_count}"
+
+        await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
+
+        async def split():
+            return True if await get_tablet_count(manager, servers[0], ks, 'test') > restored_count else None
+        await wait_for(split, time.time() + 120,
+                       label=f"the balancer to split the restored table away from {restored_count} tablet")
+
+        # ... and the hints the restore put back must be the ones the table declared, i.e. none.
+        desc = (await cql.run_async(f"DESC TABLE {ks}.test"))[0].create_statement
+        assert 'min_tablet_count' not in desc, f"Expected no min_tablet_count in: {desc}"
+        assert 'max_tablet_count' not in desc, f"Expected no max_tablet_count in: {desc}"
 
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_storage):
     '''Check that restore task fails well when given a non-existing sstable'''
