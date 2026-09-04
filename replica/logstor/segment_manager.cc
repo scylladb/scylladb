@@ -288,7 +288,10 @@ class file_manager {
     seastar::gate _async_gate;
     shared_future<> _next_file_formatter{make_ready_future<>()};
 
-    std::vector<seastar::file> _open_read_files;
+    // One handle per file, opened read-write, kept open for the life of the shard and shared by
+    // the read and the write paths. Both go through it, so it is always opened for writing: a file
+    // first touched by a read would otherwise hold a read-only handle the write path cannot use.
+    std::vector<seastar::file> _open_files;
 
     std::unique_ptr<char[], seastar::free_deleter> _zero_buf;
     size_t _zero_buf_size{0};
@@ -302,17 +305,35 @@ public:
         , _sched_group(cfg.compaction_sg)
         , _format_on_startup(cfg.format_on_startup)
         , _sparse_files(cfg.sparse_files)
-        , _open_read_files(static_cast<size_t>(_max_files.actual))
+        , _open_files(static_cast<size_t>(_max_files.actual))
     {}
 
     future<> start();
     future<> stop();
 
-    future<seastar::file> get_file_for_write(file_id_t);
-    future<seastar::file> get_file_for_read(file_id_t);
+    // Allocates the file if it is the next one, which waits for it to be formatted and starts
+    // formatting the one after it in the background. Only the first segment taken out of a file
+    // needs this; every later one finds the file already allocated and open.
+    future<> allocate_file(file_id_t);
+
+    future<seastar::file> get_file(file_id_t);
+
+    // Opens the file and puts it in the cache. The caller must have checked that it is not open.
+    future<seastar::file> do_open_file(file_id_t);
+
+    // The file, if it is already open, which after startup it always is. A caller that finds it
+    // here pays for no coroutine of its own to get at it. Returns an unset file otherwise, which is
+    // when get_file() has to open it.
+    seastar::file opened_file(file_id_t file_id) const {
+        if (file_id >= _open_files.size()) [[unlikely]] {
+            on_internal_error(logstor_logger, "Attempted to access file beyond actual disk capacity");
+        }
+        return _open_files[file_id];
+    }
 
     future<> format_file_region(seastar::file file, uint64_t offset, uint64_t size);
     future<> format_file(file_id_t);
+    future<> open_allocated_files();
     future<> recover_next_file(file_id_t);
     future<> remove_file(file_id_t);
     void set_actual_max_files(uint64_t actual_max_files);
@@ -344,10 +365,24 @@ future<> file_manager::start() {
 }
 
 future<> file_manager::stop() {
-    if (_async_gate.is_closed()) {
-        co_return;
+    if (!_async_gate.is_closed()) {
+        co_await _async_gate.close();
     }
-    co_await _async_gate.close();
+
+    // Closing a file opened for writing goes through the syscall thread pool, and a shard configured
+    // for a large disk holds thousands of them, so they are not closed one after the other. A close
+    // that fails is only reported: the store is going away and there is nothing left to do about it.
+    co_await max_concurrent_for_each(std::views::iota(size_t(0), _open_files.size()), 32,
+            [this] (size_t file_id) -> future<> {
+        auto file = std::exchange(_open_files[file_id], seastar::file());
+        if (!file) {
+            co_return;
+        }
+        auto result = co_await coroutine::as_future(file.close());
+        if (result.failed()) {
+            logstor_logger.warn("Failed to close logstor file {}: {}", get_file_path(file_id).string(), result.get_exception());
+        }
+    });
 }
 
 // Formatting a new file grows the store, so its I/O deliberately does not go through
@@ -374,6 +409,23 @@ future<> file_manager::format_file(file_id_t file_id) {
         // move the temp file to the final location
         co_await seastar::rename_file(tmp_path, file_path);
     }
+
+    // A file is opened where it comes into existence, so that allocating a segment out of it later
+    // never has to. This also covers the file formatted in the background while the shard runs.
+    if (!_open_files[file_id]) {
+        co_await do_open_file(file_id);
+    }
+}
+
+// Opens every file that has been allocated, so that no read and no segment allocation opens one
+// during normal operation. Files are formatted before they are allocated, so they all exist here.
+future<> file_manager::open_allocated_files() {
+    return max_concurrent_for_each(std::views::iota(file_id_t(0), _next_file_id), 32,
+            [this] (file_id_t file_id) -> future<> {
+        if (!_open_files[file_id]) {
+            co_await do_open_file(file_id);
+        }
+    });
 }
 
 future<> file_manager::recover_next_file(file_id_t next_file_id) {
@@ -390,8 +442,11 @@ future<> file_manager::recover_next_file(file_id_t next_file_id) {
             }
         });
         _next_file_formatter = make_ready_future<>();
+        co_await open_allocated_files();
         co_return;
     }
+
+    co_await open_allocated_files();
 
     if (_next_file_id < _max_files.configured) {
         _next_file_formatter = with_gate(_async_gate, [this] {
@@ -409,14 +464,14 @@ future<> file_manager::remove_file(file_id_t file_id) {
     if (_max_files.actual <= _max_files.configured) {
         on_internal_error(logstor_logger, fmt::format("Attempted to remove file {} while actual max files {} is not above configured max files {}", file_id, _max_files.actual, _max_files.configured));
     }
-    if (file_id < _open_read_files.size()) {
-        if (file_id + 1 != _open_read_files.size()) {
+    if (file_id < _open_files.size()) {
+        if (file_id + 1 != _open_files.size()) {
             on_internal_error(logstor_logger, fmt::format("Attempted to remove file {} while higher file {} is still allocated", file_id, file_id + 1));
         }
-        if (_open_read_files[file_id]) {
-            co_await _open_read_files[file_id].close();
+        if (_open_files[file_id]) {
+            co_await _open_files[file_id].close();
         }
-        _open_read_files.pop_back();
+        _open_files.pop_back();
     }
     co_await do_io_check(logstor_error_handler, [this, file_id] {
         return seastar::remove_file(get_file_path(file_id).string());
@@ -432,10 +487,10 @@ void file_manager::set_actual_max_files(uint64_t actual_max_files) {
         on_internal_error(logstor_logger, fmt::format("Attempted to reduce actual max files from {} to {}", _max_files.actual, actual_max_files));
     }
     _max_files.actual = actual_max_files;
-    _open_read_files.resize(static_cast<size_t>(_max_files.actual));
+    _open_files.resize(static_cast<size_t>(_max_files.actual));
 }
 
-future<seastar::file> file_manager::get_file_for_write(file_id_t file_id) {
+future<> file_manager::allocate_file(file_id_t file_id) {
     if (file_id >= _max_files.actual) {
         on_internal_error(logstor_logger, "Attempted to access file beyond actual disk capacity");
     }
@@ -461,36 +516,33 @@ future<seastar::file> file_manager::get_file_for_write(file_id_t file_id) {
     } else if (file_id > _next_file_id) {
         on_internal_error(logstor_logger, "files must be allocated in sequential order");
     }
-
-    auto file_path = get_file_path(file_id).string();
-    auto file = co_await open_checked_file_dma(logstor_error_handler, file_path,
-            seastar::open_flags::rw | seastar::open_flags::create | seastar::open_flags::dsync);
-
-    if (!_open_read_files[file_id]) {
-        _open_read_files[file_id] = file;
-    }
-
-    co_return file;
 }
 
-future<seastar::file> file_manager::get_file_for_read(file_id_t file_id) {
-    if (file_id >= _open_read_files.size()) {
+future<seastar::file> file_manager::get_file(file_id_t file_id) {
+    if (file_id >= _open_files.size()) {
         on_internal_error(logstor_logger, "Attempted to access file beyond actual disk capacity");
     }
 
-    auto& cached_file = _open_read_files[file_id];
-    if (cached_file) {
+    if (auto& cached_file = _open_files[file_id]) {
         co_return cached_file;
     }
 
+    co_return co_await do_open_file(file_id);
+}
+
+// The handle is shared by the read and the write paths, so it is opened read-write even when a read
+// is what asked for it, and with O_DSYNC, which is what makes a completed segment write durable.
+// It is not opened with O_CREAT: files are created by format_file() alone, and a read of a file that
+// is missing must fail rather than quietly create an empty one.
+future<seastar::file> file_manager::do_open_file(file_id_t file_id) {
     auto file = co_await open_checked_file_dma(logstor_error_handler,
         get_file_path(file_id).string(),
-        seastar::open_flags::ro
+        seastar::open_flags::rw | seastar::open_flags::dsync
     );
 
-    _open_read_files[file_id] = file;
+    _open_files[file_id] = file;
 
-    co_return std::move(file);
+    co_return file;
 }
 
 future<> file_manager::format_file_region(seastar::file file, uint64_t offset, uint64_t size) {
@@ -1555,7 +1607,7 @@ void segment_manager_impl::on_free_record(log_location location) noexcept {
 future<log_record> segment_manager_impl::read(log_location location) {
     auto holder = _async_gate.hold();
     auto [file_id, file_offset] = segment_id_to_file_location(location.segment);
-    auto file = co_await _file_mgr.get_file_for_read(file_id);
+    auto file = co_await _file_mgr.get_file(file_id);
     segment seg(location.segment, file, file_offset, _cfg.segment_size);
     auto record = co_await seg.read(location);
     _stats.bytes_read += location.size;
@@ -1621,7 +1673,13 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
     auto make_segment = [this] (log_segment_id seg_id) -> future<seg_ptr> {
         try {
             auto seg_loc = segment_id_to_file_location(seg_id);
-            auto file = co_await _file_mgr.get_file_for_write(seg_loc.file_id);
+            // Only the first segment taken out of a file has to allocate it, and only a file that
+            // is formatted while the shard runs is not open yet.
+            auto file = _file_mgr.opened_file(seg_loc.file_id);
+            if (!file) [[unlikely]] {
+                co_await _file_mgr.allocate_file(seg_loc.file_id);
+                file = co_await _file_mgr.get_file(seg_loc.file_id);
+            }
             auto seg = make_lw_shared<writeable_segment>(seg_id, std::move(file), seg_loc.file_offset, _cfg.segment_size);
             get_segment_descriptor(seg_id).reset(_cfg.segment_size);
             _stats.segments_allocated++;
@@ -1733,8 +1791,12 @@ future<> segment_manager_impl::discard_segments(logstor_group& cg) {
     co_await max_concurrent_for_each(segments, 32, [this] (log_segment_id seg_id) -> future<> {
         logstor_logger.trace("Discard segment {}", seg_id);
         auto [file_id, file_offset] = segment_id_to_file_location(seg_id);
-        auto file = co_await _file_mgr.get_file_for_write(file_id);
-        co_await _file_mgr.format_file_region(file, file_offset, block_alignment);
+        // The segments being discarded were written, so their file is allocated and open.
+        auto file = _file_mgr.opened_file(file_id);
+        if (!file) [[unlikely]] {
+            on_internal_error(logstor_logger, format("Discarding segment {} of file {} that is not open", seg_id, file_id));
+        }
+        co_await _file_mgr.format_file_region(std::move(file), file_offset, block_alignment);
         free_segment(seg_id);
     });
 }
@@ -2786,7 +2848,7 @@ public:
 
 future<seastar::input_stream<char>> segment_manager_impl::create_segment_input_stream(log_segment_id segment_id, const seastar::file_input_stream_options& opts) {
     auto [file_id, file_offset] = segment_id_to_file_location(segment_id);
-    auto file = co_await _file_mgr.get_file_for_read(file_id);
+    auto file = co_await _file_mgr.get_file(file_id);
     auto stream = make_file_input_stream(std::move(file), file_offset, _cfg.segment_size, opts);
     co_return std::move(stream);
 }
