@@ -17,10 +17,10 @@ public:
     static constexpr const char to[] =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     static constexpr uint8_t invalid_char = 255;
-    uint8_t from[255];
+    uint8_t from[256];
     base64_chars() {
         static_assert(sizeof(to) == 64 + 1);
-        for (int i = 0; i < 255; i++) {
+        for (int i = 0; i < 256; i++) {
             from[i] = invalid_char; // signal invalid character
         }
         for (int i = 0; i < 64; i++) {
