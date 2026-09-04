@@ -165,7 +165,73 @@ SEASTAR_TEST_CASE(test_tablet_map_creation_already_pow2_layout) {
 
 namespace {
 
-// Builds a single-node topology with the given shard count, places vnode tokens at
+// One node in a synthetic topology: where it sits, and which vnode tokens it owns.
+//
+// Positions are in unbiased token space, so `ring_percent` below expresses them as
+// hundredths of the ring.
+struct node_spec {
+    locator::host_id host;
+    locator::endpoint_dc_rack location = locator::endpoint_dc_rack::default_location;
+    std::vector<uint64_t> vnode_positions;
+};
+
+// Builds a topology from `nodes`, with `rf_per_dc` giving each DC's replication
+// factor, and invokes `func` with the resulting effective replication map and the
+// tablet-aware view of the replication strategy.
+//
+// The ERM points into the token metadata built here, so it is passed to `func`
+// rather than returned: everything stays on this frame and is torn down in order
+// once `func` is done.
+//
+// `local_host_idx` selects which node the callee should see itself as. Both the host
+// id and the location come from that one node, so the "local" node cannot drift from
+// the DC and rack the caller intended it to be in.
+//
+// Must run in a seastar thread.
+static void with_topology(
+        const std::vector<node_spec>& nodes,
+        const std::map<sstring, size_t>& rf_per_dc,
+        unsigned shard_count,
+        size_t local_host_idx,
+        std::function<void(const locator::static_effective_replication_map_ptr&,
+                           const locator::tablet_aware_replication_strategy*)> func) {
+    BOOST_REQUIRE(local_host_idx < nodes.size());
+
+    locator::token_metadata::config tm_cfg;
+    tm_cfg.topo_cfg.this_host_id = nodes[local_host_idx].host;
+    tm_cfg.topo_cfg.local_dc_rack = nodes[local_host_idx].location;
+    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
+    auto stop_stm = deferred_stop(stm);
+
+    stm.mutate_token_metadata([&] (locator::token_metadata& tm) -> future<> {
+        for (const auto& node : nodes) {
+            std::unordered_set<dht::token> tokens;
+            for (auto pos : node.vnode_positions) {
+                tokens.insert(dht::bias(pos));
+            }
+            tm.get_topology().add_or_update_endpoint(node.host, node.location,
+                                                     locator::node::state::normal, shard_count);
+            co_await tm.update_normal_tokens(tokens, node.host);
+        }
+    }).get();
+
+    std::map<sstring, locator::replication_strategy_config_option> options;
+    for (const auto& [dc, rf] : rf_per_dc) {
+        options.emplace(dc, fmt::to_string(rf));
+    }
+    locator::replication_strategy_params params(options, std::nullopt, std::nullopt);
+    auto rs = locator::abstract_replication_strategy::create_replication_strategy(
+            "NetworkTopologyStrategy", params, stm.get()->get_topology());
+    auto erm = locator::calculate_vnode_effective_replication_map(rs, stm.get()).get();
+
+    // Same cast as in prepare_for_tablets_migration().
+    const auto* trs = dynamic_cast<const locator::tablet_aware_replication_strategy*>(&*rs);
+    BOOST_REQUIRE(trs);
+
+    func(erm, trs);
+}
+
+// Builds a single-DC topology with the given shard count, places vnode tokens at
 // the given positions in unbiased token space, and runs the migration tablet map
 // builder over it.
 //
@@ -175,33 +241,19 @@ namespace {
 static locator::tablet_map build_map(const std::vector<locator::host_id>& hosts, unsigned shard_count,
                                      const std::vector<std::vector<uint64_t>>& vnode_positions_of,
                                      size_t rf) {
-    locator::token_metadata::config tm_cfg;
-    tm_cfg.topo_cfg.this_host_id = hosts[0];
-    tm_cfg.topo_cfg.local_dc_rack = locator::endpoint_dc_rack::default_location;
-    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
-    auto stop_stm = deferred_stop(stm);
+    std::vector<node_spec> nodes;
+    for (size_t n = 0; n < hosts.size(); ++n) {
+        nodes.push_back({.host = hosts[n], .vnode_positions = vnode_positions_of[n]});
+    }
 
-    stm.mutate_token_metadata([&] (locator::token_metadata& tm) -> future<> {
-        for (size_t n = 0; n < hosts.size(); ++n) {
-            std::unordered_set<dht::token> tokens;
-            for (auto pos : vnode_positions_of[n]) {
-                tokens.insert(dht::bias(pos));
-            }
-            tm.get_topology().add_or_update_endpoint(hosts[n], locator::endpoint_dc_rack::default_location,
-                                                     locator::node::state::normal, shard_count);
-            co_await tm.update_normal_tokens(tokens, hosts[n]);
-        }
-    }).get();
-
-    std::map<sstring, locator::replication_strategy_config_option> options = {
-        { locator::endpoint_dc_rack::default_location.dc, fmt::to_string(rf) },
-    };
-    locator::replication_strategy_params params(options, std::nullopt, std::nullopt);
-    auto rs = locator::abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", params, stm.get()->get_topology());
-    auto erm = locator::calculate_vnode_effective_replication_map(rs, stm.get()).get();
-
-    return service::storage_service::build_tablet_map_for_migration(erm, 0).get();
+    // The tablet map is a value that does not point back at the token metadata, so
+    // unlike the ERM it can safely outlive with_topology().
+    std::optional<locator::tablet_map> tmap;
+    with_topology(nodes, {{locator::endpoint_dc_rack::default_location.dc, rf}}, shard_count, 0,
+            [&] (const auto& erm, const auto*) {
+        tmap = service::storage_service::build_tablet_map_for_migration(erm, 0).get();
+    });
+    return std::move(*tmap);
 }
 
 static locator::tablet_map build_single_node_map(locator::host_id host, unsigned shard_count,
