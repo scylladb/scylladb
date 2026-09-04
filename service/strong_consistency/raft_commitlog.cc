@@ -59,6 +59,37 @@ void segment_record::trim_from(const raft::index_t idx) {
     }
 }
 
+size_t max_single_entry_batch_size(size_t command_size) {
+    // Measured, not summed from field widths, so it follows the format. Size
+    // prefixes are fixed width, so one measurement of an empty command is enough.
+    static thread_local const size_t envelope = [] {
+        auto entry = seastar::make_lw_shared<const raft::log_entry>(raft::log_entry{
+                .term = raft::term_t{1},
+                .idx = raft::index_t{1},
+                .data = raft::command{},
+                .lease_time = raft::time_bounds{
+                        raft::lease_clock::time_point(std::chrono::nanoseconds(1)),
+                        raft::lease_clock::time_point(std::chrono::nanoseconds(2))}});
+        const std::vector<raft::log_entry_ptr> entries{std::move(entry)};
+        return commitlog_raft_batch_writer(raft::group_id{}, raft::index_t{0}, entries).size();
+    }();
+    return envelope + command_size;
+}
+
+void check_commitlog_can_hold_a_raft_entry(const db::commitlog& cl) {
+    const auto largest_entry = max_single_entry_batch_size(raft_max_command_size);
+    if (largest_entry > cl.max_record_size()) {
+        throw std::runtime_error(fmt::format(
+                "cannot start with strongly consistent tables enabled and "
+                "commitlog_segment_size_in_mb={}: one raft entry with a command of "
+                "max_command_size ({} bytes) needs {} bytes on disk, and a commitlog "
+                "entry holds at most {}. Raise the segment size or lower "
+                "max_command_size.",
+                cl.active_config().commitlog_segment_size_in_mb,
+                raft_max_command_size, largest_entry, cl.max_record_size()));
+    }
+}
+
 // Write a batch whose writer the caller already built. Measuring is a full serialize
 // into a measuring stream, so a caller that had to measure the batch to decide whether
 // it fits passes the writer on rather than paying for a second pass.

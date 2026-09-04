@@ -849,6 +849,56 @@ SEASTAR_TEST_CASE(test_raft_batch_records_across_segments) {
     });
 }
 
+// Test: the boot check accepts the smallest segment the commitlog allows.
+// commitlog_segment_size_in_mb is clamped to 1 and max_record_size() is half a
+// segment, so the check cannot fail on any configuration a node can be given. It
+// can fail on raft_max_command_size being raised past that floor, which is what
+// this pins: raise the constant above ~512KB and every node running a 1MB segment
+// refuses to start.
+SEASTAR_TEST_CASE(test_boot_check_accepts_the_smallest_segment) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
+        BOOST_REQUIRE_LE(service::strong_consistency::max_single_entry_batch_size(
+                service::strong_consistency::raft_max_command_size), log.max_record_size());
+        BOOST_REQUIRE_NO_THROW(
+                service::strong_consistency::check_commitlog_can_hold_a_raft_entry(log));
+        co_return;
+    });
+}
+
+// Test: max_single_entry_batch_size() tightly bounds what write_raft_batch()
+// measures for one entry. The check it feeds at startup is worthless once the
+// number stops tracking the format.
+SEASTAR_TEST_CASE(test_max_single_entry_batch_size_bounds_the_writer) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+
+        for (const size_t payload : {size_t(0), size_t(4096), size_t(100 * 1024)}) {
+            auto plain = make_command_entry_sized(raft::term_t(1), raft::index_t(1), payload);
+            const auto command_size = std::get<raft::command>(plain->data).size();
+            const auto bound = service::strong_consistency::max_single_entry_batch_size(command_size);
+
+            const std::vector<raft::log_entry_ptr> plain_batch{plain};
+            commitlog_raft_batch_writer plain_writer(gid, raft::index_t{0}, plain_batch);
+            BOOST_REQUIRE_LE(plain_writer.size(), bound);
+
+            // The bound is derived from the lease-stamped form, so here it must
+            // be exact. A loose bound like SIZE_MAX would pass the check above.
+            auto stamped = make_lw_shared<const raft::log_entry>(raft::log_entry{
+                    .term = raft::term_t(1), .idx = raft::index_t(1),
+                    .data = std::get<raft::command>(plain->data),
+                    .lease_time = raft::time_bounds{
+                            raft::lease_clock::time_point(std::chrono::nanoseconds(lease_earliest_ns)),
+                            raft::lease_clock::time_point(std::chrono::nanoseconds(lease_latest_ns))}});
+            const std::vector<raft::log_entry_ptr> stamped_batch{stamped};
+            commitlog_raft_batch_writer stamped_writer(gid, raft::index_t{0}, stamped_batch);
+            BOOST_REQUIRE_EQUAL(stamped_writer.size(), bound);
+        }
+        co_return;
+    });
+}
+
 // Test: a tail larger than one commitlog entry is split into runs that each fit, so a
 // recovered log that no single entry can hold is still rewritten. The tail is
 // bounded by raft_max_log_size, not by max_record_size(), so batches that each

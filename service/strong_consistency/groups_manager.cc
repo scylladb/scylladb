@@ -1266,9 +1266,16 @@ void groups_manager::start() {
     // registered behind the feature could be missing. The flag also decides
     // whether system.raft_groups has a schema at all: asking for its id without
     // the flag aborts.
-    if (auto* commitlog = _db.commitlog();
-            commitlog && _db.get_config().check_experimental(
-                    db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+    if (_db.get_config().check_experimental(
+                db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+        auto* commitlog = _db.commitlog();
+        if (!commitlog) {
+            // Fail at startup; the first group would otherwise trip an assert.
+            throw std::runtime_error(
+                    "strongly consistent tables require the commitlog, which is disabled");
+        }
+        check_commitlog_can_hold_a_raft_entry(*commitlog);
+
         // A round names one table, and only a round naming system.raft_groups says
         // which of a group's segments are closed: a segment holding a live segment
         // record is dirty under system.raft_groups because of the record's own

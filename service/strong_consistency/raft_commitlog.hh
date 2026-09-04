@@ -94,6 +94,7 @@ struct replayed_data_per_group {
 // Bounds on a group's log, which together bound one raft batch. raft's add_entry()
 // rejects a command over raft_max_command_size, and fsm's log_limiter_semaphore
 // holds a leader's accounted log at raft_max_log_size, of which a batch is a subset.
+// Only a single entry has to fit a commitlog entry; a batch that does not is split.
 inline constexpr size_t raft_max_log_size = 20 * 1024 * 1024;
 inline constexpr size_t raft_max_command_size = 100 * 1024;
 
@@ -111,6 +112,18 @@ future<db::rp_handle> write_raft_batch(db::commitlog& cl, table_id table,
 // already fits returns a single offset without measuring its entries one by one.
 std::vector<size_t> split_raft_batch(const db::commitlog& cl, raft::group_id group_id,
         raft::index_t commit_idx, const raft::log_entry_ptr_list& entries);
+
+// Check the configured commitlog can hold one raft entry carrying a
+// raft_max_command_size command. Throws if it cannot, so the node refuses to
+// start; without the check write_raft_batch() aborts it on the first large write.
+// A batch of several entries needs no check: store_log_entries() splits one that
+// does not fit. The smallest segment the commitlog allows leaves 512KB for one
+// entry, so only raising raft_max_command_size trips this today.
+void check_commitlog_can_hold_a_raft_entry(const db::commitlog& cl);
+
+// Upper bound on what write_raft_batch() measures for a one-entry batch with a
+// `command_size`-byte command.
+size_t max_single_entry_batch_size(size_t command_size);
 
 // Fold a written batch into `segment_queue`, extending the newest record or
 // starting a new one when the batch landed in a segment new to the group.
