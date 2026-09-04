@@ -1146,11 +1146,28 @@ public:
         auto rack_list_colocation = ongoing_rack_list_colocation();
         auto rf_change_prep = co_await prepare_per_rack_rf_change_plan(plan);
 
+        // RF-change rebuilds stream between the tablet's replicas in all racks and DCs,
+        // most of which are absent from the per-(dc, rack) map of make_plan(dc, rack), so
+        // their streaming load is accounted against this cluster-wide map. It is created
+        // once per round so that the load accumulates across all planned racks.
+        node_load_map rf_change_streaming_nodes;
+        if (!rf_change_prep.actions.empty()) {
+            topo.for_each_node([&] (const locator::node& node) {
+                bool is_drained = node.get_state() == locator::node::state::being_decommissioned
+                                  || node.get_state() == locator::node::state::being_removed;
+                if ((node.get_state() == locator::node::state::normal || is_drained) && !node.is_excluded()) {
+                    ensure_node(rf_change_streaming_nodes, node.host_id());
+                }
+            });
+            // Charge streaming load of transitions which are already in progress.
+            co_await consider_scheduled_load(rf_change_streaming_nodes);
+        }
+
         // Prepare plans for each DC separately and combine them to be executed in parallel.
         for (auto&& dc : topo.get_datacenters()) {
             if (_db.get_config().rf_rack_valid_keyspaces() || _db.get_config().enforce_rack_list() || rack_list_colocation || !rf_change_prep.actions.empty()) {
                 for (auto rack : topo.get_datacenter_racks().at(dc) | std::views::keys) {
-                    auto rack_plan = co_await make_plan(dc, rack, rf_change_prep.actions[{dc, rack}]);
+                    auto rack_plan = co_await make_plan(dc, rack, rf_change_prep.actions[{dc, rack}], &rf_change_streaming_nodes);
                     auto level = rack_plan.empty() ? seastar::log_level::debug : seastar::log_level::info;
                     lblogger.log(level, "Plan for {}/{}: {}", dc, rack, plan_summary(rack_plan));
                     plan.merge(std::move(rack_plan));
@@ -1177,6 +1194,8 @@ public:
         }
 
         co_await check_restore_completions(plan);
+
+        co_await utils::clear_gently(rf_change_streaming_nodes);
 
         auto level = plan.empty() ? seastar::log_level::debug : seastar::log_level::info;
         lblogger.log(level, "Prepared plan: {}", plan_summary(plan));
@@ -1790,7 +1809,11 @@ public:
         co_return res;
     }
 
-    future<migration_plan> make_rf_change_plan(node_load_map& nodes, std::vector<rf_change_action> actions, sstring dc, sstring rack) {
+    // `nodes` covers only the (dc, rack) being planned and is used for placement decisions
+    // (target node selection). `streaming_nodes` covers the whole cluster and is used for
+    // streaming concurrency accounting, since rebuild_v2 streams between the tablet's
+    // replicas in all racks and DCs, which are absent from `nodes`.
+    future<migration_plan> make_rf_change_plan(node_load_map& nodes, node_load_map& streaming_nodes, std::vector<rf_change_action> actions, sstring dc, sstring rack) {
         lblogger.debug("In make_rf_change_plan");
 
         migration_plan mplan;
@@ -1929,9 +1952,9 @@ public:
                         };
                         auto mig_streaming_info = get_migration_streaming_info(topo, ti, mig);
                         pick(*_load_sketch, dst.host, dst.shard, source_tablets);
-                        if (can_accept_load(nodes, mig_streaming_info)) {
+                        if (can_accept_load(streaming_nodes, mig_streaming_info)) {
                             lblogger.debug("Starting rebuild_v2 transition to {}.{} of tablet {}; new_replica = {}", dc, rack, gid, pending_replica);
-                            apply_load(nodes, mig_streaming_info);
+                            apply_load(streaming_nodes, mig_streaming_info);
                             mark_as_scheduled(mig);
                             mplan.add(std::move(mig));
                         }
@@ -1954,8 +1977,8 @@ public:
                         if (_load_sketch->has_node(replica->host) && !(rep_node && rep_node->is_excluded())) {
                             unload(*_load_sketch, replica->host, replica->shard, source_tablets);
                         }
-                        if (can_accept_load(nodes, mig_streaming_info)) {
-                            apply_load(nodes, mig_streaming_info);
+                        if (can_accept_load(streaming_nodes, mig_streaming_info)) {
+                            apply_load(streaming_nodes, mig_streaming_info);
                             mark_as_scheduled(mig);
                             mplan.add(std::move(mig));
                         }
@@ -4363,7 +4386,8 @@ public:
         }
     }
 
-    future<migration_plan> make_plan(dc_name dc, std::optional<sstring> rack = std::nullopt, std::vector<rf_change_action> rf_change_actions = {}) {
+    future<migration_plan> make_plan(dc_name dc, std::optional<sstring> rack = std::nullopt, std::vector<rf_change_action> rf_change_actions = {},
+            node_load_map* rf_change_streaming_nodes = nullptr) {
         migration_plan plan;
 
         if (utils::get_local_injector().enter("tablet_migration_bypass")) {
@@ -4713,14 +4737,27 @@ public:
             plan.merge(co_await make_intranode_plan(nodes, nodes_to_drain));
         }
 
+        if (rf_change_streaming_nodes) {
+            // The migrations planned above stream too. Charge them so that RF-change
+            // admission in this rack and in the racks planned later sees their load.
+            co_await consider_planned_load(*rf_change_streaming_nodes, plan);
+        }
+
         if (!rf_change_actions.empty() && rack.has_value()) {
-            plan.merge(co_await make_rf_change_plan(nodes, rf_change_actions, dc, rack.value()));
+            if (!rf_change_streaming_nodes) {
+                on_internal_error(lblogger, "make_plan(): rf_change_actions given without a cluster-wide streaming load map");
+            }
+            plan.merge(co_await make_rf_change_plan(nodes, *rf_change_streaming_nodes, rf_change_actions, dc, rack.value()));
         }
 
         if (_tm->tablets().balancing_enabled() && plan.empty() && !ongoing_rack_list_colocation()) {
             auto dc_merge_plan = co_await make_merge_colocation_plan(nodes);
             auto level = dc_merge_plan.tablet_migration_count() > 0 ? seastar::log_level::info : seastar::log_level::debug;
             lblogger.log(level, "Prepared {} migrations for co-locating sibling tablets in {}", dc_merge_plan.tablet_migration_count(), _location);
+            if (rf_change_streaming_nodes) {
+                // Planned after the RF-change phase, so charged separately for the racks planned later.
+                co_await consider_planned_load(*rf_change_streaming_nodes, dc_merge_plan);
+            }
             plan.merge(std::move(dc_merge_plan));
         }
 
