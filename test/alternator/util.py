@@ -243,21 +243,69 @@ def get_region(dynamodb):
     system_local = dynamodb.Table('.scylla.alternator.system.local')
     return system_local.scan(AttributesToGet=['data_center'])['Items'][0]['data_center']
 
+
+class _ScyllaErrorInjection:
+    request_timeout = 5
+
+    def __init__(self, rest_api, err):
+        self.err = err
+        self.url = f'{rest_api}/v2/error_injection/injection/{err}'
+
+    def enter_count(self):
+        response = requests.get(f'{self.url}/enters', timeout=self.request_timeout)
+        response.raise_for_status()
+        return response.json()
+
+    def wait_for_enter(self, deadline, threshold=1):
+        delay = 0.1
+        while time.monotonic() < deadline:
+            count = self.enter_count()
+            if count >= threshold:
+                return count
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(delay, remaining))
+                delay = min(delay * 2, 0.5)
+        pytest.fail(f'Timed out waiting for error injection {self.err} to be entered')
+
+    def message(self):
+        response = requests.post(f'{self.url}/message', timeout=self.request_timeout)
+        response.raise_for_status()
+
+    def disable(self):
+        print("Disabling error injection", self.err)
+        response = requests.delete(self.url, timeout=self.request_timeout)
+        response.raise_for_status()
+
+
 # Tries to inject an error via Scylla REST API. It only works on Scylla,
 # and only in specific build modes (dev, debug, sanitize), so this function
-# will trigger a test to be skipped if it cannot be executed.
+# will trigger a test to be skipped if it cannot be executed. The yielded
+# handle can be used to wait for and send messages to the injected code.
 @contextmanager
-def scylla_inject_error(rest_api, err, one_shot=False, parameters={}):
-    requests.post(f'{rest_api}/v2/error_injection/injection/{err}?one_shot={one_shot}', json=parameters)
-    response = requests.get(f'{rest_api}/v2/error_injection/injection')
-    print("Enabled error injections:", response.content.decode('utf-8'))
-    if response.content.decode('utf-8') == "[]":
-        skip_env("Error injection not enabled in Scylla - try compiling in dev/debug/sanitize mode")
+def scylla_inject_error(rest_api, err, one_shot=False, parameters=None):
+    injection = _ScyllaErrorInjection(rest_api, err)
     try:
-        yield
-    finally:
-        print("Disabling error injection", err)
-        requests.delete(f'{rest_api}/v2/error_injection/injection/{err}')
+        response = requests.post(injection.url, params={'one_shot': one_shot},
+                json={} if parameters is None else parameters,
+                timeout=injection.request_timeout)
+        response.raise_for_status()
+        response = requests.get(f'{rest_api}/v2/error_injection/injection', timeout=injection.request_timeout)
+        response.raise_for_status()
+        enabled_injections = response.json()
+        print("Enabled error injections:", enabled_injections)
+        if err not in enabled_injections:
+            skip_env("Error injection not enabled in Scylla - try compiling in dev/debug/sanitize mode")
+        yield injection
+    except BaseException:
+        try:
+            injection.disable()
+        except Exception as cleanup_error:
+            print(f'Failed to disable error injection {err}: {cleanup_error}')
+        raise
+    else:
+        injection.disable()
+
 
 # Send a message to the Scylla log. E.g., we can write a message to the log
 # indicating that a test has started, which will make it easier to see which
