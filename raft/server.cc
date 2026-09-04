@@ -77,7 +77,8 @@ concept LeaderAction = requires(const server_id& leader, AsyncAction aa) {
 
 struct stop_apply_fiber{}; // exception to send when apply fiber is needs to be stopepd
 
-// The applier fiber's pending input, published by io_fiber.
+// The applier fiber's pending input, published by io_fiber and, for
+// snapshot requests, by trigger_snapshot().
 //
 // This is state rather than a queue of messages: the pending input does
 // not grow with the number of committed entries -- newly committed entries
@@ -122,7 +123,7 @@ public:
     // remaining apply waiters -- the server may never learn the fate of
     // later entries.
     bool drop_apply_waiters = false;
-    // A server request asked to take a state machine snapshot.
+    // trigger_snapshot() asked to take a state machine snapshot.
     bool snapshot_requested = false;
 
     // Wakes the applier fiber up to re-evaluate its wait() predicate; call
@@ -323,16 +324,6 @@ private:
     };
     absl::flat_hash_map<server_id, append_request_queue> _append_request_status;
 
-    struct server_requests {
-        bool snapshot = false;
-
-        bool empty() const {
-            return !snapshot;
-        }
-    };
-
-    server_requests _new_server_requests;
-
     // Notifies the waiters for the given committed entries that they
     // are committed (applied). The terms travel with the ids, so this
     // does not need the entries to still be in the fsm log.
@@ -366,9 +357,7 @@ private:
     //  - send out messages
     future<> process_fsm_output(index_t& stable_idx, fsm_output&&);
 
-    void process_server_requests(server_requests&&);
-
-    // Processes new FSM outputs and server requests as they appear.
+    // Processes new FSM outputs as they appear.
     future<> io_fiber(index_t stable_idx);
 
     // This fiber runs in the background and applies committed entries.
@@ -613,8 +602,11 @@ future<bool> server_impl::trigger_snapshot(seastar::abort_source* as) {
         co_return false;
     }
 
-    _new_server_requests.snapshot = true;
-    _events.signal();
+    // The applier fiber takes the snapshot after applying everything
+    // committed by the time it picks the request up, so the snapshot
+    // index is at least the applied index as of now.
+    _applier_mailbox.snapshot_requested = true;
+    _applier_mailbox.notify();
 
     // Wait for persisted snapshot index to catch up to this index.
     auto awaited_idx = _applied_idx;
@@ -1448,24 +1440,11 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
     }
 }
 
-void server_impl::process_server_requests(server_requests&& requests) {
-    if (requests.snapshot) {
-        _applier_mailbox.snapshot_requested = true;
-        _applier_mailbox.notify();
-    }
-}
-
 future<> server_impl::io_fiber(index_t last_stable) {
     logger.trace("[{}] io_fiber start", _tag);
     try {
         while (true) {
-            bool has_fsm_output = false;
-            bool has_server_request = false;
-            co_await _events.when([this, &has_fsm_output, &has_server_request] {
-                has_fsm_output = _fsm->has_output();
-                has_server_request = !_new_server_requests.empty();
-                return has_fsm_output || has_server_request;
-            });
+            co_await _events.when([this] { return _fsm->has_output(); });
 
             while (utils::get_local_injector().enter("poll_fsm_output/pause")) {
                 co_await seastar::sleep(std::chrono::milliseconds(100));
@@ -1473,15 +1452,8 @@ future<> server_impl::io_fiber(index_t last_stable) {
 
             _stats.polls++;
 
-            if (has_fsm_output) {
-                auto batch = _fsm->get_output();
-                co_await process_fsm_output(last_stable, std::move(batch));
-            }
-
-            if (has_server_request) {
-                auto requests = std::exchange(_new_server_requests, server_requests{});
-                process_server_requests(std::move(requests));
-            }
+            auto batch = _fsm->get_output();
+            co_await process_fsm_output(last_stable, std::move(batch));
         }
     } catch (seastar::broken_condition_variable&) {
         // Log fiber is stopped explicitly.
