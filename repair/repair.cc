@@ -1044,7 +1044,17 @@ struct repair_options {
         int job_threads;
         int_opt(job_threads, options, JOB_THREADS_KEY);
 
-        int_opt(ranges_parallelism, options, RANGES_PARALLELISM_KEY);
+        // The default, -1, means no user-specified ranges_parallelism is
+        // applied, i.e. the per-task semaphore is not created at all. It is
+        // an internal sentinel, the user is not allowed to ask for it. Any
+        // non-positive value would create the semaphore with no units and
+        // hang the repair forever, so only accept positive values.
+        if (options.contains(RANGES_PARALLELISM_KEY)) {
+            int_opt(ranges_parallelism, options, RANGES_PARALLELISM_KEY);
+            if (ranges_parallelism < 1) {
+                throw std::invalid_argument(format("invalid ranges_parallelism: {}. It must be a positive integer", ranges_parallelism));
+            }
+        }
 
         bool_opt(small_table_optimization, options, SMALL_TABLE_OPTIMIZATION_KEY);
 
@@ -1098,11 +1108,9 @@ private:
             const sstring& key) {
         auto it = options.find(key);
         if (it != options.end()) {
-            errno = 0;
-            var = strtol(it->second.c_str(), nullptr, 10);
-            if (errno) {
-                throw(std::runtime_error(format("cannot parse integer: '{}'", it->second)));
-            }
+            var = utils::from_chars_exactly<int>(std::string_view(it->second), [] (std::string_view value) {
+                return std::runtime_error(format("cannot parse integer: '{}'", value));
+            });
             options.erase(it);
         }
     }

@@ -854,3 +854,39 @@ async def test_tablet_migration_barrier_does_not_abort_vnode_repair(manager: Man
                                                host=servers[0].ip_addr,
                                                params={"id": str(sequence_number)})
     assert status == "SUCCESSFUL"
+
+
+async def test_repair_rejects_invalid_ranges_parallelism(manager):
+    """Verify that repair rejects invalid ranges_parallelism values.
+
+    ranges_parallelism was parsed with strtol without checking that anything
+    was parsed, so a non-numeric value silently became 0, and any value below
+    1 initialized the per-task semaphore with no units, hanging the repair
+    forever.
+    """
+    servers = await manager.servers_add(2, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND TABLETS = {'enabled': false}")
+    cql.execute("CREATE TABLE ks.tbl (pk int PRIMARY KEY)")
+
+    for value, error in [("0", "invalid ranges_parallelism"),
+                         ("-1", "invalid ranges_parallelism"),
+                         ("-2", "invalid ranges_parallelism"),
+                         ("abc", "cannot parse integer"),
+                         ("1x", "cannot parse integer")]:
+        params = {"columnFamilies": "tbl", "ranges_parallelism": value}
+        with pytest.raises(HTTPError, match=error):
+            await manager.api.client.post_json(f"/storage_service/repair_async/ks",
+                                               host=servers[0].ip_addr, params=params)
+
+    # A positive value, and omitting the option altogether, must keep working.
+    for params in [{"columnFamilies": "tbl", "ranges_parallelism": "1"},
+                   {"columnFamilies": "tbl"}]:
+        sequence_number = await manager.api.client.post_json(f"/storage_service/repair_async/ks",
+                                                             host=servers[0].ip_addr, params=params)
+        status = await manager.api.client.get_json(f"/storage_service/repair_status",
+                                                   host=servers[0].ip_addr,
+                                                   params={"id": str(sequence_number)})
+        assert status == "SUCCESSFUL"
