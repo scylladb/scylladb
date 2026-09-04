@@ -270,7 +270,14 @@ SEASTAR_THREAD_TEST_CASE(test_eviction_via_lru) {
 
             cf_lru.evict();
 
-            BOOST_REQUIRE_EQUAL(tf.contents.substr(page, 1), read_to_string(cf, page, 1)); // hit page 1
+            // Index pages route straight to protected (cached_file uses
+            // lru::add_index), so the re-accessed page 1 is the most-recently
+            // -used protected entry and outlives the cold pages: this second
+            // evict() drains the last cold page (page 2) while page 1 is
+            // demoted to probation but survives. This restores the "touched
+            // page evicted last" property that the flat LRU had and that the
+            // earlier window-admission model for cached_file had lost.
+            BOOST_REQUIRE_EQUAL(tf.contents.substr(page, 1), read_to_string(cf, page, 1)); // hit: touched page 1 survived
 
             BOOST_REQUIRE_EQUAL(6, metrics.page_misses);
             BOOST_REQUIRE_EQUAL(5, metrics.page_evictions); // change
@@ -500,4 +507,78 @@ SEASTAR_THREAD_TEST_CASE(test_page_view_as_contiguous_shared_buffer) {
 
     // p should not affect p2
     BOOST_REQUIRE_EQUAL(tf.contents.substr(5, 2), sstring(p2.begin(), p2.end()));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_page_release_reenters_protected_segment) {
+    auto page = cached_file::page_size;
+    test_file tf = make_test_file(page * 8);
+
+    // A private LRU (instead of the shared cf_lru) so segment sizes of the
+    // W-TinyLFU policy are observable in isolation.
+    lru pages_lru;
+    cached_file_stats metrics;
+    logalloc::region region;
+    cached_file cf(tf.f, metrics, pages_lru, region, page * 8);
+
+    // Populate page 0. While referenced, the page is not linked in the LRU
+    // (so it cannot be evicted under a reader).
+    auto res = cf.get_shared_page(0, tracing::trace_state_ptr()).get();
+    BOOST_REQUIRE(!res.was_already_cached);
+    BOOST_REQUIRE(!res.ptr->is_linked());
+    BOOST_REQUIRE_EQUAL(pages_lru.window_size() + pages_lru.probation_size() + pages_lru.protected_size(), 0);
+
+    // Index-file pages route straight to the protected segment on release
+    // (cached_file uses lru::add_index), bypassing the admission window.
+    // Recency inside protected gives scan resistance: cold pages read once age
+    // to the LRU end and are evicted first, hot pages stay at the MRU end.
+    res.ptr = nullptr;
+    BOOST_REQUIRE_EQUAL(pages_lru.protected_size(), 1);
+    BOOST_REQUIRE_EQUAL(pages_lru.window_size(), 0);
+
+    // A hit on a resident page unlinks it again (a touch); the release
+    // re-enters the protected segment.
+    res = cf.get_shared_page(0, tracing::trace_state_ptr()).get();
+    BOOST_REQUIRE(res.was_already_cached);
+    BOOST_REQUIRE(!res.ptr->is_linked());
+    res.ptr = nullptr;
+    BOOST_REQUIRE_EQUAL(pages_lru.protected_size(), 1);
+    BOOST_REQUIRE_EQUAL(pages_lru.window_size(), 0);
+
+    // Pages 1-6 are populated once (cold). They too enter protected (not the
+    // window) and sit ahead of the hot page in recency order.
+    for (int i = 1; i <= 6; ++i) {
+        auto cold = cf.get_shared_page(page * i, tracing::trace_state_ptr()).get();
+        BOOST_REQUIRE(!cold.was_already_cached);
+        cold.ptr = nullptr;
+    }
+    BOOST_REQUIRE_EQUAL(pages_lru.window_size(), 0);
+    BOOST_REQUIRE_EQUAL(pages_lru.protected_size(), 7);
+
+    // Re-access page 0 so it becomes the most-recently-used protected entry;
+    // the six cold pages are older and are evicted before it.
+    res = cf.get_shared_page(0, tracing::trace_state_ptr()).get();
+    BOOST_REQUIRE(res.was_already_cached);
+    res.ptr = nullptr;
+
+    // Drive eviction until only the hot page is left; cold pages drain out
+    // (through probation via rebalance) while the hot page survives.
+    with_allocator(region.allocator(), [&] {
+        for (int i = 0; i < 12 && (pages_lru.protected_size() + pages_lru.probation_size() + pages_lru.window_size()) > 1; ++i) {
+            if (pages_lru.evict() != memory::reclaiming_result::reclaimed_something) {
+                break;
+            }
+        }
+    });
+    BOOST_REQUIRE_GT(metrics.page_evictions, 0u);
+
+    // The hot page is still served from cache.
+    auto misses_before = metrics.page_misses;
+    res = cf.get_shared_page(0, tracing::trace_state_ptr()).get();
+    BOOST_REQUIRE(res.was_already_cached);
+    BOOST_REQUIRE_EQUAL(metrics.page_misses, misses_before);
+    res.ptr = nullptr;
+
+    with_allocator(region.allocator(), [&] {
+        pages_lru.evict_all();
+    });
 }

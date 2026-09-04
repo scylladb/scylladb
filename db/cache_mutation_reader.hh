@@ -199,6 +199,21 @@ class cache_mutation_reader final : public mutation_reader::impl {
         return *_snp->schema();
     }
 
+    // Insert a row populated by this read into the cache LRU.
+    // Rows of multi-row (clustering key) partitions go directly to the
+    // protected segment and are never demoted — recency ordering within
+    // protected handles their eviction, like plain LRU. Rows of
+    // single-row partitions go through the W-TinyLFU admission window.
+    // All rows of a partition share the partition's sketch key.
+    void insert_row_to_lru(rows_entry& e) {
+        e.set_sketch_key(compute_sketch_key(_dk.token()));
+        if (table_schema().clustering_key_size() > 0) {
+            _snp->tracker()->insert_to_protected(e);
+        } else {
+            _snp->tracker()->insert(e);
+        }
+    }
+
     gc_clock::time_point get_gc_before() {
         if (!_gc_before.has_value()) {
             _gc_before = _read_context.tombstone_gc_state().with_commitlog_check_disabled().get_gc_before_for_key(_schema, _dk, _read_time);
@@ -475,7 +490,7 @@ future<> cache_mutation_reader::read_from_underlying() {
                                         cmp);
                                 if (insert_result.second) {
                                     auto it = insert_result.first;
-                                    _snp->tracker()->insert(*it);
+                                    insert_row_to_lru(*it);
                                     auto next = std::next(it);
                                     // Also works in reverse read mode.
                                     // It preserves the continuity of the range the entry falls into.
@@ -495,7 +510,7 @@ future<> cache_mutation_reader::read_from_underlying() {
                                         cmp);
                                 if (insert_result.second) {
                                     clogger.trace("csm {}: L{}: inserted dummy at {}", fmt::ptr(this), __LINE__, _upper_bound);
-                                    _snp->tracker()->insert(*insert_result.first);
+                                    insert_row_to_lru(*insert_result.first);
                                     restore_continuity_after_insertion(insert_result.first);
                                 }
                                 if (_read_context.is_reversed()) [[unlikely]] {
@@ -583,7 +598,7 @@ void cache_mutation_reader::maybe_update_continuity() {
                         auto insert_result = rows.insert(std::move(e2), table_cmp);
                         if (insert_result.second) {
                             clogger.trace("csm {}: L{}: inserted dummy at {}", fmt::ptr(this), __LINE__, insert_result.first->position());
-                            _snp->tracker()->insert(*insert_result.first);
+                            insert_row_to_lru(*insert_result.first);
                         }
                         clogger.trace("csm {}: set_continuous({}), prev={}, rt={}", fmt::ptr(this), insert_result.first->position(),
                                       _last_row.position(), _current_tombstone);
@@ -611,7 +626,7 @@ void cache_mutation_reader::maybe_update_continuity() {
                         auto insert_result = rows.insert_before_hint(_next_row.get_iterator_in_latest_version(), std::move(e2), table_cmp);
                         if (insert_result.second) {
                             clogger.trace("csm {}: L{}: inserted dummy at {}", fmt::ptr(this), __LINE__, insert_result.first->position());
-                            _snp->tracker()->insert(*insert_result.first);
+                            insert_row_to_lru(*insert_result.first);
                             clogger.trace("csm {}: set_continuous({}), prev={}, rt={}", fmt::ptr(this), insert_result.first->position(),
                                           _last_row.position(), _current_tombstone);
                             set_rows_entry_continuous(*insert_result.first);
@@ -658,7 +673,7 @@ void cache_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
         auto insert_result = mp.mutable_clustered_rows().insert_before_hint(it, std::move(new_entry), cmp);
         it = insert_result.first;
         if (insert_result.second) {
-            _snp->tracker()->insert(*it);
+            insert_row_to_lru(*it);
             restore_continuity_after_insertion(it);
         }
 
@@ -723,7 +738,7 @@ bool cache_mutation_reader::maybe_add_to_cache(const range_tombstone_change& rtc
         auto insert_result = mp.mutable_clustered_rows().insert_before_hint(it, std::move(new_entry), cmp);
         it = insert_result.first;
         if (insert_result.second) {
-            _snp->tracker()->insert(*it);
+            insert_row_to_lru(*it);
             restore_continuity_after_insertion(it);
         }
 
@@ -929,7 +944,7 @@ void cache_mutation_reader::move_to_range(query::clustering_row_ranges::const_it
                 });
                 auto it = insert_result.first;
                 if (insert_result.second) {
-                    _snp->tracker()->insert(*it);
+                    insert_row_to_lru(*it);
                 }
                 _last_row = partition_snapshot_row_weakref(*_snp, it, true);
             } else {
