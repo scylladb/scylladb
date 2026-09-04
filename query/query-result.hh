@@ -324,6 +324,8 @@ public:
     friend class result_merger;
 
     result();
+    // The result buffer is deliberately left as-is, not linearized: it is parsed at most
+    // once, sequentially, and is serialized to the wire fragment by fragment.
     result(bytes_ostream&& w, short_read sr, std::optional<uint32_t> c_low_bits, std::optional<uint32_t> pc,
            std::optional<uint32_t> c_high_bits, std::optional<full_position> last_position, result_memory_tracker memory_tracker = { })
         : _w(std::move(w))
@@ -333,9 +335,7 @@ public:
         , _partition_count(pc)
         , _row_count_high_bits(c_high_bits)
         , _last_position(std::move(last_position))
-    {
-        w.reduce_chunk_count();
-    }
+    { }
     result(bytes_ostream&& w, std::optional<result_digest> d, api::timestamp_type last_modified,
            short_read sr, std::optional<uint32_t> c_low_bits, std::optional<uint32_t> pc, std::optional<uint32_t> c_high_bits,
            std::optional<full_position> last_position, result_memory_tracker memory_tracker = { })
@@ -348,9 +348,7 @@ public:
         , _partition_count(pc)
         , _row_count_high_bits(c_high_bits)
         , _last_position(std::move(last_position))
-    {
-        w.reduce_chunk_count();
-    }
+    { }
     result(bytes_ostream&& w, short_read sr, uint64_t c, std::optional<uint32_t> pc,
            std::optional<full_position> last_position, result_memory_tracker memory_tracker = { })
         : _w(std::move(w))
@@ -360,9 +358,7 @@ public:
         , _partition_count(pc)
         , _row_count_high_bits(static_cast<uint32_t>(c >> 32))
         , _last_position(std::move(last_position))
-    {
-        w.reduce_chunk_count();
-    }
+    { }
     result(bytes_ostream&& w, std::optional<result_digest> d, api::timestamp_type last_modified,
            short_read sr, uint64_t c, std::optional<uint32_t> pc, std::optional<full_position> last_position, result_memory_tracker memory_tracker = { })
         : _w(std::move(w))
@@ -374,9 +370,7 @@ public:
         , _partition_count(pc)
         , _row_count_high_bits(static_cast<uint32_t>(c >> 32))
         , _last_position(std::move(last_position))
-    {
-        w.reduce_chunk_count();
-    }
+    { }
     result(result&&) = default;
     result& operator=(result&&) = default;
 
