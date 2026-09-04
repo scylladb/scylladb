@@ -1110,4 +1110,56 @@ BOOST_AUTO_TEST_CASE(enforces_odd_number_of_voters_for_multiple_dc) {
     BOOST_CHECK_EQUAL(seen_dcs.size(), 3);
 }
 
+
+// Reproducer: the DC-level "no half of the voters" cap has no rack-level
+// equivalent, so one rack can absorb a voter majority. See commit message.
+BOOST_AUTO_TEST_CASE(rack_cannot_have_half_or_more_of_voters) {
+
+    // Arrange: one DC (the DC cap constrains nothing), one large rack and
+    // two single-node racks.
+
+    constexpr size_t max_voters = 5;
+
+    const service::group0_voter_calculator voter_calc{max_voters};
+
+    std::vector<raft::server_id> big_rack_ids;
+    for (int i = 0; i < 10; ++i) {
+        big_rack_ids.push_back(raft::server_id::create_random_id());
+    }
+    const auto small_rack_b_id = raft::server_id::create_random_id();
+    const auto small_rack_c_id = raft::server_id::create_random_id();
+
+    service::group0_voter_calculator::nodes_list_t nodes;
+    for (const auto& id : big_rack_ids) {
+        nodes.emplace(id, service::group0_voter_calculator::node_descriptor{
+                .datacenter = "dc", .rack = "rack-a", .is_voter = is_voter::no, .is_alive = true});
+    }
+    nodes.emplace(small_rack_b_id, service::group0_voter_calculator::node_descriptor{
+            .datacenter = "dc", .rack = "rack-b", .is_voter = is_voter::no, .is_alive = true});
+    nodes.emplace(small_rack_c_id, service::group0_voter_calculator::node_descriptor{
+            .datacenter = "dc", .rack = "rack-c", .is_voter = is_voter::no, .is_alive = true});
+
+    // Act: Distribute the voters.
+
+    const auto& voters = voter_calc.distribute_voters(nodes);
+
+    // Assert: no rack holds >= half the actual voters. Unsatisfiable with 5
+    // voters here, so a correct implementation must reduce the count.
+
+    BOOST_CHECK_LE(voters.size(), max_voters);
+    BOOST_CHECK_GE(voters.size(), 3);
+
+    std::unordered_map<sstring, size_t> voters_per_rack;
+    for (const auto id : voters) {
+        ++voters_per_rack[nodes.at(id).rack];
+    }
+
+    const size_t total = voters.size();
+    for (const auto& [rack, count] : voters_per_rack) {
+        BOOST_CHECK_MESSAGE(2 * count < total,
+                fmt::format("Rack {} has {} of {} voters, i.e. at least half, which the class contract says must "
+                            "not happen when there are 3 or more racks", rack, count, total));
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

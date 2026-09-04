@@ -77,6 +77,46 @@ SEASTAR_TEST_CASE(test_group0_state_machine_merger_timeuuid_order) {
     BOOST_REQUIRE_EQUAL(merger.last_id(), t1);
 }
 
+// Reproducer: merge() never resets _size, so a post-flush can_merge()
+// measures against sizes from already-flushed batches.
+SEASTAR_TEST_CASE(test_group0_state_machine_merger_size_reset_after_flush) {
+    auto [db, db_impl] = cql3::expr::test_utils::make_data_dictionary_database(db::system_keyspace::group0_history());
+
+    semaphore s{1};
+    auto mutex_holder = co_await get_units(s, 1);
+
+    constexpr size_t max_command_size = 100;
+    service::group0_state_machine_merger merger{OLD_TIMEUUID, std::move(mutex_holder), max_command_size, db};
+
+    // First batch: a single size-60 command.
+    auto cmd_a = create_command(utils::UUID_gen::get_time_UUID());
+    merger.add(std::move(cmd_a), 60);
+
+    // 60 + 60 > 100: the caller must flush, as apply()'s merge loop does.
+    auto cmd_b = create_command(utils::UUID_gen::get_time_UUID());
+    BOOST_REQUIRE(!merger.can_merge(cmd_b, 60));
+    merger.merge(); // flush; result content is irrelevant here
+    BOOST_REQUIRE(merger.empty());
+
+    // Fresh batch: correctly-reset _size is 60, buggy carryover makes 120.
+    merger.add(std::move(cmd_b), 60);
+
+    auto cmd_c = create_command(utils::UUID_gen::get_time_UUID());
+
+    // Control: the fresh batch's own 60 still counts (60 + 41 > 100).
+    BOOST_REQUIRE(!merger.can_merge(cmd_c, 41));
+
+    // The bug: 61 <= 100 must merge, but the stale carryover says 121 > 100.
+    BOOST_REQUIRE_MESSAGE(merger.can_merge(cmd_c, 1),
+            "merger should accept merging a tiny command into a 60-sized fresh batch (61 <= 100), "
+            "but can_merge() is measuring against size left over from the previous (already flushed) batch");
+
+    // Control: in-batch accumulation still works (61 + 40 > 100 rejects).
+    merger.add(std::move(cmd_c), 1);
+    auto cmd_d = create_command(utils::UUID_gen::get_time_UUID());
+    BOOST_REQUIRE(!merger.can_merge(cmd_d, 40));
+}
+
 SEASTAR_TEST_CASE(test_group0_cmd_merge) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
     fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
