@@ -148,6 +148,8 @@ protected:
     tracing& _local_tracing;
     cql3::query_processor& qp() noexcept;
     const cql3::query_processor& qp() const noexcept;
+    service::migration_manager& mm() noexcept;
+    const service::migration_manager& mm() const noexcept;
 
 public:
     using ptr_type = std::unique_ptr<i_tracing_backend_helper>;
@@ -671,6 +673,14 @@ inline cql3::query_processor& i_tracing_backend_helper::qp() noexcept {
 
 inline const cql3::query_processor& i_tracing_backend_helper::qp() const noexcept {
     return _local_tracing._qp;
+}
+
+inline service::migration_manager& i_tracing_backend_helper::mm() noexcept {
+    return _local_tracing._mm;
+}
+
+inline const service::migration_manager& i_tracing_backend_helper::mm() const noexcept {
+    return _local_tracing._mm;
 }
 
 }
