@@ -90,9 +90,14 @@ struct fsm_config {
     // deterministic election-timeout slot ahead of every other server, so while a
     // listed server is alive it wins leadership. Servers not listed randomize
     // within the remaining slots and can never undercut a listed one. Listed servers
-    // which cannot vote are skipped, they cannot win an election anyway. The callback
-    // is invoked only when (re)arming the election timer, so it always reflects the
-    // current topology. Empty vector / unset => ordinary Raft.
+    // which cannot vote are skipped, they cannot win an election anyway. A leader which
+    // finds itself outranked hands the leadership over, so the preference also holds for a
+    // group which has already elected somebody else.
+    //
+    // The callback is invoked when (re)arming the election timer and, on a leader, every
+    // now and then, so it always reflects the current topology. It runs in the fsm's
+    // synchronous context and must neither block nor throw.
+    // Empty vector / unset => ordinary Raft.
     std::function<std::vector<server_id>()> get_priority_members;
 };
 
@@ -136,6 +141,8 @@ struct leader {
     // If set, leadership transfer must select this voting follower once it has
     // caught up with the leader's log.
     std::optional<server_id> leadership_transfer_target;
+    // When to reconsider whether a preferred server should be leading instead of us.
+    logical_clock::time_point placement_check_at;
     // A source of read ids - a monotonically growing (in single term) identifiers of
     // reads issued by the state machine. Using monotonic ids allows the leader to
     // resolve all preceding read requests when a quorum of acks from followers arrive
@@ -358,6 +365,9 @@ private:
     // has been unusable long enough and such a replica exists. A no-op unless
     // leases are enabled. Precondition: is_leader(), not already stepping down.
     void maybe_transfer_leadership_on_clock_loss();
+    // Hands the leadership to the first server which outranks us and is alive, if
+    // there is one. A leader calls this every placement_check_interval.
+    void maybe_transfer_leadership_to_preferred();
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
         return election_elapsed() >= _randomized_election_timeout;
