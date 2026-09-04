@@ -156,7 +156,7 @@ public:
 
     i_tracing_backend_helper(tracing& tr) : _local_tracing(tr) {}
     virtual ~i_tracing_backend_helper() {}
-    virtual future<> start(service::migration_manager& mm) = 0;
+    virtual future<> start() = 0;
     virtual future<> shutdown() = 0;
 
     /**

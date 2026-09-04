@@ -210,8 +210,8 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
     });
 }
 
-future<> trace_keyspace_helper::start(service::migration_manager& mm) {
-    return table_helper::setup_keyspace(qp(), mm, KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", "2", _dummy_query_state, { &_sessions, &_sessions_time_idx, &_events, &_slow_query_log, &_slow_query_log_time_idx });
+future<> trace_keyspace_helper::start() {
+    return table_helper::setup_keyspace(qp(), mm(), KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", "2", _dummy_query_state, { &_sessions, &_sessions_time_idx, &_events, &_slow_query_log, &_slow_query_log_time_idx });
 }
 
 gms::inet_address trace_keyspace_helper::my_address() const noexcept {
