@@ -9,6 +9,7 @@
 #pragma once
 
 #include "utils/assert.hh"
+#include <memory>
 #include <vector>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -56,7 +57,8 @@ private:
         loading_shared_values& _parent;
         key_type _key;
         std::optional<value_type> _val;
-        shared_promise<> _loaded;
+        // Lazily allocated: present only while loading.
+        std::unique_ptr<shared_promise<>> _loaded;
 
     public:
         const key_type& key() const noexcept {
@@ -88,7 +90,14 @@ private:
         }
 
         shared_promise<>& loaded() {
-            return _loaded;
+            if (!_loaded) {
+                _loaded = std::make_unique<shared_promise<>>();
+            }
+            return *_loaded;
+        }
+
+        void release_loaded() noexcept {
+            _loaded.reset();
         }
 
         bool ready() const noexcept {
@@ -240,6 +249,9 @@ public:
                     } else {
                         e->set_value(val_fut.get());
                         e->loaded().set_value();
+                        // Release promise on success only; on failure, concurrent
+                        // get_or_load() may still need the failed future.
+                        e->release_loaded();
                     }
                 });
             }

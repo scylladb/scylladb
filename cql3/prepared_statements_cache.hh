@@ -16,6 +16,14 @@
 #include "cql3/column_specification.hh"
 #include "cql3/dialect.hh"
 
+#include <algorithm>
+#include <array>
+#include <stdexcept>
+#include <string_view>
+
+#include <fmt/format.h>
+#include <fmt/ranges.h>
+
 namespace cql3 {
 
 using prepared_cache_entry = std::unique_ptr<statements::prepared_statement>;
@@ -27,20 +35,34 @@ struct prepared_cache_entry_size {
     }
 };
 
-typedef bytes cql_prepared_id_type;
+/// 16-byte MD5 hash used as prepared statement cache ID.
+struct cql_prepared_id_type {
+    static constexpr size_t size = 16;
+    std::array<uint8_t, size> _id = {};
 
-/// \brief The key of the prepared statements cache
-///
-/// TODO: consolidate prepared_cache_key_type and the nested cache_key_type
-///       the latter was introduced for unifying the CQL and Thrift prepared
-///       statements so that they can be stored in the same cache.
+    cql_prepared_id_type() = default;
+    explicit cql_prepared_id_type(bytes_view id) {
+        if (id.size() != size) {
+            throw std::runtime_error(
+                fmt::format("Expected prepared cache ID of {} bytes, got {}", size, id.size()));
+        }
+        std::copy_n(id.begin(), size, _id.begin());
+    }
+
+    bool operator==(const cql_prepared_id_type& other) const = default;
+
+    bytes to_bytes() const {
+        return bytes(reinterpret_cast<const bytes::value_type*>(_id.data()), size);
+    }
+};
+
+/// The prepared statements cache key.
 class prepared_cache_key_type {
 public:
-    // derive from cql_prepared_id_type so we can customize the formatter of
-    // cache_key_type
-    struct cache_key_type : public cql_prepared_id_type {
-        cache_key_type(cql_prepared_id_type&& id, cql3::dialect d) : cql_prepared_id_type(std::move(id)), dialect(d) {}
+    struct cache_key_type {
+        cql_prepared_id_type id;
         cql3::dialect dialect; // Not part of hash, but we don't expect collisions because of that
+        cache_key_type(cql_prepared_id_type id_, cql3::dialect d) : id(std::move(id_)), dialect(d) {}
         bool operator==(const cache_key_type& other) const = default;
     };
 
@@ -49,12 +71,13 @@ private:
 
 public:
     explicit prepared_cache_key_type(cql_prepared_id_type cql_id, dialect d) : _key(std::move(cql_id), d) {}
+    explicit prepared_cache_key_type(bytes_view cql_id_bytes, dialect d) : _key(cql_prepared_id_type(cql_id_bytes), d) {}
 
     cache_key_type& key() { return _key; }
     const cache_key_type& key() const { return _key; }
 
     static const cql_prepared_id_type& cql_id(const prepared_cache_key_type& key) {
-        return key.key();
+        return key.key().id;
     }
 
     bool operator==(const prepared_cache_key_type& other) const = default;
@@ -168,25 +191,40 @@ public:
 namespace std {
 
 template<>
+struct hash<cql3::cql_prepared_id_type> final {
+    size_t operator()(const cql3::cql_prepared_id_type& k) const {
+        return std::hash<std::string_view>()(
+            std::string_view(reinterpret_cast<const char*>(k._id.data()), k._id.size()));
+    }
+};
+
+template<>
 struct hash<cql3::prepared_cache_key_type::cache_key_type> final {
     size_t operator()(const cql3::prepared_cache_key_type::cache_key_type& k) const {
-        return std::hash<cql3::cql_prepared_id_type>()(k);
+        return std::hash<cql3::cql_prepared_id_type>()(k.id);
     }
 };
 
 template<>
 struct hash<cql3::prepared_cache_key_type> final {
     size_t operator()(const cql3::prepared_cache_key_type& k) const {
-        return std::hash<cql3::cql_prepared_id_type>()(k.key());
+        return std::hash<cql3::cql_prepared_id_type>()(k.key().id);
     }
 };
 }
 
 // for prepared_statements_cache log printouts
+template <> struct fmt::formatter<cql3::cql_prepared_id_type> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const cql3::cql_prepared_id_type& id, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{:02x}", fmt::join(id._id, ""));
+    }
+};
+
 template <> struct fmt::formatter<cql3::prepared_cache_key_type::cache_key_type> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const cql3::prepared_cache_key_type::cache_key_type& p, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "{{cql_id: {}, dialect: {}}}", static_cast<const cql3::cql_prepared_id_type&>(p), p.dialect);
+        return fmt::format_to(ctx.out(), "{{cql_id: {}, dialect: {}}}", p.id, p.dialect);
     }
 };
 
