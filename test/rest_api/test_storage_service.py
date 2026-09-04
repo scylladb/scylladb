@@ -766,6 +766,19 @@ def test_storage_service_repair_parallelism_invalid(rest_api, parallelism):
     resp = rest_api.send("POST", "storage_service/repair_async/system", {"parallelism": parallelism})
     assert resp.status_code == requests.codes.bad_request
 
+# The integer repair options are parsed strictly, and ranges_parallelism has to
+# be positive. An unusable value is a bad parameter, not a server error.
+@pytest.mark.parametrize("option,value", [("ranges_parallelism", "0"),
+                                          ("ranges_parallelism", "-1"),
+                                          ("ranges_parallelism", "abc"),
+                                          ("ranges_parallelism", "1x"),
+                                          ("ranges_parallelism", "9999999999"),
+                                          ("jobThreads", "abc"),
+                                          ("jobThreads", "1x")])
+def test_storage_service_repair_int_option_invalid(rest_api, option, value):
+    resp = rest_api.send("POST", "storage_service/repair_async/system", {option: value})
+    assert resp.status_code == requests.codes.bad_request
+
 @pytest.mark.parametrize("tablets_enabled", ["true", "false"])
 def test_storage_service_get_natural_endpoints(cql, rest_api, tablets_enabled, skip_without_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }} AND TABLETS = {{ 'enabled': {tablets_enabled} }}") as keyspace:
